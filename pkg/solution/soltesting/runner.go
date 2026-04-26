@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,11 @@ type Runner struct {
 	// Used only as a fallback when BinaryPath is empty (unit tests).
 	// Production code should always set BinaryPath instead.
 	NewCommand CommandBuilder
+	// BinaryName is the application name used for deriving env var prefixes
+	// (e.g., mocked-resolver env var). When empty, falls back to paths.AppName().
+	// Must match the name used by settings.BinaryNameFromContext inside the
+	// target binary so writer and reader agree on env var names.
+	BinaryName string
 	// Progress receives notifications as tests execute.
 	// When nil, no progress output is emitted.
 	Progress TestProgressCallback
@@ -72,6 +78,15 @@ func (r *Runner) emitTestStart(solution, test string) {
 	if r.Progress != nil {
 		r.Progress.OnTestStart(solution, test)
 	}
+}
+
+// appName returns the application name for env var derivation.
+// Prefers BinaryName if set, otherwise falls back to paths.AppName().
+func (r *Runner) appName() string {
+	if r.BinaryName != "" {
+		return r.BinaryName
+	}
+	return paths.AppName()
 }
 
 // emitTestComplete notifies the progress callback that a test has finished.
@@ -512,7 +527,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 		bundleFiles = resolved
 	}
 
-	sandbox, err := NewSandbox(st.FilePath, bundleFiles, sandboxFiles)
+	sandbox, err := r.createSandbox(st, tc, bundleFiles, sandboxFiles)
 	if err != nil {
 		result.Status = StatusError
 		result.Message = fmt.Sprintf("sandbox creation failed: %s", err)
@@ -525,9 +540,26 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 		result.SandboxPath = sandbox.Path()
 	}
 
+	// Start per-test services (stopped after the test completes).
+	var extraEnv map[string]string
+	if len(tc.Services) > 0 {
+		svcEnv, stopFn, svcErr := r.startPerTestServices(tc.Services)
+		if svcErr != nil {
+			result.Status = StatusError
+			result.Message = svcErr.Error()
+			result.Duration = time.Since(start)
+			return result
+		}
+		defer stopFn()
+
+		// Inject service env vars into extraEnv so buildEnvMap picks them up
+		// without mutating the shared TestCase (safe for retries and concurrency).
+		extraEnv = svcEnv
+	}
+
 	// Run test init steps
 	if len(tc.Init) > 0 {
-		envMap := r.buildEnvMap(tc, st.Config, sandbox.Path())
+		envMap := r.buildEnvMap(tc, st.Config, sandbox.Path(), extraEnv)
 		if err := r.runInitSteps(ctx, tc.Init, sandbox.Path(), envMap); err != nil {
 			result.Status = StatusError
 			result.Message = fmt.Sprintf("init step failed: %s", err)
@@ -545,7 +577,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 	}
 
 	// Build and execute the scafctl command in-process
-	cmdOutput, err := r.executeCommand(ctx, tc, st, sandbox)
+	cmdOutput, err := r.executeCommand(ctx, tc, st, sandbox, extraEnv)
 	if err != nil {
 		result.Status = StatusError
 		result.Message = fmt.Sprintf("command execution failed: %s", err)
@@ -625,7 +657,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 
 	// Run test cleanup steps
 	if len(tc.Cleanup) > 0 {
-		envMap := r.buildEnvMap(tc, st.Config, sandbox.Path())
+		envMap := r.buildEnvMap(tc, st.Config, sandbox.Path(), extraEnv)
 		// Cleanup errors are not test failures, just log them
 		_ = r.runInitSteps(ctx, tc.Cleanup, sandbox.Path(), envMap)
 	}
@@ -635,18 +667,28 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 	return result
 }
 
-// executeCommand builds and runs a scafctl CLI command in-process.
-func (r *Runner) executeCommand(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox) (*CommandOutput, error) {
-	if r.BinaryPath != "" {
-		return r.executeCommandSubprocess(ctx, tc, st, sandbox)
+// createSandbox creates a test sandbox, choosing between flat and nested layout.
+// When tc.BaseDir is set, files are nested under that subdirectory so that
+// repo-root-relative paths in resolvers resolve correctly.
+func (r *Runner) createSandbox(st *SolutionTests, tc *TestCase, bundleFiles, sandboxFiles []string) (*Sandbox, error) {
+	if tc.BaseDir != "" {
+		return NewSandboxWithBaseDir(st.FilePath, tc.BaseDir, bundleFiles, sandboxFiles)
 	}
-	return r.executeCommandInProcess(ctx, tc, st, sandbox)
+	return NewSandbox(st.FilePath, bundleFiles, sandboxFiles)
+}
+
+// executeCommand builds and runs a scafctl CLI command in-process.
+func (r *Runner) executeCommand(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox, extraEnv map[string]string) (*CommandOutput, error) {
+	if r.BinaryPath != "" {
+		return r.executeCommandSubprocess(ctx, tc, st, sandbox, extraEnv)
+	}
+	return r.executeCommandInProcess(ctx, tc, st, sandbox, extraEnv)
 }
 
 // executeCommandSubprocess runs a scafctl CLI command as an isolated child process.
 // Each invocation gets its own process environment, so concurrent tests cannot
 // interfere with each other's env vars or global state.
-func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox) (*CommandOutput, error) {
+func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox, extraEnv map[string]string) (*CommandOutput, error) {
 	timeout := r.TestTimeout
 	if tc.Timeout != nil {
 		timeout = tc.Timeout.Duration
@@ -659,9 +701,10 @@ func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st 
 	}
 
 	// Build command args
-	args := make([]string, 0, len(tc.Command)+len(tc.Args)+4)
+	args := make([]string, 0, len(tc.Command)+len(tc.Args)+len(tc.Inputs)*2+4)
 	args = append(args, tc.Command...)
 	args = append(args, tc.Args...)
+	args = append(args, inputsToArgs(tc.Inputs)...)
 
 	// Auto-inject -f <sandbox-solution-path> unless injectFile is false
 	if tc.GetInjectFile() {
@@ -682,10 +725,22 @@ func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st 
 
 	// Build isolated environment: inherit parent env + overlay test env vars.
 	// Each subprocess gets its own copy, so no races.
-	envMap := r.buildEnvMap(tc, st.Config, sandbox.Path())
+	envMap := r.buildEnvMap(tc, st.Config, sandbox.Path(), extraEnv)
 	cmd.Env = os.Environ()
 	for k, v := range envMap {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%v", k, v))
+	}
+
+	// Write mocked resolvers to a temp JSON file and set the env var so the
+	// child process picks them up via loadMockedResolvers().
+	if len(tc.Mocks) > 0 {
+		mocksFile, mocksErr := writeMocksFile(tc.Mocks)
+		if mocksErr != nil {
+			return nil, fmt.Errorf("writing mocks file: %w", mocksErr)
+		}
+		defer os.Remove(mocksFile)
+		envVar := settings.SafeEnvPrefix(r.appName()) + "_MOCKED_RESOLVERS_FILE"
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", envVar, mocksFile))
 	}
 
 	// Execute
@@ -721,7 +776,7 @@ func (r *Runner) executeCommandSubprocess(ctx context.Context, tc *TestCase, st 
 // executeCommandInProcess runs a scafctl CLI command in the current process.
 // This path is used only when BinaryPath is empty (unit tests with mock commands).
 // It is NOT safe for concurrent execution because os.Setenv is process-global.
-func (r *Runner) executeCommandInProcess(ctx context.Context, tc *TestCase, _ *SolutionTests, sandbox *Sandbox) (*CommandOutput, error) {
+func (r *Runner) executeCommandInProcess(ctx context.Context, tc *TestCase, st *SolutionTests, sandbox *Sandbox, extraEnv map[string]string) (*CommandOutput, error) {
 	timeout := r.TestTimeout
 	if tc.Timeout != nil {
 		timeout = tc.Timeout.Duration
@@ -733,10 +788,18 @@ func (r *Runner) executeCommandInProcess(ctx context.Context, tc *TestCase, _ *S
 		defer cancel()
 	}
 
+	// Apply env vars (tc.Env, testConfig.Env, extraEnv) via os.Setenv.
+	// This is process-global, so the in-process path is NOT safe for
+	// concurrent execution. Subprocess execution should be used for that.
+	envMap := r.buildEnvMap(tc, st.Config, sandbox.Path(), extraEnv)
+	restore := setEnvVars(envMap)
+	defer restore()
+
 	// Build command args
-	args := make([]string, 0, len(tc.Command)+len(tc.Args)+4)
+	args := make([]string, 0, len(tc.Command)+len(tc.Args)+len(tc.Inputs)*2+4)
 	args = append(args, tc.Command...)
 	args = append(args, tc.Args...)
+	args = append(args, inputsToArgs(tc.Inputs)...)
 
 	// Auto-inject -f <sandbox-solution-path> unless injectFile is false
 	if tc.GetInjectFile() {
@@ -763,6 +826,18 @@ func (r *Runner) executeCommandInProcess(ctx context.Context, tc *TestCase, _ *S
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetErr(&stderr)
+
+	// Write mocked resolvers to a temp JSON file and inject via context so the
+	// in-process command picks them up via loadMockedResolvers(). Using context
+	// instead of os.Setenv avoids process-global state and potential races.
+	if len(tc.Mocks) > 0 {
+		mocksFile, mocksErr := writeMocksFile(tc.Mocks)
+		if mocksErr != nil {
+			return nil, fmt.Errorf("writing mocks file: %w", mocksErr)
+		}
+		defer os.Remove(mocksFile)
+		ctx = settings.WithMockedResolversFile(ctx, mocksFile)
+	}
 
 	// Execute command
 	cmdErr := rootCmd.ExecuteContext(ctx)
@@ -914,7 +989,7 @@ func attachCommandOutput(result *TestResult, cmdOutput *CommandOutput) {
 
 // buildEnvMap builds the environment variable map for a test.
 // Precedence: process env → testConfig.env → testCase.env → <BINARY>_SANDBOX_DIR.
-func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath string) map[string]any {
+func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath string, extraEnv map[string]string) map[string]any {
 	env := make(map[string]any)
 
 	// testConfig.env
@@ -929,10 +1004,39 @@ func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath s
 		env[k] = v
 	}
 
+	// extraEnv overrides (e.g., per-test service env vars)
+	for k, v := range extraEnv {
+		env[k] = v
+	}
+
 	// Always set sandbox dir
-	env[settings.SafeEnvPrefix(paths.AppName())+"_SANDBOX_DIR"] = sandboxPath
+	env[settings.SafeEnvPrefix(r.appName())+"_SANDBOX_DIR"] = sandboxPath
 
 	return env
+}
+
+// setEnvVars applies the given env map via os.Setenv and returns a restore
+// function that reverts each variable to its original value (or unsets it).
+// This is only used by the in-process execution path.
+func setEnvVars(envMap map[string]any) func() {
+	originals := make(map[string]*string, len(envMap))
+	for k, v := range envMap {
+		if prev, ok := os.LookupEnv(k); ok {
+			originals[k] = &prev
+		} else {
+			originals[k] = nil
+		}
+		os.Setenv(k, fmt.Sprintf("%v", v))
+	}
+	return func() {
+		for k, prev := range originals {
+			if prev != nil {
+				os.Setenv(k, *prev)
+			} else {
+				os.Unsetenv(k)
+			}
+		}
+	}
 }
 
 // mergeEnvForStep creates an env slice for shellexec combining the env map with step-level env.
@@ -955,6 +1059,47 @@ func mergeEnvForStep(envMap map[string]any, stepEnv map[string]string) []string 
 // composeExecMocks creates a single RunFunc that tries each MockExec in order.
 // The first mock that has a matching rule handles the command. If no mock matches
 // and a mock allows passthrough, the real shellexec.Run is called.
+// writeMocksFile writes a map of resolver mocks to a temp JSON file and returns its path.
+func writeMocksFile(mocks map[string]any) (string, error) {
+	data, err := json.Marshal(mocks)
+	if err != nil {
+		return "", fmt.Errorf("marshalling mocks: %w", err)
+	}
+
+	f, err := os.CreateTemp("", "scafctl-mocks-*.json")
+	if err != nil {
+		return "", fmt.Errorf("creating temp mocks file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(data); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("writing mocks data: %w", err)
+	}
+
+	return f.Name(), nil
+}
+
+// inputsToArgs converts a map of parameter name→value pairs into a sorted
+// slice of -r key=value CLI arguments. Returns nil when inputs is empty.
+func inputsToArgs(inputs map[string]string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(inputs))
+	for k := range inputs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	args := make([]string, 0, len(inputs)*2)
+	for _, k := range keys {
+		args = append(args, "-r", fmt.Sprintf("%s=%s", k, inputs[k]))
+	}
+	return args
+}
+
 func composeExecMocks(mocks []*mockexec.MockExec) shellexec.RunFunc {
 	fns := make([]shellexec.RunFunc, len(mocks))
 	for i, m := range mocks {
@@ -988,4 +1133,41 @@ func composeExecMocks(mocks []*mockexec.MockExec) shellexec.RunFunc {
 		}
 		return nil, fmt.Errorf("mockexec: no matching rule for command %q", fullCmd)
 	}
+}
+
+// startPerTestServices starts background services defined on a single test case.
+// It returns the service env vars, a stop function, and any startup error.
+func (r *Runner) startPerTestServices(services []ServiceConfig) (map[string]string, func(), error) {
+	var servers []*mockserver.Server
+	env := make(map[string]string)
+
+	stopFn := func() {
+		for _, srv := range servers {
+			_ = srv.Stop()
+		}
+	}
+
+	for _, svc := range services {
+		switch svc.Type {
+		case "http":
+			srv := mockserver.New(svc.Routes)
+			if err := srv.Start(); err != nil {
+				stopFn() // clean up any already-started servers
+				return nil, nil, fmt.Errorf("per-test service %q start failed: %w", svc.Name, err)
+			}
+			servers = append(servers, srv)
+
+			if svc.PortEnv != "" {
+				env[svc.PortEnv] = fmt.Sprintf("%d", srv.Port())
+			}
+			if svc.BaseURLEnv != "" {
+				env[svc.BaseURLEnv] = srv.BaseURL()
+			}
+		default:
+			stopFn()
+			return nil, nil, fmt.Errorf("per-test service %q: unsupported type %q (only http is supported)", svc.Name, svc.Type)
+		}
+	}
+
+	return env, stopFn, nil
 }

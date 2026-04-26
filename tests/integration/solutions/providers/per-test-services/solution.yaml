@@ -1,0 +1,106 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-per-test-services
+  version: 1.0.0
+  description: |
+    Functional tests for per-test service overrides.
+    Verifies that individual test cases can start their own HTTP mock services
+    independent of suite-level services.
+
+spec:
+  resolvers:
+    apiData:
+      description: Fetches data from the mock API
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.testApiUrl + '/api/data'"
+              method: GET
+              autoParseJson: true
+
+    testApiUrl:
+      description: Base URL of mock server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: TEST_API_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      _base:
+        description: Base template with private IP config for mock servers
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml"]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode == 0
+
+      success-response:
+        description: Per-test service returns a success response
+        extends: [_base]
+        services:
+          - name: test-api
+            type: http
+            baseUrlEnv: TEST_API_URL
+            routes:
+              - path: /api/data
+                method: GET
+                status: 200
+                body: '{"status":"ok","items":[1,2,3]}'
+                headers:
+                  Content-Type: application/json
+        assertions:
+          - expression: __output.apiData.body.status == "ok"
+            message: Per-test service should return the configured response
+          - expression: size(__output.apiData.body.items) == 3
+
+      error-response:
+        description: Per-test service returns an error response
+        extends: [_base]
+        services:
+          - name: test-api
+            type: http
+            baseUrlEnv: TEST_API_URL
+            routes:
+              - path: /api/data
+                method: GET
+                status: 500
+                body: '{"error":"internal server error"}'
+                headers:
+                  Content-Type: application/json
+        assertions:
+          - expression: __output.apiData.body.error == "internal server error"
+            message: Per-test service should return the error response
+
+      empty-response:
+        description: Per-test service returns an empty list
+        extends: [_base]
+        services:
+          - name: test-api
+            type: http
+            baseUrlEnv: TEST_API_URL
+            routes:
+              - path: /api/data
+                method: GET
+                status: 200
+                body: '{"status":"empty","items":[]}'
+                headers:
+                  Content-Type: application/json
+        assertions:
+          - expression: __output.apiData.body.status == "empty"
+          - expression: size(__output.apiData.body.items) == 0

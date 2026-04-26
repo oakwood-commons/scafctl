@@ -279,6 +279,7 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 
 	runner := &soltesting.Runner{
 		BinaryPath:      binaryPath,
+		BinaryName:      settings.BinaryNameFromContext(ctx),
 		Concurrency:     concurrency,
 		FailFast:        opts.FailFast,
 		UpdateSnapshots: opts.UpdateSnapshots,
@@ -395,6 +396,7 @@ func runWatchMode(ctx context.Context, opts *FunctionalOptions, w *writer.Writer
 
 	runner := &soltesting.Runner{
 		BinaryPath:      binaryPath,
+		BinaryName:      settings.BinaryNameFromContext(ctx),
 		Concurrency:     concurrency,
 		FailFast:        opts.FailFast,
 		UpdateSnapshots: opts.UpdateSnapshots,

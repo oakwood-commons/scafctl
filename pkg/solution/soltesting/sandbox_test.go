@@ -401,3 +401,117 @@ func writeSandboxFile(t *testing.T, baseDir, relPath, content string) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
 	require.NoError(t, os.WriteFile(fullPath, []byte(content), 0o644))
 }
+
+func TestNewSandboxWithBaseDir_NestsUnderSubdir(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "output/data.json", `{"result": true}`)
+
+	sb, err := soltesting.NewSandboxWithBaseDir(
+		filepath.Join(dir, "solution.yaml"),
+		"myapp",
+		nil,
+		[]string{"output/data.json"},
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	// Solution should be nested under myapp/
+	assert.Contains(t, sb.SolutionPath(), filepath.Join("myapp", "solution.yaml"))
+
+	// Solution file should exist at nested path
+	_, err = os.Stat(sb.SolutionPath())
+	assert.NoError(t, err)
+
+	// Data file should also be nested
+	nestedData := filepath.Join(sb.Path(), "myapp", "output", "data.json")
+	content, err := os.ReadFile(nestedData)
+	require.NoError(t, err)
+	assert.Equal(t, `{"result": true}`, string(content))
+
+	// File should NOT exist at sandbox root level
+	_, err = os.Stat(filepath.Join(sb.Path(), "output", "data.json"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestNewSandboxWithBaseDir_EmptyBaseDirIsSameAsNewSandbox(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	sb, err := soltesting.NewSandboxWithBaseDir(
+		filepath.Join(dir, "solution.yaml"),
+		"",
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	defer sb.Cleanup()
+
+	// Solution should be at root level (no nesting)
+	assert.Equal(t, filepath.Join(sb.Path(), "solution.yaml"), sb.SolutionPath())
+}
+
+func TestNewSandboxWithBaseDir_CopyForTestPreservesBaseDir(t *testing.T) {
+	dir := setupSandboxDir(t)
+	writeSandboxFile(t, dir, "base.txt", "base content")
+	writeSandboxFile(t, dir, "extra.txt", "extra content")
+
+	// Create a base sandbox with baseDir
+	base, err := soltesting.NewSandboxWithBaseDir(
+		filepath.Join(dir, "solution.yaml"),
+		"sub",
+		nil,
+		[]string{"base.txt"},
+	)
+	require.NoError(t, err)
+	defer base.Cleanup()
+
+	// CopyForTest should preserve the baseDir nesting
+	child, err := base.CopyForTest(dir, []string{"extra.txt"})
+	require.NoError(t, err)
+	defer child.Cleanup()
+
+	// Solution should be nested in both
+	assert.Contains(t, child.SolutionPath(), filepath.Join("sub", "solution.yaml"))
+
+	// Both files should be nested under sub/
+	_, err = os.Stat(filepath.Join(child.Path(), "sub", "base.txt"))
+	assert.NoError(t, err)
+
+	_, err = os.Stat(filepath.Join(child.Path(), "sub", "extra.txt"))
+	assert.NoError(t, err)
+}
+
+func TestNewSandboxWithBaseDir_RejectsAbsolutePath(t *testing.T) {
+	dir := setupSandboxDir(t)
+	_, err := soltesting.NewSandboxWithBaseDir(
+		filepath.Join(dir, "solution.yaml"),
+		"/etc/evil",
+		nil,
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a relative path")
+}
+
+func TestNewSandboxWithBaseDir_RejectsTraversal(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseDir string
+	}{
+		{"bare dotdot", ".."},
+		{"dotdot prefix", "../escape"},
+		{"nested dotdot", "foo/../../escape"},
+	}
+	dir := setupSandboxDir(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := soltesting.NewSandboxWithBaseDir(
+				filepath.Join(dir, "solution.yaml"),
+				tt.baseDir,
+				nil,
+				nil,
+			)
+			assert.Error(t, err, "baseDir %q should be rejected", tt.baseDir)
+			assert.Contains(t, err.Error(), "must not traverse")
+		})
+	}
+}

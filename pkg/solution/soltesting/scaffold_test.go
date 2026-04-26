@@ -4,6 +4,7 @@
 package soltesting
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -273,4 +274,244 @@ func TestScaffold_EmptyFileDependenciesOmitted(t *testing.T) {
 		assert.Nil(t, tc.Files,
 			"test case %q should have nil Files when no dependencies discovered", name)
 	}
+}
+
+func TestScaffold_SolutionSubdirSetsBaseDir(t *testing.T) {
+	result := Scaffold(&ScaffoldInput{
+		SolutionSubdir: "myapp",
+	})
+
+	require.NotNil(t, result)
+
+	// Non-template cases should have BaseDir set
+	for name, tc := range result.Cases {
+		if strings.HasPrefix(name, "_") {
+			assert.Empty(t, tc.BaseDir, "template %q should not have BaseDir", name)
+		} else {
+			assert.Equal(t, "myapp", tc.BaseDir, "test case %q should have BaseDir", name)
+		}
+	}
+}
+
+func TestScaffold_NoSubdirNoBaseDir(t *testing.T) {
+	result := Scaffold(&ScaffoldInput{})
+
+	for name, tc := range result.Cases {
+		assert.Empty(t, tc.BaseDir, "test case %q should not have BaseDir when no subdir", name)
+	}
+}
+
+func TestScaffold_SolutionSubdirWithFileDeps(t *testing.T) {
+	result := Scaffold(&ScaffoldInput{
+		SolutionSubdir:   "nested/app",
+		FileDependencies: []string{"templates/main.yaml"},
+	})
+
+	// _files-base template should NOT have BaseDir
+	tmpl := result.Cases[filesBaseTemplateName]
+	require.NotNil(t, tmpl)
+	assert.Empty(t, tmpl.BaseDir)
+
+	// Non-template cases should have BaseDir
+	for name, tc := range result.Cases {
+		if name != filesBaseTemplateName {
+			assert.Equal(t, "nested/app", tc.BaseDir, "test case %q should have BaseDir", name)
+		}
+	}
+}
+
+func TestExtractParameterDefault_WithStaticFallback(t *testing.T) {
+	r := &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{
+					Provider: "parameter",
+					Inputs: map[string]*spec.ValueRef{
+						"key": {Literal: "env"},
+					},
+				},
+				{
+					Provider: "static",
+					Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "dev"},
+					},
+				},
+			},
+		},
+	}
+
+	key, val, ok := extractParameterDefault(r)
+	assert.True(t, ok)
+	assert.Equal(t, "env", key)
+	assert.Equal(t, "dev", val)
+}
+
+func TestExtractParameterDefault_NoFallback(t *testing.T) {
+	r := &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{
+					Provider: "parameter",
+					Inputs: map[string]*spec.ValueRef{
+						"key": {Literal: "env"},
+					},
+				},
+			},
+		},
+	}
+
+	key, val, ok := extractParameterDefault(r)
+	assert.True(t, ok)
+	assert.Equal(t, "env", key)
+	assert.Equal(t, "TODO", val)
+}
+
+func TestExtractParameterDefault_NonParameterProvider(t *testing.T) {
+	r := &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{
+					Provider: "static",
+					Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "hello"},
+					},
+				},
+			},
+		},
+	}
+
+	_, _, ok := extractParameterDefault(r)
+	assert.False(t, ok)
+}
+
+func TestExtractParameterDefault_NilResolve(t *testing.T) {
+	r := &resolver.Resolver{}
+	_, _, ok := extractParameterDefault(r)
+	assert.False(t, ok)
+}
+
+func TestExtractParameterDefault_EmptyKey(t *testing.T) {
+	r := &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{
+					Provider: "parameter",
+					// No inputs.key — paramKey will be empty
+				},
+			},
+		},
+	}
+	_, _, ok := extractParameterDefault(r)
+	assert.False(t, ok, "should return false when parameter key cannot be derived")
+}
+
+func TestExtractParameterDefault_EmptyKeyWithStaticFallback(t *testing.T) {
+	r := &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{
+					Provider: "parameter",
+					// No inputs.key — paramKey is empty
+				},
+				{
+					Provider: "static",
+					Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "default-val"},
+					},
+				},
+			},
+		},
+	}
+	_, _, ok := extractParameterDefault(r)
+	assert.False(t, ok, "should return false when parameter key is empty even with static fallback")
+}
+
+func TestExtractParameterDefault_KeyDiffersFromResolverName(t *testing.T) {
+	r := &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{
+					Provider: "parameter",
+					Inputs: map[string]*spec.ValueRef{
+						"key": {Literal: "environment"},
+					},
+				},
+				{
+					Provider: "static",
+					Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "staging"},
+					},
+				},
+			},
+		},
+	}
+
+	key, val, ok := extractParameterDefault(r)
+	assert.True(t, ok)
+	assert.Equal(t, "environment", key, "should use the parameter key, not the resolver name")
+	assert.Equal(t, "staging", val)
+}
+
+func TestScaffold_ParameterResolverGeneratesInputs(t *testing.T) {
+	input := &ScaffoldInput{
+		Resolvers: map[string]*resolver.Resolver{
+			"environment": {
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{
+							Provider: "parameter",
+							Inputs: map[string]*spec.ValueRef{
+								"key": {Literal: "environment"},
+							},
+						},
+						{
+							Provider: "static",
+							Inputs: map[string]*spec.ValueRef{
+								"value": {Literal: "dev"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Scaffold(input)
+
+	tc := result.Cases["resolver-environment"]
+	require.NotNil(t, tc)
+	// The Inputs key should be the parameter key ("environment"), not the resolver name
+	assert.Equal(t, map[string]string{"environment": "dev"}, tc.Inputs)
+}
+
+func TestScaffold_ParameterKeyDiffersFromResolverName(t *testing.T) {
+	input := &ScaffoldInput{
+		Resolvers: map[string]*resolver.Resolver{
+			"dbConfig": {
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{
+							Provider: "parameter",
+							Inputs: map[string]*spec.ValueRef{
+								"key": {Literal: "database_env"},
+							},
+						},
+						{
+							Provider: "static",
+							Inputs: map[string]*spec.ValueRef{
+								"value": {Literal: "dev"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Scaffold(input)
+
+	tc := result.Cases["resolver-dbConfig"]
+	require.NotNil(t, tc)
+	// Key should be "database_env" (from parameter key), not "dbConfig" (resolver name)
+	assert.Equal(t, map[string]string{"database_env": "dev"}, tc.Inputs)
 }

@@ -37,6 +37,7 @@ type fileSnapshot struct {
 type Sandbox struct {
 	root         string
 	solutionPath string
+	baseDir      string // subdirectory prefix for nesting files
 	preSnapshot  map[string]fileSnapshot
 }
 
@@ -45,6 +46,42 @@ type Sandbox struct {
 // All paths are relative to solutionDir (the directory containing the solution file).
 // Symlinks and path traversal above the solution root are rejected.
 func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox, error) {
+	return newSandbox(solutionPath, "", bundleFiles, testFiles)
+}
+
+// NewSandboxWithBaseDir creates a sandbox where the solution and all related
+// files are nested under baseDir within the sandbox root. This preserves
+// directory structure for solutions that live in a subdirectory of a repository
+// and whose resolvers reference paths relative to the repository root.
+//
+// For example, with baseDir="cldctl":
+//   - solution.yaml  -> sandbox/cldctl/solution.yaml
+//   - output/data.json -> sandbox/cldctl/output/data.json
+//
+// The process working directory (cmd.Dir) should be set to sandbox.Path()
+// (the root), so repo-root-relative paths resolve correctly.
+func NewSandboxWithBaseDir(solutionPath, baseDir string, bundleFiles, testFiles []string) (*Sandbox, error) {
+	if err := validateBaseDir(baseDir); err != nil {
+		return nil, err
+	}
+	return newSandbox(solutionPath, baseDir, bundleFiles, testFiles)
+}
+
+// validateBaseDir rejects absolute paths and path-traversal attempts to prevent
+// files from being written outside the sandbox root.
+func validateBaseDir(baseDir string) error {
+	if filepath.IsAbs(baseDir) {
+		return fmt.Errorf("baseDir must be a relative path, got %q", baseDir)
+	}
+	cleaned := filepath.Clean(baseDir)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("baseDir must not traverse above sandbox root, got %q", baseDir)
+	}
+	return nil
+}
+
+// newSandbox is the internal constructor shared by NewSandbox and NewSandboxWithBaseDir.
+func newSandbox(solutionPath, baseDir string, bundleFiles, testFiles []string) (*Sandbox, error) {
 	solutionDir := filepath.Dir(solutionPath)
 	solutionBase := filepath.Base(solutionPath)
 
@@ -53,13 +90,21 @@ func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox,
 		return nil, fmt.Errorf("creating sandbox temp dir: %w", err)
 	}
 
+	// When baseDir is set, nest all files under sandbox/<baseDir>/
+	// so repo-root-relative paths resolve correctly.
+	solutionRelPath := solutionBase
+	if baseDir != "" {
+		solutionRelPath = filepath.Join(baseDir, solutionBase)
+	}
+
 	s := &Sandbox{
 		root:         tmpDir,
-		solutionPath: filepath.Join(tmpDir, solutionBase),
+		solutionPath: filepath.Join(tmpDir, solutionRelPath),
+		baseDir:      baseDir,
 	}
 
 	// Copy the solution file itself
-	if err := s.copyFile(solutionDir, solutionBase); err != nil {
+	if err := s.copyFileWithPrefix(solutionDir, solutionBase, baseDir); err != nil {
 		_ = os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("copying solution file: %w", err)
 	}
@@ -71,7 +116,7 @@ func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox,
 		return nil, fmt.Errorf("discovering compose files: %w", err)
 	}
 	for _, cf := range composeFiles {
-		if err := s.copyFile(solutionDir, cf); err != nil {
+		if err := s.copyFileWithPrefix(solutionDir, cf, baseDir); err != nil {
 			_ = os.RemoveAll(tmpDir)
 			return nil, fmt.Errorf("copying compose file %q: %w", cf, err)
 		}
@@ -79,7 +124,7 @@ func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox,
 
 	// Copy bundle files
 	for _, f := range bundleFiles {
-		if err := s.copyFile(solutionDir, f); err != nil {
+		if err := s.copyFileWithPrefix(solutionDir, f, baseDir); err != nil {
 			_ = os.RemoveAll(tmpDir)
 			return nil, fmt.Errorf("copying bundle file %q: %w", f, err)
 		}
@@ -92,7 +137,7 @@ func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox,
 		return nil, fmt.Errorf("resolving test files: %w", err)
 	}
 	for _, f := range expandedTestFiles {
-		if err := s.copyFile(solutionDir, f); err != nil {
+		if err := s.copyFileWithPrefix(solutionDir, f, baseDir); err != nil {
 			_ = os.RemoveAll(tmpDir)
 			return nil, fmt.Errorf("copying test file %q: %w", f, err)
 		}
@@ -121,10 +166,16 @@ func (s *Sandbox) CopyForTest(solutionDir string, testFiles []string) (*Sandbox,
 		return nil, fmt.Errorf("copying base sandbox: %w", err)
 	}
 
-	solutionBase := filepath.Base(s.solutionPath)
+	// Preserve the relative path from root to solution file
+	solutionRel, err := filepath.Rel(s.root, s.solutionPath)
+	if err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return nil, fmt.Errorf("computing relative solution path: %w", err)
+	}
 	child := &Sandbox{
 		root:         tmpDir,
-		solutionPath: filepath.Join(tmpDir, solutionBase),
+		solutionPath: filepath.Join(tmpDir, solutionRel),
+		baseDir:      s.baseDir,
 	}
 
 	// Copy test-specific files from the original solution directory (with glob and directory expansion)
@@ -134,7 +185,7 @@ func (s *Sandbox) CopyForTest(solutionDir string, testFiles []string) (*Sandbox,
 		return nil, fmt.Errorf("resolving test files: %w", err)
 	}
 	for _, f := range expandedTestFiles {
-		if err := child.copyFile(solutionDir, f); err != nil {
+		if err := child.copyFileWithPrefix(solutionDir, f, s.baseDir); err != nil {
 			_ = os.RemoveAll(tmpDir)
 			return nil, fmt.Errorf("copying test file %q: %w", f, err)
 		}
@@ -265,6 +316,67 @@ func (s *Sandbox) copyFile(sourceDir, relPath string) error {
 	}
 
 	// Copy file contents
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("opening source %q: %w", srcPath, err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("creating destination %q: %w", dstPath, err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("copying %q: %w", relPath, err)
+	}
+
+	return nil
+}
+
+// copyFileWithPrefix copies a file from sourceDir/relPath into the sandbox,
+// nesting it under prefix/ when prefix is non-empty. This is used by
+// NewSandboxWithBaseDir to preserve directory structure.
+func (s *Sandbox) copyFileWithPrefix(sourceDir, relPath, prefix string) error {
+	if prefix == "" {
+		return s.copyFile(sourceDir, relPath)
+	}
+	// Reject path traversal
+	cleaned := filepath.Clean(relPath)
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return fmt.Errorf(
+			"path traversal rejected: %q — test files must be within the solution directory. "+
+				"Move or copy the file alongside solution.yaml, or use 'init' steps instead",
+			relPath,
+		)
+	}
+
+	srcPath := filepath.Join(sourceDir, cleaned)
+
+	// Reject symlinks
+	info, err := os.Lstat(srcPath)
+	if err != nil {
+		return fmt.Errorf("stat %q: %w", srcPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("symlinks are not allowed: %q", relPath)
+	}
+	if info.IsDir() {
+		return fmt.Errorf(
+			"is a directory: %q — the 'files' property requires file paths or glob patterns "+
+				"(e.g., %q to copy the entire directory tree)",
+			relPath, relPath+"/**",
+		)
+	}
+
+	// Nest under prefix/
+	dstPath := filepath.Join(s.root, prefix, cleaned)
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return fmt.Errorf("creating directory for %q: %w", relPath, err)
+	}
+
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("opening source %q: %w", srcPath, err)
