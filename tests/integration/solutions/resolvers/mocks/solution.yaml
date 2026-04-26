@@ -1,0 +1,78 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-mocks
+  version: 1.0.0
+  description: |
+    Functional tests for resolver mocking.
+    Verifies that the mocks field on test cases allows canned values
+    to be injected, skipping real resolver execution.
+
+spec:
+  resolvers:
+    apiToken:
+      description: Simulates an API token that normally comes from an external source
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: real-token-value
+
+    greeting:
+      description: Uses apiToken to build a greeting
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Bearer " + _.apiToken'
+
+    combined:
+      description: Combines greeting with a static suffix
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.greeting + " (authenticated)"'
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for mock tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+
+      no-mocks:
+        description: Without mocks, resolvers run normally
+        extends: [_base]
+        assertions:
+          - expression: __output.apiToken == "real-token-value"
+          - expression: __output.greeting == "Bearer real-token-value"
+
+      mock-single-resolver:
+        description: Mock a single resolver and verify downstream uses the mocked value
+        extends: [_base]
+        mocks:
+          apiToken: mocked-token
+        assertions:
+          - expression: __output.apiToken == "mocked-token"
+            message: Mocked resolver should return canned value
+          - expression: __output.greeting == "Bearer mocked-token"
+            message: Downstream resolver should use the mocked value
+
+      mock-multiple-resolvers:
+        description: Mock multiple resolvers independently
+        extends: [_base]
+        mocks:
+          apiToken: override-token
+          greeting: Custom Greeting
+        assertions:
+          - expression: __output.apiToken == "override-token"
+          - expression: __output.greeting == "Custom Greeting"
+          - expression: __output.combined == "Custom Greeting (authenticated)"
+            message: Downstream should use the mocked greeting

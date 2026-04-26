@@ -1155,3 +1155,65 @@ func TestHTTPProvider_NonPaginated_StillWorks(t *testing.T) {
 	_, hasPages := data["pages"]
 	assert.False(t, hasPages, "non-paginated response should not have 'pages' field")
 }
+
+// TestHTTPProvider_Pagination_CollectPath_MissingKeyOnLastPage verifies that
+// collectPath tolerates "no such key" errors (e.g., API returns a different
+// envelope on the last page). Regression test for the pagination collectPath bug.
+func TestHTTPProvider_Pagination_CollectPath_MissingKeyOnLastPage(t *testing.T) {
+	pageCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		switch pageCount {
+		case 1:
+			// Page 1: normal response with items
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []any{
+					map[string]any{"id": 1},
+					map[string]any{"id": 2},
+				},
+			})
+		case 2:
+			// Page 2: response WITHOUT "items" key (different envelope)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": "no more data",
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/items?page=1&pageSize=2",
+		"method": "GET",
+		"pagination": map[string]any{
+			"strategy":  "pageNumber",
+			"maxPages":  3,
+			"pageSize":  2,
+			"pageParam": "page",
+			// collectPath references body.items which does NOT exist on page 2
+			"collectPath": "body.items",
+			// stopWhen also references body.items — should treat missing key as stop
+			"stopWhen": "size(body.items) == 0",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err, "should not fail when collectPath key is missing on page 2")
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	// Should have collected items from page 1
+	var collectedItems []map[string]any
+	err = json.Unmarshal([]byte(data["body"].(string)), &collectedItems)
+	require.NoError(t, err)
+	assert.Len(t, collectedItems, 2, "should have items from page 1 only")
+	// Should have stopped at page 2 (stopWhen treated missing key as stop)
+	assert.Equal(t, 2, data["pages"])
+}

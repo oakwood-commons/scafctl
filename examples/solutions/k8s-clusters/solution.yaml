@@ -143,7 +143,7 @@ spec:
           - provider: file
             inputs:
               operation: read
-              path: examples/solutions/k8s-clusters/cluster-manifest.yaml.tmpl
+              path: cluster-manifest.yaml.tmpl
 
     # Render the template once per cluster using a forEach transform.
     # The go-template provider receives __item (the current cluster object)

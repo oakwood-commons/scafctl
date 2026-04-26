@@ -1,0 +1,53 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-basedir
+  version: 1.0.0
+  description: |
+    Functional tests for the baseDir test case field.
+    Verifies that baseDir nests solution files under a subdirectory
+    within the sandbox so the solution runs from the correct location.
+
+spec:
+  resolvers:
+    greeting:
+      description: Static greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello from basedir test
+
+    computed:
+      description: Derived from greeting to verify resolver chaining works in sandbox
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.greeting + " (nested)"'
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      with-basedir:
+        description: Verify solution executes correctly when nested via baseDir
+        command: [run, resolver]
+        args: ["-o", "json"]
+        baseDir: myapp
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "hello from basedir test"
+            message: Static resolver should work in nested sandbox
+          - expression: __output.computed == "hello from basedir test (nested)"
+            message: Chained resolver should work in nested sandbox
+
+      without-basedir:
+        description: Verify solution works without baseDir (sanity check)
+        command: [run, resolver]
+        args: ["-o", "json", "greeting"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "hello from basedir test"

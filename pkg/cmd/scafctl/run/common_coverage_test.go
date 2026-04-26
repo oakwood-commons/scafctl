@@ -6,6 +6,7 @@ package run
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -629,4 +630,67 @@ func TestResolveVersionConstraintForFile_RejectsFilePaths(t *testing.T) {
 			assert.Contains(t, err.Error(), "--version can only be used with catalog names")
 		})
 	}
+}
+
+// ── loadMockedResolvers tests ─────────────────────────────────────────────────
+
+func TestLoadMockedResolvers_Unset(t *testing.T) {
+	ctx := context.Background()
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, mocks)
+}
+
+func TestLoadMockedResolvers_ValidFile_ViaEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mocks.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"greeting":"hello","count":42}`), 0o644))
+
+	envVar := settings.SafeEnvPrefix(settings.CliBinaryName) + mockedResolversEnvSuffix
+	t.Setenv(envVar, path)
+	ctx := context.Background()
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", mocks["greeting"])
+	assert.Equal(t, float64(42), mocks["count"])
+}
+
+func TestLoadMockedResolvers_ValidFile_ViaContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mocks.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"greeting":"hello"}`), 0o644))
+
+	ctx := settings.WithMockedResolversFile(context.Background(), path)
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", mocks["greeting"])
+}
+
+func TestLoadMockedResolvers_ContextTakesPrecedence(t *testing.T) {
+	ctxPath := filepath.Join(t.TempDir(), "ctx-mocks.json")
+	envPath := filepath.Join(t.TempDir(), "env-mocks.json")
+	require.NoError(t, os.WriteFile(ctxPath, []byte(`{"source":"context"}`), 0o644))
+	require.NoError(t, os.WriteFile(envPath, []byte(`{"source":"env"}`), 0o644))
+
+	envVar := settings.SafeEnvPrefix(settings.CliBinaryName) + mockedResolversEnvSuffix
+	t.Setenv(envVar, envPath)
+	ctx := settings.WithMockedResolversFile(context.Background(), ctxPath)
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "context", mocks["source"], "context should take precedence over env var")
+}
+
+func TestLoadMockedResolvers_MissingFile(t *testing.T) {
+	ctx := settings.WithMockedResolversFile(context.Background(), "/nonexistent/path.json")
+	_, err := loadMockedResolvers(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading")
+}
+
+func TestLoadMockedResolvers_InvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	require.NoError(t, os.WriteFile(path, []byte(`not json`), 0o644))
+
+	ctx := settings.WithMockedResolversFile(context.Background(), path)
+	_, err := loadMockedResolvers(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing")
 }

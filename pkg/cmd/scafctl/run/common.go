@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -478,6 +479,16 @@ func (o *sharedResolverOptions) executeResolvers(
 	if o.SkipTransform {
 		executorOpts = append(executorOpts, resolver.WithSkipTransform(true))
 	}
+
+	// Load mocked resolvers from context or environment (set by test runner).
+	mockedResolvers, err := loadMockedResolvers(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading mocked resolvers: %w", err)
+	}
+	if len(mockedResolvers) > 0 {
+		executorOpts = append(executorOpts, resolver.WithMockedResolvers(mockedResolvers))
+	}
+
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
 
 	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
@@ -823,4 +834,38 @@ func extractParameterKeys(resolvers []*resolver.Resolver) []string {
 		}
 	}
 	return keys
+}
+
+// mockedResolversEnvSuffix is the suffix appended to the binary-name-derived
+// env var prefix to form the full environment variable name for mocked resolvers.
+// The full name is {SAFE_PREFIX}_MOCKED_RESOLVERS_FILE.
+const mockedResolversEnvSuffix = "_MOCKED_RESOLVERS_FILE"
+
+// loadMockedResolvers reads the mocked resolvers JSON file. It first checks
+// the context (set by the in-process test runner), then falls back to the
+// environment variable (set by the subprocess test runner).
+// Returns nil if neither source is set.
+func loadMockedResolvers(ctx context.Context) (map[string]any, error) {
+	// Prefer context-based path (race-free for in-process execution).
+	path, ok := settings.MockedResolversFileFromContext(ctx)
+	if !ok {
+		// Fall back to env var for subprocess execution.
+		envVar := settings.SafeEnvPrefix(settings.BinaryNameFromContext(ctx)) + mockedResolversEnvSuffix
+		path = os.Getenv(envVar)
+	}
+	if path == "" {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path comes from test runner context or env var, not user input
+	if err != nil {
+		return nil, fmt.Errorf("reading mocked resolvers file %q: %w", path, err)
+	}
+
+	var mocks map[string]any
+	if err := json.Unmarshal(data, &mocks); err != nil {
+		return nil, fmt.Errorf("parsing mocked resolvers file: %w", err)
+	}
+
+	return mocks, nil
 }

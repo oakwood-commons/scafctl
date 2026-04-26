@@ -193,3 +193,29 @@ func TestIntoContext_FromContext_roundtrip(t *testing.T) {
 		})
 	}
 }
+
+func TestMockedResolversFileContext_RoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := WithMockedResolversFile(context.Background(), "/tmp/mocks.json")
+	path, ok := MockedResolversFileFromContext(ctx)
+	if !ok || path != "/tmp/mocks.json" {
+		t.Errorf("MockedResolversFileFromContext = (%q, %v); want (/tmp/mocks.json, true)", path, ok)
+	}
+}
+
+func TestMockedResolversFileContext_Missing(t *testing.T) {
+	t.Parallel()
+	_, ok := MockedResolversFileFromContext(context.Background())
+	if ok {
+		t.Error("MockedResolversFileFromContext should return false for empty context")
+	}
+}
+
+func TestMockedResolversFileContext_EmptyString(t *testing.T) {
+	t.Parallel()
+	ctx := WithMockedResolversFile(context.Background(), "")
+	_, ok := MockedResolversFileFromContext(ctx)
+	if ok {
+		t.Error("MockedResolversFileFromContext should return false for empty path")
+	}
+}

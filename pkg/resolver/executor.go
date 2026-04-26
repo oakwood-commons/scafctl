@@ -65,6 +65,7 @@ type Executor struct {
 	validateAll      bool             // Continue execution and collect all errors instead of stopping at first
 	skipValidation   bool             // Skip the validation phase of all resolvers
 	skipTransform    bool             // Skip the transform and validation phases of all resolvers
+	mockedResolvers  map[string]any   // Pre-populated resolver values that skip execution
 }
 
 // ExecutorOption is a functional option for configuring the Executor
@@ -140,6 +141,16 @@ func WithSkipValidation(enabled bool) ExecutorOption {
 func WithSkipTransform(enabled bool) ExecutorOption {
 	return func(e *Executor) {
 		e.skipTransform = enabled
+	}
+}
+
+// WithMockedResolvers pre-populates resolver values so that the corresponding
+// resolvers skip execution entirely and return the mocked value. This enables
+// functional testing of downstream resolvers and CEL expressions without
+// hitting external APIs or services.
+func WithMockedResolvers(mocks map[string]any) ExecutorOption {
+	return func(e *Executor) {
+		e.mockedResolvers = mocks
 	}
 }
 
@@ -252,6 +263,17 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 	// Also add parameters directly to resolver context for CEL expressions
 	for key, value := range params {
 		resolverCtx.Set(key, value)
+	}
+
+	// Inject mocked resolver values. These resolvers will be skipped during
+	// execution (see executeResolver) and downstream resolvers can reference
+	// them normally via CEL expressions.
+	for name, value := range e.mockedResolvers {
+		resolverCtx.SetResult(name, &ExecutionResult{
+			Value:  value,
+			Status: ExecutionStatusSuccess,
+		})
+		lgr.V(1).Info("injected mocked resolver value", "resolver", name)
 	}
 
 	// Track failed resolvers for validate-all mode
@@ -559,6 +581,18 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	resolverContext, cancelResolver := context.WithTimeout(ctx, timeout)
 	defer cancelResolver()
 
+	// Check if this resolver has a mocked value (injected via WithMockedResolvers).
+	// If so, the value is already in the resolver context; skip execution entirely.
+	// Note: we do NOT call OnResolverComplete here because the phase runner
+	// (executePhase) already emits the completion callback after executeResolver returns.
+	if resolverCtx.Has(r.Name) && e.isMocked(r.Name) {
+		mockedValue, _ := resolverCtx.Get(r.Name)
+		result.Value = mockedValue
+		result.Status = ExecutionStatusSuccess
+		resolverLgr.V(1).Info("resolver mocked — skipping execution")
+		return false, nil
+	}
+
 	// Check when condition
 	if r.When != nil {
 		shouldExecute, err := e.evaluateCondition(resolverContext, r.When)
@@ -713,7 +747,15 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	return false, nil
 }
 
-// evaluateCondition evaluates a condition expression
+// isMocked returns true if the resolver name is in the mocked resolvers set.
+func (e *Executor) isMocked(name string) bool {
+	if e.mockedResolvers == nil {
+		return false
+	}
+	_, ok := e.mockedResolvers[name]
+	return ok
+}
+
 func (e *Executor) evaluateCondition(ctx context.Context, cond *Condition) (bool, error) {
 	if cond == nil || cond.Expr == nil {
 		return true, nil
