@@ -11,6 +11,7 @@ type contextKey string
 
 const (
 	settingsContextKey contextKey = "settings"
+	mockedResolversKey contextKey = "mocked_resolvers_file"
 )
 
 // IntoContext stores a Settings object in the context
@@ -32,4 +33,18 @@ func BinaryNameFromContext(ctx context.Context) string {
 		return s.BinaryName
 	}
 	return CliBinaryName
+}
+
+// WithMockedResolversFile stores the path to a mocked resolvers JSON file in the context.
+// Used by the test runner to pass mock data to in-process command execution without
+// relying on process-global environment variables.
+func WithMockedResolversFile(ctx context.Context, path string) context.Context {
+	return context.WithValue(ctx, mockedResolversKey, path)
+}
+
+// MockedResolversFileFromContext returns the mocked resolvers file path from
+// context, if set. Returns empty string and false when not present.
+func MockedResolversFileFromContext(ctx context.Context) (string, bool) {
+	val, ok := ctx.Value(mockedResolversKey).(string)
+	return val, ok && val != ""
 }

@@ -56,7 +56,7 @@ spec:
           - provider: directory
             inputs:
               operation: list
-              path: examples/solutions/template-directory/templates
+              path: templates
               recursive: true
               filterGlob: "*.tpl"
               includeContent: true

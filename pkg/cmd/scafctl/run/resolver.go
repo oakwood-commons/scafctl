@@ -332,13 +332,6 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
-	// Capture the caller's working directory before preparing the solution,
-	// which may chdir into a bundle extraction directory.
-	originalCwd, err := provider.GetWorkingDirectory(ctx)
-	if err != nil {
-		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
-	}
-
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
@@ -346,10 +339,12 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	// Set the solution directory for child-solution path resolution.
+	// Set the solution directory for resolver-phase path resolution.
 	// --base-dir takes precedence; otherwise use the solution file's directory.
-	// When SolutionDirectory is set, also set WorkingDirectory so that providers
-	// like file/exec continue to resolve paths against the caller's CWD.
+	//
+	// WorkingDirectory is intentionally NOT set for the resolver-phase context.
+	// AbsFromContext checks WorkingDirectory before SolutionDirectory, so setting
+	// both causes WorkingDirectory to win and SolutionDirectory to be ignored.
 	//
 	// For bundle runs (catalog: prefix with non-empty solutionDir), only set
 	// SolutionDirectory so resolver paths resolve against the bundle extraction
@@ -362,12 +357,10 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
-		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
 	case isBundleRun:
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	case solutionDir != "":
-		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 

@@ -386,6 +386,73 @@ func TestTestCase_Validate_NegativeTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "timeout must be positive")
 }
 
+func TestTestCase_Validate_BaseDirValid(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:    "test",
+		Command: []string{"run", "resolver"},
+		BaseDir: "myapp",
+		Assertions: []soltesting.Assertion{
+			{Contains: "hello"},
+		},
+	}
+	err := tc.Validate()
+	assert.NoError(t, err)
+}
+
+func TestTestCase_Validate_BaseDirAbsoluteRejected(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:    "test",
+		Command: []string{"run", "resolver"},
+		BaseDir: "/absolute/path",
+		Assertions: []soltesting.Assertion{
+			{Contains: "hello"},
+		},
+	}
+	err := tc.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "baseDir must be a relative path")
+}
+
+func TestTestCase_Validate_BaseDirTraversalRejected(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseDir string
+	}{
+		{"parent dir", "../escape"},
+		{"bare dotdot", ".."},
+		{"nested traversal", "a/../../escape"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := &soltesting.TestCase{
+				Name:    "test",
+				Command: []string{"run", "resolver"},
+				BaseDir: tt.baseDir,
+				Assertions: []soltesting.Assertion{
+					{Contains: "hello"},
+				},
+			}
+			err := tc.Validate()
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "baseDir must not contain path traversal")
+		})
+	}
+}
+
+func TestTestCase_Validate_BaseDirDotDotPrefix_NotTraversal(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:    "test",
+		Command: []string{"run", "resolver"},
+		BaseDir: "..hidden",
+		Assertions: []soltesting.Assertion{
+			{Contains: "hello"},
+		},
+	}
+	err := tc.Validate()
+	assert.NoError(t, err, "directory names starting with .. but not a traversal segment should be allowed")
+}
+
 // --- Assertion.Validate tests ---
 
 func TestAssertion_Validate_ExactlyOneRequired(t *testing.T) {
@@ -681,4 +748,60 @@ func TestSkipValue_MarshalYAML_Expression(t *testing.T) {
 	data, err := yaml.Marshal(sv)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "os == 'linux'")
+}
+
+func TestValidate_InputsWithResolverFlags_InArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"standalone -r", []string{"-r", "env=prod"}},
+		{"-r= form", []string{"-r=env=prod"}},
+		{"--resolver", []string{"--resolver", "env=prod"}},
+		{"--resolver= form", []string{"--resolver=env=prod"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := &soltesting.TestCase{
+				Name:    "bad-combo",
+				Command: []string{"run", "resolver"},
+				Args:    tt.args,
+				Inputs:  map[string]string{"env": "prod"},
+				Assertions: []soltesting.Assertion{
+					{Contains: "ok"},
+				},
+			}
+			err := tc.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "resolver flags")
+		})
+	}
+}
+
+func TestValidate_InputsEmptyKey(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:    "empty-key",
+		Command: []string{"run", "resolver"},
+		Inputs:  map[string]string{"": "val"},
+		Assertions: []soltesting.Assertion{
+			{Contains: "ok"},
+		},
+	}
+	err := tc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inputs key must not be empty")
+}
+
+func TestValidate_InputsValid(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:    "valid-inputs",
+		Command: []string{"run", "resolver"},
+		Inputs:  map[string]string{"env": "prod", "region": "us-east-1"},
+		Assertions: []soltesting.Assertion{
+			{Contains: "ok"},
+		},
+	}
+	err := tc.Validate()
+	assert.NoError(t, err)
 }
