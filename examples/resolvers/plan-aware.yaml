@@ -5,13 +5,18 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: plan-aware-example
-  version: 1.0.0
+  displayName: Plan Aware Example
+  category: resolvers
+  tags:
+    - resolver-example
   description: |
     Using __plan to conditionally execute resolvers based on pre-execution
     topology data. Each resolver can access its own or any other resolver's
     topology: phase, dependsOn list, and dependencyCount.
 
 spec:
+  tags:
+    - resolver-example
   resolvers:
     # Phase 1: no dependencies
     base_url:

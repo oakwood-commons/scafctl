@@ -975,3 +975,200 @@ func TestDeduplicateArtifacts_ExactDuplicateCatalog(t *testing.T) {
 	assert.Equal(t, "prod", result[0].Catalog,
 		"exact duplicate catalog should not be appended")
 }
+
+func TestDeduplicateArtifacts_AnnotationMerging(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference:   catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:     "prod",
+			Annotations: map[string]string{"desc": "production app", "team": "platform"},
+		},
+		{
+			Reference:   catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:     "staging",
+			Annotations: map[string]string{"desc": "staging override", "env": "staging"},
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	require.Len(t, result, 1)
+	assert.Equal(t, "production app", result[0].Annotations["desc"],
+		"existing annotation should not be overwritten")
+	assert.Equal(t, "platform", result[0].Annotations["team"],
+		"existing-only annotation should be preserved")
+	assert.Equal(t, "staging", result[0].Annotations["env"],
+		"new annotation should be merged from second artifact")
+}
+
+func TestDeduplicateArtifacts_AnnotationMergingNilTarget(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalog.ArtifactInfo{
+		{
+			Reference: catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:   "prod",
+			// No annotations on first entry
+		},
+		{
+			Reference:   catalog.Reference{Name: "app", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")},
+			Catalog:     "staging",
+			Annotations: map[string]string{"env": "staging"},
+		},
+	}
+
+	result := deduplicateArtifacts(artifacts)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0].Annotations)
+	assert.Equal(t, "staging", result[0].Annotations["env"],
+		"annotations should be initialized from second artifact when first has none")
+}
+
+func TestWarnStaleCredentials_NoStale(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = settings.IntoContext(ctx, settings.NewCliParams())
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+
+	warnStaleCredentials(ctx, w, rc)
+	assert.Empty(t, errBuf.String(), "should not emit warning when credentials are not stale")
+}
+
+func TestWarnStaleCredentials_WithStale_KnownHandler(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	w := writer.New(ioStreams, params)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = settings.IntoContext(ctx, params)
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+	rc.SetStaleForTesting()
+
+	warnStaleCredentials(ctx, w, rc)
+	output := errBuf.String()
+	assert.Contains(t, output, "rejected")
+	assert.Contains(t, output, "anonymous access")
+	assert.Contains(t, output, "auth login github",
+		"should suggest auth login for known registry handler")
+}
+
+func TestWarnStaleCredentials_WithStale_UnknownRegistry(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	w := writer.New(ioStreams, params)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = settings.IntoContext(ctx, params)
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "registry.example.com",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+	rc.SetStaleForTesting()
+
+	warnStaleCredentials(ctx, w, rc)
+	output := errBuf.String()
+	assert.Contains(t, output, "rejected")
+	assert.Contains(t, output, "catalog login registry.example.com",
+		"should suggest catalog login for unknown registry")
+}
+
+func TestWarnStaleCredentials_WithCredentialSource(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	w := writer.New(ioStreams, params)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = settings.IntoContext(ctx, params)
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+	rc.SetStaleForTesting()
+	rc.SetCredentialSourceForTest("docker credential helper (desktop)")
+
+	warnStaleCredentials(ctx, w, rc)
+	output := errBuf.String()
+	assert.Contains(t, output, "docker credential helper (desktop)")
+}
+
+func TestWarnStaleCredentials_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	params.BinaryName = "mycli"
+	w := writer.New(ioStreams, params)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = settings.IntoContext(ctx, params)
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+	rc.SetStaleForTesting()
+
+	warnStaleCredentials(ctx, w, rc)
+	output := errBuf.String()
+	assert.Contains(t, output, "mycli auth login github")
+	assert.NotContains(t, output, "scafctl")
+}
+
+func TestVerboseCredentialSource_WithSource(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	params.Verbose = true
+	w := writer.New(ioStreams, params)
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+	rc.SetCredentialSourceForTest("docker credential helper (desktop)")
+
+	verboseCredentialSource(w, rc)
+	output := errBuf.String()
+	assert.Contains(t, output, "Credential source: docker credential helper (desktop)")
+}
+
+func TestVerboseCredentialSource_Empty(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	params := settings.NewCliParams()
+	params.Verbose = true
+	w := writer.New(ioStreams, params)
+
+	rc, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
+		Registry:   "ghcr.io",
+		Repository: "myorg/solutions",
+	})
+	require.NoError(t, err)
+
+	verboseCredentialSource(w, rc)
+	assert.Empty(t, errBuf.String(), "should not log when credential source is empty")
+}

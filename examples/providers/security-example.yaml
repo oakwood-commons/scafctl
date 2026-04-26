@@ -10,7 +10,11 @@ kind: Solution
 
 metadata:
   name: security-example
-  version: 1.0.0
+  displayName: Security Example
+  category: providers
+  tags:
+    - provider-example
+    - security
   description: Example demonstrating provider security features
 
 spec:

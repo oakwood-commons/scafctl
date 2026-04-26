@@ -467,6 +467,10 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	storeResult, err := builder.StoreSolutionArtifact(ctx, localCatalog, name, version, content, br, builder.StoreOptions{
 		Force:            opts.Force,
 		Source:           opts.File,
+		DisplayName:      sol.Metadata.DisplayName,
+		Description:      sol.Metadata.Description,
+		Category:         sol.Metadata.Category,
+		Tags:             sol.Metadata.Tags,
 		ArtifactCacheDir: paths.ArtifactCacheDir(),
 		ArtifactCacheTTL: settings.DefaultArtifactCacheTTL,
 	})

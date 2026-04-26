@@ -39,7 +39,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	opts := &ListOptions{}
 
 	cCmd := &cobra.Command{
-		Use:     "list",
+		Use:     "list [name[@version]]",
 		Aliases: []string{"ls", "l"},
 		Short:   "List available tests without executing them",
 		Long: `List all functional tests defined in solution files.
@@ -65,10 +65,22 @@ Examples:
 
   # Output as JSON
   scafctl test list -f ./solution.yaml -o json`,
-		Args:         cobra.NoArgs,
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
+		PreRunE: func(_ *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test list"); err != nil {
+					return err
+				}
+				if !get.IsUnambiguousCatalogReference(args[0]) {
+					return fmt.Errorf("bare names are not supported as positional args for test list; use -f to specify a solution file or a versioned catalog ref (name@version)")
+				}
+				opts.File = args[0]
+			}
+			return nil
+		},
 		RunE: func(cCmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			opts.IOStreams = ioStreams

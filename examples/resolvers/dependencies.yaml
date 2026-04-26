@@ -4,7 +4,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: dependencies-example
-  version: 1.0.0
+  displayName: Dependencies Example
+  category: resolvers
+  tags:
+    - resolver-example
   description: |
     Resolver dependencies and execution phases. Resolvers depend on each
     other and execute in parallel within phases:

@@ -4,7 +4,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: transform-pipeline
-  version: 1.0.0
+  displayName: Transform Pipeline
+  category: resolvers
+  tags:
+    - resolver-example
   description: |
     Multi-step data transformation pipeline. Demonstrates chaining
     transforms with __self references, filtering, mapping, and aggregation.

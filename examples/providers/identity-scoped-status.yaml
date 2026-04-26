@@ -8,7 +8,11 @@ kind: Solution
 
 metadata:
   name: identity-scoped-status-example
-  version: 1.0.0
+  displayName: Identity Scoped Status Example
+  category: providers
+  tags:
+    - identity
+    - provider-example
   description: |
     Check scoped token status and metadata. Mints or retrieves a cached
     access token and returns expiry, flow, type, and JWT identity details.

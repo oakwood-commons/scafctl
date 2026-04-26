@@ -5,7 +5,11 @@ kind: Solution
 
 metadata:
   name: message-custom-style-example
-  version: 1.0.0
+  displayName: Message Custom Style Example
+  category: providers
+  tags:
+    - message
+    - provider-example
   description: |
     Custom message styling with colors, icons, and formatting. Style fields
     merge on top of type defaults. Use type: plain for fully custom styling.

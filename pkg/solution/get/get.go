@@ -485,6 +485,35 @@ func IsCatalogReference(s string) bool {
 	return true
 }
 
+// IsUnambiguousCatalogReference returns true only when s is clearly a catalog
+// reference rather than a bare name that could be an action or resolver name.
+// Unlike IsCatalogReference, bare words like "deploy" return false.
+// Accepted forms:
+//   - versioned refs ("my-app@1.0.0")
+//   - registry refs ("ghcr.io/org/sol", "localhost:5000/sol")
+//   - URLs ("https://...", "oci://...")
+func IsUnambiguousCatalogReference(s string) bool {
+	// Exclude obvious local paths.
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, ".") {
+		return false
+	}
+	if strings.Contains(s, "://") {
+		return true
+	}
+	// Versioned catalog ref: name@version (but not @file params like "@params.yaml")
+	if strings.Contains(s, "@") && !strings.HasPrefix(s, "@") {
+		return true
+	}
+	// Registry-style ref with hostname (contains "." or ":" in first segment)
+	if strings.Contains(s, "/") {
+		firstSegment := strings.SplitN(s, "/", 2)[0]
+		if strings.Contains(firstSegment, ".") || strings.Contains(firstSegment, ":") {
+			return true
+		}
+	}
+	return false
+}
+
 // tryLocalCatalogForRef checks the local catalog for a remote reference before
 // fetching from the remote registry. Returns the solution and true if found.
 func (o *Getter) tryLocalCatalogForRef(ctx context.Context, path string) (*solution.Solution, bool) {

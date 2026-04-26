@@ -2,7 +2,6 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: plugin-template
-  version: 1.0.0
   displayName: Plugin Project Template
   description: >-
     Scaffolds a complete scafctl plugin project (provider or auth-handler) with

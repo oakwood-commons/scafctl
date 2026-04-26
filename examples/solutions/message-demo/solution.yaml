@@ -5,7 +5,11 @@ kind: Solution
 
 metadata:
   name: message-demo
-  version: 1.0.0
+  displayName: Message Demo
+  category: solutions
+  tags:
+    - message
+    - solution
   description: |
     Message provider in a complete solution workflow with styled terminal
     output. Demonstrates resolvers, actions, and rich terminal messaging.

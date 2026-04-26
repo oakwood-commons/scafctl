@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: cel-transform-patterns
-  version: 1.0.0
+  displayName: CEL Transform Patterns
+  category: resolvers
+  tags:
+    - cel
+    - resolver-example
   description: |
     Real-world CEL data transformation patterns. Each resolver shows a
     practical pattern you can reuse in your solutions.

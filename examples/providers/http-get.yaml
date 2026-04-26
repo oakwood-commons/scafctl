@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: http-get-example
-  version: 1.0.0
+  displayName: HTTP Get Example
+  category: providers
+  tags:
+    - http
+    - provider-example
   description: Simple HTTP GET request using the http provider
 
 spec:

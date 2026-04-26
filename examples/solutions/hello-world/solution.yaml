@@ -6,7 +6,7 @@ kind: Solution
 
 metadata:
   name: hello-world
-  version: 0.0.1
+  displayName: Hello World
   description: |
     A minimal hello-world solution that demonstrates the basic structure
     of a scafctl solution. Use this as a starting point for building

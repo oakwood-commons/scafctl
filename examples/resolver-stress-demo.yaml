@@ -44,7 +44,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: resolver-stress-demo
-  version: 2.0.0
+  displayName: Resolver Stress Demo
+  category: examples
+  tags:
+    - example
+    - performance
+    - resolver
   description: |
     Stress test with 50+ resolvers across 4+ execution phases. Demonstrates
     validation, long-running operations, transforms, complex dependencies,

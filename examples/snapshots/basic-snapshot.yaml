@@ -7,7 +7,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: snapshot-demo
-  version: 1.0.0
+  displayName: Snapshot Demo
+  category: developer-tools
+  tags:
+    - snapshot
   description: |
     Capture and inspect execution snapshots. Snapshots record resolver
     state for debugging, testing, and comparison.

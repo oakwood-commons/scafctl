@@ -20,7 +20,7 @@ func TestSolution_Defaults(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "./my-solution.yaml", result.Filename)
 	assert.Contains(t, result.YAML, "name: my-solution")
-	assert.Contains(t, result.YAML, "version: \"1.0.0\"")
+	assert.NotContains(t, result.YAML, "version:")
 	assert.Contains(t, result.YAML, "description: A test solution")
 	assert.Contains(t, result.YAML, "provider: parameter")
 	assert.Contains(t, result.YAML, "key: inputName")

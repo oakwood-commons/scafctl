@@ -290,6 +290,10 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		ref.VersionOrDigest(),
 		format.Bytes(result.Size))
 
+	// Warn about stale credentials if anonymous fallback was used.
+	warnStaleCredentials(ctx, w, remoteCatalog)
+	verboseCredentialSource(w, remoteCatalog)
+
 	// When --no-cache is set, invalidate any stale artifact cache entry so that
 	// subsequent run/render/get commands fetch the freshly pulled artifact from
 	// the local catalog rather than a cached copy.

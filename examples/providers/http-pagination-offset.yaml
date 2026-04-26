@@ -6,7 +6,12 @@ kind: Solution
 
 metadata:
   name: http-pagination-offset-example
-  version: 1.0.0
+  displayName: HTTP Pagination Offset Example
+  category: providers
+  tags:
+    - http
+    - pagination
+    - provider-example
   description: Offset-based pagination uses offset and limit query parameters
 
 spec:

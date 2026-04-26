@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: static-hello-example
-  version: 1.0.0
+  displayName: Static Hello Example
+  category: providers
+  tags:
+    - provider-example
+    - static
   description: Simple static string value using the static provider
 
 spec:

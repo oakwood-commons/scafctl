@@ -9,7 +9,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: parameters-example
-  version: 1.0.0
+  displayName: Parameters Example
+  category: resolvers
+  tags:
+    - resolver-example
   description: |
     CLI parameter usage with default values and type coercion.
     Demonstrates positional args, -r flag, @file loading, @- stdin,

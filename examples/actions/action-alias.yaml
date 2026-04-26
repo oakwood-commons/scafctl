@@ -4,7 +4,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: action-alias-demo
-  version: 1.0.0
+  displayName: Action Alias Demo
+  category: actions
+  tags:
+    - action
+    - action-example
+    - workflow
   description: |
     Action aliases for shorter, more readable expression references.
     Use config.results.endpoint instead of __actions.fetchConfiguration.results.endpoint.

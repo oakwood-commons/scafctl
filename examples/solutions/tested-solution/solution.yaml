@@ -3,13 +3,16 @@ kind: Solution
 
 metadata:
   name: tested-solution
+  displayName: Tested Solution
+  category: solutions
+  tags:
+    - solution
   description: |
     Example solution demonstrating functional testing features.
     Includes resolvers, a template action, and inline tests with
     CEL assertions, substring checks, inheritance, snapshots, init/cleanup,
     tags, expected failures, environment variables, conditional skips,
     retries, and more.
-  version: 1.0.0
 
 spec:
   resolvers:

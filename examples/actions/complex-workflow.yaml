@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: complex-workflow
-  version: 1.0.0
+  displayName: Complex Workflow
+  category: actions
+  tags:
+    - action-example
+    - workflow
   description: |
     Full CI/CD-style workflow demonstrating sequential and parallel dependencies,
     forEach expansion, conditional execution, error handling, retry with backoff,

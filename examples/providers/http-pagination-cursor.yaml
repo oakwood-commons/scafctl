@@ -6,7 +6,12 @@ kind: Solution
 
 metadata:
   name: http-pagination-cursor-example
-  version: 1.0.0
+  displayName: HTTP Pagination Cursor Example
+  category: providers
+  tags:
+    - http
+    - pagination
+    - provider-example
   description: |
     Cursor-based pagination where a token is extracted from the response
     body to fetch subsequent pages until the cursor is null.

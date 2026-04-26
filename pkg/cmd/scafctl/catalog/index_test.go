@@ -288,3 +288,127 @@ func TestCommandIndexPush_NoAppNameInRunE(t *testing.T) {
 	// The push command should exist and have RunE wired.
 	assert.NotNil(t, push.RunE)
 }
+
+func TestCommandIndexShow_FilterFlags(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandIndex(cliParams, ioStreams, "scafctl/catalog")
+
+	show, _, err := cmd.Find([]string{"show"})
+	require.NoError(t, err)
+
+	assert.NotNil(t, show.Flags().Lookup("kind"))
+	assert.NotNil(t, show.Flags().Lookup("search"))
+	assert.NotNil(t, show.Flags().ShorthandLookup("k"))
+	assert.NotNil(t, show.Flags().ShorthandLookup("s"))
+}
+
+func TestFilterIndexArtifacts(t *testing.T) {
+	t.Parallel()
+
+	artifacts := []catalogpkg.DiscoveredArtifact{
+		{Kind: catalogpkg.ArtifactKindSolution, Name: "hello-world", DisplayName: "Hello World", Category: "getting-started", Description: "A starter solution"},
+		{Kind: catalogpkg.ArtifactKindProvider, Name: "sleep"},
+		{Kind: catalogpkg.ArtifactKindProvider, Name: "env"},
+		{Kind: catalogpkg.ArtifactKindAuthHandler, Name: "entra"},
+	}
+
+	tests := []struct {
+		name      string
+		kind      string
+		search    string
+		wantCount int
+		wantNames []string
+	}{
+		{
+			name:      "no filters returns all",
+			wantCount: 4,
+		},
+		{
+			name:      "filter by kind solution",
+			kind:      "solution",
+			wantCount: 1,
+			wantNames: []string{"hello-world"},
+		},
+		{
+			name:      "filter by kind provider",
+			kind:      "provider",
+			wantCount: 2,
+			wantNames: []string{"sleep", "env"},
+		},
+		{
+			name:      "filter by kind case-insensitive",
+			kind:      "Provider",
+			wantCount: 2,
+		},
+		{
+			name:      "search by name",
+			search:    "hello",
+			wantCount: 1,
+			wantNames: []string{"hello-world"},
+		},
+		{
+			name:      "search by display name",
+			search:    "World",
+			wantCount: 1,
+			wantNames: []string{"hello-world"},
+		},
+		{
+			name:      "search by category",
+			search:    "getting-started",
+			wantCount: 1,
+		},
+		{
+			name:      "search by description",
+			search:    "starter",
+			wantCount: 1,
+		},
+		{
+			name:      "kind and search combined",
+			kind:      "provider",
+			search:    "env",
+			wantCount: 1,
+			wantNames: []string{"env"},
+		},
+		{
+			name:      "no match",
+			search:    "nonexistent",
+			wantCount: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := filterIndexArtifacts(artifacts, tc.kind, tc.search)
+			assert.Len(t, result, tc.wantCount)
+			if tc.wantNames != nil {
+				names := make([]string, len(result))
+				for i, a := range result {
+					names[i] = a.Name
+				}
+				assert.Equal(t, tc.wantNames, names)
+			}
+		})
+	}
+}
+
+func TestMatchesSearch(t *testing.T) {
+	t.Parallel()
+
+	a := catalogpkg.DiscoveredArtifact{
+		Name:        "hello-world",
+		DisplayName: "Hello World Starter",
+		Description: "A minimal getting-started solution",
+		Category:    "templates",
+	}
+
+	assert.True(t, matchesSearch(a, "hello"))
+	assert.True(t, matchesSearch(a, "starter"))
+	assert.True(t, matchesSearch(a, "minimal"))
+	assert.True(t, matchesSearch(a, "templates"))
+	assert.False(t, matchesSearch(a, "nonexistent"))
+}

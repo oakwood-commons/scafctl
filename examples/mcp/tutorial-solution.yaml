@@ -5,7 +5,8 @@ kind: Solution
 
 metadata:
   name: greeting-service
-  version: 1.0.0
+  displayName: Greeting Service
+  category: developer-tools
   description: A simple greeting service that demonstrates resolvers, validation, and actions.
   maintainers:
     - name: Tutorial User

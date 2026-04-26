@@ -17,7 +17,7 @@ func TestCommandLint(t *testing.T) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandLint(cliParams, ioStreams, "scafctl")
 	require.NotNil(t, cmd)
-	assert.Equal(t, "lint", cmd.Use)
+	assert.Equal(t, "lint [name[@version]]", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "l")
 	assert.Contains(t, cmd.Aliases, "check")
 	assert.NotEmpty(t, cmd.Short)

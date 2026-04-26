@@ -6,7 +6,12 @@ kind: Solution
 
 metadata:
   name: http-poll-example
-  version: 1.0.0
+  displayName: HTTP Poll Example
+  category: providers
+  tags:
+    - http
+    - polling
+    - provider-example
   description: |
     HTTP provider with polling until a condition is met. Useful for
     waiting on async operations like deployments or CI pipelines.

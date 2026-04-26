@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: hcl-format-example
-  version: 1.0.0
+  displayName: HCL Format Example
+  category: providers
+  tags:
+    - hcl
+    - provider-example
   description: |
     Format poorly-formatted Terraform content to canonical style.
     The output changed field indicates whether modification occurred.

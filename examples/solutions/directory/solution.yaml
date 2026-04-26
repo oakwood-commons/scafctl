@@ -5,13 +5,16 @@ kind: Solution
 
 metadata:
   name: directory-provider-example
+  displayName: Directory Provider Example
+  category: solutions
+  tags:
+    - solution
   description: |
     Demonstrates the directory provider capabilities:
     - Listing directory contents with filtering
     - Recursive traversal with glob patterns
     - Reading file contents with checksums
     - Creating, removing, and copying directories
-  version: 1.0.0
 
 spec:
   resolvers:

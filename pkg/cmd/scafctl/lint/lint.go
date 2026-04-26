@@ -75,7 +75,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	}
 
 	cmd := &cobra.Command{
-		Use:     "lint",
+		Use:     "lint [name[@version]]",
 		Aliases: []string{"l", "check"},
 		Short:   "Lint a solution file for issues and best practices",
 		Long: heredoc.Doc(`
@@ -120,9 +120,18 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			# Output as JSON for CI integration
 			scafctl lint -f ./solution.yaml -o json
 		`), settings.CliBinaryName, cliParams.BinaryName),
-		Args: cobra.NoArgs,
+		Args: cobra.MaximumNArgs(1),
+		PreRunE: func(_ *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" lint"); err != nil {
+					return err
+				}
+				options.File = args[0]
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
 			lgr := logger.FromContext(cmd.Context())
 			ctx = logger.WithLogger(ctx, lgr)

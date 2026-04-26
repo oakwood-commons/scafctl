@@ -14,7 +14,10 @@ kind: Solution
 
 metadata:
   name: auto-fetch-demo
-  version: 1.0.0
+  displayName: Auto Fetch Demo
+  category: developer-tools
+  tags:
+    - plugin
   description: |
     Automatic plugin fetching from catalogs at runtime. Declares plugin
     dependencies that are resolved and cached on first use.

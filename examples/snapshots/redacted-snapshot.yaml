@@ -7,7 +7,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: redacted-snapshot-demo
-  version: 1.0.0
+  displayName: Redacted Snapshot Demo
+  category: developer-tools
+  tags:
+    - snapshot
   description: |
     Create snapshots with sensitive values redacted. Useful for sharing
     snapshots without exposing secrets.

@@ -4,7 +4,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: result-schema-validation
-  version: 1.0.0
+  displayName: Result Schema Validation
+  category: actions
+  tags:
+    - action-example
+    - validation
+    - workflow
   description: |
     Result schema validation for actions using JSON Schema 2020-12.
     Enables self-documenting actions and catches result mismatches

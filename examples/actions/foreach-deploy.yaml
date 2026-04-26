@@ -4,7 +4,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: foreach-deploy
-  version: 1.0.0
+  displayName: Foreach Deploy
+  category: actions
+  tags:
+    - action-example
+    - foreach
+    - workflow
   description: |
     ForEach expansion for deploying to multiple targets. The deploy action
     expands into deploy[0], deploy[1], deploy[2] -- one per server.
