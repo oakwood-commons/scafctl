@@ -36,6 +36,12 @@ type ScaffoldInput struct {
 	// discovered through static analysis of provider inputs.
 	// These are automatically populated onto generated test cases.
 	FileDependencies []string
+
+	// SolutionSubdir is the subdirectory path of the solution file relative to
+	// the project root (e.g., "myapp" when the solution is at myapp/solution.yaml).
+	// When set, generated test cases include BaseDir so the test runner nests
+	// solution files under this subdirectory within the sandbox.
+	SolutionSubdir string
 }
 
 // Scaffold generates a skeleton test suite from the provided solution data.
@@ -76,6 +82,16 @@ func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 		for name, tc := range result.Cases {
 			if name != filesBaseTemplateName {
 				tc.Extends = []string{filesBaseTemplateName}
+			}
+		}
+	}
+
+	// When the solution lives in a subdirectory, set BaseDir on all non-template
+	// test cases so the runner nests solution files under this subdirectory within the sandbox.
+	if input.SolutionSubdir != "" {
+		for name, tc := range result.Cases {
+			if !strings.HasPrefix(name, "_") {
+				tc.BaseDir = input.SolutionSubdir
 			}
 		}
 	}
@@ -135,7 +151,7 @@ func addResolverTests(result *ScaffoldResult, resolvers map[string]*resolver.Res
 		// Generate a basic resolver output test
 		exitCodeZero := 0
 		testName := fmt.Sprintf("resolver-%s", name)
-		result.Cases[testName] = &TestCase{
+		tc := &TestCase{
 			Description: fmt.Sprintf("Verify resolver %q produces expected output", name),
 			Command:     []string{"run", "resolver"},
 			Args:        []string{"--resolver", name, "-o", "json"},
@@ -148,6 +164,14 @@ func addResolverTests(result *ScaffoldResult, resolvers map[string]*resolver.Res
 				},
 			},
 		}
+
+		// If the resolver uses a parameter provider, add an inputs entry with
+		// the default value (or a placeholder) so tests can override it.
+		if paramKey, paramDefault, ok := extractParameterDefault(r); ok {
+			tc.Inputs = map[string]string{paramKey: paramDefault}
+		}
+
+		result.Cases[testName] = tc
 
 		// If the resolver has validation rules, generate an expectFailure test
 		if r.Validate != nil && len(r.Validate.With) > 0 {
@@ -236,4 +260,52 @@ func ScaffoldToYAML(result *ScaffoldResult) ([]byte, error) {
 		},
 	}
 	return yaml.Marshal(wrapper)
+}
+
+// extractParameterDefault checks whether a resolver uses the "parameter"
+// provider and returns its parameter key, default value (or a placeholder),
+// and whether it was found.
+// The third return value is false if the resolver is not parameter-based.
+//
+// It detects defaults from two patterns:
+//  1. A static provider in the fallback chain after the parameter provider.
+//  2. No fallback -- returns "TODO" as a placeholder.
+func extractParameterDefault(r *resolver.Resolver) (string, string, bool) {
+	if r.Resolve == nil {
+		return "", "", false
+	}
+
+	hasParameter := false
+	paramKey := ""
+	for i, src := range r.Resolve.With {
+		if src.Provider == "parameter" {
+			hasParameter = true
+
+			// Extract the parameter key from inputs.key
+			if src.Inputs != nil {
+				if keyRef, ok := src.Inputs["key"]; ok && keyRef != nil {
+					if s, ok := keyRef.Literal.(string); ok && s != "" {
+						paramKey = s
+					}
+				}
+			}
+
+			// Check if next source in fallback chain is static with a literal value.
+			if paramKey != "" && i+1 < len(r.Resolve.With) {
+				next := r.Resolve.With[i+1]
+				if next.Provider == "static" && next.Inputs != nil {
+					if valRef, ok := next.Inputs["value"]; ok && valRef != nil {
+						if s, ok := valRef.Literal.(string); ok && s != "" {
+							return paramKey, s, true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if hasParameter && paramKey != "" {
+		return paramKey, "TODO", true
+	}
+	return "", "", false
 }

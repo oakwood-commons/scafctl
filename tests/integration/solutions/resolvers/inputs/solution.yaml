@@ -1,0 +1,85 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-inputs-field
+  version: 1.0.0
+  description: |
+    Functional tests for the inputs test case field.
+    Verifies that the inputs map is translated to -r key=value CLI arguments
+    for the parameter provider.
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment from parameter
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: environment
+          - provider: static
+            inputs:
+              value: dev
+
+    region:
+      description: Target region from parameter
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+          - provider: static
+            inputs:
+              value: us-west-2
+
+    endpoint:
+      description: Builds an endpoint URL from environment and region
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"https://" + _.environment + "." + _.region + ".example.com"'
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for input tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+
+      defaults:
+        description: Without inputs, parameters use their defaults
+        extends: [_base]
+        assertions:
+          - expression: __output.environment == "dev"
+          - expression: __output.region == "us-west-2"
+          - expression: __output.endpoint == "https://dev.us-west-2.example.com"
+
+      override-single:
+        description: Override a single parameter via inputs
+        extends: [_base]
+        inputs:
+          environment: staging
+        assertions:
+          - expression: __output.environment == "staging"
+            message: Inputs should override the default value
+          - expression: __output.region == "us-west-2"
+            message: Unset inputs should keep their defaults
+          - expression: __output.endpoint == "https://staging.us-west-2.example.com"
+
+      override-multiple:
+        description: Override multiple parameters via inputs
+        extends: [_base]
+        inputs:
+          environment: prod
+          region: eu-west-1
+        assertions:
+          - expression: __output.environment == "prod"
+          - expression: __output.region == "eu-west-1"
+          - expression: __output.endpoint == "https://prod.eu-west-1.example.com"

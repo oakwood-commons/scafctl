@@ -169,6 +169,16 @@ func mergeTestCase(dst, src *TestCase) {
 		}
 	}
 
+	// inputs: merged map, src wins on key conflict
+	if len(src.Inputs) > 0 {
+		if dst.Inputs == nil {
+			dst.Inputs = make(map[string]string)
+		}
+		for k, v := range src.Inputs {
+			dst.Inputs[k] = v
+		}
+	}
+
 	// Scalar fields: src wins if set
 	if src.Description != "" {
 		dst.Description = src.Description
@@ -196,6 +206,24 @@ func mergeTestCase(dst, src *TestCase) {
 	}
 	if src.Retries > 0 {
 		dst.Retries = src.Retries
+	}
+	if src.BaseDir != "" {
+		dst.BaseDir = src.BaseDir
+	}
+
+	// services: appended (dst first, then src)
+	if len(src.Services) > 0 {
+		dst.Services = append(dst.Services, src.Services...)
+	}
+
+	// mocks: merged map, src wins on key conflict
+	if len(src.Mocks) > 0 {
+		if dst.Mocks == nil {
+			dst.Mocks = make(map[string]any)
+		}
+		for k, v := range src.Mocks {
+			dst.Mocks[k] = v
+		}
 	}
 }
 

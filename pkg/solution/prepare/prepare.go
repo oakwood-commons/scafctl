@@ -206,13 +206,23 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// For file-based loading: use the file's parent directory.
 	// For bundles (including catalog bundles): use the bundle extraction directory.
 	// For stdin or unbundled catalog references: leave empty (falls back to CWD).
+	//
+	// Prefer sol.GetPath() over the original `path` argument because when
+	// auto-discovery is performed inside GetWithBundle (path == ""), the
+	// original path stays empty while the solution object carries the resolved
+	// file path set by FromLocalFileSystem. Fall back to `path` for callers
+	// that use custom getters (e.g. test mocks) that don't call SetPath.
 	var solutionDir string
-	isCatalogRef := strings.HasPrefix(sol.GetPath(), "catalog:")
+	resolvedPath := sol.GetPath()
+	if resolvedPath == "" {
+		resolvedPath = path
+	}
+	isCatalogRef := strings.HasPrefix(resolvedPath, "catalog:")
 	switch {
 	case bundleDir != "":
 		solutionDir = bundleDir
-	case path != "-" && !isCatalogRef:
-		absPath, absErr := provider.AbsFromContext(ctx, path)
+	case resolvedPath != "" && resolvedPath != "-" && !isCatalogRef:
+		absPath, absErr := provider.AbsFromContext(ctx, resolvedPath)
 		if absErr == nil {
 			solutionDir = filepath.Dir(absPath)
 		}

@@ -231,3 +231,35 @@ func BenchmarkComposeExecMocks(b *testing.B) {
 		composeExecMocks([]*mockexec.MockExec{mock})
 	}
 }
+
+func TestSetEnvVars_AppliesAndRestores(t *testing.T) {
+	// Set a pre-existing var to verify restore
+	t.Setenv("SOLTESTING_EXISTING", "original")
+
+	envMap := map[string]any{
+		"SOLTESTING_EXISTING": "overridden",
+		"SOLTESTING_NEW":      "new-value",
+	}
+
+	restore := setEnvVars(envMap)
+
+	assert.Equal(t, "overridden", os.Getenv("SOLTESTING_EXISTING"))
+	assert.Equal(t, "new-value", os.Getenv("SOLTESTING_NEW"))
+
+	restore()
+
+	assert.Equal(t, "original", os.Getenv("SOLTESTING_EXISTING"))
+	_, exists := os.LookupEnv("SOLTESTING_NEW")
+	assert.False(t, exists, "new var should be unset after restore")
+}
+
+func TestRunnerAppName_DefaultFallback(t *testing.T) {
+	r := &Runner{}
+	// With no BinaryName set, should fall back to paths.AppName()
+	assert.NotEmpty(t, r.appName())
+}
+
+func TestRunnerAppName_ExplicitName(t *testing.T) {
+	r := &Runner{BinaryName: "mycli"}
+	assert.Equal(t, "mycli", r.appName())
+}
