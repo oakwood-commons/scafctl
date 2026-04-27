@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -160,12 +161,14 @@ Examples:
 }
 
 // parseActionArgs splits positional args into action names and dynamic parameters.
-// Bare words are action names, args containing '=' or starting with '@' are parameters.
-// Only URLs (http(s)://, oci://) are auto-detected as solution refs when no -f flag is set.
+// The first positional arg is treated as a catalog/registry reference only if it is
+// unambiguous (versioned ref, registry ref, or URL). Bare names like "deploy" are
+// always treated as action names. Args containing '=' or starting with '@' are
+// always dynamic parameters.
 func parseActionArgs(args []string, options *ActionOptions, fileExplicit bool) {
 	for _, arg := range args {
 		switch {
-		case !fileExplicit && options.File == "" && pkgfilepath.IsURL(arg):
+		case !fileExplicit && options.File == "" && (pkgfilepath.IsURL(arg) || get.IsUnambiguousCatalogReference(arg)):
 			options.File = arg
 			fileExplicit = true
 		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):

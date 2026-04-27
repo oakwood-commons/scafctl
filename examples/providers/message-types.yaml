@@ -5,7 +5,11 @@ kind: Solution
 
 metadata:
   name: message-types-example
-  version: 1.0.0
+  displayName: Message Types Example
+  category: providers
+  tags:
+    - message
+    - provider-example
   description: All built-in message types with their default styling (icons and colors)
 
 spec:

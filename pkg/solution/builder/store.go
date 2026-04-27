@@ -23,6 +23,18 @@ type StoreOptions struct {
 	// Source is the path to the solution file, recorded as an annotation.
 	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"Source file path for annotation"`
 
+	// DisplayName is the human-readable name, stored as an OCI annotation.
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name"`
+
+	// Description is the solution description, stored as an OCI annotation.
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Solution description"`
+
+	// Category classifies the solution, stored as an OCI annotation.
+	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"Solution category"`
+
+	// Tags are searchable keywords, stored as a comma-separated OCI annotation.
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable tags"`
+
 	// ArtifactCacheDir is the path to the artifact cache directory.
 	// When non-empty, the corresponding artifact cache entry is invalidated
 	// after a successful store to prevent stale reads on subsequent runs.
@@ -60,6 +72,10 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 
 	annotations := catalog.NewAnnotationBuilder().
 		Set(catalog.AnnotationSource, opts.Source).
+		Set(catalog.AnnotationDisplayName, opts.DisplayName).
+		Set(catalog.AnnotationDescription, opts.Description).
+		Set(catalog.AnnotationCategory, opts.Category).
+		SetTags(opts.Tags).
 		Build()
 
 	var info catalog.ArtifactInfo

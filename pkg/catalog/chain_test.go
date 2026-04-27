@@ -25,6 +25,7 @@ type mockCatalog struct {
 	deleteFunc          func(ctx context.Context, ref Reference) error
 	fetchFunc           func(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error)
 	fetchWithBundleFunc func(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error)
+	resolveFunc         func(ctx context.Context, ref Reference) (ArtifactInfo, error)
 }
 
 type mockArtifact struct {
@@ -86,6 +87,9 @@ func (m *mockCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byt
 }
 
 func (m *mockCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	if m.resolveFunc != nil {
+		return m.resolveFunc(ctx, ref)
+	}
 	a, ok := m.artifacts[ref.String()]
 	if !ok {
 		return ArtifactInfo{}, ErrArtifactNotFound

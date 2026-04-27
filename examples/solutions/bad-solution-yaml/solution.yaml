@@ -3,7 +3,10 @@ kind: Solution
 
 metadata:
   name: bad-solution-yaml
-  version: 1.0.0
+  displayName: Bad Solution YAML
+  category: solutions
+  tags:
+    - solution
   description: A solution with invalid YAML syntax to demonstrate error handling
 
 spec:

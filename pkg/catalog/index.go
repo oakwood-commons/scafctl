@@ -48,6 +48,24 @@ func (c *RemoteCatalog) FetchIndex(ctx context.Context) ([]DiscoveredArtifact, e
 	}
 	repo.Client = c.client
 
+	artifacts, fetchErr := c.fetchIndexFromRepo(ctx, repo)
+	if fetchErr != nil && isOCIAuthError(fetchErr) {
+		c.logger.V(1).Info("catalog index fetch rejected by registry, retrying anonymously",
+			"repo", repoPath, "error", fetchErr.Error())
+		c.switchToAnonymous()
+		repo.Client = c.client
+		anonArtifacts, anonErr := c.fetchIndexFromRepo(ctx, repo)
+		if anonErr != nil {
+			return nil, fetchErr
+		}
+		return anonArtifacts, nil
+	}
+
+	return artifacts, fetchErr
+}
+
+// fetchIndexFromRepo fetches and parses the catalog index from an OCI repository.
+func (c *RemoteCatalog) fetchIndexFromRepo(ctx context.Context, repo *remote.Repository) ([]DiscoveredArtifact, error) {
 	// Resolve the manifest descriptor.
 	manifestDesc, err := repo.Resolve(ctx, catalogIndexTag)
 	if err != nil {

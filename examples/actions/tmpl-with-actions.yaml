@@ -13,7 +13,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: tmpl-actions-demo
-  version: 1.0.0
+  displayName: Tmpl Actions Demo
+  category: actions
+  tags:
+    - action
+    - action-example
+    - workflow
   description: Using Go templates to format action results
 
 spec:

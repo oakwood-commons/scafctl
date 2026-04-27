@@ -14,7 +14,11 @@ kind: Solution
 
 metadata:
   name: file-conflict-strategies-demo
-  version: 1.0.0
+  displayName: File Conflict Strategies Demo
+  category: providers
+  tags:
+    - file
+    - provider-example
   description: |
     File provider conflict resolution strategies: skip-unchanged, overwrite,
     skip, error, and append (with line-level deduplication). Includes

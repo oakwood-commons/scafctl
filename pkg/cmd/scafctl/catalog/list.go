@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
@@ -40,13 +41,26 @@ type ListOptions struct {
 
 // ArtifactListItem represents an artifact in list output.
 type ArtifactListItem struct {
-	Name      string `json:"name" yaml:"name"`
-	Version   string `json:"version" yaml:"version"`
-	Tag       string `json:"tag" yaml:"tag"`
-	Kind      string `json:"kind" yaml:"kind"`
-	Digest    string `json:"digest" yaml:"digest"`
-	CreatedAt string `json:"createdAt" yaml:"createdAt"`
-	Catalog   string `json:"catalog" yaml:"catalog"`
+	Name        string `json:"name" yaml:"name"`
+	Version     string `json:"version" yaml:"version"`
+	Tag         string `json:"tag" yaml:"tag"`
+	Kind        string `json:"kind" yaml:"kind"`
+	DisplayName string `json:"displayName" yaml:"displayName"`
+	Category    string `json:"category" yaml:"category"`
+	Digest      string `json:"digest" yaml:"digest"`
+	CreatedAt   string `json:"createdAt" yaml:"createdAt"`
+	Catalog     string `json:"catalog" yaml:"catalog"`
+}
+
+// listColumnHints controls table column display for catalog list.
+var listColumnHints = map[string]tui.ColumnHint{
+	"name":        {MaxWidth: 30, Priority: 10},
+	"tag":         {MaxWidth: 12, Priority: 8},
+	"kind":        {MaxWidth: 12, Priority: 10},
+	"displayName": {MaxWidth: 25, Priority: 6, DisplayName: "display name"},
+	"category":    {MaxWidth: 15, Priority: 4},
+	"digest":      {MaxWidth: 40, Priority: 2},
+	"catalog":     {MaxWidth: 25, Priority: 8},
 }
 
 // artifactListSchema controls table column display. Columns in the "required" array
@@ -58,13 +72,15 @@ var artifactListSchema = []byte(`{
 		"type": "object",
 		"required": ["name", "tag", "kind", "catalog"],
 		"properties": {
-			"name":      { "type": "string", "title": "Name" },
-			"tag":       { "type": "string", "title": "Tag" },
-			"kind":      { "type": "string", "title": "Kind" },
-			"catalog":   { "type": "string", "title": "Catalog" },
-			"version":   { "type": "string", "deprecated": true },
-			"digest":    { "type": "string", "title": "Digest" },
-			"createdAt": { "type": "string", "deprecated": true }
+			"name":        { "type": "string", "title": "Name" },
+			"tag":         { "type": "string", "title": "Tag" },
+			"kind":        { "type": "string", "title": "Kind" },
+			"displayName": { "type": "string", "title": "Display Name" },
+			"category":    { "type": "string", "title": "Category" },
+			"catalog":     { "type": "string", "title": "Catalog" },
+			"version":     { "type": "string", "deprecated": true },
+			"digest":      { "type": "string", "title": "Digest" },
+			"createdAt":   { "type": "string", "deprecated": true }
 		}
 	}
 }`)
@@ -131,8 +147,9 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			options.AppName = cliParams.BinaryName
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"name", "tag", "kind", "digest", "catalog"}),
+				kvx.WithOutputColumnOrder([]string{"name", "tag", "kind", "displayName", "category", "digest", "catalog"}),
 				kvx.WithOutputSchemaJSON(artifactListSchema),
+				kvx.WithOutputColumnHints(listColumnHints),
 			)
 			return runList(cmd.Context(), options, kvxOpts)
 		},
@@ -480,7 +497,13 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 		return nil, fmt.Errorf("failed to create remote catalog: %w", err)
 	}
 
-	return remoteCatalog.List(ctx, kind, opts.Name)
+	result, listErr := remoteCatalog.List(ctx, kind, opts.Name)
+
+	// Warn the user about stale credentials so they can fix the issue.
+	warnStaleCredentials(ctx, w, remoteCatalog)
+	verboseCredentialSource(w, remoteCatalog)
+
+	return result, listErr
 }
 
 func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions) error {
@@ -545,13 +568,15 @@ func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showA
 			createdAt = a.CreatedAt.Format("2006-01-02 15:04:05")
 		}
 		items[i] = ArtifactListItem{
-			Name:      a.Reference.Name,
-			Version:   version,
-			Tag:       tag,
-			Kind:      string(a.Reference.Kind),
-			Digest:    a.Digest,
-			CreatedAt: createdAt,
-			Catalog:   a.Catalog,
+			Name:        a.Reference.Name,
+			Version:     version,
+			Tag:         tag,
+			Kind:        string(a.Reference.Kind),
+			DisplayName: a.Annotations[catalog.AnnotationDisplayName],
+			Category:    a.Annotations[catalog.AnnotationCategory],
+			Digest:      a.Digest,
+			CreatedAt:   createdAt,
+			Catalog:     a.Catalog,
 		}
 	}
 

@@ -87,6 +87,42 @@ func hintOnAuthError(ctx context.Context, w *writer.Writer, registry string, err
 	}
 }
 
+// warnStaleCredentials emits a user-facing warning when a RemoteCatalog
+// detected that stored credentials were rejected and fell back to anonymous
+// access. Includes the credential source and a fix command.
+func warnStaleCredentials(ctx context.Context, w *writer.Writer, rc *catalog.RemoteCatalog) {
+	if !rc.HasStaleCredentials() {
+		return
+	}
+
+	registry := rc.Registry()
+	bin := settings.BinaryNameFromContext(ctx)
+
+	// Use the specific credential source when available, fall back to
+	// a handler-based or generic description.
+	source := rc.CredentialSource()
+	if source == "" {
+		if handler := rc.AuthHandlerUsed(); handler != "" {
+			source = fmt.Sprintf("%s auth handler credentials", handler)
+		} else {
+			source = "stored credentials"
+		}
+	}
+
+	w.WarnStderrf("Your %s for %s were rejected — fell back to anonymous access.", source, registry)
+
+	var customHandlers []config.CustomOAuth2Config
+	if cfg := config.FromContext(ctx); cfg != nil {
+		customHandlers = cfg.Auth.CustomOAuth2
+	}
+
+	if handler := catalog.InferAuthHandler(registry, customHandlers); handler != "" {
+		w.PlainStderrf("  To fix: %s auth login %s", bin, handler)
+	} else {
+		w.PlainStderrf("  To fix: %s catalog login %s", bin, registry)
+	}
+}
+
 // resolveAuthHandler attempts to find and return the auth handler for a registry.
 // It checks:
 //  1. Catalog config authProvider field (when catalogFlag resolves to a named catalog)
@@ -258,7 +294,15 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 		w.Verbose("Credentials: bridged from auth handler on-the-fly")
 	} else {
 		w.Verbose("Auth handler: none (using stored registry credentials)")
-		w.Verbosef("Credential source: container auth config or native credential store for %s", registry)
+	}
+}
+
+// verboseCredentialSource logs the actual credential source that was resolved
+// during the most recent OCI operation. Call after the first OCI call (Fetch,
+// List, CopyTo, FetchIndex) so the lazy credential function has executed.
+func verboseCredentialSource(w *writer.Writer, rc *catalog.RemoteCatalog) {
+	if source := rc.CredentialSource(); source != "" {
+		w.Verbosef("Credential source: %s", source)
 	}
 }
 
@@ -451,6 +495,17 @@ func deduplicateArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactIn
 			}
 			if existing.CreatedAt.IsZero() && !a.CreatedAt.IsZero() {
 				existing.CreatedAt = a.CreatedAt
+			}
+			// Merge annotations: keep existing values, fill gaps from the other catalog.
+			if len(a.Annotations) > 0 {
+				if existing.Annotations == nil {
+					existing.Annotations = make(map[string]string, len(a.Annotations))
+				}
+				for k, v := range a.Annotations {
+					if _, found := existing.Annotations[k]; !found {
+						existing.Annotations[k] = v
+					}
+				}
 			}
 		} else {
 			seen[k] = len(result)

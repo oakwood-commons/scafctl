@@ -3,6 +3,8 @@ kind: Solution
 
 metadata:
   name: comprehensive-example
+  displayName: Comprehensive Example
+  category: solutions
   description: |
     Comprehensive solution demonstrating all scafctl features:
     - All four input forms (literal, rslv, expr, tmpl)
@@ -11,7 +13,8 @@ metadata:
     - Actions with dependencies and conditions
     - forEach iteration
     - Result consumption between actions
-  version: 1.0.0
+  tags:
+    - solution
   maintainers:
     - name: Platform Team
       email: platform@example.com

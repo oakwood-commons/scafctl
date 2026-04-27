@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: soldiff-demo
-  version: 2.0.0
+  version: "2.0.0"
+  displayName: Soldiff Demo
+  category: developer-tools
+  tags:
+    - diff
   description: |
     Updated version with scaling and monitoring changes. Compare against
     solution-v1.yaml to see a modified resolver, a new resolver, and an

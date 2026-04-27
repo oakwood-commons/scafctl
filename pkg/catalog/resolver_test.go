@@ -692,3 +692,157 @@ func TestSolutionResolver_LocalNonNotFoundError_NoFallback_WithBundle(t *testing
 	assert.Contains(t, err.Error(), "corrupted OCI layout")
 	assert.False(t, IsNotFound(err), "non-not-found errors should not be masked")
 }
+
+func TestIsNewerVersion(t *testing.T) {
+	v1 := semver.MustParse("1.0.0")
+	v2 := semver.MustParse("2.0.0")
+
+	tests := []struct {
+		name          string
+		remoteVersion *semver.Version
+		localVersion  *semver.Version
+		want          bool
+	}{
+		{name: "remote newer", remoteVersion: v2, localVersion: v1, want: true},
+		{name: "remote same", remoteVersion: v1, localVersion: v1, want: false},
+		{name: "remote older", remoteVersion: v1, localVersion: v2, want: false},
+		{name: "remote nil", remoteVersion: nil, localVersion: v1, want: false},
+		{name: "local nil", remoteVersion: v1, localVersion: nil, want: true},
+		{name: "both nil", remoteVersion: nil, localVersion: nil, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			remote := ArtifactInfo{Reference: Reference{Version: tt.remoteVersion}}
+			local := ArtifactInfo{Reference: Reference{Version: tt.localVersion}}
+			assert.Equal(t, tt.want, isNewerVersion(remote, local))
+		})
+	}
+}
+
+func TestFetchSolution_LatestChecksRemote(t *testing.T) {
+	ctx := context.Background()
+
+	// Local has v1.0.0
+	local := newMockCatalog("local")
+	localRef := Reference{Kind: ArtifactKindSolution, Name: "my-app", Version: semver.MustParse("1.0.0")}
+	local.addArtifact(localRef, []byte("v1-content"), nil)
+	// Make local return v1 for unversioned fetch
+	local.fetchFunc = func(_ context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+		return []byte("v1-content"), ArtifactInfo{
+			Reference: localRef,
+			Digest:    "sha256:local-v1",
+			Catalog:   "local",
+		}, nil
+	}
+
+	// Remote has v2.0.0
+	remoteRef := Reference{Kind: ArtifactKindSolution, Name: "my-app", Version: semver.MustParse("2.0.0")}
+	remote := newMockCatalog("remote-reg")
+	remote.resolveFunc = func(_ context.Context, _ Reference) (ArtifactInfo, error) {
+		return ArtifactInfo{
+			Reference: remoteRef,
+			Digest:    "sha256:remote-v2",
+			Catalog:   "remote-reg",
+		}, nil
+	}
+	remote.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return []byte("v2-content"), ArtifactInfo{
+			Reference: remoteRef,
+			Digest:    "sha256:remote-v2",
+			Catalog:   "remote-reg",
+		}, nil
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	// Unversioned fetch should get v2 from remote
+	content, err := resolver.FetchSolution(ctx, "my-app")
+	require.NoError(t, err)
+	assert.Equal(t, "v2-content", string(content))
+	assert.Equal(t, "remote-reg", resolver.LastResolvedCatalog())
+}
+
+func TestFetchSolution_LatestUsesLocalWhenRemoteUnavailable(t *testing.T) {
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	localRef := Reference{Kind: ArtifactKindSolution, Name: "my-app", Version: semver.MustParse("1.0.0")}
+	local.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return []byte("v1-content"), ArtifactInfo{
+			Reference: localRef,
+			Catalog:   "local",
+		}, nil
+	}
+
+	remote := newMockCatalog("remote-reg")
+	remote.resolveFunc = func(_ context.Context, _ Reference) (ArtifactInfo, error) {
+		return ArtifactInfo{}, fmt.Errorf("network error")
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	// Should fall back to local gracefully
+	content, err := resolver.FetchSolution(ctx, "my-app")
+	require.NoError(t, err)
+	assert.Equal(t, "v1-content", string(content))
+}
+
+func TestFetchSolution_PinnedVersionSkipsRemoteCheck(t *testing.T) {
+	ctx := context.Background()
+
+	local := newMockCatalog("local")
+	localRef := Reference{Kind: ArtifactKindSolution, Name: "my-app", Version: semver.MustParse("1.0.0")}
+	local.addArtifact(localRef, []byte("v1-content"), nil)
+
+	// Remote has v2 but should never be consulted for a pinned version
+	remote := newMockCatalog("remote-reg")
+	remote.resolveFunc = func(_ context.Context, _ Reference) (ArtifactInfo, error) {
+		t.Error("remote.Resolve should not be called for pinned version")
+		return ArtifactInfo{}, nil
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	content, err := resolver.FetchSolution(ctx, "my-app@1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, "v1-content", string(content))
+}
+
+func TestFetchSolution_LatestNoUpgradeWhenSameVersion(t *testing.T) {
+	ctx := context.Background()
+
+	v1 := semver.MustParse("1.0.0")
+	local := newMockCatalog("local")
+	local.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return []byte("v1-content"), ArtifactInfo{
+			Reference: Reference{Kind: ArtifactKindSolution, Name: "my-app", Version: v1},
+			Catalog:   "local",
+		}, nil
+	}
+
+	remote := newMockCatalog("remote-reg")
+	remote.resolveFunc = func(_ context.Context, _ Reference) (ArtifactInfo, error) {
+		return ArtifactInfo{
+			Reference: Reference{Kind: ArtifactKindSolution, Name: "my-app", Version: v1},
+		}, nil
+	}
+	remote.fetchFunc = func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		t.Error("remote.Fetch should not be called when versions match")
+		return nil, ArtifactInfo{}, nil
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	content, err := resolver.FetchSolution(ctx, "my-app")
+	require.NoError(t, err)
+	assert.Equal(t, "v1-content", string(content))
+}

@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: metadata-single-field-example
-  version: 1.0.0
+  displayName: Metadata Single Field Example
+  category: providers
+  tags:
+    - metadata
+    - provider-example
   description: Extract individual fields from runtime metadata using CEL
 
 spec:

@@ -2,7 +2,6 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: template-functions-demo
-  version: 1.0.0
   displayName: Template Functions Demo
   description: |
     Demonstrates the custom Go template functions available in scafctl:

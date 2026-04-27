@@ -2056,7 +2056,7 @@ func TestResolverArgs_NoArgs(t *testing.T) {
 	assert.Empty(t, dynamicArgs)
 }
 
-func TestResolverArgs_PreRun_AllBareWordsAreNames(t *testing.T) {
+func TestResolverArgs_PreRun_BareWordsAreResolverNames(t *testing.T) {
 	t.Parallel()
 
 	streams, _, _ := terminal.NewTestIOStreams()
@@ -2065,16 +2065,33 @@ func TestResolverArgs_PreRun_AllBareWordsAreNames(t *testing.T) {
 	cmd := CommandResolver(cliParams, streams, "")
 
 	// Simulate: scafctl run resolver sln-starter-kit db config
-	// All bare words should become resolver names, not solution refs
+	// All bare words are resolver names, not catalog refs
 	args := []string{"sln-starter-kit", "db", "config"}
 	cmd.PreRun(cmd, args)
 
-	// No file should be set — use auto-discovery
+	// Bare words should not be set as the solution file
 	path := extractSolutionPath(cmd)
 	assert.Empty(t, path)
 }
 
-func TestResolverArgs_PreRun_AtVersionIsDynamicArg(t *testing.T) {
+func TestResolverArgs_PreRun_VersionedRefIsCatalogRef(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandResolver(cliParams, streams, "")
+
+	// Simulate: scafctl run resolver my-app@1.0.0 db
+	// Versioned ref is a catalog ref, "db" is a resolver name
+	args := []string{"my-app@1.0.0", "db"}
+	cmd.PreRun(cmd, args)
+
+	path := extractSolutionPath(cmd)
+	assert.Equal(t, "my-app@1.0.0", path)
+}
+
+func TestResolverArgs_PreRun_AtPrefixIsDynamicArg(t *testing.T) {
 	t.Parallel()
 
 	streams, _, _ := terminal.NewTestIOStreams()
@@ -2083,7 +2100,7 @@ func TestResolverArgs_PreRun_AtVersionIsDynamicArg(t *testing.T) {
 	cmd := CommandResolver(cliParams, streams, "")
 
 	// Simulate: scafctl run resolver db @override
-	// @override starts with @ so becomes a dynamic arg
+	// "db" is a resolver name, @override is a dynamic arg
 	args := []string{"db", "@override"}
 	cmd.PreRun(cmd, args)
 
@@ -2169,4 +2186,89 @@ func containsEquals(s string) bool {
 		}
 	}
 	return false
+}
+
+func TestParseResolverArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		args         []string
+		fileExplicit bool
+		initialFile  string
+		wantNames    []string
+		wantDynamic  []string
+		wantFile     string
+	}{
+		{
+			name:      "bare name treated as resolver name not catalog ref",
+			args:      []string{"hello-world"},
+			wantNames: []string{"hello-world"},
+		},
+		{
+			name:      "multiple bare names are resolver names",
+			args:      []string{"hello-world", "greeting", "farewell"},
+			wantNames: []string{"hello-world", "greeting", "farewell"},
+		},
+		{
+			name:      "versioned catalog ref",
+			args:      []string{"my-app@1.2.3", "greeting"},
+			wantFile:  "my-app@1.2.3",
+			wantNames: []string{"greeting"},
+		},
+		{
+			name:      "URL detected as file",
+			args:      []string{"https://example.com/solution.yaml", "greeting"},
+			wantFile:  "https://example.com/solution.yaml",
+			wantNames: []string{"greeting"},
+		},
+		{
+			name:         "catalog ref ignored when -f is set",
+			args:         []string{"hello-world"},
+			fileExplicit: true,
+			initialFile:  "other.yaml",
+			wantNames:    []string{"hello-world"},
+		},
+		{
+			name:        "key=value are dynamic args",
+			args:        []string{"greeting", "env=prod"},
+			wantNames:   []string{"greeting"},
+			wantDynamic: []string{"env=prod"},
+		},
+		{
+			name:        "@file args are dynamic args",
+			args:        []string{"greeting", "@params.yaml"},
+			wantNames:   []string{"greeting"},
+			wantDynamic: []string{"@params.yaml"},
+		},
+		{
+			name:      "registry ref detected as file",
+			args:      []string{"ghcr.io/myorg/solutions/app:2.0", "greeting"},
+			wantFile:  "ghcr.io/myorg/solutions/app:2.0",
+			wantNames: []string{"greeting"},
+		},
+		{
+			name: "no args",
+			args: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := &ResolverOptions{}
+			if tc.initialFile != "" {
+				opts.File = tc.initialFile
+			}
+
+			parseResolverArgs(tc.args, opts, tc.fileExplicit)
+
+			assert.Equal(t, tc.wantNames, opts.Names)
+			assert.Equal(t, tc.wantDynamic, opts.DynamicArgs)
+			if tc.wantFile != "" {
+				assert.Equal(t, tc.wantFile, opts.File)
+			}
+		})
+	}
 }

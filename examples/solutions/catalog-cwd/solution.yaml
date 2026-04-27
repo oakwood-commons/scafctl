@@ -7,7 +7,11 @@ kind: Solution
 
 metadata:
   name: catalog-cwd-demo
-  version: 1.0.0
+  displayName: Catalog Cwd Demo
+  category: solutions
+  tags:
+    - catalog
+    - solution
   description: |
     Demonstrates catalog solution CWD resolution. When run from the catalog,
     file-writing actions resolve relative paths against the caller's working

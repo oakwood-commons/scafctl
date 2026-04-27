@@ -131,6 +131,13 @@ func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion st
 		if err != nil {
 			return nil, err
 		}
+	} else if version == "" && len(r.remoteCatalogs) > 0 {
+		// No version pinned → "latest" semantics. Check remotes for a newer
+		// version than what the local catalog has (like `docker pull :latest`).
+		if upgraded, upgradedInfo, ok := r.checkRemoteForNewer(ctx, ref, info); ok {
+			content = upgraded
+			info = upgradedInfo
+		}
 	}
 
 	r.lastResolvedCatalog = info.Catalog
@@ -201,6 +208,14 @@ func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWith
 		content, bundleData, info, err = r.fetchWithBundleFromRemotes(ctx, ref)
 		if err != nil {
 			return nil, nil, err
+		}
+	} else if version == "" && len(r.remoteCatalogs) > 0 {
+		// No version pinned → "latest" semantics. Check remotes for a newer
+		// version than what the local catalog has.
+		if upgraded, upgradedBundle, upgradedInfo, ok := r.checkRemoteForNewerWithBundle(ctx, ref, info); ok {
+			content = upgraded
+			bundleData = upgradedBundle
+			info = upgradedInfo
 		}
 	}
 
@@ -332,4 +347,88 @@ func (r *SolutionResolver) storeLocally(ctx context.Context, ref Reference, info
 	if _, err := r.catalog.Store(ctx, storeRef, content, bundleData, annotations, false); err != nil {
 		r.logger.V(1).Info("failed to store auto-pulled artifact locally (ignoring)", "error", err)
 	}
+}
+
+// checkRemoteForNewer resolves the latest version from remote catalogs and
+// compares it against the locally held version. If a remote has a newer
+// version (by semver), it fetches the content and auto-caches it locally.
+// Returns (content, info, true) on upgrade, or (nil, zero, false) when no
+// upgrade is available or remotes are unreachable.
+//
+// This implements Docker-style "latest" semantics: unversioned requests always
+// check for newer versions when the artifact cache TTL has expired. Pinned
+// versions (explicit @version) skip this check entirely.
+func (r *SolutionResolver) checkRemoteForNewer(ctx context.Context, ref Reference, localInfo ArtifactInfo) ([]byte, ArtifactInfo, bool) {
+	for _, remote := range r.remoteCatalogs {
+		remoteInfo, err := remote.Resolve(ctx, ref)
+		if err != nil {
+			r.logger.V(1).Info("remote version check failed (using local)", "catalog", remote.Name(), "error", err)
+			continue
+		}
+
+		if !isNewerVersion(remoteInfo, localInfo) {
+			r.logger.V(1).Info("local is up-to-date", "local", localInfo.Reference.Version, "remote", remoteInfo.Reference.Version)
+			continue
+		}
+
+		r.logger.Info("newer version available, pulling from remote",
+			"name", ref.Name,
+			"localVersion", localInfo.Reference.Version,
+			"remoteVersion", remoteInfo.Reference.Version,
+			"catalog", remote.Name())
+
+		content, info, err := remote.Fetch(ctx, ref)
+		if err != nil {
+			r.logger.V(1).Info("remote fetch failed after version check, trying next remote", "catalog", remote.Name(), "error", err)
+			continue
+		}
+
+		r.storeLocally(ctx, ref, info, content, nil, remote.Name())
+		return content, info, true
+	}
+	return nil, ArtifactInfo{}, false
+}
+
+// checkRemoteForNewerWithBundle is the bundle-aware variant of checkRemoteForNewer.
+func (r *SolutionResolver) checkRemoteForNewerWithBundle(ctx context.Context, ref Reference, localInfo ArtifactInfo) ([]byte, []byte, ArtifactInfo, bool) {
+	for _, remote := range r.remoteCatalogs {
+		remoteInfo, err := remote.Resolve(ctx, ref)
+		if err != nil {
+			r.logger.V(1).Info("remote version check failed (using local)", "catalog", remote.Name(), "error", err)
+			continue
+		}
+
+		if !isNewerVersion(remoteInfo, localInfo) {
+			r.logger.V(1).Info("local is up-to-date", "local", localInfo.Reference.Version, "remote", remoteInfo.Reference.Version)
+			continue
+		}
+
+		r.logger.Info("newer version available, pulling from remote",
+			"name", ref.Name,
+			"localVersion", localInfo.Reference.Version,
+			"remoteVersion", remoteInfo.Reference.Version,
+			"catalog", remote.Name())
+
+		content, bundleData, info, err := remote.FetchWithBundle(ctx, ref)
+		if err != nil {
+			r.logger.V(1).Info("remote fetch failed after version check, trying next remote", "catalog", remote.Name(), "error", err)
+			continue
+		}
+
+		r.storeLocally(ctx, ref, info, content, bundleData, remote.Name())
+		return content, bundleData, info, true
+	}
+	return nil, nil, ArtifactInfo{}, false
+}
+
+// isNewerVersion returns true when remoteInfo has a strictly higher semver
+// version than localInfo, or when the remote has a version while local does not.
+func isNewerVersion(remoteInfo, localInfo ArtifactInfo) bool {
+	if remoteInfo.Reference.Version == nil {
+		return false
+	}
+	if localInfo.Reference.Version == nil {
+		return true
+	}
+	return remoteInfo.Reference.Version.GreaterThan(localInfo.Reference.Version)
 }

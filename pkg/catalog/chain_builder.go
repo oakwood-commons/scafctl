@@ -78,6 +78,13 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 
 // buildRemoteCatalog creates a RemoteCatalog from a CatalogConfig.
 func buildRemoteCatalog(catCfg config.CatalogConfig, credStore *CredentialStore, authRegistry *auth.Registry, logger logr.Logger) (*RemoteCatalog, error) {
+	return BuildRemoteCatalogFromConfig(catCfg, credStore, authRegistry, logger)
+}
+
+// BuildRemoteCatalogFromConfig creates a RemoteCatalog from a CatalogConfig.
+// Exported for use by packages that need to construct remote catalogs outside
+// the catalog chain (e.g. MCP tools for index-based search).
+func BuildRemoteCatalogFromConfig(catCfg config.CatalogConfig, credStore *CredentialStore, authRegistry *auth.Registry, logger logr.Logger) (*RemoteCatalog, error) {
 	registry, repository := ParseCatalogURL(catCfg.URL)
 
 	remoteCfg := RemoteCatalogConfig{

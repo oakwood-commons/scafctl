@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: exec-cross-platform
-  version: 1.0.0
+  displayName: Exec Cross Platform
+  category: developer-tools
+  tags:
+    - exec
+    - shell
   description: |
     Cross-platform patterns using the embedded POSIX shell. No external
     shell required -- works identically on Linux, macOS, and Windows.

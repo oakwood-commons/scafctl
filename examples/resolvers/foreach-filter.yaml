@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: foreach-filter
-  version: 1.0.0
+  displayName: Foreach Filter
+  category: resolvers
+  tags:
+    - foreach
+    - resolver-example
   description: |
     ForEach with keepSkipped to control nil handling in array resolvers.
     When a when condition skips items, nil entries are produced. By default
@@ -12,6 +16,7 @@ metadata:
     keepSkipped: true retains nils so output stays index-aligned with input.
 
 spec:
+    - resolver-example
   resolvers:
     # ─────────────────────────────────────────────
     # 1. Source data — all users (active and inactive)

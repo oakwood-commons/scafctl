@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: custom-error-messages
-  version: 1.0.0
+  displayName: Custom Error Messages
+  category: resolvers
+  tags:
+    - message
+    - resolver-example
   description: Demonstrates custom error messages on resolver failures.
 
 spec:

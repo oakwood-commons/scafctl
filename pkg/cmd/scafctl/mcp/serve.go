@@ -30,6 +30,7 @@ type ServeOptions struct {
 	QueueSize      int
 	CliParams      *settings.Run
 	IOStreams      *terminal.IOStreams
+	rootCmd        *cobra.Command
 }
 
 // CommandServe creates the `scafctl mcp serve` command.
@@ -90,6 +91,7 @@ func CommandServe(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts.rootCmd = cmd.Root()
 			return runServe(cmd.Context(), opts)
 		},
 	}
@@ -141,6 +143,9 @@ func runServe(ctx context.Context, opts *ServeOptions) error {
 	}
 	if opts.QueueSize > 0 {
 		serverOpts = append(serverOpts, mcpserver.WithQueueSize(opts.QueueSize))
+	}
+	if opts.rootCmd != nil {
+		serverOpts = append(serverOpts, mcpserver.WithRootCommand(opts.rootCmd))
 	}
 
 	// Create server

@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: cel-basics
-  version: 1.0.0
+  displayName: CEL Basics
+  category: resolvers
+  tags:
+    - cel
+    - resolver-example
   description: |
     Basic CEL expressions, literal types, and resolver references.
     Quick Start companion for the CEL tutorial.

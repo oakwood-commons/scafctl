@@ -12,6 +12,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
@@ -542,13 +543,57 @@ func TestListRepositories_ContextTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "timed out")
 }
 
+func TestListRepositories_EmptyAutoFallsBackToIndex(t *testing.T) {
+	t.Parallel()
+
+	// When API enumeration returns zero repos with "auto" strategy,
+	// ListRepositories should try FetchIndex as a fallback.
+	// Since there's no real registry, FetchIndex fails and we get an empty
+	// result (not an error).
+	cat := &RemoteCatalog{
+		name:              "test-fallback",
+		registry:          "localhost:0",
+		repository:        "myorg",
+		discoveryStrategy: config.DiscoveryStrategyAuto,
+		insecure:          true,
+		logger:            logr.Discard(),
+		client:            &orasauth.Client{},
+		enumerator:        &mockEnumerator{repos: []string{}},
+	}
+
+	result, err := cat.ListRepositories(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, result, "should return empty when both enumeration and index fallback yield nothing")
+}
+
+func TestListRepositories_EmptyAPINoFallback(t *testing.T) {
+	t.Parallel()
+
+	// With "api" strategy, empty enumeration should NOT fall back to index.
+	cat := &RemoteCatalog{
+		name:              "test-api-only",
+		registry:          "localhost:0",
+		repository:        "myorg",
+		discoveryStrategy: config.DiscoveryStrategyAPI,
+		insecure:          true,
+		logger:            logr.Discard(),
+		client:            &orasauth.Client{},
+		enumerator:        &mockEnumerator{repos: []string{}},
+	}
+
+	result, err := cat.ListRepositories(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, result, "api-only should return empty without fallback")
+}
+
 // mockEnumerator returns a fixed set of repository paths.
 type mockEnumerator struct {
 	repos []string
+	err   error
 }
 
 func (m *mockEnumerator) enumerate(_ context.Context) ([]string, error) {
-	return m.repos, nil
+	return m.repos, m.err
 }
 
 func TestListAllArtifacts_SearchFilter(t *testing.T) {
@@ -734,4 +779,171 @@ func TestLatestVersion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsOCIAuthError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil error", nil, false},
+		{"generic error", fmt.Errorf("network timeout"), false},
+		{"401 status", fmt.Errorf("response status code 401: Unauthorized"), true},
+		{"403 status", fmt.Errorf("response status code 403: denied"), true},
+		{"unauthorized keyword", fmt.Errorf("unauthorized access to resource"), true},
+		{"denied keyword", fmt.Errorf("token exchange denied"), true},
+		{"nested 403", fmt.Errorf("failed to fetch: %w", fmt.Errorf("GET /token: response status code 403: denied: denied")), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, isOCIAuthError(tt.err))
+		})
+	}
+}
+
+func TestSwitchToAnonymous(t *testing.T) {
+	t.Parallel()
+
+	cat := &RemoteCatalog{
+		name:     "test",
+		registry: "ghcr.io",
+		logger:   logr.Discard(),
+		client:   &orasauth.Client{},
+	}
+
+	assert.False(t, cat.HasStaleCredentials(), "should start without stale credentials")
+
+	originalClient := cat.client
+	cat.switchToAnonymous()
+
+	assert.True(t, cat.HasStaleCredentials(), "should report stale credentials after switch")
+	assert.NotSame(t, originalClient, cat.client, "client should be replaced")
+}
+
+func TestAnonymousClient_Insecure(t *testing.T) {
+	t.Parallel()
+
+	cat := &RemoteCatalog{
+		name:     "test",
+		registry: "localhost:5000",
+		logger:   logr.Discard(),
+		client:   &orasauth.Client{},
+		insecure: true,
+	}
+
+	anonClient := cat.anonymousClient()
+	assert.NotNil(t, anonClient)
+	// The anonymous client should have a custom transport for insecure mode.
+	assert.NotNil(t, anonClient.Client)
+}
+
+func TestAnonymousClient_Secure(t *testing.T) {
+	t.Parallel()
+
+	cat := &RemoteCatalog{
+		name:     "test",
+		registry: "ghcr.io",
+		logger:   logr.Discard(),
+		client:   &orasauth.Client{},
+		insecure: false,
+	}
+
+	anonClient := cat.anonymousClient()
+	assert.NotNil(t, anonClient)
+}
+
+func TestAuthHandlerUsed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		handler  string
+		expected string
+	}{
+		{name: "github handler", handler: "github", expected: "github"},
+		{name: "empty handler", handler: "", expected: ""},
+		{name: "custom handler", handler: "entra", expected: "entra"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cat := &RemoteCatalog{
+				name:            "test",
+				registry:        "ghcr.io",
+				logger:          logr.Discard(),
+				client:          &orasauth.Client{},
+				authHandlerUsed: tt.handler,
+			}
+			assert.Equal(t, tt.expected, cat.AuthHandlerUsed())
+		})
+	}
+}
+
+func TestCredentialSource(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns set value", func(t *testing.T) {
+		t.Parallel()
+		cat := &RemoteCatalog{
+			logger: logr.Discard(),
+			client: &orasauth.Client{},
+		}
+		cat.credentialSource.Store("docker credential helper (desktop)")
+		assert.Equal(t, "docker credential helper (desktop)", cat.CredentialSource())
+	})
+
+	t.Run("returns empty when unset", func(t *testing.T) {
+		t.Parallel()
+		cat := &RemoteCatalog{
+			logger: logr.Discard(),
+			client: &orasauth.Client{},
+		}
+		assert.Empty(t, cat.CredentialSource())
+	})
+}
+
+func TestDiscoveredArtifact_ToAnnotations(t *testing.T) {
+	t.Parallel()
+
+	t.Run("populates all non-empty fields", func(t *testing.T) {
+		t.Parallel()
+		d := DiscoveredArtifact{
+			Name:        "my-app",
+			DisplayName: "My Application",
+			Description: "A test app",
+			Category:    "deployment",
+			Tags:        []string{"go", "cloud"},
+		}
+		ann := d.ToAnnotations()
+		assert.Equal(t, "My Application", ann[AnnotationDisplayName])
+		assert.Equal(t, "A test app", ann[AnnotationDescription])
+		assert.Equal(t, "deployment", ann[AnnotationCategory])
+		assert.Equal(t, "go,cloud", ann[AnnotationTags])
+	})
+
+	t.Run("omits empty fields", func(t *testing.T) {
+		t.Parallel()
+		d := DiscoveredArtifact{
+			Name:        "bare",
+			DisplayName: "Bare App",
+		}
+		ann := d.ToAnnotations()
+		assert.Equal(t, "Bare App", ann[AnnotationDisplayName])
+		assert.NotContains(t, ann, AnnotationDescription)
+		assert.NotContains(t, ann, AnnotationCategory)
+		assert.NotContains(t, ann, AnnotationTags)
+	})
+
+	t.Run("returns empty map when no metadata", func(t *testing.T) {
+		t.Parallel()
+		d := DiscoveredArtifact{Name: "empty"}
+		ann := d.ToAnnotations()
+		assert.Empty(t, ann)
+	})
 }

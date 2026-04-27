@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: validation-example
-  version: 1.0.0
+  displayName: Validation Example
+  category: resolvers
+  tags:
+    - resolver-example
+    - validation
   description: |
     Input validation with multiple rules and aggregated errors.
     Try invalid values to see validation error reporting.
