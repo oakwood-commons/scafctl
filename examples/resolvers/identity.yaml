@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: identity-example
-  version: 1.0.0
+  displayName: Identity Example
+  category: resolvers
+  tags:
+    - identity
+    - resolver-example
   description: Identity provider examples - access authentication info without exposing tokens
 
 spec:

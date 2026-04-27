@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: k8s-clusters
-  version: 1.0.0
+  displayName: K8S Clusters
+  category: solutions
+  tags:
+    - kubernetes
+    - solution
   description: |
     Generate Kubernetes manifests for multiple clusters from a shared template.
     Demonstrates reading a Go template from file, resolver-level forEach to

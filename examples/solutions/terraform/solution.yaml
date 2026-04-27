@@ -3,7 +3,11 @@ kind: Solution
 
 metadata:
   name: terraform-scaffold
-  version: 1.0.0
+  displayName: Terraform Scaffold
+  category: solutions
+  tags:
+    - solution
+    - terraform
   description: Scaffold Terraform environments using resolvers, templates, and filesystem actions
 
 spec:

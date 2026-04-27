@@ -257,12 +257,13 @@ Examples:
 
 // parseResolverArgs splits positional args into resolver names and dynamic parameters.
 // Bare words are resolver names, args containing '=' or starting with '@' are parameters.
-// Only URLs (http(s)://, oci://) are auto-detected as solution refs when no -f flag is set.
-// This matches the parseActionArgs pattern: solution source is always via -f or auto-discovery.
+// URLs (http(s)://, oci://) and unambiguous catalog references (versioned refs,
+// registry refs) are auto-detected as solution refs when no -f flag is set.
+// Bare names like "my-resolver" are always treated as resolver names.
 func parseResolverArgs(args []string, options *ResolverOptions, fileExplicit bool) {
 	for _, arg := range args {
 		switch {
-		case !fileExplicit && options.File == "" && filepath.IsURL(arg):
+		case !fileExplicit && options.File == "" && (filepath.IsURL(arg) || get.IsUnambiguousCatalogReference(arg)):
 			options.File = arg
 			fileExplicit = true
 		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):

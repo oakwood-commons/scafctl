@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: exec-ls-example
-  version: 1.0.0
+  displayName: Exec Ls Example
+  category: providers
+  tags:
+    - exec
+    - provider-example
   description: List directory contents using the exec provider
 
 spec:

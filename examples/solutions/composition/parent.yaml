@@ -4,7 +4,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: composition-example
-  version: 1.0.0
+  displayName: Composition Example
+  category: solutions
+  tags:
+    - solution
   description: |
     Solution composition via the solution provider. The parent loads a child
     solution, passes parameters, and consumes the child's resolver values

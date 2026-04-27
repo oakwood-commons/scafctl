@@ -69,7 +69,7 @@ func TestCommandSolution_Flags(t *testing.T) {
 	}{
 		{"name flag", "name", ""},
 		{"description flag", "description", ""},
-		{"version flag", "version", "1.0.0"},
+		{"version flag", "version", ""},
 		{"features flag", "features", ""},
 		{"providers flag", "providers", ""},
 		{"output flag", "output", ""},

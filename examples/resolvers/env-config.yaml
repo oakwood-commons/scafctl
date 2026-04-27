@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: env-config
-  version: 1.0.0
+  displayName: Env Config
+  category: resolvers
+  tags:
+    - environment
+    - resolver-example
   description: |
     Environment-based configuration pattern. Shows how to build
     configuration that varies by deployment environment.

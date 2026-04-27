@@ -100,7 +100,7 @@ func TestParseActionArgs(t *testing.T) {
 		wantFile     string
 	}{
 		{
-			name:      "bare words are action names",
+			name:      "bare words are action names not catalog refs",
 			args:      []string{"lint", "test"},
 			wantNames: []string{"lint", "test"},
 		},
@@ -123,17 +123,23 @@ func TestParseActionArgs(t *testing.T) {
 			wantNames: []string{"lint"},
 		},
 		{
-			name:         "URL ignored when -f is set",
+			name:         "catalog ref ignored when -f is set",
 			args:         []string{"https://example.com/solution.yaml"},
 			fileExplicit: true,
 			initialFile:  "other.yaml",
 			wantNames:    []string{"https://example.com/solution.yaml"},
 		},
 		{
-			name:        "mixed args",
-			args:        []string{"lint", "test", "env=prod", "@config.yaml"},
+			name:      "versioned ref detected as catalog ref",
+			args:      []string{"my-app@1.0.0", "test"},
+			wantFile:  "my-app@1.0.0",
+			wantNames: []string{"test"},
+		},
+		{
+			name:        "mixed args with bare words",
+			args:        []string{"lint", "test", "env=prod"},
 			wantNames:   []string{"lint", "test"},
-			wantDynamic: []string{"env=prod", "@config.yaml"},
+			wantDynamic: []string{"env=prod"},
 		},
 		{
 			name: "no args",

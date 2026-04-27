@@ -309,3 +309,54 @@ func TestFindDockerConfig_XDGRuntimeDir(t *testing.T) {
 	// that takes precedence. We just verify no panic.
 	_ = result
 }
+
+func TestCredentialStore_CredentialWithSource(t *testing.T) {
+	t.Run("env var source", func(t *testing.T) {
+		t.Setenv("SCAFCTL_REGISTRY_USERNAME", "envuser")
+		t.Setenv("SCAFCTL_REGISTRY_PASSWORD", "envpass")
+
+		store, err := NewCredentialStore(logr.Discard())
+		require.NoError(t, err)
+
+		cred, source, err := store.CredentialWithSource(context.Background(), "ghcr.io")
+		require.NoError(t, err)
+		assert.Equal(t, "envuser", cred.Username)
+		assert.Equal(t, "environment variable", source)
+	})
+
+	t.Run("static auth source", func(t *testing.T) {
+		t.Setenv("SCAFCTL_REGISTRY_USERNAME", "")
+		t.Setenv("SCAFCTL_REGISTRY_PASSWORD", "")
+
+		store := &CredentialStore{
+			logger: logr.Discard(),
+			config: &dockerConfig{
+				Auths: map[string]dockerAuthEntry{
+					"ghcr.io": {Username: "staticuser", Password: "staticpass"},
+				},
+			},
+		}
+
+		cred, source, err := store.CredentialWithSource(context.Background(), "ghcr.io")
+		require.NoError(t, err)
+		assert.Equal(t, "staticuser", cred.Username)
+		assert.Equal(t, "docker config static auth", source)
+	})
+
+	t.Run("anonymous returns empty source", func(t *testing.T) {
+		t.Setenv("SCAFCTL_REGISTRY_USERNAME", "")
+		t.Setenv("SCAFCTL_REGISTRY_PASSWORD", "")
+
+		store := &CredentialStore{
+			logger: logr.Discard(),
+			config: &dockerConfig{
+				Auths: map[string]dockerAuthEntry{},
+			},
+		}
+
+		cred, source, err := store.CredentialWithSource(context.Background(), "unknown.io")
+		require.NoError(t, err)
+		assert.Empty(t, cred.Username)
+		assert.Empty(t, source)
+	})
+}

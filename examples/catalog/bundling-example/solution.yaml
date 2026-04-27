@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: bundling-example
-  version: 1.0.0
+  displayName: Bundling Example
+  category: developer-tools
+  tags:
+    - bundling
+    - catalog
   description: |
     Advanced bundle configuration with include/exclude patterns, static
     file references (auto-discovered), and dynamic file paths (explicit includes).

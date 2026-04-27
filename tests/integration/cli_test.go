@@ -3178,7 +3178,7 @@ func TestIntegration_CatalogLoad_Success(t *testing.T) {
 	assert.Contains(t, stdout, "1.0.0")
 
 	// Verify artifact is in catalog
-	stdout, _, exitCode = runScafctl(t, "catalog", "list")
+	stdout, _, exitCode = runScafctl(t, "catalog", "list", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 }

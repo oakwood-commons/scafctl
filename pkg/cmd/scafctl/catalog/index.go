@@ -5,10 +5,14 @@ package catalog
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/search"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -18,6 +22,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed index_schema.json
+var indexSchemaJSON []byte
 
 // IndexPushOptions holds options for the index push command.
 type IndexPushOptions struct {
@@ -34,17 +41,30 @@ type IndexPushOptions struct {
 type IndexShowOptions struct {
 	Catalog  string // Target catalog (URL or config name, --catalog)
 	Insecure bool   // Allow HTTP (--insecure)
+	Kind     string // Filter by artifact kind (--kind)
+	Search   string // Free-text search filter (--search)
 
 	CliParams *settings.Run
 	IOStreams *terminal.IOStreams
 	flags.KvxOutputFlags
 }
 
-// IndexListItem represents an artifact entry in index output.
+// IndexListItem represents an artifact entry in index table output.
 type IndexListItem struct {
 	Kind          string `json:"kind"          yaml:"kind"          doc:"Artifact kind (solution, provider, auth-handler)" example:"solution"`
 	Name          string `json:"name"          yaml:"name"          doc:"Artifact name" example:"hello-world"`
 	LatestVersion string `json:"latestVersion" yaml:"latestVersion" doc:"Latest semver version" example:"1.2.0"`
+	DisplayName   string `json:"displayName"   yaml:"displayName"   doc:"Human-friendly display name" example:"Hello World"`
+	Category      string `json:"category"      yaml:"category"      doc:"Solution category" example:"deployment"`
+}
+
+// indexColumnHints controls table column display for index commands.
+var indexColumnHints = map[string]tui.ColumnHint{
+	"kind":          {MaxWidth: 12, Priority: 10},
+	"name":          {MaxWidth: 30, Priority: 10},
+	"latestVersion": {MaxWidth: 12, Priority: 8, DisplayName: "version"},
+	"displayName":   {MaxWidth: 25, Priority: 6, DisplayName: "display name"},
+	"category":      {MaxWidth: 15, Priority: 4},
 }
 
 // IndexDiffItem represents an artifact entry in diff output.
@@ -116,7 +136,9 @@ func commandIndexPush(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion"}),
+				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion", "displayName", "category"}),
+				kvx.WithOutputColumnHints(indexColumnHints),
+				kvx.WithOutputDisplaySchemaJSON(indexSchemaJSON),
 			)
 			return runIndexPush(cmd.Context(), opts, kvxOpts)
 		},
@@ -151,8 +173,11 @@ func commandIndexShow(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 			  # Show index for the default catalog
 			  %[1]s catalog index show
 
-			  # Show index for a named catalog
-			  %[1]s catalog index show --catalog myregistry
+			  # Show only solutions
+			  %[1]s catalog index show --kind solution
+
+			  # Search by name or description
+			  %[1]s catalog index show --search hello
 
 			  # Show in JSON format
 			  %[1]s catalog index show -o json
@@ -162,7 +187,9 @@ func commandIndexShow(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion"}),
+				kvx.WithOutputColumnOrder([]string{"kind", "name", "latestVersion", "displayName", "category"}),
+				kvx.WithOutputColumnHints(indexColumnHints),
+				kvx.WithOutputDisplaySchemaJSON(indexSchemaJSON),
 			)
 			return runIndexShow(cmd.Context(), opts, kvxOpts)
 		},
@@ -170,6 +197,8 @@ func commandIndexShow(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 
 	cmd.Flags().StringVarP(&opts.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().BoolVar(&opts.Insecure, "insecure", false, "Allow insecure HTTP connections")
+	cmd.Flags().StringVarP(&opts.Kind, "kind", "k", "", "Filter by artifact kind (solution, provider, auth-handler)")
+	cmd.Flags().StringVarP(&opts.Search, "search", "s", "", "Free-text search filter (matches name, display name, description, category)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
 	return cmd
@@ -179,6 +208,7 @@ func commandIndexShow(cliParams *settings.Run, ioStreams *terminal.IOStreams) *c
 // the catalog index. With --dry-run it prints the index without pushing.
 func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.OutputOptions) error {
 	w := writer.FromContext(ctx)
+	lgr := logger.FromContext(ctx)
 
 	remoteCatalog, err := createIndexRemoteCatalog(ctx, opts.Catalog, opts.Insecure)
 	if err != nil {
@@ -204,17 +234,26 @@ func runIndexPush(ctx context.Context, opts *IndexPushOptions, outputOpts *kvx.O
 	w.Verbosef("Resolving latest versions for %d artifact(s)...", len(artifacts))
 	remoteCatalog.ResolveLatestVersions(ctx, artifacts)
 
+	// Fetch the current published index (if any) so we can skip enrichment
+	// for unchanged artifacts and use it for dry-run diffing.
+	existingIndex, fetchErr := remoteCatalog.FetchIndex(ctx)
+	if fetchErr != nil {
+		w.Verbosef("No existing index found, will enrich all artifacts: %v", fetchErr)
+	}
+
+	// Enrich solution artifacts with metadata from their YAML.
+	// Unchanged artifacts (same name+version in existing index) reuse cached metadata.
+	w.Verbosef("Enriching solution metadata...")
+	search.EnrichArtifacts(ctx, *lgr, remoteCatalog, artifacts, existingIndex)
+
 	if opts.DryRun {
-		// Fetch the current published index for comparison.
-		currentArtifacts, fetchErr := remoteCatalog.FetchIndex(ctx)
 		if fetchErr != nil {
-			w.Verbosef("No existing index found, showing full list: %v", fetchErr)
 			w.Verbosef("Dry run: %d artifact(s) would be indexed to catalog %q (%s)",
 				len(artifacts), remoteCatalog.Name(), remoteCatalog.Registry())
 			return writeIndexList(artifacts, outputOpts)
 		}
 
-		diff := catalog.DiffIndex(currentArtifacts, artifacts)
+		diff := catalog.DiffIndex(existingIndex, artifacts)
 		w.Verbosef("Dry run: %d artifact(s) would be indexed to catalog %q (%s)",
 			diff.Total, remoteCatalog.Name(), remoteCatalog.Registry())
 		w.Verbosef("Changes: %d added, %d removed, %d version-changed, %d unchanged",
@@ -253,13 +292,20 @@ func runIndexShow(ctx context.Context, opts *IndexShowOptions, outputOpts *kvx.O
 	if err != nil {
 		err = fmt.Errorf("failed to fetch catalog index: %w", err)
 		w.Errorf("%v", err)
+		hintOnAuthError(ctx, w, remoteCatalog.Registry(), err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
+
+	// Warn if stale credentials were detected during fetch.
+	warnStaleCredentials(ctx, w, remoteCatalog)
+	verboseCredentialSource(w, remoteCatalog)
 
 	if len(artifacts) == 0 {
 		w.Verbosef("Catalog index is empty.")
 		return writeIndexList(nil, outputOpts)
 	}
+
+	artifacts = filterIndexArtifacts(artifacts, opts.Kind, opts.Search)
 
 	w.Verbosef("Catalog index contains %d artifact(s)", len(artifacts))
 	return writeIndexList(artifacts, outputOpts)
@@ -305,14 +351,52 @@ func createIndexRemoteCatalog(ctx context.Context, catalogFlag string, insecure 
 	})
 }
 
+// filterIndexArtifacts filters artifacts by kind and free-text search.
+func filterIndexArtifacts(artifacts []catalog.DiscoveredArtifact, kind, search string) []catalog.DiscoveredArtifact {
+	if kind == "" && search == "" {
+		return artifacts
+	}
+
+	kindLower := strings.ToLower(kind)
+	searchLower := strings.ToLower(search)
+
+	filtered := make([]catalog.DiscoveredArtifact, 0, len(artifacts))
+	for _, a := range artifacts {
+		if kindLower != "" && strings.ToLower(string(a.Kind)) != kindLower {
+			continue
+		}
+		if searchLower != "" && !matchesSearch(a, searchLower) {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	return filtered
+}
+
+// matchesSearch returns true if any of the artifact's text fields contain the query.
+func matchesSearch(a catalog.DiscoveredArtifact, query string) bool {
+	return strings.Contains(strings.ToLower(a.Name), query) ||
+		strings.Contains(strings.ToLower(a.DisplayName), query) ||
+		strings.Contains(strings.ToLower(a.Description), query) ||
+		strings.Contains(strings.ToLower(a.Category), query)
+}
+
 // writeIndexList writes the index artifact list using kvx output options.
+// Structured formats (json/yaml) get the full DiscoveredArtifact with all
+// metadata; table output gets a flat IndexListItem without array fields.
 func writeIndexList(artifacts []catalog.DiscoveredArtifact, outputOpts *kvx.OutputOptions) error {
+	if kvx.IsStructuredFormat(outputOpts.Format) {
+		return outputOpts.Write(artifacts)
+	}
+
 	items := make([]IndexListItem, len(artifacts))
 	for i, a := range artifacts {
 		items[i] = IndexListItem{
 			Kind:          string(a.Kind),
 			Name:          a.Name,
 			LatestVersion: a.LatestVersion,
+			DisplayName:   a.DisplayName,
+			Category:      a.Category,
 		}
 	}
 	return outputOpts.Write(items)

@@ -16,7 +16,12 @@ kind: Solution
 
 metadata:
   name: github-provider-validation
-  version: 1.0.0
+  displayName: GitHub Provider Validation
+  category: solutions
+  tags:
+    - github
+    - solution
+    - validation
   description: |
     End-to-end validation of GitHub provider v2.1 operations.
     Resolvers gather data from oakwood-commons/scafctl-test-sandbox,

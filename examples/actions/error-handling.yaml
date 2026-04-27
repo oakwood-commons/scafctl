@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: error-handling
-  version: 1.0.0
+  displayName: Error Handling
+  category: actions
+  tags:
+    - action-example
+    - workflow
   description: Error handling with onError continue
 
 spec:

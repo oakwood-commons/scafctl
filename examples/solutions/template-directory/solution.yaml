@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: template-directory-rendering
-  version: 1.0.0
+  displayName: Template Directory Rendering
+  category: solutions
+  tags:
+    - solution
+    - template
   description: |
     Render a directory tree of Go templates into final files, preserving
     directory structure and stripping the .tpl extension from output paths.

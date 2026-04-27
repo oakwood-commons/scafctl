@@ -171,10 +171,19 @@ func (c *CredentialStore) loadConfig() error {
 // Credential returns the auth credential for a registry host.
 // This implements the auth.CredentialFunc signature for oras-go.
 func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Credential, error) {
+	cred, _, err := c.CredentialWithSource(ctx, host)
+	return cred, err
+}
+
+// CredentialWithSource returns the auth credential for a registry host along
+// with a human-readable label describing where the credential came from
+// (e.g. "environment variable", "docker credential helper (desktop)",
+// "native credential store"). Returns empty source for anonymous access.
+func (c *CredentialStore) CredentialWithSource(ctx context.Context, host string) (auth.Credential, string, error) {
 	// Check environment variables first
 	if cred := c.credentialFromEnv(); cred.Username != "" {
 		c.logger.V(1).Info("using credentials from environment", "host", host)
-		return cred, nil
+		return cred, "environment variable", nil
 	}
 
 	if c.config == nil {
@@ -182,9 +191,9 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 		host = normalizeRegistryHost(host)
 		if nativeCred := c.credentialFromNativeStore(host); nativeCred.Username != "" {
 			c.logger.V(1).Info("using native credential store", "host", host)
-			return nativeCred, nil
+			return nativeCred, "native credential store", nil
 		}
-		return auth.EmptyCredential, nil
+		return auth.EmptyCredential, "", nil
 	}
 
 	// Normalize host for Docker Hub
@@ -200,7 +209,7 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 				"error", err.Error())
 		} else {
 			c.logger.V(1).Info("using credential helper", "helper", helper, "host", host)
-			return cred, nil
+			return cred, fmt.Sprintf("docker credential helper (%s)", helper), nil
 		}
 	}
 
@@ -210,7 +219,7 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 		if err == nil && cred.Username != "" {
 			c.logger.V(1).Info("using default credential store",
 				"store", c.config.CredsStore, "host", host)
-			return cred, nil
+			return cred, fmt.Sprintf("docker credential store (%s)", c.config.CredsStore), nil
 		}
 	}
 
@@ -219,7 +228,7 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 		cred, err := c.credentialFromAuthEntry(authEntry)
 		if err == nil {
 			c.logger.V(1).Info("using static auth entry", "host", host)
-			return cred, nil
+			return cred, "docker config static auth", nil
 		}
 	}
 
@@ -229,18 +238,18 @@ func (c *CredentialStore) Credential(ctx context.Context, host string) (auth.Cre
 		cred, err := c.credentialFromAuthEntry(authEntry)
 		if err == nil {
 			c.logger.V(1).Info("using static auth entry with scheme", "host", hostWithScheme)
-			return cred, nil
+			return cred, "docker config static auth", nil
 		}
 	}
 
 	// Fall back to scafctl native credential store
 	if nativeCred := c.credentialFromNativeStore(host); nativeCred.Username != "" {
 		c.logger.V(1).Info("using native credential store", "host", host)
-		return nativeCred, nil
+		return nativeCred, "native credential store", nil
 	}
 
 	c.logger.V(1).Info("no credentials found, using anonymous auth", "host", host)
-	return auth.EmptyCredential, nil
+	return auth.EmptyCredential, "", nil
 }
 
 // credentialFromEnv returns credentials from environment variables.

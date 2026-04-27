@@ -6,7 +6,12 @@ kind: Solution
 
 metadata:
   name: http-pagination-page-number-example
-  version: 1.0.0
+  displayName: HTTP Pagination Page Number Example
+  category: providers
+  tags:
+    - http
+    - pagination
+    - provider-example
   description: Page number pagination increments a page query parameter each request
 
 spec:

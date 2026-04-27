@@ -3,7 +3,10 @@ kind: Solution
 
 metadata:
   name: email-notifier
-  version: 1.0.0
+  displayName: Email Notifier
+  category: solutions
+  tags:
+    - solution
   description: Send notification emails using provider-backed actions. Designed for local execution and pipeline rendering.
 
 spec:

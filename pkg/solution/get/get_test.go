@@ -1074,6 +1074,42 @@ func BenchmarkIsCatalogReference(b *testing.B) {
 	}
 }
 
+func TestIsUnambiguousCatalogReference(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Unambiguous catalog refs (should return true)
+		{"versioned name", "my-app@1.0.0", true},
+		{"registry ref", "ghcr.io/myorg/solutions/app:2.0", true},
+		{"https URL", "https://example.com/solution.yaml", true},
+		{"oci URL", "oci://registry.example.com/sol:v1", true},
+		{"localhost registry", "localhost:5000/sol", true},
+
+		// Ambiguous — could be action/resolver names (should return false)
+		{"bare name", "my-app", false},
+		{"bare name with dash", "deploy-to-k8s", false},
+		{"name with underscore", "my_app", false},
+		{"@params file", "@params.yaml", false},
+
+		// Local file paths (should return false)
+		{"absolute path", "/tmp/solution.yaml", false},
+		{"relative path", "./solution.yaml", false},
+		{"yaml extension", "solution.yaml", false},
+		{"relative dir", "configs/solution", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := IsUnambiguousCatalogReference(tt.input)
+			assert.Equal(t, tt.expected, got, "IsUnambiguousCatalogReference(%q)", tt.input)
+		})
+	}
+}
+
 func TestWithSolutionDiscovery(t *testing.T) {
 	t.Parallel()
 	folders := []string{"mycli", ".mycli", ""}

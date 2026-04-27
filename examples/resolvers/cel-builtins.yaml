@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: cel-builtins
-  version: 1.0.0
+  displayName: CEL Builtins
+  category: resolvers
+  tags:
+    - cel
+    - resolver-example
   description: |
     Built-in CEL functions and standard library showcase. Covers math,
     encoders, sets, optionals, bindings, string operations, and list

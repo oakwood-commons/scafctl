@@ -6,7 +6,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: dryrun-demo
-  version: 1.0.0
+  displayName: Dryrun Demo
+  category: developer-tools
+  tags:
+    - dry-run
+    - preview
   description: |
     Dry-run WhatIf report showing what a solution would do without performing
     side effects. Resolvers execute normally (side-effect-free) to provide

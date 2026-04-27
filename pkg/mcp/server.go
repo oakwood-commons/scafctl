@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/spf13/cobra"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -33,6 +34,7 @@ type Server struct {
 	config    *config.Config
 	version   string
 	name      string
+	rootCmd   *cobra.Command
 
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
@@ -56,6 +58,14 @@ type serverConfig struct {
 	queueSize                int
 	errorLogger              *log.Logger
 	supplementalInstructions string
+	rootCmd                  *cobra.Command
+}
+
+// WithRootCommand sets the cobra root command for CLI introspection tools.
+func WithRootCommand(cmd *cobra.Command) ServerOption {
+	return func(c *serverConfig) {
+		c.rootCmd = cmd
+	}
 }
 
 // WithServerLogger sets the logger for the MCP server.
@@ -453,6 +463,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		registry: cfg.registry,
 		authReg:  cfg.authReg,
 		config:   cfg.config,
+		rootCmd:  cfg.rootCmd,
 	}
 	if cfg.logger != nil {
 		s.logger = *cfg.logger
@@ -675,6 +686,7 @@ func (s *Server) registerTools() {
 
 	// Catalog tools (Phase 3)
 	s.registerCatalogTools()
+	s.registerCatalogSearchTools()
 
 	// Auth tools (Phase 3)
 	s.registerAuthTools()
@@ -699,6 +711,9 @@ func (s *Server) registerTools() {
 
 	// Dry-run tools
 	s.registerDryRunTools()
+
+	// Run tools (execute solutions via domain layer)
+	s.registerRunTools()
 
 	// Config tools
 	s.registerConfigTools()
@@ -726,6 +741,9 @@ func (s *Server) registerTools() {
 
 	// REST API tools
 	s.registerAPITools()
+
+	// CLI introspection tools
+	s.registerCLITools()
 }
 
 // registerResources registers all MCP resources on the server.

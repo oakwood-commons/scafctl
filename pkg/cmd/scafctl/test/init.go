@@ -32,7 +32,7 @@ func CommandInit(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	opts := &InitOptions{}
 
 	cCmd := &cobra.Command{
-		Use:   "init",
+		Use:   "init [name[@version]]",
 		Short: "Generate a starter test suite from a solution",
 		Long: `Generate skeleton test cases by analyzing a solution's structure.
 
@@ -52,10 +52,22 @@ Examples:
 
   # Pipe into a compose file
   scafctl test init -f solution.yaml >> solution-tests.yaml`,
-		Args:         cobra.NoArgs,
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
+		PreRunE: func(_ *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], opts.File, cliParams.BinaryName+" test init"); err != nil {
+					return err
+				}
+				if !get.IsUnambiguousCatalogReference(args[0]) {
+					return fmt.Errorf("bare names are not supported as positional args for test init; use -f to specify a solution file or a versioned catalog ref (name@version)")
+				}
+				opts.File = args[0]
+			}
+			return nil
+		},
 		RunE: func(cCmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
 
 			opts.IOStreams = ioStreams

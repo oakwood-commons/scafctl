@@ -17,7 +17,7 @@ type Options struct {
 	Name string `json:"name" doc:"Solution name" maxLength:"60" example:"my-solution"`
 	// Description is a brief description of what the solution does.
 	Description string `json:"description" doc:"Solution description" maxLength:"200" example:"Deploy to Kubernetes"`
-	// Version is the semver version string (default: "1.0.0").
+	// Version is the semver version string. Optional for local development.
 	Version string `json:"version" doc:"Semantic version" example:"1.0.0"`
 	// Features is a map of features to include in the scaffold.
 	// Valid keys: parameters, resolvers, actions, transforms, validation, tests, composition.
@@ -46,12 +46,8 @@ var ValidFeatures = []string{
 
 // Solution generates a skeleton solution YAML from the given options.
 // If no features are specified, defaults to parameters and resolvers.
-// If version is empty, defaults to "1.0.0".
+// Version is optional; omit for local development, set for catalog publishing.
 func Solution(opts Options) *Result {
-	if opts.Version == "" {
-		opts.Version = "1.0.0"
-	}
-
 	// Default features if none specified
 	if len(opts.Features) == 0 {
 		opts.Features = map[string]bool{
@@ -89,7 +85,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 	b.WriteString("kind: Solution\n")
 	b.WriteString("metadata:\n")
 	fmt.Fprintf(&b, "  name: %s\n", name)
-	fmt.Fprintf(&b, "  version: \"%s\"\n", version)
+	if version != "" {
+		fmt.Fprintf(&b, "  version: \"%s\"\n", version)
+	}
 	fmt.Fprintf(&b, "  description: %s\n", description)
 	b.WriteString("  tags:\n")
 	b.WriteString("    - scaffold\n")

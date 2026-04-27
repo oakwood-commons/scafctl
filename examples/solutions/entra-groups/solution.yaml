@@ -2,7 +2,6 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: entra-groups
-  version: 1.0.0
   displayName: Entra Group Membership Check
   description: >
     Resolves the current user's Entra group memberships via the Microsoft Graph API.
