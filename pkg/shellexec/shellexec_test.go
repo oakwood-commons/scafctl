@@ -460,3 +460,16 @@ func TestOpenHandler_DevNull(t *testing.T) {
 	_, ok := rwc.(devNull)
 	assert.True(t, ok)
 }
+
+func TestRun_EmbeddedShell_NilStdinCatDoesNotPanic(t *testing.T) {
+	var stdout bytes.Buffer
+	result, err := Run(context.Background(), &RunOptions{
+		Command: "cat",
+		Shell:   ShellAuto,
+		Stdin:   nil,
+		Stdout:  &stdout,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Empty(t, stdout.String())
+}

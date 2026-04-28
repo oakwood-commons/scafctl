@@ -881,6 +881,9 @@ func TestShouldRedactSensitive(t *testing.T) {
 		{name: "json reveals", format: "json", showSensitive: false, wantRedact: false},
 		{name: "yaml reveals", format: "yaml", showSensitive: false, wantRedact: false},
 		{name: "quiet reveals", format: "quiet", showSensitive: false, wantRedact: false},
+		{name: "csv reveals", format: "csv", showSensitive: false, wantRedact: false},
+		{name: "toml reveals", format: "toml", showSensitive: false, wantRedact: false},
+		{name: "mermaid reveals", format: "mermaid", showSensitive: false, wantRedact: false},
 		{name: "table with show-sensitive reveals", format: "table", showSensitive: true, wantRedact: false},
 		{name: "json with show-sensitive reveals", format: "json", showSensitive: true, wantRedact: false},
 	}

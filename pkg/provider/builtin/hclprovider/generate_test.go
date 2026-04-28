@@ -5,6 +5,7 @@ package hclprovider
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -634,4 +635,74 @@ func TestGenerateHCL_Int64Value(t *testing.T) {
 	hcl, err := GenerateHCL(input)
 	require.NoError(t, err)
 	assert.Contains(t, hcl, "8080")
+}
+
+func TestGenerateHCL_VariableTypeUnquoted(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		typeVal  string
+		expected string
+	}{
+		{"bare string", "string", "type = string"},
+		{"bare number", "number", "type = number"},
+		{"bare bool", "bool", "type = bool"},
+		{"bare any", "any", "type = any"},
+		{"list of string", "list(string)", "type = list(string)"},
+		{"map of number", "map(number)", "type = map(number)"},
+		{"set of string", "set(string)", "type = set(string)"},
+		{"object type", "object({ name = string, age = number })", "type = object({ name = string, age = number })"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			input := map[string]any{
+				"variables": []any{
+					map[string]any{
+						"name": "test_var",
+						"type": tt.typeVal,
+					},
+				},
+			}
+			hcl, err := GenerateHCL(input)
+			require.NoError(t, err)
+			assert.Contains(t, hcl, tt.expected, "type should be unquoted")
+			assert.NotContains(t, hcl, fmt.Sprintf(`type = "%s"`, tt.typeVal), "type must not be quoted")
+		})
+	}
+}
+
+func TestIsHCLTypeExpression(t *testing.T) {
+	t.Parallel()
+	trueTests := []string{"string", "number", "bool", "any", "list(string)", "map(number)", "set(string)", "object({name=string})", "tuple([string, number])"}
+	for _, s := range trueTests {
+		assert.True(t, isHCLTypeExpression(s), "expected true for %q", s)
+	}
+	falseTests := []string{"hello", "us-east-1", "ami-12345", "my_value", "", "list", "map", "set", "object", "tuple"}
+	for _, s := range falseTests {
+		assert.False(t, isHCLTypeExpression(s), "expected false for %q", s)
+	}
+}
+
+func TestGenerateHCL_NonTypeExpressionStaysQuoted(t *testing.T) {
+	t.Parallel()
+	// When "type" value is not a type expression (e.g., in a nested default block),
+	// it should remain quoted as a normal string.
+	input := map[string]any{
+		"variables": []any{
+			map[string]any{
+				"name": "action_type",
+				"type": "string",
+				"default": map[string]any{
+					"type": "forward",
+				},
+			},
+		},
+	}
+	hcl, err := GenerateHCL(input)
+	require.NoError(t, err)
+	// "forward" is not a type constraint, so it should be quoted
+	assert.Contains(t, hcl, `type = "forward"`, "non-type-expression 'forward' must stay quoted")
+	// The variable's own type field should be unquoted (HCL alignment may add spaces)
+	assert.Regexp(t, `type\s+= string`, hcl, "type constraint 'string' must be unquoted")
 }

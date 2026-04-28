@@ -691,6 +691,56 @@ func TestLintEmptyValidateWith(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "empty")
 }
 
+func TestLintNonValidationProvider(t *testing.T) {
+	// "static" has CapabilityFrom, not CapabilityValidation
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	validationProv := newFakeProvider("validation", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	validationProv.desc.Capabilities = []provider.Capability{provider.CapabilityValidation}
+
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+	_ = reg.Register(validationProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test-resolver": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+						}},
+					},
+					Validate: &resolver.ValidatePhase{
+						With: []resolver.ProviderValidation{
+							{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"expression": {Literal: "true"}},
+							},
+							{
+								Provider: "validation",
+								Inputs:   map[string]*spec.ValueRef{"expression": {Literal: "true"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "non-validation-provider")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "static")
+	assert.Contains(t, findings[0].Message, "does not declare validation capability")
+}
+
 func TestLintNullResolverValue(t *testing.T) {
 	reg := provider.NewRegistry()
 	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
@@ -1185,4 +1235,41 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLintResolveForEach(t *testing.T) {
+	prov := newFakeProvider("http", map[string]*jsonschema.Schema{
+		"url": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(prov)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test-resolver": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "http",
+								Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+								ForEach: &resolver.ForEachClause{
+									In:   &spec.ValueRef{Literal: "items"},
+									Item: "item",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "resolve-foreach")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "forEach on resolve step")
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
 }

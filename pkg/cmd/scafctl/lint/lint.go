@@ -9,10 +9,15 @@ package lint
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -155,6 +160,43 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	return cmd
 }
 
+// findingsColumnHints builds column hints with a message width that fills the
+// available terminal width. Fixed columns (severity, location, rule) use static
+// caps; the message column expands to consume the remaining space.
+func findingsColumnHints(w io.Writer) map[string]tui.ColumnHint {
+	msgWidth := maxMessageWidth
+	if tw := termWidth(w); tw > 0 {
+		// Subtract fixed columns and overhead. The overhead covers borders,
+		// the row-number column, and inter-column gaps.
+		const fixedOverhead = 6
+		const minMsgWidth = 16
+		remaining := tw - 8 - maxLocationWidth - maxRuleWidth - fixedOverhead
+		if remaining < minMsgWidth {
+			remaining = minMsgWidth
+		}
+		if remaining != msgWidth {
+			msgWidth = remaining
+		}
+	}
+	return map[string]tui.ColumnHint{
+		"severity": {MaxWidth: 8, DisplayName: "Severity"},
+		"location": {MaxWidth: maxLocationWidth, DisplayName: "Location"},
+		"message":  {MaxWidth: msgWidth, DisplayName: "Message"},
+		"ruleName": {MaxWidth: maxRuleWidth, DisplayName: "Rule"},
+	}
+}
+
+// termWidth returns the terminal width for the given writer, or 0 if unknown.
+func termWidth(w io.Writer) int {
+	if f, ok := w.(*os.File); ok {
+		fd := f.Fd()
+		if width, _, err := term.GetSize(int(fd)); err == nil && width > 0 { //nolint:gosec // fd is a valid file descriptor, not user input
+			return width
+		}
+	}
+	return 0
+}
+
 func runLint(ctx context.Context, opts *Options) error {
 	if opts.BinaryName == "" {
 		opts.BinaryName = settings.CliBinaryName
@@ -224,10 +266,27 @@ func runLint(ctx context.Context, opts *Options) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 		kvx.WithOutputAppName(opts.BinaryName+" lint"),
+		kvx.WithOutputColumnHints(findingsColumnHints(opts.IOStreams.Out)),
+		kvx.WithOutputColumnOrder([]string{"severity", "location", "message", "ruleName"}),
 	)
 	kvxOpts.IOStreams = opts.IOStreams
 
-	if err := kvxOpts.Write(result); err != nil {
+	// For table output, project findings to the four visible columns so
+	// the columnar renderer sees exactly 4 fields (not the full 9-field
+	// struct) and stays in table mode at narrower terminal widths.
+	// For structured formats (json/yaml), emit the full result with all
+	// fields and summary counts.
+	var outputData any = result
+	if !kvx.IsStructuredFormat(kvxOpts.Format) && opts.Expression == "" {
+		if len(result.Findings) == 0 {
+			w := writer.FromContext(ctx)
+			w.Success("No lint issues found.")
+			return nil
+		}
+		outputData = projectFindings(result.Findings)
+	}
+
+	if err := kvxOpts.Write(outputData); err != nil {
 		writeError(opts, fmt.Sprintf("failed to write output: %v", err))
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
@@ -237,6 +296,42 @@ func runLint(ctx context.Context, opts *Options) error {
 	}
 
 	return nil
+}
+
+// projectFindings converts findings to maps with only the four table-visible
+// columns. This keeps the column count low so kvx renders a columnar table
+// instead of falling back to list view at narrow terminal widths.
+// Returns []any so kvx View() recognises the data as a homogeneous array.
+func projectFindings(findings []*pkglint.Finding) []any {
+	rows := make([]any, len(findings))
+	for i, f := range findings {
+		rows[i] = map[string]any{
+			"severity": string(f.Severity),
+			"location": truncate(f.Location, maxLocationWidth),
+			"message":  f.Message,
+			"ruleName": truncate(f.RuleName, maxRuleWidth),
+		}
+	}
+	return rows
+}
+
+// Column width limits for table rendering. Values are chosen so the four
+// visible columns (severity≤7 + location + message + rule + separators)
+// fit comfortably in an 80-column terminal.
+const (
+	maxLocationWidth = 15
+	maxMessageWidth  = 32
+	maxRuleWidth     = 12
+)
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func getRegistry(ctx context.Context) *provider.Registry {

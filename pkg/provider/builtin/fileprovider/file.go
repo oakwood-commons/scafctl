@@ -134,6 +134,12 @@ func NewFileProvider() *FileProvider {
 						"Has no effect on other strategies or the write operation.",
 					schemahelper.WithExample(false),
 					schemahelper.WithDefault(false)),
+				"stripExtension": schemahelper.BoolProp(
+					"Strip the final file extension from each entry path before writing (write-tree only). "+
+						"For example, 'main.go.tmpl' becomes 'main.go'. "+
+						"Applied before outputPath template if both are set.",
+					schemahelper.WithExample(true),
+					schemahelper.WithDefault(false)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -560,6 +566,7 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	}
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
+	stripExtension, _ := inputs["stripExtension"].(bool)
 
 	// Parse permissions — default to 0600 (owner read/write only).
 	fileMode := os.FileMode(0o600)
@@ -590,8 +597,16 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	resolved := make([]resolvedEntry, 0, len(entries))
 	for i, entry := range entries {
 		outputPath := entry.path
+		if stripExtension {
+			base := filepath.Base(outputPath)
+			ext := filepath.Ext(outputPath)
+			// Only strip if the extension is not the entire basename (e.g. skip dotfiles like ".env").
+			if ext != "" && base != ext {
+				outputPath = strings.TrimSuffix(outputPath, ext)
+			}
+		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("outputPath template failed for entries[%d] (%s): %w", i, entry.path, tmplErr)
 			}

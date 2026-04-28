@@ -277,8 +277,20 @@ func generateLocalsBlock(body *hclwrite.Body, locals map[string]any) {
 
 // writeAttribute writes a key-value attribute to an hclwrite body.
 // Values are converted to HCL token representations.
+// The "type" key is special-cased: when its value is a recognized HCL type
+// constraint (e.g. string, list(string)), it is written as an unquoted
+// identifier. Other values fall back to normal token rendering.
 func writeAttribute(body *hclwrite.Body, key string, val any) {
-	tokens := valueToTokens(val)
+	var tokens hclwrite.Tokens
+	if key == "type" {
+		if s, ok := val.(string); ok && isHCLTypeExpression(s) {
+			tokens = hclwrite.TokensForIdentifier(s)
+		} else {
+			tokens = valueToTokens(val)
+		}
+	} else {
+		tokens = valueToTokens(val)
+	}
 	body.SetAttributeRaw(key, tokens)
 }
 
@@ -370,6 +382,38 @@ func valueToHCLString(val any) string {
 	default:
 		return fmt.Sprintf("%q", fmt.Sprint(v))
 	}
+}
+
+// hclTypeKeywords are bare HCL type constraint keywords that must be written
+// unquoted as identifiers (e.g. type = string, not type = "string").
+// Only scalar types are allowed bare; composite types (list, map, set, object,
+// tuple) require parenthesised arguments and are handled by isHCLTypeExpression.
+var hclTypeKeywords = map[string]bool{
+	"string": true, "number": true, "bool": true, "any": true,
+}
+
+// hclCompositeTypeKeywords are type constructors that are valid only with
+// parenthesised arguments (e.g. list(string), not bare "list").
+var hclCompositeTypeKeywords = map[string]bool{
+	"list": true, "map": true, "set": true, "object": true, "tuple": true,
+}
+
+// isHCLTypeExpression returns true if a string is an HCL type constraint expression.
+// Type constraints are always identifiers, never quoted strings:
+// simple types (string, number, bool, any) and complex types (list(string), map(number), etc.).
+func isHCLTypeExpression(s string) bool {
+	s = strings.TrimSpace(s)
+	if hclTypeKeywords[s] {
+		return true
+	}
+	// Complex types require parenthesised arguments: list(...), map(...), etc.
+	if idx := strings.Index(s, "("); idx > 0 {
+		keyword := s[:idx]
+		if hclCompositeTypeKeywords[keyword] && strings.HasSuffix(s, ")") {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeExpression returns true if a string appears to be an HCL expression

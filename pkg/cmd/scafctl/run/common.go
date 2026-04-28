@@ -284,9 +284,16 @@ func (o *sharedResolverOptions) buildResolverOutputMap(resolverData map[string]a
 	// --show-sensitive overrides to always reveal.
 	shouldRedact := o.shouldRedactSensitive()
 
+	// Determine whether to exclude internal resolvers: exclude in table/interactive
+	// (human-facing) output, include in structured output for machine consumption.
+	excludeInternal := o.shouldExcludeInternal()
+
 	for name, value := range resolverData {
-		if shouldRedact {
-			if r, ok := sol.Spec.Resolvers[name]; ok && r.Sensitive {
+		if r, ok := sol.Spec.Resolvers[name]; ok {
+			if excludeInternal && r.Internal {
+				continue
+			}
+			if shouldRedact && r.Sensitive {
 				results[name] = "[REDACTED]"
 				continue
 			}
@@ -297,25 +304,31 @@ func (o *sharedResolverOptions) buildResolverOutputMap(resolverData map[string]a
 	return results
 }
 
+// shouldExcludeInternal determines whether internal resolvers should be excluded
+// based on the output format. Structured formats (json, yaml, csv, toml, mermaid)
+// include internal resolvers for machine consumption; table/interactive modes exclude them.
+func (o *sharedResolverOptions) shouldExcludeInternal() bool {
+	format, _ := kvx.ParseOutputFormat(o.Output)
+	return !kvx.IsStructuredFormat(format)
+}
+
 // shouldRedactSensitive determines whether sensitive values should be redacted based on
 // the output format and --show-sensitive flag. Following the Terraform model:
 // - Table/interactive output: redacted (human-facing)
-// - JSON/YAML output: revealed (machine-facing)
+// - Structured output (json, yaml, csv, toml, mermaid, quiet): revealed (machine-facing)
 // - --show-sensitive: always reveals regardless of format
 func (o *sharedResolverOptions) shouldRedactSensitive() bool {
 	if o.ShowSensitive {
 		return false
 	}
 
-	// Structured formats (json, yaml, quiet) are for machine consumption — don't redact
-	format := o.Output
-	switch format {
-	case "json", "yaml", "quiet":
+	format, _ := kvx.ParseOutputFormat(o.Output)
+	// Structured formats are for machine consumption — don't redact.
+	// Quiet is also non-redacting (suppresses output entirely).
+	if kvx.IsStructuredFormat(format) || kvx.IsQuietFormat(format) {
 		return false
-	default:
-		// Table and interactive modes are human-facing — redact
-		return true
 	}
+	return true
 }
 
 // checkValueSizes checks if any values exceed size limits

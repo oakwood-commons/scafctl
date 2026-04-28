@@ -763,6 +763,66 @@ func TestFileProvider_WriteTree_BasicNestedDirs(t *testing.T) {
 	assert.Equal(t, "nested", string(b3))
 }
 
+func TestFileProvider_WriteTree_StripExtensionBool(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "deployment.yaml.tpl", "content": "apiVersion: apps/v1"},
+			map[string]any{"path": "configs/app.conf.tmpl", "content": "key=value"},
+			map[string]any{"path": "noext", "content": "plain"},
+			map[string]any{"path": ".env", "content": "SECRET=val"},
+		},
+		"stripExtension": true,
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 4, data["filesWritten"])
+	paths := data["paths"].([]string)
+	assert.Equal(t, []string{"deployment.yaml", "configs/app.conf", "noext", ".env"}, paths)
+
+	b, err := os.ReadFile(filepath.Join(tmpDir, "deployment.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "apiVersion: apps/v1", string(b))
+
+	// Verify dotfile .env was NOT stripped
+	envContent, err := os.ReadFile(filepath.Join(tmpDir, ".env"))
+	require.NoError(t, err)
+	assert.Equal(t, "SECRET=val", string(envContent))
+}
+
+func TestFileProvider_WriteTree_StripExtensionWithOutputPath(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "src/main.go.tmpl", "content": "package main"},
+		},
+		"stripExtension": true,
+		"outputPath":     "out/{{ .__fileName }}",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	// stripExtension applied first: main.go.tmpl -> main.go
+	// Then outputPath template sees __fileName as main.go
+	assert.Equal(t, []string{"out/main.go"}, paths)
+}
+
 func TestFileProvider_WriteTree_OutputPathStripExtension(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()

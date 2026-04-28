@@ -201,6 +201,14 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 
 				lintNilInputs(step.Inputs, stepLocation, result)
 				lintExpressions(step.Inputs, stepLocation, result)
+
+				// Warn if forEach is used on a resolve step.
+				if step.ForEach != nil {
+					result.addFinding(SeverityWarning, "structure", stepLocation,
+						"forEach on resolve step is not supported; __self is not available during the resolve phase",
+						"Move forEach to a transform step or use a separate resolver to iterate",
+						"resolve-foreach")
+				}
 			}
 		}
 
@@ -229,6 +237,26 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 			for i, step := range res.Validate.With {
 				stepLocation := fmt.Sprintf("%s.validate.with[%d]", location, i)
 				lintNilInputs(step.Inputs, stepLocation, result)
+
+				// Warn if the provider does not declare validation capability.
+				if registry != nil && step.Provider != "" {
+					if p, exists := registry.Get(step.Provider); exists {
+						desc := p.Descriptor()
+						hasValidation := false
+						for _, cap := range desc.Capabilities {
+							if cap == provider.CapabilityValidation {
+								hasValidation = true
+								break
+							}
+						}
+						if !hasValidation {
+							result.addFinding(SeverityWarning, "provider", stepLocation,
+								fmt.Sprintf("provider '%s' does not declare validation capability", step.Provider),
+								"Use the 'validation' provider or another provider with validation capability",
+								"non-validation-provider")
+						}
+					}
+				}
 			}
 		}
 

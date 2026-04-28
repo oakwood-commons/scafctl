@@ -113,7 +113,7 @@ type Metadata struct {
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"The description of the solution" minLength:"3" maxLength:"5000" example:"This solution scaffolds terraform code to create a simple GCP bucket" pattern:"^(.|\\n|\\r)*" required:"false"`
 
 	// Category classifies the solution (e.g., "application", "infrastructure")
-	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution" minLength:"3" maxLength:"30" example:"application" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9]|[a-z0-9]{1,})$" required:"false"`
+	Category string `json:"category,omitempty" yaml:"category,omitempty" doc:"The category of the solution" minLength:"1" maxLength:"30" example:"application" pattern:"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" required:"false"`
 
 	// Tags are searchable keywords associated with the solution
 	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" maxItems:"100" doc:"A list of tags for the solution" required:"false"`

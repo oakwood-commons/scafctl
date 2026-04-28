@@ -264,6 +264,28 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "An empty transform.with array is almost certainly unintentional. The transform phase will be silently skipped, which may cause unexpected resolver output.",
 		Fix:         "Either add transform steps to the with array or remove the transform section entirely.",
 	},
+	"non-validation-provider": {
+		Rule:        "non-validation-provider",
+		Severity:    string(SeverityWarning),
+		Category:    "provider",
+		Description: "A validate.with step uses a provider that does not declare the validation capability.",
+		Why:         "Providers without the validation capability will not produce validation results. The validate phase expects providers that return valid/invalid status. Using other providers here is almost certainly a mistake.",
+		Fix:         "Use the 'validation' provider (for CEL expressions) or another provider that declares the validation capability.",
+		Examples: []string{
+			"validate:\n  with:\n    - provider: validation\n      inputs:\n        expression: size(__self) > 0",
+		},
+	},
+	"resolve-foreach": {
+		Rule:        "resolve-foreach",
+		Severity:    string(SeverityWarning),
+		Category:    "structure",
+		Description: "A resolve.with step uses forEach, which is not supported in the resolve phase.",
+		Why:         "During the resolve phase, __self is not yet available because the resolver is still obtaining its initial value. forEach requires an iterable input, and the resolve phase cannot provide one from the current resolver. Use forEach in the transform phase instead.",
+		Fix:         "Move the forEach clause to a transform step, or use a separate resolver to iterate over an array.",
+		Examples: []string{
+			"# Wrong (forEach in resolve):\nresolve:\n  with:\n    - provider: http\n      forEach:\n        in:\n          expr: items\n\n# Correct (forEach in transform):\ntransform:\n  with:\n    - provider: cel\n      forEach:\n        in:\n          expr: __self\n        item: item",
+		},
+	},
 	"empty-validate-with": {
 		Rule:        "empty-validate-with",
 		Severity:    string(SeverityWarning),
