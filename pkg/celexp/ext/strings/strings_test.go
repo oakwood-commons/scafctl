@@ -582,3 +582,107 @@ func TestCombinedFunctions(t *testing.T) {
 		})
 	}
 }
+
+func TestRepeatFunc(t *testing.T) {
+	fn := RepeatFunc()
+	env, err := cel.NewEnv(fn.EnvOptions...)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		expression string
+		expected   any
+		wantErr    bool
+	}{
+		{
+			name:       "repeat string three times",
+			expression: `strings.repeat("ab", 3)`,
+			expected:   "ababab",
+		},
+		{
+			name:       "repeat single char",
+			expression: `strings.repeat("-", 5)`,
+			expected:   "-----",
+		},
+		{
+			name:       "repeat zero times",
+			expression: `strings.repeat("abc", 0)`,
+			expected:   "",
+		},
+		{
+			name:       "repeat empty string",
+			expression: `strings.repeat("", 100)`,
+			expected:   "",
+		},
+		{
+			name:       "negative count",
+			expression: `strings.repeat("x", -1)`,
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, issues := env.Compile(tt.expression)
+			require.Nil(t, issues, "compilation failed: %v", issues)
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err)
+
+			result, _, err := prog.Eval(map[string]interface{}{})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result.Value())
+		})
+	}
+}
+
+func TestRepeatFunc_Metadata(t *testing.T) {
+	fn := RepeatFunc()
+	assert.Equal(t, "strings.repeat", fn.Name)
+	assert.True(t, fn.Custom)
+	assert.NotEmpty(t, fn.Examples)
+	assert.NotEmpty(t, fn.EnvOptions)
+}
+
+func TestRepeatFunc_OverflowGuard(t *testing.T) {
+	// Verify that a huge count does not overflow the int64 multiplication
+	// and bypass the maxRepeatLen guard.
+	fn := RepeatFunc()
+	env, err := cel.NewEnv(fn.EnvOptions...)
+	require.NoError(t, err)
+
+	// Use a count that would overflow int64 when multiplied by len("ab")=2.
+	// math.MaxInt64 / 2 + 1 would overflow: 2 * (MaxInt64/2+1) wraps negative.
+	expr := `strings.repeat("ab", 4611686018427387905)`
+	ast, issues := env.Compile(expr)
+	require.Nil(t, issues)
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	_, _, err = prog.Eval(map[string]interface{}{})
+	require.Error(t, err, "should reject count that would overflow")
+	assert.Contains(t, err.Error(), "exceed maximum length")
+}
+
+func TestRepeatFunc_EmptyStringLargeCount(t *testing.T) {
+	// Empty string with a huge count should return "" without panic.
+	fn := RepeatFunc()
+	env, err := cel.NewEnv(fn.EnvOptions...)
+	require.NoError(t, err)
+
+	expr := `strings.repeat("", 9223372036854775807)`
+	ast, issues := env.Compile(expr)
+	require.Nil(t, issues)
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	result, _, err := prog.Eval(map[string]interface{}{})
+	require.NoError(t, err)
+	assert.Equal(t, "", result.Value())
+}

@@ -98,3 +98,55 @@ func TitleFunc() celexp.ExtFunction {
 		},
 	}
 }
+
+// maxRepeatLen is the maximum total length allowed for strings.repeat output
+// to prevent excessive memory allocation.
+const maxRepeatLen = 1 << 20 // 1 MiB
+
+func RepeatFunc() celexp.ExtFunction {
+	funcName := "strings.repeat"
+	return celexp.ExtFunction{
+		Name:          funcName,
+		Description:   "Repeats a string a given number of times",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Repeat a string three times",
+				Expression:  `strings.repeat("ab", 3)`,
+			},
+			{
+				Description: "Create a separator line",
+				Expression:  `strings.repeat("-", 40)`,
+			},
+		},
+		EnvOptions: []cel.EnvOption{
+			cel.Function(funcName,
+				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
+					[]*cel.Type{cel.StringType, cel.IntType},
+					cel.StringType,
+					cel.BinaryBinding(func(strRef, countRef ref.Val) ref.Val {
+						str, ok := strRef.Value().(string)
+						if !ok {
+							return types.NewErr("strings.repeat: expected string as first argument, got %s", strRef.Type())
+						}
+						count, ok := countRef.Value().(int64)
+						if !ok {
+							return types.NewErr("strings.repeat: expected int as second argument, got %s", countRef.Type())
+						}
+						if count < 0 {
+							return types.NewErr("strings.repeat: count must be non-negative, got %d", count)
+						}
+						if len(str) == 0 {
+							return types.String("")
+						}
+						if count > int64(maxRepeatLen)/int64(len(str)) {
+							return types.NewErr("strings.repeat: result would exceed maximum length (%d bytes)", maxRepeatLen)
+						}
+						return types.String(strings.Repeat(str, int(count)))
+					}),
+				),
+			),
+		},
+	}
+}

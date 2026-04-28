@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"strings"
 	"testing"
 
@@ -292,4 +293,131 @@ func TestWithSupplementalInstructions(t *testing.T) {
 		require.NotNil(t, srv)
 		assert.Equal(t, "mycli", srv.name)
 	})
+}
+
+func TestServerContextPropagation(t *testing.T) {
+	t.Run("mergeContext propagates values from server context", func(t *testing.T) {
+		authReg := auth.NewRegistry()
+		cfg := &config.Config{Version: 42}
+
+		srv, err := NewServer(
+			WithServerAuthRegistry(authReg),
+			WithServerConfig(cfg),
+			WithServerName("testcli"),
+		)
+		require.NoError(t, err)
+
+		// Simulate what the transport context func does: merge a fresh
+		// background context (as mcp-go would create) with the server context.
+		transportCtx := context.Background()
+		merged := mergeContext(transportCtx, srv.ctx)
+
+		// Auth registry must be available — this is the core bug fix.
+		gotAuth := auth.RegistryFromContext(merged)
+		require.NotNil(t, gotAuth, "auth registry must be present in merged context")
+		assert.Equal(t, authReg, gotAuth)
+
+		// Config must be available.
+		gotCfg := config.FromContext(merged)
+		require.NotNil(t, gotCfg)
+		assert.Equal(t, 42, gotCfg.Version)
+
+		// Settings must be available with the configured binary name.
+		gotSettings, ok := settings.FromContext(merged)
+		require.True(t, ok)
+		assert.Equal(t, "testcli", gotSettings.BinaryName)
+	})
+
+	t.Run("mergeContext prefers values context over parent", func(t *testing.T) {
+		parentReg := auth.NewRegistry()
+		valuesReg := auth.NewRegistry()
+
+		parentCtx := auth.WithRegistry(context.Background(), parentReg)
+		valuesCtx := auth.WithRegistry(context.Background(), valuesReg)
+
+		merged := mergeContext(parentCtx, valuesCtx)
+		got := auth.RegistryFromContext(merged)
+		assert.Equal(t, valuesReg, got, "values context should take precedence")
+	})
+
+	t.Run("mergeContext falls back to parent for missing values", func(t *testing.T) {
+		parentReg := auth.NewRegistry()
+		parentCtx := auth.WithRegistry(context.Background(), parentReg)
+		valuesCtx := context.Background() // no auth registry
+
+		merged := mergeContext(parentCtx, valuesCtx)
+		got := auth.RegistryFromContext(merged)
+		assert.Equal(t, parentReg, got, "should fall back to parent context")
+	})
+
+	t.Run("embedder tool receives auth from merged context", func(t *testing.T) {
+		authReg := auth.NewRegistry()
+
+		srv, err := NewServer(
+			WithServerAuthRegistry(authReg),
+			WithServerName("embeddercli"),
+		)
+		require.NoError(t, err)
+
+		// Simulate an embedder-registered tool handler receiving the
+		// transport context after mergeContext is applied.
+		handlerCtx := mergeContext(context.Background(), srv.ctx)
+		got := auth.RegistryFromContext(handlerCtx)
+		require.NotNil(t, got, "embedder tool must see auth registry in handler ctx")
+		assert.Equal(t, authReg, got)
+	})
+}
+
+// ── Server option coverage ──────────────────────────────────────────────────
+
+func TestWithPaginationLimit(t *testing.T) {
+	srv, err := NewServer(WithPaginationLimit(50))
+	require.NoError(t, err)
+	require.NotNil(t, srv)
+}
+
+func TestWithWorkerPoolSize(t *testing.T) {
+	srv, err := NewServer(WithWorkerPoolSize(4))
+	require.NoError(t, err)
+	require.NotNil(t, srv)
+}
+
+func TestWithQueueSize(t *testing.T) {
+	srv, err := NewServer(WithQueueSize(100))
+	require.NoError(t, err)
+	require.NotNil(t, srv)
+}
+
+func TestWithErrorLog(t *testing.T) {
+	lgr := log.Default()
+	srv, err := NewServer(WithErrorLog(lgr))
+	require.NoError(t, err)
+	require.NotNil(t, srv)
+}
+
+// ── MCPServer accessor ──────────────────────────────────────────────────────
+
+func TestMCPServer(t *testing.T) {
+	srv, err := NewServer()
+	require.NoError(t, err)
+	assert.NotNil(t, srv.MCPServer(), "MCPServer() should return the underlying server")
+	assert.Equal(t, srv.mcpServer, srv.MCPServer())
+}
+
+// ── Handler tests ────────────────────────────────────────────────────────────
+
+func TestHandler_ReturnsHTTPHandler(t *testing.T) {
+	srv, err := NewServer()
+	require.NoError(t, err)
+	h := srv.Handler()
+	require.NotNil(t, h, "Handler() should return an http.Handler")
+	assert.NotNil(t, srv.httpServer, "httpServer should be initialized after Handler()")
+}
+
+func TestHandler_ReturnsCachedInstance(t *testing.T) {
+	srv, err := NewServer()
+	require.NoError(t, err)
+	h1 := srv.Handler()
+	h2 := srv.Handler()
+	assert.Equal(t, h1, h2, "Handler() should return the same instance on subsequent calls")
 }
