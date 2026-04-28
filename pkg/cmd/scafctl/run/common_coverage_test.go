@@ -694,3 +694,83 @@ func TestLoadMockedResolvers_InvalidJSON(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing")
 }
+
+// ── shouldExcludeInternal tests ──────────────────────────────────────────────
+
+func TestSharedResolverOptions_ShouldExcludeInternal_TableExcludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "table"}}
+	assert.True(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_JSONIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "json"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_YAMLIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "yaml"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_EmptyExcludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: ""}}
+	assert.True(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_CSVIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "csv"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_TOMLIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "toml"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_MermaidIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "mermaid"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_BuildResolverOutputMap_InternalExcludedInTable(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+	}
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"public":   {Name: "public", Internal: false},
+		"internal": {Name: "internal", Internal: true},
+	}
+	result := opts.buildResolverOutputMap(map[string]any{
+		"public":   "visible",
+		"internal": "hidden",
+	}, sol)
+	assert.Equal(t, "visible", result["public"])
+	assert.NotContains(t, result, "internal")
+}
+
+func TestSharedResolverOptions_BuildResolverOutputMap_InternalIncludedInJSON(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"public":   {Name: "public", Internal: false},
+		"internal": {Name: "internal", Internal: true},
+	}
+	result := opts.buildResolverOutputMap(map[string]any{
+		"public":   "visible",
+		"internal": "also-visible",
+	}, sol)
+	assert.Equal(t, "visible", result["public"])
+	assert.Equal(t, "also-visible", result["internal"])
+}

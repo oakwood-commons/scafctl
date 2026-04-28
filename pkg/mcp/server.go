@@ -525,31 +525,63 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 }
 
 // Serve starts the MCP server on stdio transport (blocking).
+// Server context values (auth registry, config, settings, logger) are
+// automatically injected into the transport's request context so that
+// all tool handlers -- including those registered by embedders via
+// MCPServer().AddTool() -- can access them.
 func (s *Server) Serve(opts ...server.StdioOption) error {
-	return server.ServeStdio(s.mcpServer, opts...)
+	contextOpt := server.WithStdioContextFunc(func(ctx context.Context) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.StdioOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	return server.ServeStdio(s.mcpServer, allOpts...)
 }
 
 // ServeSSE starts the MCP server on SSE transport at the given address.
-func (s *Server) ServeSSE(addr string) error {
-	s.sseServer = server.NewSSEServer(s.mcpServer)
+// Server context values are injected into every request context (see Serve).
+func (s *Server) ServeSSE(addr string, opts ...server.SSEOption) error {
+	contextOpt := server.WithSSEContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.SSEOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	s.sseServer = server.NewSSEServer(s.mcpServer, allOpts...)
 	s.logger.Info("starting SSE server", "addr", addr)
 	return s.sseServer.Start(addr)
 }
 
 // ServeHTTP starts the MCP server on Streamable HTTP transport at the given address.
-func (s *Server) ServeHTTP(addr string) error {
-	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer)
+// Server context values are injected into every request context (see Serve).
+func (s *Server) ServeHTTP(addr string, opts ...server.StreamableHTTPOption) error {
+	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.StreamableHTTPOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer, allOpts...)
 	s.logger.Info("starting Streamable HTTP server", "addr", addr)
 	return s.httpServer.Start(addr)
 }
 
 // Handler returns an http.Handler for the Streamable HTTP transport.
-// This is useful for embedding the MCP server into an existing HTTP server.
-func (s *Server) Handler() http.Handler {
+// Server context values are injected into every request context (see Serve).
+// If the HTTP server was already created (by a prior call to Handler or ServeHTTP),
+// the existing instance is returned and opts are ignored.
+func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
 	if s.httpServer != nil {
 		return s.httpServer
 	}
-	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer)
+	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.StreamableHTTPOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer, allOpts...)
 	return s.httpServer
 }
 
