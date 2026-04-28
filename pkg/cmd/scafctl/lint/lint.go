@@ -161,7 +161,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 }
 
 // findingsColumnHints builds column hints with a message width that fills the
-// available terminal width. Fixed columns (severity, location, rule) use static
+// available terminal width. Fixed columns (severity, rule, location) use static
 // caps; the message column expands to consume the remaining space.
 func findingsColumnHints(w io.Writer) map[string]tui.ColumnHint {
 	msgWidth := maxMessageWidth
@@ -170,7 +170,7 @@ func findingsColumnHints(w io.Writer) map[string]tui.ColumnHint {
 		// the row-number column, and inter-column gaps.
 		const fixedOverhead = 6
 		const minMsgWidth = 16
-		remaining := tw - 8 - maxLocationWidth - maxRuleWidth - fixedOverhead
+		remaining := tw - 8 - maxRuleWidth - maxLocationWidth - fixedOverhead
 		if remaining < minMsgWidth {
 			remaining = minMsgWidth
 		}
@@ -180,9 +180,9 @@ func findingsColumnHints(w io.Writer) map[string]tui.ColumnHint {
 	}
 	return map[string]tui.ColumnHint{
 		"severity": {MaxWidth: 8, DisplayName: "Severity"},
+		"ruleName": {MaxWidth: maxRuleWidth, DisplayName: "Rule"},
 		"location": {MaxWidth: maxLocationWidth, DisplayName: "Location"},
 		"message":  {MaxWidth: msgWidth, DisplayName: "Message"},
-		"ruleName": {MaxWidth: maxRuleWidth, DisplayName: "Rule"},
 	}
 }
 
@@ -267,7 +267,7 @@ func runLint(ctx context.Context, opts *Options) error {
 		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 		kvx.WithOutputAppName(opts.BinaryName+" lint"),
 		kvx.WithOutputColumnHints(findingsColumnHints(opts.IOStreams.Out)),
-		kvx.WithOutputColumnOrder([]string{"severity", "location", "message", "ruleName"}),
+		kvx.WithOutputColumnOrder([]string{"severity", "ruleName", "location", "message"}),
 	)
 	kvxOpts.IOStreams = opts.IOStreams
 
@@ -307,32 +307,23 @@ func projectFindings(findings []*pkglint.Finding) []any {
 	for i, f := range findings {
 		rows[i] = map[string]any{
 			"severity": string(f.Severity),
-			"location": truncate(f.Location, maxLocationWidth),
+			"location": f.Location,
 			"message":  f.Message,
-			"ruleName": truncate(f.RuleName, maxRuleWidth),
+			"ruleName": f.RuleName,
 		}
 	}
 	return rows
 }
 
 // Column width limits for table rendering. Values are chosen so the four
-// visible columns (severity≤7 + location + message + rule + separators)
-// fit comfortably in an 80-column terminal.
+// visible columns (severity + rule + location + message + separators)
+// fit comfortably in an 80-column terminal. The message column fills
+// remaining space and is the first to be truncated on narrow terminals.
 const (
-	maxLocationWidth = 15
-	maxMessageWidth  = 32
-	maxRuleWidth     = 12
+	maxRuleWidth     = 25
+	maxLocationWidth = 25
+	maxMessageWidth  = 40
 )
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
-}
 
 func getRegistry(ctx context.Context) *provider.Registry {
 	reg, err := builtin.DefaultRegistry(ctx)

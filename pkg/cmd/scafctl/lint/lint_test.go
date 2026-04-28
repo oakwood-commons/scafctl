@@ -111,12 +111,12 @@ func BenchmarkCommandLint(b *testing.B) {
 func TestFindingsColumnHints_ReturnsAllColumns(t *testing.T) {
 	t.Parallel()
 	hints := findingsColumnHints(nil)
-	for _, col := range []string{"severity", "location", "message", "ruleName"} {
+	for _, col := range []string{"severity", "ruleName", "location", "message"} {
 		assert.Contains(t, hints, col, "column %q must be present", col)
 	}
 	assert.Equal(t, 8, hints["severity"].MaxWidth)
-	assert.Equal(t, maxLocationWidth, hints["location"].MaxWidth)
 	assert.Equal(t, maxRuleWidth, hints["ruleName"].MaxWidth)
+	assert.Equal(t, maxLocationWidth, hints["location"].MaxWidth)
 }
 
 func TestFindingsColumnHints_DefaultMessageWidth(t *testing.T) {
@@ -147,43 +147,6 @@ func TestProjectFindings_Empty(t *testing.T) {
 	t.Parallel()
 	rows := projectFindings(nil)
 	assert.Empty(t, rows)
-}
-
-// ── truncate tests ───────────────────────────────────────────────────────────
-
-func TestTruncate_Short(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abc", truncate("abc", 10))
-}
-
-func TestTruncate_Exact(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abcde", truncate("abcde", 5))
-}
-
-func TestTruncate_Long(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abcdefghij...", truncate("abcdefghijklmnop", 13))
-}
-
-func TestTruncate_MaxLenZero(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "", truncate("abc", 0))
-}
-
-func TestTruncate_MaxLenOne(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "a", truncate("abc", 1))
-}
-
-func TestTruncate_MaxLenTwo(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "ab", truncate("abc", 2))
-}
-
-func TestTruncate_MaxLenThree(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abc", truncate("abcde", 3))
 }
 
 // ── termWidth tests ──────────────────────────────────────────────────────────

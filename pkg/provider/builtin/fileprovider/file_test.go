@@ -763,7 +763,7 @@ func TestFileProvider_WriteTree_BasicNestedDirs(t *testing.T) {
 	assert.Equal(t, "nested", string(b3))
 }
 
-func TestFileProvider_WriteTree_StripExtensionBool(t *testing.T) {
+func TestFileProvider_WriteTree_StripSuffix(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 
@@ -777,7 +777,7 @@ func TestFileProvider_WriteTree_StripExtensionBool(t *testing.T) {
 			map[string]any{"path": "noext", "content": "plain"},
 			map[string]any{"path": ".env", "content": "SECRET=val"},
 		},
-		"stripExtension": true,
+		"stripSuffix": ".tpl",
 	}
 
 	result, err := p.Execute(ctx, inputs)
@@ -786,19 +786,20 @@ func TestFileProvider_WriteTree_StripExtensionBool(t *testing.T) {
 	data := result.Data.(map[string]any)
 	assert.Equal(t, 4, data["filesWritten"])
 	paths := data["paths"].([]string)
-	assert.Equal(t, []string{"deployment.yaml", "configs/app.conf", "noext", ".env"}, paths)
+	// Only .tpl is stripped; .tmpl and others are untouched
+	assert.Equal(t, []string{"deployment.yaml", "configs/app.conf.tmpl", "noext", ".env"}, paths)
 
 	b, err := os.ReadFile(filepath.Join(tmpDir, "deployment.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, "apiVersion: apps/v1", string(b))
 
-	// Verify dotfile .env was NOT stripped
+	// .env is untouched since it doesn't end with .tpl
 	envContent, err := os.ReadFile(filepath.Join(tmpDir, ".env"))
 	require.NoError(t, err)
 	assert.Equal(t, "SECRET=val", string(envContent))
 }
 
-func TestFileProvider_WriteTree_StripExtensionWithOutputPath(t *testing.T) {
+func TestFileProvider_WriteTree_StripSuffixWithOutputPath(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 
@@ -809,8 +810,8 @@ func TestFileProvider_WriteTree_StripExtensionWithOutputPath(t *testing.T) {
 		"entries": []any{
 			map[string]any{"path": "src/main.go.tmpl", "content": "package main"},
 		},
-		"stripExtension": true,
-		"outputPath":     "out/{{ .__fileName }}",
+		"stripSuffix": ".tmpl",
+		"outputPath":  "out/{{ .__fileName }}",
 	}
 
 	result, err := p.Execute(ctx, inputs)
@@ -818,9 +819,32 @@ func TestFileProvider_WriteTree_StripExtensionWithOutputPath(t *testing.T) {
 	require.NoError(t, err)
 	data := result.Data.(map[string]any)
 	paths := data["paths"].([]string)
-	// stripExtension applied first: main.go.tmpl -> main.go
+	// stripSuffix applied first: main.go.tmpl -> main.go
 	// Then outputPath template sees __fileName as main.go
 	assert.Equal(t, []string{"out/main.go"}, paths)
+}
+
+func TestFileProvider_WriteTree_StripSuffixNoMatch(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "main.go", "content": "package main"},
+		},
+		"stripSuffix": ".tmpl",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	// No match — path is unchanged
+	assert.Equal(t, []string{"main.go"}, paths)
 }
 
 func TestFileProvider_WriteTree_OutputPathStripExtension(t *testing.T) {
