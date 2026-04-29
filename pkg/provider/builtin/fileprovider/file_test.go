@@ -847,7 +847,72 @@ func TestFileProvider_WriteTree_StripSuffixNoMatch(t *testing.T) {
 	assert.Equal(t, []string{"main.go"}, paths)
 }
 
-func TestFileProvider_WriteTree_OutputPathStripExtension(t *testing.T) {
+func TestFileProvider_WriteTree_StripSuffixEmptyPath(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": ".env", "content": "SECRET=val"},
+		},
+		"stripSuffix": ".env",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolves to empty")
+	assert.Contains(t, err.Error(), ".env")
+}
+
+func TestFileProvider_WriteTree_StripSuffixEmptyPathDryRun(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": ".env", "content": "SECRET=val"},
+		},
+		"stripSuffix": ".env",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolves to empty")
+}
+
+func TestFileProvider_WriteTree_StripSuffixDryRunMatchesLive(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "main.go.tmpl", "content": "package main"},
+			map[string]any{"path": "util.go.tmpl", "content": "package util"},
+		},
+		"stripSuffix": ".tmpl",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	data := result.Data.(map[string]any)
+	dryRunPaths := data["paths"].([]string)
+	assert.Equal(t, []string{"main.go", "util.go"}, dryRunPaths,
+		"dry-run paths should reflect stripSuffix application")
+}
+
+func TestFileProvider_WriteTree_OutputPathStemExtraction(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 

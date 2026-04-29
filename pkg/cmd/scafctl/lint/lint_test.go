@@ -4,7 +4,6 @@
 package lint
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -110,20 +109,14 @@ func BenchmarkCommandLint(b *testing.B) {
 
 func TestFindingsColumnHints_ReturnsAllColumns(t *testing.T) {
 	t.Parallel()
-	hints := findingsColumnHints(nil)
+	hints := findingsColumnHints()
 	for _, col := range []string{"severity", "ruleName", "location", "message"} {
 		assert.Contains(t, hints, col, "column %q must be present", col)
 	}
 	assert.Equal(t, 8, hints["severity"].MaxWidth)
 	assert.Equal(t, maxRuleWidth, hints["ruleName"].MaxWidth)
 	assert.Equal(t, maxLocationWidth, hints["location"].MaxWidth)
-}
-
-func TestFindingsColumnHints_DefaultMessageWidth(t *testing.T) {
-	t.Parallel()
-	// With a nil writer, termWidth returns 0, so message stays at default.
-	hints := findingsColumnHints(nil)
-	assert.Equal(t, maxMessageWidth, hints["message"].MaxWidth)
+	assert.True(t, hints["message"].Flex, "message column must be flex")
 }
 
 // ── projectFindings tests ────────────────────────────────────────────────────
@@ -147,19 +140,6 @@ func TestProjectFindings_Empty(t *testing.T) {
 	t.Parallel()
 	rows := projectFindings(nil)
 	assert.Empty(t, rows)
-}
-
-// ── termWidth tests ──────────────────────────────────────────────────────────
-
-func TestTermWidth_NilWriter(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, 0, termWidth(nil))
-}
-
-func TestTermWidth_NonFileWriter(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	assert.Equal(t, 0, termWidth(&buf))
 }
 
 // ── runLint integration tests ────────────────────────────────────────────────

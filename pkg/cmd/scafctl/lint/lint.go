@@ -9,12 +9,8 @@ package lint
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/term"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/kvx/pkg/tui"
@@ -160,41 +156,16 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	return cmd
 }
 
-// findingsColumnHints builds column hints with a message width that fills the
-// available terminal width. Fixed columns (severity, rule, location) use static
-// caps; the message column expands to consume the remaining space.
-func findingsColumnHints(w io.Writer) map[string]tui.ColumnHint {
-	msgWidth := maxMessageWidth
-	if tw := termWidth(w); tw > 0 {
-		// Subtract fixed columns and overhead. The overhead covers borders,
-		// the row-number column, and inter-column gaps.
-		const fixedOverhead = 6
-		const minMsgWidth = 16
-		remaining := tw - 8 - maxRuleWidth - maxLocationWidth - fixedOverhead
-		if remaining < minMsgWidth {
-			remaining = minMsgWidth
-		}
-		if remaining != msgWidth {
-			msgWidth = remaining
-		}
-	}
+// findingsColumnHints returns column display hints for the findings table.
+// Fixed columns (severity, rule, location) use static width caps; the
+// message column is marked Flex so it absorbs remaining terminal width.
+func findingsColumnHints() map[string]tui.ColumnHint {
 	return map[string]tui.ColumnHint{
 		"severity": {MaxWidth: 8, DisplayName: "Severity"},
 		"ruleName": {MaxWidth: maxRuleWidth, DisplayName: "Rule"},
 		"location": {MaxWidth: maxLocationWidth, DisplayName: "Location"},
-		"message":  {MaxWidth: msgWidth, DisplayName: "Message"},
+		"message":  {DisplayName: "Message", Flex: true},
 	}
-}
-
-// termWidth returns the terminal width for the given writer, or 0 if unknown.
-func termWidth(w io.Writer) int {
-	if f, ok := w.(*os.File); ok {
-		fd := f.Fd()
-		if width, _, err := term.GetSize(int(fd)); err == nil && width > 0 { //nolint:gosec // fd is a valid file descriptor, not user input
-			return width
-		}
-	}
-	return 0
 }
 
 func runLint(ctx context.Context, opts *Options) error {
@@ -266,7 +237,7 @@ func runLint(ctx context.Context, opts *Options) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 		kvx.WithOutputAppName(opts.BinaryName+" lint"),
-		kvx.WithOutputColumnHints(findingsColumnHints(opts.IOStreams.Out)),
+		kvx.WithOutputColumnHints(findingsColumnHints()),
 		kvx.WithOutputColumnOrder([]string{"severity", "ruleName", "location", "message"}),
 	)
 	kvxOpts.IOStreams = opts.IOStreams
@@ -320,9 +291,8 @@ func projectFindings(findings []*pkglint.Finding) []any {
 // fit comfortably in an 80-column terminal. The message column fills
 // remaining space and is the first to be truncated on narrow terminals.
 const (
-	maxRuleWidth     = 25
-	maxLocationWidth = 25
-	maxMessageWidth  = 40
+	maxRuleWidth     = 20
+	maxLocationWidth = 20
 )
 
 func getRegistry(ctx context.Context) *provider.Registry {

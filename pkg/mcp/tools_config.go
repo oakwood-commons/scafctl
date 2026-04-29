@@ -44,19 +44,12 @@ func (s *Server) registerConfigTools() {
 
 // handleGetConfig returns the current configuration (with sensitive fields redacted).
 func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	cfg := s.config
+	cfg := s.resolveConfig()
 	if cfg == nil {
-		cfg = config.FromContext(s.ctx)
-	}
-	if cfg == nil {
-		var err error
-		cfg, err = config.Global()
-		if err != nil {
-			return newStructuredError(ErrCodeConfigError, fmt.Sprintf("no configuration available: %v", err),
-				WithSuggestion("Run 'scafctl config init' to create a default configuration"),
-				WithRelatedTools("get_config_paths"),
-			), nil
-		}
+		return newStructuredError(ErrCodeConfigError, "no configuration available",
+			WithSuggestion(fmt.Sprintf("Run '%s config init' to create a default configuration", s.name)),
+			WithRelatedTools("get_config_paths"),
+		), nil
 	}
 
 	sanitized := config.SanitizeConfig(cfg)

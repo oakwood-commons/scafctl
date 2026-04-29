@@ -607,6 +607,13 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 			outputPath = transformed
 		}
 
+		if outputPath == "" || outputPath == "." {
+			if outputPathTmpl != "" {
+				return nil, fmt.Errorf("entries[%d]: path %q resolves to empty after applying stripSuffix %q and outputPath template %q", i, entry.path, stripSuffix, outputPathTmpl)
+			}
+			return nil, fmt.Errorf("entries[%d]: path %q resolves to empty after applying stripSuffix %q", i, entry.path, stripSuffix)
+		}
+
 		absDest := filepath.Join(absBasePath, outputPath)
 		if !isSubPath(absBasePath, absDest) {
 			return nil, fmt.Errorf("path traversal detected: entries[%d] path %q resolves outside basePath %q", i, outputPath, absBasePath)
@@ -938,6 +945,7 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 	}
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
+	stripSuffix, _ := inputs["stripSuffix"].(string)
 
 	// Invocation-level conflict inputs.
 	invOnConflict, _ := inputs["onConflict"].(string)
@@ -950,12 +958,22 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 
 	for i, entry := range entries {
 		outputPath := entry.path
+		if stripSuffix != "" {
+			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
+		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("%s: outputPath template failed for entries[%d] (%s): %w", ProviderName, i, entry.path, tmplErr)
 			}
 			outputPath = transformed
+		}
+
+		if outputPath == "" || outputPath == "." {
+			if outputPathTmpl != "" {
+				return nil, fmt.Errorf("%s: entries[%d]: path %q resolves to empty after applying stripSuffix %q and outputPath template %q", ProviderName, i, entry.path, stripSuffix, outputPathTmpl)
+			}
+			return nil, fmt.Errorf("%s: entries[%d]: path %q resolves to empty after applying stripSuffix %q", ProviderName, i, entry.path, stripSuffix)
 		}
 
 		absDest := filepath.Join(absBasePath, outputPath)

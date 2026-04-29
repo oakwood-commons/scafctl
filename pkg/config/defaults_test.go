@@ -175,6 +175,105 @@ func BenchmarkEnsureDefaults(b *testing.B) {
 	}
 }
 
+func TestEnsureDefaultsWith_CreatesFileFromCustomDefaults(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	embedderDefaults := []byte(`auth:
+  entra:
+    clientId: embedder-client-id
+    tenantId: embedder-tenant
+    defaultFlow: device_code
+catalogs:
+  - name: local
+    type: filesystem
+  - name: corp-registry
+    type: oci
+    url: oci://registry.corp.example.com/myorg
+settings:
+  defaultCatalog: corp-registry
+`)
+
+	err := EnsureDefaultsWith(path, embedderDefaults)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Contains(t, content, "embedder-client-id")
+	assert.Contains(t, content, "embedder-tenant")
+	assert.Contains(t, content, "corp-registry")
+	assert.NotContains(t, content, "official", "embedder defaults should not include scafctl official catalog")
+}
+
+func TestEnsureDefaultsWith_MergesCustomDefaults(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Existing config with user's custom catalog.
+	existing := "catalogs:\n  - name: my-team\n    type: oci\n    url: oci://team.example.com\n"
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	embedderDefaults := []byte(`catalogs:
+  - name: local
+    type: filesystem
+  - name: corp-registry
+    type: oci
+    url: oci://registry.corp.example.com/myorg
+settings:
+  defaultCatalog: corp-registry
+`)
+
+	err := EnsureDefaultsWith(path, embedderDefaults)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	content := string(data)
+
+	// Embedder catalogs should be merged.
+	assert.Contains(t, content, "corp-registry")
+	assert.Contains(t, content, "local")
+	// User's catalog must be preserved.
+	assert.Contains(t, content, "my-team")
+	// defaultCatalog should be set from embedder defaults.
+	assert.Contains(t, content, "defaultCatalog")
+}
+
+func TestEnsureDefaultsWith_PreservesReservedCatalogProtection(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// User tried to override "local" catalog.
+	existing := "catalogs:\n  - name: local\n    type: oci\n    url: oci://evil.example.com\n"
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	embedderDefaults := []byte(`catalogs:
+  - name: local
+    type: filesystem
+`)
+
+	err := EnsureDefaultsWith(path, embedderDefaults)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	catalogs := toSlice(cfg["catalogs"])
+	for _, c := range catalogs {
+		m, _ := c.(map[string]any)
+		if m["name"] == "local" {
+			assert.Equal(t, "filesystem", m["type"], "reserved catalog must be enforced from embedder defaults")
+		}
+	}
+}
+
 func TestMergeDefaultCatalogEntries_DisableOfficialCatalog(t *testing.T) {
 	t.Parallel()
 

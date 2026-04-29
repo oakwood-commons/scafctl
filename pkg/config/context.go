@@ -13,6 +13,9 @@ type configContextKey struct{}
 // managerOptsContextKey is the context key for storing ManagerOptions.
 type managerOptsContextKey struct{}
 
+// baseDefaultsContextKey is the context key for storing embedder defaults bytes.
+type baseDefaultsContextKey struct{}
+
 // WithConfig returns a new context with the Config stored in it.
 func WithConfig(ctx context.Context, cfg *Config) context.Context {
 	return context.WithValue(ctx, configContextKey{}, cfg)
@@ -37,4 +40,19 @@ func WithManagerOptions(ctx context.Context, opts []ManagerOption) context.Conte
 func ManagerOptionsFromContext(ctx context.Context) []ManagerOption {
 	opts, _ := ctx.Value(managerOptsContextKey{}).([]ManagerOption)
 	return opts
+}
+
+// WithBaseDefaults stores the raw embedder defaults YAML bytes in the context.
+// Commands that need to write defaults to disk (e.g. config reset) use these
+// bytes so that the on-disk file matches the embedder's runtime defaults.
+func WithBaseDefaults(ctx context.Context, data []byte) context.Context {
+	return context.WithValue(ctx, baseDefaultsContextKey{}, data)
+}
+
+// BaseDefaultsFromContext retrieves the embedder defaults YAML bytes from the
+// context. Returns nil when no embedder defaults were stored (i.e. plain
+// scafctl usage).
+func BaseDefaultsFromContext(ctx context.Context) []byte {
+	data, _ := ctx.Value(baseDefaultsContextKey{}).([]byte)
+	return data
 }
