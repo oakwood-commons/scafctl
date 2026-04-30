@@ -108,13 +108,14 @@ func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDO
 		entraCfg.ClientID = cfg.Auth.Entra.ClientID
 		entraCfg.TenantID = cfg.Auth.Entra.TenantID
 		entraCfg.DefaultScopes = cfg.Auth.Entra.DefaultScopes
+		entraCfg.DefaultFlow = cfg.Auth.Entra.DefaultFlow
 	}
 
 	applyOverride(&entraCfg.TenantID, tenantOverride)
 	applyOverride(&entraCfg.ClientID, clientIDOverride)
 
 	var opts []entra.Option
-	if entraCfg.ClientID != "" || entraCfg.TenantID != "" || len(entraCfg.DefaultScopes) > 0 {
+	if entraCfg.ClientID != "" || entraCfg.TenantID != "" || len(entraCfg.DefaultScopes) > 0 || entraCfg.DefaultFlow != "" {
 		opts = append(opts, entra.WithConfig(entraCfg))
 	}
 	opts = append(opts, entra.WithLogger(*logger.FromContext(ctx)))

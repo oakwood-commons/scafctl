@@ -111,28 +111,41 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 
 	if cfg.CredentialStore != nil {
 		if cfg.AuthHandler != nil {
-			// Composite credential function: try static credentials first,
-			// fall back to dynamic auth handler bridge
+			// Composite credential function: try auth handler bridge first
+			// (explicit user login), fall back to Docker/native credentials.
+			// This ensures a fresh `auth login <provider>` token is not
+			// shadowed by stale Docker config entries.
 			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
+				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
+				if bridgeErr == nil {
+					// Auth handler bridge succeeded. Log a warning if Docker
+					// config also has credentials for this host, since those
+					// would have silently taken precedence before this fix.
+					if cfg.Logger.V(1).Enabled() {
+						if dockerCred, dockerSource, _ := cfg.CredentialStore.CredentialWithSource(ctx, host); dockerCred != auth.EmptyCredential {
+							cfg.Logger.V(1).Info("authProvider token used; Docker config credentials for this host were skipped",
+								"handler", cfg.AuthHandler.Name(),
+								"host", host,
+								"dockerSource", dockerSource)
+						}
+					}
+					rc.credentialSource.Store(fmt.Sprintf("%s auth handler token", cfg.AuthHandler.Name()))
+					return auth.Credential{
+						Username: username,
+						Password: password,
+					}, nil
+				}
+				cfg.Logger.V(1).Info("auth handler bridge failed, trying credential store",
+					"handler", cfg.AuthHandler.Name(),
+					"host", host,
+					"error", bridgeErr.Error())
+				// Fall back to credential store (Docker config, native store, etc.)
 				cred, source, err := cfg.CredentialStore.CredentialWithSource(ctx, host)
 				if err == nil && cred != auth.EmptyCredential {
 					rc.credentialSource.Store(source)
 					return cred, nil
 				}
-				// Fall back to auth handler bridge
-				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
-				if bridgeErr != nil {
-					cfg.Logger.V(1).Info("auth handler bridge failed, using anonymous",
-						"handler", cfg.AuthHandler.Name(),
-						"host", host,
-						"error", bridgeErr.Error())
-					return auth.EmptyCredential, nil
-				}
-				rc.credentialSource.Store(fmt.Sprintf("%s auth handler token", cfg.AuthHandler.Name()))
-				return auth.Credential{
-					Username: username,
-					Password: password,
-				}, nil
+				return auth.EmptyCredential, nil
 			}
 		} else {
 			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
@@ -245,6 +258,31 @@ func isOCIAuthError(err error) bool {
 		strings.Contains(s, "403") ||
 		strings.Contains(s, "unauthorized") ||
 		strings.Contains(s, "denied")
+}
+
+// isOCIServerError returns true if the error looks like a registry
+// internal server error (HTTP 500). The match uses "status code 500" to
+// avoid false positives on port numbers like ":5000".
+func isOCIServerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "status code 500") || strings.Contains(s, "INTERNAL_SERVER_ERROR")
+}
+
+// wrapWithCredentialHint enriches err with a credential diagnostic hint when
+// the registry returned a 500 and the catalog was using non-anonymous credentials.
+// Some registries (e.g. ACR) return 500 instead of 401 for expired tokens.
+func (c *RemoteCatalog) wrapWithCredentialHint(err error) error {
+	if err == nil || !isOCIServerError(err) {
+		return err
+	}
+	src := c.CredentialSource()
+	if src == "" {
+		return err
+	}
+	return fmt.Errorf("%w (hint: registry returned 500 while using %q credentials -- the token may be expired; try re-authenticating)", err, src)
 }
 
 // anonymousClient returns a plain auth.Client with no credentials.
@@ -489,7 +527,7 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 		}
 		return data, info, nil
 	}
-	return data, info, err
+	return data, info, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
@@ -569,7 +607,7 @@ func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]b
 		}
 		return data, bundle, info, nil
 	}
-	return data, bundle, info, err
+	return data, bundle, info, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
@@ -1231,7 +1269,7 @@ func (c *RemoteCatalog) ListTags(ctx context.Context, ref Reference) ([]TagInfo,
 		}
 		return tags, nil
 	}
-	return tags, err
+	return tags, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) listTagsFromRepo(ctx context.Context, repo *remote.Repository, ref Reference) ([]TagInfo, error) {
@@ -1476,7 +1514,7 @@ func (c *RemoteCatalog) CopyTo(ctx context.Context, ref Reference, target *Local
 		}
 		return info, nil
 	}
-	return info, err
+	return info, c.wrapWithCredentialHint(err)
 }
 
 func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, target *LocalCatalog, opts CopyOptions) (ArtifactInfo, error) {

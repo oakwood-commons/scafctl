@@ -414,6 +414,31 @@ func buildInstructions(name, supplemental string) string {
 	return base + "\n\n" + supplemental
 }
 
+// resolveConfig returns the effective configuration by checking, in order:
+//  1. s.config (set during NewServer via WithServerConfig)
+//  2. config.FromContext(s.ctx) (set during PersistentPreRun)
+//  3. config.Global() (loads from disk)
+//
+// This ensures catalog-related handlers see the same config as get_config,
+// even when the MCP server was created without an explicit config reference
+// (e.g. config file doesn't exist at startup but is created later).
+func (s *Server) resolveConfig() *config.Config {
+	if s.config != nil {
+		return s.config
+	}
+	if s.ctx != nil {
+		if cfg := config.FromContext(s.ctx); cfg != nil {
+			return cfg
+		}
+	}
+	cfg, err := config.Global()
+	if err != nil {
+		s.logger.V(1).Info("failed to load global config", "error", err)
+		return nil
+	}
+	return cfg
+}
+
 // NewServer creates a new MCP server with all tools and resources registered.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	cfg := &serverConfig{

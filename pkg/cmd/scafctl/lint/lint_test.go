@@ -4,7 +4,6 @@
 package lint
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -110,20 +109,14 @@ func BenchmarkCommandLint(b *testing.B) {
 
 func TestFindingsColumnHints_ReturnsAllColumns(t *testing.T) {
 	t.Parallel()
-	hints := findingsColumnHints(nil)
-	for _, col := range []string{"severity", "location", "message", "ruleName"} {
+	hints := findingsColumnHints()
+	for _, col := range []string{"severity", "ruleName", "location", "message"} {
 		assert.Contains(t, hints, col, "column %q must be present", col)
 	}
 	assert.Equal(t, 8, hints["severity"].MaxWidth)
-	assert.Equal(t, maxLocationWidth, hints["location"].MaxWidth)
 	assert.Equal(t, maxRuleWidth, hints["ruleName"].MaxWidth)
-}
-
-func TestFindingsColumnHints_DefaultMessageWidth(t *testing.T) {
-	t.Parallel()
-	// With a nil writer, termWidth returns 0, so message stays at default.
-	hints := findingsColumnHints(nil)
-	assert.Equal(t, maxMessageWidth, hints["message"].MaxWidth)
+	assert.Equal(t, maxLocationWidth, hints["location"].MaxWidth)
+	assert.True(t, hints["message"].Flex, "message column must be flex")
 }
 
 // ── projectFindings tests ────────────────────────────────────────────────────
@@ -147,56 +140,6 @@ func TestProjectFindings_Empty(t *testing.T) {
 	t.Parallel()
 	rows := projectFindings(nil)
 	assert.Empty(t, rows)
-}
-
-// ── truncate tests ───────────────────────────────────────────────────────────
-
-func TestTruncate_Short(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abc", truncate("abc", 10))
-}
-
-func TestTruncate_Exact(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abcde", truncate("abcde", 5))
-}
-
-func TestTruncate_Long(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abcdefghij...", truncate("abcdefghijklmnop", 13))
-}
-
-func TestTruncate_MaxLenZero(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "", truncate("abc", 0))
-}
-
-func TestTruncate_MaxLenOne(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "a", truncate("abc", 1))
-}
-
-func TestTruncate_MaxLenTwo(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "ab", truncate("abc", 2))
-}
-
-func TestTruncate_MaxLenThree(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "abc", truncate("abcde", 3))
-}
-
-// ── termWidth tests ──────────────────────────────────────────────────────────
-
-func TestTermWidth_NilWriter(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, 0, termWidth(nil))
-}
-
-func TestTermWidth_NonFileWriter(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	assert.Equal(t, 0, termWidth(&buf))
 }
 
 // ── runLint integration tests ────────────────────────────────────────────────

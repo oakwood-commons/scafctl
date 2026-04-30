@@ -45,6 +45,11 @@ type Config struct {
 	// DefaultScopes are requested during initial login if not specified.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" doc:"Default OAuth scopes"`
 
+	// DefaultFlow is the authentication flow used when no explicit flow is
+	// requested and no environment credentials are detected.
+	// Valid values: "interactive" (auth code + PKCE), "device_code".
+	DefaultFlow string `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default interactive auth flow"`
+
 	// MinPollInterval is the minimum interval between device code poll requests.
 	// Defaults to 5 seconds per OAuth 2.0 spec. Only set lower for testing.
 	MinPollInterval time.Duration `json:"-" yaml:"-"`
@@ -80,6 +85,9 @@ func DefaultConfig() *Config {
 		}
 		if len(d.DefaultScopes) > 0 {
 			cfg.DefaultScopes = d.DefaultScopes
+		}
+		if d.DefaultFlow != "" {
+			cfg.DefaultFlow = d.DefaultFlow
 		}
 	}
 

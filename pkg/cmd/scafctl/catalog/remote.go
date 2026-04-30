@@ -140,7 +140,7 @@ func runRemoteAdd(ctx context.Context, opts *RemoteAddOptions) error {
 		}
 	}
 
-	mgr := appconfig.NewManager(opts.ConfigPath)
+	mgr := appconfig.NewManager(opts.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
 		w.Errorf("%v", err)
@@ -236,7 +236,7 @@ func commandRemoteRemove(cliParams *settings.Run, ioStreams *terminal.IOStreams,
 func runRemoteRemove(ctx context.Context, opts *RemoteRemoveOptions) error {
 	w := writer.FromContext(ctx)
 
-	mgr := appconfig.NewManager(opts.ConfigPath)
+	mgr := appconfig.NewManager(opts.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
 		w.Errorf("%v", err)
@@ -319,7 +319,7 @@ func commandRemoteSetDefault(cliParams *settings.Run, ioStreams *terminal.IOStre
 func runRemoteSetDefault(ctx context.Context, opts *RemoteSetDefaultOptions) error {
 	w := writer.FromContext(ctx)
 
-	mgr := appconfig.NewManager(opts.ConfigPath)
+	mgr := appconfig.NewManager(opts.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
 		w.Errorf("%v", err)
@@ -419,7 +419,7 @@ func commandRemoteList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _
 func runRemoteList(ctx context.Context, configPath string, outputOpts *kvx.OutputOptions) error {
 	w := writer.FromContext(ctx)
 
-	mgr := appconfig.NewManager(configPath)
+	mgr := appconfig.NewManager(configPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
 		w.Errorf("%v", err)

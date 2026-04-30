@@ -57,19 +57,32 @@ func EmbeddedCatalogDefaults() []CatalogConfig {
 // config file exists. When a config file already exists, it merges in any
 // missing catalog entries without overwriting values the user has customised.
 func EnsureDefaults(configPath string) error {
+	return EnsureDefaultsWith(configPath, defaultsYAML)
+}
+
+// EnsureDefaultsWith is like EnsureDefaults but uses caller-supplied defaults
+// bytes instead of the embedded defaults.yaml. Embedders use this to bootstrap
+// the on-disk config from their own product-specific defaults so the config
+// file matches their runtime ConfigDefaults.
+//
+// Behavior:
+//   - If config does not exist, write the supplied defaults verbatim.
+//   - If config exists, merge missing catalog entries and settings according
+//     to the same rules as EnsureDefaults (reserved-catalog protection, etc.).
+func EnsureDefaultsWith(configPath string, customDefaults []byte) error {
 	if _, err := os.Stat(configPath); err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("checking config file: %w", err)
 		}
-		// No config file -- write the full embedded defaults.
+		// No config file -- write the full defaults.
 		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 			return fmt.Errorf("creating config directory: %w", err)
 		}
-		return writeDefaultsFile(configPath, defaultsYAML)
+		return writeDefaultsFile(configPath, customDefaults)
 	}
 
 	// Config exists -- merge missing defaults into it.
-	return mergeDefaults(configPath)
+	return mergeDefaults(configPath, customDefaults)
 }
 
 // writeDefaultsFile writes data with 0600 permissions.
@@ -80,10 +93,10 @@ func writeDefaultsFile(path string, data []byte) error {
 	return nil
 }
 
-// mergeDefaults reads the existing config and the embedded defaults, then adds
+// mergeDefaults reads the existing config and the provided defaults, then adds
 // any missing catalog entries (by name) from the defaults. Existing entries
 // are never modified.
-func mergeDefaults(configPath string) error {
+func mergeDefaults(configPath string, defsYAML []byte) error {
 	existingData, err := os.ReadFile(configPath) //nolint:gosec // config path from trusted source
 	if err != nil {
 		return fmt.Errorf("reading existing config: %w", err)
@@ -93,8 +106,8 @@ func mergeDefaults(configPath string) error {
 	if err := yaml.Unmarshal(existingData, &existing); err != nil {
 		return fmt.Errorf("parsing existing config: %w", err)
 	}
-	if err := yaml.Unmarshal(defaultsYAML, &defs); err != nil {
-		return fmt.Errorf("parsing embedded defaults: %w", err)
+	if err := yaml.Unmarshal(defsYAML, &defs); err != nil {
+		return fmt.Errorf("parsing provided defaults: %w", err)
 	}
 	if existing == nil {
 		existing = make(map[string]any)

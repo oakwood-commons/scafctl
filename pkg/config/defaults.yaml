@@ -15,6 +15,7 @@ auth:
     clientId: 04b07795-8ddb-461a-bbee-02f9e1bf7b46
     tenantId: common
     authority: https://login.microsoftonline.com
+    defaultFlow: interactive
     defaultScopes:
       - openid
       - profile

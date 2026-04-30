@@ -1798,6 +1798,41 @@ func TestIntegration_ConfigSchema(t *testing.T) {
 	assert.Contains(t, stdout, "properties")
 }
 
+func TestIntegration_ConfigReset_RequiresForce(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("custom: true"), 0o600))
+
+	_, stderr, exitCode := runScafctl(t, "--config", configPath, "config", "reset")
+
+	assert.NotEqual(t, 0, exitCode, "should fail without --force")
+	assert.Contains(t, stderr, "--force")
+
+	// Config should be untouched.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "custom: true")
+}
+
+func TestIntegration_ConfigReset_HappyPath(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("custom: true"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "--config", configPath, "config", "reset", "--force")
+
+	assert.Equal(t, 0, exitCode, "should succeed with --force")
+	combined := stdout + stderr
+	assert.Contains(t, combined, "Reset config file")
+
+	// Config should be recreated with defaults (not our custom value).
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "custom: true")
+}
+
 // ============================================================================
 // Secrets Command Tests (basic, non-destructive)
 // ============================================================================

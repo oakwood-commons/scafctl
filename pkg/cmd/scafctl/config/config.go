@@ -48,6 +48,7 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	cCmd.AddCommand(CommandGet(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandSet(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandUnset(cliParams, ioStreams, cmdPath))
+	cCmd.AddCommand(CommandReset(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandValidate(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandSchema(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandPaths(cliParams, ioStreams, cmdPath))

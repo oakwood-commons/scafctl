@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +24,7 @@ func TestDefaultConfig(t *testing.T) {
 	require.NotNil(t, embedded, "defaults.yaml must contain auth.entra section")
 	assert.Equal(t, embedded.DefaultScopes, cfg.DefaultScopes)
 	assert.Equal(t, embedded.Authority, cfg.Authority)
+	assert.Equal(t, embedded.DefaultFlow, cfg.DefaultFlow, "DefaultFlow should come from embedded defaults.yaml")
 	assert.Equal(t, DefaultMinPollInterval, cfg.MinPollInterval)
 	assert.Equal(t, 5*time.Second, cfg.SlowDownIncrement)
 }
@@ -184,4 +186,31 @@ func BenchmarkQualifyScope(b *testing.B) {
 	for b.Loop() {
 		QualifyScope("User.Read")
 	}
+}
+
+func TestWithConfig_MergesDefaultFlow(t *testing.T) {
+	store := secrets.NewMockStore()
+
+	handler, err := New(
+		WithConfig(&Config{
+			DefaultFlow: "device_code",
+		}),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "device_code", handler.config.DefaultFlow)
+}
+
+func TestWithConfig_PreservesExistingDefaultFlow(t *testing.T) {
+	store := secrets.NewMockStore()
+
+	// Empty DefaultFlow should not overwrite the default from DefaultConfig().
+	handler, err := New(
+		WithConfig(&Config{
+			ClientID: "custom-client",
+		}),
+		WithSecretStore(store),
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, handler.config.DefaultFlow, "DefaultFlow from defaults.yaml should be preserved")
 }

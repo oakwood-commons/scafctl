@@ -444,3 +444,46 @@ func TestRunRemoteList_Empty(t *testing.T) {
 	err = runRemoteList(ctx, configPath, outputOpts)
 	require.NoError(t, err)
 }
+
+// TestRunRemoteList_EmbedderConfigDefaults verifies that catalogs injected
+// via WithBaseConfig (the embedder pattern) appear in the listing when
+// ManagerOptionsFromContext propagates the options through the context.
+func TestRunRemoteList_EmbedderConfigDefaults(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Empty on-disk config -- no catalogs defined by the user.
+	err := os.WriteFile(configPath, []byte(""), 0o600)
+	require.NoError(t, err)
+
+	// Embedder injects its own catalog via WithBaseConfig.
+	embedderDefaults := []byte(`
+catalogs:
+  - name: embedder-catalog
+    type: oci
+    url: oci://ghcr.io/embedder/catalog
+`)
+	configOpts := []appconfig.ManagerOption{
+		appconfig.WithBaseConfig(embedderDefaults),
+	}
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = appconfig.WithManagerOptions(ctx, configOpts)
+
+	outputOpts := kvxOutputForTest(ioStreams)
+
+	err = runRemoteList(ctx, configPath, outputOpts)
+	require.NoError(t, err)
+
+	output := stdout.String()
+	assert.Contains(t, output, "embedder-catalog", "embedder catalog must appear in listing")
+	assert.Contains(t, output, "oci://ghcr.io/embedder/catalog")
+}
