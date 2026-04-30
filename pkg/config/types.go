@@ -419,6 +419,13 @@ type EntraAuthConfig struct {
 
 	// DefaultScopes are requested during login if not specified on command line.
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+
+	// DefaultFlow is the authentication flow used when no explicit flow is
+	// requested and no environment credentials (service principal, workload
+	// identity) are detected. Valid values: "interactive", "device_code".
+	// Embedders can override this via WithBaseConfig to change the default
+	// for their CLI.
+	DefaultFlow string `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow" enum:"interactive,device_code" maxLength:"32" example:"interactive"`
 }
 
 // GitHubAuthConfig contains GitHub-specific configuration.

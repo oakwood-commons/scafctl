@@ -382,6 +382,9 @@ func Root(opts *RootOptions) *cobra.Command {
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
 			ctx = config.WithManagerOptions(ctx, configOpts)
+			if len(opts.ConfigDefaults) > 0 {
+				ctx = config.WithBaseDefaults(ctx, opts.ConfigDefaults)
+			}
 
 			// ── Resolve --cwd flag and inject into context ──
 			// This must happen before any path resolution so that downstream
@@ -430,6 +433,7 @@ func Root(opts *RootOptions) *cobra.Command {
 					ClientID:      cfg.Auth.Entra.ClientID,
 					TenantID:      cfg.Auth.Entra.TenantID,
 					DefaultScopes: cfg.Auth.Entra.DefaultScopes,
+					DefaultFlow:   cfg.Auth.Entra.DefaultFlow,
 				}))
 			}
 			entraOpts = append(entraOpts, entra.WithLogger(*lgr))

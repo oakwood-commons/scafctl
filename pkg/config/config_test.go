@@ -574,6 +574,25 @@ func TestWithConfig_And_FromContext(t *testing.T) {
 	assert.Equal(t, cfg, FromContext(ctx2))
 }
 
+func TestWithBaseDefaults_And_BaseDefaultsFromContext(t *testing.T) {
+	ctx := t.Context()
+	assert.Nil(t, BaseDefaultsFromContext(ctx))
+
+	data := []byte("auth:\n  entra:\n    clientId: test\n")
+	ctx2 := WithBaseDefaults(ctx, data)
+	assert.Equal(t, data, BaseDefaultsFromContext(ctx2))
+}
+
+func TestWithManagerOptions_And_ManagerOptionsFromContext(t *testing.T) {
+	ctx := t.Context()
+	assert.Nil(t, ManagerOptionsFromContext(ctx))
+
+	opts := []ManagerOption{WithEnvPrefix("TEST")}
+	ctx2 := WithManagerOptions(ctx, opts)
+	got := ManagerOptionsFromContext(ctx2)
+	assert.Len(t, got, 1)
+}
+
 func TestManager_Set_AllBranches(t *testing.T) {
 	t.Parallel()
 

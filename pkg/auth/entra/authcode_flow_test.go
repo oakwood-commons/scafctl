@@ -446,12 +446,30 @@ func TestAuthCodeLogin_BrowserOpenFails_PrintsURL(t *testing.T) {
 	_ = callbackMessage
 }
 
-func TestDefaultFlowIsDeviceCode(t *testing.T) {
+func TestDefaultFlowIsInteractive(t *testing.T) {
+	// Verify that DefaultConfig() picks up the interactive default from
+	// embedded defaults.yaml without actually triggering a Login() call
+	// (which would open a real browser).
+	cfg := DefaultConfig()
+	assert.Equal(t, string(auth.FlowInteractive), cfg.DefaultFlow,
+		"embedded defaults.yaml should set defaultFlow to interactive")
+
+	// Verify DetectFlow uses the configured default when no explicit flow
+	// is set and no environment credentials are detected.
+	result := auth.DetectFlow("", nil, auth.Flow(cfg.DefaultFlow))
+	assert.Equal(t, auth.FlowInteractive, result.Flow,
+		"DetectFlow should resolve to interactive when that is the configured default")
+}
+
+func TestDefaultFlowOverrideDeviceCode(t *testing.T) {
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
 
+	cfg := fastPollConfig()
+	cfg.DefaultFlow = string(auth.FlowDeviceCode)
+
 	handler, err := New(
-		WithConfig(fastPollConfig()),
+		WithConfig(cfg),
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
 	)
@@ -476,7 +494,6 @@ func TestDefaultFlowIsDeviceCode(t *testing.T) {
 
 	var callbackCalled bool
 	ctx := context.Background()
-	// Login with no explicit flow (empty Flow field) -- should use device code.
 	result, err := handler.Login(ctx, auth.LoginOptions{
 		Timeout: 10 * time.Second,
 		DeviceCodeCallback: func(userCode, verificationURI, message string) {
@@ -486,13 +503,12 @@ func TestDefaultFlowIsDeviceCode(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.True(t, callbackCalled, "device code callback should have been called for default flow")
+	assert.True(t, callbackCalled, "device code callback should have been called")
 
-	// Verify device code endpoint was called (first request)
 	requests := mockHTTP.GetRequests()
 	require.GreaterOrEqual(t, len(requests), 1)
 	assert.Contains(t, requests[0].Endpoint, "/devicecode",
-		"default flow should hit the device code endpoint, not the authorize endpoint")
+		"overridden flow should hit the device code endpoint")
 }
 
 func TestExchangeAuthCode_NoClientSecret(t *testing.T) {

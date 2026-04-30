@@ -134,12 +134,11 @@ func NewFileProvider() *FileProvider {
 						"Has no effect on other strategies or the write operation.",
 					schemahelper.WithExample(false),
 					schemahelper.WithDefault(false)),
-				"stripExtension": schemahelper.BoolProp(
-					"Strip the final file extension from each entry path before writing (write-tree only). "+
-						"For example, 'main.go.tmpl' becomes 'main.go'. "+
+				"stripSuffix": schemahelper.StringProp(
+					"Strip the given suffix from each entry path before writing (write-tree only). "+
+						"For example, with stripSuffix '.tmpl', 'main.go.tmpl' becomes 'main.go'. "+
 						"Applied before outputPath template if both are set.",
-					schemahelper.WithExample(true),
-					schemahelper.WithDefault(false)),
+					schemahelper.WithExample(".tmpl")),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -566,7 +565,7 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	}
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
-	stripExtension, _ := inputs["stripExtension"].(bool)
+	stripSuffix, _ := inputs["stripSuffix"].(string)
 
 	// Parse permissions — default to 0600 (owner read/write only).
 	fileMode := os.FileMode(0o600)
@@ -597,13 +596,8 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	resolved := make([]resolvedEntry, 0, len(entries))
 	for i, entry := range entries {
 		outputPath := entry.path
-		if stripExtension {
-			base := filepath.Base(outputPath)
-			ext := filepath.Ext(outputPath)
-			// Only strip if the extension is not the entire basename (e.g. skip dotfiles like ".env").
-			if ext != "" && base != ext {
-				outputPath = strings.TrimSuffix(outputPath, ext)
-			}
+		if stripSuffix != "" {
+			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
 		}
 		if outputPathTmpl != "" {
 			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
@@ -611,6 +605,13 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 				return nil, fmt.Errorf("outputPath template failed for entries[%d] (%s): %w", i, entry.path, tmplErr)
 			}
 			outputPath = transformed
+		}
+
+		if outputPath == "" || outputPath == "." {
+			if outputPathTmpl != "" {
+				return nil, fmt.Errorf("entries[%d]: path %q resolves to empty after applying stripSuffix %q and outputPath template %q", i, entry.path, stripSuffix, outputPathTmpl)
+			}
+			return nil, fmt.Errorf("entries[%d]: path %q resolves to empty after applying stripSuffix %q", i, entry.path, stripSuffix)
 		}
 
 		absDest := filepath.Join(absBasePath, outputPath)
@@ -944,6 +945,7 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 	}
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
+	stripSuffix, _ := inputs["stripSuffix"].(string)
 
 	// Invocation-level conflict inputs.
 	invOnConflict, _ := inputs["onConflict"].(string)
@@ -956,12 +958,22 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 
 	for i, entry := range entries {
 		outputPath := entry.path
+		if stripSuffix != "" {
+			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
+		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("%s: outputPath template failed for entries[%d] (%s): %w", ProviderName, i, entry.path, tmplErr)
 			}
 			outputPath = transformed
+		}
+
+		if outputPath == "" || outputPath == "." {
+			if outputPathTmpl != "" {
+				return nil, fmt.Errorf("%s: entries[%d]: path %q resolves to empty after applying stripSuffix %q and outputPath template %q", ProviderName, i, entry.path, stripSuffix, outputPathTmpl)
+			}
+			return nil, fmt.Errorf("%s: entries[%d]: path %q resolves to empty after applying stripSuffix %q", ProviderName, i, entry.path, stripSuffix)
 		}
 
 		absDest := filepath.Join(absBasePath, outputPath)

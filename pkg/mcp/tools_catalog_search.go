@@ -236,7 +236,8 @@ func (s *Server) listRemoteCatalogs(catalogFilter string) []search.SolutionEntry
 // registered OCI catalog, specific name = that catalog only.
 // "local" should not reach here.
 func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCatalog {
-	if s.config == nil {
+	cfg := s.resolveConfig()
+	if cfg == nil {
 		return nil
 	}
 
@@ -250,24 +251,24 @@ func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCata
 	switch {
 	case catalogFilter == "":
 		// Default: search only the default catalog (or official if no default is set).
-		if catCfg, ok := s.config.GetDefaultCatalog(); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+		if catCfg, ok := cfg.GetDefaultCatalog(); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
 			targets = append(targets, *catCfg)
 		} else {
 			// Fall back to the official catalog when no explicit default is configured.
-			if catCfg, ok := s.config.GetCatalog(config.CatalogNameOfficial); ok &&
+			if catCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok &&
 				catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" &&
-				!s.config.Settings.DisableOfficialCatalog {
+				!cfg.Settings.DisableOfficialCatalog {
 				targets = append(targets, *catCfg)
 			}
 		}
 	case strings.EqualFold(catalogFilter, "all"):
 		// Explicit "all": search every registered OCI catalog.
-		for _, catCfg := range s.config.Catalogs {
+		for _, catCfg := range cfg.Catalogs {
 			if catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
 				if catCfg.Name == config.CatalogNameLocal {
 					continue
 				}
-				if catCfg.Name == config.CatalogNameOfficial && s.config.Settings.DisableOfficialCatalog {
+				if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
 					continue
 				}
 				targets = append(targets, catCfg)
@@ -275,7 +276,7 @@ func (s *Server) buildRemoteCatalogs(catalogFilter string) []*catalog.RemoteCata
 		}
 	default:
 		// Specific catalog by name.
-		if catCfg, ok := s.config.GetCatalog(catalogFilter); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
+		if catCfg, ok := cfg.GetCatalog(catalogFilter); ok && catCfg.Type == config.CatalogTypeOCI && catCfg.URL != "" {
 			targets = append(targets, *catCfg)
 		}
 	}
@@ -303,17 +304,18 @@ func (s *Server) listRegisteredCatalogs() []search.CatalogInfo {
 		Type: "filesystem",
 	})
 
-	if s.config == nil {
+	cfg := s.resolveConfig()
+	if cfg == nil {
 		return catalogs
 	}
 
-	defaultCatalog := s.config.Settings.DefaultCatalog
+	defaultCatalog := cfg.Settings.DefaultCatalog
 
-	for _, catCfg := range s.config.Catalogs {
+	for _, catCfg := range cfg.Catalogs {
 		if catCfg.Name == config.CatalogNameLocal {
 			continue
 		}
-		if catCfg.Name == config.CatalogNameOfficial && s.config.Settings.DisableOfficialCatalog {
+		if catCfg.Name == config.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
 			continue
 		}
 

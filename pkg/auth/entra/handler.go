@@ -88,6 +88,9 @@ func WithConfig(cfg *Config) Option {
 			if cfg.SlowDownIncrement > 0 {
 				h.config.SlowDownIncrement = cfg.SlowDownIncrement
 			}
+			if cfg.DefaultFlow != "" {
+				h.config.DefaultFlow = cfg.DefaultFlow
+			}
 		}
 	}
 }
@@ -249,28 +252,40 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		return nil, err
 	}
 
-	// Check if workload identity flow is requested or detected (highest priority)
-	if opts.Flow == auth.FlowWorkloadIdentity || (opts.Flow == "" && HasWorkloadIdentityCredentials()) {
+	// Determine which flow to use. Priority:
+	//   1. Explicit --flow flag (opts.Flow)
+	//   2. Detected environment credentials (workload identity, service principal)
+	//   3. Configured default flow (h.config.DefaultFlow, set via defaults.yaml
+	//      or embedder config)
+	//   4. device_code (hard fallback)
+	defaultFlow := auth.Flow(h.config.DefaultFlow)
+	if defaultFlow == "" {
+		defaultFlow = auth.FlowDeviceCode
+	}
+
+	result := auth.DetectFlow(opts.Flow, []auth.CredentialDetector{
+		{
+			HasCredentials: HasWorkloadIdentityCredentials,
+			Flow:           auth.FlowWorkloadIdentity,
+			Description:    "workload identity credentials detected",
+		},
+		{
+			HasCredentials: HasServicePrincipalCredentials,
+			Flow:           auth.FlowServicePrincipal,
+			Description:    "service principal credentials detected",
+		},
+	}, defaultFlow)
+
+	switch result.Flow {
+	case auth.FlowWorkloadIdentity:
 		return h.workloadIdentityLogin(ctx, opts)
-	}
-
-	// Check if service principal flow is requested or detected
-	if opts.Flow == auth.FlowServicePrincipal || (opts.Flow == "" && HasServicePrincipalCredentials()) {
+	case auth.FlowServicePrincipal:
 		return h.servicePrincipalLogin(ctx, opts)
-	}
-
-	// Interactive (auth code + PKCE) only when explicitly requested.
-	// Auth code flow opens a browser tab that may not carry the device PRT
-	// (Primary Refresh Token) on non-Edge browsers, causing Conditional
-	// Access device-compliance failures.
-	if opts.Flow == auth.FlowInteractive {
+	case auth.FlowInteractive:
 		return h.authCodeLogin(ctx, opts)
+	default:
+		return h.deviceCodeLogin(ctx, opts)
 	}
-
-	// Default to device code flow -- microsoft.com/devicelogin inherits
-	// the browser's existing SSO session (including the PRT), so
-	// Conditional Access device compliance works in any browser.
-	return h.deviceCodeLogin(ctx, opts)
 }
 
 // Logout clears stored credentials and cached tokens.

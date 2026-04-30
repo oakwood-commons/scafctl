@@ -947,3 +947,149 @@ func TestDiscoveredArtifact_ToAnnotations(t *testing.T) {
 		assert.Empty(t, ann)
 	})
 }
+
+func TestIsOCIServerError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil error", nil, false},
+		{"generic error", fmt.Errorf("network timeout"), false},
+		{"401 is not server error", fmt.Errorf("response status code 401"), false},
+		{"500 status", fmt.Errorf("response status code 500"), true},
+		{"INTERNAL_SERVER_ERROR keyword", fmt.Errorf("INTERNAL_SERVER_ERROR"), true},
+		{"nested 500", fmt.Errorf("failed: %w", fmt.Errorf("response status code 500: error")), true},
+		{"port 5000 is not server error", fmt.Errorf("connect to localhost:5000 failed"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, isOCIServerError(tt.err))
+		})
+	}
+}
+
+func TestWrapWithCredentialHint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil error returns nil", func(t *testing.T) {
+		t.Parallel()
+		cat := &RemoteCatalog{logger: logr.Discard()}
+		assert.NoError(t, cat.wrapWithCredentialHint(nil))
+	})
+
+	t.Run("non-500 error passes through", func(t *testing.T) {
+		t.Parallel()
+		cat := &RemoteCatalog{logger: logr.Discard()}
+		cat.credentialSource.Store("docker config static auth")
+		original := fmt.Errorf("network timeout")
+		result := cat.wrapWithCredentialHint(original)
+		assert.Equal(t, original, result)
+	})
+
+	t.Run("500 with anonymous creds passes through", func(t *testing.T) {
+		t.Parallel()
+		cat := &RemoteCatalog{logger: logr.Discard()}
+		// no credential source stored → anonymous
+		original := fmt.Errorf("response status code 500")
+		result := cat.wrapWithCredentialHint(original)
+		assert.Equal(t, original, result)
+	})
+
+	t.Run("500 with credentials adds hint", func(t *testing.T) {
+		t.Parallel()
+		cat := &RemoteCatalog{logger: logr.Discard()}
+		cat.credentialSource.Store("docker config static auth")
+		original := fmt.Errorf("response status code 500")
+		result := cat.wrapWithCredentialHint(original)
+		assert.ErrorIs(t, result, original)
+		assert.Contains(t, result.Error(), "hint:")
+		assert.Contains(t, result.Error(), "docker config static auth")
+		assert.Contains(t, result.Error(), "expired")
+	})
+}
+
+func TestAuthHandlerPrecedenceOverDockerConfig(t *testing.T) {
+	t.Parallel()
+
+	// Set up a mock auth handler that returns a valid token.
+	handler := scafctlauth.NewMockHandler("entra")
+	handler.GetTokenResult = &scafctlauth.Token{AccessToken: "fresh-entra-token"}
+	handler.StatusResult = &scafctlauth.Status{
+		Authenticated: true,
+		Claims:        &scafctlauth.Claims{Username: "testuser"},
+	}
+
+	// Set up a credential store with static Docker config creds for the same host.
+	credStore := &CredentialStore{
+		config: &dockerConfig{
+			Auths: map[string]dockerAuthEntry{
+				"myregistry.azurecr.io": {
+					Username: "stale-user",
+					Password: "stale-password",
+				},
+			},
+		},
+		logger: logr.Discard(),
+	}
+
+	// Create catalog with both credential store and auth handler.
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:            "test",
+		Registry:        "myregistry.azurecr.io",
+		Repository:      "org/repo",
+		CredentialStore: credStore,
+		AuthHandler:     handler,
+		Logger:          logr.Discard(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cat.client.Credential)
+
+	// Call the credential function and verify the auth handler is used, not Docker config.
+	cred, err := cat.client.Credential(context.Background(), "myregistry.azurecr.io")
+	require.NoError(t, err)
+	assert.Equal(t, "fresh-entra-token", cred.Password, "auth handler token should take precedence over Docker config")
+	assert.Equal(t, "entra auth handler token", cat.CredentialSource(), "credential source should indicate auth handler")
+}
+
+func TestAuthHandlerFallsBackToCredentialStore(t *testing.T) {
+	t.Parallel()
+
+	// Set up a mock auth handler that fails to produce a token.
+	handler := scafctlauth.NewMockHandler("entra")
+	handler.GetTokenErr = fmt.Errorf("token expired")
+
+	// Set up a credential store with valid static Docker config creds.
+	credStore := &CredentialStore{
+		config: &dockerConfig{
+			Auths: map[string]dockerAuthEntry{
+				"myregistry.azurecr.io": {
+					Username: "docker-user",
+					Password: "docker-password",
+				},
+			},
+		},
+		logger: logr.Discard(),
+	}
+
+	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:            "test",
+		Registry:        "myregistry.azurecr.io",
+		Repository:      "org/repo",
+		CredentialStore: credStore,
+		AuthHandler:     handler,
+		Logger:          logr.Discard(),
+	})
+	require.NoError(t, err)
+
+	// When auth handler fails, credential store should be used.
+	cred, err := cat.client.Credential(context.Background(), "myregistry.azurecr.io")
+	require.NoError(t, err)
+	assert.Equal(t, "docker-user", cred.Username, "should fall back to Docker config when auth handler fails")
+	assert.Equal(t, "docker-password", cred.Password)
+	assert.Equal(t, "docker config static auth", cat.CredentialSource())
+}

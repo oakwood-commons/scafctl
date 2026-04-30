@@ -189,6 +189,51 @@ func TestHandleCatalogListRegistered_WithConfig(t *testing.T) {
 	assert.Equal(t, float64(3), body["count"].(float64))
 }
 
+func TestHandleCatalogListRegistered_FallsBackToContextConfig(t *testing.T) {
+	// Simulate the case where WithServerConfig was not called (s.config is nil)
+	// but the config is available in the parent context.
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: config.CatalogNameLocal, Type: config.CatalogTypeFilesystem},
+			{Name: "corp-registry", Type: config.CatalogTypeOCI, URL: "oci://registry.corp.example.com/solutions"},
+			{Name: config.CatalogNameOfficial, Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/oakwood-commons"},
+		},
+		Settings: config.Settings{
+			DefaultCatalog: "corp-registry",
+		},
+	}
+
+	parentCtx := config.WithConfig(context.Background(), cfg)
+	srv, err := NewServer(
+		WithServerVersion("test"),
+		WithServerContext(parentCtx),
+		// Intentionally NOT passing WithServerConfig -- simulates the nil-config case.
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "catalog_list_registered"
+
+	result, err := srv.handleCatalogListRegistered(context.Background(), request)
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	var body map[string]any
+	unmarshalResult(t, result, &body)
+	assert.Equal(t, float64(3), body["count"].(float64),
+		"should return all catalogs from context config, not just local")
+
+	// Verify corp-registry is included.
+	catalogList := body["catalogs"].([]any)
+	names := make([]string, len(catalogList))
+	for i, c := range catalogList {
+		names[i] = c.(map[string]any)["name"].(string)
+	}
+	assert.Contains(t, names, "corp-registry")
+	assert.Contains(t, names, config.CatalogNameOfficial)
+	assert.Contains(t, names, config.CatalogNameLocal)
+}
+
 func TestHandleCatalogListRegistered_OfficialDisabled(t *testing.T) {
 	cfg := &config.Config{
 		Catalogs: []config.CatalogConfig{
