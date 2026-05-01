@@ -98,7 +98,7 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 		b.WriteString("  resolvers:\n")
 
 		if features["parameters"] {
-			b.WriteString("    # User-provided input parameter\n")
+			b.WriteString("    # User-provided input (override with -r inputName=your-value)\n")
 			b.WriteString("    inputName:\n")
 			b.WriteString("      type: string\n")
 			b.WriteString("      description: \"A user-provided input value\"\n")
@@ -108,9 +108,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			b.WriteString("          - provider: parameter\n")
 			b.WriteString("            inputs:\n")
 			b.WriteString("              key: inputName\n")
-			b.WriteString("          - provider: static\n")
+			b.WriteString("          - provider: cel\n")
 			b.WriteString("            inputs:\n")
-			b.WriteString("              value: my-value\n")
+			b.WriteString("              expression: \"'my-value'\"\n")
 
 			if features["validation"] {
 				b.WriteString("      validate:\n")
@@ -129,9 +129,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			b.WriteString("      description: \"A static configuration value\"\n")
 			b.WriteString("      resolve:\n")
 			b.WriteString("        with:\n")
-			b.WriteString("          - provider: static\n")
+			b.WriteString("          - provider: cel\n")
 			b.WriteString("            inputs:\n")
-			b.WriteString("              value: \"default-value\"\n")
+			b.WriteString("              expression: \"'default-value'\"\n")
 		}
 
 		if features["transforms"] {
@@ -145,9 +145,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			}
 			b.WriteString("      resolve:\n")
 			b.WriteString("        with:\n")
-			b.WriteString("          - provider: static\n")
+			b.WriteString("          - provider: cel\n")
 			b.WriteString("            inputs:\n")
-			b.WriteString("              value: \"raw-data\"\n")
+			b.WriteString("              expression: \"'raw-data'\"\n")
 			b.WriteString("      transform:\n")
 			b.WriteString("        with:\n")
 			b.WriteString("          - provider: cel\n")
@@ -238,16 +238,15 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 		if !hasExec && len(providers) == 0 {
 			b.WriteString("      # Example action\n")
 			b.WriteString("      hello:\n")
-			b.WriteString("        provider: exec\n")
+			b.WriteString("        provider: message\n")
 			b.WriteString("        description: \"A simple action\"\n")
 			b.WriteString("        inputs:\n")
-			b.WriteString("          command: echo\n")
 			if features["transforms"] {
-				b.WriteString("          args:\n")
-				b.WriteString("            expr: \"['Hello, ' + _.inputName + ' - processed: ' + _.processed]\"\n")
+				b.WriteString("          message:\n")
+				b.WriteString("            expr: \"'Hello, ' + _.inputName + ' - processed: ' + _.processed\"\n")
 			} else {
-				b.WriteString("          args:\n")
-				b.WriteString("            expr: \"['Hello, ' + _.inputName]\"\n")
+				b.WriteString("          message:\n")
+				b.WriteString("            expr: \"'Hello, ' + _.inputName\"\n")
 			}
 		}
 	}

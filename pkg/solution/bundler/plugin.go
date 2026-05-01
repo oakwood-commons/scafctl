@@ -73,6 +73,13 @@ func parseVersionConstraint(constraint string) (*semver.Constraints, error) {
 		return nil, fmt.Errorf("empty version constraint")
 	}
 
+	// "latest" is a special sentinel meaning "resolve to the newest version
+	// at fetch time". It is not a valid semver constraint, but is accepted
+	// as a wildcard that matches any version.
+	if strings.EqualFold(constraint, "latest") {
+		return semver.NewConstraint("*")
+	}
+
 	c, err := semver.NewConstraint(constraint)
 	if err != nil {
 		return nil, fmt.Errorf("invalid semver constraint: %w", err)

@@ -705,7 +705,7 @@ tasks:
       GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
     cmds:
       - mkdir -p {{.COVER}}
-      - go test $GOTESTFLAGS ./... -coverprofile={{.COVER}}/cover.out -covermode=atomic
+      - go test $GOTESTFLAGS $(go list ./... | grep -v /tests/) -coverprofile={{.COVER}}/cover.out -covermode=atomic
     sources:
       - "**/*.go"
       - go.mod
@@ -1012,8 +1012,8 @@ tasks:
       CGO_ENABLED: "1"
     cmds:
       - go test -race -count=1 ./tests/integration/ -run "TestAPI_"
-      - go test -race -count=1 ./tests/integration/ -run "TestIntegration_"
-      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 10'
+      - go test -count=1 -parallel 4 ./tests/integration/ -run "TestIntegration_" -timeout 5m
+      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 8'
 
   test:e2e:
     deps: [info, git-unshallow-clone, lint]

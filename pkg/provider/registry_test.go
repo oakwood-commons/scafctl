@@ -696,3 +696,68 @@ func TestValidateDescriptor(t *testing.T) {
 		})
 	}
 }
+
+func TestRegistry_MarkKnown(t *testing.T) {
+	t.Run("marks new name as known", func(t *testing.T) {
+		r := NewRegistry()
+		r.MarkKnown("my-plugin")
+
+		assert.True(t, r.Has("my-plugin"), "Has should return true for MarkKnown name")
+		p, ok := r.Get("my-plugin")
+		assert.False(t, ok, "Get should return false for MarkKnown-only name")
+		assert.Nil(t, p)
+	})
+
+	t.Run("does not overwrite registered provider", func(t *testing.T) {
+		r := NewRegistry()
+		prov := newMockProvider("existing", "1.0.0")
+		require.NoError(t, r.Register(prov))
+
+		r.MarkKnown("existing")
+
+		p, ok := r.Get("existing")
+		assert.True(t, ok, "Get should still return the registered provider")
+		assert.Equal(t, prov, p)
+	})
+
+	t.Run("Has returns false for unknown name", func(t *testing.T) {
+		r := NewRegistry()
+		assert.False(t, r.Has("unknown"))
+	})
+}
+
+func TestRegistry_ShallowClone(t *testing.T) {
+	t.Run("clone has same providers", func(t *testing.T) {
+		r := NewRegistry()
+		prov := newMockProvider("http", "1.0.0")
+		require.NoError(t, r.Register(prov))
+		r.MarkKnown("extra")
+
+		clone := r.ShallowClone()
+
+		p, ok := clone.Get("http")
+		assert.True(t, ok)
+		assert.Equal(t, prov, p)
+		assert.True(t, clone.Has("extra"))
+	})
+
+	t.Run("clone mutations do not affect original", func(t *testing.T) {
+		r := NewRegistry()
+		prov := newMockProvider("http", "1.0.0")
+		require.NoError(t, r.Register(prov))
+
+		clone := r.ShallowClone()
+		clone.MarkKnown("new-plugin")
+
+		assert.True(t, clone.Has("new-plugin"), "clone should have the new name")
+		assert.False(t, r.Has("new-plugin"), "original should NOT have the new name")
+	})
+
+	t.Run("empty registry clone", func(t *testing.T) {
+		r := NewRegistry()
+		clone := r.ShallowClone()
+
+		assert.Equal(t, 0, len(clone.List()))
+		assert.False(t, clone.Has("anything"))
+	})
+}

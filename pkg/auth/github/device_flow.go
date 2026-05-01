@@ -211,14 +211,14 @@ func (h *Handler) pollForToken(ctx context.Context, deviceCode *DeviceCodeRespon
 		interval = minPollInterval
 	}
 
-	ticker := time.NewTicker(interval)
+	ticker := h.clock.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, auth.ErrTimeout
-		case <-ticker.C:
+		case <-ticker.C():
 			data := makeFormData(map[string]string{
 				"client_id":   h.config.ClientID,
 				"device_code": deviceCode.DeviceCode,

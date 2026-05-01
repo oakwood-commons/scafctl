@@ -492,6 +492,12 @@ func validateProvider(action *Action, section string, registry RegistryInterface
 		return
 	}
 
+	// Skip capability checks when the provider is known by name only
+	// (e.g. from bundle.plugins) — no implementation is loaded yet.
+	if p == nil {
+		return
+	}
+
 	// Check for CapabilityAction
 	desc := p.Descriptor()
 	if desc == nil {

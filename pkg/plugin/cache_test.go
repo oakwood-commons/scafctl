@@ -139,3 +139,55 @@ func TestCache_DefaultDir(t *testing.T) {
 	cache := NewCache("")
 	assert.NotEmpty(t, cache.Dir())
 }
+
+func TestCache_GetLatestCached_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	_, _, ok := cache.GetLatestCached("nonexistent", "linux/amd64")
+	assert.False(t, ok)
+}
+
+func TestCache_GetLatestCached_NonExecutable(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	// Create a version directory with a non-executable file.
+	dir := filepath.Join(tmpDir, "myplugin", "1.0.0", "linux-amd64")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "myplugin"), []byte("bin"), 0o644))
+
+	_, _, ok := cache.GetLatestCached("myplugin", "linux/amd64")
+	assert.False(t, ok)
+}
+
+func TestCache_GetLatestCached_PicksHighestSemver(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	// Create versions: 0.9.0, 0.10.0, 1.0.0
+	for _, v := range []string{"0.9.0", "0.10.0", "1.0.0"} {
+		_, err := cache.Put("myplugin", v, "linux/amd64", []byte("binary-"+v))
+		require.NoError(t, err)
+	}
+
+	path, version, ok := cache.GetLatestCached("myplugin", "linux/amd64")
+	require.True(t, ok)
+	assert.Equal(t, "1.0.0", version)
+	assert.Contains(t, path, "1.0.0")
+}
+
+func TestCache_GetLatestCached_SemverBeatsLexicographic(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	// 0.10.0 > 0.9.0 semver, but 0.9.0 > 0.10.0 lexicographically.
+	for _, v := range []string{"0.9.0", "0.10.0"} {
+		_, err := cache.Put("myplugin", v, "linux/amd64", []byte("binary-"+v))
+		require.NoError(t, err)
+	}
+
+	_, version, ok := cache.GetLatestCached("myplugin", "linux/amd64")
+	require.True(t, ok)
+	assert.Equal(t, "0.10.0", version, "should pick 0.10.0 (semver) not 0.9.0 (lexicographic)")
+}

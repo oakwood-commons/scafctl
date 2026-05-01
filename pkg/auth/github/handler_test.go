@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/clock"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
@@ -364,10 +365,12 @@ func TestHandler_CompileTimeCheck(t *testing.T) {
 func TestHandler_DeviceCodeLogin(t *testing.T) {
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	handler, err := New(
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
+		WithClock(mockClock),
 	)
 	require.NoError(t, err)
 
@@ -394,6 +397,8 @@ func TestHandler_DeviceCodeLogin(t *testing.T) {
 		"email":      "octocat@github.com",
 		"avatar_url": "https://avatars.githubusercontent.com/u/1?v=4",
 	})
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	var receivedCode, receivedURI string
 	result, err := handler.Login(ctx, auth.LoginOptions{
@@ -422,10 +427,12 @@ func TestHandler_DeviceCodeLogin(t *testing.T) {
 func TestHandler_DeviceCodeLogin_WithRefreshToken(t *testing.T) {
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	handler, err := New(
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
+		WithClock(mockClock),
 	)
 	require.NoError(t, err)
 
@@ -454,6 +461,8 @@ func TestHandler_DeviceCodeLogin_WithRefreshToken(t *testing.T) {
 		"name":  "Test User",
 		"email": "test@example.com",
 	})
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	result, err := handler.Login(ctx, auth.LoginOptions{
 		Flow:    auth.FlowDeviceCode,
@@ -530,10 +539,12 @@ func TestHandler_Login_DeviceCodeUsedWhenScopesProvided(t *testing.T) {
 	// even if PAT credentials exist in the environment.
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	handler, err := New(
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
+		WithClock(mockClock),
 	)
 	require.NoError(t, err)
 
@@ -562,6 +573,8 @@ func TestHandler_Login_DeviceCodeUsedWhenScopesProvided(t *testing.T) {
 	})
 
 	// Login with explicit scopes; should use device code flow
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
+
 	result, err := handler.Login(ctx, auth.LoginOptions{
 		Flow:    auth.FlowDeviceCode,
 		Scopes:  []string{"admin:org", "workflow"},
@@ -585,10 +598,12 @@ func TestHandler_Login_ScopesNotOverriddenByDefaults(t *testing.T) {
 	// Verify that when user provides scopes, the defaults are NOT used
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	handler, err := New(
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
+		WithClock(mockClock),
 	)
 	require.NoError(t, err)
 
@@ -616,6 +631,8 @@ func TestHandler_Login_ScopesNotOverriddenByDefaults(t *testing.T) {
 
 	// Provide scopes that differ from defaults ("gist", "read:org", "repo", "workflow")
 	customScopes := []string{"notifications"}
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
+
 	result, err := handler.Login(ctx, auth.LoginOptions{
 		Flow:    auth.FlowDeviceCode,
 		Scopes:  customScopes,

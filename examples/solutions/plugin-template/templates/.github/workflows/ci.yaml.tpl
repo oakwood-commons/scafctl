@@ -28,9 +28,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
-          version: v1.59.1
+          version: v2.11.4
       - name: Check go mod tidy
         run: |
           go mod tidy

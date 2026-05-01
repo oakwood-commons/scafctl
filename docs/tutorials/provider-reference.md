@@ -5,7 +5,7 @@ weight: 110
 
 # Provider Reference
 
-This document provides a reference for all built-in providers in scafctl.
+This document provides a reference for all providers available in scafctl.
 
 > [!TIP]
 > **Note:** All YAML examples in this reference show only the relevant resolver or action snippet. To use them, place each snippet inside a complete solution file with `apiVersion`, `kind`, `metadata`, and `spec` sections. See the [Getting Started](getting-started.md) tutorial for the full solution structure.
@@ -22,30 +22,45 @@ Providers are execution primitives used by resolvers and actions. Each provider 
 | `action` | Action `provider` | Perform side effects |
 | `authentication` | HTTP auth | Provide authentication |
 
+## Built-in vs Official Plugin Providers
+
+scafctl providers are split into two categories:
+
+| Category | Description |
+|----------|-------------|
+| **Built-in** | Compiled into the scafctl binary. Always available without network access or plugins. |
+| **Official (plugin)** | Distributed as external plugin binaries via `ghcr.io/oakwood-commons/providers/<name>`. Auto-resolved at runtime when referenced in a solution. |
+
+**Built-in providers** (10): `cel`, `debug`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `static`, `validation`
+
+**Official plugin providers** (10): `directory`, `env`, `exec`, `git`, `github`, `hcl`, `identity`, `metadata`, `secret`, `sleep`
+
+Official providers are automatically fetched from the catalog when a solution references them -- no `bundle.plugins` declaration is required for local development. The `run provider` command also auto-resolves official providers (e.g., `scafctl run provider exec command='ls'`). For CI/CD and reproducible builds, declare them explicitly in `bundle.plugins` or use the `--strict` flag. See [Plugin Auto-Fetching](plugin-auto-fetch-tutorial.md) for details.
+
 ## Capabilities Matrix
 
-| Provider | from | transform | validation | action |
-|----------|:----:|:---------:|:----------:|:------:|
-| [cel](#cel) | ❌ | ✅ | ❌ | ✅ |
-| [debug](#debug) | ✅ | ✅ | ✅ | ✅ |
-| [directory](#directory) | ✅ | ❌ | ❌ | ✅ |
-| [env](#env) | ✅ | ❌ | ❌ | ❌ |
-| [exec](#exec) | ✅ | ✅ | ❌ | ✅ |
-| [file](#file) | ✅ | ✅ | ❌ | ✅ |
-| [git](#git) | ✅ | ❌ | ❌ | ✅ |
-| [github](#github) | ✅ | ✅ | ✅ | ❌ |
-| [go-template](#go-template) | ❌ | ✅ | ❌ | ✅ |
-| [hcl](#hcl) | ✅ | ✅ | ❌ | ❌ |
-| [http](#http) | ✅ | ✅ | ❌ | ✅ |
-| [identity](#identity) | ✅ | ❌ | ❌ | ❌ |
-| [message](#message) | ❌ | ✅ | ❌ | ✅ |
-| [metadata](#metadata) | ✅ | ❌ | ❌ | ❌ |
-| [parameter](#parameter) | ✅ | ❌ | ❌ | ❌ |
-| [secret](#secret) | ✅ | ❌ | ❌ | ❌ |
-| [sleep](#sleep) | ✅ | ✅ | ✅ | ✅ |
-| [solution](#solution) | ✅ | ❌ | ❌ | ✅ |
-| [static](#static) | ✅ | ✅ | ❌ | ❌ |
-| [validation](#validation) | ❌ | ✅ | ✅ | ❌ |
+| Provider | Type | from | transform | validation | action |
+|----------|:----:|:----:|:---------:|:----------:|:------:|
+| [cel](#cel) | built-in | ❌ | ✅ | ❌ | ✅ |
+| [debug](#debug) | built-in | ✅ | ✅ | ✅ | ✅ |
+| [directory](#directory) | official | ✅ | ❌ | ❌ | ✅ |
+| [env](#env) | official | ✅ | ❌ | ❌ | ❌ |
+| [exec](#exec) | official | ✅ | ✅ | ❌ | ✅ |
+| [file](#file) | built-in | ✅ | ✅ | ❌ | ✅ |
+| [git](#git) | official | ✅ | ❌ | ❌ | ✅ |
+| [github](#github) | official | ✅ | ✅ | ✅ | ❌ |
+| [go-template](#go-template) | built-in | ❌ | ✅ | ❌ | ✅ |
+| [hcl](#hcl) | official | ✅ | ✅ | ❌ | ❌ |
+| [http](#http) | built-in | ✅ | ✅ | ❌ | ✅ |
+| [identity](#identity) | official | ✅ | ❌ | ❌ | ❌ |
+| [message](#message) | built-in | ❌ | ✅ | ❌ | ✅ |
+| [metadata](#metadata) | official | ✅ | ❌ | ❌ | ❌ |
+| [parameter](#parameter) | built-in | ✅ | ❌ | ❌ | ❌ |
+| [secret](#secret) | official | ✅ | ❌ | ❌ | ❌ |
+| [sleep](#sleep) | official | ✅ | ✅ | ✅ | ✅ |
+| [solution](#solution) | built-in | ✅ | ❌ | ❌ | ✅ |
+| [static](#static) | built-in | ✅ | ✅ | ❌ | ❌ |
+| [validation](#validation) | built-in | ❌ | ✅ | ✅ | ❌ |
 
 ---
 

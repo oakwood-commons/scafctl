@@ -127,6 +127,7 @@ func TestAddSharedResolverFlags(t *testing.T) {
 		"resolver-timeout",
 		"phase-timeout",
 		"pre-release",
+		"strict",
 	}
 
 	for _, name := range expectedFlags {

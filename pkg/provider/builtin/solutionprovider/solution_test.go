@@ -14,9 +14,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -1019,4 +1023,204 @@ func TestIsFilePath(t *testing.T) {
 			assert.Equal(t, tt.want, isFilePath(tt.source))
 		})
 	}
+}
+
+func TestClose_NoClients(t *testing.T) {
+	p := New()
+	// Must not panic.
+	p.Close()
+}
+
+func TestClose_KillsClients(t *testing.T) {
+	// Close should clear childClients even when they're nil (simulating no actual processes).
+	p := New()
+	p.mu.Lock()
+	p.childClients = nil
+	p.mu.Unlock()
+	p.Close()
+	assert.Nil(t, p.childClients)
+}
+
+func TestAutoResolveChildProviders_NilOfficialProviders(t *testing.T) {
+	p := New(WithRegistry(provider.NewRegistry()))
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "exec"}}}},
+			},
+		},
+	}
+	// Should return immediately — no panic, no error, nothing fetched.
+	err := p.autoResolveChildProviders(context.Background(), sol)
+	assert.NoError(t, err)
+	assert.Empty(t, p.childClients)
+}
+
+func TestAutoResolveChildProviders_NilPluginFetcher(t *testing.T) {
+	officialReg := official.NewRegistry()
+	p := New(
+		WithRegistry(provider.NewRegistry()),
+		WithOfficialProviders(officialReg),
+		// No WithPluginFetcher — simulates missing fetcher.
+	)
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "exec"}}}},
+			},
+		},
+	}
+	err := p.autoResolveChildProviders(context.Background(), sol)
+	assert.NoError(t, err)
+	assert.Empty(t, p.childClients)
+}
+
+func TestAutoResolveChildProviders_AllRegistered(t *testing.T) {
+	// When all providers are already registered, nothing should be resolved.
+	reg := provider.NewRegistry()
+	// Register a dummy "exec" provider.
+	_ = reg.Register(&mockProvider{name: "exec"})
+
+	officialReg := official.NewRegistry()
+	p := New(
+		WithRegistry(reg),
+		WithOfficialProviders(officialReg),
+	)
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "exec"}}}},
+			},
+		},
+	}
+	err := p.autoResolveChildProviders(context.Background(), sol)
+	assert.NoError(t, err)
+	assert.Empty(t, p.childClients)
+}
+
+func TestAutoResolveChildProviders_NoMissing(t *testing.T) {
+	// When solution references no providers at all.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	p := New(
+		WithRegistry(reg),
+		WithOfficialProviders(officialReg),
+		WithPluginFetcher(&plugin.Fetcher{}),
+	)
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "cel"}}}},
+			},
+		},
+	}
+	// "cel" is not in the official registry so nothing to resolve.
+	err := p.autoResolveChildProviders(context.Background(), sol)
+	assert.NoError(t, err)
+	assert.Empty(t, p.childClients)
+}
+
+func TestAutoResolveChildProviders_DeduplicatesProviders(t *testing.T) {
+	// When the same provider appears multiple times, it should only appear once.
+	reg := provider.NewRegistry()
+	_ = reg.Register(&mockProvider{name: "exec"}) // already registered
+
+	officialReg := official.NewRegistry()
+	p := New(
+		WithRegistry(reg),
+		WithOfficialProviders(officialReg),
+	)
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "exec"}}}},
+				"r2": {Transform: &resolver.TransformPhase{With: []resolver.ProviderTransform{{Provider: "exec"}}}},
+			},
+		},
+	}
+	err := p.autoResolveChildProviders(context.Background(), sol)
+	assert.NoError(t, err)
+	assert.Empty(t, p.childClients)
+}
+
+func TestAutoResolveChildProviders_FetchFails(t *testing.T) {
+	// When a provider IS in the official registry but the fetcher returns an
+	// error (no catalog has the binary), the function should surface the error.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistryFrom([]official.Provider{
+		{Name: "fake-provider", CatalogRef: "fake-provider", DefaultVersion: "latest"},
+	})
+
+	// Create a fetcher with an empty local catalog — resolution will fail.
+	local, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+	require.NoError(t, err)
+
+	p := New(
+		WithRegistry(reg),
+		WithOfficialProviders(officialReg),
+		WithPluginFetcher(plugin.NewFetcher(plugin.FetcherConfig{
+			Catalog:  local,
+			Cache:    plugin.NewCache(t.TempDir()),
+			Platform: "linux/amd64",
+			Logger:   logr.Discard(),
+		})),
+	)
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "fake-provider"}}}},
+			},
+		},
+	}
+	err = p.autoResolveChildProviders(context.Background(), sol)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "auto-fetching child solution providers")
+}
+
+func TestAutoResolveChildProviders_WorkflowActions(t *testing.T) {
+	// Providers in workflow.actions and workflow.finally are also resolved.
+	reg := provider.NewRegistry()
+	_ = reg.Register(&mockProvider{name: "exec"})
+
+	officialReg := official.NewRegistryFrom([]official.Provider{
+		{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
+	})
+
+	p := New(
+		WithRegistry(reg),
+		WithOfficialProviders(officialReg),
+		WithPluginFetcher(plugin.NewFetcher(plugin.FetcherConfig{
+			Catalog:  func() catalog.Catalog { c, _ := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard()); return c }(),
+			Cache:    plugin.NewCache(t.TempDir()),
+			Platform: "linux/amd64",
+			Logger:   logr.Discard(),
+		})),
+	)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"a1": {Provider: "exec"}, // already registered
+					"a2": {Provider: "git"},  // missing, official, will fail fetch
+				},
+				Finally: map[string]*action.Action{
+					"cleanup": {Provider: "exec"}, // already registered
+				},
+			},
+		},
+	}
+
+	// "git" is official but not registered and not in any catalog — errors on fetch.
+	err := p.autoResolveChildProviders(context.Background(), sol)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "auto-fetching child solution providers")
+}
+
+func TestAutoResolveChildProviders_Close(t *testing.T) {
+	// Verify Close() can be called on a provider with no child clients.
+	p := New(WithRegistry(provider.NewRegistry()))
+	p.Close() // should not panic
+	assert.Empty(t, p.childClients)
 }

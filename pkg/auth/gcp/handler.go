@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/clock"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -52,6 +53,7 @@ type Handler struct {
 	httpClientConfig *config.HTTPClientConfig
 	tokenCache       *auth.TokenCache
 	logger           logr.Logger
+	clock            clock.Clock
 }
 
 // Option configures the Handler.
@@ -111,6 +113,14 @@ func WithLogger(lgr logr.Logger) Option {
 	}
 }
 
+// WithClock sets the clock used for timing operations (e.g. polling intervals).
+// Defaults to clock.Real{} when not specified.
+func WithClock(c clock.Clock) Option {
+	return func(h *Handler) {
+		h.clock = c
+	}
+}
+
 // New creates a new GCP auth handler.
 // Secret store initialization is deferred — if it fails, the handler is still
 // created so that metadata operations (Name, SupportedFlows, etc.) work.
@@ -119,6 +129,7 @@ func WithLogger(lgr logr.Logger) Option {
 func New(opts ...Option) (*Handler, error) {
 	h := &Handler{
 		config: DefaultConfig(),
+		clock:  clock.Real{},
 	}
 
 	for _, opt := range opts {

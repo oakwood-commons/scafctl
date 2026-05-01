@@ -7,10 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -19,9 +22,11 @@ import (
 // Fetcher resolves, downloads, caches, and loads plugin binaries at runtime.
 // It checks a local cache first, then falls back to fetching from catalogs.
 type Fetcher struct {
+	binaryName     string
 	catalogFetcher *catalog.PluginFetcher
 	cache          *Cache
 	platform       string
+	noCache        bool
 	logger         logr.Logger
 }
 
@@ -35,6 +40,14 @@ type FetcherConfig struct {
 
 	// Platform overrides the target platform. If empty, CurrentPlatform() is used.
 	Platform string
+
+	// NoCache bypasses the local cache, forcing a fresh fetch from the catalog.
+	// Cached binaries are still written after fetch (the cache is populated but not read).
+	NoCache bool
+
+	// BinaryName is the CLI binary name used in user-facing messages (e.g.,
+	// "Run 'mycli build solution' to pin..."). Defaults to "scafctl" when empty.
+	BinaryName string
 
 	// Logger for logging operations.
 	Logger logr.Logger
@@ -52,10 +65,17 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		platform = CurrentPlatform()
 	}
 
+	binaryName := cfg.BinaryName
+	if binaryName == "" {
+		binaryName = "scafctl" // fallback must match settings.CliBinaryName
+	}
+
 	return &Fetcher{
+		binaryName:     binaryName,
 		catalogFetcher: catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
 		cache:          cache,
 		platform:       platform,
+		noCache:        cfg.NoCache,
 		logger:         cfg.Logger.WithName("plugin-fetcher"),
 	}
 }
@@ -113,6 +133,27 @@ func (f *Fetcher) FetchPlugins(ctx context.Context, plugins []solution.PluginDep
 
 // fetchOne resolves and fetches a single plugin dependency.
 func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, lockPlugins []bundler.LockPlugin) (FetchResult, error) {
+	start := time.Now()
+	result, err := f.doFetchOne(ctx, dep, lockPlugins)
+	duration := time.Since(start).Seconds()
+
+	source := "registry"
+	if err == nil && result.FromCache {
+		source = "cache"
+	}
+
+	f.logger.V(1).Info("plugin resolution completed",
+		"name", dep.Name,
+		"source", source,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"success", err == nil)
+
+	metrics.RecordPluginResolution(ctx, dep.Name, source, duration, err == nil)
+	return result, err
+}
+
+// doFetchOne performs the actual resolution and fetch logic for a single plugin.
+func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency, lockPlugins []bundler.LockPlugin) (FetchResult, error) {
 	kind := pluginKindToArtifactKind(dep.Kind)
 
 	// Check lock file for a pinned version
@@ -131,14 +172,59 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 			"version", version,
 			"digest", expectedDigest)
 	} else {
-		// No lock file — resolve from catalog (with warning)
-		f.logger.V(0).Info("WARNING: resolving plugin without lock file — version may differ between runs. "+
-			"Run 'scafctl build solution' to pin plugin versions.",
+		// No lock file — prefer cached version to avoid network latency.
+		// Only resolve from catalog if no cached version exists.
+		if !f.noCache {
+			if cachedPath, cachedVer, ok := f.cache.GetLatestCached(dep.Name, f.platform); ok {
+				// If a version constraint is specified, verify the cached version satisfies it.
+				useCached := true
+				if dep.Version != "" && !strings.EqualFold(dep.Version, "latest") {
+					satisfies, err := bundler.CheckVersionConstraint(dep.Version, cachedVer)
+					if err != nil || !satisfies {
+						useCached = false
+					}
+				}
+				if useCached {
+					f.logger.V(1).Info("using cached plugin (no lock file)",
+						"name", dep.Name,
+						"version", cachedVer,
+						"path", cachedPath)
+					return FetchResult{
+						Name:      dep.Name,
+						Kind:      dep.Kind,
+						Version:   cachedVer,
+						Path:      cachedPath,
+						FromCache: true,
+					}, nil
+				}
+			}
+		}
+
+		// Cache miss or constraint not satisfied — resolve from catalog.
+		f.logger.V(0).Info("WARNING: resolving plugin without lock file — version may differ between runs",
 			"name", dep.Name,
-			"constraint", dep.Version)
+			"constraint", dep.Version,
+			"hint", fmt.Sprintf("Run '%s build solution' to pin plugin versions", f.binaryName))
 
 		info, err := f.catalogFetcher.ResolvePlugin(ctx, dep.Name, kind, dep.Version)
 		if err != nil {
+			// Fallback: if catalog resolution fails, check if a cached version exists.
+			if !f.noCache {
+				if cachedPath, cachedVer, ok := f.cache.GetLatestCached(dep.Name, f.platform); ok {
+					f.logger.V(0).Info("catalog resolution failed, using cached version",
+						"name", dep.Name,
+						"version", cachedVer,
+						"path", cachedPath,
+						"error", err)
+					return FetchResult{
+						Name:      dep.Name,
+						Kind:      dep.Kind,
+						Version:   cachedVer,
+						Path:      cachedPath,
+						FromCache: true,
+					}, nil
+				}
+			}
 			return FetchResult{}, fmt.Errorf("resolving version: %w", err)
 		}
 
@@ -148,8 +234,10 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 		expectedDigest = info.Digest
 		resolvedFrom = info.Catalog
 
-		// Verify the resolved version satisfies the constraint
-		if version != "" && dep.Version != "" {
+		// Verify the resolved version satisfies the constraint.
+		// "latest" means "whatever the resolver picked" and is not a valid
+		// semver constraint, so skip the check in that case.
+		if version != "" && dep.Version != "" && !strings.EqualFold(dep.Version, "latest") {
 			satisfies, err := bundler.CheckVersionConstraint(dep.Version, version)
 			if err != nil {
 				return FetchResult{}, fmt.Errorf("checking version constraint: %w", err)
@@ -161,20 +249,22 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 	}
 
 	// Check local cache
-	if cachedPath, ok := f.cache.Get(dep.Name, version, f.platform, expectedDigest); ok {
-		f.logger.V(1).Info("plugin found in cache",
-			"name", dep.Name,
-			"version", version,
-			"path", cachedPath)
+	if !f.noCache {
+		if cachedPath, ok := f.cache.Get(dep.Name, version, f.platform, expectedDigest); ok {
+			f.logger.V(1).Info("plugin found in cache",
+				"name", dep.Name,
+				"version", version,
+				"path", cachedPath)
 
-		return FetchResult{
-			Name:      dep.Name,
-			Kind:      dep.Kind,
-			Version:   version,
-			Path:      cachedPath,
-			Digest:    expectedDigest,
-			FromCache: true,
-		}, nil
+			return FetchResult{
+				Name:      dep.Name,
+				Kind:      dep.Kind,
+				Version:   version,
+				Path:      cachedPath,
+				Digest:    expectedDigest,
+				FromCache: true,
+			}, nil
+		}
 	}
 
 	// Cache miss — fetch from catalog
@@ -183,9 +273,18 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 		"version", version,
 		"platform", f.platform)
 
-	data, info, err := f.catalogFetcher.FetchPlugin(ctx, dep.Name, kind, version, f.platform)
+	data, fetchInfo, err := f.catalogFetcher.FetchPlugin(ctx, dep.Name, kind, version, f.platform)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("fetching binary: %w", err)
+	}
+
+	// For multi-platform artifacts (OCI image indexes), the digest from
+	// Resolve is the index digest, not the per-platform binary content
+	// digest. FetchPlugin returns the layer-level content digest after
+	// selecting the platform-specific manifest. Update expectedDigest so
+	// the verification below compares against the correct content hash.
+	if locked == nil && fetchInfo.Digest != "" {
+		expectedDigest = fetchInfo.Digest
 	}
 
 	// Verify the downloaded binary matches the expected digest before caching.
@@ -194,8 +293,8 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 	if expectedDigest == "" {
 		return FetchResult{}, fmt.Errorf(
 			"plugin %s@%s: no digest available for verification; "+
-				"run 'scafctl build solution' to generate a lock file with pinned digests",
-			dep.Name, version,
+				"run '%s build solution' to generate a lock file with pinned digests",
+			dep.Name, version, f.binaryName,
 		)
 	}
 	actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
@@ -212,7 +311,7 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 		return FetchResult{}, fmt.Errorf("caching binary: %w", err)
 	}
 
-	digest := info.Digest
+	digest := fetchInfo.Digest
 	if digest == "" {
 		// Compute digest from the downloaded data
 		d, err := f.cache.Digest(dep.Name, version, f.platform)
@@ -222,7 +321,7 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 	}
 
 	if resolvedFrom == "" {
-		resolvedFrom = info.Catalog
+		resolvedFrom = fetchInfo.Catalog
 	}
 
 	f.logger.V(1).Info("plugin fetched and cached",
@@ -286,9 +385,19 @@ func RegisterFetchedPlugins(ctx context.Context, registry *provider.Registry, re
 		for _, providerName := range providers {
 			wrapper, err := NewProviderWrapper(client, providerName, WithContext(ctx))
 			if err != nil {
+				lgr := logr.FromContextOrDiscard(ctx)
+				lgr.V(1).Info("failed to create plugin provider wrapper",
+					"plugin", r.Name,
+					"provider", providerName,
+					"error", err)
 				continue
 			}
 			if err := registry.Register(wrapper); err != nil {
+				lgr := logr.FromContextOrDiscard(ctx)
+				lgr.V(0).Info("WARNING: plugin provider not registered (name already taken by a builtin or another plugin)",
+					"plugin", r.Name,
+					"provider", providerName,
+					"error", err)
 				continue
 			}
 			if cfg != nil {

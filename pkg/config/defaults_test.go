@@ -295,6 +295,36 @@ func TestMergeDefaultCatalogEntries_DisableOfficialCatalog(t *testing.T) {
 	assert.NotContains(t, names, CatalogNameOfficial)
 }
 
+func TestSettings_DisableOfficialProviders(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults to false", func(t *testing.T) {
+		t.Parallel()
+
+		var s Settings
+		assert.False(t, s.DisableOfficialProviders)
+	})
+
+	t.Run("deserializes from YAML", func(t *testing.T) {
+		t.Parallel()
+
+		data := []byte(`disableOfficialProviders: true`)
+		var s Settings
+		require.NoError(t, yaml.Unmarshal(data, &s))
+		assert.True(t, s.DisableOfficialProviders)
+	})
+
+	t.Run("independent of DisableOfficialCatalog", func(t *testing.T) {
+		t.Parallel()
+
+		s := Settings{DisableOfficialCatalog: true}
+		assert.False(t, s.DisableOfficialProviders)
+
+		s2 := Settings{DisableOfficialProviders: true}
+		assert.False(t, s2.DisableOfficialCatalog)
+	})
+}
+
 func TestMergeDefaultCatalogEntries_DefaultIncludesOfficial(t *testing.T) {
 	t.Parallel()
 

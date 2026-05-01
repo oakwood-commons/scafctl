@@ -1,0 +1,45 @@
+# Test fixture: uses only built-in providers (cel) for offline integration tests.
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: builtin-resolver-demo
+  version: "1.0.0"
+  description: Resolver demo using only built-in providers
+
+spec:
+  resolvers:
+    environment:
+      description: Target deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'production'"
+
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'us-west-2'"
+
+    port:
+      description: Application port
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "8080"
+
+    hostname:
+      description: Generated hostname
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.environment + '-server-' + _.region"

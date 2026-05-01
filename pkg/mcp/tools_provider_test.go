@@ -156,11 +156,11 @@ func TestHandleGetProviderSchema(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		// Use a known provider name — "static" is always available
+		// Use a known provider name — "cel" is always available
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "get_provider_schema"
 		request.Params.Arguments = map[string]any{
-			"name": "static",
+			"name": "cel",
 		}
 
 		result, err := srv.handleGetProviderSchema(context.Background(), request)
@@ -170,7 +170,7 @@ func TestHandleGetProviderSchema(t *testing.T) {
 		text := result.Content[0].(mcp.TextContent).Text
 		var desc map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &desc))
-		assert.Equal(t, "static", desc["name"])
+		assert.Equal(t, "cel", desc["name"])
 	})
 
 	t.Run("returns error for unknown provider", func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestHandleGetProviderSchema(t *testing.T) {
 }
 
 func TestHandleRunProvider(t *testing.T) {
-	t.Run("executes static provider", func(t *testing.T) {
+	t.Run("executes cel provider", func(t *testing.T) {
 		reg, err := builtin.DefaultRegistry(context.Background())
 		require.NoError(t, err)
 		srv, err := NewServer(
@@ -223,8 +223,8 @@ func TestHandleRunProvider(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider": "static",
-			"inputs":   map[string]any{"value": "hello world"},
+			"provider": "cel",
+			"inputs":   map[string]any{"expression": "'hello world'"},
 		}
 
 		result, err := srv.handleRunProvider(context.Background(), request)
@@ -234,8 +234,8 @@ func TestHandleRunProvider(t *testing.T) {
 		text := result.Content[0].(mcp.TextContent).Text
 		var output map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
-		assert.Equal(t, "static", output["provider"])
-		assert.Equal(t, "from", output["capability"])
+		assert.Equal(t, "cel", output["provider"])
+		assert.Equal(t, "transform", output["capability"])
 		assert.NotNil(t, output["data"])
 	})
 
@@ -287,7 +287,7 @@ func TestHandleRunProvider(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider": "static",
+			"provider": "cel",
 			"inputs":   map[string]any{},
 		}
 
@@ -311,9 +311,9 @@ func TestHandleRunProvider(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider":   "static",
-			"inputs":     map[string]any{"value": "test"},
-			"capability": "from",
+			"provider":   "cel",
+			"inputs":     map[string]any{"expression": "'test'"},
+			"capability": "transform",
 		}
 
 		result, err := srv.handleRunProvider(context.Background(), request)
@@ -323,7 +323,7 @@ func TestHandleRunProvider(t *testing.T) {
 		text := result.Content[0].(mcp.TextContent).Text
 		var output map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
-		assert.Equal(t, "from", output["capability"])
+		assert.Equal(t, "transform", output["capability"])
 	})
 
 	t.Run("with unsupported capability", func(t *testing.T) {
@@ -335,13 +335,13 @@ func TestHandleRunProvider(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		// env provider only supports "from", so "action" is unsupported
+		// cel provider only supports "transform" and "action", so "from" is unsupported
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider":   "env",
-			"inputs":     map[string]any{"name": "HOME"},
-			"capability": "action",
+			"provider":   "cel",
+			"inputs":     map[string]any{"expression": "'test'"},
+			"capability": "from",
 		}
 
 		result, err := srv.handleRunProvider(context.Background(), request)
@@ -364,8 +364,8 @@ func TestHandleRunProvider(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider": "static",
-			"inputs":   map[string]any{"value": "test"},
+			"provider": "cel",
+			"inputs":   map[string]any{"expression": "'test'"},
 			"dry_run":  true,
 		}
 
@@ -391,8 +391,8 @@ func TestHandleRunProvider(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider": "static",
-			"inputs":   map[string]any{"value": "default"},
+			"provider": "cel",
+			"inputs":   map[string]any{"expression": "'default'"},
 		}
 
 		result, err := srv.handleRunProvider(context.Background(), request)
@@ -412,7 +412,7 @@ func TestHandleRunProvider(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider": "static",
+			"provider": "cel",
 			"inputs":   "not-an-object",
 		}
 
@@ -424,7 +424,7 @@ func TestHandleRunProvider(t *testing.T) {
 		assert.Contains(t, text, "INVALID_INPUT")
 	})
 
-	t.Run("executes env provider", func(t *testing.T) {
+	t.Run("executes message provider", func(t *testing.T) {
 		reg, err := builtin.DefaultRegistry(context.Background())
 		require.NoError(t, err)
 		srv, err := NewServer(
@@ -433,14 +433,12 @@ func TestHandleRunProvider(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		t.Setenv("TEST_RUN_PROVIDER_VAR", "mcp-test-value")
-
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_provider"
 		request.Params.Arguments = map[string]any{
-			"provider":   "env",
-			"inputs":     map[string]any{"operation": "get", "name": "TEST_RUN_PROVIDER_VAR"},
-			"capability": "from",
+			"provider":   "message",
+			"inputs":     map[string]any{"message": "mcp-test-value"},
+			"capability": "action",
 		}
 
 		result, err := srv.handleRunProvider(context.Background(), request)
@@ -450,6 +448,6 @@ func TestHandleRunProvider(t *testing.T) {
 		text := result.Content[0].(mcp.TextContent).Text
 		var output map[string]any
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
-		assert.Equal(t, "env", output["provider"])
+		assert.Equal(t, "message", output["provider"])
 	})
 }

@@ -370,6 +370,7 @@ spec:
   # =====================================================================
   # TEST CONFIGURATION
   # =====================================================================
+
   testing:
     config:
       skipBuiltins: [resolve-defaults, render-defaults]
@@ -575,21 +576,25 @@ spec:
       _resolver-base:
         description: Base template for resolver tests
         command: [run, resolver]
-        args: ["-o", "json"]
+        args: ["-o", "json", "--config", "config.yaml"]
         tags: [provider, github, v3]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
 
       _action-base:
         description: Base template for action tests
         command: [run, action]
-        args: ["-o", "json"]
+        args: ["-o", "json", "--config", "config.yaml"]
         tags: [provider, github, v3]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
 
       # ── API Call Tests ──────────────────────────────────────────────
       api-call-get:
         description: Generic api_call GET returns label list
         extends: [_resolver-base]
         tags: [api-call]
-        args: ["api-call-get", "-o", "json"]
+        args: ["api-call-get", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "api_call GET should succeed"
@@ -602,7 +607,7 @@ spec:
         description: Generic api_call POST creates a resource
         extends: [_resolver-base]
         tags: [api-call]
-        args: ["api-call-post", "-o", "json"]
+        args: ["api-call-post", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "api_call POST should succeed"
@@ -614,7 +619,7 @@ spec:
         description: List labels returns expected labels
         extends: [_resolver-base]
         tags: [labels]
-        args: ["list-labels", "-o", "json"]
+        args: ["list-labels", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_labels should succeed"
@@ -626,7 +631,7 @@ spec:
         description: Create a new label
         extends: [_action-base]
         tags: [labels]
-        args: ["create-label", "-o", "json"]
+        args: ["create-label", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "create_label should succeed"
@@ -637,7 +642,7 @@ spec:
         description: Delete a label
         extends: [_action-base]
         tags: [labels]
-        args: ["delete-label", "-o", "json"]
+        args: ["delete-label", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "delete_label should succeed"
@@ -648,7 +653,7 @@ spec:
         description: Add labels to an issue
         extends: [_action-base]
         tags: [labels]
-        args: ["add-labels-to-issue", "-o", "json"]
+        args: ["add-labels-to-issue", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "add_labels_to_issue should succeed"
@@ -660,7 +665,7 @@ spec:
         description: List milestones
         extends: [_resolver-base]
         tags: [milestones]
-        args: ["list-milestones", "-o", "json"]
+        args: ["list-milestones", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_milestones should succeed"
@@ -674,7 +679,7 @@ spec:
         description: Create a milestone
         extends: [_action-base]
         tags: [milestones]
-        args: ["create-milestone", "-o", "json"]
+        args: ["create-milestone", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "create_milestone should succeed"
@@ -686,7 +691,7 @@ spec:
         description: List reactions on issue
         extends: [_resolver-base]
         tags: [reactions]
-        args: ["list-reactions", "-o", "json"]
+        args: ["list-reactions", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_reactions should succeed"
@@ -698,7 +703,7 @@ spec:
         description: Add thumbs-up reaction
         extends: [_action-base]
         tags: [reactions]
-        args: ["add-reaction", "-o", "json"]
+        args: ["add-reaction", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "add_reaction should succeed"
@@ -710,7 +715,7 @@ spec:
         description: List collaborators
         extends: [_resolver-base]
         tags: [collaborators]
-        args: ["list-collaborators", "-o", "json"]
+        args: ["list-collaborators", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_collaborators should succeed"
@@ -722,7 +727,7 @@ spec:
         description: Add a collaborator
         extends: [_action-base]
         tags: [collaborators]
-        args: ["add-collaborator", "-o", "json"]
+        args: ["add-collaborator", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "add_collaborator should succeed"
@@ -734,7 +739,7 @@ spec:
         description: List webhooks
         extends: [_resolver-base]
         tags: [webhooks]
-        args: ["list-webhooks", "-o", "json"]
+        args: ["list-webhooks", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_webhooks should succeed"
@@ -746,7 +751,7 @@ spec:
         description: Create a webhook
         extends: [_action-base]
         tags: [webhooks]
-        args: ["create-webhook", "-o", "json"]
+        args: ["create-webhook", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "create_webhook should succeed"
@@ -758,7 +763,7 @@ spec:
         description: List workflow runs
         extends: [_resolver-base]
         tags: [actions]
-        args: ["list-workflow-runs", "-o", "json"]
+        args: ["list-workflow-runs", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_workflow_runs should succeed"
@@ -769,7 +774,7 @@ spec:
         description: List repository variables
         extends: [_resolver-base]
         tags: [actions]
-        args: ["list-repo-variables", "-o", "json"]
+        args: ["list-repo-variables", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_repo_variables should succeed"
@@ -780,7 +785,7 @@ spec:
         description: List deployment environments
         extends: [_resolver-base]
         tags: [actions]
-        args: ["list-environments", "-o", "json"]
+        args: ["list-environments", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_environments should succeed"
@@ -792,7 +797,7 @@ spec:
         description: Dispatch a workflow
         extends: [_action-base]
         tags: [actions]
-        args: ["dispatch-workflow", "-o", "json"]
+        args: ["dispatch-workflow", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "dispatch_workflow should succeed"
@@ -804,7 +809,7 @@ spec:
         description: Update repository settings
         extends: [_action-base]
         tags: [repo-settings]
-        args: ["update-repo", "-o", "json"]
+        args: ["update-repo", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "update_repo should succeed"
@@ -816,7 +821,7 @@ spec:
         description: List repository topics
         extends: [_resolver-base]
         tags: [repo-settings]
-        args: ["list-topics", "-o", "json"]
+        args: ["list-topics", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_topics should succeed"
@@ -828,7 +833,7 @@ spec:
         description: Replace repository topics
         extends: [_action-base]
         tags: [repo-settings]
-        args: ["replace-topics", "-o", "json"]
+        args: ["replace-topics", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "replace_topics should succeed"
@@ -839,7 +844,7 @@ spec:
         description: Fork a repository
         extends: [_action-base]
         tags: [repo-settings]
-        args: ["fork-repo", "-o", "json"]
+        args: ["fork-repo", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "fork_repo should succeed"
@@ -851,7 +856,7 @@ spec:
         description: List custom properties
         extends: [_resolver-base]
         tags: [custom-properties]
-        args: ["list-custom-properties", "-o", "json"]
+        args: ["list-custom-properties", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "list_custom_properties should succeed"
@@ -863,7 +868,7 @@ spec:
         description: Set custom properties
         extends: [_action-base]
         tags: [custom-properties]
-        args: ["set-custom-properties", "-o", "json"]
+        args: ["set-custom-properties", "-o", "json", "--config", "config.yaml"]
         assertions:
           - expression: __exitCode == 0
             message: "set_custom_properties should succeed"

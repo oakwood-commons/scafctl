@@ -22,8 +22,8 @@ func TestSolution_Defaults(t *testing.T) {
 	assert.Contains(t, result.YAML, "name: my-solution")
 	assert.NotContains(t, result.YAML, "version:")
 	assert.Contains(t, result.YAML, "description: A test solution")
-	assert.Contains(t, result.YAML, "provider: parameter")
-	assert.Contains(t, result.YAML, "key: inputName")
+	assert.Contains(t, result.YAML, "provider: cel")
+	assert.Contains(t, result.YAML, "my-value")
 	assert.Contains(t, result.YAML, "workflow:")
 	assert.Contains(t, result.YAML, "transform:")
 	assert.Contains(t, result.YAML, "validate:")
@@ -56,8 +56,8 @@ func TestSolution_AllFeatures(t *testing.T) {
 
 	require.NotNil(t, result)
 	assert.Contains(t, result.YAML, "version: \"2.0.0\"")
-	assert.Contains(t, result.YAML, "provider: parameter")
-	assert.Contains(t, result.YAML, "key: inputName")
+	assert.Contains(t, result.YAML, "provider: cel")
+	assert.Contains(t, result.YAML, "my-value")
 	assert.Contains(t, result.YAML, "transform:")
 	assert.Contains(t, result.YAML, "workflow:")
 	assert.Contains(t, result.YAML, "testing:")
@@ -95,7 +95,7 @@ func TestSolution_ResolversOnly(t *testing.T) {
 
 	require.NotNil(t, result)
 	assert.Contains(t, result.YAML, "resolvers:")
-	assert.Contains(t, result.YAML, "provider: static")
+	assert.Contains(t, result.YAML, "provider: cel")
 	assert.NotContains(t, result.YAML, "workflow:")
 }
 

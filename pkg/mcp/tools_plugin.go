@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 )
 
 // registerPluginTools registers all plugin-related MCP tools.
@@ -41,6 +42,26 @@ func (s *Server) registerPluginTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	s.mcpServer.AddTool(pluginCachePathTool, s.handleGetPluginCachePath)
+
+	// list_official_providers
+	listOfficialProvidersTool := mcp.NewTool("list_official_providers",
+		mcp.WithDescription(fmt.Sprintf(
+			"List official first-party providers distributed as external plugins. "+
+				"These providers are auto-fetched from the OCI catalog when a solution references them. "+
+				"Returns name, catalog reference, and default version for each. "+
+				"Use this to determine whether a provider is built-in (compiled into %s) or official "+
+				"(auto-fetched as a plugin). Solutions should declare official providers in bundle.plugins "+
+				"for reproducibility.",
+			s.name,
+		)),
+		mcp.WithTitleAnnotation("List Official Providers"),
+		mcp.WithToolIcons(toolIcons["plugin"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+	s.mcpServer.AddTool(listOfficialProvidersTool, s.handleListOfficialProviders)
 }
 
 // handleListPlugins lists cached plugin binaries.
@@ -63,4 +84,33 @@ func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*m
 // handleGetPluginCachePath returns the plugin cache directory path.
 func (s *Server) handleGetPluginCachePath(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return mcp.NewToolResultText(paths.PluginCacheDir()), nil
+}
+
+// officialProviderItem is the response structure for list_official_providers.
+type officialProviderItem struct {
+	Name           string `json:"name"`
+	CatalogRef     string `json:"catalogRef"`
+	DefaultVersion string `json:"defaultVersion"`
+}
+
+// handleListOfficialProviders lists all official first-party providers that are
+// distributed as external plugins and auto-fetched from the OCI catalog.
+func (s *Server) handleListOfficialProviders(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	reg := official.RegistryFromContext(s.ctx)
+	if reg == nil {
+		reg = official.NewRegistry()
+	}
+
+	names := reg.Names()
+	items := make([]officialProviderItem, 0, len(names))
+	for _, name := range names {
+		p, _ := reg.Get(name)
+		items = append(items, officialProviderItem{
+			Name:           p.Name,
+			CatalogRef:     p.CatalogRef,
+			DefaultVersion: p.DefaultVersion,
+		})
+	}
+
+	return mcp.NewToolResultJSON(items)
 }

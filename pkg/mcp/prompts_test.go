@@ -150,7 +150,7 @@ func TestHandleAddActionPrompt(t *testing.T) {
 		request := mcp.GetPromptRequest{}
 		request.Params.Name = "add_action"
 		request.Params.Arguments = map[string]string{
-			"provider": "exec",
+			"provider": "message",
 			"purpose":  "run a deployment script",
 		}
 
@@ -160,7 +160,7 @@ func TestHandleAddActionPrompt(t *testing.T) {
 		assert.NotEmpty(t, result.Messages)
 
 		text := result.Messages[0].Content.(mcp.TextContent).Text
-		assert.Contains(t, text, "exec")
+		assert.Contains(t, text, "message")
 		assert.Contains(t, text, "run a deployment script")
 		assert.Contains(t, text, "get_provider_schema")
 		assert.Contains(t, text, "explain_kind")
@@ -612,12 +612,12 @@ func TestPromptToolReferencesAreValid(t *testing.T) {
 		{
 			name:    "add_resolver",
 			handler: srv.handleAddResolverPrompt,
-			args:    map[string]string{"provider": "static", "purpose": "test"},
+			args:    map[string]string{"provider": "cel", "purpose": "test"},
 		},
 		{
 			name:    "add_action",
 			handler: srv.handleAddActionPrompt,
-			args:    map[string]string{"provider": "exec", "purpose": "test"},
+			args:    map[string]string{"provider": "message", "purpose": "test"},
 		},
 		{
 			name:    "update_solution",

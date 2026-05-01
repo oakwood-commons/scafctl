@@ -70,9 +70,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello"
+              expression: "'Hello'"
 `
 		tmpDir := t.TempDir()
 		solutionPath := filepath.Join(tmpDir, "solution.yaml")
@@ -113,17 +113,15 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello"
+              expression: "'Hello'"
   workflow:
     actions:
       greet:
-        provider: exec
+        provider: message
         inputs:
-          command: echo
-          args:
-            - "{{ .greeting }}"
+          message: "{{ .greeting }}"
 `
 		tmpDir := t.TempDir()
 		solutionPath := filepath.Join(tmpDir, "solution.yaml")
@@ -157,8 +155,8 @@ spec:
 
 		act := actionPlan[0].(map[string]any)
 		assert.Equal(t, "greet", act["name"])
-		assert.Equal(t, "exec", act["provider"])
-		assert.Contains(t, act["wouldDo"], "Would execute via")
+		assert.Equal(t, "message", act["provider"])
+		assert.Contains(t, act["wouldDo"], "Would output")
 	})
 
 	t.Run("resolver_overrides applied", func(t *testing.T) {
@@ -173,15 +171,15 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello"
+              expression: "'Hello'"
   workflow:
     actions:
       greet:
-        provider: static
+        provider: message
         inputs:
-          value: "{{ .greeting }}"
+          message: "{{ .greeting }}"
 `
 		tmpDir := t.TempDir()
 		solutionPath := filepath.Join(tmpDir, "solution.yaml")
@@ -239,15 +237,15 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello"
+              expression: "'Hello'"
   workflow:
     actions:
       greet:
-        provider: static
+        provider: message
         inputs:
-          value: "{{ .greeting }}"
+          message: "{{ .greeting }}"
 `
 		tmpDir := t.TempDir()
 		solutionPath := filepath.Join(tmpDir, "solution.yaml")
@@ -293,9 +291,9 @@ spec:
   workflow:
     actions:
       greet:
-        provider: static
+        provider: message
         inputs:
-          value: "hello"
+          message: "hello"
 `
 		tmpDir := t.TempDir()
 		solutionPath := filepath.Join(tmpDir, "solution.yaml")
@@ -358,9 +356,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello"
+              expression: "'Hello'"
 `
 		tmpDir := t.TempDir()
 		solutionPath := filepath.Join(tmpDir, "solution.yaml")

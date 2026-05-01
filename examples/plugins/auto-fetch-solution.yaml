@@ -22,6 +22,14 @@ metadata:
     Automatic plugin fetching from catalogs at runtime. Declares plugin
     dependencies that are resolved and cached on first use.
 
+bundle:
+  plugins:
+    - name: echo-provider
+      kind: provider
+      version: "^1.0.0"
+      defaults:
+        prefix: "[auto-fetch-demo]"
+
 spec:
   resolvers:
     greeting:
@@ -34,10 +42,3 @@ spec:
 
   # Plugin dependencies — scafctl resolves these from the catalog chain
   # (local catalog first, then configured remote OCI registries)
-  bundle:
-    plugins:
-      - name: echo-provider
-        kind: provider
-        version: "^1.0.0"
-        defaults:
-          prefix: "[auto-fetch-demo]"

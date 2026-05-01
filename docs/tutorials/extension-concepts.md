@@ -24,7 +24,7 @@ This page defines the core terminology and links to the detailed development gui
 
 | | **Builtin** | **Plugin** |
 |---|---|---|
-| **Provider** | Compiled into scafctl; 16 built-in providers (http, cel, exec...) | Standalone gRPC binary; auto-fetched from OCI catalogs |
+| **Provider** | Compiled into scafctl; 10 built-in providers (http, cel, static, parameter...) | Standalone gRPC binary; auto-fetched from OCI catalogs (10 official: exec, git, env...) |
 | **Auth Handler** | Compiled into scafctl; 3 built-in handlers (entra, github, gcp) | Standalone gRPC binary; auto-fetched from OCI catalogs |
 
 ## When to Choose Builtin vs Plugin
@@ -38,6 +38,16 @@ This page defines the core terminology and links to the detailed development gui
 | **Update cycle** | Tied to scafctl releases | Independent release cadence |
 | **Use case** | Core functionality, general-purpose | Third-party integrations, proprietary logic |
 | **Contributing** | PR to scafctl repo | Publish to any OCI registry |
+
+### Built-in Boundary Rule
+
+A provider **must** stay built-in when:
+
+1. It imports `pkg/celexp` or `pkg/gotmpl` (core engine coupling)
+2. Its execution is sub-microsecond with zero I/O (serialization overhead dominates)
+3. It requires direct access to internal host state that cannot cross a gRPC boundary
+
+Everything else defaults to plugin. See [Plugins Design -- Built-in Boundary Rule](../design/plugins.md#built-in-boundary-rule) for the full rationale and provider table.
 
 ## Key Differences: Providers vs Auth Handlers
 

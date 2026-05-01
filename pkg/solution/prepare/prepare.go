@@ -8,6 +8,7 @@ package prepare
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -26,6 +28,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -36,18 +39,20 @@ import (
 type Option func(*prepareConfig)
 
 type prepareConfig struct {
-	getter        get.Interface
-	registry      *provider.Registry
-	authRegistry  *auth.Registry
-	stdin         io.Reader
-	showMetrics   bool
-	metricsOut    io.Writer
-	pluginFetcher *plugin.Fetcher
-	lockPlugins   []bundler.LockPlugin
-	noCache       bool
-	pluginCfg     *plugin.ProviderConfig
-	clientOpts    []plugin.ClientOption
-	discoveryMode settings.DiscoveryMode
+	getter            get.Interface
+	registry          *provider.Registry
+	authRegistry      *auth.Registry
+	stdin             io.Reader
+	showMetrics       bool
+	metricsOut        io.Writer
+	pluginFetcher     *plugin.Fetcher
+	lockPlugins       []bundler.LockPlugin
+	noCache           bool
+	pluginCfg         *plugin.ProviderConfig
+	clientOpts        []plugin.ClientOption
+	discoveryMode     settings.DiscoveryMode
+	officialProviders *official.Registry
+	strict            bool
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -136,6 +141,25 @@ func WithClientOptions(opts ...plugin.ClientOption) Option {
 func WithDiscoveryMode(mode settings.DiscoveryMode) Option {
 	return func(c *prepareConfig) {
 		c.discoveryMode = mode
+	}
+}
+
+// WithOfficialProviders provides an official provider registry for
+// auto-resolving missing providers at runtime. When set (and strict is
+// false), providers not found in the registry are checked against the
+// official list and auto-fetched via the plugin fetcher.
+func WithOfficialProviders(r *official.Registry) Option {
+	return func(c *prepareConfig) {
+		c.officialProviders = r
+	}
+}
+
+// WithStrict disables auto-resolution of official providers. When strict
+// is true, missing providers produce an error instructing the user to
+// declare them explicitly in bundle.plugins.
+func WithStrict(strict bool) Option {
+	return func(c *prepareConfig) {
+		c.strict = strict
 	}
 }
 
@@ -295,6 +319,14 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		}
 	}
 
+	// Inject host metadata into plugin config so providers like "metadata"
+	// can return runtime information about the scafctl process.
+	injectHostMetadataSettings(cfg.pluginCfg, sol)
+
+	// Inject httpClient settings (e.g. allowPrivateIPs) from the app config
+	// so external plugins can apply the same SSRF policy as the host.
+	injectHTTPClientSettings(ctx, cfg.pluginCfg)
+
 	// Auto-fetch and register plugin binaries from catalogs
 	var pluginClients []*plugin.Client
 	if len(sol.Bundle.Plugins) > 0 && cfg.pluginFetcher != nil {
@@ -351,15 +383,52 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		}
 	}
 
+	// Auto-resolve official providers that are referenced in the solution
+	// but not already registered. This runs after the explicit plugin fetch
+	// so that declared bundle.plugins always take precedence.
+	officialClients, officialErr := autoResolveOfficialProviders(ctx, sol, reg, cfg)
+	if officialErr != nil {
+		cleanup()
+		return nil, officialErr
+	}
+	if len(officialClients) > 0 {
+		origCleanup := cleanup
+		cleanup = func() {
+			for _, c := range officialClients {
+				c.Kill()
+			}
+			origCleanup()
+		}
+	}
+
 	// Register the solution provider
 	if !reg.Has(solutionprovider.ProviderName) {
-		solProvider := solutionprovider.New(
+		solOpts := []solutionprovider.Option{
 			solutionprovider.WithLoader(getter),
 			solutionprovider.WithRegistry(reg),
-		)
+		}
+		if cfg.officialProviders != nil {
+			solOpts = append(solOpts, solutionprovider.WithOfficialProviders(cfg.officialProviders))
+		}
+		if cfg.pluginFetcher != nil {
+			solOpts = append(solOpts, solutionprovider.WithPluginFetcher(cfg.pluginFetcher))
+		}
+		if cfg.pluginCfg != nil {
+			solOpts = append(solOpts, solutionprovider.WithPluginConfig(cfg.pluginCfg))
+		}
+		if len(cfg.clientOpts) > 0 {
+			solOpts = append(solOpts, solutionprovider.WithClientOptions(cfg.clientOpts...))
+		}
+		solProvider := solutionprovider.New(solOpts...)
 		if err := reg.Register(solProvider); err != nil {
 			cleanup()
 			return nil, fmt.Errorf("registering solution provider: %w", err)
+		}
+		// Add solution provider cleanup to kill child plugin clients.
+		origCleanup := cleanup
+		cleanup = func() {
+			solProvider.Close()
+			origCleanup()
 		}
 	}
 
@@ -563,4 +632,275 @@ func writeMetrics(out io.Writer) {
 			successRate)
 	}
 	fmt.Fprintln(out, strings.Repeat("-", 80))
+}
+
+// autoResolveOfficialProviders scans the solution's resolvers for provider
+// references that are not already registered. For each missing provider
+// found in the official registry, a synthetic PluginDependency is created
+// and fetched via the plugin fetcher.
+//
+// When strict is true, this function returns an error listing the missing
+// official providers instead of auto-fetching them.
+//
+// Returns the plugin clients that were created (caller must add to cleanup)
+// or nil when no providers were auto-resolved.
+func autoResolveOfficialProviders(
+	ctx context.Context,
+	sol *solution.Solution,
+	reg *provider.Registry,
+	cfg *prepareConfig,
+) ([]*plugin.Client, error) {
+	if cfg.officialProviders == nil || cfg.officialProviders.Len() == 0 {
+		return nil, nil
+	}
+
+	lgr := logger.FromContext(ctx)
+
+	// Collect provider names referenced in the solution's resolvers.
+	missing := missingOfficialProviders(sol, reg, cfg.officialProviders)
+	if len(missing) == 0 {
+		return nil, nil
+	}
+
+	// In strict mode, refuse to auto-resolve and return an actionable error.
+	if cfg.strict {
+		names := make([]string, len(missing))
+		for i, p := range missing {
+			names[i] = p.Name
+		}
+		return nil, fmt.Errorf(
+			"strict mode: providers %v are official but not declared in bundle.plugins; "+
+				"add them explicitly or disable strict mode",
+			names,
+		)
+	}
+
+	if cfg.pluginFetcher == nil {
+		if lgr != nil {
+			lgr.V(1).Info("official providers need auto-resolution but no plugin fetcher available")
+		}
+		return nil, nil
+	}
+
+	// Build synthetic plugin dependencies for each missing official provider.
+	deps := make([]solution.PluginDependency, len(missing))
+	for i, p := range missing {
+		deps[i] = p.ToPluginDependency()
+	}
+
+	if lgr != nil {
+		names := make([]string, len(missing))
+		for i, p := range missing {
+			names[i] = p.Name
+		}
+		lgr.V(0).Info("auto-resolving official providers", "providers", names)
+	}
+
+	fetchResults, fetchErr := cfg.pluginFetcher.FetchPlugins(ctx, deps, cfg.lockPlugins)
+	if fetchErr != nil {
+		return nil, fmt.Errorf("auto-fetching official providers: %w", fetchErr)
+	}
+
+	clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
+	if regErr != nil {
+		return nil, fmt.Errorf("registering auto-resolved official providers: %w", regErr)
+	}
+
+	return clients, nil
+}
+
+// missingOfficialProviders returns the subset of official providers that are
+// referenced by solution resolvers or workflow actions but not present in the
+// provider registry.
+func missingOfficialProviders(
+	sol *solution.Solution,
+	reg *provider.Registry,
+	officialReg *official.Registry,
+) []official.Provider {
+	var missing []official.Provider
+	for _, name := range sol.Spec.ReferencedProviderNames() {
+		if reg.Has(name) {
+			continue
+		}
+		if p, ok := officialReg.Get(name); ok {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
+// BuildPluginFetcher creates a plugin.Fetcher from the context's config and
+// auth registry. Returns an error when the catalog chain cannot be built.
+// Callers should treat errors as non-fatal: plugin auto-fetch is simply disabled.
+func BuildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
+	lgr := logger.FromContext(ctx)
+	var fetcherLogger logr.Logger
+	if lgr != nil {
+		fetcherLogger = *lgr
+	} else {
+		fetcherLogger = logr.Discard()
+	}
+	appCfg := config.FromContext(ctx)
+	authReg := auth.RegistryFromContext(ctx)
+	catalogChain, err := catalog.BuildCatalogChain(appCfg, authReg, fetcherLogger)
+	if err != nil {
+		fetcherLogger.V(1).Info("catalog chain not available, plugin auto-fetch disabled", "error", err)
+		return nil, fmt.Errorf("building catalog chain: %w", err)
+	}
+	return plugin.NewFetcher(plugin.FetcherConfig{
+		Catalog:    catalogChain,
+		BinaryName: settings.BinaryNameFromContext(ctx),
+		Logger:     fetcherLogger,
+	}), nil
+}
+
+// ResolveOfficialProviders fetches any official providers referenced by the
+// solution that are missing from the registry. It reads the official provider
+// registry from context and builds a plugin fetcher on demand.
+// Returns the plugin clients created (caller must defer Kill on each), or nil
+// when no providers needed resolution or fetching failed non-fatally.
+func ResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry) ([]*plugin.Client, error) {
+	officialReg := official.RegistryFromContext(ctx)
+	if officialReg == nil || officialReg.Len() == 0 {
+		return nil, nil
+	}
+	missing := missingOfficialProviders(sol, reg, officialReg)
+	if len(missing) == 0 {
+		return nil, nil
+	}
+	lgr := logger.FromContext(ctx)
+	fetcher, err := BuildPluginFetcher(ctx)
+	if err != nil {
+		if lgr != nil {
+			lgr.V(1).Info("plugin fetcher not available for official provider auto-resolution", "error", err)
+		}
+		return nil, nil
+	}
+	deps := make([]solution.PluginDependency, len(missing))
+	for i, p := range missing {
+		deps[i] = p.ToPluginDependency()
+	}
+	if lgr != nil {
+		names := make([]string, len(missing))
+		for i, p := range missing {
+			names[i] = p.Name
+		}
+		lgr.V(0).Info("auto-resolving official providers", "providers", names)
+	}
+	results, err := fetcher.FetchPlugins(ctx, deps, nil)
+	if err != nil {
+		return nil, fmt.Errorf("auto-fetching official providers: %w", err)
+	}
+	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, nil)
+	if err != nil {
+		return nil, fmt.Errorf("registering auto-resolved official providers: %w", err)
+	}
+	return clients, nil
+}
+
+// injectHostMetadataSettings populates cfg.Settings["metadata"] with host runtime
+// information so that the metadata plugin (and any other plugin that cares) can
+// return version, entrypoint, args, and solution metadata to callers.
+//
+// NOTE: os.Args is included in the serialized settings. This means command-line
+// arguments (potentially including sensitive values) are visible to all plugins
+// over the local gRPC socket. This is acceptable because plugins are first-party
+// trusted binaries, but users should avoid passing secrets via CLI flags when
+// running untrusted plugin binaries.
+func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Solution) {
+	if cfg == nil {
+		return
+	}
+
+	// Determine entrypoint from binary name heuristic.
+	entrypoint := "cli"
+	if cfg.BinaryName == "" {
+		entrypoint = "unknown"
+	}
+
+	type solutionMeta struct {
+		Name        string   `json:"name"`
+		Version     string   `json:"version"`
+		DisplayName string   `json:"displayName"`
+		Description string   `json:"description"`
+		Category    string   `json:"category"`
+		Tags        []string `json:"tags"`
+	}
+
+	solMeta := solutionMeta{}
+	if sol != nil && sol.Metadata.Name != "" {
+		solMeta.Name = sol.Metadata.Name
+		solMeta.DisplayName = sol.Metadata.DisplayName
+		solMeta.Description = sol.Metadata.Description
+		solMeta.Category = sol.Metadata.Category
+		solMeta.Tags = sol.Metadata.Tags
+		if sol.Metadata.Version != nil {
+			solMeta.Version = sol.Metadata.Version.String()
+		}
+	}
+
+	type hostMetadata struct {
+		BuildVersion string       `json:"buildVersion"`
+		Commit       string       `json:"commit"`
+		BuildTime    string       `json:"buildTime"`
+		Entrypoint   string       `json:"entrypoint"`
+		Command      string       `json:"command"`
+		Args         []string     `json:"args"`
+		Solution     solutionMeta `json:"solution"`
+	}
+
+	meta := hostMetadata{
+		BuildVersion: settings.VersionInformation.BuildVersion,
+		Commit:       settings.VersionInformation.Commit,
+		BuildTime:    settings.VersionInformation.BuildTime,
+		Entrypoint:   entrypoint,
+		Command:      strings.Join(os.Args, " "),
+		Args:         os.Args,
+		Solution:     solMeta,
+	}
+
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return
+	}
+
+	if cfg.Settings == nil {
+		cfg.Settings = make(map[string]json.RawMessage)
+	}
+	cfg.Settings["metadata"] = json.RawMessage(raw)
+}
+
+// injectHTTPClientSettings propagates httpClient configuration (e.g.
+// allowPrivateIPs) from the app config to ProviderConfig.Settings["httpClient"]
+// so external plugins can apply the same network policies as the host.
+func injectHTTPClientSettings(ctx context.Context, cfg *plugin.ProviderConfig) {
+	if cfg == nil {
+		return
+	}
+
+	appCfg := config.FromContext(ctx)
+	if appCfg == nil {
+		return
+	}
+
+	// Only inject if there's something to communicate.
+	if appCfg.HTTPClient.AllowPrivateIPs == nil {
+		return
+	}
+
+	type httpClientSettings struct {
+		AllowPrivateIPs bool `json:"allowPrivateIPs"`
+	}
+
+	raw, err := json.Marshal(httpClientSettings{
+		AllowPrivateIPs: *appCfg.HTTPClient.AllowPrivateIPs,
+	})
+	if err != nil {
+		return
+	}
+
+	if cfg.Settings == nil {
+		cfg.Settings = make(map[string]json.RawMessage)
+	}
+	cfg.Settings["httpClient"] = json.RawMessage(raw)
 }
