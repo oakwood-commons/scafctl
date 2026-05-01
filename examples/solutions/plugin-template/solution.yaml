@@ -17,6 +17,10 @@ metadata:
     - name: Provider Authoring Guide
       url: https://github.com/oakwood-commons/scafctl/blob/main/docs/tutorials/plugin-development.md
 
+bundle:
+  include:
+    - templates/**
+
 spec:
   resolvers:
     # ── User Inputs ──────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import (
 )
 
 func TestValidateURLNotPrivate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		url     string
@@ -45,6 +46,7 @@ func TestValidateURLNotPrivate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := validateURLNotPrivate(tt.url)
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -56,25 +58,30 @@ func TestValidateURLNotPrivate(t *testing.T) {
 }
 
 func TestPrivateIPsAllowed(t *testing.T) {
+	t.Parallel()
 	falseVal := false
 	trueVal := true
 
 	t.Run("nil config defaults to denied", func(t *testing.T) {
+		t.Parallel()
 		assert.False(t, privateIPsAllowed(context.Background()))
 	})
 
 	t.Run("config with nil AllowPrivateIPs defaults to denied", func(t *testing.T) {
+		t.Parallel()
 		ctx := config.WithConfig(context.Background(), &config.Config{})
 		assert.False(t, privateIPsAllowed(ctx))
 	})
 
 	t.Run("config with AllowPrivateIPs=true", func(t *testing.T) {
+		t.Parallel()
 		cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &trueVal}}
 		ctx := config.WithConfig(context.Background(), cfg)
 		assert.True(t, privateIPsAllowed(ctx))
 	})
 
 	t.Run("config with AllowPrivateIPs=false", func(t *testing.T) {
+		t.Parallel()
 		cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &falseVal}}
 		ctx := config.WithConfig(context.Background(), cfg)
 		assert.False(t, privateIPsAllowed(ctx))
@@ -95,6 +102,7 @@ func BenchmarkValidateURLNotPrivate(b *testing.B) {
 }
 
 func TestHTTPProvider_Execute_BlocksPrivateIP(t *testing.T) {
+	t.Parallel()
 	falseVal := false
 	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &falseVal}}
 	ctx := config.WithConfig(context.Background(), cfg)

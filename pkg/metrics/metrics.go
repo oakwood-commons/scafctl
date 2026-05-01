@@ -34,6 +34,8 @@ const (
 	LabelPathTemplate = "path_template"
 	AttrProviderName  = "provider_name"
 	AttrStatus        = "status"
+	AttrPluginName    = "plugin_name"
+	AttrPluginSource  = "source"
 )
 
 // requestTimesBuckets are the histogram bucket boundaries used for duration metrics.
@@ -47,17 +49,21 @@ var (
 
 // OTel metric instruments (initialised by InitMetrics).
 var (
-	HTTPClientDuration        metric.Float64Histogram
-	HTTPClientRequestsTotal   metric.Int64Counter
-	HTTPClientErrorsTotal     metric.Int64Counter
-	HTTPClientRetriesTotal    metric.Int64Counter
-	HTTPClientCacheHits       metric.Int64Counter
-	HTTPClientCacheMisses     metric.Int64Counter
-	HTTPClientRequestSize     metric.Float64Histogram
-	HTTPClientResponseSize    metric.Float64Histogram
-	GetSolutionTimeHistogram  metric.Float64Histogram
+	HTTPClientDuration       metric.Float64Histogram
+	HTTPClientRequestsTotal  metric.Int64Counter
+	HTTPClientErrorsTotal    metric.Int64Counter
+	HTTPClientRetriesTotal   metric.Int64Counter
+	HTTPClientCacheHits      metric.Int64Counter
+	HTTPClientCacheMisses    metric.Int64Counter
+	HTTPClientRequestSize    metric.Float64Histogram
+	HTTPClientResponseSize   metric.Float64Histogram
+	GetSolutionTimeHistogram metric.Float64Histogram
+
 	ProviderExecutionDuration metric.Float64Histogram
 	ProviderExecutionTotal    metric.Int64Counter
+
+	PluginResolutionDuration metric.Float64Histogram
+	PluginResolutionTotal    metric.Int64Counter
 )
 
 // private instruments
@@ -214,6 +220,22 @@ func InitMetrics(_ context.Context) error {
 			initErr = fmt.Errorf("ProviderExecutionTotal: %w", err)
 			return
 		}
+
+		PluginResolutionDuration, err = m.Float64Histogram(fmt.Sprintf("%s_plugin_resolution_duration_seconds", n),
+			metric.WithDescription("Plugin resolution duration in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("PluginResolutionDuration: %w", err)
+			return
+		}
+
+		PluginResolutionTotal, err = m.Int64Counter(fmt.Sprintf("%s_plugin_resolution_total", n),
+			metric.WithDescription("Total number of plugin resolutions"))
+		if err != nil {
+			initErr = fmt.Errorf("PluginResolutionTotal: %w", err)
+			return
+		}
 	})
 	return initErr
 }
@@ -263,6 +285,25 @@ func PrometheusMiddleware() gin.HandlerFunc {
 				attribute.String(AttrStatusCode, statusCode),
 			))
 	}
+}
+
+// RecordPluginResolution records plugin resolution metrics to OTel.
+// source should be "cache" or "registry".
+func RecordPluginResolution(ctx context.Context, pluginName, source string, duration float64, success bool) {
+	if PluginResolutionDuration == nil || PluginResolutionTotal == nil {
+		return
+	}
+	status := "success"
+	if !success {
+		status = "failure"
+	}
+	attrs := metric.WithAttributes(
+		attribute.String(AttrPluginName, pluginName),
+		attribute.String(AttrPluginSource, source),
+		attribute.String(AttrStatus, status),
+	)
+	PluginResolutionDuration.Record(ctx, duration, attrs)
+	PluginResolutionTotal.Add(ctx, 1, attrs)
 }
 
 // RecordProviderExecution records provider execution metrics to OTel.

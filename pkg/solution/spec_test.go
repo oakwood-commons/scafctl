@@ -691,3 +691,164 @@ spec:
 	assert.False(t, sol.Spec.HasTestConfig())
 	assert.Nil(t, sol.Spec.Testing)
 }
+
+func TestSpec_ReferencedProviderNames(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *Spec
+		want []string
+	}{
+		{
+			name: "nil spec",
+			spec: nil,
+			want: nil,
+		},
+		{
+			name: "empty spec",
+			spec: &Spec{},
+			want: []string{},
+		},
+		{
+			name: "resolve phase only",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "parameter"},
+								{Provider: "env"},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"env", "parameter"},
+		},
+		{
+			name: "transform phase only",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Transform: &resolver.TransformPhase{
+							With: []resolver.ProviderTransform{
+								{Provider: "cel"},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"cel"},
+		},
+		{
+			name: "validate phase only",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Validate: &resolver.ValidatePhase{
+							With: []resolver.ProviderValidation{
+								{Provider: "validation"},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"validation"},
+		},
+		{
+			name: "workflow actions and finally",
+			spec: &Spec{
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"build": {Provider: "exec"},
+					},
+					Finally: map[string]*action.Action{
+						"cleanup": {Provider: "shell"},
+					},
+				},
+			},
+			want: []string{"exec", "shell"},
+		},
+		{
+			name: "deduplication across phases",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "parameter"},
+							},
+						},
+						Transform: &resolver.TransformPhase{
+							With: []resolver.ProviderTransform{
+								{Provider: "parameter"},
+							},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"run": {Provider: "parameter"},
+					},
+				},
+			},
+			want: []string{"parameter"},
+		},
+		{
+			name: "all phases combined, sorted",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "git"},
+								{Provider: "env"},
+							},
+						},
+						Transform: &resolver.TransformPhase{
+							With: []resolver.ProviderTransform{
+								{Provider: "cel"},
+							},
+						},
+						Validate: &resolver.ValidatePhase{
+							With: []resolver.ProviderValidation{
+								{Provider: "validation"},
+							},
+						},
+					},
+				},
+				Workflow: &action.Workflow{
+					Actions: map[string]*action.Action{
+						"deploy": {Provider: "exec"},
+					},
+					Finally: map[string]*action.Action{
+						"notify": {Provider: "env"},
+					},
+				},
+			},
+			want: []string{"cel", "env", "exec", "git", "validation"},
+		},
+		{
+			name: "empty provider names skipped",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: ""},
+								{Provider: "parameter"},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"parameter"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.ReferencedProviderNames()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

@@ -26,6 +26,16 @@ type VendorPluginsOptions struct {
 	// PluginResolver resolves plugins from the catalog.
 	// If nil, plugin vendoring is skipped.
 	PluginResolver PluginResolver
+
+	// PlatformCatalog, if set, is used to obtain the binary content digest
+	// for multi-platform (OCI image index) plugins. Without this, the lock
+	// file records the OCI manifest/index digest, which differs from the
+	// content hash used for runtime verification.
+	PlatformCatalog catalog.PlatformAwareCatalog
+
+	// Platform is the target platform string (e.g., "darwin/arm64") used with
+	// PlatformCatalog to resolve platform-specific content digests.
+	Platform string
 }
 
 // VendorPluginsResult describes the outcome of plugin vendoring.
@@ -97,6 +107,28 @@ func VendorPlugins(ctx context.Context, plugins []solution.PluginDependency, exi
 
 		// Compute a digest from the artifact info
 		digest := info.Digest
+
+		// If the artifact is a multi-platform image index, the manifest-level
+		// digest does not match the binary content hash. Use FetchByPlatform
+		// to get the actual content digest for the target platform.
+		if opts.PlatformCatalog != nil && opts.Platform != "" {
+			ref, refErr := catalog.ParseReference(kind, fmt.Sprintf("%s@%s", p.Name, resolvedVersion))
+			if refErr == nil {
+				_, contentInfo, fetchErr := opts.PlatformCatalog.FetchByPlatform(ctx, ref, opts.Platform)
+				if fetchErr == nil {
+					lgr.V(1).Info("resolved content digest via platform fetch",
+						"name", p.Name,
+						"indexDigest", digest,
+						"contentDigest", contentInfo.Digest)
+					digest = contentInfo.Digest
+				} else {
+					lgr.V(1).Info("platform fetch for content digest failed, using manifest digest",
+						"name", p.Name,
+						"error", fetchErr)
+				}
+			}
+		}
+
 		if digest == "" {
 			// Fall back to hashing the version string
 			digest = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(resolvedVersion)))

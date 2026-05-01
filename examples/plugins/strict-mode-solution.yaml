@@ -1,0 +1,47 @@
+# Strict Mode Example
+#
+# This solution uses official providers (exec, env) without declaring them in
+# bundle.plugins. It works fine in normal mode (auto-resolution fetches them)
+# but fails with --strict, enforcing explicit dependency declarations.
+#
+# Normal mode (succeeds -- providers are auto-resolved):
+#   scafctl run solution -f examples/plugins/strict-mode-solution.yaml
+#
+# Strict mode (fails -- undeclared providers are not auto-resolved):
+#   scafctl run solution -f examples/plugins/strict-mode-solution.yaml --strict
+#
+# Fix for strict mode: uncomment the bundle.plugins section below.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: strict-mode-demo
+  displayName: Strict Mode Demo
+  category: developer-tools
+  tags:
+    - plugin
+    - strict
+  version: 1.0.0
+  description: |
+    Demonstrates --strict mode for CI/CD reproducibility. Without explicit
+    bundle.plugins declarations, --strict prevents auto-resolution of official
+    providers and fails with an actionable error message.
+
+# Uncomment this section to make the solution pass with --strict:
+# bundle:
+#   plugins:
+#     - name: exec
+#       kind: provider
+#       version: "latest"
+
+spec:
+  resolvers:
+    greeting:
+      description: A greeting from exec
+      type: string
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: echo "Hello from strict mode demo"

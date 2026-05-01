@@ -24,9 +24,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
@@ -54,9 +56,9 @@ type runCommandConfig struct {
 }
 
 // makeRunEFunc creates a RunE function for run subcommands
-func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []string) error {
+func makeRunEFunc(cfg runCommandConfig, cmdName string) func(*cobra.Command, []string) error {
 	return func(cCmd *cobra.Command, args []string) error {
-		cfg.cliParams.EntryPointSettings.Path = filepath.Join(cfg.path, cmdUse)
+		cfg.cliParams.EntryPointSettings.Path = filepath.Join(cfg.path, cmdName)
 		ctx := settings.IntoContext(cCmd.Context(), cfg.cliParams)
 
 		lgr := logger.FromContext(cCmd.Context())
@@ -191,6 +193,11 @@ type sharedResolverOptions struct {
 	// resolving the latest catalog version. By default, pre-release versions
 	// are excluded.
 	PreRelease bool
+
+	// Strict disables auto-resolution of official providers. When true,
+	// missing official providers produce an error instructing the user to
+	// declare them explicitly in bundle.plugins.
+	Strict bool
 
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
@@ -603,6 +610,35 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		opts = append(opts, prepare.WithDiscoveryMode(o.discoveryMode))
 	}
 
+	// Wire plugin auto-fetch so that bundle.plugins declarations trigger
+	// automatic download from configured catalogs. Without this, solutions
+	// that declare plugins would silently skip plugin loading.
+	if fetcher, err := buildPluginFetcher(ctx); err == nil {
+		opts = append(opts, prepare.WithPluginFetcher(fetcher))
+	}
+
+	// Load lock file for reproducible plugin resolution. The lock file
+	// lives alongside the solution file (e.g., bundle.lock.yaml).
+	if o.File != "" && o.File != "-" {
+		lockPlugins := loadLockPlugins(o.File)
+		if len(lockPlugins) > 0 {
+			opts = append(opts, prepare.WithLockPlugins(lockPlugins))
+		}
+	}
+
+	// Pass auth registry so auth handler plugins can be registered
+	if authReg := auth.RegistryFromContext(ctx); authReg != nil {
+		opts = append(opts, prepare.WithAuthRegistry(authReg))
+	}
+
+	// Wire official provider auto-resolution from context.
+	if officialReg := official.RegistryFromContext(ctx); officialReg != nil {
+		opts = append(opts, prepare.WithOfficialProviders(officialReg))
+	}
+	if o.Strict {
+		opts = append(opts, prepare.WithStrict(true))
+	}
+
 	// Resolve binary name once for verbose output and user-facing messages.
 	binaryName := settings.CliBinaryName
 	if o.CliParams != nil && o.CliParams.BinaryName != "" {
@@ -764,6 +800,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from CWD)")
 	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
+	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
@@ -881,4 +918,63 @@ func loadMockedResolvers(ctx context.Context) (map[string]any, error) {
 	}
 
 	return mocks, nil
+}
+
+// buildPluginFetcher creates a plugin.Fetcher from the context's config and
+// auth registry. Delegates to prepare.BuildPluginFetcher.
+func buildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
+	return prepare.BuildPluginFetcher(ctx)
+}
+
+// loadLockPlugins loads plugin entries from a lock file adjacent to the
+// solution file. Returns nil if no lock file exists or it cannot be parsed.
+func loadLockPlugins(solutionPath string) []bundler.LockPlugin {
+	lockPath := filepath.Join(filepath.Dir(solutionPath), bundler.DefaultLockFileName)
+	lockFile, err := bundler.LoadLockFile(lockPath)
+	if err != nil || lockFile == nil {
+		return nil
+	}
+	return lockFile.Plugins
+}
+
+// autoResolveProviderByName checks the official provider registry for a
+// provider name and, if found, auto-fetches it via the plugin fetcher.
+// This enables `run provider <name>` to work for extracted official providers
+// without requiring --plugin-dir or bundle.plugins.
+func autoResolveProviderByName(ctx context.Context, name string, reg *provider.Registry) ([]*plugin.Client, error) {
+	officialReg := official.RegistryFromContext(ctx)
+	if officialReg == nil {
+		return nil, fmt.Errorf("official registry not available")
+	}
+
+	p, ok := officialReg.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("provider %q is not an official provider", name)
+	}
+
+	lgr := logger.FromContext(ctx)
+	if lgr != nil {
+		lgr.V(0).Info("auto-resolving official provider", "provider", name)
+	}
+
+	fetcher, err := buildPluginFetcher(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("building plugin fetcher: %w", err)
+	}
+
+	dep := p.ToPluginDependency()
+	results, err := fetcher.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetching provider %q: %w", name, err)
+	}
+
+	pluginCfg := &plugin.ProviderConfig{
+		BinaryName: settings.BinaryNameFromContext(ctx),
+	}
+	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, pluginCfg)
+	if err != nil {
+		return nil, fmt.Errorf("registering provider %q: %w", name, err)
+	}
+
+	return clients, nil
 }

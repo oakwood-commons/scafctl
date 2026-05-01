@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/clock"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ func TestDeviceCodeLogin_Success(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	idToken := makeIDToken(t, map[string]any{
 		"sub":   "12345",
@@ -57,11 +59,13 @@ func TestDeviceCodeLogin_Success(t *testing.T) {
 		IDToken:      idToken,
 	})
 
-	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP), WithClock(mockClock))
 	require.NoError(t, err)
 
 	var callbackCalled bool
 	var callbackCode, callbackURL string
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	result, err := handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
 		Flow:    auth.FlowDeviceCode,
@@ -96,6 +100,7 @@ func TestDeviceCodeLogin_CustomClientID(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	idToken := makeIDToken(t, map[string]any{
 		"sub":   "12345",
@@ -121,8 +126,11 @@ func TestDeviceCodeLogin_CustomClientID(t *testing.T) {
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
 		WithConfig(&Config{ClientID: "custom-id", ClientSecret: "custom-secret"}),
+		WithClock(mockClock),
 	)
 	require.NoError(t, err)
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	result, err := handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
 		Timeout: 10 * time.Second,
@@ -140,6 +148,7 @@ func TestDeviceCodeLogin_PollPending(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	idToken := makeIDToken(t, map[string]any{
 		"sub": "12345", "email": "user@example.com", "iss": "https://accounts.google.com",
@@ -165,8 +174,15 @@ func TestDeviceCodeLogin_PollPending(t *testing.T) {
 		AccessToken: "token", TokenType: "Bearer", ExpiresIn: 3600, IDToken: idToken,
 	})
 
-	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP), WithClock(mockClock))
 	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		mockClock.Add(5 * time.Second)
+		time.Sleep(10 * time.Millisecond)
+		mockClock.Add(5 * time.Second)
+	}()
 
 	result, err := handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
 		Timeout: 30 * time.Second,
@@ -182,6 +198,7 @@ func TestDeviceCodeLogin_AccessDenied(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	mockHTTP.AddResponse(200, DeviceCodeResponse{
 		DeviceCode:      "dc",
@@ -196,8 +213,10 @@ func TestDeviceCodeLogin_AccessDenied(t *testing.T) {
 		TokenErrorResponse
 	}{TokenErrorResponse: TokenErrorResponse{Error: "access_denied"}})
 
-	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP), WithClock(mockClock))
 	require.NoError(t, err)
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	_, err = handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
 		Timeout: 10 * time.Second,
@@ -210,6 +229,7 @@ func TestDeviceCodeLogin_ExpiredToken(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	mockHTTP.AddResponse(200, DeviceCodeResponse{
 		DeviceCode:      "dc",
@@ -224,8 +244,10 @@ func TestDeviceCodeLogin_ExpiredToken(t *testing.T) {
 		TokenErrorResponse
 	}{TokenErrorResponse: TokenErrorResponse{Error: "expired_token"}})
 
-	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP), WithClock(mockClock))
 	require.NoError(t, err)
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	_, err = handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
 		Timeout: 10 * time.Second,
@@ -258,6 +280,7 @@ func TestDeviceCodeLogin_DefaultScopes(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	idToken := makeIDToken(t, map[string]any{
 		"sub": "12345", "email": "user@example.com", "iss": "https://accounts.google.com",
@@ -271,8 +294,10 @@ func TestDeviceCodeLogin_DefaultScopes(t *testing.T) {
 		AccessToken: "token", TokenType: "Bearer", ExpiresIn: 3600, IDToken: idToken,
 	})
 
-	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP), WithClock(mockClock))
 	require.NoError(t, err)
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	_, err = handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
 		Timeout: 10 * time.Second,
@@ -314,6 +339,7 @@ func TestLogin_RoutesToDeviceCode(t *testing.T) {
 	t.Parallel()
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	idToken := makeIDToken(t, map[string]any{
 		"sub": "12345", "email": "user@example.com", "iss": "https://accounts.google.com",
@@ -327,8 +353,10 @@ func TestLogin_RoutesToDeviceCode(t *testing.T) {
 		AccessToken: "token", TokenType: "Bearer", ExpiresIn: 3600, IDToken: idToken,
 	})
 
-	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP), WithClock(mockClock))
 	require.NoError(t, err)
+
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
 
 	result, err := handler.Login(context.Background(), auth.LoginOptions{
 		Flow:    auth.FlowDeviceCode,

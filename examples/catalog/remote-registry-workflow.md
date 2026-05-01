@@ -77,7 +77,9 @@ jobs:
           sudo mv scafctl /usr/local/bin/
 
       - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: |
+          mkdir -p ~/.docker
+          echo '{"auths":{"ghcr.io":{"auth":"'"$(echo -n "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" | base64)"'"}}}' > ~/.docker/config.json
 
       - name: Build and Push
         run: |
@@ -112,7 +114,9 @@ jobs:
           sudo mv scafctl /usr/local/bin/
 
       - name: Login to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: |
+          mkdir -p ~/.docker
+          echo '{"auths":{"ghcr.io":{"auth":"'"$(echo -n "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" | base64)"'"}}}' > ~/.docker/config.json
 
       - name: Pull and Run Solution
         run: |

@@ -177,8 +177,8 @@ type PluginDependency struct {
 	// Kind is the plugin type.
 	Kind PluginKind `json:"kind" yaml:"kind" doc:"Plugin type" example:"provider"`
 
-	// Version is a semver constraint (e.g., "^1.5.0", ">=2.0.0", "3.1.2").
-	Version string `json:"version" yaml:"version" doc:"Semver version constraint" example:"^1.5.0" maxLength:"50" pattern:"^[~^>=<]*[0-9]" patternDescription:"semver constraint"`
+	// Version is a semver constraint (e.g., "^1.5.0", ">=2.0.0", "3.1.2") or "latest".
+	Version string `json:"version" yaml:"version" doc:"Semver version constraint or 'latest'" example:"^1.5.0" maxLength:"50" pattern:"^([~^>=<]*[0-9]|latest$)" patternDescription:"semver constraint or 'latest'"`
 
 	// Defaults provides default values for plugin inputs.
 	// These are shallow-merged beneath inline provider inputs (inline always wins).

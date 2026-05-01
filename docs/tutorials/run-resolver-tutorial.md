@@ -1168,14 +1168,22 @@ Check that all resolvers succeed without running actions:
 {{< tabs "run-resolver-tutorial-cmd-25" >}}
 {{% tab "Bash" %}}
 ```bash
+# Basic validation
 scafctl run resolver -f demo.yaml -o quiet
 echo "Exit code: $?"
+
+# Strict mode: fail if any provider is auto-resolved (enforces explicit bundle.plugins)
+scafctl run resolver -f demo.yaml -o quiet --strict
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
+# Basic validation
 scafctl run resolver -f demo.yaml -o quiet
 Write-Output "Exit code: $LASTEXITCODE"
+
+# Strict mode: fail if any provider is auto-resolved (enforces explicit bundle.plugins)
+scafctl run resolver -f demo.yaml -o quiet --strict
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1318,6 +1326,9 @@ scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
 # Snapshot with sensitive value redaction
 scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
 
+# Strict mode (fail if any provider requires auto-resolution)
+scafctl run resolver -f solution.yaml --strict
+
 # With parameters
 scafctl run resolver -f solution.yaml -r key=value
 
@@ -1358,6 +1369,9 @@ scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
 
 # Snapshot with sensitive value redaction
 scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
+
+# Strict mode (fail if any provider requires auto-resolution)
+scafctl run resolver -f solution.yaml --strict
 
 # With parameters
 scafctl run resolver -f solution.yaml -r key=value

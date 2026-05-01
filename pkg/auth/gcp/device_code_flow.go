@@ -174,14 +174,14 @@ func (h *Handler) pollGCPDeviceToken(ctx context.Context, deviceCode *DeviceCode
 		interval = defaultDeviceCodePollInterval
 	}
 
-	ticker := time.NewTicker(interval)
+	ticker := h.clock.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("authentication timed out or cancelled: %w", auth.ErrTimeout)
-		case <-ticker.C:
+		case <-ticker.C():
 			data := url.Values{}
 			data.Set("client_id", clientID)
 			if clientSecret != "" {

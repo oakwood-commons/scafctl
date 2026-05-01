@@ -69,6 +69,7 @@ __debug*
 issues/
 # Bubble Tea debug logs
 tea_debug.log
+output.txt
 # Embedded examples (populated at build time)
 pkg/examples/files/*
 !pkg/examples/files/.gitkeep

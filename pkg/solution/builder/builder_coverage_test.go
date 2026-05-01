@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,4 +183,160 @@ func BenchmarkBuildBundle_DryRun(b *testing.B) {
 	for b.Loop() {
 		_, _ = BuildBundle(context.Background(), sol, []byte("test"), tmpDir, opts)
 	}
+}
+
+// ── autoInjectOfficialPlugins tests ──────────────────────────────────────────
+
+func TestAutoInjectOfficialPlugins_InjectsMissingProviders(t *testing.T) {
+	t.Parallel()
+
+	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"myenv": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+				},
+				"mydir": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "directory"}},
+					},
+				},
+			},
+		},
+	}
+
+	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
+
+	assert.Len(t, injected, 2)
+	assert.Contains(t, injected, "env")
+	assert.Contains(t, injected, "directory")
+	assert.Len(t, sol.Bundle.Plugins, 2)
+}
+
+func TestAutoInjectOfficialPlugins_SkipsAlreadyDeclared(t *testing.T) {
+	t.Parallel()
+
+	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "env", Kind: solution.PluginKindProvider, Version: ">=1.0.0"},
+			},
+		},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"myenv": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+				},
+			},
+		},
+	}
+
+	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
+
+	assert.Empty(t, injected)
+	assert.Len(t, sol.Bundle.Plugins, 1, "existing declaration should be untouched")
+}
+
+func TestAutoInjectOfficialPlugins_SkipsNonOfficialProviders(t *testing.T) {
+	t.Parallel()
+
+	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"custom": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "my-custom-provider"}},
+					},
+				},
+			},
+		},
+	}
+
+	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
+
+	assert.Empty(t, injected)
+	assert.Empty(t, sol.Bundle.Plugins)
+}
+
+func TestAutoInjectOfficialPlugins_StrictMode(t *testing.T) {
+	t.Parallel()
+
+	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"myenv": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+				},
+			},
+		},
+	}
+
+	injected := autoInjectOfficialPlugins(sol, officialReg, true, logr.Discard())
+
+	assert.Len(t, injected, 1)
+	assert.Contains(t, injected, "env")
+	assert.Empty(t, sol.Bundle.Plugins, "strict mode should not mutate solution")
+}
+
+func TestAutoInjectOfficialPlugins_TransformPhase(t *testing.T) {
+	t.Parallel()
+
+	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"transformed": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+					Transform: &resolver.TransformPhase{
+						With: []resolver.ProviderTransform{{Provider: "exec"}},
+					},
+				},
+			},
+		},
+	}
+
+	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
+
+	assert.Len(t, injected, 2)
+	assert.Contains(t, injected, "env")
+	assert.Contains(t, injected, "exec")
+}
+
+func TestAutoInjectOfficialPlugins_DeduplicatesProviders(t *testing.T) {
+	t.Parallel()
+
+	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"first": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+				},
+				"second": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+				},
+			},
+		},
+	}
+
+	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
+
+	assert.Len(t, injected, 1, "same provider used twice should only be injected once")
+	assert.Len(t, sol.Bundle.Plugins, 1)
 }

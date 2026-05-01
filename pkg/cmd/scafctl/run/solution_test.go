@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testRegistry creates a registry with static provider for CLI tests
+// testRegistry creates a registry with built-in static provider for CLI tests
 func testRegistry() *provider.Registry {
 	reg := provider.NewRegistry()
 	_ = reg.Register(staticprovider.New())

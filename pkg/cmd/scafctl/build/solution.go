@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
@@ -517,13 +518,14 @@ func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 	}
 
 	br, err := builder.BuildBundle(ctx, sol, solutionContent, bundleRoot, builder.BuildBundleOptions{
-		BundleMaxSize:   opts.BundleMaxSize,
-		NoVendor:        opts.NoVendor,
-		NoCache:         opts.NoCache,
-		DryRun:          opts.DryRun,
-		Dedupe:          opts.Dedupe,
-		DedupeThreshold: opts.DedupeThreshold,
-		Logger:          *lgr,
+		BundleMaxSize:     opts.BundleMaxSize,
+		NoVendor:          opts.NoVendor,
+		NoCache:           opts.NoCache,
+		DryRun:            opts.DryRun,
+		Dedupe:            opts.Dedupe,
+		DedupeThreshold:   opts.DedupeThreshold,
+		Logger:            *lgr,
+		OfficialProviders: official.RegistryFromContext(ctx),
 	})
 	if err != nil {
 		w.Errorf("%v", err)

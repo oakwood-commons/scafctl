@@ -23,10 +23,6 @@ func TestDefaultRegistry(t *testing.T) {
 		// Verify all expected providers are registered
 		expectedProviders := ProviderNames()
 		for _, name := range expectedProviders {
-			// Secret provider may not be available if keyring/env var is missing
-			if name == "secret" && !SecretStoreAvailable() {
-				continue
-			}
 			p, found := reg.Get(name)
 			assert.True(t, found, "provider %q should be registered", name)
 			assert.NotNil(t, p, "provider %q should not be nil", name)
@@ -74,30 +70,20 @@ func TestProviderNames(t *testing.T) {
 	names := ProviderNames()
 
 	// Should have all built-in providers
-	expectedCount := 19 // http, env, cel, file, directory, validation, exec, git, debug, sleep, parameter, static, go-template, secret, identity, hcl, github, metadata, message
+	expectedCount := 9 // http, cel, file, validation, debug, go-template, message, static, parameter
 	assert.Len(t, names, expectedCount, "should have %d built-in providers", expectedCount)
 
 	// Verify expected names are present
 	expectedNames := []string{
 		"http",
-		"env",
 		"cel",
 		"file",
-		"directory",
 		"validation",
-		"exec",
-		"git",
 		"debug",
-		"sleep",
-		"parameter",
-		"static",
 		"go-template",
-		"secret",
-		"identity",
-		"hcl",
-		"github",
-		"metadata",
 		"message",
+		"static",
+		"parameter",
 	}
 
 	for _, expected := range expectedNames {
@@ -127,14 +113,6 @@ func TestDefaultRegistry_ProviderFunctionality(t *testing.T) {
 		assert.Equal(t, "cel", desc.Name)
 	})
 
-	t.Run("parameter provider is functional", func(t *testing.T) {
-		p, found := reg.Get("parameter")
-		require.True(t, found)
-
-		desc := p.Descriptor()
-		assert.Equal(t, "parameter", desc.Name)
-	})
-
 	t.Run("validation provider is functional", func(t *testing.T) {
 		p, found := reg.Get("validation")
 		require.True(t, found)
@@ -151,41 +129,24 @@ func TestAllProvidersRegistered(t *testing.T) {
 	reg, err := DefaultRegistry(ctx)
 	require.NoError(t, err)
 
-	secretAvailable := SecretStoreAvailable()
-
 	// All expected built-in providers
 	expectedProviders := []struct {
 		name        string
 		description string // partial match
 	}{
 		{"http", "HTTP"},
-		{"env", "environment"},
 		{"cel", "CEL"},
 		{"file", "file"},
-		{"directory", "director"},
 		{"validation", "validat"},
-		{"exec", "execut"},
-		{"git", "git"},
 		{"debug", "debug"},
-		{"sleep", "sleep"},
-		{"parameter", "parameter"},
-		{"static", "static"},
 		{"go-template", "template"},
-		{"secret", "secret"},
-		{"identity", "identity"},
-		{"hcl", "HCL"},
-		{"metadata", "metadata"},
-		{"github", "GitHub"},
 		{"message", "message"},
+		{"static", "static"},
+		{"parameter", "parameter"},
 	}
 
 	for _, expected := range expectedProviders {
 		t.Run(expected.name, func(t *testing.T) {
-			// Secret provider may not be available if keyring/env var is missing
-			if expected.name == "secret" && !secretAvailable {
-				t.Skip("secret store not available")
-			}
-
 			p, found := reg.Get(expected.name)
 			require.True(t, found, "provider %q must be registered", expected.name)
 			require.NotNil(t, p, "provider %q must not be nil", expected.name)
@@ -198,11 +159,6 @@ func TestAllProvidersRegistered(t *testing.T) {
 		})
 	}
 
-	// Verify count matches expected (accounting for missing secret provider)
-	expectedCount := len(expectedProviders)
-	if !secretAvailable {
-		expectedCount--
-	}
 	registeredCount := len(reg.ListProviders())
-	assert.Equal(t, expectedCount, registeredCount, "registered provider count must match expected")
+	assert.Equal(t, len(expectedProviders), registeredCount, "registered provider count must match expected")
 }

@@ -21,7 +21,7 @@ scafctl is a CLI tool that lets you declaratively gather data from any source (A
 - **Solution** — A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
 - **Resolver** — A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
 - **Action** — A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
-- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 16 built-in providers and supports external plugins.
+- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 10 built-in providers and 10 official plugin providers that auto-resolve from OCI catalogs.
 
 ## Installation
 
@@ -88,7 +88,7 @@ Zsh users must have `compinit` loaded before the completion file is sourced.
 - **Resolvers**: Gather and transform configuration data from multiple sources
 - **Actions**: Execute side-effect operations as a declarative action graph
 - **CEL Integration**: Use Common Expression Language for dynamic evaluation
-- **Providers**: 16 built-in providers (HTTP, exec, file, directory, git, CEL, and more)
+- **Providers**: 10 built-in + 10 official plugin providers (HTTP, exec, file, directory, git, CEL, and more)
 - **Catalog**: Publish, version, and share reusable solutions via OCI registries
 - **Secrets**: Encrypted secrets management with OS keyring integration
 - **Plugins**: Extend scafctl with custom providers via a plugin system

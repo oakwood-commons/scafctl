@@ -46,7 +46,7 @@ func TestHandleScaffoldSolution(t *testing.T) {
 			"name":        "full-solution",
 			"description": "Full featured solution",
 			"features":    []any{"parameters", "actions", "transforms", "validation", "tests", "composition"},
-			"providers":   []any{"http", "exec"},
+			"providers":   []any{"http", "message"},
 		}
 
 		result, err := srv.handleScaffoldSolution(context.Background(), request)

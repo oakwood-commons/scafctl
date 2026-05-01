@@ -24,7 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
@@ -39,7 +39,7 @@ func setupTestServer(t testing.TB) *httptest.Server {
 	}
 
 	reg := provider.NewRegistry()
-	require.NoError(t, reg.Register(staticprovider.New()))
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
 
 	srv, err := api.NewServer(
@@ -176,14 +176,14 @@ func TestAPI_ProvidersEndpoint_Filter(t *testing.T) {
 	defer ts.Close()
 
 	obj := e.GET("/v1/providers").
-		WithQuery("filter", `item.name=="static"`).
+		WithQuery("filter", `item.name=="file"`).
 		Expect().
 		Status(http.StatusOK).
 		JSON().Object()
 
 	items := obj.Value("items").Array()
 	items.Length().IsEqual(1)
-	items.Value(0).Object().Value("name").IsEqual("static")
+	items.Value(0).Object().Value("name").IsEqual("file")
 }
 
 // TestAPI_AdminInfoEndpoint verifies admin info returns server metadata.

@@ -64,6 +64,12 @@ type HostServiceDeps struct {
 	// Plugins call this for authenticated HTTP requests and token refresh on 401.
 	// May be nil if auth is unavailable.
 	AuthTokenFunc func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) `json:"-" yaml:"-" doc:"Auth token callback (not serialized)."`
+	// AuthGroupsFunc retrieves group memberships for the authenticated user.
+	// Only handlers that implement group queries (e.g. Entra) will return results.
+	// May be nil if group queries are unavailable.
+	// TODO: Wire this callback in production code (e.g. via RootOptions or plugin SDK)
+	// once an auth handler with group query support is available.
+	AuthGroupsFunc func(ctx context.Context, handler string) ([]string, error) `json:"-" yaml:"-" doc:"Auth groups callback (not serialized)."`
 }
 
 // isSecretAllowed checks whether the given secret name is within the allowed
@@ -332,6 +338,32 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 	return resp, nil
 }
 
+// GetAuthGroups implements HostService.GetAuthGroups
+func (h *HostServiceServer) GetAuthGroups(ctx context.Context, req *proto.GetAuthGroupsRequest) (*proto.GetAuthGroupsResponse, error) {
+	if h.Deps.AuthGroupsFunc == nil {
+		return &proto.GetAuthGroupsResponse{
+			Error: "auth groups not available",
+		}, nil
+	}
+
+	if !h.Deps.isAuthHandlerAllowed(req.HandlerName) {
+		return &proto.GetAuthGroupsResponse{
+			Error: fmt.Sprintf("access denied: auth handler %q is not in the allowed set", req.HandlerName),
+		}, nil
+	}
+
+	groups, err := h.Deps.AuthGroupsFunc(ctx, req.HandlerName)
+	if err != nil {
+		return &proto.GetAuthGroupsResponse{
+			Error: fmt.Sprintf("get auth groups: %v", err),
+		}, nil
+	}
+
+	return &proto.GetAuthGroupsResponse{
+		Groups: groups,
+	}, nil
+}
+
 // HostServiceClient wraps the HostService gRPC client (used by plugins).
 // Plugin code uses this to call back into the host process.
 type HostServiceClient struct {
@@ -430,4 +462,19 @@ func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope str
 		return nil, fmt.Errorf("host GetAuthToken: %s", resp.Error)
 	}
 	return resp, nil
+}
+
+// GetAuthGroups retrieves group memberships for the authenticated user from
+// the host's auth registry.
+func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) ([]string, error) {
+	resp, err := c.client.GetAuthGroups(ctx, &proto.GetAuthGroupsRequest{
+		HandlerName: handler,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("host GetAuthGroups: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("host GetAuthGroups: %s", resp.Error)
+	}
+	return resp.Groups, nil
 }

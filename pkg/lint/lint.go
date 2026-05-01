@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	resolverRefs "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
@@ -70,6 +71,13 @@ type Result struct {
 // Solution validates a solution and returns structured lint findings.
 // This function is reusable by both CLI and MCP.
 func Solution(sol *solution.Solution, filePath string, registry *provider.Registry) *Result {
+	if registry == nil {
+		registry = provider.NewRegistry()
+	}
+	// Clone the registry to avoid mutating the shared singleton when
+	// marking bundle.plugins and official providers as known.
+	registry = registryWithBundlePlugins(registry, sol)
+
 	result := &Result{
 		File:     filePath,
 		Findings: make([]*Finding, 0),
@@ -191,7 +199,7 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				stepLocation := fmt.Sprintf("%s.resolve.with[%d]", location, i)
 
 				if step.Provider != "" {
-					if _, found := registry.Get(step.Provider); !found {
+					if !registry.Has(step.Provider) {
 						result.addFinding(SeverityError, "provider", stepLocation,
 							fmt.Sprintf("provider '%s' not found", step.Provider),
 							"Check spelling or register the provider",
@@ -388,13 +396,41 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Reg
 	}
 }
 
+// registryWithBundlePlugins creates a shallow clone of the registry and marks
+// provider names declared in sol.Bundle.Plugins as known so the
+// missing-provider lint rule does not fire for plugin-managed providers.
+// The clone ensures the shared singleton registry is not mutated.
+func registryWithBundlePlugins(registry *provider.Registry, sol *solution.Solution) *provider.Registry {
+	clone := registry.ShallowClone()
+	for _, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindProvider && p.Name != "" {
+			clone.MarkKnown(p.Name)
+		}
+	}
+	// Also mark all official providers as known - auto-resolution fetches
+	// them at runtime without requiring explicit bundle.plugins declarations.
+	for _, entry := range official.DefaultProviders() {
+		clone.MarkKnown(entry.Name)
+	}
+	return clone
+}
+
 // registryAdapter adapts provider.Registry to action.RegistryInterface
 type registryAdapter struct {
 	registry *provider.Registry
 }
 
 func (r *registryAdapter) Get(name string) (provider.Provider, bool) {
-	return r.registry.Get(name)
+	p, ok := r.registry.Get(name)
+	if ok {
+		return p, true
+	}
+	// For providers known only by name (bundle.plugins), report as found
+	// so workflow validation doesn't emit a duplicate missing-provider error.
+	if r.registry.Has(name) {
+		return nil, true
+	}
+	return nil, false
 }
 
 func (r *registryAdapter) Has(name string) bool {
@@ -410,7 +446,7 @@ func lintAction(act *action.Action, location string, validDeps map[string]bool, 
 	}
 
 	if act.Provider != "" {
-		if _, found := registry.Get(act.Provider); !found {
+		if !registry.Has(act.Provider) {
 			result.addFinding(SeverityError, "provider", location,
 				fmt.Sprintf("provider '%s' not found", act.Provider),
 				"Check spelling or register the provider",
