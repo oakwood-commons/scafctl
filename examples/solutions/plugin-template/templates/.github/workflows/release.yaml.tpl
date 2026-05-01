@@ -63,9 +63,7 @@ jobs:
           rm -rf "${TMP_DIR}"
 
       - name: Login to GitHub Container Registry
-        run: |
-          mkdir -p ~/.docker
-          echo '{"auths":{"ghcr.io":{"auth":"'"$(echo -n "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" | base64)"'"}}}' > ~/.docker/config.json
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Download release archives
         env:
@@ -115,6 +113,6 @@ jobs:
 
           scafctl catalog push \
             "<% .provider_name %>@${VERSION}" \
-            --catalog "ghcr.io/<% index (splitList "/" .repo_path) 0 %>" \
+            --catalog "ghcr.io/<% .registry_owner %>" \
             --kind "<% .plugin_type %>" \
             --force
