@@ -380,7 +380,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 
 	// Resolve capability
-	capability, err := o.resolveCapability(desc)
+	capability, err := o.resolveCapability(desc, inputs)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -471,7 +471,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 // resolveCapability determines which capability to use for execution.
 // If --capability is specified, validates and uses it.
 // Otherwise, defaults to the first declared capability.
-func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor) (provider.Capability, error) {
+func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor, inputs map[string]any) (provider.Capability, error) {
 	if o.Capability != "" {
 		requested := provider.Capability(o.Capability)
 		if !requested.IsValid() {
@@ -495,6 +495,17 @@ func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor) (provider
 	// Default to first capability
 	if len(desc.Capabilities) == 0 {
 		return "", fmt.Errorf("provider %q declares no capabilities", desc.Name)
+	}
+
+	// Auto-escalate to action capability when the operation is a write operation.
+	// This lets `run provider` execute write operations (e.g., create_issue)
+	// without requiring an explicit --capability=action flag.
+	if operation, _ := inputs["operation"].(string); operation != "" && desc.IsWriteOperation(operation) {
+		for _, c := range desc.Capabilities {
+			if c == provider.CapabilityAction {
+				return provider.CapabilityAction, nil
+			}
+		}
 	}
 
 	return desc.Capabilities[0], nil

@@ -67,8 +67,12 @@ func (h *Handler) deviceCodeLogin(ctx context.Context, opts auth.LoginOptions) (
 	defer cancel()
 
 	// Step 1: Request device code from Google
+	isDefaultClient := clientID == DefaultADCClientID
 	deviceCode, err := h.requestGCPDeviceCode(ctx, clientID, scopes)
 	if err != nil {
+		if isDefaultClient {
+			return nil, fmt.Errorf("device code request failed with default ADC client (configure auth.gcp.client_id and auth.gcp.client_secret for device code support): %w", err)
+		}
 		return nil, fmt.Errorf("device code request failed: %w", err)
 	}
 

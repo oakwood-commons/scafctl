@@ -6,6 +6,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -84,23 +85,140 @@ func parseValidationErrors(err error) []Violation {
 }
 
 // parseSchemaErrorLine attempts to extract a path and message from a validation error line.
-// The google/jsonschema-go library formats errors with path info in various ways.
+// The google/jsonschema-go library formats errors as chains of "validating X:" prefixes
+// followed by the actual error message. This function collapses that chain into a dot-path.
 func parseSchemaErrorLine(line string) (path, message string) {
-	// Try to extract path from common patterns like:
-	//   "/path/to/field: error message"
-	//   "at /path/to/field: error message"
 	line = strings.TrimPrefix(line, "- ")
 	line = strings.TrimPrefix(line, "at ")
+
+	// Handle "validating X: validating Y: ... actual message" chains
+	if strings.HasPrefix(line, "validating ") {
+		return parseValidatingChain(line)
+	}
 
 	if idx := strings.Index(line, ": "); idx > 0 {
 		candidate := line[:idx]
 		// JSON pointer paths start with /
 		if strings.HasPrefix(candidate, "/") {
-			return jsonPointerToDotPath(candidate), line[idx+2:]
+			return jsonPointerToDotPath(candidate), cleanSchemaMessage(line[idx+2:])
 		}
 	}
 
-	return "", line
+	return "", cleanSchemaMessage(line)
+}
+
+// validatingPrefix is the prefix used by google/jsonschema-go in error chains.
+const validatingPrefix = "validating "
+
+// parseValidatingChain collapses a "validating X: validating Y: ... message" chain
+// into a dot-path and final message. It skips schema URLs, $defs type references,
+// and structural JSON pointer segments (properties, additionalProperties, items).
+func parseValidatingChain(line string) (string, string) {
+	var segments []string
+	remaining := line
+
+	for strings.HasPrefix(remaining, validatingPrefix) {
+		remaining = remaining[len(validatingPrefix):]
+
+		colonIdx := strings.Index(remaining, ": ")
+		if colonIdx < 0 {
+			// No more colons — the rest is the message
+			break
+		}
+
+		segment := remaining[:colonIdx]
+		remaining = remaining[colonIdx+2:]
+
+		// Skip schema URLs
+		if strings.HasPrefix(segment, "http://") || strings.HasPrefix(segment, "https://") {
+			continue
+		}
+
+		// Handle JSON pointer segments (e.g., /properties/spec, /$defs/SolutionSpec/properties/resolvers)
+		if strings.HasPrefix(segment, "/") {
+			parts := strings.Split(strings.TrimPrefix(segment, "/"), "/")
+			// Extract only property-name segments, skipping structural parts
+			skipNext := false
+			for _, part := range parts {
+				if skipNext {
+					// Skip the type name after $defs
+					skipNext = false
+					continue
+				}
+				switch part {
+				case "$defs":
+					skipNext = true // next segment is a type name
+				case "properties", "additionalProperties", "items":
+					// structural — skip
+				default:
+					segments = appendDedupe(segments, part)
+				}
+			}
+			continue
+		}
+
+		// Skip CamelCase type names (schema type references like SolutionSpec, ResolverResolver)
+		if len(segment) > 0 && segment[0] >= 'A' && segment[0] <= 'Z' {
+			continue
+		}
+
+		// Keep lowercase property names as path segments
+		if segment != "" {
+			segments = appendDedupe(segments, segment)
+		}
+	}
+
+	dotPath := strings.Join(segments, ".")
+	message := cleanSchemaMessage(remaining)
+
+	return dotPath, message
+}
+
+// appendDedupe appends s to the slice only if it differs from the last element.
+func appendDedupe(slice []string, s string) []string {
+	if len(slice) > 0 && slice[len(slice)-1] == s {
+		return slice
+	}
+	return append(slice, s)
+}
+
+// defsPattern matches JSON schema $defs references like:
+//
+//	$defs/SolutionSpec/properties/resolvers/additionalProperties
+//	#/$defs/Resolver/properties/resolve
+var defsPattern = regexp.MustCompile(`#?/?\$defs/[A-Za-z0-9_]+(?:/[A-Za-z0-9_\[\]]+)*`)
+
+// additionalPropsPattern matches "unexpected additional properties [\"key1\", \"key2\"]"
+// and rewrites it to the cleaner "unknown key \"key1\", \"key2\"" format.
+var additionalPropsPattern = regexp.MustCompile(`unexpected additional properties \[([^\]]+)\]`)
+
+// cleanSchemaMessage strips verbose $defs/... references and rewrites common
+// schema validation phrases to produce cleaner, user-facing output.
+func cleanSchemaMessage(msg string) string {
+	cleaned := defsPattern.ReplaceAllStringFunc(msg, func(match string) string {
+		// Extract the last meaningful segment as a simplified reference
+		parts := strings.Split(match, "/")
+		// Find last non-structural segment (skip "properties", "additionalProperties", "items", "$defs")
+		for i := len(parts) - 1; i >= 0; i-- {
+			p := parts[i]
+			switch p {
+			case "properties", "additionalProperties", "items", "$defs", "#":
+				continue
+			default:
+				return p
+			}
+		}
+		return match
+	})
+	// Collapse multiple spaces that may result from replacements
+	for strings.Contains(cleaned, "  ") {
+		cleaned = strings.ReplaceAll(cleaned, "  ", " ")
+	}
+
+	// Rewrite "unexpected additional properties" to "unknown key"
+	cleaned = additionalPropsPattern.ReplaceAllString(cleaned, "unknown key $1")
+
+	return strings.TrimSpace(cleaned)
 }
 
 // jsonPointerToDotPath converts a JSON pointer (e.g., "/spec/resolvers/env") to

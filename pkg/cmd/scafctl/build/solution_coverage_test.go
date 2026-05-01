@@ -60,6 +60,7 @@ func TestCommandBuildSolution_Flags(t *testing.T) {
 		{"skip-tests", "false"},
 		{"ignore-preflight", "false"},
 		{"allow-dev-version", "false"},
+		{"base-dir", ""},
 	}
 
 	for _, tc := range flagTests {
@@ -607,6 +608,42 @@ spec: {}
 	require.NoError(t, err)
 	assert.Contains(t, outBuf.String(), "Dry run:")
 	assert.Contains(t, outBuf.String(), "stdin-solution@1.0.0")
+}
+
+func TestRunBuildSolution_BaseDirOverridesBundleRoot(t *testing.T) {
+	t.Parallel()
+
+	// Create solution file in one directory and a separate base-dir
+	solDir := t.TempDir()
+	baseDir := t.TempDir()
+	solFile := filepath.Join(solDir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: basedir-test
+  version: 1.0.0
+spec: {}
+`
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          solFile,
+		BaseDir:       baseDir,
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		DryRun:        true,
+		BundleMaxSize: "50MB",
+	}
+
+	err := runBuildSolution(ctx, opts)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Dry run:")
+	assert.Contains(t, buf.String(), "basedir-test@1.0.0")
 }
 
 func TestRunBuildSolution_StdinImpliesNoBundle(t *testing.T) {
