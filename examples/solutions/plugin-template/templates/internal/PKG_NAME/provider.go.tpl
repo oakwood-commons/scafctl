@@ -42,7 +42,7 @@ func (p *Plugin) GetProviderDescriptor(_ context.Context, providerName string) (
 		Name:        ProviderName,
 		DisplayName: "<% .display_name %>",
 		Description: "<% .description %>",
-		APIVersion:  "scafctl.io/v1",
+		APIVersion:  "v1",
 		Version:     semver.MustParse(Version),
 		Category:    "custom",
 		Capabilities: []sdkprovider.Capability{
