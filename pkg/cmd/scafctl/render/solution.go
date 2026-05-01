@@ -22,11 +22,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -292,6 +294,17 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 
 	// Validate the workflow
 	reg := o.getRegistry(ctx)
+
+	// Auto-resolve official providers so render can execute solutions
+	// that reference extracted providers (e.g., static, exec).
+	if clients := o.autoResolveOfficialProviders(ctx, sol, reg); len(clients) > 0 {
+		defer func() {
+			for _, c := range clients {
+				c.Kill()
+			}
+		}()
+	}
+
 	adapter := &solutionRegistryAdapter{Registry: reg}
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
@@ -369,6 +382,16 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 
 	// Validate the workflow
 	reg := o.getRegistry(ctx)
+
+	// Auto-resolve official providers for the action graph visualization.
+	if clients := o.autoResolveOfficialProviders(ctx, sol, reg); len(clients) > 0 {
+		defer func() {
+			for _, c := range clients {
+				c.Kill()
+			}
+		}()
+	}
+
 	adapter := &solutionRegistryAdapter{Registry: reg}
 	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
@@ -594,6 +617,21 @@ func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
 		return o.registry
 	}
 	return solrender.GetDefaultRegistry(ctx)
+}
+
+// autoResolveOfficialProviders fetches any official providers referenced by
+// the solution that are missing from the registry. Returns plugin clients
+// that should be closed when done.
+func (o *SolutionOptions) autoResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry) []*plugin.Client {
+	clients, err := prepare.ResolveOfficialProviders(ctx, sol, reg)
+	if err != nil {
+		lgr := logger.FromContext(ctx)
+		if lgr != nil {
+			lgr.V(1).Info("auto-resolution failed for render", "error", err)
+		}
+		return nil
+	}
+	return clients
 }
 
 // writeOutput writes the rendered output to stdout or file

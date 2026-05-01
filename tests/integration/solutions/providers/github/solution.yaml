@@ -340,8 +340,10 @@ spec:
       _base:
         description: Base template for GitHub provider tests
         command: [run, resolver]
-        args: ["-o", "json"]
+        args: ["-o", "json", "--config", "config.yaml"]
         tags: [provider, github]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
         assertions:
           - expression: __exitCode == 0
 

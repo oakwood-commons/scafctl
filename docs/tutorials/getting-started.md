@@ -201,18 +201,20 @@ Actions perform work. They:
 
 Providers are the execution primitives. Common ones:
 
-| Provider | Use Case |
-|----------|----------|
-| `static` | Return constant values |
-| `parameter` | CLI parameters (`-r key=value`) |
-| `env` | Environment variables |
-| `file` | Read/write files |
-| `http` | API calls |
-| `exec` | Shell commands |
-| `cel` | Expression evaluation |
-| `hcl` | Parse Terraform/OpenTofu HCL files |
-| `validation` | Data validation |
-| `secret` | Encrypted secrets |
+| Provider | Type | Use Case |
+|----------|------|----------|
+| `static` | built-in | Return constant values |
+| `parameter` | built-in | CLI parameters (`-r key=value`) |
+| `env` | official | Environment variables |
+| `file` | built-in | Read/write files |
+| `http` | built-in | API calls |
+| `exec` | official | Shell commands |
+| `cel` | built-in | Expression evaluation |
+| `hcl` | official | Parse Terraform/OpenTofu HCL files |
+| `validation` | built-in | Data validation |
+| `secret` | official | Encrypted secrets |
+
+Built-in providers are always available. Official providers are auto-fetched from the catalog when first used -- no configuration needed.
 
 See [Provider Reference](provider-reference.md) for full documentation.
 

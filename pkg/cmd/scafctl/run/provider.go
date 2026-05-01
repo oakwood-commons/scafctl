@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/detail"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -232,7 +233,22 @@ func setProviderHelpFunc(cmd *cobra.Command) {
 
 		prov, ok := reg.Get(providerName)
 		if !ok {
-			return
+			// Try auto-resolving official providers for dynamic help.
+			// The help function may run before PersistentPreRunE sets up context,
+			// so ensure official registry is available.
+			helpCtx := c.Context()
+			if official.RegistryFromContext(helpCtx) == nil {
+				helpCtx = official.WithRegistry(helpCtx, official.NewRegistry())
+			}
+			clients, resolveErr := autoResolveProviderByName(helpCtx, providerName, reg)
+			if resolveErr != nil {
+				return
+			}
+			defer plugin.KillAll(clients)
+			prov, ok = reg.Get(providerName)
+			if !ok {
+				return
+			}
 		}
 
 		helpText := detail.FormatProviderInputHelp(prov.Descriptor())
@@ -332,6 +348,13 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 
 	// Look up the provider
 	prov, ok := reg.Get(o.ProviderName)
+	if !ok {
+		// Auto-resolve official providers on miss.
+		if clients, resolveErr := autoResolveProviderByName(ctx, o.ProviderName, reg); resolveErr == nil {
+			defer plugin.KillAll(clients)
+			prov, ok = reg.Get(o.ProviderName)
+		}
+	}
 	if !ok {
 		err := fmt.Errorf("provider %q not found (use '%s get providers' to list available providers)", o.ProviderName, o.BinaryName)
 		w.Errorf("%v", err)

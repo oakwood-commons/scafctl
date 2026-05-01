@@ -100,9 +100,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 	solFile := filepath.Join(tmpDir, "solution.yaml")
 	require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
@@ -147,9 +147,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "test.txt"
+              expression: "'test.txt'"
   workflow:
     actions:
       write-file:

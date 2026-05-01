@@ -46,7 +46,7 @@ spec:
         assertions:
           - expression: __output.data.operation == "status"
           - expression: __output.data.authenticated == false
-          - expression: has(__output.data.identityType)
+          - expression: has(__output.data.handler)
 
       claims-dry-run:
         description: Verify dry-run claims output shape

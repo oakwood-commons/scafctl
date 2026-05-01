@@ -9,6 +9,10 @@ metadata:
     Verifies that relative paths resolve against the --cwd directory
     instead of the process CWD.
 
+bundle:
+  include:
+    - "**/*"
+
 spec:
   resolvers:
     greeting:

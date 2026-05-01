@@ -352,3 +352,87 @@ func TestFetcher_FetchPlugins_VersionConstraintMismatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "strict-plugin")
 }
+
+func TestFetcher_FetchPlugins_NoCache_BypassesCachedBinary(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("my-plugin", "1.0.0")
+	cat.addArtifact(ref, []byte("fresh-binary"))
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache with stale data
+	_, err := cache.Put("my-plugin", "1.0.0", "linux/amd64", []byte("stale-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		NoCache:  true,
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	lock := []bundler.LockPlugin{
+		{Name: "my-plugin", Kind: "provider", Version: "1.0.0", Digest: binaryDigest([]byte("fresh-binary")), ResolvedFrom: "test"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, lock)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].FromCache, "expected fresh fetch, not cache hit")
+	assert.Equal(t, "1.0.0", results[0].Version)
+}
+
+func TestFetcher_FetchPlugins_NoCache_BypassesLatestCached(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("unlocked-plugin", "2.0.0")
+	cat.addArtifact(ref, []byte("catalog-binary"))
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache — without NoCache this would be used
+	_, err := cache.Put("unlocked-plugin", "1.5.0", "linux/amd64", []byte("cached-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		NoCache:  true,
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "unlocked-plugin", Kind: solution.PluginKindProvider, Version: "2.0.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].FromCache, "expected fresh fetch when --no-cache is set")
+	assert.Equal(t, "2.0.0", results[0].Version)
+}
+
+func TestNewFetcher_BinaryNameDefault(t *testing.T) {
+	t.Parallel()
+	f := NewFetcher(FetcherConfig{
+		Catalog: &mockCatalog{name: "test"},
+		Logger:  logr.Discard(),
+	})
+	assert.Equal(t, "scafctl", f.binaryName)
+}
+
+func TestNewFetcher_BinaryNameCustom(t *testing.T) {
+	t.Parallel()
+	f := NewFetcher(FetcherConfig{
+		Catalog:    &mockCatalog{name: "test"},
+		BinaryName: "mycli",
+		Logger:     logr.Discard(),
+	})
+	assert.Equal(t, "mycli", f.binaryName)
+}

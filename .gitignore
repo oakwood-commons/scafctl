@@ -69,3 +69,4 @@ __debug*
 issues/
 # Bubble Tea debug logs
 tea_debug.log
+output.txt

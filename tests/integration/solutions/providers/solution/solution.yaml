@@ -13,6 +13,7 @@ spec:
   resolvers:
     childAll:
       description: Run all resolvers in child solution
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -24,6 +25,7 @@ spec:
 
     childSelectResolver:
       description: Run only the greeting resolver in child
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -34,6 +36,7 @@ spec:
 
     childWithInputs:
       description: Pass inputs and verify child echoes them
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -47,6 +50,7 @@ spec:
 
     childComputed:
       description: Verify child computes transformed value
+      timeout: 90s
       resolve:
         with:
           - provider: solution

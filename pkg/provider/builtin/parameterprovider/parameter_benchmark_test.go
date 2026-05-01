@@ -19,7 +19,7 @@ func BenchmarkParameterProvider_Execute(b *testing.B) {
 			"region": "us-east-1",
 		})
 		inputs := map[string]any{
-			"name": "env",
+			"key": "env",
 		}
 
 		b.ReportAllocs()
@@ -32,7 +32,7 @@ func BenchmarkParameterProvider_Execute(b *testing.B) {
 	b.Run("with_default", func(b *testing.B) {
 		ctx := provider.WithParameters(context.Background(), map[string]any{})
 		inputs := map[string]any{
-			"name":    "missing",
+			"key":     "missing",
 			"default": "fallback-value",
 		}
 

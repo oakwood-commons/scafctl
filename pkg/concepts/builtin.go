@@ -48,7 +48,7 @@ For actions, dependsOn controls execution order within the workflow DAG.`,
 		Summary:  "A pluggable executor that performs a specific operation (e.g., read file, call API, prompt user).",
 		Explanation: `Providers are the execution engines in scafctl. Each provider has a name, a typed input schema, and produces output. Providers are referenced by name in resolver steps and action definitions.
 
-Built-in providers include: static, parameter, env, file, exec, http, cel, go-template, validation, directory, hcl, and solution. Custom providers can be added via the plugin system.
+Built-in providers (always available): cel, debug, file, go-template, http, message, parameter, solution, static, and validation. Official plugin providers (auto-fetched on first use): directory, env, exec, git, github, hcl, identity, metadata, secret, and sleep. Custom providers can be added via the plugin system.
 
 Use 'list_providers' to see all available providers and 'get_provider_schema' to see a provider's input/output schema.`,
 		SeeAlso: []string{"resolver", "action", "go-template-provider"},

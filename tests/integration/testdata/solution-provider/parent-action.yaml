@@ -20,3 +20,4 @@ spec:
           source: "child.yaml"
           inputs:
             expr: '{"message": _.msg}'
+          timeout: "90s"

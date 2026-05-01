@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -44,6 +46,15 @@ type BuildBundleOptions struct {
 
 	// Logger is used for structured logging during the build.
 	Logger logr.Logger
+
+	// OfficialProviders is the official provider registry for auto-injecting
+	// missing providers into bundle.plugins at build time. When nil, no
+	// auto-injection occurs.
+	OfficialProviders *official.Registry
+
+	// Strict disables auto-injection of official providers. When true,
+	// missing official providers produce a build error.
+	Strict bool
 }
 
 // BuildResult holds the output of the build bundle pipeline.
@@ -136,6 +147,25 @@ func BuildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 		bundler.MergePluginDefaults(sol)
 	}
 
+	// Step 3.5a: Auto-inject official providers into bundle.plugins.
+	// For each resolver-referenced provider that is in the official registry
+	// but not already declared in bundle.plugins, inject a synthetic dependency
+	// so VendorPlugins (Step 3.6) can pin it in the lock file.
+	if opts.OfficialProviders != nil && opts.OfficialProviders.Len() > 0 {
+		injected := autoInjectOfficialPlugins(sol, opts.OfficialProviders, opts.Strict, lgr)
+		if opts.Strict && len(injected) > 0 {
+			return nil, fmt.Errorf(
+				"strict mode: providers %v are official but not declared in bundle.plugins; "+
+					"add them explicitly or disable strict mode",
+				injected,
+			)
+		}
+		if len(injected) > 0 {
+			result.Messages = append(result.Messages,
+				fmt.Sprintf("Auto-injected %d official provider(s): %v", len(injected), injected))
+		}
+	}
+
 	// Step 3.6: Vendor plugin dependencies (resolve versions and pin in lock file)
 	lockPath := filepath.Join(bundleRoot, "solution.lock")
 
@@ -158,7 +188,9 @@ func BuildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 		pluginResolver := &CatalogPluginResolver{Catalog: localCat}
 
 		pluginResult, pluginErr := bundler.VendorPlugins(ctx, sol.Bundle.Plugins, existingLock, bundler.VendorPluginsOptions{
-			PluginResolver: pluginResolver,
+			PluginResolver:  pluginResolver,
+			PlatformCatalog: localCat,
+			Platform:        runtime.GOOS + "/" + runtime.GOARCH,
 		})
 		if pluginErr != nil {
 			// Plugin resolution failure is a warning, not a hard error —
@@ -405,4 +437,41 @@ func (a *RegistryFetcherAdapter) FetchSolution(ctx context.Context, nameWithVers
 // ListSolutions returns all available versions of a named solution artifact.
 func (a *RegistryFetcherAdapter) ListSolutions(ctx context.Context, name string) ([]catalog.ArtifactInfo, error) {
 	return a.Registry.List(ctx, catalog.ArtifactKindSolution, name)
+}
+
+// autoInjectOfficialPlugins scans the solution's resolvers for provider
+// references that are in the official registry but not already declared in
+// bundle.plugins, and injects synthetic PluginDependency entries.
+//
+// When strict is true, it collects the names but does NOT mutate the solution,
+// returning them so the caller can produce an error.
+//
+// Returns the names of injected (or would-be-injected) providers.
+func autoInjectOfficialPlugins(
+	sol *solution.Solution,
+	officialReg *official.Registry,
+	strict bool,
+	lgr logr.Logger,
+) []string {
+	// Index existing bundle.plugins by name.
+	declared := make(map[string]struct{}, len(sol.Bundle.Plugins))
+	for _, p := range sol.Bundle.Plugins {
+		declared[p.Name] = struct{}{}
+	}
+
+	var injected []string
+	for _, name := range sol.Spec.ReferencedProviderNames() {
+		if _, ok := declared[name]; ok {
+			continue
+		}
+		if p, ok := officialReg.Get(name); ok {
+			injected = append(injected, name)
+			if !strict {
+				sol.Bundle.Plugins = append(sol.Bundle.Plugins, p.ToPluginDependency())
+				lgr.V(0).Info("auto-injected official provider into bundle.plugins",
+					"provider", name, "version", p.DefaultVersion)
+			}
+		}
+	}
+	return injected
 }

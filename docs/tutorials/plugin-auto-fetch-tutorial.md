@@ -270,7 +270,128 @@ The prepare phase automatically:
 5. Loads the plugins and registers their providers
 6. Cleans up plugin processes on exit
 
-No explicit `plugins install` step is needed — but pre-fetching is recommended for predictability.
+No explicit `plugins install` step is needed -- but pre-fetching is recommended for predictability.
+
+## Official Provider Auto-Resolution
+
+scafctl includes a built-in registry of 10 **official providers** distributed as external plugins. These providers are automatically resolved from `ghcr.io/oakwood-commons/providers/<name>` when referenced in a solution -- even without a `bundle.plugins` declaration.
+
+### Official Providers
+
+| Provider | Description |
+|----------|-------------|
+| `directory` | File system directory operations |
+| `env` | Environment variable lookup |
+| `exec` | Shell command execution |
+| `git` | Git repository operations |
+| `github` | GitHub API interactions |
+| `hcl` | HCL/Terraform file parsing |
+| `identity` | Identity token provider |
+| `metadata` | Solution and system metadata |
+| `secret` | Secret retrieval |
+| `sleep` | Delay execution |
+
+### How It Works
+
+When a solution references `provider: exec` (or any official provider):
+
+1. scafctl checks the local registry -- provider not found as a built-in
+2. scafctl checks the official provider list -- match found
+3. The plugin binary is fetched from `ghcr.io/oakwood-commons/providers/exec`
+4. The binary is cached locally for future use
+5. The provider is registered and execution continues
+
+A warning is logged when auto-resolution occurs:
+
+```
+WARN  auto-resolved official provider "exec" from ghcr.io/oakwood-commons/providers/exec
+```
+
+### `run provider` Auto-Resolution
+
+The `run provider` command also auto-resolves official providers. You can invoke any official provider directly without installing it first:
+
+{{< tabs "plugin-auto-fetch-tutorial-cmd-run-provider" >}}
+{{% tab "Bash" %}}
+~~~bash
+# Auto-resolves the exec provider plugin and runs it
+scafctl run provider exec command='echo hello' -o json
+
+# Auto-resolves the env provider plugin
+scafctl run provider env name=HOME -o json
+~~~
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+~~~powershell
+# Auto-resolves the exec provider plugin and runs it
+scafctl run provider exec command='echo hello' -o json
+
+# Auto-resolves the env provider plugin
+scafctl run provider env name=HOME -o json
+~~~
+{{% /tab %}}
+{{< /tabs >}}
+
+The provider binary is fetched on first use and cached for subsequent calls. Dynamic help (`--help`) also triggers auto-resolution so you can view the provider's schema.
+
+### When to Declare `bundle.plugins`
+
+Auto-resolution is convenient for local development, but you should declare plugins explicitly for:
+
+- **CI/CD pipelines** -- use `--strict` to catch undeclared dependencies
+- **Air-gapped environments** -- pre-fetch with `scafctl plugins install`
+- **Version pinning** -- specify exact version constraints
+- **Reproducible builds** -- combine with lock files
+
+```yaml
+bundle:
+  plugins:
+    - name: static
+      kind: provider
+      version: "^0.1.0"
+    - name: parameter
+      kind: provider
+      version: "latest"
+```
+
+### Strict Mode
+
+The `--strict` flag disables auto-resolution and requires all providers to be either built-in or declared in `bundle.plugins`:
+
+{{< tabs "plugin-auto-fetch-tutorial-cmd-strict" >}}
+{{% tab "Bash" %}}
+~~~bash
+# Fails if any provider would be auto-resolved
+scafctl run solution -f solution.yaml --strict
+
+# Also works with run resolver
+scafctl run resolver -f solution.yaml --strict
+~~~
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+~~~powershell
+# Fails if any provider would be auto-resolved
+scafctl run solution -f solution.yaml --strict
+
+# Also works with run resolver
+scafctl run resolver -f solution.yaml --strict
+~~~
+{{% /tab %}}
+{{< /tabs >}}
+
+Use `--strict` in CI to ensure all dependencies are declared and reproducible.
+
+### Disabling Auto-Resolution
+
+For air-gapped or restricted environments, disable official provider auto-resolution entirely:
+
+```yaml
+# ~/.config/scafctl/config.yaml
+settings:
+  disableOfficialProviders: true
+```
+
+With this setting, solutions must declare all non-built-in providers in `bundle.plugins`.
 
 ## Example: End-to-End Workflow
 

@@ -194,18 +194,18 @@ func (c *LocalCatalog) fetchFromIndex(ctx context.Context, indexDesc ocispec.Des
 		return nil, ArtifactInfo{}, err
 	}
 
-	content, _, err := c.fetchFromManifest(ctx, *platDesc, info)
+	content, contentInfo, err := c.fetchFromManifest(ctx, *platDesc, info)
 	if err != nil {
 		return nil, ArtifactInfo{}, fmt.Errorf("fetching platform %s manifest: %w", platform, err)
 	}
 
 	// Enrich info with platform annotation
-	if info.Annotations == nil {
-		info.Annotations = make(map[string]string)
+	if contentInfo.Annotations == nil {
+		contentInfo.Annotations = make(map[string]string)
 	}
-	info.Annotations[AnnotationPlatform] = platform
+	contentInfo.Annotations[AnnotationPlatform] = platform
 
-	return content, info, nil
+	return content, contentInfo, nil
 }
 
 // fetchFromManifest fetches the first layer content from a manifest descriptor.
@@ -228,6 +228,11 @@ func (c *LocalCatalog) fetchFromManifest(ctx context.Context, manifestDesc ocisp
 	if err != nil {
 		return nil, ArtifactInfo{}, fmt.Errorf("fetching content layer: %w", err)
 	}
+
+	// Use the layer digest (content-addressable hash of the actual binary)
+	// instead of the manifest/index descriptor digest. This ensures that
+	// ArtifactInfo.Digest matches sha256(content) for verification.
+	info.Digest = manifest.Layers[0].Digest.String()
 
 	return content, info, nil
 }

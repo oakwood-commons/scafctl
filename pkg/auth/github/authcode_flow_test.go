@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/clock"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -161,10 +162,12 @@ func TestHandler_LoginRoutingInteractive(t *testing.T) {
 func TestHandler_LoginRoutingDeviceCode(t *testing.T) {
 	store := secrets.NewMockStore()
 	mockHTTP := NewMockHTTPClient()
+	mockClock := clock.NewMock()
 
 	handler, err := New(
 		WithSecretStore(store),
 		WithHTTPClient(mockHTTP),
+		WithClock(mockClock),
 	)
 	require.NoError(t, err)
 
@@ -190,6 +193,8 @@ func TestHandler_LoginRoutingDeviceCode(t *testing.T) {
 	})
 
 	ctx := context.Background()
+	go func() { time.Sleep(10 * time.Millisecond); mockClock.Add(5 * time.Second) }()
+
 	result, err := handler.Login(ctx, auth.LoginOptions{
 		Flow:    auth.FlowDeviceCode,
 		Timeout: 10 * time.Second,

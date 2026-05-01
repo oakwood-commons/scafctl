@@ -62,13 +62,13 @@ scafctl run resolver -f hello.yaml -o yaml
 | **Solution** | A YAML file declaring what data to gather and what work to do. Versionable, composable, and shareable via OCI registries. |
 | **Resolver** | A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel. |
 | **Action** | A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with parallelism, retries, conditions, and `forEach` loops. |
-| **Provider** | A pluggable backend that does the actual work. scafctl ships with 18 built-in providers and supports external plugins. |
+| **Provider** | A pluggable backend that does the actual work. scafctl ships with 10 built-in providers and 10 official plugin providers (auto-resolved from OCI catalogs). |
 
 ---
 
 ## Built-in Providers
 
-scafctl ships with 18 providers out of the box:
+scafctl ships with 10 built-in providers and 10 official plugin providers (auto-resolved on first use):
 
 `cel` · `debug` · `directory` · `env` · `exec` · `file` · `git` · `github` · `go-template` · `hcl` · `http` · `identity` · `metadata` · `parameter` · `secret` · `sleep` · `static` · `validation`
 

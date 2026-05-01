@@ -1,6 +1,13 @@
 # Provider Examples
 
-Full solution examples demonstrating each built-in provider. Every file is a valid, self-contained solution that can be run directly.
+Full solution examples demonstrating each provider. Every file is a valid, self-contained solution that can be run directly.
+
+Providers are split into two categories:
+
+- **Built-in**: Compiled into scafctl (cel, file, http, message, parameter, static, validation)
+- **Official**: Auto-fetched as plugins from the OCI catalog on first use (directory, env, exec, git, github, hcl, identity, metadata, secret, sleep)
+
+Official provider examples include `bundle.plugins` declarations for reproducibility. Auto-fetch handles resolution transparently, but explicit declarations pin versions and make dependencies visible.
 
 ## Usage
 

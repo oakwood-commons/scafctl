@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
@@ -71,6 +72,51 @@ func (c *Cache) Get(name, version, platform, expectedDigest string) (string, boo
 	return p, true
 }
 
+// GetLatestCached returns the path to the newest cached binary for the given
+// name and platform, regardless of version. Returns empty string and false if
+// nothing is cached. This is used as a fallback when catalog version resolution
+// fails (e.g., when running offline).
+func (c *Cache) GetLatestCached(name, platform string) (string, string, bool) {
+	entries, err := os.ReadDir(filepath.Join(c.dir, name))
+	if err != nil {
+		return "", "", false
+	}
+
+	var bestSemver *semver.Version
+	var bestVersion string
+	var bestPath string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		v := entry.Name()
+		p := c.binaryPath(name, v, platform)
+		info, err := os.Stat(p)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		parsed, parseErr := semver.NewVersion(v)
+		if parseErr != nil {
+			// Not a valid semver directory — use lexicographic fallback.
+			if bestSemver == nil && (bestVersion == "" || v > bestVersion) {
+				bestVersion = v
+				bestPath = p
+			}
+			continue
+		}
+		if bestSemver == nil || parsed.GreaterThan(bestSemver) {
+			bestSemver = parsed
+			bestVersion = v
+			bestPath = p
+		}
+	}
+
+	if bestPath == "" {
+		return "", "", false
+	}
+	return bestPath, bestVersion, true
+}
+
 // Put writes a plugin binary to the cache. It creates the directory
 // structure, writes the data, sets executable permissions, and returns
 // the path to the cached binary.
@@ -82,10 +128,27 @@ func (c *Cache) Put(name, version, platform string, data []byte) (string, error)
 		return "", fmt.Errorf("creating plugin cache directory: %w", err)
 	}
 
-	// Write to a temp file then rename for atomicity
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil { //nolint:gosec // chmod to 0755 below
+	// Check if already cached (another process may have finished first).
+	if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+		return p, nil
+	}
+
+	// Write to a uniquely-named temp file then rename for atomicity.
+	// Using os.CreateTemp avoids collisions when multiple processes
+	// cache the same plugin concurrently.
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(p)+".*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file for plugin binary: %w", err)
+	}
+	tmp := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmp)
 		return "", fmt.Errorf("writing plugin binary to cache: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmp)
+		return "", fmt.Errorf("closing temp plugin binary: %w", err)
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
 		os.Remove(tmp)

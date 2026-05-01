@@ -57,9 +57,9 @@ func TestProviderOptions_Run_InvalidOnConflict(t *testing.T) {
 	opts := &ProviderOptions{
 		IOStreams:    terminal.NewIOStreams(nil, nil, nil, false),
 		CliParams:    settings.NewCliParams(),
-		ProviderName: "static", // use the builtin static provider (always available)
+		ProviderName: "message",
 		OnConflict:   "not-a-valid-strategy",
-		InputParams:  []string{"value=hello"},
+		InputParams:  []string{"message=hello"},
 	}
 	opts.Output = "json"
 
@@ -68,8 +68,8 @@ func TestProviderOptions_Run_InvalidOnConflict(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid --on-conflict value")
 }
 
-// TestProviderOptions_Run_StaticProvider verifies the static provider runs successfully.
-func TestProviderOptions_Run_StaticProvider(t *testing.T) {
+// TestProviderOptions_Run_MessageProvider verifies the message provider runs successfully.
+func TestProviderOptions_Run_MessageProvider(t *testing.T) {
 	ctx := newProviderTestCtx(t)
 
 	var out bytes.Buffer
@@ -77,14 +77,14 @@ func TestProviderOptions_Run_StaticProvider(t *testing.T) {
 	opts := &ProviderOptions{
 		IOStreams:    ioStreams,
 		CliParams:    settings.NewCliParams(),
-		ProviderName: "static",
-		InputParams:  []string{"value=hello"},
+		ProviderName: "message",
+		InputParams:  []string{"message=hello"},
 	}
 	opts.Output = "json"
 
 	err := opts.Run(ctx)
 	require.NoError(t, err)
-	assert.NotEmpty(t, out.String(), "static provider should produce output")
+	assert.NotEmpty(t, out.String(), "message provider should produce output")
 }
 
 // ── resolveCapability tests ────────────────────────────────────────────────────

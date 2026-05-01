@@ -34,6 +34,7 @@ type InstallOptions struct {
 	File      string
 	Platform  string
 	CacheDir  string
+	NoCache   bool
 }
 
 // CommandInstall creates the install subcommand.
@@ -86,6 +87,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to solution file (auto-discovered if not provided)")
 	cmd.Flags().StringVar(&opts.Platform, "platform", "", "Target platform (default: current, e.g., linux/amd64)")
 	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", fmt.Sprintf("Plugin cache directory (default: $XDG_CACHE_HOME/%s/plugins/)", path))
+	cmd.Flags().BoolVar(&opts.NoCache, "no-cache", false, "Bypass the plugin cache and fetch directly from the catalog")
 
 	return cmd
 }
@@ -144,10 +146,12 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 
 	// Create the fetcher
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:  chain,
-		Cache:    plugin.NewCache(opts.CacheDir),
-		Platform: opts.Platform,
-		Logger:   chainLogger,
+		Catalog:    chain,
+		Cache:      plugin.NewCache(opts.CacheDir),
+		Platform:   opts.Platform,
+		NoCache:    opts.NoCache,
+		BinaryName: settings.BinaryNameFromContext(ctx),
+		Logger:     chainLogger,
 	})
 
 	// Fetch all plugins

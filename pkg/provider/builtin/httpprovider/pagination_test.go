@@ -18,18 +18,21 @@ import (
 // --- parsePaginationConfig tests ---
 
 func TestParsePaginationConfig_NoPagination(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{})
 	require.NoError(t, err)
 	assert.Nil(t, cfg)
 }
 
 func TestParsePaginationConfig_NilPagination(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{"pagination": nil})
 	require.NoError(t, err)
 	assert.Nil(t, cfg)
 }
 
 func TestParsePaginationConfig_InvalidType(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{"pagination": "invalid"})
 	require.Error(t, err)
 	assert.Nil(t, cfg)
@@ -37,6 +40,7 @@ func TestParsePaginationConfig_InvalidType(t *testing.T) {
 }
 
 func TestParsePaginationConfig_MissingStrategy(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"maxPages": 10,
@@ -48,6 +52,7 @@ func TestParsePaginationConfig_MissingStrategy(t *testing.T) {
 }
 
 func TestParsePaginationConfig_UnknownStrategy(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "unknown",
@@ -60,6 +65,7 @@ func TestParsePaginationConfig_UnknownStrategy(t *testing.T) {
 }
 
 func TestParsePaginationConfig_OffsetStrategy(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":    "offset",
@@ -79,6 +85,7 @@ func TestParsePaginationConfig_OffsetStrategy(t *testing.T) {
 }
 
 func TestParsePaginationConfig_OffsetStrategy_MissingLimit(t *testing.T) {
+	t.Parallel()
 	_, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "offset",
@@ -90,6 +97,7 @@ func TestParsePaginationConfig_OffsetStrategy_MissingLimit(t *testing.T) {
 }
 
 func TestParsePaginationConfig_OffsetStrategy_Defaults(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "offset",
@@ -103,6 +111,7 @@ func TestParsePaginationConfig_OffsetStrategy_Defaults(t *testing.T) {
 }
 
 func TestParsePaginationConfig_PageNumberStrategy(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":      "pageNumber",
@@ -123,6 +132,7 @@ func TestParsePaginationConfig_PageNumberStrategy(t *testing.T) {
 }
 
 func TestParsePaginationConfig_PageNumberStrategy_MissingPageSize(t *testing.T) {
+	t.Parallel()
 	_, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "pageNumber",
@@ -134,6 +144,7 @@ func TestParsePaginationConfig_PageNumberStrategy_MissingPageSize(t *testing.T) 
 }
 
 func TestParsePaginationConfig_CursorStrategy_WithTokenPath(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":       "cursor",
@@ -150,6 +161,7 @@ func TestParsePaginationConfig_CursorStrategy_WithTokenPath(t *testing.T) {
 }
 
 func TestParsePaginationConfig_CursorStrategy_WithNextURL(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":    "cursor",
@@ -163,6 +175,7 @@ func TestParsePaginationConfig_CursorStrategy_WithNextURL(t *testing.T) {
 }
 
 func TestParsePaginationConfig_CursorStrategy_MissingPaths(t *testing.T) {
+	t.Parallel()
 	_, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "cursor",
@@ -174,6 +187,7 @@ func TestParsePaginationConfig_CursorStrategy_MissingPaths(t *testing.T) {
 }
 
 func TestParsePaginationConfig_CursorStrategy_MissingParam(t *testing.T) {
+	t.Parallel()
 	_, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":      "cursor",
@@ -186,6 +200,7 @@ func TestParsePaginationConfig_CursorStrategy_MissingParam(t *testing.T) {
 }
 
 func TestParsePaginationConfig_LinkHeaderStrategy(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":    "linkHeader",
@@ -200,6 +215,7 @@ func TestParsePaginationConfig_LinkHeaderStrategy(t *testing.T) {
 }
 
 func TestParsePaginationConfig_CustomStrategy(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "custom",
@@ -214,6 +230,7 @@ func TestParsePaginationConfig_CustomStrategy(t *testing.T) {
 }
 
 func TestParsePaginationConfig_CustomStrategy_MissingExpressions(t *testing.T) {
+	t.Parallel()
 	_, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "custom",
@@ -225,6 +242,7 @@ func TestParsePaginationConfig_CustomStrategy_MissingExpressions(t *testing.T) {
 }
 
 func TestParsePaginationConfig_Float64MaxPages(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy": "linkHeader",
@@ -236,6 +254,7 @@ func TestParsePaginationConfig_Float64MaxPages(t *testing.T) {
 }
 
 func TestParsePaginationConfig_StopWhenAndCollectPath(t *testing.T) {
+	t.Parallel()
 	cfg, err := parsePaginationConfig(map[string]any{
 		"pagination": map[string]any{
 			"strategy":    "linkHeader",
@@ -252,6 +271,7 @@ func TestParsePaginationConfig_StopWhenAndCollectPath(t *testing.T) {
 // --- Link header parsing tests ---
 
 func TestResolveLinkHeaderNext_WithRelNext(t *testing.T) {
+	t.Parallel()
 	resp := &paginatedResponse{
 		Headers: map[string]any{
 			"Link": `<https://api.example.com/items?page=2>; rel="next", <https://api.example.com/items?page=5>; rel="last"`,
@@ -264,6 +284,7 @@ func TestResolveLinkHeaderNext_WithRelNext(t *testing.T) {
 }
 
 func TestResolveLinkHeaderNext_NoLinkHeader(t *testing.T) {
+	t.Parallel()
 	resp := &paginatedResponse{
 		Headers: map[string]any{},
 	}
@@ -273,6 +294,7 @@ func TestResolveLinkHeaderNext_NoLinkHeader(t *testing.T) {
 }
 
 func TestResolveLinkHeaderNext_NoRelNext(t *testing.T) {
+	t.Parallel()
 	resp := &paginatedResponse{
 		Headers: map[string]any{
 			"Link": `<https://api.example.com/items?page=1>; rel="prev"`,
@@ -284,6 +306,7 @@ func TestResolveLinkHeaderNext_NoRelNext(t *testing.T) {
 }
 
 func TestResolveLinkHeaderNext_MultipleHeaderValues(t *testing.T) {
+	t.Parallel()
 	resp := &paginatedResponse{
 		Headers: map[string]any{
 			"Link": []string{
@@ -301,6 +324,7 @@ func TestResolveLinkHeaderNext_MultipleHeaderValues(t *testing.T) {
 // --- Offset strategy tests ---
 
 func TestResolveOffsetNext(t *testing.T) {
+	t.Parallel()
 	cfg := &paginationConfig{
 		Strategy:    StrategyOffset,
 		OffsetParam: "offset",
@@ -320,6 +344,7 @@ func TestResolveOffsetNext(t *testing.T) {
 }
 
 func TestResolveOffsetNext_StopsOnEmptyPage(t *testing.T) {
+	t.Parallel()
 	cfg := &paginationConfig{
 		Strategy:    StrategyOffset,
 		OffsetParam: "offset",
@@ -339,6 +364,7 @@ func TestResolveOffsetNext_StopsOnEmptyPage(t *testing.T) {
 // --- Page number strategy tests ---
 
 func TestResolvePageNumberNext(t *testing.T) {
+	t.Parallel()
 	cfg := &paginationConfig{
 		Strategy:      StrategyPageNumber,
 		PageParam:     "page",
@@ -407,6 +433,7 @@ func newPaginatedServer(t *testing.T, totalItems, pageSize int) *httptest.Server
 }
 
 func TestHTTPProvider_Pagination_Offset(t *testing.T) {
+	t.Parallel()
 	totalItems := 7
 	pageSize := 3
 
@@ -456,6 +483,7 @@ func TestHTTPProvider_Pagination_Offset(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_PageNumber(t *testing.T) {
+	t.Parallel()
 	totalItems := 5
 	pageSize := 2
 
@@ -497,6 +525,7 @@ func TestHTTPProvider_Pagination_PageNumber(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_Cursor(t *testing.T) {
+	t.Parallel()
 	totalItems := 6
 	pageSize := 2
 
@@ -567,6 +596,7 @@ func TestHTTPProvider_Pagination_Cursor(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_CursorNextURL(t *testing.T) {
+	t.Parallel()
 	totalItems := 4
 	pageSize := 2
 
@@ -632,6 +662,7 @@ func TestHTTPProvider_Pagination_CursorNextURL(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_LinkHeader(t *testing.T) {
+	t.Parallel()
 	totalItems := 6
 	pageSize := 2
 
@@ -694,6 +725,7 @@ func TestHTTPProvider_Pagination_LinkHeader(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_Custom_NextURL(t *testing.T) {
+	t.Parallel()
 	totalItems := 4
 	pageSize := 2
 
@@ -761,6 +793,7 @@ func TestHTTPProvider_Pagination_Custom_NextURL(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_Custom_NextParams(t *testing.T) {
+	t.Parallel()
 	totalItems := 6
 	pageSize := 2
 
@@ -828,6 +861,7 @@ func TestHTTPProvider_Pagination_Custom_NextParams(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_MaxPagesLimit(t *testing.T) {
+	t.Parallel()
 	// Server returns infinite pages
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -864,6 +898,7 @@ func TestHTTPProvider_Pagination_MaxPagesLimit(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_StopWhen(t *testing.T) {
+	t.Parallel()
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
@@ -912,6 +947,7 @@ func TestHTTPProvider_Pagination_StopWhen(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_NoCollectPath(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cursor := r.URL.Query().Get("cursor")
 
@@ -952,6 +988,7 @@ func TestHTTPProvider_Pagination_NoCollectPath(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_EmptyResponse(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -989,6 +1026,7 @@ func TestHTTPProvider_Pagination_EmptyResponse(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_NonJSONResponse(t *testing.T) {
+	t.Parallel()
 	requestCount := 0
 	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1028,6 +1066,7 @@ func TestHTTPProvider_Pagination_NonJSONResponse(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_HTTPErrorStopsGracefully(t *testing.T) {
+	t.Parallel()
 	requestCount := 0
 	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1069,6 +1108,7 @@ func TestHTTPProvider_Pagination_HTTPErrorStopsGracefully(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_DescriptorHasPaginationSchema(t *testing.T) {
+	t.Parallel()
 	p := NewHTTPProvider()
 	schema := p.Descriptor().Schema
 	require.NotNil(t, schema)
@@ -1092,6 +1132,7 @@ func TestHTTPProvider_Pagination_DescriptorHasPaginationSchema(t *testing.T) {
 }
 
 func TestHTTPProvider_Pagination_OutputIncludesPagesAndTotalItems(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1129,6 +1170,7 @@ func TestHTTPProvider_Pagination_OutputIncludesPagesAndTotalItems(t *testing.T) 
 
 // Verify that non-paginated requests still work normally
 func TestHTTPProvider_NonPaginated_StillWorks(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -1160,6 +1202,7 @@ func TestHTTPProvider_NonPaginated_StillWorks(t *testing.T) {
 // collectPath tolerates "no such key" errors (e.g., API returns a different
 // envelope on the last page). Regression test for the pagination collectPath bug.
 func TestHTTPProvider_Pagination_CollectPath_MissingKeyOnLastPage(t *testing.T) {
+	t.Parallel()
 	pageCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pageCount++

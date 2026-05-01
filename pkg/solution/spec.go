@@ -4,6 +4,8 @@
 package solution
 
 import (
+	"sort"
+
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
@@ -76,4 +78,56 @@ func (s *Spec) HasTests() bool {
 // HasTestConfig returns true if the spec has test configuration.
 func (s *Spec) HasTestConfig() bool {
 	return s != nil && s.Testing.HasConfig()
+}
+
+// ReferencedProviderNames returns the unique, sorted set of provider names
+// referenced across all resolver phases (resolve, transform, validate) and
+// workflow actions (actions, finally). Used to determine which providers must
+// be registered before execution.
+func (s *Spec) ReferencedProviderNames() []string {
+	if s == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, r := range s.Resolvers {
+		if r.Resolve != nil {
+			for _, src := range r.Resolve.With {
+				if src.Provider != "" {
+					seen[src.Provider] = struct{}{}
+				}
+			}
+		}
+		if r.Transform != nil {
+			for _, t := range r.Transform.With {
+				if t.Provider != "" {
+					seen[t.Provider] = struct{}{}
+				}
+			}
+		}
+		if r.Validate != nil {
+			for _, v := range r.Validate.With {
+				if v.Provider != "" {
+					seen[v.Provider] = struct{}{}
+				}
+			}
+		}
+	}
+	if s.Workflow != nil {
+		for _, a := range s.Workflow.Actions {
+			if a.Provider != "" {
+				seen[a.Provider] = struct{}{}
+			}
+		}
+		for _, a := range s.Workflow.Finally {
+			if a.Provider != "" {
+				seen[a.Provider] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

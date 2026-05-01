@@ -50,6 +50,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
@@ -163,6 +164,13 @@ type RootOptions struct {
 	// auto-discovery. When empty, the defaults from
 	// settings.ActionFileNamesFor are used.
 	ActionDiscoveryFileNames []string
+
+	// OfficialProviders overrides the default official provider registry used
+	// for auto-resolution. When nil and DisableOfficialProviders is false,
+	// the default registry (all 10 extracted first-party providers) is used.
+	// Embedders can supply a custom registry via official.NewRegistryFrom to
+	// extend or replace the default set.
+	OfficialProviders *official.Registry
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -542,6 +550,17 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
+
+			// ── Wire official provider registry for auto-resolution ──
+			// When the embedder provides a custom registry, use it.
+			// Otherwise, use the default registry unless disabled in config.
+			if !cfg.Settings.DisableOfficialProviders {
+				officialReg := opts.OfficialProviders
+				if officialReg == nil {
+					officialReg = official.NewRegistry()
+				}
+				ctx = official.WithRegistry(ctx, officialReg)
+			}
 
 			cCmd.SetContext(ctx)
 

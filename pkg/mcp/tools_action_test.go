@@ -56,9 +56,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `), 0o644)
 		require.NoError(t, err)
 
@@ -89,17 +89,17 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
   workflow:
     actions:
       echo:
         description: "Echo greeting"
-        provider: exec
+        provider: message
         inputs:
-          command:
-            tmpl: "echo {{ .greeting }}"
+          message:
+            tmpl: "{{ .greeting }}"
 `), 0o644)
 		require.NoError(t, err)
 
@@ -144,15 +144,15 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "x"
+              expression: "'x'"
   workflow:
     actions:
       step1:
-        provider: exec
+        provider: message
         inputs:
-          command: "echo step1"
+          message: "step1"
 `), 0o644)
 		require.NoError(t, err)
 

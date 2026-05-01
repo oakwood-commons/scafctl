@@ -29,6 +29,7 @@ func testContext(_ testing.TB) context.Context {
 }
 
 func TestNewHTTPProvider(t *testing.T) {
+	t.Parallel()
 	p := NewHTTPProvider()
 
 	require.NotNil(t, p)
@@ -40,6 +41,7 @@ func TestNewHTTPProvider(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_GET(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method)
 		w.Header().Set("Content-Type", "application/json")
@@ -67,6 +69,7 @@ func TestHTTPProvider_Execute_GET(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_DryRun(t *testing.T) {
+	t.Parallel()
 	p := NewHTTPProvider()
 	ctx := provider.WithDryRun(testContext(t), true)
 	inputs := map[string]any{
@@ -84,6 +87,7 @@ func TestHTTPProvider_Execute_DryRun(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_POST(t *testing.T) {
+	t.Parallel()
 	expectedBody := `{"key":"value"}`
 	receivedBody := ""
 
@@ -133,6 +137,7 @@ func TestHTTPProvider_Execute_POST(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_CustomHeaders(t *testing.T) {
+	t.Parallel()
 	receivedHeaders := http.Header{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +175,7 @@ func TestHTTPProvider_Execute_CustomHeaders(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_PUT(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPut, r.Method)
 
@@ -201,6 +207,7 @@ func TestHTTPProvider_Execute_PUT(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_DELETE(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodDelete, r.Method)
 		w.WriteHeader(http.StatusNoContent)
@@ -224,6 +231,7 @@ func TestHTTPProvider_Execute_DELETE(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_404(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"not found"}`))
@@ -247,6 +255,7 @@ func TestHTTPProvider_Execute_404(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_500(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("Internal Server Error"))
@@ -270,6 +279,7 @@ func TestHTTPProvider_Execute_500(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_MultipleHeaderValues(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Send multiple Set-Cookie headers
 		w.Header().Add("Set-Cookie", "session=abc123")
@@ -313,6 +323,7 @@ func TestHTTPProvider_Execute_MultipleHeaderValues(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_Timeout(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Sleep longer than the timeout
 		time.Sleep(200 * time.Millisecond)
@@ -337,6 +348,7 @@ func TestHTTPProvider_Execute_Timeout(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_TimeoutExceeded(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Sleep longer than the timeout
 		time.Sleep(2 * time.Second)
@@ -366,6 +378,7 @@ func TestHTTPProvider_Execute_TimeoutExceeded(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_InvalidURL(t *testing.T) {
+	t.Parallel()
 	p := NewHTTPProvider()
 	ctx := testContext(t)
 
@@ -379,6 +392,7 @@ func TestHTTPProvider_Execute_InvalidURL(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_DefaultMethod(t *testing.T) {
+	t.Parallel()
 	receivedMethod := ""
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +421,7 @@ func TestHTTPProvider_Execute_DefaultMethod(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_EmptyBody(t *testing.T) {
+	t.Parallel()
 	receivedBody := "not-empty"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -440,6 +455,7 @@ func TestHTTPProvider_Execute_EmptyBody(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_RetryOnServerError(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -483,6 +499,7 @@ func TestHTTPProvider_Execute_RetryOnServerError(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_RetryExhausted(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -524,6 +541,7 @@ func TestHTTPProvider_Execute_RetryExhausted(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_RetryLinearBackoff(t *testing.T) {
+	t.Parallel()
 	attemptTimes := []time.Time{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -571,6 +589,7 @@ func TestHTTPProvider_Execute_RetryLinearBackoff(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_RetryExponentialBackoff(t *testing.T) {
+	t.Parallel()
 	attemptTimes := []time.Time{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -617,6 +636,7 @@ func TestHTTPProvider_Execute_RetryExponentialBackoff(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_RetryContextCancellation(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -658,6 +678,7 @@ func TestHTTPProvider_Execute_RetryContextCancellation(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_NoRetryOnNonRetryableStatus(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -696,6 +717,7 @@ func TestHTTPProvider_Execute_NoRetryOnNonRetryableStatus(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_RetryOnRateLimited(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -740,6 +762,7 @@ func TestHTTPProvider_Execute_RetryOnRateLimited(t *testing.T) {
 // ============================================================================
 
 func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
+	t.Parallel()
 	var receivedAuthHeader string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -791,6 +814,7 @@ func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_MissingScope(t *testing.T) {
+	t.Parallel()
 	// Scope is required for handlers with CapScopesOnTokenRequest (e.g., entra)
 	mockHandler := auth.NewMockHandler("entra")
 	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
@@ -816,6 +840,7 @@ func TestHTTPProvider_Execute_AuthProvider_MissingScope(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_GitHubNoScope(t *testing.T) {
+	t.Parallel()
 	var receivedAuthHeader string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -858,6 +883,7 @@ func TestHTTPProvider_Execute_AuthProvider_GitHubNoScope(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
+	t.Parallel()
 	p := NewHTTPProvider()
 	// Context without auth registry
 	ctx := testContext(t)
@@ -877,6 +903,7 @@ func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
+	t.Parallel()
 	// Create empty registry
 	registry := auth.NewRegistry()
 	ctx := auth.WithRegistry(testContext(t), registry)
@@ -897,6 +924,7 @@ func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_TokenError(t *testing.T) {
+	t.Parallel()
 	// Set up mock auth handler that returns error
 	mockHandler := auth.NewMockHandler("entra")
 	mockHandler.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
@@ -922,6 +950,7 @@ func TestHTTPProvider_Execute_AuthProvider_TokenError(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_401Retry(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -979,6 +1008,7 @@ func TestHTTPProvider_Execute_AuthProvider_401Retry(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AuthProvider_401RetryOnlyOnce(t *testing.T) {
+	t.Parallel()
 	attemptCount := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1022,6 +1052,7 @@ func TestHTTPProvider_Execute_AuthProvider_401RetryOnlyOnce(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_FloatTimeout(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
@@ -1048,6 +1079,7 @@ func TestHTTPProvider_Execute_FloatTimeout(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_HeadersCopy(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1086,17 +1118,21 @@ func TestHTTPProvider_Execute_HeadersCopy(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	t.Parallel()
+
+	jsonHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"users":[{"name":"alice"},{"name":"bob"}],"count":2}`))
-	}))
-	defer server.Close()
-
-	p := NewHTTPProvider()
-	ctx := testContext(t)
+	})
 
 	t.Run("enabled", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(jsonHandler)
+		defer server.Close()
+
+		p := NewHTTPProvider()
+		ctx := testContext(t)
 		inputs := map[string]any{
 			"url":           server.URL,
 			"method":        "GET",
@@ -1118,6 +1154,12 @@ func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
 	})
 
 	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(jsonHandler)
+		defer server.Close()
+
+		p := NewHTTPProvider()
+		ctx := testContext(t)
 		inputs := map[string]any{
 			"url":    server.URL,
 			"method": "GET",
@@ -1134,6 +1176,7 @@ func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
 	})
 
 	t.Run("non-json-content-type", func(t *testing.T) {
+		t.Parallel()
 		textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
@@ -1141,6 +1184,8 @@ func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
 		}))
 		defer textServer.Close()
 
+		p := NewHTTPProvider()
+		ctx := testContext(t)
 		inputs := map[string]any{
 			"url":           textServer.URL,
 			"method":        "GET",
@@ -1158,6 +1203,7 @@ func TestHTTPProvider_Execute_AutoParseJson(t *testing.T) {
 }
 
 func TestIsJSONContentType(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		contentType string
 		expected    bool
@@ -1172,6 +1218,7 @@ func TestIsJSONContentType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.contentType, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.expected, isJSONContentType(tt.contentType))
 		})
 	}

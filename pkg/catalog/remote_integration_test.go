@@ -205,7 +205,7 @@ func (r *fakeOCIRegistry) handleManifests(w http.ResponseWriter, req *http.Reque
 			return
 		}
 
-		w.Header().Set("Content-Type", ocispec.MediaTypeImageManifest)
+		w.Header().Set("Content-Type", detectManifestMediaType(data))
 		w.Header().Set("Docker-Content-Digest", dgst)
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 		if req.Method == http.MethodGet {
@@ -1339,4 +1339,16 @@ func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
 	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "pulled from test-catalog")
 	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "myorg/artifacts")
 	_ = info // ensure CopyTo returned successfully
+}
+
+// detectManifestMediaType inspects stored manifest JSON to return the correct
+// Content-Type. Defaults to image manifest if detection fails.
+func detectManifestMediaType(data []byte) string {
+	var probe struct {
+		MediaType string `json:"mediaType"`
+	}
+	if err := json.Unmarshal(data, &probe); err == nil && probe.MediaType != "" {
+		return probe.MediaType
+	}
+	return ocispec.MediaTypeImageManifest
 }

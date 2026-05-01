@@ -96,6 +96,12 @@ func (r *Runner) emitTestComplete(result TestResult) {
 	}
 }
 
+// preparedSolution holds a solution that has been pre-processed and is ready for execution.
+type preparedSolution struct {
+	st        *SolutionTests
+	testNames []string
+}
+
 // Run orchestrates functional test execution across all solutions.
 // It returns the results and a non-nil error only for infrastructure failures
 // (not test failures — those are reflected in the results).
@@ -107,7 +113,10 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 	}
 
 	var allResults []TestResult
+	var prepared []preparedSolution
 
+	// Phase 1: Pre-process all solutions (fast, sequential).
+	// Generates builtins, resolves extends, validates, and filters.
 	for i := range solutions {
 		st := &solutions[i]
 
@@ -184,18 +193,61 @@ func (r *Runner) Run(ctx context.Context, solutions []SolutionTests) ([]TestResu
 			continue
 		}
 
-		results, err := r.runSolution(ctx, st, testNames)
-		if err != nil {
-			return allResults, fmt.Errorf("running solution %q: %w", st.SolutionName, err)
-		}
-		allResults = append(allResults, results...)
+		prepared = append(prepared, preparedSolution{st: st, testNames: testNames})
 	}
 
-	return allResults, nil
+	if len(prepared) == 0 {
+		return allResults, nil
+	}
+
+	// Phase 2: Execute all solutions concurrently.
+	// Solutions run in parallel; individual test execution is bounded by
+	// a shared semaphore so the total subprocess count never exceeds Concurrency.
+	concurrency := r.Concurrency
+	if concurrency <= 1 {
+		// Sequential: run solutions one at a time (no cross-solution parallelism).
+		for _, ps := range prepared {
+			results, err := r.runSolution(ctx, ps.st, ps.testNames, nil)
+			if err != nil {
+				return allResults, fmt.Errorf("running solution %q: %w", ps.st.SolutionName, err)
+			}
+			allResults = append(allResults, results...)
+		}
+		return allResults, nil
+	}
+
+	// Create a shared semaphore for cross-solution test parallelism.
+	sem := make(chan struct{}, concurrency)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+
+	for _, ps := range prepared {
+		wg.Add(1)
+		go func(ps preparedSolution) {
+			defer wg.Done()
+
+			results, err := r.runSolution(ctx, ps.st, ps.testNames, sem)
+
+			mu.Lock()
+			allResults = append(allResults, results...)
+			if err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("running solution %q: %w", ps.st.SolutionName, err)
+			}
+			mu.Unlock()
+		}(ps)
+	}
+
+	wg.Wait()
+
+	return allResults, firstErr
 }
 
 // runSolution executes all tests for a single solution.
-func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames []string) ([]TestResult, error) {
+// When sem is non-nil, it is used as a shared semaphore for cross-solution
+// test parallelism. When nil, a local semaphore is created from r.Concurrency.
+func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames []string, sem chan struct{}) ([]TestResult, error) {
 	solutionDir := filepath.Dir(st.FilePath)
 
 	// Run suite-level setup if configured
@@ -322,6 +374,12 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 		concurrency = 1
 	}
 
+	// Use shared semaphore if provided (cross-solution parallelism),
+	// otherwise create a local one for intra-solution parallelism only.
+	if sem == nil && concurrency > 1 {
+		sem = make(chan struct{}, concurrency)
+	}
+
 	results := make([]TestResult, 0, len(testNames))
 	var mu sync.Mutex
 	var failFastTriggered bool
@@ -364,7 +422,6 @@ func (r *Runner) runSolution(ctx context.Context, st *SolutionTests, testNames [
 		}
 	} else {
 		// Concurrent execution with semaphore
-		sem := make(chan struct{}, concurrency)
 		var wg sync.WaitGroup
 
 		for _, name := range testNames {

@@ -17,6 +17,10 @@ metadata:
     - name: Provider Authoring Guide
       url: https://github.com/oakwood-commons/scafctl/blob/main/docs/tutorials/plugin-development.md
 
+bundle:
+  include:
+    - templates/**
+
 spec:
   resolvers:
     # ── User Inputs ──────────────────────────────────────────────────────────
@@ -263,6 +267,7 @@ spec:
         - capability_consts
         - display_name
         - plugin_type
+        - repo_path
       resolve:
         with:
           - provider: go-template
@@ -313,7 +318,7 @@ spec:
           entries:
             rslvr: output_files
           outputPath: >-
-            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileName }}
           onConflict: skip-unchanged
 
       # Create GitHub repository (optional)

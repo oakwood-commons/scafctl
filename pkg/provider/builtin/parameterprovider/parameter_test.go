@@ -20,7 +20,7 @@ type MockHTTPClient struct {
 	Err      error
 }
 
-func (m *MockHTTPClient) Get(ctx context.Context, url string) (*http.Response, error) {
+func (m *MockHTTPClient) Get(_ context.Context, _ string) (*http.Response, error) {
 	return m.Response, m.Err
 }
 
@@ -30,7 +30,7 @@ type MockFileOps struct {
 	Err     error
 }
 
-func (m *MockFileOps) ReadFile(path string) ([]byte, error) {
+func (m *MockFileOps) ReadFile(_ string) ([]byte, error) {
 	return m.Content, m.Err
 }
 

@@ -57,9 +57,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `), 0o644)
 		require.NoError(t, err)
 
@@ -97,16 +97,16 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
     old-resolver:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "old"
+              expression: "'old'"
 `), 0o644)
 		require.NoError(t, err)
 
@@ -123,16 +123,16 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
     new-resolver:
       type: int
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: 42
+              expression: "42"
 `), 0o644)
 		require.NoError(t, err)
 
