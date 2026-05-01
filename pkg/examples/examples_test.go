@@ -92,6 +92,30 @@ func TestRead_ValidExample(t *testing.T) {
 	assert.NotEmpty(t, content, "example content should not be empty")
 }
 
+func TestRead_BackslashPathNormalized(t *testing.T) {
+	t.Parallel()
+	items, err := Scan("")
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	// Simulate a Windows-style backslash path
+	backslashPath := strings.ReplaceAll(items[0].Path, "/", "\\")
+	content, err := Read(backslashPath)
+	require.NoError(t, err)
+	assert.NotEmpty(t, content, "should read example with backslash path")
+}
+
+func TestScan_PathsUseForwardSlashes(t *testing.T) {
+	t.Parallel()
+	items, err := Scan("")
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	for _, item := range items {
+		assert.NotContains(t, item.Path, "\\", "example paths should use forward slashes, got %q", item.Path)
+	}
+}
+
 func TestRead_NonexistentFile(t *testing.T) {
 	t.Parallel()
 	_, err := Read("nonexistent/file.yaml")
