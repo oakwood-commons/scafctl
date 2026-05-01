@@ -218,3 +218,129 @@ func TestPatchSchema_JSONSchemaType(t *testing.T) {
 	assert.Equal(t, "object", def["type"], "JsonschemaSchema should be type object")
 	assert.Nil(t, def["additionalProperties"], "JsonschemaSchema should not restrict additional properties")
 }
+
+func TestCleanSchemaMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "strips full $defs path",
+			input: "doesn't match schema $defs/SolutionSpec/properties/resolvers/additionalProperties",
+			want:  "doesn't match schema resolvers",
+		},
+		{
+			name:  "strips #/$defs path",
+			input: "value doesn't match #/$defs/Resolver/properties/resolve",
+			want:  "value doesn't match resolve",
+		},
+		{
+			name:  "no $defs unchanged",
+			input: "missing required field",
+			want:  "missing required field",
+		},
+		{
+			name:  "multiple $defs references",
+			input: "at $defs/A/properties/x or $defs/B/properties/y",
+			want:  "at x or y",
+		},
+		{
+			name:  "unexpected additional properties rewritten",
+			input: `unexpected additional properties ["s"]`,
+			want:  `unknown key "s"`,
+		},
+		{
+			name:  "multiple additional properties",
+			input: `unexpected additional properties ["foo", "bar"]`,
+			want:  `unknown key "foo", "bar"`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, cleanSchemaMessage(tc.input))
+		})
+	}
+}
+
+func TestParseValidatingChain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantP   string
+		wantMsg string
+	}{
+		{
+			name:    "full chain with $defs",
+			input:   `validating https://scafctl.dev/schemas/v1/solution.json: validating /properties/spec: validating /$defs/SolutionSpec: validating /$defs/SolutionSpec/properties/resolvers: validating /$defs/SolutionSpec/properties/resolvers/additionalProperties: validating /$defs/ResolverResolver: validating /$defs/ResolverResolver/properties/resolve: validating /$defs/ResolverResolvePhase: unexpected additional properties ["s"]`,
+			wantP:   "spec.resolvers.resolve",
+			wantMsg: `unknown key "s"`,
+		},
+		{
+			name:    "simple properties chain",
+			input:   `validating https://example.com/schema.json: validating /properties/metadata: missing required field`,
+			wantP:   "metadata",
+			wantMsg: "missing required field",
+		},
+		{
+			name:    "deduplicates consecutive segments",
+			input:   `validating /properties/spec: validating /$defs/X/properties/spec: some error`,
+			wantP:   "spec",
+			wantMsg: "some error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path, msg := parseValidatingChain(tc.input)
+			assert.Equal(t, tc.wantP, path)
+			assert.Equal(t, tc.wantMsg, msg)
+		})
+	}
+}
+
+func TestValidateSolutionAgainstSchema_UnknownKey(t *testing.T) {
+	resetSolutionSchemaOnce()
+
+	data := map[string]any{
+		"apiVersion": "scafctl.io/v1",
+		"kind":       "Solution",
+		"metadata": map[string]any{
+			"name":    "test-solution",
+			"version": "1.0.0",
+		},
+		"spec": map[string]any{
+			"resolvers": map[string]any{
+				"env": map[string]any{
+					"name": "env",
+					"resolve": map[string]any{
+						"s": "bad-key",
+						"with": []any{
+							map[string]any{
+								"provider": "parameter",
+								"inputs":   map[string]any{"name": "environment"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	violations, err := ValidateSolutionAgainstSchema(data)
+	require.NoError(t, err)
+	require.NotEmpty(t, violations)
+
+	v := violations[0]
+	assert.Equal(t, "spec.resolvers.resolve", v.Path, "should produce dot-path, not validating chain")
+	assert.Contains(t, v.Message, `unknown key "s"`, "should use 'unknown key' not 'unexpected additional properties'")
+	assert.NotContains(t, v.Message, "validating", "should not contain 'validating' prefix")
+	assert.NotContains(t, v.Message, "$defs", "should not contain $defs references")
+}
