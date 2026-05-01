@@ -122,6 +122,7 @@ tasks:
         rm -rf dist/
         rm -rf build/
         rm -rf bin/
+        rm -rf pkg/examples/files/*
 
         echo "  📋 Cleaning task cache..."
         rm -rf .task/
@@ -585,8 +586,20 @@ tasks:
   # Build
   # ──────────────────────────────────────────────────────────────────────────────
 
+  embed-examples:
+    desc: "Copy examples into pkg/examples/files for go:embed"
+    internal: true
+    sources:
+      - examples/**/*
+    generates:
+      - pkg/examples/files/**/*
+    cmds:
+      - |
+        rm -rf pkg/examples/files/*
+        cp -R examples/* pkg/examples/files/
+
   build:
-    deps: [mod, git-unshallow-clone]
+    deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the CLI"
     silent: true
     sources:
@@ -607,7 +620,7 @@ tasks:
         platforms: [darwin]
 
   build-container-image:
-    deps: [mod, git-unshallow-clone]
+    deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the container image layer"
     sources:
       - "**/*.go"

@@ -391,3 +391,28 @@ func BenchmarkDeviceCodeLogin(b *testing.B) {
 		})
 	}
 }
+
+func TestDeviceCodeLogin_DefaultClientFailureMessage(t *testing.T) {
+	t.Parallel()
+	store := secrets.NewMockStore()
+	mockHTTP := NewMockHTTPClient()
+
+	// Device code request fails (e.g., default ADC client doesn't support device code)
+	mockHTTP.AddResponse(403, TokenErrorResponse{
+		Error:            "access_denied",
+		ErrorDescription: "device code not supported",
+	})
+
+	// No custom client ID — will use DefaultADCClientID
+	handler, err := New(WithSecretStore(store), WithHTTPClient(mockHTTP))
+	require.NoError(t, err)
+
+	_, err = handler.deviceCodeLogin(context.Background(), auth.LoginOptions{
+		Flow:    auth.FlowDeviceCode,
+		Timeout: 10 * time.Second,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default ADC client")
+	assert.Contains(t, err.Error(), "auth.gcp.client_id")
+	assert.Contains(t, err.Error(), "auth.gcp.client_secret")
+}

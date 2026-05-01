@@ -48,6 +48,7 @@ type SolutionOptions struct {
 	SkipTests       bool
 	IgnorePreflight bool
 	AllowDevVersion bool
+	BaseDir         string
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -216,6 +217,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd.Flags().BoolVar(&options.SkipTests, "skip-tests", false, "Skip functional test pre-flight check")
 	cmd.Flags().BoolVar(&options.IgnorePreflight, "ignore-preflight", false, "Run pre-flight checks but proceed even if they fail")
 	cmd.Flags().BoolVar(&options.AllowDevVersion, "allow-dev-version", false, "Allow build without metadata.version set")
+	cmd.Flags().StringVar(&options.BaseDir, "base-dir", "", "Override base directory for resolving relative paths in the solution (default: solution file's directory)")
 
 	return cmd
 }
@@ -255,15 +257,22 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	}
 	w.Verbosef("Parsed solution: %s (apiVersion: %s)", sol.Metadata.Name, sol.APIVersion)
 
-	// Determine bundle root (directory containing the solution file, or cwd for stdin)
+	// Determine bundle root (--base-dir flag, directory containing the solution file, or cwd for stdin)
 	var bundleRoot string
-	if opts.File == "-" {
+	switch {
+	case opts.BaseDir != "":
+		bundleRoot, err = filepath.Abs(opts.BaseDir)
+		if err != nil {
+			w.Errorf("--base-dir: %v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	case opts.File == "-":
 		bundleRoot, err = os.Getwd()
 		if err != nil {
 			w.Errorf("failed to determine working directory: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
-	} else {
+	default:
 		absFile, absErr := provider.AbsFromContext(ctx, opts.File)
 		if absErr != nil {
 			w.Errorf("failed to resolve path: %v", absErr)

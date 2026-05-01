@@ -11,7 +11,9 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/stretchr/testify/assert"
@@ -435,4 +437,86 @@ func TestNewFetcher_BinaryNameCustom(t *testing.T) {
 		Logger:     logr.Discard(),
 	})
 	assert.Equal(t, "mycli", f.binaryName)
+}
+
+// ── RegisterFetchedPlugins tests ─────────────────────────────────────────────
+
+func TestRegisterFetchedPlugins_EmptyResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	clients, err := RegisterFetchedPlugins(ctx, reg, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestRegisterFetchedPlugins_SkipsNonProviderKinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "auth-handler-1", Kind: solution.PluginKindAuthHandler, Path: "/tmp/fake"},
+	}
+
+	clients, err := RegisterFetchedPlugins(ctx, reg, results, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients, "auth handler kind should be skipped by RegisterFetchedPlugins")
+}
+
+func TestRegisterFetchedPlugins_InvalidPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "bad-plugin", Kind: solution.PluginKindProvider, Path: "/nonexistent/binary/path"},
+	}
+
+	clients, err := RegisterFetchedPlugins(ctx, reg, results, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading plugin bad-plugin")
+	assert.Nil(t, clients)
+}
+
+// ── RegisterFetchedAuthHandlerPlugins tests ──────────────────────────────────
+
+func TestRegisterFetchedAuthHandlerPlugins_EmptyResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestRegisterFetchedAuthHandlerPlugins_SkipsProviderKinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "provider-1", Kind: solution.PluginKindProvider, Path: "/tmp/fake"},
+	}
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, results, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients, "provider kind should be skipped by RegisterFetchedAuthHandlerPlugins")
+}
+
+func TestRegisterFetchedAuthHandlerPlugins_InvalidPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "bad-handler", Kind: solution.PluginKindAuthHandler, Path: "/nonexistent/binary"},
+	}
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, results, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading auth handler plugin bad-handler")
+	assert.Nil(t, clients)
 }
