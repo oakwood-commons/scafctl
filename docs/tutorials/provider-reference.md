@@ -1144,7 +1144,7 @@ action:
 
 > [!TIP]
 > For a complete end-to-end example of repo creation with rulesets and security settings,
-> see the [plugin-template solution](../../examples/solutions/plugin-template/solution.yaml).
+> see the [plugin-template solution](https://github.com/oakwood-commons/scafctl-solution-plugin-template).
 
 ---
 

@@ -1027,7 +1027,7 @@ The fastest way to scaffold a complete plugin project is with the **plugin-templ
 {{% tab "Bash" %}}
 ```bash
 scafctl run solution \
-  -f examples/solutions/plugin-template/solution.yaml \
+  ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 \
   -r name=scafctl-plugin-echo \
   -r module=github.com/myorg/scafctl-plugin-echo \
   -r "description=Echoes input values" \
@@ -1039,7 +1039,7 @@ scafctl run solution \
 {{% tab "PowerShell" %}}
 ```powershell
 scafctl run solution `
-  -f examples/solutions/plugin-template/solution.yaml `
+  ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 `
   -r name=scafctl-plugin-echo `
   -r module=github.com/myorg/scafctl-plugin-echo `
   -r "description=Echoes input values" `
@@ -1061,7 +1061,7 @@ This creates the GitHub repository, pushes a GPG-signed initial commit with all 
 {{% tab "Bash" %}}
 ```bash
 scafctl run solution \
-  -f examples/solutions/plugin-template/solution.yaml \
+  ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 \
   -r name=scafctl-plugin-echo \
   -r module=github.com/myorg/scafctl-plugin-echo \
   -r "description=Echoes input values" \
@@ -1071,7 +1071,7 @@ scafctl run solution \
 {{% tab "PowerShell" %}}
 ```powershell
 scafctl run solution `
-  -f examples/solutions/plugin-template/solution.yaml `
+  ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 `
   -r name=scafctl-plugin-echo `
   -r module=github.com/myorg/scafctl-plugin-echo `
   -r "description=Echoes input values" `
