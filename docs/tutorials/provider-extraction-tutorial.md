@@ -43,7 +43,7 @@ Use the plugin-template solution to generate the project structure:
 
 ~~~bash
 scafctl run solution \
-  -f examples/solutions/plugin-template/solution.yaml \
+  ghcr.io/oakwood-commons/solutions/plugin-template:1.0.0 \
   --output-dir /tmp \
   -r name=scafctl-plugin-static \
   -r module=github.com/oakwood-commons/scafctl-plugin-static \
