@@ -40,6 +40,7 @@ func TestCommandDelete_Flags(t *testing.T) {
 		{"catalog"},
 		{"kind"},
 		{"insecure"},
+		{"force"},
 	}
 
 	for _, tt := range flagTests {
@@ -73,7 +74,7 @@ func TestCommandDelete_RequiresExactlyOneArg(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing required argument: <name@version>")
+	assert.Contains(t, err.Error(), "requires exactly 1 argument")
 }
 
 func TestCommandDelete_VersionRequired(t *testing.T) {
@@ -161,6 +162,57 @@ func TestLooksLikeRemoteReference(t *testing.T) {
 			assert.Equal(t, tt.expected, result, "looksLikeRemoteReference(%q)", tt.ref)
 		})
 	}
+}
+
+func TestCommandDelete_AllFlag(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"--all", "--force"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestCommandDelete_AllWithArgs(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"--all", "my-solution@1.0.0"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--all cannot be used with positional arguments")
+}
+
+func TestCommandDelete_AllWithCatalog(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandDelete(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(newCatalogTestCtx(t))
+	cmd.SetArgs([]string{"--all", "--catalog", "myregistry"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--all only applies to the local catalog; cannot be combined with --catalog")
+}
+
+func TestRunDeleteAll_EmptyCatalog(t *testing.T) {
+	// Set XDG_DATA_HOME to a temp dir so NewLocalCatalog creates an empty catalog
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ctx := newCatalogTestCtx(t)
+
+	err := runDeleteAll(ctx, &DeleteOptions{Force: true, CliParams: settings.NewCliParams()})
+	require.NoError(t, err)
 }
 
 func BenchmarkLooksLikeRemoteReference(b *testing.B) {

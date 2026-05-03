@@ -70,6 +70,26 @@ func TestGoTemplateProvider_Execute_WithName(t *testing.T) {
 	assert.Equal(t, "my-template", output.Metadata["templateName"])
 }
 
+func TestGoTemplateProvider_Execute_DefaultName(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"greeting": "Hi",
+	})
+
+	inputs := map[string]any{
+		"template": "{{.greeting}}, world!",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	assert.Equal(t, "Hi, world!", output.Data)
+	assert.Equal(t, "template", output.Metadata["templateName"])
+}
+
 func TestGoTemplateProvider_Execute_Conditional(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()
@@ -284,11 +304,12 @@ func TestGoTemplateProvider_Execute_MissingName(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()
 
-	_, err := p.Execute(ctx, map[string]any{
+	output, err := p.Execute(ctx, map[string]any{
 		"template": "Hello",
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "name is required")
+	require.NoError(t, err)
+	assert.Equal(t, "Hello", output.Data)
+	assert.Equal(t, "template", output.Metadata["templateName"])
 }
 
 func TestGoTemplateProvider_Execute_EmptyTemplate(t *testing.T) {

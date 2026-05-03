@@ -7,10 +7,12 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -22,6 +24,7 @@ const ProviderName = "validation"
 // ValidationProvider provides validation operations using regex patterns and CEL expressions.
 type ValidationProvider struct {
 	descriptor *provider.Descriptor
+	tmplSvc    *gotmpl.Service // cached template service for resolveMessage
 }
 
 // NewValidationProvider creates a new validation provider instance.
@@ -55,7 +58,7 @@ func NewValidationProvider() *ValidationProvider {
 				"failWhen": schemahelper.StringProp("CEL expression that triggers a validation failure when true (has access to __self and _ for resolver data). Reads naturally for error conditions. Mutually exclusive with expression",
 					schemahelper.WithExample("__self.statusCode == 401"),
 					schemahelper.WithMaxLength(1000)),
-				"message": schemahelper.StringProp("Custom error message to display when validation fails",
+				"message": schemahelper.StringProp("Custom error message. Supports dynamic messages with 'expr:' prefix (CEL) or 'tmpl:' prefix (Go template). Plain strings are used as-is",
 					schemahelper.WithExample("Value must be a valid email address"),
 					schemahelper.WithMaxLength(1000)),
 			}),
@@ -128,6 +131,7 @@ inputs:
 				},
 			},
 		},
+		tmplSvc: gotmpl.NewService(nil),
 	}
 }
 
@@ -206,10 +210,9 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 			return nil, fmt.Errorf("%s: invalid match pattern: %w", ProviderName, err)
 		}
 		if !matched {
-			// Get custom message from inputs if provided
 			message := fmt.Sprintf("value does not match pattern: %s", matchPattern)
 			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
-				message = customMsg
+				message = resolveMessage(ctx, customMsg, resolverData, valueAny, p.tmplSvc)
 			}
 			return nil, fmt.Errorf("%s: %s", ProviderName, message)
 		}
@@ -225,10 +228,9 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 			return nil, fmt.Errorf("%s: invalid notMatch pattern: %w", ProviderName, err)
 		}
 		if matched {
-			// Get custom message from inputs if provided
 			message := fmt.Sprintf("value matches forbidden pattern: %s", notMatchPattern)
 			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
-				message = customMsg
+				message = resolveMessage(ctx, customMsg, resolverData, valueAny, p.tmplSvc)
 			}
 			return nil, fmt.Errorf("%s: %s", ProviderName, message)
 		}
@@ -272,7 +274,6 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 		}
 
 		if !valid {
-			// Get custom message from inputs if provided
 			var message string
 			if invertResult {
 				message = fmt.Sprintf("error condition met: %s", celExpr)
@@ -280,7 +281,7 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 				message = fmt.Sprintf("expression evaluated to false: %s", celExpr)
 			}
 			if customMsg, ok := inputs["message"].(string); ok && customMsg != "" {
-				message = customMsg
+				message = resolveMessage(ctx, customMsg, resolverData, valueAny, p.tmplSvc)
 			}
 			return nil, fmt.Errorf("%s: %s", ProviderName, message)
 		}
@@ -294,4 +295,47 @@ func (p *ValidationProvider) Execute(ctx context.Context, input any) (*provider.
 			"details": "all validations passed",
 		},
 	}, nil
+}
+
+// resolveMessage evaluates a message string that may contain an expr: or tmpl: prefix.
+// If the message starts with "expr:", the remainder is evaluated as a CEL expression.
+// If the message starts with "tmpl:", the remainder is evaluated as a Go template.
+// Otherwise, the message is returned as-is.
+func resolveMessage(ctx context.Context, message string, resolverData map[string]any, self any, tmplSvc *gotmpl.Service) string {
+	switch {
+	case strings.HasPrefix(message, "expr:"):
+		expr := strings.TrimPrefix(message, "expr:")
+		result, err := celexp.EvaluateExpression(ctx, strings.TrimSpace(expr), resolverData, map[string]any{
+			celexp.VarSelf: self,
+		})
+		if err != nil {
+			logger.FromContext(ctx).V(1).Info("dynamic message evaluation failed, using raw message", "prefix", "expr", "error", err)
+			return strings.TrimPrefix(message, "expr:") // fall back to stripped message on error
+		}
+		if s, ok := result.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", result)
+
+	case strings.HasPrefix(message, "tmpl:"):
+		tmplContent := strings.TrimPrefix(message, "tmpl:")
+		data := make(map[string]any)
+		for k, v := range resolverData {
+			data[k] = v
+		}
+		data[celexp.VarSelf] = self
+		result, err := tmplSvc.Execute(ctx, gotmpl.TemplateOptions{
+			Content: strings.TrimSpace(tmplContent),
+			Name:    "validation-message",
+			Data:    data,
+		})
+		if err != nil {
+			logger.FromContext(ctx).V(1).Info("dynamic message evaluation failed, using raw message", "prefix", "tmpl", "error", err)
+			return strings.TrimPrefix(message, "tmpl:") // fall back to stripped message on error
+		}
+		return result.Output
+
+	default:
+		return message
+	}
 }

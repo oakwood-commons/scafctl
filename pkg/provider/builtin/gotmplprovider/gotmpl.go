@@ -85,7 +85,7 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 				"template": schemahelper.StringProp("Go template content to render (required for 'render' operation). Resolver data is available as the root context (e.g., .name, .config.host). Use {{.fieldName}} to access values.",
 					schemahelper.WithExample("Hello, {{.name}}!"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(65536))),
-				"name": schemahelper.StringProp("Name for the template, used in error messages and logging. Required for 'render', optional for 'render-tree' (defaults to 'render-tree').",
+				"name": schemahelper.StringProp("Optional name for the template, used in error messages and logging. Defaults to 'template' for 'render' and 'render-tree' for the batch operation.",
 					schemahelper.WithExample("greeting-template"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
 				"missingKey": schemahelper.StringProp("Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error)",
@@ -335,10 +335,10 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 		return nil, fmt.Errorf("%s: template is required and must be a string", ProviderName)
 	}
 
-	// Extract name (required)
-	templateName, ok := inputs["name"].(string)
-	if !ok || templateName == "" {
-		return nil, fmt.Errorf("%s: name is required and must be a string", ProviderName)
+	// Extract name (optional, defaults to "template")
+	templateName, _ := inputs["name"].(string)
+	if templateName == "" {
+		templateName = "template"
 	}
 
 	// Parse shared rendering options
@@ -419,6 +419,9 @@ func (p *GoTemplateProvider) executeDryRun(inputs map[string]any) (*provider.Out
 
 	templateStr, _ := inputs["template"].(string)
 	templateName, _ := inputs["name"].(string)
+	if templateName == "" {
+		templateName = "template"
+	}
 
 	// Truncate template for display if too long
 	displayTemplate := templateStr

@@ -800,3 +800,25 @@ func BenchmarkValidateConfig(b *testing.B) {
 		_ = ValidateConfig(cfg)
 	}
 }
+
+func TestHandler_GetToken_LastLoginFlowCacheLookup(t *testing.T) {
+	// Scenario: resolveDefaultFlow() returns FlowInteractive (authorizeURL is set),
+	// but user logged in with FlowClientCredentials. Without the fix, GetToken
+	// would look up the wrong cache key and return ErrNotAuthenticated.
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.AuthorizeURL = srv.URL + "/authorize" // makes resolveDefaultFlow() return FlowInteractive
+		cfg.ClientSecret = "test-secret"          // enables client_credentials
+	})
+
+	// Login with client_credentials (different from resolveDefaultFlow)
+	_, err := h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+
+	// GetToken should find the cached token using LastLoginFlow from metadata
+	token, err := h.GetToken(context.Background(), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "cc-access-token", token.AccessToken)
+}
