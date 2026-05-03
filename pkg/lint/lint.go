@@ -176,6 +176,14 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				"reserved-name")
 		}
 
+		if strings.Contains(name, "-") {
+			result.addFinding(SeverityInfo, "naming", location,
+				fmt.Sprintf("resolver name '%s' contains hyphens — use underscores for CEL compatibility (e.g., '%s')",
+					name, strings.ReplaceAll(name, "-", "_")),
+				"Hyphens in resolver names require quoting in CEL expressions. Use underscores for direct access: _.my_resolver",
+				"hyphenated-name")
+		}
+
 		// A resolver with a validate block exists for its side effect (aborting
 		// execution on validation failure), so it is "used" even if no other
 		// resolver or action references it.

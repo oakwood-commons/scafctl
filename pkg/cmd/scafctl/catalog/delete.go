@@ -5,15 +5,16 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
@@ -21,6 +22,8 @@ import (
 // DeleteOptions holds options for the delete command.
 type DeleteOptions struct {
 	Reference string
+	All       bool   // Delete all local artifacts (--all)
+	Force     bool   // Skip confirmation prompt (--force)
 	Catalog   string // Target catalog for remote delete (URL or config name, --catalog)
 	Kind      string // Artifact kind override (--kind)
 	Insecure  bool
@@ -40,7 +43,7 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		Aliases:      []string{"rm", "remove"},
 		Short:        "Delete an artifact from the catalog",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Doc(`
 			Delete an artifact from the local or remote catalog.
 
 			You must specify the exact version to delete.
@@ -48,23 +51,45 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			For local artifacts, use the simple name@version format.
 			For remote artifacts, use the full registry path or specify --catalog.
 
+			Use --all to delete all artifacts from the local catalog.
+
 			Examples:
 			  # Delete from local catalog
 			  scafctl catalog delete my-solution@1.0.0
+
+			  # Delete all local artifacts
+			  scafctl catalog delete --all
+
+			  # Delete all local artifacts (skip confirmation)
+			  scafctl catalog delete --all --force
 
 			  # Delete from remote registry (full reference)
 			  scafctl catalog delete ghcr.io/myorg/scafctl/solutions/my-solution@1.0.0
 
 			  # Delete from a configured catalog
 			  scafctl catalog delete my-solution@1.0.0 --catalog myregistry
-		`),
-		Args: flags.RequireArg("name@version", cliParams.BinaryName+" catalog delete my-solution@1.0.0"),
+		`), settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.All {
+				if len(args) > 0 {
+					return exitcode.Errorf("--all cannot be used with positional arguments")
+				}
+				if options.Catalog != "" {
+					return exitcode.Errorf("--all only applies to the local catalog; cannot be combined with --catalog")
+				}
+				return runDeleteAll(cmd.Context(), options)
+			}
+			if len(args) != 1 {
+				return exitcode.Errorf("requires exactly 1 argument: %s catalog delete my-solution@1.0.0", cliParams.BinaryName)
+			}
 			options.Reference = args[0]
 			return runDelete(cmd.Context(), options)
 		},
 	}
 
+	cmd.Flags().BoolVar(&options.All, "all", false, "Delete all artifacts from the local catalog")
+	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Skip confirmation prompt")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
@@ -132,6 +157,74 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 	}
 
 	w.Successf("Deleted %s", ref.String())
+
+	return nil
+}
+
+// runDeleteAll deletes all artifacts from the local catalog.
+func runDeleteAll(ctx context.Context, opts *DeleteOptions) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	// Confirm action (skip in force mode or quiet mode)
+	if !opts.Force && !opts.CliParams.IsQuiet {
+		in := input.FromContext(ctx)
+		if in == nil {
+			return fmt.Errorf("input not initialized in context")
+		}
+		confirmed, err := in.Confirm(input.NewConfirmOptions().
+			WithPrompt("Delete all artifacts from the local catalog?").
+			WithDefault(false))
+		if err != nil {
+			err := fmt.Errorf("failed to read confirmation: %w", err)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.GeneralError)
+		}
+		if !confirmed {
+			w.Info("Delete cancelled")
+			return nil
+		}
+	}
+
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err != nil {
+		w.Errorf("failed to open catalog: %v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
+	}
+
+	allKinds := []catalog.ArtifactKind{
+		catalog.ArtifactKindSolution,
+		catalog.ArtifactKindProvider,
+		catalog.ArtifactKindAuthHandler,
+	}
+
+	var deleted, failed int
+	for _, kind := range allKinds {
+		artifacts, listErr := localCatalog.List(ctx, kind, "")
+		if listErr != nil {
+			lgr.V(1).Info("failed to list artifacts", "kind", kind, "error", listErr)
+			failed++
+			continue
+		}
+		for _, info := range artifacts {
+			if delErr := localCatalog.Delete(ctx, info.Reference); delErr != nil {
+				lgr.V(1).Info("failed to delete artifact", "ref", info.Reference.String(), "error", delErr)
+				failed++
+				continue
+			}
+			deleted++
+		}
+	}
+
+	if failed > 0 {
+		w.Warningf("Failed to delete %d artifact(s); check logs for details", failed)
+	}
+
+	if deleted == 0 && failed == 0 {
+		w.Infof("No artifacts in local catalog")
+	} else if deleted > 0 {
+		w.Successf("Deleted %d artifact(s) from local catalog", deleted)
+	}
 
 	return nil
 }

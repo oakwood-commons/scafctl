@@ -283,7 +283,13 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	if scope == "" {
 		scope = strings.Join(h.cfg.Scopes, " ")
 	}
+
+	// Use the last login flow if available, falling back to resolveDefaultFlow.
+	// This ensures GetToken uses the same cache key as the flow used during Login.
 	flow := h.resolveDefaultFlow()
+	if meta, metaErr := h.loadMetadata(ctx); metaErr == nil && meta != nil && meta.LastLoginFlow != "" {
+		flow = meta.LastLoginFlow
+	}
 
 	// Try cached token
 	if !opts.ForceRefresh && h.tokenCache != nil {
@@ -340,9 +346,10 @@ type tokenResponse struct {
 }
 
 type handlerMetadata struct {
-	Claims    *auth.Claims `json:"claims"`
-	ExpiresAt time.Time    `json:"expiresAt"`
-	Scopes    []string     `json:"scopes"`
+	Claims        *auth.Claims `json:"claims"`
+	ExpiresAt     time.Time    `json:"expiresAt"`
+	Scopes        []string     `json:"scopes"`
+	LastLoginFlow auth.Flow    `json:"lastLoginFlow,omitempty"`
 }
 
 type exchangeResult struct {
@@ -757,7 +764,7 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 			return fmt.Errorf("store refresh token: %w", err)
 		}
 	}
-	meta := &handlerMetadata{Claims: claims, ExpiresAt: expiresAt, Scopes: scopes}
+	meta := &handlerMetadata{Claims: claims, ExpiresAt: expiresAt, Scopes: scopes, LastLoginFlow: flow}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)

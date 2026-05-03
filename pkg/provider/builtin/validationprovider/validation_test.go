@@ -379,3 +379,55 @@ func TestValidationProvider_Execute_NoCriteria_IncludesFailWhen(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failWhen")
 }
+
+func TestValidationProvider_Execute_ExprMessage(t *testing.T) {
+	p := NewValidationProvider()
+
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{
+		"task": "deploy",
+	})
+	inputs := map[string]any{
+		"value":      "invalid",
+		"expression": "__self == \"valid\"",
+		"message":    "expr: \"Value '\" + __self + \"' is not valid for task '\" + _.task + \"'\"",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Value 'invalid' is not valid for task 'deploy'")
+}
+
+func TestValidationProvider_Execute_TmplMessage(t *testing.T) {
+	p := NewValidationProvider()
+
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{
+		"env": "prod",
+	})
+	inputs := map[string]any{
+		"value":      "bad",
+		"expression": "__self == \"good\"",
+		"message":    "tmpl: Value '{{.__self}}' is invalid in {{.env}}",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Value 'bad' is invalid in prod")
+}
+
+func TestValidationProvider_Execute_PlainMessage(t *testing.T) {
+	p := NewValidationProvider()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"value":      "bad",
+		"expression": "__self == \"good\"",
+		"message":    "plain error message",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plain error message")
+}

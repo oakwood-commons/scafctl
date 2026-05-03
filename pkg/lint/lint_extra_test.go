@@ -553,3 +553,42 @@ func TestLintResolvers_CELExpressionInputNotFlaggedUnused(t *testing.T) {
 		}
 	}
 }
+
+func TestLintResolvers_HyphenatedName(t *testing.T) {
+	reg := provider.NewRegistry()
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"my-resolver": {
+			Description: "has hyphens",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static"},
+				},
+			},
+		},
+		"my_resolver": {
+			Description: "uses underscores",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static"},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := map[string]bool{"my-resolver": true, "my_resolver": true}
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	var hyphenFindings []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == "hyphenated-name" {
+			hyphenFindings = append(hyphenFindings, f)
+		}
+	}
+
+	require.Len(t, hyphenFindings, 1)
+	assert.Contains(t, hyphenFindings[0].Message, "my-resolver")
+	assert.Contains(t, hyphenFindings[0].Message, "my_resolver")
+	assert.Equal(t, SeverityInfo, hyphenFindings[0].Severity)
+}
