@@ -324,8 +324,9 @@ func TestExtractDependencies(t *testing.T) {
 						{
 							Provider: "go-template",
 							Inputs: map[string]*ValueRef{
-								// Note: Inside range blocks, {{.name}} refers to the element's field
-								// but the parser can't distinguish this context, so "name" is also extracted
+								// Inside range blocks, {{.name}} refers to the element's field,
+								// not a top-level resolver. The scope-aware parser correctly
+								// excludes it as a dependency.
 								"template": {Literal: "{{range .servers}}- {{.name}}{{end}}"},
 								"name":     {Literal: "range-template"},
 							},
@@ -333,9 +334,9 @@ func TestExtractDependencies(t *testing.T) {
 					},
 				},
 			},
-			// servers is extracted from .servers, name is extracted from .name inside range
-			// (even though .name refers to a field, not a resolver, the parser can't distinguish)
-			want: []string{"servers", "name"},
+			// Only "servers" is a root-level dependency.
+			// ".name" inside the range body is scoped to each element, not a resolver.
+			want: []string{"servers"},
 		},
 		{
 			name: "explicit dependsOn only",
@@ -681,6 +682,26 @@ func TestExtractDepsFromTemplate(t *testing.T) {
 			name: "__item and __index should not be extracted",
 			tmpl: "{{ .__item }} at {{ .__index }}",
 			want: []string{},
+		},
+		{
+			name: "with block scopes inner references",
+			tmpl: `{{ with .platformAssets.body.data }}{{ .kubeNamespaces }}{{ end }}`,
+			want: []string{"platformAssets"},
+		},
+		{
+			name: "range block scopes inner references",
+			tmpl: `{{ range .items }}{{ .name }}{{ end }}`,
+			want: []string{"items"},
+		},
+		{
+			name: "nested with/range blocks",
+			tmpl: `{{ with .config }}{{ range .servers }}{{ .host }}{{ end }}{{ end }}`,
+			want: []string{"config"},
+		},
+		{
+			name: "if block does not scope references",
+			tmpl: `{{ if .enabled }}{{ .value }}{{ end }}`,
+			want: []string{"enabled", "value"},
 		},
 	}
 

@@ -384,3 +384,108 @@ func TestWalkArg_PipeNodeArg(t *testing.T) {
 	// The nested PipeNode branch should find .Name
 	assert.Contains(t, paths, ".Name")
 }
+
+func TestGetGoTemplateReferences_ScopeAwareness(t *testing.T) {
+	tests := []struct {
+		name         string
+		template     string
+		wantScoped   []string // paths that should be marked Scoped=true
+		wantUnscoped []string // paths that should be marked Scoped=false
+	}{
+		{
+			name:         "with block scopes inner references",
+			template:     `{{ with .platformAssets.body.data }}{{ .kubeNamespaces }}{{ end }}`,
+			wantUnscoped: []string{".platformAssets.body.data"},
+			wantScoped:   []string{".kubeNamespaces"},
+		},
+		{
+			name:         "range block scopes inner references",
+			template:     `{{ range .Items }}{{ .Name }}{{ end }}`,
+			wantUnscoped: []string{".Items"},
+			wantScoped:   []string{".Name"},
+		},
+		{
+			name:         "if block does not scope references",
+			template:     `{{ if .Show }}{{ .Content }}{{ end }}`,
+			wantUnscoped: []string{".Show", ".Content"},
+			wantScoped:   nil,
+		},
+		{
+			name: "nested with/range increases scope depth",
+			template: `{{ with .config }}
+				{{ range .items }}{{ .name }}{{ end }}
+			{{ end }}`,
+			wantUnscoped: []string{".config"},
+			wantScoped:   []string{".items", ".name"},
+		},
+		{
+			name:         "with else clause is not scoped",
+			template:     `{{ with .data }}{{ .field }}{{ else }}{{ .fallback }}{{ end }}`,
+			wantUnscoped: []string{".data", ".fallback"},
+			wantScoped:   []string{".field"},
+		},
+		{
+			name:         "range else clause is not scoped",
+			template:     `{{ range .items }}{{ .name }}{{ else }}{{ .empty }}{{ end }}`,
+			wantUnscoped: []string{".items", ".empty"},
+			wantScoped:   []string{".name"},
+		},
+		{
+			name: "issue 334 reproduction",
+			template: `{{ with .platformAssets.body.data }}
+Namespaces: {{ .kubeNamespaces }}
+{{ end }}`,
+			wantUnscoped: []string{".platformAssets.body.data"},
+			wantScoped:   []string{".kubeNamespaces"},
+		},
+		{
+			name:         "same path scoped then unscoped upgrades to unscoped",
+			template:     `{{ with .cfg }}{{ .name }}{{ end }}{{ .name }}`,
+			wantUnscoped: []string{".cfg", ".name"},
+			wantScoped:   nil,
+		},
+		{
+			name:         "same path unscoped then scoped stays unscoped",
+			template:     `{{ .host }}{{ with .cfg }}{{ .host }}{{ end }}`,
+			wantUnscoped: []string{".host", ".cfg"},
+			wantScoped:   nil,
+		},
+		{
+			name:         "dollar root variable is unscoped inside with",
+			template:     `{{ with .cfg }}{{ $.resolver }}{{ end }}`,
+			wantUnscoped: []string{".cfg", ".resolver"},
+			wantScoped:   nil,
+		},
+		{
+			name:         "dollar root variable is unscoped inside range",
+			template:     `{{ range .items }}{{ $.global.name }}{{ end }}`,
+			wantUnscoped: []string{".items", ".global.name"},
+			wantScoped:   nil,
+		},
+		{
+			name:         "user variable chain is not recorded as reference",
+			template:     `{{ range $i, $v := .items }}{{ $v.name }}{{ end }}`,
+			wantUnscoped: []string{".items"},
+			wantScoped:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs, err := GetGoTemplateReferences(tt.template, "", "")
+			require.NoError(t, err)
+
+			var scoped, unscoped []string
+			for _, ref := range refs {
+				if ref.Scoped {
+					scoped = append(scoped, ref.Path)
+				} else {
+					unscoped = append(unscoped, ref.Path)
+				}
+			}
+
+			assert.ElementsMatch(t, tt.wantUnscoped, unscoped, "unscoped references")
+			assert.ElementsMatch(t, tt.wantScoped, scoped, "scoped references")
+		})
+	}
+}

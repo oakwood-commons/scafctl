@@ -242,6 +242,12 @@ func extractDepsFromTemplateWithExclusions(tmplContent string, deps, exclude map
 
 	// Extract resolver names from paths that reference data
 	for _, ref := range refs {
+		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
+		// bodies where dot has been rebound, not to top-level resolvers.
+		if ref.Scoped {
+			continue
+		}
+
 		path := ref.Path
 		var varName string
 		// Handle different path patterns from template parsing

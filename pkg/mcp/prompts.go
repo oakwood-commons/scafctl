@@ -1124,11 +1124,49 @@ CRITICAL RULES:
 - Document what was migrated and why in commit messages
 
 YAML FORMATTING RULES:
-- Multi-line CEL expressions MUST use block scalar format (>-), never single-quoted strings
-- When renaming resolvers (e.g., to param-<name>), update ALL dependsOn references to use the new name
-- When converting data.resolvers arrays, preserve ALL fields (name, type, value, cel, expression, etc.) — never drop fields silently
-- Use folded block scalar (>-) only for CEL or other single-line expressions longer than 80 characters
-- Use literal block scalar (|) for multi-line content (templates, scripts, JSON) where newlines must be preserved`, pathRef, inlineNote, migration, targetSection, pathRef, pathRef, pathRef, migrationGuide)
+
+1. CEL BLOCK SCALARS — Multi-line CEL expressions MUST use block scalar format, never single-quoted strings.
+   WRONG:
+     expression: 'cel.bind(vars, map.filter(x, x.size > 0))'
+   CORRECT:
+     expression: >-
+       cel.bind(vars, map.filter(x, x.size > 0))
+   Use >- (folded, strip) for CEL expressions. Use | (literal) for multi-line content where newlines matter (templates, scripts).
+
+2. DEPENDSON RENAMING — When renaming resolvers (e.g., to param-<name>), update ALL dependsOn references to use the new name.
+   WRONG (old name kept in dependsOn):
+     param-environment:
+       resolve: ...
+     deploy-config:
+       dependsOn: [environment]      # BUG: still uses old name
+   CORRECT:
+     param-environment:
+       resolve: ...
+     deploy-config:
+       dependsOn: [param-environment] # matches the new resolver name
+
+3. DATA.RESOLVERS ARRAY CONVERSION — When converting data.resolvers arrays, preserve ALL fields.
+   WRONG (drops value and cel fields):
+     resolve:
+       with:
+         - provider: static
+           inputs:
+             value:
+               items:
+                 - name: region
+                   type: string
+   CORRECT (all fields preserved):
+     resolve:
+       with:
+         - provider: static
+           inputs:
+             value:
+               items:
+                 - name: region
+                   type: string
+                   value: "us-east-1"
+                   cel: "env.region"
+   Never silently drop fields — every field in the source must appear in the output.`, pathRef, inlineNote, migration, targetSection, pathRef, pathRef, pathRef, migrationGuide)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Migrate solution (%s): %s", migration, pathRef),
@@ -1188,9 +1226,24 @@ func migrationTypeGuide(migration string) string {
 - Add display_name and description fields where missing
 - Standardize naming conventions (lowercase-with-hyphens)
 - Add type annotations to resolvers that are missing them
-- When renaming resolvers (e.g., prefixing with param-), update ALL dependsOn arrays to reference the new name
-- When converting data.resolvers from array format, preserve ALL fields including value, cel, expression, and any provider-specific inputs
-- Format multi-line CEL expressions as YAML block scalars (>-), never single-quoted strings
+
+CEL expression formatting:
+  When writing CEL expressions to YAML, ALWAYS use block scalar format:
+    expression: >-
+      cel.bind(vars, map.filter(x, x.size > 0))
+  NEVER use single-quoted strings for CEL:
+    expression: 'cel.bind(vars, ...)'   # WRONG
+
+Resolver renaming and dependsOn:
+  When renaming resolvers (e.g., prefixing with param-), update ALL dependsOn arrays to reference the new name.
+  Example: if "environment" is renamed to "param-environment", then dependsOn: [environment] must become dependsOn: [param-environment].
+  Search all resolvers and actions for dependsOn arrays referencing the old name.
+
+data.resolvers array conversion:
+  When converting data.resolvers from array format, preserve ALL fields including value, cel, expression, and any provider-specific inputs.
+  WRONG: only keeping name and type, dropping value/cel.
+  CORRECT: every field from the source array element must appear in the converted output.
+
 - Use literal block scalar (|) for multi-line content where newlines must be preserved`
 	default:
 		return fmt.Sprintf(`Migration: %s

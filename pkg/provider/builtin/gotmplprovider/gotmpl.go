@@ -809,6 +809,12 @@ func extractDependencies(inputs map[string]any) []string {
 	// Extract the first segment of each reference path as the dependency name
 	// e.g., ".config.host" -> "config", "._.name" -> "name"
 	for _, ref := range refs {
+		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
+		// bodies where dot has been rebound, not to top-level resolvers.
+		if ref.Scoped {
+			continue
+		}
+
 		path := ref.Path
 		// Strip leading dot if present
 		path = strings.TrimPrefix(path, ".")

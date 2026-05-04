@@ -1279,3 +1279,13 @@ func BenchmarkValueRef_Resolve_NestedValueRefs(b *testing.B) {
 		}
 	}
 }
+
+func TestValueRef_ReferencedVariables_ScopedRefs(t *testing.T) {
+	tmpl := gotmpl.GoTemplatingContent(`{{ with .config.data }}{{ .host }}{{ end }}`)
+	vr := ValueRef{Tmpl: &tmpl}
+	vars := vr.ReferencedVariables()
+
+	assert.Contains(t, vars, "config", "root-level ref should be included")
+	_, hasHost := vars["host"]
+	assert.False(t, hasHost, "scoped ref inside {{ with }} should be excluded")
+}

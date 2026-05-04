@@ -73,6 +73,71 @@ func TestHandleMigrateSolutionPrompt(t *testing.T) {
 		assert.Contains(t, text, "get_provider_schema")
 	})
 
+	t.Run("cel block scalar examples in prompt", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Arguments = map[string]string{
+			"path":      "solution.yaml",
+			"migration": "upgrade-patterns",
+		}
+
+		result, err := srv.handleMigrateSolutionPrompt(context.Background(), request)
+		require.NoError(t, err)
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+
+		// Bug 1: CEL expressions must show block scalar format examples
+		assert.Contains(t, text, "expression: >-", "should show correct block scalar format for CEL")
+		assert.Contains(t, text, "NEVER use single-quoted strings for CEL", "should warn against single-quoted CEL")
+	})
+
+	t.Run("dependsOn renaming examples in prompt", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Arguments = map[string]string{
+			"path":      "solution.yaml",
+			"migration": "upgrade-patterns",
+		}
+
+		result, err := srv.handleMigrateSolutionPrompt(context.Background(), request)
+		require.NoError(t, err)
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+
+		// Bug 2: dependsOn must show before/after rename examples
+		assert.Contains(t, text, "dependsOn: [param-environment]", "should show correct dependsOn after rename")
+		assert.Contains(t, text, "dependsOn: [environment]", "should show wrong dependsOn for contrast")
+	})
+
+	t.Run("data resolvers field preservation in prompt", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Arguments = map[string]string{
+			"path":      "solution.yaml",
+			"migration": "upgrade-patterns",
+		}
+
+		result, err := srv.handleMigrateSolutionPrompt(context.Background(), request)
+		require.NoError(t, err)
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+
+		// Bug 3: data.resolvers conversion must preserve all fields
+		assert.Contains(t, text, "preserve ALL fields", "should emphasize preserving all fields")
+		assert.Contains(t, text, "dropping value/cel", "should warn about dropping fields")
+	})
+
+	t.Run("yaml formatting rules contain examples", func(t *testing.T) {
+		request := mcp.GetPromptRequest{}
+		request.Params.Arguments = map[string]string{
+			"path":      "solution.yaml",
+			"migration": "add-composition",
+		}
+
+		result, err := srv.handleMigrateSolutionPrompt(context.Background(), request)
+		require.NoError(t, err)
+		text := result.Messages[0].Content.(mcp.TextContent).Text
+
+		// All migration types should include the YAML formatting rules with examples
+		assert.Contains(t, text, "CEL BLOCK SCALARS", "should include CEL block scalar rule")
+		assert.Contains(t, text, "DEPENDSON RENAMING", "should include dependsOn renaming rule")
+		assert.Contains(t, text, "DATA.RESOLVERS ARRAY CONVERSION", "should include data.resolvers rule")
+	})
+
 	t.Run("unknown migration type falls back to generic", func(t *testing.T) {
 		request := mcp.GetPromptRequest{}
 		request.Params.Arguments = map[string]string{

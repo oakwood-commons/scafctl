@@ -19,6 +19,15 @@ type TemplateReference struct {
 
 	// Position is the line:column position in the template (if available)
 	Position string
+
+	// Scoped indicates the reference is inside a {{ with }} or {{ range }} body
+	// where dot has been rebound. Scoped references refer to fields of the
+	// narrowed context, not the root data.
+	//
+	// Deduplication: if the same path appears both scoped and unscoped, the
+	// entry is marked Scoped=false (unscoped wins) so that dependency
+	// extractors do not miss a real top-level reference.
+	Scoped bool
 }
 
 // goTemplateBuiltins lists the function names that text/template provides
@@ -79,13 +88,13 @@ func (s *Service) GetReferences(ctx context.Context, opts TemplateOptions) ([]Te
 	}
 
 	references := make([]TemplateReference, 0)
-	visited := make(map[string]bool)
+	visited := make(map[string]int) // path → index in references slice
 
 	// Walk the parse tree to extract data references
 	// parse.Parse returns a map of tree names to trees
 	for _, tree := range trees {
 		if tree.Root != nil {
-			walkNodes(tree.Root, &references, visited)
+			walkNodes(tree.Root, &references, visited, 0)
 		}
 	}
 
@@ -107,8 +116,11 @@ func GetGoTemplateReferences(templateContent, leftDelim, rightDelim string) ([]T
 	})
 }
 
-// walkNodes recursively walks the template parse tree to find data references
-func walkNodes(node parse.Node, references *[]TemplateReference, visited map[string]bool) {
+// walkNodes recursively walks the template parse tree to find data references.
+// scopeDepth tracks how many {{ with }} or {{ range }} bodies we are inside.
+// When scopeDepth > 0, dot has been rebound, so field references are scoped
+// to the narrowed context rather than the root data.
+func walkNodes(node parse.Node, references *[]TemplateReference, visited map[string]int, scopeDepth int) {
 	if node == nil {
 		return
 	}
@@ -117,106 +129,157 @@ func walkNodes(node parse.Node, references *[]TemplateReference, visited map[str
 	case *parse.ListNode:
 		if n != nil {
 			for _, child := range n.Nodes {
-				walkNodes(child, references, visited)
+				walkNodes(child, references, visited, scopeDepth)
 			}
 		}
 
 	case *parse.ActionNode:
 		if n.Pipe != nil {
-			walkPipe(n.Pipe, references, visited, n.Pos)
+			walkPipe(n.Pipe, references, visited, n.Pos, scopeDepth)
 		}
 
 	case *parse.IfNode:
 		if n.Pipe != nil {
-			walkPipe(n.Pipe, references, visited, n.Pos)
+			walkPipe(n.Pipe, references, visited, n.Pos, scopeDepth)
 		}
-		walkNodes(n.List, references, visited)
+		walkNodes(n.List, references, visited, scopeDepth)
 		if n.ElseList != nil {
-			walkNodes(n.ElseList, references, visited)
+			walkNodes(n.ElseList, references, visited, scopeDepth)
 		}
 
 	case *parse.RangeNode:
+		// The pipe is evaluated in the outer scope (dot is still the parent).
 		if n.Pipe != nil {
-			walkPipe(n.Pipe, references, visited, n.Pos)
+			walkPipe(n.Pipe, references, visited, n.Pos, scopeDepth)
 		}
-		walkNodes(n.List, references, visited)
+		// The body has dot rebound to each element.
+		walkNodes(n.List, references, visited, scopeDepth+1)
+		// The else clause runs when the collection is empty; dot is NOT rebound.
 		if n.ElseList != nil {
-			walkNodes(n.ElseList, references, visited)
+			walkNodes(n.ElseList, references, visited, scopeDepth)
 		}
 
 	case *parse.WithNode:
+		// The pipe is evaluated in the outer scope (dot is still the parent).
 		if n.Pipe != nil {
-			walkPipe(n.Pipe, references, visited, n.Pos)
+			walkPipe(n.Pipe, references, visited, n.Pos, scopeDepth)
 		}
-		walkNodes(n.List, references, visited)
+		// The body has dot rebound to the pipe value.
+		walkNodes(n.List, references, visited, scopeDepth+1)
+		// The else clause runs when the value is falsy; dot is NOT rebound.
 		if n.ElseList != nil {
-			walkNodes(n.ElseList, references, visited)
+			walkNodes(n.ElseList, references, visited, scopeDepth)
 		}
 
 	case *parse.TemplateNode:
 		if n.Pipe != nil {
-			walkPipe(n.Pipe, references, visited, n.Pos)
+			walkPipe(n.Pipe, references, visited, n.Pos, scopeDepth)
 		}
 	}
 }
 
 // walkPipe walks a pipe node to extract field references
-func walkPipe(pipe *parse.PipeNode, references *[]TemplateReference, visited map[string]bool, pos parse.Pos) {
+func walkPipe(pipe *parse.PipeNode, references *[]TemplateReference, visited map[string]int, pos parse.Pos, scopeDepth int) {
 	if pipe == nil {
 		return
 	}
 
 	for _, cmd := range pipe.Cmds {
-		walkCommand(cmd, references, visited, pos)
+		walkCommand(cmd, references, visited, pos, scopeDepth)
 	}
 }
 
 // walkCommand walks a command node to extract field references
-func walkCommand(cmd *parse.CommandNode, references *[]TemplateReference, visited map[string]bool, pos parse.Pos) {
+func walkCommand(cmd *parse.CommandNode, references *[]TemplateReference, visited map[string]int, pos parse.Pos, scopeDepth int) {
 	if cmd == nil {
 		return
 	}
 
 	for _, arg := range cmd.Args {
-		walkArg(arg, references, visited, pos)
+		walkArg(arg, references, visited, pos, scopeDepth)
 	}
 }
 
-// walkArg walks an argument node to extract field references
-func walkArg(arg parse.Node, references *[]TemplateReference, visited map[string]bool, pos parse.Pos) {
+// addOrUpgradeRef adds a new reference or upgrades an existing scoped
+// reference to unscoped when the same path is encountered at root scope.
+func addOrUpgradeRef(references *[]TemplateReference, visited map[string]int, path, position string, scoped bool) {
+	if idx, ok := visited[path]; ok {
+		// Path already seen. If the existing ref is scoped but this one is not,
+		// upgrade to unscoped so dependency extractors don't miss it.
+		if !scoped && (*references)[idx].Scoped {
+			(*references)[idx].Scoped = false
+		}
+
+		return
+	}
+
+	visited[path] = len(*references)
+	*references = append(*references, TemplateReference{
+		Path:     path,
+		Position: position,
+		Scoped:   scoped,
+	})
+}
+
+// walkArg walks an argument node to extract field references.
+// When scopeDepth > 0, references are marked as Scoped because dot has been
+// rebound by a {{ with }} or {{ range }} block.
+func walkArg(arg parse.Node, references *[]TemplateReference, visited map[string]int, pos parse.Pos, scopeDepth int) {
+	scoped := scopeDepth > 0
+
 	switch n := arg.(type) {
 	case *parse.FieldNode:
 		// This is a field reference like .User.Name or .Items
 		path := buildFieldPath(n.Ident)
-		if !visited[path] && !isTemplateVariable(path) {
-			visited[path] = true
-			*references = append(*references, TemplateReference{
-				Path:     path,
-				Position: fmt.Sprintf("pos:%d", pos),
-			})
+		if !isTemplateVariable(path) {
+			addOrUpgradeRef(references, visited, path, fmt.Sprintf("pos:%d", pos), scoped)
+		}
+
+	case *parse.VariableNode:
+		// Variable nodes represent $, $.Field, $var, $var.Field.
+		// $ (root variable) refers to the root data even inside with/range,
+		// so $.Field references are recorded as unscoped data references.
+		// Other variables ($var, $var.Field) are user-defined pipeline
+		// variables and are not data references.
+		if len(n.Ident) >= 2 && n.Ident[0] == "$" {
+			path := "." + strings.Join(n.Ident[1:], ".")
+			if !isTemplateVariable(path) {
+				addOrUpgradeRef(references, visited, path, fmt.Sprintf("pos:%d", pos), false)
+			}
 		}
 
 	case *parse.ChainNode:
 		// Handle chained field access
 		if n.Node != nil {
-			walkArg(n.Node, references, visited, pos)
+			walkArg(n.Node, references, visited, pos, scopeDepth)
 		}
 		if len(n.Field) > 0 {
+			// Check if the chain is rooted at a variable node ($var.Field or $.Field).
+			if vn, ok := n.Node.(*parse.VariableNode); ok {
+				if len(vn.Ident) == 1 && vn.Ident[0] == "$" {
+					// $ always refers to the root data, even inside with/range,
+					// so $.resolver must be recorded as unscoped.
+					path := "." + strings.Join(n.Field, ".")
+					if !isTemplateVariable(path) {
+						addOrUpgradeRef(references, visited, path, fmt.Sprintf("pos:%d", pos), false)
+					}
+				}
+				// For any other variable ($var.Field), skip entirely -- these
+				// are user-defined pipeline variables, not data references.
+				break
+			}
+
 			// Extract the base path from the chain's base node
 			basePath := extractBasePath(n.Node)
 			path := basePath + "." + strings.Join(n.Field, ".")
-			if !visited[path] && !isTemplateVariable(path) {
-				visited[path] = true
-				*references = append(*references, TemplateReference{
-					Path:     path,
-					Position: fmt.Sprintf("pos:%d", pos),
-				})
+			if !isTemplateVariable(path) {
+				addOrUpgradeRef(references, visited, path, fmt.Sprintf("pos:%d", pos), scoped)
 			}
 		}
 
 	case *parse.PipeNode:
 		// Handle nested pipes
-		walkPipe(n, references, visited, pos)
+		walkPipe(n, references, visited, pos, scopeDepth)
 	}
 }
 
