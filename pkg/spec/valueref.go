@@ -330,6 +330,11 @@ func (v *ValueRef) ReferencedVariables() map[string]struct{} {
 	if v.Tmpl != nil {
 		if refs, err := gotmpl.GetGoTemplateReferences(string(*v.Tmpl), "", ""); err == nil {
 			for _, ref := range refs {
+				// Skip scoped references inside {{ with }}/{{ range }} bodies
+				if ref.Scoped {
+					continue
+				}
+
 				path := strings.TrimPrefix(ref.Path, ".")
 				// Extract the root variable name (before the first dot)
 				if idx := strings.Index(path, "."); idx >= 0 {

@@ -1265,6 +1265,36 @@ func TestExtractDependencies_DataKeyExclusion(t *testing.T) {
 	})
 }
 
+func TestExtractDependencies_ScopedReferences(t *testing.T) {
+	t.Run("with block scopes inner references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": `{{ with .platformAssets.body.data }}{{ .kubeNamespaces }}{{ end }}`,
+		})
+		assert.Contains(t, deps, "platformAssets")
+		for _, d := range deps {
+			assert.NotEqual(t, "kubeNamespaces", d, "scoped ref should not be a dependency")
+		}
+	})
+
+	t.Run("range block scopes inner references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": `{{ range .servers }}{{ .name }}{{ end }}`,
+		})
+		assert.Contains(t, deps, "servers")
+		for _, d := range deps {
+			assert.NotEqual(t, "name", d, "scoped ref should not be a dependency")
+		}
+	})
+
+	t.Run("if block does not scope references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": `{{ if .enabled }}{{ .value }}{{ end }}`,
+		})
+		assert.Contains(t, deps, "enabled")
+		assert.Contains(t, deps, "value")
+	})
+}
+
 func TestGoTemplateProvider_UnderscoreAlias(t *testing.T) {
 	p := NewGoTemplateProvider()
 

@@ -173,3 +173,23 @@ func TestReadStdin_NilReader(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stdin is not available")
 }
+
+func TestExtractFromTemplate_ScopedReferences(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with block excludes scoped refs", func(t *testing.T) {
+		t.Parallel()
+		refs, err := ExtractFromTemplate(`{{ with ._.config.data }}{{ .host }}{{ end }}`, "{{", "}}")
+		require.NoError(t, err)
+		assert.Contains(t, refs, "config")
+		assert.NotContains(t, refs, "host")
+	})
+
+	t.Run("range block excludes scoped refs", func(t *testing.T) {
+		t.Parallel()
+		refs, err := ExtractFromTemplate(`{{ range ._.servers }}{{ .name }}{{ end }}`, "{{", "}}")
+		require.NoError(t, err)
+		assert.Contains(t, refs, "servers")
+		assert.NotContains(t, refs, "name")
+	})
+}

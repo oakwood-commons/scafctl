@@ -656,6 +656,11 @@ func extractRefsFromTemplate(tmpl *gotmpl.GoTemplatingContent, refs map[string]s
 	}
 
 	for _, ref := range tmplRefs {
+		// Skip scoped references inside {{ with }}/{{ range }} bodies
+		if ref.Scoped {
+			continue
+		}
+
 		// Template references come as .__actions.name.field or __actions.name.field
 		path := ref.Path
 		if strings.HasPrefix(path, ".__actions.") || strings.HasPrefix(path, "__actions.") {

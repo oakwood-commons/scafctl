@@ -658,6 +658,11 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 				tmplRefs, err := gotmpl.GetGoTemplateReferences(string(*vr.Tmpl), "", "")
 				if err == nil {
 					for _, ref := range tmplRefs {
+						// Skip scoped references inside {{ with }}/{{ range }} bodies
+						if ref.Scoped {
+							continue
+						}
+
 						name := resolverRefs.ExtractResolverName(ref.Path)
 						if name != "" {
 							refs[name] = true
