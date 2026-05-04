@@ -1264,3 +1264,92 @@ func TestExtractDependencies_DataKeyExclusion(t *testing.T) {
 		}
 	})
 }
+
+func TestGoTemplateProvider_UnderscoreAlias(t *testing.T) {
+	p := NewGoTemplateProvider()
+
+	t.Run("underscore alias accesses resolver data", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"greeting": "hello",
+		})
+
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   "{{._.greeting}}",
+			"missingKey": "error",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "hello", output.Data)
+	})
+
+	t.Run("both direct and underscore access work", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"name": "world",
+		})
+
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   "{{.name}} {{._.name}}",
+			"missingKey": "error",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world world", output.Data)
+	})
+
+	t.Run("missing key with error default", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"name": "world",
+		})
+
+		_, err := p.Execute(ctx, map[string]any{
+			"template": "{{.nonexistent}}",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nonexistent")
+	})
+
+	t.Run("shallow copy prevents infinite recursion in serialization", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"name": "world",
+		})
+
+		// Build template data the same way the provider does internally.
+		// Then verify json.Marshal doesn't stack overflow -- proving the
+		// shallow copy breaks the cycle that a self-reference would create.
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   "{{._.name}}",
+			"missingKey": "error",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world", output.Data)
+
+		// Verify that _._ does NOT exist (proving shallow copy, not self-ref).
+		// With missingKey=default, {{._._.name}} would print "<no value>" if
+		// _._ doesn't exist, vs "world" if it were a self-reference.
+		output2, err := p.Execute(ctx, map[string]any{
+			"template":   `{{._._.name}}`,
+			"missingKey": "default",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "<no value>", output2.Data)
+	})
+
+	t.Run("underscore alias is shallow copy not self-reference", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"greeting": "hello",
+		})
+
+		// Verify _._ does NOT exist, proving _ is a shallow copy.
+		// If _ were a self-reference, _._.greeting would return "hello".
+		// With a shallow copy, _._ doesn't exist so it renders <no value>.
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   `{{._._.greeting}}`,
+			"missingKey": "default",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "<no value>", output.Data)
+	})
+}

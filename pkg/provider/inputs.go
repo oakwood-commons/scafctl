@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -365,9 +366,10 @@ func (r *InputResolver) resolveTemplate(propName string, tmpl gotmpl.GoTemplatin
 
 	// Render template
 	result, err := svc.Execute(r.ctx, gotmpl.TemplateOptions{
-		Content: string(tmpl),
-		Name:    propName,
-		Data:    r.resolverContext,
+		Content:    string(tmpl),
+		Name:       propName,
+		Data:       r.resolverContext,
+		MissingKey: gotmpl.MissingKeyDefault,
 	})
 	if err != nil {
 		if isSecret {
@@ -411,9 +413,15 @@ func (r *InputResolver) coerceType(_ string, value any, targetType string) (any,
 			if err != nil {
 				return nil, fmt.Errorf("cannot convert %q to integer: %w", s, err)
 			}
+			if i > math.MaxInt || i < math.MinInt {
+				return nil, fmt.Errorf("integer value %d exceeds int range", i)
+			}
 			return int(i), nil
 		}
 		if f, ok := value.(float64); ok {
+			if f > math.MaxInt || f < math.MinInt {
+				return nil, fmt.Errorf("float value %v exceeds int range", f)
+			}
 			return int(f), nil
 		}
 		return nil, fmt.Errorf("cannot convert %T to integer", value)

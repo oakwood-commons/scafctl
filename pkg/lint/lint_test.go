@@ -1181,7 +1181,7 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 		errorCount  int
 	}{
 		{
-			name:        "underscore prefix triggers error",
+			name:        "underscore prefix triggers info",
 			tmpl:        "{{ ._.config.appName }}",
 			expectError: true,
 			errorCount:  1,
@@ -1228,7 +1228,7 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 			if tt.expectError {
 				assert.Len(t, findings, tt.errorCount)
 				if len(findings) > 0 {
-					assert.Equal(t, SeverityError, findings[0].Severity)
+					assert.Equal(t, SeverityInfo, findings[0].Severity)
 				}
 			} else {
 				assert.Empty(t, findings)

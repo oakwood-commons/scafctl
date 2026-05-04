@@ -100,6 +100,10 @@ func validateResolverName(name string) error {
 		return fmt.Errorf("resolver name cannot be empty")
 	}
 
+	if name == "_" {
+		return fmt.Errorf("resolver name %q is reserved: '_' is used as the template context alias", name)
+	}
+
 	if strings.HasPrefix(name, "__") {
 		return fmt.Errorf("resolver name %q cannot start with '__' (reserved for internal use)", name)
 	}

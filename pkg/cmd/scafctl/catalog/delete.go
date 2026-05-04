@@ -24,6 +24,7 @@ type DeleteOptions struct {
 	Reference string
 	All       bool   // Delete all local artifacts (--all)
 	Force     bool   // Skip confirmation prompt (--force)
+	DryRun    bool   // Show what would be deleted without deleting (--dry-run)
 	Catalog   string // Target catalog for remote delete (URL or config name, --catalog)
 	Kind      string // Artifact kind override (--kind)
 	Insecure  bool
@@ -90,6 +91,7 @@ func CommandDelete(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 	cmd.Flags().BoolVar(&options.All, "all", false, "Delete all artifacts from the local catalog")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be deleted without actually deleting")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
@@ -146,6 +148,22 @@ func runDelete(ctx context.Context, opts *DeleteOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
+	// Dry-run mode: show what would be deleted and return
+	if opts.DryRun {
+		// Verify the artifact exists before reporting
+		exists, getErr := localCatalog.Exists(ctx, ref)
+		if getErr != nil {
+			w.Errorf("failed to check artifact: %v", getErr)
+			return exitcode.WithCode(getErr, exitcode.CatalogError)
+		}
+		if !exists {
+			w.Errorf("artifact %q not found in catalog", opts.Reference)
+			return exitcode.WithCode(fmt.Errorf("artifact %q not found in catalog", opts.Reference), exitcode.FileNotFound)
+		}
+		w.Infof("Would delete %s from local catalog", ref.String())
+		return nil
+	}
+
 	// Delete artifact
 	if err := localCatalog.Delete(ctx, ref); err != nil {
 		if catalog.IsNotFound(err) {
@@ -166,8 +184,8 @@ func runDeleteAll(ctx context.Context, opts *DeleteOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
-	// Confirm action (skip in force mode or quiet mode)
-	if !opts.Force && !opts.CliParams.IsQuiet {
+	// Confirm action (skip in force, dry-run, or quiet mode)
+	if !opts.Force && !opts.DryRun && !opts.CliParams.IsQuiet {
 		in := input.FromContext(ctx)
 		if in == nil {
 			return fmt.Errorf("input not initialized in context")
@@ -207,6 +225,11 @@ func runDeleteAll(ctx context.Context, opts *DeleteOptions) error {
 			continue
 		}
 		for _, info := range artifacts {
+			if opts.DryRun {
+				w.Infof("Would delete %s", info.Reference.String())
+				deleted++
+				continue
+			}
 			if delErr := localCatalog.Delete(ctx, info.Reference); delErr != nil {
 				lgr.V(1).Info("failed to delete artifact", "ref", info.Reference.String(), "error", delErr)
 				failed++
@@ -214,6 +237,18 @@ func runDeleteAll(ctx context.Context, opts *DeleteOptions) error {
 			}
 			deleted++
 		}
+	}
+
+	if opts.DryRun {
+		if failed > 0 {
+			w.Warningf("Failed to list %d artifact kind(s); preview may be incomplete", failed)
+		}
+		if deleted == 0 && failed == 0 {
+			w.Infof("No artifacts in local catalog")
+		} else if deleted > 0 {
+			w.Infof("Would delete %d artifact(s) from local catalog", deleted)
+		}
+		return nil
 	}
 
 	if failed > 0 {
@@ -382,6 +417,14 @@ func runDeleteRemote(ctx context.Context, opts *DeleteOptions) error {
 
 	// Delete from remote
 	repoPath := remoteCatalog.RepositoryPath(ref)
+
+	// Dry-run mode: show what would be deleted and return.
+	// Remote existence is not checked to avoid unnecessary network requests.
+	if opts.DryRun {
+		w.Infof("Would delete %s@%s from %s (remote existence not verified)", ref.Name, ref.VersionOrDigest(), repoPath)
+		return nil
+	}
+
 	w.Infof("Deleting %s@%s from %s...", ref.Name, ref.VersionOrDigest(), repoPath)
 
 	if err := remoteCatalog.Delete(ctx, ref); err != nil {

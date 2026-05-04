@@ -5,6 +5,7 @@ package spec
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -180,7 +181,7 @@ func coerceToInt(value any) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("cannot coerce string %q to int: %w", v, err)
 		}
-		if i > int64(^uint(0)>>1) || i < -int64(^uint(0)>>1)-1 {
+		if i > math.MaxInt || i < math.MinInt {
 			return 0, fmt.Errorf("string value %q exceeds int range", v)
 		}
 		return int(i), nil

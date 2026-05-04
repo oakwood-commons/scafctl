@@ -272,8 +272,8 @@ func (v *ValueRef) ResolveWithIterationContext(ctx context.Context, resolverData
 	// Go template
 	if v.Tmpl != nil {
 		// Spread resolver data at the top level so templates can use
-		// {{ .resolverName }} directly. The "._" prefix is a CEL convention
-		// and is not supported in Go templates.
+		// {{ .resolverName }} directly. The "._" alias is injected by
+		// gotmpl.Execute to unify CEL (_.foo) and template (.foo) access.
 		templateData := make(map[string]any, len(resolverData)+4)
 		for k, val := range resolverData {
 			templateData[k] = val

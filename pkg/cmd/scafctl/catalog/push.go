@@ -28,10 +28,11 @@ const catalogFlagUsage = `Target catalog (registry URL or configured catalog nam
 // PushOptions holds options for the push command.
 type PushOptions struct {
 	Reference  string // Artifact reference (name@version)
-	Catalog    string // Target catalog (URL or config name, --catalog)
+	Catalog    string // Target catalog (URL or configured catalog name)
 	TargetName string // Optional target name (--as)
 	Kind       string // Artifact kind override (--kind)
 	Force      bool   // Overwrite existing (--force)
+	DryRun     bool   // Show what would be pushed without pushing (--dry-run)
 	Insecure   bool   // Allow HTTP (--insecure)
 	SBOM       bool   // Auto-generate and attach SBOM (--sbom)
 	CliParams  *settings.Run
@@ -99,6 +100,7 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVar(&options.TargetName, "as", "", "Push with a different artifact name")
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing artifact in remote")
+	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pushed without actually pushing")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.SBOM, "sbom", false, "Auto-generate and attach an SPDX SBOM after pushing")
 
@@ -240,6 +242,19 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 	ref = info.Reference
+
+	// Dry-run mode: show what would be pushed and return
+	if opts.DryRun {
+		dest := fmt.Sprintf("%s/%s/%s", registry, repository, ref.Kind.Plural())
+		w.Infof("Would push %s@%s to %s/%s", ref.Name, ref.VersionOrDigest(), dest, ref.Name)
+		if opts.TargetName != "" {
+			w.Infof("  --as: would tag as %q in the remote repository", opts.TargetName)
+		}
+		if opts.Force {
+			w.Infof("  --force: would overwrite if exists")
+		}
+		return nil
+	}
 
 	// Create credential store
 	credStore, err := catalog.NewCredentialStore(*lgr)

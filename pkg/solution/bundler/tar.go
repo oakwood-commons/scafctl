@@ -240,6 +240,11 @@ func extractBundleTarRecursive(tarData []byte, destDir string, visitedDigests ma
 
 		destPath := filepath.Join(destDir, cleanName)
 
+		// Security: verify the resolved path stays within destDir (zip-slip protection).
+		if !strings.HasPrefix(destPath, filepath.Clean(destDir)+string(os.PathSeparator)) && destPath != filepath.Clean(destDir) {
+			return nil, fmt.Errorf("tar entry %q resolves outside destination directory", header.Name)
+		}
+
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(destPath, 0o755); err != nil {

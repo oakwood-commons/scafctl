@@ -372,6 +372,24 @@ func TestInputResolver_TypeCoercion(t *testing.T) {
 			targetType: "integer",
 			wantErr:    true,
 		},
+		{
+			name:       "string exceeding int range",
+			value:      "9999999999999999999",
+			targetType: "integer",
+			wantErr:    true,
+		},
+		{
+			name:       "float exceeding int range",
+			value:      1e19,
+			targetType: "integer",
+			wantErr:    true,
+		},
+		{
+			name:       "negative float exceeding int range",
+			value:      -1e19,
+			targetType: "integer",
+			wantErr:    true,
+		},
 
 		// Float coercion
 		{

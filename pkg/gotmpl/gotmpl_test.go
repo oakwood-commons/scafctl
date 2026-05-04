@@ -359,12 +359,18 @@ func TestService_Execute_MissingKey(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name:       "empty uses default",
+			name:       "empty uses error default",
 			missingKey: "",
 			content:    "{{.Missing}}",
 			data:       map[string]any{},
-			wantErr:    false,
-			want:       "<no value>",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid value is rejected",
+			missingKey: "bogus",
+			content:    "{{.Name}}",
+			data:       map[string]any{"Name": "ok"},
+			wantErr:    true,
 		},
 	}
 
@@ -387,6 +393,79 @@ func TestService_Execute_MissingKey(t *testing.T) {
 			assert.Equal(t, tt.want, result.Output)
 		})
 	}
+}
+
+func TestService_Execute_UnderscoreAlias(t *testing.T) {
+	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
+	svc := NewService(nil)
+
+	t.Run("alias accesses map data", func(t *testing.T) {
+		result, err := svc.Execute(ctx, TemplateOptions{
+			Name:    "alias-test",
+			Content: "{{._.name}}",
+			Data:    map[string]any{"name": "world"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world", result.Output)
+	})
+
+	t.Run("both direct and alias access work", func(t *testing.T) {
+		result, err := svc.Execute(ctx, TemplateOptions{
+			Name:    "alias-test",
+			Content: "{{.name}} {{._.name}}",
+			Data:    map[string]any{"name": "world"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world world", result.Output)
+	})
+
+	t.Run("alias is shallow copy not self-reference", func(t *testing.T) {
+		result, err := svc.Execute(ctx, TemplateOptions{
+			Name:       "alias-test",
+			Content:    "{{._._.name}}",
+			Data:       map[string]any{"name": "world"},
+			MissingKey: MissingKeyDefault,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "<no value>", result.Output)
+	})
+
+	t.Run("not injected for non-map data", func(t *testing.T) {
+		type custom struct{ Name string }
+		result, err := svc.Execute(ctx, TemplateOptions{
+			Name:    "alias-test",
+			Content: "{{.Name}}",
+			Data:    custom{Name: "world"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world", result.Output)
+	})
+
+	t.Run("does not mutate caller map", func(t *testing.T) {
+		data := map[string]any{"name": "world"}
+		result, err := svc.Execute(ctx, TemplateOptions{
+			Name:    "alias-test",
+			Content: "{{._.name}}",
+			Data:    data,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world", result.Output)
+		assert.NotContains(t, data, "_", "Execute must not mutate the caller's data map")
+	})
+
+	t.Run("preserves existing underscore key", func(t *testing.T) {
+		data := map[string]any{"_": []int{1, 2, 3}, "name": "world"}
+		result, err := svc.Execute(ctx, TemplateOptions{
+			Name:       "alias-test",
+			Content:    "{{.name}}",
+			Data:       data,
+			MissingKey: MissingKeyDefault,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world", result.Output)
+		// The original "_" value must not be replaced by the alias
+		assert.Equal(t, []int{1, 2, 3}, data["_"], "existing _ key must be preserved")
+	})
 }
 
 func TestService_Execute_DisableBuiltinFuncs(t *testing.T) {

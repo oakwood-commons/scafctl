@@ -29,6 +29,7 @@ type PullOptions struct {
 	Kind              string // Artifact kind override (--kind)
 	VersionConstraint string // Semver version constraint (--version)
 	Force             bool   // Overwrite existing (--force)
+	DryRun            bool   // Show what would be pulled without pulling (--dry-run)
 	Insecure          bool   // Allow HTTP (--insecure)
 	NoCache           bool   // Invalidate artifact cache after pull (--no-cache)
 	CliParams         *settings.Run
@@ -90,6 +91,7 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().StringVar(&options.Kind, "kind", "", "Artifact kind override (solution, provider, auth-handler)")
 	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Semver version constraint (e.g., ^1.0.0, ~2.1, >=1.0 <3.0)")
 	cmd.Flags().BoolVarP(&options.Force, "force", "f", false, "Overwrite existing local artifact")
+	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pulled without actually pulling")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Invalidate the artifact cache for this artifact after pulling")
 
@@ -234,6 +236,17 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 	ref = info.Reference
+
+	// Dry-run mode: show what would be pulled and return
+	if opts.DryRun {
+		targetName := ref.Name
+		if opts.TargetName != "" {
+			targetName = opts.TargetName
+		}
+		src := fmt.Sprintf("%s/%s/%s/%s", registry, repository, ref.Kind.Plural(), ref.Name)
+		w.Infof("Would pull %s@%s from %s to local catalog as %s", ref.Name, ref.VersionOrDigest(), src, targetName)
+		return nil
+	}
 
 	// Create local catalog
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
