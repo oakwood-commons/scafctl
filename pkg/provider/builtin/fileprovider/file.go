@@ -907,9 +907,10 @@ func (p *FileProvider) renderOutputPath(outputPathTmpl, filePath string) (string
 
 	svc := gotmpl.NewService(nil)
 	result, err := svc.Execute(context.Background(), gotmpl.TemplateOptions{
-		Content: outputPathTmpl,
-		Name:    "outputPath",
-		Data:    data,
+		Content:    outputPathTmpl,
+		Name:       "outputPath",
+		Data:       data,
+		MissingKey: gotmpl.MissingKeyDefault,
 	})
 	if err != nil {
 		return "", err

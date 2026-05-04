@@ -87,6 +87,12 @@ func TestValidateResolverName(t *testing.T) {
 			wantErr: true,
 			errMsg:  "cannot start with '__'",
 		},
+		{
+			name:    "underscore alone is reserved",
+			input:   "_",
+			wantErr: true,
+			errMsg:  "reserved",
+		},
 	}
 
 	for _, tt := range tests {

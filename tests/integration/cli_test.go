@@ -5612,6 +5612,19 @@ func TestIntegration_EvalTemplate_MissingTemplate(t *testing.T) {
 	assert.NotEqual(t, 0, exitCode)
 }
 
+func TestIntegration_EvalTemplate_MissingKeyDefault(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hello {{ .missing }}", "--missing-key", "default")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "<no value>")
+}
+
+func TestIntegration_EvalTemplate_MissingKeyError(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "eval", "template", "-t", "hello {{ .missing }}", "-v", "other=val", "--missing-key", "error")
+	assert.NotEqual(t, 0, exitCode)
+}
+
 func TestIntegration_EvalValidate_CELValid(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "size(name) > 3", "--type", "cel")

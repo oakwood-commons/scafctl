@@ -369,6 +369,18 @@ func (e *tokenEndpointError) Error() string {
 	return e.ErrorCode
 }
 
+// callbackOpts builds CallbackOptions from the handler's config.
+func (h *Handler) callbackOpts() []oauth.CallbackOption {
+	var opts []oauth.CallbackOption
+	if h.cfg.CallbackHost != "" {
+		opts = append(opts, oauth.WithCallbackHost(h.cfg.CallbackHost))
+	}
+	if h.cfg.CallbackPath != "" {
+		opts = append(opts, oauth.WithCallbackPath(h.cfg.CallbackPath))
+	}
+	return opts
+}
+
 // ---------- flow: authorization code + PKCE ----------
 
 func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPort int) (*tokenResponse, error) {
@@ -395,7 +407,7 @@ func (h *Handler) authCodeLogin(ctx context.Context, scopes []string, callbackPo
 		return nil, fmt.Errorf("generate state: %w", err)
 	}
 
-	callbackServer, err := oauth.StartCallbackServer(ctx, callbackPort, state)
+	callbackServer, err := oauth.StartCallbackServer(ctx, callbackPort, state, h.callbackOpts()...)
 	if err != nil {
 		return nil, fmt.Errorf("start callback server: %w", err)
 	}
@@ -463,7 +475,7 @@ func (h *Handler) implicitGrantLogin(ctx context.Context, scopes []string, callb
 		return nil, fmt.Errorf("generate state: %w", err)
 	}
 
-	callbackServer, err := oauth.StartImplicitCallbackServer(ctx, callbackPort, state)
+	callbackServer, err := oauth.StartImplicitCallbackServer(ctx, callbackPort, state, h.callbackOpts()...)
 	if err != nil {
 		return nil, fmt.Errorf("start callback server: %w", err)
 	}
@@ -1019,6 +1031,12 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 
 	if cfg.CallbackPort != 0 && (cfg.CallbackPort < 1024 || cfg.CallbackPort > 65535) {
 		return fmt.Errorf("custom OAuth2 handler %q: callbackPort must be 0 (random) or 1024-65535, got %d", cfg.Name, cfg.CallbackPort)
+	}
+
+	if cfg.CallbackHost != "" || cfg.CallbackPath != "" {
+		if err := oauth.ValidateCallbackHostPath(cfg.CallbackHost, cfg.CallbackPath); err != nil {
+			return fmt.Errorf("custom OAuth2 handler %q: %w", cfg.Name, err)
+		}
 	}
 
 	if cfg.TokenExchange != nil {

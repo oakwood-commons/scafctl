@@ -563,6 +563,39 @@ func TestAPI_EvalTemplate_CustomName(t *testing.T) {
 	obj.HasValue("output", "Greetings from integration test")
 }
 
+// TestAPI_EvalTemplate_MissingKeyDefault verifies that missingKey=default renders
+// missing keys as "<no value>" instead of returning an error.
+func TestAPI_EvalTemplate_MissingKeyDefault(t *testing.T) {
+	e, ts := setupExpect(t)
+	defer ts.Close()
+
+	obj := e.POST("/v1/eval/template").
+		WithJSON(map[string]any{
+			"template":   "Hello {{ .missing }}!",
+			"missingKey": "default",
+		}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	obj.HasValue("output", "Hello <no value>!")
+}
+
+// TestAPI_EvalTemplate_MissingKeyError verifies that missing keys return a 400
+// error by default (missingKey=error).
+func TestAPI_EvalTemplate_MissingKeyError(t *testing.T) {
+	e, ts := setupExpect(t)
+	defer ts.Close()
+
+	e.POST("/v1/eval/template").
+		WithJSON(map[string]any{
+			"template": "Hello {{ .missing }}!",
+			"data":     map[string]any{},
+		}).
+		Expect().
+		Status(http.StatusBadRequest)
+}
+
 // ─── Schema Endpoints ───────────────────────────────────────────────────────
 
 // TestAPI_SchemaList verifies the schema list endpoint returns available schemas.

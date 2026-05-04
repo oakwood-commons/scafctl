@@ -1121,7 +1121,14 @@ CRITICAL RULES:
 - Do NOT add, remove, or modify resolver logic (that's what update_solution is for)
 - Do NOT change action behavior or ordering
 - If any validation step fails, revert the change and investigate before continuing
-- Document what was migrated and why in commit messages`, pathRef, inlineNote, migration, targetSection, pathRef, pathRef, pathRef, migrationGuide)
+- Document what was migrated and why in commit messages
+
+YAML FORMATTING RULES:
+- Multi-line CEL expressions MUST use block scalar format (>-), never single-quoted strings
+- When renaming resolvers (e.g., to param-<name>), update ALL dependsOn references to use the new name
+- When converting data.resolvers arrays, preserve ALL fields (name, type, value, cel, expression, etc.) — never drop fields silently
+- Use folded block scalar (>-) only for CEL or other single-line expressions longer than 80 characters
+- Use literal block scalar (|) for multi-line content (templates, scripts, JSON) where newlines must be preserved`, pathRef, inlineNote, migration, targetSection, pathRef, pathRef, pathRef, migrationGuide)
 
 	return &mcp.GetPromptResult{
 		Description: fmt.Sprintf("Migrate solution (%s): %s", migration, pathRef),
@@ -1180,7 +1187,11 @@ func migrationTypeGuide(migration string) string {
 - Ensure all providers are using their latest input field names (call get_provider_schema)
 - Add display_name and description fields where missing
 - Standardize naming conventions (lowercase-with-hyphens)
-- Add type annotations to resolvers that are missing them`
+- Add type annotations to resolvers that are missing them
+- When renaming resolvers (e.g., prefixing with param-), update ALL dependsOn arrays to reference the new name
+- When converting data.resolvers from array format, preserve ALL fields including value, cel, expression, and any provider-specific inputs
+- Format multi-line CEL expressions as YAML block scalars (>-), never single-quoted strings
+- Use literal block scalar (|) for multi-line content where newlines must be preserved`
 	default:
 		return fmt.Sprintf(`Migration: %s
 - Inspect the solution to understand current structure

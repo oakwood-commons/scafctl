@@ -234,7 +234,8 @@ func computeLCS(a, b []string) []string {
 	m, n := len(a), len(b)
 
 	// For very large inputs, fall back to empty LCS (full diff).
-	if m*n > 1_000_000 {
+	// Guard against integer overflow in the m*n multiplication.
+	if m > 0 && n > 1_000_000/m {
 		return nil
 	}
 

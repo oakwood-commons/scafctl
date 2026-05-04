@@ -436,6 +436,9 @@ func TestValidateConfig(t *testing.T) {
 		{name: "responseType token no tokenURL ok", cfg: config.CustomOAuth2Config{Name: "t", ClientID: "c", AuthorizeURL: "https://x.com/a", ResponseType: "token"}},
 		{name: "responseType invalid", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", ResponseType: "bad"}, wantErr: "unknown responseType"},
 		{name: "responseType token with device_code flow", cfg: config.CustomOAuth2Config{Name: "t", ClientID: "c", AuthorizeURL: "https://x.com/a", ResponseType: "token", DefaultFlow: "device_code"}, wantErr: "implicit grant (responseType=token) only supports interactive flow"},
+		{name: "invalid callbackHost", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", CallbackHost: "evil.com"}, wantErr: "not allowed"},
+		{name: "invalid callbackPath", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", CallbackPath: "no-slash"}, wantErr: "must start with /"},
+		{name: "valid callbackHost and path", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", CallbackHost: "127.0.0.1", CallbackPath: "/auth/callback"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -821,4 +824,31 @@ func TestHandler_GetToken_LastLoginFlowCacheLookup(t *testing.T) {
 	token, err := h.GetToken(context.Background(), auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "cc-access-token", token.AccessToken)
+}
+
+func TestHandler_CallbackOpts(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	tests := []struct {
+		name    string
+		host    string
+		path    string
+		wantLen int
+	}{
+		{"no overrides", "", "", 0},
+		{"host only", "127.0.0.1", "", 1},
+		{"path only", "", "/auth/callback", 1},
+		{"both", "127.0.0.1", "/auth/callback", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _ := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+				cfg.CallbackHost = tt.host
+				cfg.CallbackPath = tt.path
+			})
+			opts := h.callbackOpts()
+			assert.Len(t, opts, tt.wantLen)
+		})
+	}
 }

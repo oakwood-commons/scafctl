@@ -579,15 +579,17 @@ func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *
 					"invalid-template")
 			}
 
-			// Check for _.resolverName pattern in Go templates (should be .resolverName)
+			// Check for _.resolverName pattern in Go templates — now valid at
+			// runtime, but worth an informational note since direct access is
+			// shorter and the alias only exists for CEL/template parity.
 			lintTemplateUnderscorePrefix(tmplStr, inputLoc, result)
 		}
 	}
 }
 
-// lintTemplateUnderscorePrefix flags when a Go template uses {{ ._.resolverName }}
-// which is not supported — the correct syntax is {{ .resolverName }}.
-// Uses Go template AST parsing to avoid false positives from literal text.
+// lintTemplateUnderscorePrefix emits an informational finding when a Go
+// template uses {{ ._.resolverName }}. The underscore alias is supported at
+// runtime, but direct access ({{ .resolverName }}) is shorter and preferred.
 func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 	refs, err := gotmpl.GetGoTemplateReferences(tmpl, "", "")
 	if err != nil {
@@ -610,9 +612,9 @@ func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 			continue
 		}
 		seen[name] = true
-		result.addFinding(SeverityError, "template", location,
-			fmt.Sprintf("Go template uses '{{ ._.%s }}' which is not supported — use '{{ .%s }}' instead (the '._' prefix is a CEL convention)", name, name),
-			fmt.Sprintf("Replace '._.%s' with '.%s' in the template", name, name),
+		result.addFinding(SeverityInfo, "template", location,
+			fmt.Sprintf("Go template uses '{{ ._.%s }}' — consider using '{{ .%s }}' for brevity (both work; the '._' alias exists for CEL/template parity)", name, name),
+			fmt.Sprintf("Replace '._.%s' with '.%s' in the template for shorter syntax", name, name),
 			"tmpl-underscore-prefix")
 	}
 }

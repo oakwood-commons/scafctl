@@ -4,12 +4,12 @@
 package soltesting
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -257,7 +257,7 @@ func deriveAssertions(data any, path string, depth int) []Assertion {
 
 	case string:
 		out = append(out, Assertion{
-			Expression: celexp.Expression(fmt.Sprintf(`%s == "%s"`, path, generateJSONEscape(v))),
+			Expression: celexp.Expression(fmt.Sprintf(`%s == %s`, path, strconv.Quote(v))),
 		})
 
 	case float64:
@@ -287,21 +287,6 @@ func sortedStringKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// generateJSONEscape escapes a string value for embedding in a CEL string literal.
-// It uses json.Marshal to handle all necessary escape sequences, then strips the
-// surrounding quotes that json.Marshal adds.
-func generateJSONEscape(s string) string {
-	b, err := json.Marshal(s)
-	if err != nil {
-		// Fallback: manual escaping.
-		s = strings.ReplaceAll(s, `\`, `\\`)
-		s = strings.ReplaceAll(s, `"`, `\"`)
-		return s
-	}
-	// b is `"escaped-value"` — strip the outer double quotes.
-	return string(b[1 : len(b)-1])
 }
 
 // generateFormatNumber formats a float64 as an integer when it has no fractional

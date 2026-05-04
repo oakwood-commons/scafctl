@@ -316,9 +316,10 @@ func TestValueRef_Resolve_Tmpl(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "underscore prefix not supported",
+			name:        "underscore prefix accesses data via alias",
 			tmpl:        "{{ ._.environment }}",
-			expectError: true,
+			expected:    "production",
+			expectError: false,
 		},
 	}
 

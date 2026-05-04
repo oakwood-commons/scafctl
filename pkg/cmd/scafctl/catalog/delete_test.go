@@ -41,6 +41,7 @@ func TestCommandDelete_Flags(t *testing.T) {
 		{"kind"},
 		{"insecure"},
 		{"force"},
+		{"dry-run"},
 	}
 
 	for _, tt := range flagTests {
@@ -212,6 +213,14 @@ func TestRunDeleteAll_EmptyCatalog(t *testing.T) {
 	ctx := newCatalogTestCtx(t)
 
 	err := runDeleteAll(ctx, &DeleteOptions{Force: true, CliParams: settings.NewCliParams()})
+	require.NoError(t, err)
+}
+
+func TestRunDeleteAll_DryRun(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ctx := newCatalogTestCtx(t)
+
+	err := runDeleteAll(ctx, &DeleteOptions{DryRun: true, Force: true, CliParams: settings.NewCliParams()})
 	require.NoError(t, err)
 }
 

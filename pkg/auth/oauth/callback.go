@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,12 +30,157 @@ type CallbackResult struct {
 	Err error
 }
 
+// implicitTokenPath is the path used by the implicit grant flow to receive
+// POSTed token data from the browser. It is reserved and cannot be used as
+// a custom callback path.
+const implicitTokenPath = "/token"
+
+// allowedCallbackHosts is the set of hosts permitted for the OAuth callback
+// server. Only loopback addresses are allowed to prevent binding on external
+// interfaces.
+var allowedCallbackHosts = map[string]bool{
+	"localhost": true,
+	"127.0.0.1": true,
+	"::1":       true,
+}
+
+// ValidateCallbackHostPath validates callback host and path values
+// without starting a server. This is intended for config-time validation.
+func ValidateCallbackHostPath(host, path string) error {
+	cfg := &callbackConfig{
+		host: host,
+		path: path,
+	}
+	if host == "" {
+		cfg.host = "localhost"
+	}
+	if path == "" {
+		cfg.path = "/"
+	}
+	return validateCallbackConfig(cfg)
+}
+
+// CallbackOption configures optional parameters for the callback server.
+type CallbackOption func(*callbackConfig)
+
+type callbackConfig struct {
+	host string
+	path string
+}
+
+// WithCallbackHost sets the host used in the redirect URI (default: "localhost").
+// Only loopback addresses are allowed: "localhost", "127.0.0.1", or "::1".
+func WithCallbackHost(host string) CallbackOption {
+	return func(c *callbackConfig) {
+		c.host = host
+	}
+}
+
+// WithCallbackPath sets the path component of the redirect URI (default: "/").
+// The path must start with "/" and must not contain ".." segments.
+func WithCallbackPath(path string) CallbackOption {
+	return func(c *callbackConfig) {
+		c.path = path
+	}
+}
+
+// validateCallbackConfig validates the callback configuration.
+func validateCallbackConfig(cfg *callbackConfig) error {
+	if !allowedCallbackHosts[cfg.host] {
+		return fmt.Errorf("callback host %q is not allowed: must be localhost, 127.0.0.1, or ::1", cfg.host)
+	}
+	if cfg.path != "" && cfg.path != "/" {
+		if !strings.HasPrefix(cfg.path, "/") {
+			return fmt.Errorf("callback path %q must start with /", cfg.path)
+		}
+		if strings.Contains(cfg.path, "..") {
+			return fmt.Errorf("callback path %q must not contain '..' segments", cfg.path)
+		}
+		if strings.ContainsAny(cfg.path, "?#") {
+			return fmt.Errorf("callback path %q must not contain query or fragment characters", cfg.path)
+		}
+		if cfg.path == implicitTokenPath {
+			return fmt.Errorf("callback path %q is reserved for internal use by the implicit grant flow", cfg.path)
+		}
+	}
+	return nil
+}
+
+// newCallbackServer creates and starts a listener, returning a CallbackServer
+// with the RedirectURI set (including the configured path). The caller is
+// responsible for registering HTTP handlers and calling Serve.
+func newCallbackServer(ctx context.Context, port int, expectedState string, opts ...CallbackOption) (*CallbackServer, *callbackConfig, error) {
+	cfg := callbackConfig{
+		host: "localhost",
+		path: "/",
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	if err := validateCallbackConfig(&cfg); err != nil {
+		return nil, nil, err
+	}
+
+	// Format the host for use in addresses and URIs.
+	// IPv6 addresses need brackets in host:port notation and URLs.
+	listenHost := cfg.host
+	uriHost := cfg.host
+	if strings.Contains(cfg.host, ":") {
+		listenHost = "[" + cfg.host + "]"
+		uriHost = "[" + cfg.host + "]"
+	}
+
+	addr := listenHost + ":0"
+	if port > 0 {
+		addr = fmt.Sprintf("%s:%d", listenHost, port)
+	}
+
+	var lc net.ListenConfig
+	listener, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("starting local redirect server on %s: %w", addr, err)
+	}
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		listener.Close()
+		return nil, nil, fmt.Errorf("unexpected listener address type: %T", listener.Addr())
+	}
+
+	// Build the origin (scheme://host:port) separately for CORS checks.
+	origin := fmt.Sprintf("http://%s:%d", uriHost, tcpAddr.Port)
+
+	// Build the full redirect URI including the path.
+	// When path is the default "/", omit it to preserve the traditional
+	// redirect URI format (http://host:port) expected by existing OAuth
+	// providers that do exact string matching.
+	redirectURI := origin
+	if cfg.path != "" && cfg.path != "/" {
+		redirectURI += cfg.path
+	}
+
+	cs := &CallbackServer{
+		RedirectURI:   redirectURI,
+		origin:        origin,
+		listener:      listener,
+		resultCh:      make(chan CallbackResult, 1),
+		expectedState: expectedState,
+	}
+
+	return cs, &cfg, nil
+}
+
 // CallbackServer manages a local HTTP server that listens for an OAuth redirect
 // and captures the authorization code.
 type CallbackServer struct {
 	// RedirectURI is the localhost URI the identity provider should redirect to
-	// (e.g. "http://localhost:54321").
+	// (e.g. "http://localhost:54321/auth/callback").
 	RedirectURI string
+
+	// origin is the scheme://host:port portion of the redirect URI, used for
+	// CORS Origin header validation in the implicit grant flow.
+	origin string
 
 	listener net.Listener
 	server   *http.Server
@@ -54,37 +200,21 @@ type CallbackServer struct {
 // state does not match, preventing CSRF attacks. The state is set before the
 // server begins accepting connections to close any race window.
 //
+// Options allow configuring the callback host (default "localhost") and path
+// (default "/") for OAuth2 servers that validate the exact redirect URI.
+//
 // The server waits for a single OAuth redirect, extracts the authorization
 // code (or error), and sends it on the channel returned by ResultChan().
 //
 // The caller is responsible for calling Close() when done.
-func StartCallbackServer(ctx context.Context, port int, expectedState string) (*CallbackServer, error) {
-	addr := "localhost:0"
-	if port > 0 {
-		addr = fmt.Sprintf("localhost:%d", port)
-	}
-
-	var lc net.ListenConfig
-	listener, err := lc.Listen(ctx, "tcp", addr)
+func StartCallbackServer(ctx context.Context, port int, expectedState string, opts ...CallbackOption) (*CallbackServer, error) {
+	cs, cfg, err := newCallbackServer(ctx, port, expectedState, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("starting local redirect server on %s: %w", addr, err)
-	}
-
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		listener.Close()
-		return nil, fmt.Errorf("unexpected listener address type: %T", listener.Addr())
-	}
-
-	cs := &CallbackServer{
-		RedirectURI:   fmt.Sprintf("http://localhost:%d", tcpAddr.Port),
-		listener:      listener,
-		resultCh:      make(chan CallbackResult, 1),
-		expectedState: expectedState,
+		return nil, err
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", cs.handleCallback)
+	mux.HandleFunc(cfg.path, cs.handleCallback)
 
 	cs.server = &http.Server{
 		Handler:           mux,
@@ -92,7 +222,7 @@ func StartCallbackServer(ctx context.Context, port int, expectedState string) (*
 	}
 
 	go func() {
-		if sErr := cs.server.Serve(listener); sErr != nil && sErr != http.ErrServerClosed {
+		if sErr := cs.server.Serve(cs.listener); sErr != nil && sErr != http.ErrServerClosed {
 			cs.sendResult(CallbackResult{Err: fmt.Errorf("redirect server error: %w", sErr)})
 		}
 	}()
@@ -181,34 +311,17 @@ func (cs *CallbackServer) handleCallback(w http.ResponseWriter, r *http.Request)
 // If expectedState is non-empty, a provided state value must match it. Unlike
 // StartCallbackServer, the implicit flow accepts a missing state value and
 // only rejects explicit mismatches.
-func StartImplicitCallbackServer(ctx context.Context, port int, expectedState string) (*CallbackServer, error) {
-	addr := "localhost:0"
-	if port > 0 {
-		addr = fmt.Sprintf("localhost:%d", port)
-	}
-
-	var lc net.ListenConfig
-	listener, err := lc.Listen(ctx, "tcp", addr)
+func StartImplicitCallbackServer(ctx context.Context, port int, expectedState string, opts ...CallbackOption) (*CallbackServer, error) {
+	cs, cfg, err := newCallbackServer(ctx, port, expectedState, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("starting local redirect server on %s: %w", addr, err)
+		return nil, err
 	}
 
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		listener.Close()
-		return nil, fmt.Errorf("unexpected listener address type: %T", listener.Addr())
-	}
-
-	cs := &CallbackServer{
-		RedirectURI:   fmt.Sprintf("http://localhost:%d", tcpAddr.Port),
-		listener:      listener,
-		resultCh:      make(chan CallbackResult, 1),
-		expectedState: expectedState,
-	}
-
+	// For implicit flow, the configured path serves the HTML page that extracts
+	// the fragment, and /token receives the POSTed token data.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", cs.handleImplicitCallback)
-	mux.HandleFunc("/token", cs.handleImplicitTokenPost)
+	mux.HandleFunc(cfg.path, cs.handleImplicitCallback)
+	mux.HandleFunc(implicitTokenPath, cs.handleImplicitTokenPost)
 
 	cs.server = &http.Server{
 		Handler:           mux,
@@ -216,7 +329,7 @@ func StartImplicitCallbackServer(ctx context.Context, port int, expectedState st
 	}
 
 	go func() {
-		if sErr := cs.server.Serve(listener); sErr != nil && sErr != http.ErrServerClosed {
+		if sErr := cs.server.Serve(cs.listener); sErr != nil && sErr != http.ErrServerClosed {
 			cs.sendResult(CallbackResult{Err: fmt.Errorf("redirect server error: %w", sErr)})
 		}
 	}()
@@ -245,8 +358,9 @@ func (cs *CallbackServer) handleImplicitTokenPost(w http.ResponseWriter, r *http
 
 	// Reject cross-origin requests. A simple POST with application/x-www-form-urlencoded
 	// Content-Type is not subject to CORS preflight, so a malicious page could inject
-	// a forged token. When Origin is present it must match the local callback server.
-	if origin := r.Header.Get("Origin"); origin != "" && origin != cs.RedirectURI {
+	// a forged token. When Origin is present it must match the local callback server's
+	// origin (scheme://host:port), not the full redirect URI which may include a path.
+	if origin := r.Header.Get("Origin"); origin != "" && origin != cs.origin {
 		http.Error(w, "cross-origin request rejected", http.StatusForbidden)
 		return
 	}
@@ -326,7 +440,7 @@ const implicitCallbackHTML = `<!DOCTYPE html>
     return;
   }
   var xhr = new XMLHttpRequest();
-  xhr.open("POST", "/token", true);
+  xhr.open("POST", "` + implicitTokenPath + `", true);
   xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
   xhr.onload = function() {
     if (xhr.status === 200) {

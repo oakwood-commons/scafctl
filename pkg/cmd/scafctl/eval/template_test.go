@@ -44,6 +44,7 @@ func TestCommandTemplate_Flags(t *testing.T) {
 		{"file flag", "file", ""},
 		{"show-refs flag", "show-refs", "false"},
 		{"output flag", "output", "auto"},
+		{"missing-key flag", "missing-key", "error"},
 	}
 
 	for _, tt := range tests {

@@ -88,8 +88,8 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 				"name": schemahelper.StringProp("Optional name for the template, used in error messages and logging. Defaults to 'template' for 'render' and 'render-tree' for the batch operation.",
 					schemahelper.WithExample("greeting-template"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
-				"missingKey": schemahelper.StringProp("Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error)",
-					schemahelper.WithDefault("default"),
+				"missingKey": schemahelper.StringProp("Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error). Default: error",
+					schemahelper.WithDefault("error"),
 					schemahelper.WithExample("error"),
 					schemahelper.WithEnum("default", "zero", "error")),
 				"leftDelim": schemahelper.StringProp("Left action delimiter (default: '{{'). Change this if your template content contains literal {{",
@@ -601,7 +601,7 @@ func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*pr
 
 // parseRenderingOptions extracts missingKey, leftDelim, and rightDelim from inputs.
 func (p *GoTemplateProvider) parseRenderingOptions(inputs map[string]any) (gotmpl.MissingKeyOption, string, string, error) {
-	missingKey := gotmpl.MissingKeyDefault
+	missingKey := gotmpl.MissingKeyError
 	if mk, ok := inputs["missingKey"].(string); ok && mk != "" {
 		switch mk {
 		case "default":

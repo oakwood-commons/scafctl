@@ -1241,7 +1241,7 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 func buildResolverExecutionError(err error, sol *solution.Solution) *mcp.CallToolResult {
 	diag := inspect.DiagnoseExecutionError(err, sol)
 
-	opts := make([]ErrorOption, 0, 1+len(diag.Suggestions))
+	opts := make([]ErrorOption, 0, len(diag.Suggestions))
 	opts = append(opts, WithRelatedTools("lint_solution", "inspect_solution"))
 	for _, s := range diag.Suggestions {
 		opts = append(opts, WithSuggestion(s))

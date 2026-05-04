@@ -83,6 +83,27 @@ func TestRegisterEvalEndpoints_Template_InvalidSyntax(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
 }
 
+func TestRegisterEvalEndpoints_Template_MissingKeyDefault(t *testing.T) {
+	_, testAPI := humatest.New(t)
+	hctx := newTestHandlerContext(t)
+	RegisterEvalEndpoints(testAPI, hctx, "/v1")
+
+	// With missingKey=default, missing keys should print "<no value>" instead of erroring
+	resp := testAPI.Post("/v1/eval/template", strings.NewReader(`{"template": "Hello {{ .missing }}", "missingKey": "default"}`), "Content-Type: application/json")
+	require.Equal(t, http.StatusOK, resp.Code)
+	assert.Contains(t, resp.Body.String(), "<no value>")
+}
+
+func TestRegisterEvalEndpoints_Template_MissingKeyError(t *testing.T) {
+	_, testAPI := humatest.New(t)
+	hctx := newTestHandlerContext(t)
+	RegisterEvalEndpoints(testAPI, hctx, "/v1")
+
+	// Default missingKey is error -- missing keys should return 400
+	resp := testAPI.Post("/v1/eval/template", strings.NewReader(`{"template": "Hello {{ .missing }}", "data": {}}`), "Content-Type: application/json")
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+}
+
 func BenchmarkCELEvalEndpoint(b *testing.B) {
 	_, testAPI := humatest.New(b)
 	var shutting int32

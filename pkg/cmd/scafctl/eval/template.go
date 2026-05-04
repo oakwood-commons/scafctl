@@ -31,6 +31,7 @@ type TemplateOptions struct {
 	Data         string
 	File         string
 	ShowRefs     bool
+	MissingKey   string
 }
 
 // TemplateResult holds the result of evaluating a Go template.
@@ -99,6 +100,7 @@ func CommandTemplate(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd.Flags().StringVar(&opts.File, "file", "", "JSON/YAML file for data context")
 	cCmd.Flags().BoolVar(&opts.ShowRefs, "show-refs", false, "Also output referenced template variables")
 	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "auto", "Output format: auto, json, yaml")
+	cCmd.Flags().StringVar(&opts.MissingKey, "missing-key", "error", "Behavior when a map key is missing: default, zero, error")
 
 	cCmd.MarkFlagsMutuallyExclusive("template", "template-file")
 
@@ -138,9 +140,10 @@ func (o *TemplateOptions) Run(ctx context.Context) error {
 
 	// Execute template
 	result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
-		Content: tmplContent,
-		Name:    "eval",
-		Data:    data,
+		Content:    tmplContent,
+		Name:       "eval",
+		Data:       data,
+		MissingKey: gotmpl.MissingKeyOption(o.MissingKey),
 	})
 	if err != nil {
 		w.Errorf("template execution failed: %v", err)
