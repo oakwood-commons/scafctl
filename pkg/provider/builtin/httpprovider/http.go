@@ -204,7 +204,7 @@ func NewHTTPProvider() *HTTPProvider {
 					"pageSizeParam": schemahelper.StringProp("Query parameter name for page size (pageNumber strategy, default: 'pageSize')",
 						schemahelper.WithExample("pageSize"),
 						schemahelper.WithMaxLength(*ptrs.IntPtr(100))),
-					"pageSize": schemahelper.IntProp("Page size for pageNumber strategy",
+					"pageSize": schemahelper.IntProp("Page size. Required for pageNumber strategy; also used as __pageSize in bodyTemplate for any strategy.",
 						schemahelper.WithExample(50),
 						schemahelper.WithMaximum(*ptrs.Float64Ptr(10000))),
 					"startPage": schemahelper.IntProp("Starting page number for pageNumber strategy (default: 1)",
@@ -229,6 +229,9 @@ func NewHTTPProvider() *HTTPProvider {
 					"collectPath": schemahelper.StringProp("CEL expression to extract items from each page's response body. Items are accumulated across pages into a single array.",
 						schemahelper.WithExample("body.items"),
 						schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
+					"bodyTemplate": schemahelper.StringProp("CEL expression evaluated per-page to generate the request body. Enables POST-based pagination (GraphQL, Elasticsearch). When set, overrides the top-level body field. Available variables: __page (1-indexed), __pageSize, __offset, __cursor.",
+						schemahelper.WithExample(`'{"query":"{ items(page: ' + string(__page) + ', size: ' + string(__pageSize) + ') { results { id } } }"}'`),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(50000))),
 				}),
 				"authProvider": schemahelper.StringProp("Authentication provider to use for this request (e.g., 'entra'). When set, the provider will automatically obtain and inject an access token.",
 					schemahelper.WithExample("entra"),
@@ -588,6 +591,9 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 
 	// If pagination is configured, use the paginated execution path
 	if pagCfg != nil {
+		if pagCfg.BodyTemplate != "" && !methodSupportsBody(method) {
+			return nil, fmt.Errorf("%s: pagination bodyTemplate requires method POST, PUT, or PATCH (got %q)", ProviderName, method)
+		}
 		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg)
 	}
 

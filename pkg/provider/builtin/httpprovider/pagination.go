@@ -31,6 +31,16 @@ const (
 	StrategyCustom     = "custom"
 )
 
+// methodSupportsBody returns true for HTTP methods that accept a request body.
+func methodSupportsBody(method string) bool {
+	switch strings.ToUpper(method) {
+	case "POST", "PUT", "PATCH":
+		return true
+	default:
+		return false
+	}
+}
+
 // paginationConfig holds parsed pagination configuration for HTTP requests.
 type paginationConfig struct {
 	Strategy string // "offset", "pageNumber", "cursor", "linkHeader", "custom"
@@ -56,6 +66,9 @@ type paginationConfig struct {
 	NextURL    string // CEL expression that returns the full URL for the next request (null/empty = stop)
 	NextParams string // CEL expression that returns a map of query params for the next request
 
+	// --- body template (POST body pagination) ---
+	BodyTemplate string // CEL expression to generate request body per-page (evaluated for every page)
+
 	// --- universal ---
 	StopWhen    string // CEL expression evaluated against each response; true = stop paginating
 	CollectPath string // CEL expression to extract items from each page's response body
@@ -71,6 +84,39 @@ func defaultPaginationConfig() paginationConfig {
 		PageParam:     "page",
 		PageSizeParam: "pageSize",
 	}
+}
+
+// pageSize returns the effective page size for the configured strategy.
+// Returns Limit for offset, PageSize for pageNumber. For other strategies,
+// returns PageSize if explicitly set (for bodyTemplate use), otherwise 0.
+func (c *paginationConfig) pageSize() int {
+	switch c.Strategy {
+	case StrategyOffset:
+		return c.Limit
+	case StrategyPageNumber:
+		return c.PageSize
+	default:
+		// PageSize may be explicitly set for bodyTemplate usage with cursor/linkHeader/custom
+		return c.PageSize
+	}
+}
+
+// initialOffset parses the initial offset value from the URL's query parameters
+// for the configured offset strategy. Returns 0 if not present or not applicable.
+func initialOffset(urlStr string, cfg *paginationConfig) int {
+	if cfg.Strategy != StrategyOffset {
+		return 0
+	}
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return 0
+	}
+	if v := u.Query().Get(cfg.OffsetParam); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 // parsePaginationConfig parses pagination configuration from inputs.
@@ -114,6 +160,9 @@ func parsePaginationConfig(inputs map[string]any) (*paginationConfig, error) {
 	}
 	if cp, ok := pagMap["collectPath"].(string); ok {
 		cfg.CollectPath = cp
+	}
+	if bt, ok := pagMap["bodyTemplate"].(string); ok {
+		cfg.BodyTemplate = bt
 	}
 
 	// Strategy-specific fields
@@ -168,17 +217,31 @@ func parsePaginationConfig(inputs map[string]any) (*paginationConfig, error) {
 		if nup, ok := pagMap["nextURLPath"].(string); ok {
 			cfg.NextURLPath = nup
 		}
+		// Allow pageSize for cursor strategy (used by bodyTemplate's __pageSize)
+		if ps, ok := pagMap["pageSize"].(int); ok && ps > 0 {
+			cfg.PageSize = ps
+		}
+		if ps, ok := pagMap["pageSize"].(float64); ok && ps > 0 {
+			cfg.PageSize = int(ps)
+		}
 		// Validate: must have nextTokenPath or nextURLPath
 		if cfg.NextTokenPath == "" && cfg.NextURLPath == "" {
 			return nil, fmt.Errorf("pagination: cursor strategy requires nextTokenPath or nextURLPath")
 		}
-		// If nextTokenPath is set, nextTokenParam is required
-		if cfg.NextTokenPath != "" && cfg.NextTokenParam == "" {
-			return nil, fmt.Errorf("pagination: nextTokenParam is required when nextTokenPath is set")
+		// If nextTokenPath is set, nextTokenParam is required unless bodyTemplate handles pagination
+		if cfg.NextTokenPath != "" && cfg.NextTokenParam == "" && cfg.BodyTemplate == "" {
+			return nil, fmt.Errorf("pagination: nextTokenParam is required when nextTokenPath is set (without bodyTemplate)")
 		}
 
 	case StrategyLinkHeader:
 		// No additional config required — follows rel="next" automatically
+		// Allow pageSize for bodyTemplate's __pageSize
+		if ps, ok := pagMap["pageSize"].(int); ok && ps > 0 {
+			cfg.PageSize = ps
+		}
+		if ps, ok := pagMap["pageSize"].(float64); ok && ps > 0 {
+			cfg.PageSize = int(ps)
+		}
 
 	case StrategyCustom:
 		if nu, ok := pagMap["nextURL"].(string); ok {
@@ -189,6 +252,13 @@ func parsePaginationConfig(inputs map[string]any) (*paginationConfig, error) {
 		}
 		if cfg.NextURL == "" && cfg.NextParams == "" {
 			return nil, fmt.Errorf("pagination: custom strategy requires nextURL or nextParams")
+		}
+		// Allow pageSize for bodyTemplate's __pageSize
+		if ps, ok := pagMap["pageSize"].(int); ok && ps > 0 {
+			cfg.PageSize = ps
+		}
+		if ps, ok := pagMap["pageSize"].(float64); ok && ps > 0 {
+			cfg.PageSize = int(ps)
 		}
 	}
 
@@ -218,9 +288,25 @@ func (p *HTTPProvider) executePaginated(
 	pageCount := 0
 	currentURL := urlStr
 
+	// Track state for bodyTemplate context variables.
+	// __page starts from startPage (or 1 for non-pageNumber strategies).
+	// __offset starts from the initial URL's offset param (or 0).
+	var lastCursor string
+	currentPage := pagCfg.StartPage
+	currentOffset := initialOffset(urlStr, pagCfg)
+
 	for pageCount < pagCfg.MaxPages {
 		pageCount++
 		lgr.V(1).Info("fetching page", "provider", ProviderName, "page", pageCount, "url", currentURL)
+
+		// Evaluate bodyTemplate if configured, replacing the request body for this page.
+		if pagCfg.BodyTemplate != "" {
+			newBody, err := p.evaluateBodyTemplate(ctx, pagCfg, currentPage, currentOffset, lastCursor)
+			if err != nil {
+				return nil, fmt.Errorf("%s: page %d bodyTemplate evaluation failed: %w", ProviderName, pageCount, err)
+			}
+			bodyContent = newBody
+		}
 
 		// Execute the request for this page
 		resp, err := p.doRequest(ctx, client, method, currentURL, bodyContent, headers)
@@ -287,17 +373,88 @@ func (p *HTTPProvider) executePaginated(
 			}
 		}
 
-		// Determine next page URL based on strategy
-		nextURL, stop, err := p.resolveNextPage(ctx, pagCfg, currentURL, resp, responseCtx)
-		if err != nil {
-			return nil, fmt.Errorf("%s: page %d failed to resolve next page: %w", ProviderName, pageCount, err)
-		}
-		if stop {
-			lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "no more pages")
-			break
-		}
+		// When bodyTemplate is set, pagination state lives in the body — do not
+		// mutate the URL. We still evaluate response-driven stop signals from
+		// each strategy so that linkHeader, custom, and cursor+nextURLPath
+		// correctly detect end-of-pagination.
+		if pagCfg.BodyTemplate != "" {
+			// Check response-driven stop signals per strategy.
+			bodyStop := false
+			switch pagCfg.Strategy {
+			case StrategyCursor:
+				if pagCfg.NextURLPath != "" {
+					result, err := evaluateCELForPagination(ctx, pagCfg.NextURLPath, responseCtx)
+					if err != nil {
+						return nil, fmt.Errorf("%s: page %d nextURLPath evaluation failed: %w", ProviderName, pageCount, err)
+					}
+					if isNullOrEmpty(result) {
+						lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "nextURLPath exhausted")
+						bodyStop = true
+					} else if s, ok := result.(string); !ok || s == "" {
+						lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "nextURLPath exhausted")
+						bodyStop = true
+					}
+				} else if pagCfg.NextTokenPath != "" {
+					cursor, err := evaluateCELForPagination(ctx, pagCfg.NextTokenPath, responseCtx)
+					if err != nil {
+						return nil, fmt.Errorf("%s: page %d nextTokenPath evaluation failed: %w", ProviderName, pageCount, err)
+					}
+					if isNullOrEmpty(cursor) {
+						lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "cursor exhausted")
+						bodyStop = true
+					} else if s, ok := cursor.(string); ok {
+						lastCursor = s
+					} else {
+						lastCursor = fmt.Sprintf("%v", cursor)
+					}
+				}
+			case StrategyLinkHeader:
+				// Only check whether a Link rel="next" header exists — don't
+				// validate the URL since we won't follow it in bodyTemplate mode.
+				if !hasLinkNextHeader(resp) {
+					lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "no Link rel=next header")
+					bodyStop = true
+				}
+			case StrategyCustom:
+				// Only check whether the custom expressions signal stop — don't
+				// validate the URL since we won't follow it in bodyTemplate mode.
+				stop, err := checkCustomStop(ctx, pagCfg, responseCtx)
+				if err != nil {
+					return nil, fmt.Errorf("%s: page %d custom stop evaluation failed: %w", ProviderName, pageCount, err)
+				}
+				if stop {
+					lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "custom expression signaled stop")
+					bodyStop = true
+				}
+			case StrategyOffset, StrategyPageNumber:
+				// Apply short-page stop heuristic: if the response body is a
+				// bare array with fewer items than pageSize, we're on the last page.
+				if pageCount > 1 {
+					if checkItemCountStop(responseCtx, pagCfg) {
+						lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "short page detected")
+						bodyStop = true
+					}
+				}
+			}
+			if bodyStop {
+				break
+			}
 
-		currentURL = nextURL
+			// Advance bodyTemplate state for next iteration.
+			currentPage++
+			currentOffset += pagCfg.pageSize()
+		} else {
+			// URL-based pagination: resolve the next page URL via strategy.
+			nextURL, stop, err := p.resolveNextPage(ctx, pagCfg, currentURL, resp, responseCtx)
+			if err != nil {
+				return nil, fmt.Errorf("%s: page %d failed to resolve next page: %w", ProviderName, pageCount, err)
+			}
+			if stop {
+				lgr.V(1).Info("pagination completed", "page", pageCount, "reason", "no more pages")
+				break
+			}
+			currentURL = nextURL
+		}
 	}
 
 	lgr.V(1).Info("pagination finished", "totalPages", pageCount, "totalItems", len(allItems))
@@ -629,6 +786,75 @@ func resolveCustomNext(ctx context.Context, currentURL string, pagCfg *paginatio
 	return "", true, nil
 }
 
+// hasLinkNextHeader checks whether the response contains a Link header with rel="next".
+// Used in bodyTemplate mode to detect end-of-pagination without host validation.
+func hasLinkNextHeader(resp *paginatedResponse) bool {
+	linkHeader, ok := resp.Headers["Link"]
+	if !ok {
+		return false
+	}
+
+	var linkStr string
+	switch v := linkHeader.(type) {
+	case string:
+		linkStr = v
+	case []string:
+		linkStr = strings.Join(v, ", ")
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				parts = append(parts, s)
+			}
+		}
+		linkStr = strings.Join(parts, ", ")
+	default:
+		return false
+	}
+
+	return linkHeaderRegex.MatchString(linkStr)
+}
+
+// checkCustomStop evaluates custom nextURL/nextParams expressions to determine if
+// pagination should stop. Used in bodyTemplate mode to check stop signals without
+// host validation (since the URL is not followed).
+func checkCustomStop(ctx context.Context, pagCfg *paginationConfig, responseCtx map[string]any) (bool, error) {
+	if pagCfg.NextURL != "" {
+		result, err := evaluateCELForPagination(ctx, pagCfg.NextURL, responseCtx)
+		if err != nil {
+			return true, fmt.Errorf("nextURL evaluation failed: %w", err)
+		}
+		if isNullOrEmpty(result) {
+			return true, nil
+		}
+		nextURL, ok := result.(string)
+		if !ok || nextURL == "" {
+			return true, nil
+		}
+		return false, nil
+	}
+
+	if pagCfg.NextParams != "" {
+		result, err := evaluateCELForPagination(ctx, pagCfg.NextParams, responseCtx)
+		if err != nil {
+			return true, fmt.Errorf("nextParams evaluation failed: %w", err)
+		}
+		if isNullOrEmpty(result) {
+			return true, nil
+		}
+		paramsMap, ok := result.(map[string]any)
+		if !ok {
+			return true, fmt.Errorf("nextParams must evaluate to a map, got %T", result)
+		}
+		if len(paramsMap) == 0 {
+			return true, nil
+		}
+		return false, nil
+	}
+
+	return true, nil
+}
+
 // checkItemCountStop checks if pagination should stop based on collected item count.
 // For offset and pageNumber strategies, if the response body is a JSON array and
 // has fewer items than the page size, we've reached the last page.
@@ -661,6 +887,44 @@ func evaluateCELForPagination(ctx context.Context, expression string, responseCt
 		return nil, err
 	}
 	return result, nil
+}
+
+// evaluateBodyTemplate evaluates a bodyTemplate CEL expression to produce the request body
+// for the current page. The expression receives pagination context variables:
+// __page (1-indexed page number), __pageSize, __offset, __cursor.
+func (p *HTTPProvider) evaluateBodyTemplate(
+	ctx context.Context,
+	pagCfg *paginationConfig,
+	page, offset int,
+	cursor string,
+) (string, error) {
+	bodyCtx := map[string]any{
+		"__page":     page,
+		"__pageSize": pagCfg.pageSize(),
+		"__offset":   offset,
+		"__cursor":   cursor,
+	}
+
+	result, err := celexp.EvaluateExpression(ctx, pagCfg.BodyTemplate, nil, bodyCtx)
+	if err != nil {
+		return "", err
+	}
+
+	if isNullOrEmpty(result) {
+		return "", nil
+	}
+
+	switch v := result.(type) {
+	case string:
+		return v, nil
+	default:
+		// Non-string results (maps, slices) are marshaled to JSON
+		jsonBytes, err := json.Marshal(v)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal bodyTemplate result to JSON: %w", err)
+		}
+		return string(jsonBytes), nil
+	}
 }
 
 // buildPaginatedOutput constructs the provider output for paginated requests.

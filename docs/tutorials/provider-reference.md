@@ -1511,7 +1511,7 @@ Extracts a cursor token or next URL from the response to fetch subsequent pages.
 | Field | Type | Description |
 |-------|------|-------------|
 | `nextTokenPath` | string | CEL expression to extract cursor from response (e.g., `body.nextCursor`) |
-| `nextTokenParam` | string | Query parameter to set with the cursor value (required with `nextTokenPath`) |
+| `nextTokenParam` | string | Query parameter to set with the cursor value (required with `nextTokenPath` unless `bodyTemplate` is set) |
 | `nextURLPath` | string | CEL expression to extract the full next page URL (e.g., `body['@odata.nextLink']`). Alternative to `nextTokenPath`. |
 
 Use `nextTokenPath` + `nextTokenParam` for APIs that return a token. Use `nextURLPath` for APIs that return a full URL (e.g., Microsoft Graph `@odata.nextLink`).
@@ -1528,6 +1528,63 @@ Full control using CEL expressions.
 |-------|------|-------------|
 | `nextURL` | string | CEL expression returning the full next page URL (empty string = stop) |
 | `nextParams` | string | CEL expression returning a map of query params for the next request (empty map = stop) |
+
+#### Body-Based Pagination (bodyTemplate)
+
+For APIs that paginate via the request body (GraphQL, Elasticsearch), use `bodyTemplate` to generate the POST body for each page instead of modifying URL query parameters.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `bodyTemplate` | string | CEL expression evaluated per-page to produce the request body. Overrides the top-level `body` field. The expression may return a string (sent as-is) or a map/list (automatically JSON-marshaled). If the expression evaluates to `null`, an empty body is sent. |
+
+**CEL variables available** in `bodyTemplate`:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `__page` | int | Current page number (starts at `startPage`, default 1) |
+| `__pageSize` | int | Page size from `pageSize` (pageNumber/cursor/linkHeader/custom) or `limit` (offset) |
+| `__offset` | int | Current offset (increments by `__pageSize` each page) |
+| `__cursor` | string | Last cursor value from `nextTokenPath` (cursor strategy) |
+
+When `bodyTemplate` is set, the URL remains unchanged across all pages --- pagination state is carried entirely in the request body.
+
+```yaml
+# GraphQL pagination with bodyTemplate
+provider: http
+inputs:
+  url: https://api.example.com/graphql
+  method: POST
+  headers:
+    Content-Type: application/json
+  pagination:
+    strategy: cursor
+    maxPages: 10
+    pageSize: 50
+    nextTokenPath: "body.data.pageInfo.endCursor"
+    bodyTemplate: |
+      __cursor == "" ?
+        '{"query":"{ items(first: ' + string(__pageSize) + ') { nodes { id } pageInfo { endCursor hasNextPage } } }"}'
+      :
+        '{"query":"{ items(first: ' + string(__pageSize) + ', after: \"' + __cursor + '\") { nodes { id } pageInfo { endCursor hasNextPage } } }"}'
+    collectPath: "body.data.items.nodes"
+    stopWhen: "body.data.items.pageInfo.hasNextPage == false"
+
+# Elasticsearch scroll with bodyTemplate
+provider: http
+inputs:
+  url: https://es.example.com/my-index/_search
+  method: POST
+  headers:
+    Content-Type: application/json
+  pagination:
+    strategy: offset
+    maxPages: 20
+    limit: 100
+    bodyTemplate: |
+      '{"from": ' + string(__offset) + ', "size": ' + string(__pageSize) + ', "query": {"match_all": {}}}'
+    collectPath: "body.hits.hits"
+    stopWhen: "size(body.hits.hits) == 0"
+```
 
 ### Polling
 

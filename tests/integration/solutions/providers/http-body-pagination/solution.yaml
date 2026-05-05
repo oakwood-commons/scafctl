@@ -1,0 +1,100 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-http-body-pagination
+  version: 1.0.0
+  description: |
+    Functional tests for HTTP provider body-based pagination (bodyTemplate).
+    Verifies that bodyTemplate generates correct request bodies per page
+    and that pagination collects items across pages.
+
+spec:
+  resolvers:
+    paginatedPost:
+      description: POST with bodyTemplate pagination
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/items'"
+              method: POST
+              headers:
+                Content-Type: application/json
+              pagination:
+                strategy: pageNumber
+                maxPages: 3
+                pageSize: 2
+                bodyTemplate: |
+                  '{"page": ' + string(__page) + ', "size": ' + string(__pageSize) + '}'
+                collectPath: "body.items"
+                stopWhen: "page == 3"
+
+    mockBaseUrl:
+      description: Base URL of mock server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: mock-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /api/items
+              method: POST
+              bodyContains: '"page": 1'
+              status: 200
+              body: '{"items":[{"id":1,"name":"alpha"},{"id":2,"name":"beta"}]}'
+              headers:
+                Content-Type: application/json
+            - path: /api/items
+              method: POST
+              bodyContains: '"page": 2'
+              status: 200
+              body: '{"items":[{"id":3,"name":"gamma"},{"id":4,"name":"delta"}]}'
+              headers:
+                Content-Type: application/json
+            - path: /api/items
+              method: POST
+              bodyContains: '"page": 3'
+              status: 200
+              body: '{"items":[]}'
+              headers:
+                Content-Type: application/json
+
+    cases:
+      _base:
+        description: Base template for body pagination tests
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml"]
+        tags: [provider, http, pagination]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode == 0
+
+      body-template-page-number:
+        description: Verify bodyTemplate pagination collects items from multiple pages
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.paginatedPost.statusCode == 200
+            message: "Last page should return 200"
+          - expression: __output.paginatedPost.pages == 3
+            message: "Should have fetched 3 pages"
+          - expression: __output.paginatedPost.totalItems == 4
+            message: "Should have collected 4 items (page 1: 2, page 2: 2, page 3: 0)"
