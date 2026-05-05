@@ -421,6 +421,10 @@ Service Status Report
 - You can nest `{{ if }}` inside `{{ range }}` to conditionally render per item.
 - `{{ len .list }}` returns the length of a list.
 
+{{% hint info %}}
+**Nil-safe `len`**: Unlike the built-in Go `len` function, scafctl's `len` returns `0` for nil values instead of panicking. This means `{{ if eq (len .maybeNil) 0 }}` is safe even when `.maybeNil` is not set.
+{{% /hint %}}
+
 ---
 
 ## Iterating Over Maps

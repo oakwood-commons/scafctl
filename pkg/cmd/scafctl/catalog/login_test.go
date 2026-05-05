@@ -151,6 +151,7 @@ func BenchmarkCommandLogin(b *testing.B) {
 // TestRunCatalogLogin_DirectCredentials tests the direct credential path via runCatalogLogin.
 func TestRunCatalogLogin_DirectCredentials(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	ctx := newCatalogTestCtx(t)
 

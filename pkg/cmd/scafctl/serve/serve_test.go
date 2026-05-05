@@ -4,8 +4,12 @@
 package serve
 
 import (
+	"context"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -81,4 +85,32 @@ func BenchmarkCommandServe(b *testing.B) {
 	for b.Loop() {
 		CommandServe(cliParams, ioStreams, "scafctl")
 	}
+}
+
+func TestPreloadOfficialProviders_SkipsRegistered(t *testing.T) {
+	ctx := context.Background()
+	reg, err := builtin.DefaultRegistry(ctx)
+	require.NoError(t, err)
+
+	// Create an official registry containing "http" which is already a builtin.
+	// preloadOfficialProviders should skip it since it's already registered.
+	officialReg := official.NewRegistryFrom([]official.Provider{
+		{Name: "http", CatalogRef: "http", DefaultVersion: "latest"},
+	})
+
+	// No plugin fetcher needed -- all providers are already registered
+	clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, nil)
+	assert.NoError(t, preloadErr)
+	assert.Empty(t, clients)
+}
+
+func TestPreloadOfficialProviders_NilFetcher(t *testing.T) {
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+
+	// Without a fetcher, should return nil (not panic)
+	clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, nil)
+	assert.Nil(t, clients)
+	assert.Nil(t, preloadErr)
 }

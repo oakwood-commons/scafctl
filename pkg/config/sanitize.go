@@ -18,6 +18,7 @@ type SanitizedConfig struct {
 	Action     ActionConfig       `json:"action" yaml:"action" doc:"Action execution configuration"`
 	Auth       SanitizedAuth      `json:"auth" yaml:"auth" doc:"Authentication configuration (redacted)"`
 	Build      BuildConfig        `json:"build" yaml:"build" doc:"Build configuration"`
+	APIServer  APIServerConfig    `json:"apiServer,omitempty" yaml:"apiServer,omitempty" doc:"REST API server configuration"`
 }
 
 // SanitizedCatalog redacts auth tokens from catalog config.
@@ -78,6 +79,7 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 		Resolver:   cfg.Resolver,
 		Action:     cfg.Action,
 		Build:      cfg.Build,
+		APIServer:  cfg.APIServer,
 	}
 
 	// Sanitize catalogs

@@ -22,12 +22,13 @@ import (
 // Fetcher resolves, downloads, caches, and loads plugin binaries at runtime.
 // It checks a local cache first, then falls back to fetching from catalogs.
 type Fetcher struct {
-	binaryName     string
-	catalogFetcher *catalog.PluginFetcher
-	cache          *Cache
-	platform       string
-	noCache        bool
-	logger         logr.Logger
+	binaryName      string
+	catalogFetcher  *catalog.PluginFetcher
+	cache           *Cache
+	platform        string
+	noCache         bool
+	logger          logr.Logger
+	allowedCatalogs map[string]bool // if non-nil, only these catalog names are permitted
 }
 
 // FetcherConfig configures a Fetcher.
@@ -48,6 +49,10 @@ type FetcherConfig struct {
 	// BinaryName is the CLI binary name used in user-facing messages (e.g.,
 	// "Run 'mycli build solution' to pin..."). Defaults to "scafctl" when empty.
 	BinaryName string
+
+	// AllowedCatalogs restricts which catalog names plugins may be fetched
+	// from. If empty, all catalogs are allowed.
+	AllowedCatalogs []string
 
 	// Logger for logging operations.
 	Logger logr.Logger
@@ -70,13 +75,22 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		binaryName = "scafctl" // fallback must match settings.CliBinaryName
 	}
 
+	var allowedCatalogs map[string]bool
+	if len(cfg.AllowedCatalogs) > 0 {
+		allowedCatalogs = make(map[string]bool, len(cfg.AllowedCatalogs))
+		for _, name := range cfg.AllowedCatalogs {
+			allowedCatalogs[strings.ToLower(name)] = true
+		}
+	}
+
 	return &Fetcher{
-		binaryName:     binaryName,
-		catalogFetcher: catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
-		cache:          cache,
-		platform:       platform,
-		noCache:        cfg.NoCache,
-		logger:         cfg.Logger.WithName("plugin-fetcher"),
+		binaryName:      binaryName,
+		catalogFetcher:  catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
+		cache:           cache,
+		platform:        platform,
+		noCache:         cfg.NoCache,
+		logger:          cfg.Logger.WithName("plugin-fetcher"),
+		allowedCatalogs: allowedCatalogs,
 	}
 }
 
@@ -171,6 +185,11 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 			"name", dep.Name,
 			"version", version,
 			"digest", expectedDigest)
+
+		// Security: check catalog allowlist even for locked entries.
+		if err := f.checkCatalogAllowed(resolvedFrom); err != nil {
+			return FetchResult{}, err
+		}
 	} else {
 		// No lock file — prefer cached version to avoid network latency.
 		// Only resolve from catalog if no cached version exists.
@@ -185,6 +204,11 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 					}
 				}
 				if useCached {
+					// Security: reject cached plugins when an allowlist is configured
+					// but cache lacks catalog origin metadata.
+					if err := f.checkCatalogAllowed(""); err != nil {
+						return FetchResult{}, fmt.Errorf("cached plugin %s: %w", dep.Name, err)
+					}
 					f.logger.V(1).Info("using cached plugin (no lock file)",
 						"name", dep.Name,
 						"version", cachedVer,
@@ -211,6 +235,11 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 			// Fallback: if catalog resolution fails, check if a cached version exists.
 			if !f.noCache {
 				if cachedPath, cachedVer, ok := f.cache.GetLatestCached(dep.Name, f.platform); ok {
+					// Security: reject cached plugins when an allowlist is configured
+					// but cache lacks catalog origin metadata.
+					if allowErr := f.checkCatalogAllowed(""); allowErr != nil {
+						return FetchResult{}, fmt.Errorf("cached plugin %s: %w", dep.Name, allowErr)
+					}
 					f.logger.V(0).Info("catalog resolution failed, using cached version",
 						"name", dep.Name,
 						"version", cachedVer,
@@ -233,6 +262,11 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		}
 		expectedDigest = info.Digest
 		resolvedFrom = info.Catalog
+
+		// Security: check catalog allowlist before proceeding with fetch.
+		if err := f.checkCatalogAllowed(resolvedFrom); err != nil {
+			return FetchResult{}, err
+		}
 
 		// Verify the resolved version satisfies the constraint.
 		// "latest" means "whatever the resolver picked" and is not a valid
@@ -465,6 +499,23 @@ func pluginKindToArtifactKind(kind solution.PluginKind) catalog.ArtifactKind {
 }
 
 // findLockPlugin looks up a lock plugin entry by name and kind.
+// checkCatalogAllowed returns an error if the catalog is not in the
+// configured allowlist. If no allowlist is configured, all catalogs are
+// permitted. An empty resolvedFrom (e.g. from cache with no catalog metadata)
+// is rejected when an allowlist is configured, since the origin cannot be verified.
+func (f *Fetcher) checkCatalogAllowed(resolvedFrom string) error {
+	if f.allowedCatalogs == nil {
+		return nil
+	}
+	if resolvedFrom == "" {
+		return fmt.Errorf("plugin origin unknown (cached without catalog metadata); cannot verify against allowlist")
+	}
+	if !f.allowedCatalogs[strings.ToLower(resolvedFrom)] {
+		return fmt.Errorf("catalog %q is not in the allowed catalogs list", resolvedFrom)
+	}
+	return nil
+}
+
 func findLockPlugin(plugins []bundler.LockPlugin, name, kind string) *bundler.LockPlugin {
 	for i := range plugins {
 		if plugins[i].Name == name && plugins[i].Kind == kind {

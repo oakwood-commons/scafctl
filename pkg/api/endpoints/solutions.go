@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
 	"github.com/oakwood-commons/scafctl/pkg/lint"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 )
@@ -193,6 +194,16 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			return nil, api.HandleError(ctx, err, "solution-dryrun", http.StatusBadRequest, "failed to load solution")
 		}
 
+		// Ensure external plugins from bundle.plugins are available and
+		// acquire refcounts to prevent eviction during this request.
+		if hctx.PluginPool != nil && len(sol.Bundle.Plugins) > 0 {
+			release, err := hctx.PluginPool.EnsureAndAcquire(ctx, sol.Bundle.Plugins)
+			if err != nil {
+				return nil, api.HandleError(ctx, err, "solution-dryrun", plugin.PoolErrorHTTPStatus(err), "failed to load required plugins")
+			}
+			defer release()
+		}
+
 		opts := dryrun.Options{
 			Registry: hctx.ProviderRegistry,
 			Verbose:  input.Body.Verbose,
@@ -225,6 +236,16 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-run", http.StatusBadRequest, "failed to load solution")
+		}
+
+		// Ensure external plugins from bundle.plugins are available and
+		// acquire refcounts to prevent eviction during this request.
+		if hctx.PluginPool != nil && len(sol.Bundle.Plugins) > 0 {
+			release, err := hctx.PluginPool.EnsureAndAcquire(ctx, sol.Bundle.Plugins)
+			if err != nil {
+				return nil, api.HandleError(ctx, err, "solution-run", plugin.PoolErrorHTTPStatus(err), "failed to load required plugins")
+			}
+			defer release()
 		}
 
 		// Validate solution first
@@ -274,6 +295,16 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-render", http.StatusBadRequest, "failed to load solution")
+		}
+
+		// Ensure external plugins from bundle.plugins are available and
+		// acquire refcounts to prevent eviction during this request.
+		if hctx.PluginPool != nil && len(sol.Bundle.Plugins) > 0 {
+			release, err := hctx.PluginPool.EnsureAndAcquire(ctx, sol.Bundle.Plugins)
+			if err != nil {
+				return nil, api.HandleError(ctx, err, "solution-render", plugin.PoolErrorHTTPStatus(err), "failed to load required plugins")
+			}
+			defer release()
 		}
 
 		validation := execute.ValidateSolution(ctx, sol, hctx.ProviderRegistry)
