@@ -32,7 +32,7 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 			mcp.Enum("provider", "auth-handler"),
 		),
 	)
-	s.mcpServer.AddTool(listPlatformsTool, s.handleCatalogListPlatforms)
+	s.addTool(listPlatformsTool, s.handleCatalogListPlatforms)
 
 	buildPluginTool := mcp.NewTool("build_plugin",
 		mcp.WithDescription("Build a multi-platform plugin artifact into the local catalog as an OCI image index. Each platform entry maps an OS/architecture pair to a local binary path. Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64. Use this to package cross-compiled plugin binaries for distribution."),
@@ -66,7 +66,7 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 			mcp.Description("Working directory for path resolution. When set, relative platform binary paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(buildPluginTool, s.handleBuildPlugin)
+	s.addTool(buildPluginTool, s.handleBuildPlugin)
 }
 
 // handleCatalogListPlatforms lists platforms for a multi-platform catalog artifact.

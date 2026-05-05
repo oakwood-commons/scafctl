@@ -35,7 +35,7 @@ func (s *Server) registerDiffTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(diffSolutionTool, s.handleDiffSolution)
+	s.addTool(diffSolutionTool, s.handleDiffSolution)
 }
 
 // handleDiffSolution compares two solutions structurally.

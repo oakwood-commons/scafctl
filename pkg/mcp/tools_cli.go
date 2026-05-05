@@ -35,7 +35,7 @@ func (s *Server) registerCLITools() {
 			mcp.Description("Space-separated command path (e.g. \"run solution\", \"catalog list\"). Omit to list all commands."),
 		),
 	)
-	s.mcpServer.AddTool(getCommandHelpTool, s.handleGetCommandHelp)
+	s.addTool(getCommandHelpTool, s.handleGetCommandHelp)
 }
 
 // handleGetCommandHelp returns structured CLI help.

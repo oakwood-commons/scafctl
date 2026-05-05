@@ -6858,6 +6858,74 @@ func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
 	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool to be registered")
 }
 
+func TestIntegration_MCPListHelp(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "List all tools and prompts")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_MCPList(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "list", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+
+	var caps []struct {
+		Kind   string `json:"kind"`
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &caps))
+	assert.NotEmpty(t, caps, "should list capabilities")
+
+	var hasTools, hasPrompts bool
+	for _, c := range caps {
+		if c.Kind == "tool" {
+			hasTools = true
+		}
+		if c.Kind == "prompt" {
+			hasPrompts = true
+		}
+		assert.NotEmpty(t, c.Name, "capability should have a name")
+		assert.Equal(t, "core", c.Source, "all default capabilities should be core")
+	}
+	assert.True(t, hasTools, "should contain tools")
+	assert.True(t, hasPrompts, "should contain prompts")
+}
+
+func TestIntegration_MCPListKindFilter(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "list", "--kind", "prompt", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+
+	var caps []struct {
+		Kind string `json:"kind"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &caps))
+	assert.NotEmpty(t, caps)
+
+	for _, c := range caps {
+		assert.Equal(t, "prompt", c.Kind, "all results should be prompts")
+	}
+}
+
+func TestIntegration_MCPListInvalidKind(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, exitCode := runScafctl(t, "mcp", "list", "--kind", "invalid")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid --kind value")
+}
+
 // ============================================================================
 // Snapshot Command Tests
 // ============================================================================

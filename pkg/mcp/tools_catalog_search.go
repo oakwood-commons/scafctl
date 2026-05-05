@@ -46,7 +46,7 @@ func (s *Server) registerCatalogSearchTools() {
 			mcp.Description("Catalog name to search. Omit for default catalog, use 'all' to search all registered catalogs, or 'local' for local only"),
 		),
 	)
-	s.mcpServer.AddTool(catalogSearchTool, s.handleCatalogSearch)
+	s.addTool(catalogSearchTool, s.handleCatalogSearch)
 
 	catalogListSolutionsTool := mcp.NewTool("catalog_list_solutions",
 		mcp.WithDescription(fmt.Sprintf(
@@ -65,7 +65,7 @@ func (s *Server) registerCatalogSearchTools() {
 			mcp.Description("Catalog name to list from. Omit for default catalog, use 'all' for all registered catalogs, or 'local' for local only"),
 		),
 	)
-	s.mcpServer.AddTool(catalogListSolutionsTool, s.handleCatalogListSolutions)
+	s.addTool(catalogListSolutionsTool, s.handleCatalogListSolutions)
 
 	catalogListRegisteredTool := mcp.NewTool("catalog_list_registered",
 		mcp.WithDescription("List all registered catalogs with their type, registry, and default status. Use this to discover which catalogs are available for search and listing."),
@@ -76,7 +76,7 @@ func (s *Server) registerCatalogSearchTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcpServer.AddTool(catalogListRegisteredTool, s.handleCatalogListRegistered)
+	s.addTool(catalogListRegisteredTool, s.handleCatalogListRegistered)
 }
 
 // handleCatalogSearch searches catalogs for solutions.

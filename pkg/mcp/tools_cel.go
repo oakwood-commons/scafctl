@@ -40,7 +40,7 @@ func (s *Server) registerCELTools() {
 			mcp.Description("Search functions by name or description (substring match). More flexible than 'name' which only matches function names."),
 		),
 	)
-	s.mcpServer.AddTool(listCELFunctionsTool, s.handleListCELFunctions)
+	s.addTool(listCELFunctionsTool, s.handleListCELFunctions)
 
 	// evaluate_cel
 	evaluateCELTool := mcp.NewTool("evaluate_cel",
@@ -66,7 +66,7 @@ func (s *Server) registerCELTools() {
 			mcp.Description("Path to a YAML/JSON file to load as root data (alternative to 'data')"),
 		),
 	)
-	s.mcpServer.AddTool(evaluateCELTool, s.handleEvaluateCEL)
+	s.addTool(evaluateCELTool, s.handleEvaluateCEL)
 }
 
 // handleListCELFunctions lists available CEL functions.

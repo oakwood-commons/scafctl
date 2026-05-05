@@ -40,7 +40,7 @@ func (s *Server) registerRefsTools() {
 			mcp.Description("Working directory for path resolution. When set, relative file paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(extractRefssTool, s.handleExtractResolverRefs)
+	s.addTool(extractRefssTool, s.handleExtractResolverRefs)
 }
 
 // handleExtractResolverRefs extracts resolver references from expressions.

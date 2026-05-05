@@ -22,7 +22,7 @@ func (s *Server) registerVersionTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaVersion),
 	)
-	s.mcpServer.AddTool(getVersionTool, s.handleGetVersion)
+	s.addTool(getVersionTool, s.handleGetVersion)
 }
 
 // handleGetVersion returns the scafctl version information.

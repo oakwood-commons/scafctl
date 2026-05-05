@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -139,4 +140,101 @@ func (s *Server) elicitMissingParams(ctx context.Context, paramNames []string, d
 	}
 
 	return values
+}
+
+// CapabilityKind distinguishes tools from prompts.
+type CapabilityKind string
+
+const (
+	// CapabilityTool is an MCP tool (callable by agents).
+	CapabilityTool CapabilityKind = "tool"
+	// CapabilityPrompt is an MCP prompt (template for agent interactions).
+	CapabilityPrompt CapabilityKind = "prompt"
+)
+
+// CapabilitySource identifies where a capability was registered.
+type CapabilitySource string
+
+const (
+	// SourceCore marks capabilities registered by scafctl itself.
+	SourceCore CapabilitySource = "core"
+	// SourcePlugin marks capabilities registered by plugins or embedders.
+	SourcePlugin CapabilitySource = "plugin"
+)
+
+// Capability describes a single MCP tool or prompt.
+type Capability struct {
+	Kind        CapabilityKind   `json:"kind"        yaml:"kind"`
+	Name        string           `json:"name"        yaml:"name"`
+	Title       string           `json:"title"       yaml:"title"`
+	Description string           `json:"description" yaml:"description"`
+	Source      CapabilitySource `json:"source"      yaml:"source"`
+	ReadOnly    bool             `json:"readOnly"    yaml:"readOnly"`
+	Destructive bool             `json:"destructive" yaml:"destructive"`
+}
+
+// ListCapabilities returns all tools and tracked prompts registered on
+// the server. Prompts must be registered via Server.AddPrompt (or the
+// internal addCorePrompt) to appear; prompts added directly through
+// MCPServer().AddPrompt() are not tracked.
+// Core capabilities are tagged with SourceCore; embedder/plugin
+// capabilities are tagged with SourcePlugin.
+// The contextual tool filter is applied, so results match what MCP
+// clients would discover at runtime.
+func (s *Server) ListCapabilities() []Capability {
+	// Tools — apply the same contextual filter used by the MCP protocol
+	registered := s.mcpServer.ListTools()
+	caps := make([]Capability, 0, len(registered)+len(s.prompts))
+	allTools := make([]mcp.Tool, 0, len(registered))
+	for _, st := range registered {
+		allTools = append(allTools, st.Tool)
+	}
+
+	filterFn := contextualToolFilter(s)
+	visible := filterFn(context.Background(), allTools)
+
+	for _, t := range visible {
+		source := SourcePlugin
+		if _, ok := s.coreTools[t.Name]; ok {
+			source = SourceCore
+		}
+		c := Capability{
+			Kind:        CapabilityTool,
+			Name:        t.Name,
+			Title:       t.Annotations.Title,
+			Description: t.Description,
+			Source:      source,
+		}
+		if t.Annotations.ReadOnlyHint != nil {
+			c.ReadOnly = *t.Annotations.ReadOnlyHint
+		}
+		if t.Annotations.DestructiveHint != nil {
+			c.Destructive = *t.Annotations.DestructiveHint
+		}
+		caps = append(caps, c)
+	}
+
+	// Prompts — sourced from our tracked list
+	for _, p := range s.prompts {
+		source := SourcePlugin
+		if _, ok := s.corePrompts[p.Name]; ok {
+			source = SourceCore
+		}
+		caps = append(caps, Capability{
+			Kind:        CapabilityPrompt,
+			Name:        p.Name,
+			Description: p.Description,
+			Source:      source,
+			ReadOnly:    true,
+		})
+	}
+
+	sort.Slice(caps, func(i, j int) bool {
+		if caps[i].Kind != caps[j].Kind {
+			return caps[i].Kind < caps[j].Kind
+		}
+		return caps[i].Name < caps[j].Name
+	})
+
+	return caps
 }

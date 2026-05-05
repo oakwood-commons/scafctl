@@ -30,7 +30,7 @@ func (s *Server) registerSchemaTools() {
 			mcp.Description("Optional: get schema for a specific field path (dot-separated, e.g., 'metadata', 'spec.resolvers', 'spec.workflow.actions'). Omit to get the full schema."),
 		),
 	)
-	s.mcpServer.AddTool(getSolutionSchemaTool, s.handleGetSolutionSchema)
+	s.addTool(getSolutionSchemaTool, s.handleGetSolutionSchema)
 
 	// explain_kind — introspect any registered kind (solution, resolver, action, etc.)
 	explainKindTool := mcp.NewTool("explain_kind",
@@ -49,7 +49,7 @@ func (s *Server) registerSchemaTools() {
 			mcp.Description("Optional field path to drill into (dot-separated, e.g., 'metadata', 'resolve.with')"),
 		),
 	)
-	s.mcpServer.AddTool(explainKindTool, s.handleExplainKind)
+	s.addTool(explainKindTool, s.handleExplainKind)
 }
 
 // handleGetSolutionSchema returns the full JSON Schema for a solution YAML file.

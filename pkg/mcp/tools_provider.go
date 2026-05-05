@@ -32,7 +32,7 @@ func (s *Server) registerProviderTools() {
 			mcp.Description("Filter by category"),
 		),
 	)
-	s.mcpServer.AddTool(listProvidersTool, s.handleListProviders)
+	s.addTool(listProvidersTool, s.handleListProviders)
 
 	// get_provider_schema
 	getProviderSchemaTool := mcp.NewTool("get_provider_schema",
@@ -48,7 +48,7 @@ func (s *Server) registerProviderTools() {
 			mcp.Description("Provider name (e.g., http, static, file, cel, parameter)"),
 		),
 	)
-	s.mcpServer.AddTool(getProviderSchemaTool, s.handleGetProviderSchema)
+	s.addTool(getProviderSchemaTool, s.handleGetProviderSchema)
 
 	// get_provider_output_shape
 	getProviderOutputShapeTool := mcp.NewTool("get_provider_output_shape",
@@ -68,7 +68,7 @@ func (s *Server) registerProviderTools() {
 			mcp.Enum("from", "transform", "validation", "authentication", "action"),
 		),
 	)
-	s.mcpServer.AddTool(getProviderOutputShapeTool, s.handleGetProviderOutputShape)
+	s.addTool(getProviderOutputShapeTool, s.handleGetProviderOutputShape)
 
 	// run_provider
 	runProviderTool := mcp.NewTool("run_provider",
@@ -100,7 +100,7 @@ func (s *Server) registerProviderTools() {
 			mcp.Description("Preview what would happen without executing. Defaults to false."),
 		),
 	)
-	s.mcpServer.AddTool(runProviderTool, s.handleRunProvider)
+	s.addTool(runProviderTool, s.handleRunProvider)
 }
 
 // providerItem is a structured response for provider listings.

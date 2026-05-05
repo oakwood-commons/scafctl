@@ -60,7 +60,7 @@ func (s *Server) registerPrompts() {
 	replaceName := s.replaceName
 
 	// create_solution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("create_solution",
 			mcp.WithPromptDescription(replaceName("Guide for creating a new scafctl solution YAML file from scratch. Provides the solution schema, examples, and step-by-step instructions.")),
 			mcp.WithPromptIcons(promptIcons["create"]),
@@ -80,7 +80,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// debug_solution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("debug_solution",
 			mcp.WithPromptDescription(replaceName("Help debug a scafctl solution that isn't working as expected. Inspects the solution, lints it, and suggests fixes.")),
 			mcp.WithPromptIcons(promptIcons["debug"]),
@@ -96,7 +96,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// add_resolver prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("add_resolver",
 			mcp.WithPromptDescription("Guide for adding a new resolver to an existing solution. Shows available providers, schema, and patterns."),
 			mcp.WithPromptIcons(promptIcons["create"]),
@@ -112,7 +112,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// add_action prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("add_action",
 			mcp.WithPromptDescription("Guide for adding a new action to an existing solution's workflow. Shows available action providers, schema, and patterns."),
 			mcp.WithPromptIcons(promptIcons["create"]),
@@ -128,7 +128,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// update_solution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("update_solution",
 			mcp.WithPromptDescription(replaceName("Guide for modifying an existing scafctl solution. Inspects the current state, makes targeted changes, then validates with lint and preview.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
@@ -145,7 +145,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// add_tests prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("add_tests",
 			mcp.WithPromptDescription(replaceName("Guide for writing functional tests for a scafctl solution. Walks through test schema, assertions, snapshots, and test patterns.")),
 			mcp.WithPromptIcons(promptIcons["create"]),
@@ -161,7 +161,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// compose_solution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("compose_solution",
 			mcp.WithPromptDescription(replaceName("Guide for designing a multi-file composed solution using scafctl's composition system. Breaks a solution into reusable partial YAML files that get merged at build time.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
@@ -178,7 +178,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// fix_lint prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("fix_lint",
 			mcp.WithPromptDescription(replaceName("Guide for fixing lint findings in a scafctl solution. Lints the solution, explains each finding, and applies targeted fixes in priority order (errors first, then warnings).")),
 			mcp.WithPromptIcons(promptIcons["debug"]),
@@ -194,7 +194,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// prepare_execution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("prepare_execution",
 			mcp.WithPromptDescription(replaceName("Prepare a scafctl solution for execution. Validates, previews, and generates the exact CLI command — without actually running it. Use this when you're ready to run a solution but want to verify everything first.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
@@ -210,7 +210,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// analyze_execution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("analyze_execution",
 			mcp.WithPromptDescription(replaceName("Analyze a completed scafctl execution by inspecting the snapshot. Identifies failures, regressions, and suggests fixes. Optionally compares against a known-good snapshot.")),
 			mcp.WithPromptIcons(promptIcons["analyze"]),
@@ -229,7 +229,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// migrate_solution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("migrate_solution",
 			mcp.WithPromptDescription(replaceName("Guide for structurally refactoring a scafctl solution. Supports adding composition, extracting templates, splitting into multiple files, adding tests, and upgrading to newer patterns.")),
 			mcp.WithPromptIcons(promptIcons["guide"]),
@@ -249,7 +249,7 @@ func (s *Server) registerPrompts() {
 	)
 
 	// optimize_solution prompt
-	s.mcpServer.AddPrompt(
+	s.addCorePrompt(
 		mcp.NewPrompt("optimize_solution",
 			mcp.WithPromptDescription(replaceName("Analyze a scafctl solution for performance, readability, and quality improvements. Identifies parallelization opportunities, unnecessary dependencies, naming issues, and missing test coverage.")),
 			mcp.WithPromptIcons(promptIcons["analyze"]),

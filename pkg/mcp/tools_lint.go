@@ -30,7 +30,7 @@ func (s *Server) registerLintTools() {
 			mcp.Description("Filter by category (e.g., 'structure', 'naming', 'provider', 'expression', 'schema'). Omit to list all."),
 		),
 	)
-	s.mcpServer.AddTool(listLintRulesTool, s.handleListLintRules)
+	s.addTool(listLintRulesTool, s.handleListLintRules)
 
 	// explain_lint_rule
 	explainLintRuleTool := mcp.NewTool("explain_lint_rule",
@@ -47,7 +47,7 @@ func (s *Server) registerLintTools() {
 			mcp.Description("The lint rule name to explain (e.g., 'unused-resolver', 'invalid-expression', 'missing-provider')"),
 		),
 	)
-	s.mcpServer.AddTool(explainLintRuleTool, s.handleExplainLintRule)
+	s.addTool(explainLintRuleTool, s.handleExplainLintRule)
 }
 
 // lintRuleSummary is a compact view of a lint rule for listing.

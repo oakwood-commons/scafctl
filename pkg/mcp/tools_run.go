@@ -59,7 +59,7 @@ func (s *Server) registerRunTools() {
 			mcp.Description("Include execution metadata (timing, phases, providers) in the response."),
 		),
 	)
-	s.mcpServer.AddTool(runSolutionTool, s.handleRunSolution)
+	s.addTool(runSolutionTool, s.handleRunSolution)
 }
 
 // handleRunSolution executes a solution through the domain layer.

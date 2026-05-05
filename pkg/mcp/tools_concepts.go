@@ -31,7 +31,7 @@ func (s *Server) registerConceptTools() {
 			mcp.Description("Filter concepts by category (e.g., 'resolvers', 'testing', 'providers', 'actions')"),
 		),
 	)
-	s.mcpServer.AddTool(tool, s.handleExplainConcepts)
+	s.addTool(tool, s.handleExplainConcepts)
 }
 
 // handleExplainConcepts handles the explain_concepts MCP tool.
