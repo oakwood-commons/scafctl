@@ -551,6 +551,23 @@ type APIServerConfig struct {
 	Audit           APIAuditConfig       `json:"audit,omitempty" yaml:"audit,omitempty" mapstructure:"audit" doc:"Audit logging configuration"`
 	Tracing         APITracingConfig     `json:"tracing,omitempty" yaml:"tracing,omitempty" mapstructure:"tracing" doc:"OpenTelemetry tracing configuration"`
 	MaxConcurrent   int                  `json:"maxConcurrent,omitempty" yaml:"maxConcurrent,omitempty" mapstructure:"maxConcurrent" doc:"Maximum concurrent in-flight requests (chi Throttle, not TCP connections)" maximum:"100000" example:"1000"`
+	Plugins         APIPluginConfig      `json:"plugins,omitempty" yaml:"plugins,omitempty" mapstructure:"plugins" doc:"Plugin security configuration"`
+}
+
+// APIPluginConfig holds security settings for plugin execution in the API server.
+type APIPluginConfig struct {
+	// AllowExternal enables loading of external (non-official) plugins via
+	// API requests. Defaults to false (only pre-loaded official providers).
+	AllowExternal bool `json:"allowExternal,omitempty" yaml:"allowExternal,omitempty" mapstructure:"allowExternal" doc:"Allow loading external plugins from solution bundles (default: false for security)"`
+
+	// AllowedPlugins is an explicit allowlist of plugin names that may be
+	// loaded. Empty means all plugins are permitted (when AllowExternal is true).
+	AllowedPlugins []string `json:"allowedPlugins,omitempty" yaml:"allowedPlugins,omitempty" mapstructure:"allowedPlugins" doc:"Explicit plugin name allowlist (empty = allow all when allowExternal is true)" maxItems:"200"`
+
+	// AllowedCatalogs restricts which configured catalogs plugins may be
+	// fetched from. Catalog names are matched against catalog config entries.
+	// Empty means all configured catalogs are permitted.
+	AllowedCatalogs []string `json:"allowedCatalogs,omitempty" yaml:"allowedCatalogs,omitempty" mapstructure:"allowedCatalogs" doc:"Catalog name allowlist for plugin fetches (empty = allow all configured catalogs)" maxItems:"50"`
 }
 
 // APITLSConfig holds TLS configuration for the API server.

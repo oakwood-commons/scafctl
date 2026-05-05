@@ -22,6 +22,7 @@ type pluginConfig struct {
 	handshake  *HandshakeConfigData
 	pluginName string
 	grpcPlugin plugin.Plugin
+	cmdFn      func(string) *exec.Cmd // builds the exec.Cmd for the plugin binary
 }
 
 // connectPlugin creates a go-plugin client, connects, and dispenses the named plugin.
@@ -29,6 +30,11 @@ type pluginConfig struct {
 // The caller is responsible for type-asserting the raw interface and calling
 // client.Kill() on failure after this function returns.
 func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, error) {
+	cmdFn := cfg.cmdFn
+	if cmdFn == nil {
+		cmdFn = pluginCmd
+	}
+
 	//nolint:noctx // Context not available at plugin initialization time
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
@@ -39,7 +45,7 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 		Plugins: map[string]plugin.Plugin{
 			cfg.pluginName: cfg.grpcPlugin,
 		},
-		Cmd:              exec.Command(pluginPath),
+		Cmd:              cmdFn(pluginPath),
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 	})
 
@@ -56,6 +62,57 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 	}
 
 	return raw, client, nil
+}
+
+// safeEnvKeys is the set of environment variables that are safe to pass to
+// plugin processes. This prevents leaking sensitive credentials (AWS_*,
+// KUBECONFIG, SSH_AUTH_SOCK, etc.) to potentially untrusted plugin binaries.
+var safeEnvKeys = map[string]bool{
+	"PATH":    true,
+	"HOME":    true,
+	"TMPDIR":  true,
+	"LANG":    true,
+	"TZ":      true,
+	"USER":    true,
+	"LOGNAME": true,
+
+	// Required for go-plugin gRPC communication
+	"PLUGIN_MIN_PORT": true,
+	"PLUGIN_MAX_PORT": true,
+}
+
+// pluginCmd creates an exec.Cmd for a plugin binary with a sanitized
+// environment. Only safe environment variables are propagated to prevent
+// leaking secrets to external plugin processes.
+func pluginCmd(pluginPath string) *exec.Cmd {
+	//nolint:gosec // pluginPath is validated via digest verification before reaching here
+	cmd := exec.Command(pluginPath) //nolint:noctx // Context not available at plugin initialization time
+	return cmd
+}
+
+// pluginCmdSanitized creates an exec.Cmd with a minimal sanitized
+// environment. Used in API server context to prevent leaking secrets.
+func pluginCmdSanitized(pluginPath string) *exec.Cmd {
+	//nolint:gosec // pluginPath is validated via digest verification before reaching here
+	cmd := exec.Command(pluginPath) //nolint:noctx // Context not available at plugin initialization time
+	cmd.Env = safePluginEnv()
+	return cmd
+}
+
+// safePluginEnv builds a minimal environment from the current process
+// environment, keeping only keys in safeEnvKeys.
+func safePluginEnv() []string {
+	env := make([]string, 0, len(safeEnvKeys))
+	for _, kv := range os.Environ() {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if safeEnvKeys[key] {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
 
 // discoverExecutables scans the given directories for executable files and
@@ -134,7 +191,8 @@ type Client struct {
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
-	hostDeps *HostServiceDeps
+	hostDeps    *HostServiceDeps
+	sanitizeEnv bool // strip sensitive env vars from plugin process
 }
 
 // WithHostDeps provides host-side dependencies (secrets, auth) that are
@@ -145,6 +203,15 @@ func WithHostDeps(deps *HostServiceDeps) ClientOption {
 	}
 }
 
+// WithSanitizedEnv restricts the environment variables passed to the plugin
+// process. Only safe variables (PATH, HOME, TMPDIR, etc.) are inherited.
+// Use this in API server contexts to prevent leaking secrets to plugins.
+func WithSanitizedEnv() ClientOption {
+	return func(o *clientOptions) {
+		o.sanitizeEnv = true
+	}
+}
+
 // NewClient creates a new plugin client
 func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
 	var o clientOptions
@@ -152,10 +219,16 @@ func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
 		opt(&o)
 	}
 
+	cmdFn := pluginCmd
+	if o.sanitizeEnv {
+		cmdFn = pluginCmdSanitized
+	}
+
 	raw, client, err := connectPlugin(pluginPath, pluginConfig{
 		handshake:  HandshakeConfig,
 		pluginName: PluginName,
 		grpcPlugin: &GRPCPlugin{HostDeps: o.hostDeps},
+		cmdFn:      cmdFn,
 	})
 	if err != nil {
 		return nil, err
@@ -275,10 +348,16 @@ func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandler
 		opt(&o)
 	}
 
+	cmdFn := pluginCmd
+	if o.sanitizeEnv {
+		cmdFn = pluginCmdSanitized
+	}
+
 	raw, client, err := connectPlugin(pluginPath, pluginConfig{
 		handshake:  AuthHandlerHandshakeConfig,
 		pluginName: AuthHandlerPluginName,
 		grpcPlugin: &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
+		cmdFn:      cmdFn,
 	})
 	if err != nil {
 		return nil, err

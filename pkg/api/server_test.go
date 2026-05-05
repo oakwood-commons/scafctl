@@ -14,7 +14,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,6 +65,53 @@ func TestServer_HandlerCtx(t *testing.T) {
 	assert.NotNil(t, hctx)
 	assert.Equal(t, cfg, hctx.Config)
 	assert.False(t, hctx.ShuttingDown())
+}
+
+func TestServer_HandlerCtx_WithPluginFields(t *testing.T) {
+	cfg := &config.Config{}
+	officialReg := official.NewRegistry()
+	srv, err := NewServer(
+		WithServerConfig(cfg),
+		WithServerOfficialProviders(officialReg),
+	)
+	require.NoError(t, err)
+	hctx := srv.HandlerCtx()
+	assert.NotNil(t, hctx)
+	assert.Equal(t, officialReg, hctx.OfficialProviders)
+	assert.NotNil(t, hctx.ServerContext, "ServerContext should be set from server's context")
+}
+
+func TestServer_WithPluginClients_Shutdown(t *testing.T) {
+	// Verify that Shutdown doesn't panic with nil or empty plugin clients.
+	srv, err := NewServer(WithServerPluginClients(nil))
+	require.NoError(t, err)
+	err = srv.Shutdown(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, srv.IsShuttingDown())
+}
+
+func TestServer_WithPluginPool_Shutdown(t *testing.T) {
+	reg := provider.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+
+	srv, err := NewServer(WithServerPluginPool(pool))
+	require.NoError(t, err)
+
+	err = srv.Shutdown(context.Background())
+	assert.NoError(t, err)
+	assert.True(t, srv.IsShuttingDown())
+}
+
+func TestServer_HandlerCtx_PluginPool(t *testing.T) {
+	reg := provider.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	srv, err := NewServer(WithServerPluginPool(pool), WithServerRegistry(reg))
+	require.NoError(t, err)
+
+	hctx := srv.HandlerCtx()
+	assert.Equal(t, pool, hctx.PluginPool)
 }
 
 func TestServer_Shutdown(t *testing.T) {

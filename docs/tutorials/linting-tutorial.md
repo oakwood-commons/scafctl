@@ -389,7 +389,47 @@ scafctl lint explain unreachable-test-path
 {{% /tab %}}
 {{< /tabs >}}
 
-## 6. Using Lint with the MCP Server
+## 6. Hyphenated Resolver Names
+
+The `hyphenated-name` rule warns when resolver names contain hyphens. While valid YAML, hyphens require quoting in CEL expressions:
+
+```yaml
+# ⚠️ INFO: hyphenated names require quoting in CEL
+spec:
+  resolvers:
+    my-service-name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    otherResolver:
+      dependsOn: [my-service-name]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              # Must quote: _["my-service-name"] instead of _.my_service_name
+              expression: '_["my-service-name"]'
+```
+
+**Fix**: Use underscores instead of hyphens for CEL-friendly access:
+
+```yaml
+spec:
+  resolvers:
+    my_service_name:  # Can use _.my_service_name in CEL
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+```
+
+This is an **info**-level finding (not an error) because hyphenated names are valid — they just require bracket notation in CEL expressions.
+
+## 7. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 

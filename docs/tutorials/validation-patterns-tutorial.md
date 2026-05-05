@@ -467,7 +467,64 @@ validate:
 
 ---
 
-## 6. Validation Failure Diagnostics
+## 6. Dynamic Validation Messages
+
+The `message` field supports dynamic evaluation using `expr:` (CEL) or `tmpl:` (Go template) prefixes. This lets you include the actual value or computed context in error messages.
+
+### CEL Expression Messages
+
+Prefix the message with `expr:` to evaluate it as a CEL expression. The expression has access to `__self` (the current value) and `_` (all resolver data):
+
+```yaml
+validate:
+  with:
+    - provider: validation
+      inputs:
+        match: "^[a-z][a-z0-9-]*$"
+        message: "expr: 'Invalid name \"' + string(__self) + '\": must start with a lowercase letter and contain only [a-z0-9-]'"
+    - provider: validation
+      inputs:
+        expression: "size(__self) <= 63"
+        message: "expr: 'Name \"' + string(__self) + '\" is ' + string(size(__self)) + ' chars (max 63)'"
+```
+
+### Go Template Messages
+
+Prefix the message with `tmpl:` to evaluate it as a Go template. The template data includes all resolver values plus `__self`:
+
+```yaml
+validate:
+  with:
+    - provider: validation
+      inputs:
+        expression: "__self != _.environment"
+        message: "tmpl: Name '{{.__self}}' must not match the environment name '{{.environment}}'"
+    - provider: validation
+      inputs:
+        match: "^[a-z]"
+        message: "tmpl: Value '{{.__self}}' must start with a lowercase letter"
+```
+
+### Fallback Behavior
+
+If the dynamic expression fails to evaluate (syntax error, missing variable), the raw message content (minus the prefix) is used as the error message, and a debug log is emitted. This ensures validation never silently passes due to a message evaluation error.
+
+### Plain Static Messages
+
+Messages without a prefix are used as-is (unchanged behavior):
+
+```yaml
+validate:
+  with:
+    - provider: validation
+      inputs:
+        match: "^[a-z]"
+        message: "Must start with a lowercase letter"
+```
+
+---
+
+## 7. Validation Failure Diagnostics
 
 When validation fails, scafctl provides structured error messages. Use the MCP `explain_error` tool or inspect the output directly:
 

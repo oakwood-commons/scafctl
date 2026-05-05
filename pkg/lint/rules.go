@@ -55,6 +55,17 @@ var KnownRules = map[string]RuleMeta{
 		Fix:         "Rename the resolver to avoid reserved names. Use descriptive names like 'user-input' or 'api-response' instead.",
 		Examples:    []string{"Reserved names: __actions, __error, __item, __index, _"},
 	},
+	"hyphenated-name": {
+		Rule:        "hyphenated-name",
+		Severity:    string(SeverityInfo),
+		Category:    "naming",
+		Description: "A resolver name contains hyphens, which require bracket notation in CEL expressions.",
+		Why:         "Hyphens in resolver names require quoting in CEL: _[\"my-resolver\"] instead of _.my_resolver. This is more verbose and error-prone.",
+		Fix:         "Use underscores instead of hyphens for CEL-friendly access: my_resolver instead of my-resolver.",
+		Examples: []string{
+			"# Hyphenated (requires quoting in CEL):\nresolvers:\n  my-service:\n    ...\n# Access: _[\"my-service\"]\n\n# Underscored (direct CEL access):\nresolvers:\n  my_service:\n    ...\n# Access: _.my_service",
+		},
+	},
 	"unused-resolver": {
 		Rule:        "unused-resolver",
 		Severity:    string(SeverityWarning),

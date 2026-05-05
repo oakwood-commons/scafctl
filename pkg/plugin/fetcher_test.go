@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -519,4 +521,130 @@ func TestRegisterFetchedAuthHandlerPlugins_InvalidPath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading auth handler plugin bad-handler")
 	assert.Nil(t, clients)
+}
+
+// --- Catalog allowlist security tests ---
+
+func TestFetcher_CheckCatalogAllowed_NoRestriction(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: nil}
+	assert.NoError(t, f.checkCatalogAllowed("any-catalog"))
+}
+
+func TestFetcher_CheckCatalogAllowed_EmptyResolvedFrom(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
+	err := f.checkCatalogAllowed("")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "origin unknown")
+}
+
+func TestFetcher_CheckCatalogAllowed_EmptyResolvedFrom_NoAllowlist(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: nil}
+	assert.NoError(t, f.checkCatalogAllowed(""))
+}
+
+func TestFetcher_CheckCatalogAllowed_Permitted(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true, "internal": true}}
+	assert.NoError(t, f.checkCatalogAllowed("official"))
+}
+
+func TestFetcher_CheckCatalogAllowed_Rejected(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
+	err := f.checkCatalogAllowed("untrusted-catalog")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
+}
+
+func TestFetcher_CheckCatalogAllowed_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
+	// Allowlist is built with ToLower, and checkCatalogAllowed also lowercases
+	// resolvedFrom, so matching is fully case-insensitive.
+	assert.NoError(t, f.checkCatalogAllowed("official"))
+	assert.NoError(t, f.checkCatalogAllowed("Official"))
+	assert.NoError(t, f.checkCatalogAllowed("OFFICIAL"))
+}
+
+func TestNewFetcher_AllowedCatalogs(t *testing.T) {
+	t.Parallel()
+	cat := newMockCatalog()
+	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
+		Logger:          logr.Discard(),
+		AllowedCatalogs: []string{"Official", "Internal"},
+	})
+	require.NotNil(t, f.allowedCatalogs)
+	assert.True(t, f.allowedCatalogs["official"])
+	assert.True(t, f.allowedCatalogs["internal"])
+	assert.False(t, f.allowedCatalogs["untrusted"])
+}
+
+func TestFetcher_FetchPlugins_CatalogNotAllowed(t *testing.T) {
+	t.Parallel()
+	// Create a catalog that resolves to a non-allowed name
+	cat := newMockCatalog()
+	cat.name = "untrusted"
+
+	binaryData := []byte("fake-plugin-binary")
+	digest := binaryDigest(binaryData)
+
+	ver := semver.MustParse("1.0.0")
+	ref := catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "evil-plugin",
+		Version: ver,
+	}
+	cat.addArtifact(ref, binaryData)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
+		Logger:          logr.Discard(),
+		NoCache:         true,
+		AllowedCatalogs: []string{"official"},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "evil-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	// Provide a lock entry so it hits the locked path with resolvedFrom set
+	lockPlugins := []bundler.LockPlugin{
+		{Name: "evil-plugin", Kind: "provider", Version: "1.0.0", Digest: digest, ResolvedFrom: "untrusted"},
+	}
+
+	_, err := f.FetchPlugins(context.Background(), deps, lockPlugins)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
+}
+
+func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
+	t.Parallel()
+	// Create a pre-populated cache so the no-lock cache-first path is taken.
+	cacheDir := t.TempDir()
+	platform := CurrentPlatform()
+	pluginName := "cached-plugin"
+	binDir := filepath.Join(cacheDir, pluginName, "2.0.0", PlatformCacheKey(platform))
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, pluginName), []byte("#!/bin/sh\n"), 0o755))
+
+	f := NewFetcher(FetcherConfig{
+		Cache:           NewCache(cacheDir),
+		Platform:        platform,
+		Logger:          logr.Discard(),
+		AllowedCatalogs: []string{"approved"},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: pluginName, Kind: solution.PluginKindProvider},
+	}
+
+	// No lock file provided — fetcher uses cache-first path.
+	// Allowlist is set, cached entry has unknown origin → rejected.
+	_, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot verify against allowlist")
 }

@@ -733,6 +733,25 @@ func missingOfficialProviders(
 // auth registry. Returns an error when the catalog chain cannot be built.
 // Callers should treat errors as non-fatal: plugin auto-fetch is simply disabled.
 func BuildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
+	return BuildPluginFetcherWithConfig(ctx, PluginFetcherOverrides{})
+}
+
+// PluginFetcherOverrides holds the subset of FetcherConfig fields that
+// BuildPluginFetcherWithConfig can override. Other fields (Catalog,
+// BinaryName, Logger, Cache) are always derived from context.
+type PluginFetcherOverrides struct {
+	// AllowedCatalogs restricts which catalog names plugins may be fetched from.
+	AllowedCatalogs []string
+	// Platform overrides the target platform. If empty, auto-detected.
+	Platform string
+	// NoCache bypasses the local cache when true.
+	NoCache bool
+}
+
+// BuildPluginFetcherWithConfig creates a plugin.Fetcher from the context's
+// config and auth registry, applying optional overrides for policy fields.
+// Catalog, BinaryName, Logger, and Cache are always derived from context.
+func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOverrides) (*plugin.Fetcher, error) {
 	lgr := logger.FromContext(ctx)
 	var fetcherLogger logr.Logger
 	if lgr != nil {
@@ -747,11 +766,20 @@ func BuildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
 		fetcherLogger.V(1).Info("catalog chain not available, plugin auto-fetch disabled", "error", err)
 		return nil, fmt.Errorf("building catalog chain: %w", err)
 	}
-	return plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog:    catalogChain,
-		BinaryName: settings.BinaryNameFromContext(ctx),
-		Logger:     fetcherLogger,
-	}), nil
+
+	cfg := plugin.FetcherConfig{
+		Catalog:         catalogChain,
+		BinaryName:      settings.BinaryNameFromContext(ctx),
+		Logger:          fetcherLogger,
+		AllowedCatalogs: override.AllowedCatalogs,
+	}
+	if override.Platform != "" {
+		cfg.Platform = override.Platform
+	}
+	if override.NoCache {
+		cfg.NoCache = true
+	}
+	return plugin.NewFetcher(cfg), nil
 }
 
 // ResolveOfficialProviders fetches any official providers referenced by the

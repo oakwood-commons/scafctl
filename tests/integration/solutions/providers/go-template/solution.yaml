@@ -200,6 +200,37 @@ spec:
               ignoredBlocks:
                 - line: "# scafctl:ignore"
 
+    # Test: name input is optional (defaults to "template")
+    optionalNameTemplate:
+      description: Template without explicit name input
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: "Service: {{.appName}}"
+
+    # Test: nil-safe len function
+    nilSafeLenTemplate:
+      description: Template using len on nil value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: "count={{ len .items }}"
+              data:
+                items: null
+
   testing:
     config:
       # render-defaults: solution has no workflow.actions section
@@ -291,3 +322,17 @@ spec:
             message: "Line with ignore marker should be preserved literally"
           - expression: '__output.ignoredBlocksLineTemplate.contains("echo \"deployed\"")'
             message: "Non-ignored lines should render normally"
+
+      optional-name:
+        description: Verify template works without explicit name input
+        extends: [_base]
+        tags: [optional-name]
+        assertions:
+          - expression: '__output.optionalNameTemplate == "Service: my-service"'
+
+      nil-safe-len:
+        description: Verify len returns 0 for nil/missing values
+        extends: [_base]
+        tags: [safelen]
+        assertions:
+          - expression: '__output.nilSafeLenTemplate == "count=0"'

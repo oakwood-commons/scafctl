@@ -84,15 +84,17 @@ func TestResetOptions_ResetsConfigFile(t *testing.T) {
 }
 
 func TestResetOptions_AllSucceeds(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: t.Setenv is used to override XDG paths.
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
 
-	// The --all flag removes real XDG cache/data/state dirs which we cannot
-	// inject in a unit test. This test validates the --force + --all
-	// combination succeeds without error.
+	// Override XDG directories to temp paths so the --all flag does not
+	// interfere with real user/runner data or parallel tests.
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmpDir, "state"))
+
 	var stdout, stderr bytes.Buffer
 	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
 	cliParams := settings.NewCliParams()

@@ -24,35 +24,45 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // Server is the REST API server backed by chi and Huma.
 type Server struct {
-	cfg            *config.Config
-	router         *chi.Mux
-	apiRouter      chi.Router
-	api            huma.API
-	httpSrv        *http.Server
-	isShuttingDown int32
-	startTime      time.Time
-	logger         logr.Logger
-	providerReg    *provider.Registry
-	authReg        *auth.Registry
-	version        string
-	ctx            context.Context
-	cancel         context.CancelFunc
+	cfg               *config.Config
+	router            *chi.Mux
+	apiRouter         chi.Router
+	api               huma.API
+	httpSrv           *http.Server
+	isShuttingDown    int32
+	startTime         time.Time
+	logger            logr.Logger
+	providerReg       *provider.Registry
+	authReg           *auth.Registry
+	pluginFetcher     *plugin.Fetcher
+	officialProviders *official.Registry
+	pluginClients     []*plugin.Client
+	pluginPool        *plugin.Pool
+	version           string
+	ctx               context.Context
+	cancel            context.CancelFunc
 }
 
 // serverConfig collects all configuration options before building the server.
 type serverConfig struct {
-	logger   *logr.Logger
-	registry *provider.Registry
-	authReg  *auth.Registry
-	config   *config.Config
-	version  string
-	ctx      context.Context
+	logger            *logr.Logger
+	registry          *provider.Registry
+	authReg           *auth.Registry
+	pluginFetcher     *plugin.Fetcher
+	officialProviders *official.Registry
+	pluginClients     []*plugin.Client
+	pluginPool        *plugin.Pool
+	config            *config.Config
+	version           string
+	ctx               context.Context
 }
 
 // ServerOption configures the API server.
@@ -100,6 +110,39 @@ func WithServerContext(ctx context.Context) ServerOption {
 	}
 }
 
+// WithServerPluginFetcher sets the plugin fetcher for auto-fetching plugin
+// binaries from catalogs. This enables solution endpoints to resolve
+// bundle.plugins declarations and official provider auto-resolution.
+func WithServerPluginFetcher(f *plugin.Fetcher) ServerOption {
+	return func(c *serverConfig) {
+		c.pluginFetcher = f
+	}
+}
+
+// WithServerOfficialProviders sets the official provider registry for
+// auto-resolution of first-party extracted providers.
+func WithServerOfficialProviders(r *official.Registry) ServerOption {
+	return func(c *serverConfig) {
+		c.officialProviders = r
+	}
+}
+
+// WithServerPluginClients sets the pre-loaded plugin clients that should be
+// killed when the server shuts down.
+func WithServerPluginClients(clients []*plugin.Client) ServerOption {
+	return func(c *serverConfig) {
+		c.pluginClients = clients
+	}
+}
+
+// WithServerPluginPool sets the plugin pool for managing shared, long-lived
+// plugin processes with lazy initialization and idle eviction.
+func WithServerPluginPool(pool *plugin.Pool) ServerOption {
+	return func(c *serverConfig) {
+		c.pluginPool = pool
+	}
+}
+
 // NewServer creates a new API server with the given options.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	sc := &serverConfig{}
@@ -129,15 +172,19 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:         cfg,
-		router:      chi.NewRouter(),
-		logger:      lgr,
-		providerReg: sc.registry,
-		authReg:     sc.authReg,
-		version:     version,
-		ctx:         ctx,
-		cancel:      cancel,
-		startTime:   time.Now(),
+		cfg:               cfg,
+		router:            chi.NewRouter(),
+		logger:            lgr,
+		providerReg:       sc.registry,
+		authReg:           sc.authReg,
+		pluginFetcher:     sc.pluginFetcher,
+		officialProviders: sc.officialProviders,
+		pluginClients:     sc.pluginClients,
+		pluginPool:        sc.pluginPool,
+		version:           version,
+		ctx:               ctx,
+		cancel:            cancel,
+		startTime:         time.Now(),
 	}
 
 	return s, nil
@@ -200,7 +247,7 @@ func (s *Server) Context() context.Context {
 
 // HandlerCtx returns the handler context for endpoint registration.
 func (s *Server) HandlerCtx() *HandlerContext {
-	return NewHandlerContext(
+	hctx := NewHandlerContext(
 		s.cfg,
 		s.providerReg,
 		s.authReg,
@@ -208,6 +255,11 @@ func (s *Server) HandlerCtx() *HandlerContext {
 		&s.isShuttingDown,
 		s.startTime,
 	)
+	hctx.PluginFetcher = s.pluginFetcher
+	hctx.OfficialProviders = s.officialProviders
+	hctx.ServerContext = s.ctx
+	hctx.PluginPool = s.pluginPool
+	return hctx
 }
 
 // Start starts the HTTP server and blocks until shutdown.
@@ -291,10 +343,21 @@ func (s *Server) Start() error {
 	return err
 }
 
-// Shutdown gracefully shuts down the server.
+// Shutdown gracefully shuts down the server and kills plugin clients.
 func (s *Server) Shutdown(ctx context.Context) error {
 	atomic.StoreInt32(&s.isShuttingDown, 1)
 	s.cancel()
+
+	// Shut down plugin pool (kills all managed plugin processes)
+	if s.pluginPool != nil {
+		s.pluginPool.Shutdown()
+	}
+
+	// Kill pre-loaded plugin clients not managed by the pool
+	for _, c := range s.pluginClients {
+		c.Kill()
+	}
+
 	if s.httpSrv != nil {
 		return s.httpSrv.Shutdown(ctx)
 	}

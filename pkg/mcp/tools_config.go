@@ -15,7 +15,7 @@ import (
 // registerConfigTools registers configuration-related MCP tools.
 func (s *Server) registerConfigTools() {
 	getConfigTool := mcp.NewTool("get_config",
-		mcp.WithDescription("Return the current scafctl configuration. Shows catalogs, settings, logging, HTTP client, CEL, resolver, action, auth, and build configuration. Use the optional 'section' parameter to retrieve only a specific section. Sensitive fields (client secrets, tokens) are redacted."),
+		mcp.WithDescription(fmt.Sprintf("Return the current %s configuration. Shows catalogs, settings, logging, HTTP client, CEL, resolver, action, auth, build, and apiServer configuration. Use the optional 'section' parameter to retrieve only a specific section. Sensitive fields (client secrets, tokens) are redacted.", s.name)),
 		mcp.WithTitleAnnotation("Get Configuration"),
 		mcp.WithToolIcons(toolIcons["config"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -24,13 +24,13 @@ func (s *Server) registerConfigTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaGetConfig),
 		mcp.WithString("section",
-			mcp.Description("Optional section to retrieve: 'catalogs', 'settings', 'logging', 'httpClient', 'cel', 'resolver', 'action', 'auth', 'build'. Omit to return the full configuration."),
+			mcp.Description("Optional section to retrieve: 'catalogs', 'settings', 'logging', 'httpClient', 'cel', 'resolver', 'action', 'auth', 'build', 'apiServer'. Omit to return the full configuration."),
 		),
 	)
 	s.addTool(getConfigTool, s.handleGetConfig)
 
 	getConfigPathsTool := mcp.NewTool("get_config_paths",
-		mcp.WithDescription("Return all XDG-compliant filesystem paths used by scafctl. Shows config, data, cache, state, catalog, secrets, plugins, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout."),
+		mcp.WithDescription(fmt.Sprintf("Return all XDG-compliant filesystem paths used by %s. Shows config, data, cache, state, catalog, secrets, plugins, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout.", s.name)),
 		mcp.WithTitleAnnotation("Get Config Paths"),
 		mcp.WithToolIcons(toolIcons["config"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -70,6 +70,7 @@ func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest)
 		"action":     sanitized.Action,
 		"auth":       sanitized.Auth,
 		"build":      sanitized.Build,
+		"apiServer":  sanitized.APIServer,
 	}
 
 	sectionData, ok := validSections[section]
