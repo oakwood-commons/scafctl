@@ -35,7 +35,7 @@ func (s *Server) registerTestingTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(genTestTool, s.handleGenerateTestScaffold)
+	s.addTool(genTestTool, s.handleGenerateTestScaffold)
 
 	// list_tests
 	listTestsTool := mcp.NewTool("list_tests",
@@ -62,7 +62,7 @@ func (s *Server) registerTestingTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(listTestsTool, s.handleListTests)
+	s.addTool(listTestsTool, s.handleListTests)
 }
 
 // handleGenerateTestScaffold generates a starter test scaffold for a solution.

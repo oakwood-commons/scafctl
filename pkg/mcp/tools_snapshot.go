@@ -34,7 +34,7 @@ func (s *Server) registerSnapshotTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(showSnapshotTool, s.handleShowSnapshot)
+	s.addTool(showSnapshotTool, s.handleShowSnapshot)
 
 	diffSnapshotsTool := mcp.NewTool("diff_snapshots",
 		mcp.WithDescription("Compare two resolver execution snapshots and show differences. Identifies resolvers with changed values, status changes (success→failure), additions, and removals. Useful for detecting regressions between runs or understanding the impact of solution changes."),
@@ -60,7 +60,7 @@ func (s *Server) registerSnapshotTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(diffSnapshotsTool, s.handleDiffSnapshots)
+	s.addTool(diffSnapshotsTool, s.handleDiffSnapshots)
 }
 
 // handleShowSnapshot loads a snapshot file and returns structured data.

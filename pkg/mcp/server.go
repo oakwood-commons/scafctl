@@ -36,6 +36,19 @@ type Server struct {
 	name      string
 	rootCmd   *cobra.Command
 
+	// prompts tracks registered prompts for listing. The mcp-go SDK
+	// does not expose a public ListPrompts method, so we maintain our
+	// own slice during registration.
+	prompts []mcp.Prompt
+
+	// coreTools tracks tool names registered by scafctl itself.
+	// Tools not in this set are tagged as plugin/embedder tools.
+	coreTools map[string]struct{}
+
+	// corePrompts tracks prompt names registered by scafctl itself.
+	// Prompts not in this set are tagged as plugin/embedder prompts.
+	corePrompts map[string]struct{}
+
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
 	// httpServer is the Streamable HTTP transport server (nil for stdio).
@@ -482,13 +495,15 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 
 	s := &Server{
-		ctx:      mcpCtx,
-		version:  cfg.version,
-		name:     cfg.name,
-		registry: cfg.registry,
-		authReg:  cfg.authReg,
-		config:   cfg.config,
-		rootCmd:  cfg.rootCmd,
+		ctx:         mcpCtx,
+		version:     cfg.version,
+		name:        cfg.name,
+		registry:    cfg.registry,
+		authReg:     cfg.authReg,
+		config:      cfg.config,
+		rootCmd:     cfg.rootCmd,
+		coreTools:   make(map[string]struct{}, 64),
+		corePrompts: make(map[string]struct{}, 16),
 	}
 	if cfg.logger != nil {
 		s.logger = *cfg.logger
@@ -612,6 +627,14 @@ func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
 
 // MCPServer returns the underlying mcp-go MCPServer.
 // This is useful for advanced operations like sending notifications.
+//
+// Embedders can call MCPServer().AddTool() to register custom tools;
+// these are automatically listed by ListCapabilities with SourcePlugin.
+//
+// Note: prompts added via MCPServer().AddPrompt() will NOT appear in
+// ListCapabilities because the mcp-go SDK does not expose a ListPrompts
+// method. Use [Server.AddPrompt] instead to register prompts that should
+// be discoverable.
 func (s *Server) MCPServer() *server.MCPServer {
 	return s.mcpServer
 }
@@ -806,6 +829,28 @@ func (s *Server) registerTools() {
 // registerResources registers all MCP resources on the server.
 func (s *Server) registerResources() {
 	s.registerResourceTemplates()
+}
+
+// addTool registers a tool with the MCP server and tracks it as a core
+// tool for listing via ListCapabilities. Embedders that call
+// MCPServer().AddTool() directly will have their tools listed as plugin.
+func (s *Server) addTool(tool mcp.Tool, handler server.ToolHandlerFunc) {
+	s.mcpServer.AddTool(tool, handler)
+	s.coreTools[tool.Name] = struct{}{}
+}
+
+// AddPrompt registers a prompt with the MCP server and tracks it for
+// listing via ListCapabilities. Embedders should use this instead of
+// MCPServer().AddPrompt() to ensure the prompt appears in listings.
+func (s *Server) AddPrompt(prompt mcp.Prompt, handler server.PromptHandlerFunc) {
+	s.mcpServer.AddPrompt(prompt, handler)
+	s.prompts = append(s.prompts, prompt)
+}
+
+// addCorePrompt registers a prompt and marks it as a core prompt.
+func (s *Server) addCorePrompt(prompt mcp.Prompt, handler server.PromptHandlerFunc) {
+	s.AddPrompt(prompt, handler)
+	s.corePrompts[prompt.Name] = struct{}{}
 }
 
 // registerAllPrompts registers all MCP prompts on the server.

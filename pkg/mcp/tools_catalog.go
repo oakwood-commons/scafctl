@@ -29,7 +29,7 @@ func (s *Server) registerCatalogTools() {
 			mcp.Description("Filter by name (exact match)"),
 		),
 	)
-	s.mcpServer.AddTool(catalogListTool, s.handleCatalogList)
+	s.addTool(catalogListTool, s.handleCatalogList)
 
 	catalogInspectTool := mcp.NewTool("catalog_inspect",
 		mcp.WithDescription("Show detailed metadata about a specific catalog artifact. Returns kind, name, version, digest, size, creation time, and annotations. Use 'catalog_list' first to discover available artifacts, then inspect a specific one for details."),
@@ -49,7 +49,7 @@ func (s *Server) registerCatalogTools() {
 			mcp.Enum("solution", "provider", "auth-handler"),
 		),
 	)
-	s.mcpServer.AddTool(catalogInspectTool, s.handleCatalogInspect)
+	s.addTool(catalogInspectTool, s.handleCatalogInspect)
 }
 
 // handleCatalogList lists entries in the local catalog.

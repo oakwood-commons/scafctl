@@ -27,7 +27,7 @@ func (s *Server) registerPluginTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcpServer.AddTool(listPluginsTool, s.handleListPlugins)
+	s.addTool(listPluginsTool, s.handleListPlugins)
 
 	pluginCachePathTool := mcp.NewTool("get_plugin_cache_path",
 		mcp.WithDescription(fmt.Sprintf(
@@ -41,7 +41,7 @@ func (s *Server) registerPluginTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcpServer.AddTool(pluginCachePathTool, s.handleGetPluginCachePath)
+	s.addTool(pluginCachePathTool, s.handleGetPluginCachePath)
 
 	// list_official_providers
 	listOfficialProvidersTool := mcp.NewTool("list_official_providers",
@@ -61,7 +61,7 @@ func (s *Server) registerPluginTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcpServer.AddTool(listOfficialProvidersTool, s.handleListOfficialProviders)
+	s.addTool(listOfficialProvidersTool, s.handleListOfficialProviders)
 }
 
 // handleListPlugins lists cached plugin binaries.

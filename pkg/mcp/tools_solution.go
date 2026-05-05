@@ -49,7 +49,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Filter solutions by name (substring match). Omit to list all."),
 		),
 	)
-	s.mcpServer.AddTool(listSolutionsTool, s.handleListSolutions)
+	s.addTool(listSolutionsTool, s.handleListSolutions)
 
 	// inspect_solution
 	inspectSolutionTool := mcp.NewTool("inspect_solution",
@@ -69,7 +69,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(inspectSolutionTool, s.handleInspectSolution)
+	s.addTool(inspectSolutionTool, s.handleInspectSolution)
 
 	// lint_solution
 	lintSolutionTool := mcp.NewTool("lint_solution",
@@ -93,7 +93,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(lintSolutionTool, s.handleLintSolution)
+	s.addTool(lintSolutionTool, s.handleLintSolution)
 
 	// render_solution
 	renderSolutionTool := mcp.NewTool("render_solution",
@@ -123,7 +123,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(renderSolutionTool, s.handleRenderSolution)
+	s.addTool(renderSolutionTool, s.handleRenderSolution)
 
 	// preview_resolvers
 	previewResolversTool := mcp.NewTool("preview_resolvers",
@@ -152,7 +152,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(previewResolversTool, s.handlePreviewResolvers)
+	s.addTool(previewResolversTool, s.handlePreviewResolvers)
 
 	// run_solution_tests
 	runSolutionTestsTool := mcp.NewTool("run_solution_tests",
@@ -186,7 +186,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(runSolutionTestsTool, s.handleRunSolutionTests)
+	s.addTool(runSolutionTestsTool, s.handleRunSolutionTests)
 
 	// get_run_command
 	getRunCommandTool := mcp.NewTool("get_run_command",
@@ -215,7 +215,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(getRunCommandTool, s.handleGetRunCommand)
+	s.addTool(getRunCommandTool, s.handleGetRunCommand)
 }
 
 // handleListSolutions lists available solutions from the local catalog.

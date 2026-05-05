@@ -41,7 +41,7 @@ func (s *Server) registerScaffoldTools() {
 			mcp.WithStringItems(),
 		),
 	)
-	s.mcpServer.AddTool(scaffoldSolutionTool, s.handleScaffoldSolution)
+	s.addTool(scaffoldSolutionTool, s.handleScaffoldSolution)
 }
 
 // handleScaffoldSolution generates a skeleton solution YAML.

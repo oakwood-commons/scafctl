@@ -27,7 +27,7 @@ func (s *Server) registerConfigTools() {
 			mcp.Description("Optional section to retrieve: 'catalogs', 'settings', 'logging', 'httpClient', 'cel', 'resolver', 'action', 'auth', 'build'. Omit to return the full configuration."),
 		),
 	)
-	s.mcpServer.AddTool(getConfigTool, s.handleGetConfig)
+	s.addTool(getConfigTool, s.handleGetConfig)
 
 	getConfigPathsTool := mcp.NewTool("get_config_paths",
 		mcp.WithDescription("Return all XDG-compliant filesystem paths used by scafctl. Shows config, data, cache, state, catalog, secrets, plugins, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout."),
@@ -39,7 +39,7 @@ func (s *Server) registerConfigTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaGetConfigPaths),
 	)
-	s.mcpServer.AddTool(getConfigPathsTool, s.handleGetConfigPaths)
+	s.addTool(getConfigPathsTool, s.handleGetConfigPaths)
 }
 
 // handleGetConfig returns the current configuration (with sensitive fields redacted).

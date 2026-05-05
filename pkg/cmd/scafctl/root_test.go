@@ -17,9 +17,7 @@ import (
 func TestRoot_CommandProperties(t *testing.T) {
 	t.Parallel()
 	cmd := Root(nil)
-	if cmd == nil {
-		t.Fatal("Root() returned nil")
-	}
+	require.NotNil(t, cmd)
 	if cmd.Use != "scafctl" {
 		t.Errorf("Root().Use = %q, want %q", cmd.Use, "scafctl")
 	}
@@ -59,16 +57,12 @@ func TestRoot_HiddenFlags(t *testing.T) {
 	t.Parallel()
 	cmd := Root(nil)
 	pprofFlag := cmd.PersistentFlags().Lookup("pprof")
-	if pprofFlag == nil {
-		t.Fatal("Expected 'pprof' flag to exist")
-	}
+	require.NotNil(t, pprofFlag, "Expected 'pprof' flag to exist")
 	if !pprofFlag.Hidden {
 		t.Error("Expected 'pprof' flag to be hidden")
 	}
 	pprofOutFlag := cmd.PersistentFlags().Lookup("pprof-output-dir")
-	if pprofOutFlag == nil {
-		t.Fatal("Expected 'pprof-output-dir' flag to exist")
-	}
+	require.NotNil(t, pprofOutFlag, "Expected 'pprof-output-dir' flag to exist")
 	if !pprofOutFlag.Hidden {
 		t.Error("Expected 'pprof-output-dir' flag to be hidden")
 	}
@@ -233,9 +227,7 @@ func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
 	cmd := Root(&RootOptions{
 		BinaryName: "cldctl",
 	})
-	if cmd == nil {
-		t.Fatal("Root() with custom BinaryName returned nil")
-	}
+	require.NotNil(t, cmd)
 	if cmd.Use != "cldctl" {
 		t.Errorf("Root().Use = %q, want %q", cmd.Use, "cldctl")
 	}

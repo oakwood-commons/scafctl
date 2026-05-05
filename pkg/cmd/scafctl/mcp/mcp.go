@@ -20,5 +20,6 @@ func CommandMCP(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 		SilenceUsage: true,
 	}
 	cmd.AddCommand(CommandServe(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
+	cmd.AddCommand(CommandList(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
 	return cmd
 }

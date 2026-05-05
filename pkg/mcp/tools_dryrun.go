@@ -52,7 +52,7 @@ func (s *Server) registerDryRunTools() {
 			mcp.Description("Include materialized inputs in the report for each action. Useful for debugging what values were resolved for each provider input."),
 		),
 	)
-	s.mcpServer.AddTool(dryRunTool, s.handleDryRunSolution)
+	s.addTool(dryRunTool, s.handleDryRunSolution)
 }
 
 // handleDryRunSolution performs a full dry-run of a solution using the shared dryrun package.
