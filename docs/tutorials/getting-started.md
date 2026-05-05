@@ -244,7 +244,7 @@ scafctl render solution -f solution.yaml
 # Show resolver dependency graph
 scafctl run resolver --graph -f solution.yaml
 
-# List available providers
+# List available providers (built-in + official)
 scafctl get provider
 
 # Get details about a specific provider
@@ -302,7 +302,7 @@ scafctl render solution -f solution.yaml
 # Show resolver dependency graph
 scafctl run resolver --graph -f solution.yaml
 
-# List available providers
+# List available providers (built-in + official)
 scafctl get provider
 
 # Get details about a specific provider

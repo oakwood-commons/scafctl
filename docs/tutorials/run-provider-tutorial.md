@@ -560,6 +560,10 @@ scafctl get providers
 {{% /tab %}}
 {{< /tabs >}}
 
+This lists all available providers with their source (`builtin` or `official`), category, and capabilities. Official providers are auto-fetched from the OCI catalog on first use -- no manual installation required.
+
+> **Note:** When `--capability` or `--category` filters are active, only built-in providers are shown since official providers do not expose this metadata.
+
 ### View Provider Details
 
 {{< tabs "run-provider-tutorial-cmd-16" >}}
@@ -575,7 +579,7 @@ scafctl get provider http
 {{% /tab %}}
 {{< /tabs >}}
 
-This shows the provider's schema, capabilities, examples, and auto-generated CLI usage examples.
+This shows the provider's schema, capabilities, examples, and auto-generated CLI usage examples. If the provider is not found in the built-in registry, scafctl falls back to the official provider registry and displays catalog information.
 
 ### Dynamic Help for Provider Inputs
 

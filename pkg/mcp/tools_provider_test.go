@@ -10,6 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -144,6 +145,50 @@ func TestHandleListProviders(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 	})
+
+	t.Run("includes official providers from context", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+			{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
+		})
+		ctx := official.WithRegistry(context.Background(), officialReg)
+
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+			WithServerContext(ctx),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "list_providers"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListProviders(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var items []providerItem
+		require.NoError(t, json.Unmarshal([]byte(text), &items))
+
+		// Should have built-ins plus official providers
+		foundExec := false
+		foundGit := false
+		for _, item := range items {
+			if item.Name == "exec" && item.Source == "official" {
+				foundExec = true
+			}
+			if item.Name == "git" && item.Source == "official" {
+				foundGit = true
+			}
+		}
+		assert.True(t, foundExec, "expected official 'exec' provider in output")
+		assert.True(t, foundGit, "expected official 'git' provider in output")
+	})
 }
 
 func TestHandleGetProviderSchema(t *testing.T) {
@@ -207,6 +252,39 @@ func TestHandleGetProviderSchema(t *testing.T) {
 		result, err := srv.handleGetProviderSchema(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
+	})
+
+	t.Run("falls back to official registry for unknown builtin", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		})
+		ctx := official.WithRegistry(context.Background(), officialReg)
+
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+			WithServerContext(ctx),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_provider_schema"
+		request.Params.Arguments = map[string]any{
+			"name": "exec",
+		}
+
+		result, err := srv.handleGetProviderSchema(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var desc map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &desc))
+		assert.Equal(t, "exec", desc["name"])
+		assert.Equal(t, "official", desc["source"])
 	})
 }
 

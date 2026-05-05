@@ -6,6 +6,7 @@ package plugin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,7 +32,9 @@ func TestCache_PutAndGet(t *testing.T) {
 	// Verify file exists and is executable
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.True(t, info.Mode()&0o111 != 0, "file should be executable")
+	if runtime.GOOS != "windows" {
+		assert.True(t, info.Mode()&0o111 != 0, "file should be executable")
+	}
 
 	// Get without digest
 	gotPath, ok := cache.Get(name, version, platform, "")
@@ -98,6 +101,46 @@ func TestCache_ListEmptyDir(t *testing.T) {
 	assert.Empty(t, items)
 }
 
+func TestCache_BinaryPath_WindowsExeExtension(t *testing.T) {
+	cache := NewCache("/tmp/plugins")
+
+	// Windows platform should get .exe extension
+	winPath := cache.binaryPath("myplugin", "1.0.0", "windows/amd64")
+	assert.Equal(t, "myplugin.exe", filepath.Base(winPath))
+
+	// Linux platform should NOT get .exe extension
+	linuxPath := cache.binaryPath("myplugin", "1.0.0", "linux/amd64")
+	assert.Equal(t, "myplugin", filepath.Base(linuxPath))
+
+	// Darwin platform should NOT get .exe extension
+	darwinPath := cache.binaryPath("myplugin", "1.0.0", "darwin/arm64")
+	assert.Equal(t, "myplugin", filepath.Base(darwinPath))
+}
+
+func TestCache_PutAndGet_WindowsPlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	data := []byte("MZ fake PE binary")
+	name := "test-plugin"
+	version := "1.0.0"
+	platform := "windows/amd64"
+
+	// Put
+	path, err := cache.Put(name, version, platform, data)
+	require.NoError(t, err)
+	assert.Contains(t, path, "test-plugin.exe")
+	assert.Contains(t, path, "windows-amd64")
+
+	// Verify the file has the .exe extension on disk
+	assert.Equal(t, "test-plugin.exe", filepath.Base(path))
+
+	// Get should find it
+	gotPath, ok := cache.Get(name, version, platform, "")
+	assert.True(t, ok)
+	assert.Equal(t, path, gotPath)
+}
+
 func TestCache_Remove(t *testing.T) {
 	tmpDir := t.TempDir()
 	cache := NewCache(tmpDir)
@@ -149,6 +192,10 @@ func TestCache_GetLatestCached_Empty(t *testing.T) {
 }
 
 func TestCache_GetLatestCached_NonExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support Unix file permission bits")
+	}
+
 	tmpDir := t.TempDir()
 	cache := NewCache(tmpDir)
 
@@ -190,4 +237,53 @@ func TestCache_GetLatestCached_SemverBeatsLexicographic(t *testing.T) {
 	_, version, ok := cache.GetLatestCached("myplugin", "linux/amd64")
 	require.True(t, ok)
 	assert.Equal(t, "0.10.0", version, "should pick 0.10.0 (semver) not 0.9.0 (lexicographic)")
+}
+
+func TestCache_Get_MigrationFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	name := "test-plugin"
+	version := "1.0.0"
+	platform := "windows/amd64"
+	data := []byte("MZ fake PE binary")
+
+	// Simulate a legacy cache entry: binary at old path without .exe.
+	legacyDir := filepath.Join(tmpDir, name, version, "windows-amd64")
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	legacyPath := filepath.Join(legacyDir, name) // no .exe
+	require.NoError(t, os.WriteFile(legacyPath, data, 0o755))
+
+	// Get should find the legacy binary and rename it to the .exe path.
+	gotPath, ok := cache.Get(name, version, platform, "")
+	require.True(t, ok, "Get should succeed via migration fallback")
+	assert.Contains(t, gotPath, "test-plugin.exe", "returned path should have .exe extension")
+
+	// The legacy path should no longer exist.
+	_, err := os.Stat(legacyPath)
+	assert.True(t, os.IsNotExist(err), "legacy binary should be removed after migration")
+
+	// The new path should exist.
+	_, err = os.Stat(gotPath)
+	require.NoError(t, err, "migrated binary should exist at new path")
+
+	// Verify content is preserved.
+	content, err := os.ReadFile(gotPath)
+	require.NoError(t, err)
+	assert.Equal(t, data, content)
+}
+
+func TestCache_Get_MigrationFallback_NotTriggeredForNonWindows(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	name := "test-plugin"
+	version := "1.0.0"
+	platform := "linux/amd64"
+
+	// Create a binary at the legacy path (no .exe, same as normal linux path).
+	// For linux, binaryPath == legacyBinaryPath, so this is just a normal Get.
+	// If the binary doesn't exist at the expected path, Get returns false — no fallback.
+	_, ok := cache.Get(name, version, platform, "")
+	assert.False(t, ok, "Get should return false for missing linux binary")
 }

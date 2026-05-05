@@ -559,7 +559,14 @@ func Root(opts *RootOptions) *cobra.Command {
 				if officialReg == nil {
 					officialReg = official.NewRegistry()
 				}
+				source := "default"
+				if opts.OfficialProviders != nil {
+					source = "embedder"
+				}
+				lgr.V(1).Info("official provider registry enabled", "count", officialReg.Len(), "source", source)
 				ctx = official.WithRegistry(ctx, officialReg)
+			} else {
+				lgr.V(1).Info("official provider registry disabled via config")
 			}
 
 			cCmd.SetContext(ctx)

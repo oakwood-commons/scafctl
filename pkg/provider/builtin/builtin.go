@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/debugprovider"
@@ -38,7 +39,9 @@ func DefaultRegistry(ctx context.Context) (*provider.Registry, error) {
 }
 
 // registerAllToRegistry registers all built-in providers to the given registry.
-func registerAllToRegistry(_ context.Context, reg *provider.Registry) error {
+func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
+	lgr := logger.FromContext(ctx)
+
 	providers := []provider.Provider{
 		httpprovider.NewHTTPProvider(),
 		celprovider.NewCelProvider(),
@@ -51,10 +54,15 @@ func registerAllToRegistry(_ context.Context, reg *provider.Registry) error {
 		parameterprovider.NewParameterProvider(),
 	}
 
+	lgr.V(2).Info("registering built-in providers", "count", len(providers))
+
 	var errs []error
 	for _, p := range providers {
 		if regErr := reg.Register(p); regErr != nil {
+			lgr.V(1).Info("failed to register built-in provider", "name", p.Descriptor().Name, "error", regErr)
 			errs = append(errs, regErr)
+		} else {
+			lgr.V(3).Info("registered built-in provider", "name", p.Descriptor().Name)
 		}
 	}
 
@@ -62,6 +70,7 @@ func registerAllToRegistry(_ context.Context, reg *provider.Registry) error {
 		return fmt.Errorf("failed to register %d provider(s): %w", len(errs), errs[0])
 	}
 
+	lgr.V(2).Info("all built-in providers registered successfully", "count", len(providers))
 	return nil
 }
 

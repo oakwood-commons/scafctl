@@ -156,7 +156,7 @@ Following kubectl conventions, use singular or plural forms:
 # List all solutions in the catalog
 scafctl get solutions
 
-# List all providers
+# List all providers (built-in + official)
 scafctl get providers
 
 # Get a specific solution
@@ -164,6 +164,8 @@ scafctl get solution example
 ~~~
 
 Both singular and plural forms without a name will list all resources of that kind.
+
+The `get providers` output includes a `source` column indicating whether each provider is `builtin` (compiled in) or `official` (auto-fetched from the OCI catalog). When filters (`--capability`, `--category`) are active, only built-in providers are shown since official providers do not expose capability/category metadata.
 ---
 
 ## Rendering a Solution

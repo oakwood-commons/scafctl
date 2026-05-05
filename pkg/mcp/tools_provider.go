@@ -10,6 +10,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 )
 
@@ -17,7 +18,7 @@ import (
 func (s *Server) registerProviderTools() {
 	// list_providers
 	listProvidersTool := mcp.NewTool("list_providers",
-		mcp.WithDescription("List all available solution providers (e.g. http, static, file, cel, exec, directory). Solution providers are the building blocks of solutions — they fetch data, transform values, validate inputs, and execute actions. Returns name, description, capabilities, and category for each provider. To get full input/output schemas, examples, and CLI usage for a specific provider, call get_provider_schema with the provider name."),
+		mcp.WithDescription("List all available solution providers (e.g. http, static, file, cel, exec, directory). Solution providers are the building blocks of solutions -- they fetch data, transform values, validate inputs, and execute actions. Returns name, displayName, description, source, capabilities, category, and version for each provider. The 'source' field indicates whether a provider is 'builtin' or 'official' (auto-fetched from catalog). Official providers may have empty capabilities and category fields. To get full input/output schemas, examples, and CLI usage for a specific provider, call get_provider_schema with the provider name."),
 		mcp.WithTitleAnnotation("List Providers"),
 		mcp.WithToolIcons(toolIcons["provider"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -108,6 +109,7 @@ type providerItem struct {
 	Name         string   `json:"name"`
 	DisplayName  string   `json:"displayName,omitempty"`
 	Description  string   `json:"description,omitempty"`
+	Source       string   `json:"source"`
 	Category     string   `json:"category,omitempty"`
 	Capabilities []string `json:"capabilities"`
 	Version      string   `json:"version,omitempty"`
@@ -147,6 +149,7 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 			Name:         d.Name,
 			DisplayName:  d.DisplayName,
 			Description:  d.Description,
+			Source:       "builtin",
 			Category:     d.Category,
 			Capabilities: caps,
 			Deprecated:   d.IsDeprecated,
@@ -156,6 +159,21 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 			item.Version = d.Version.String()
 		}
 		items = append(items, item)
+	}
+
+	// Include official plugin providers only when no filters are active
+	// (official providers don't expose capability/category metadata).
+	if capability == "" && category == "" {
+		for _, oi := range official.ListItems(s.ctx) {
+			items = append(items, providerItem{
+				Name:         oi.Name,
+				DisplayName:  oi.DisplayName,
+				Description:  oi.Description,
+				Source:       oi.Source,
+				Capabilities: oi.Capabilities,
+				Version:      oi.Version,
+			})
+		}
 	}
 
 	result, err := mcp.NewToolResultJSON(items)
@@ -184,12 +202,21 @@ func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallTool
 
 	desc, err := inspect.LookupProvider(s.ctx, name, s.registry)
 	if err != nil {
+		// Check official provider registry before returning error
+		if officialReg := official.RegistryFromContext(s.ctx); officialReg != nil {
+			if op, found := officialReg.Get(name); found {
+				detail := official.Detail(op)
+				detail["schemaAvailable"] = false
+				detail["hint"] = "Full schema, examples, and capabilities are unavailable until the plugin is fetched. Run 'plugins install " + op.CatalogRef + "' to fetch it."
+				return mcp.NewToolResultJSON(detail)
+			}
+		}
 		// Build a helpful error with available provider names
 		availableNames := ""
 		if s.registry != nil {
 			names := s.registry.List()
 			if len(names) > 0 {
-				availableNames = fmt.Sprintf(". Available providers: %v", names)
+				availableNames = fmt.Sprintf(". Available built-in providers: %v", names)
 			}
 		}
 		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("provider %q not found%s", name, availableNames),
@@ -206,6 +233,7 @@ func (s *Server) handleGetProviderSchema(_ context.Context, request mcp.CallTool
 	// - CLI usage examples
 	// - version, capabilities, category, tags, links, maintainers
 	detail := provdetail.BuildProviderDetail(*desc)
+	detail["source"] = "builtin"
 
 	return mcp.NewToolResultJSON(detail)
 }
