@@ -323,7 +323,7 @@ spec:
 
 ### List Available Providers
 
-No files needed — this tool lists the built-in providers.
+No files needed -- this tool lists both built-in and official providers.
 
 > [!NOTE]
 > **You:** "What solution providers are available?"
@@ -333,27 +333,31 @@ The AI calls `list_providers` and returns something like:
 ```
 Here are the available solution providers:
 
-| Name        | Category    | Capabilities       |
-|-------------|-------------|--------------------|
-| cel         | transform   | from, transform    |
-| debug       | utility     | action             |
-| directory   | data        | from               |
-| env         | data        | from               |
-| exec        | action      | from, action       |
-| file        | data        | from               |
-| git         | data        | from               |
-| go-template | transform   | from, transform    |
-| hcl         | data        | from, transform    |
-| http        | data        | from, action       |
-| identity    | auth        | from               |
-| parameter   | data        | from               |
-| secret      | data        | from               |
-| sleep       | utility     | action             |
-| static      | data        | from, action       |
-| validation  | validation  | validation         |
+| Name        | Source   | Category    | Capabilities       |
+|-------------|----------|-------------|--------------------|
+| cel         | builtin  | transform   | from, transform    |
+| debug       | builtin  | utility     | action             |
+| file        | builtin  | data        | from               |
+| go-template | builtin  | transform   | from, transform    |
+| http        | builtin  | data        | from, action       |
+| message     | builtin  | utility     | action             |
+| parameter   | builtin  | data        | from               |
+| static      | builtin  | data        | from, action       |
+| validation  | builtin  | validation  | validation         |
+| directory   | official |             |                    |
+| env         | official |             |                    |
+| exec        | official |             |                    |
+| git         | official |             |                    |
+| github      | official |             |                    |
+| hcl         | official |             |                    |
+| identity    | official |             |                    |
+| metadata    | official |             |                    |
+| secret      | official |             |                    |
+| sleep       | official |             |                    |
 
-16 providers available. Use `get_provider_schema` with a specific
-provider name to see its full input schema and examples.
+19 providers available (9 built-in, 10 official). Use `get_provider_schema`
+with a specific provider name to see its full input schema and examples.
+Official providers are auto-fetched from the OCI catalog on first use.
 ```
 
 ### Inspect a Solution
@@ -599,7 +603,7 @@ Resolution order:
 
 ### Get Provider Schema
 
-No files needed — you specify the provider by name.
+No files needed -- you specify the provider by name. If the provider is not found in the built-in registry, scafctl falls back to the official provider registry and returns catalog metadata (name, source, catalog reference, version).
 
 > [!NOTE]
 > **You:** "What inputs does the `exec` provider accept?"

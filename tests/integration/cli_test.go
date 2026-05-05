@@ -251,7 +251,7 @@ func TestIntegration_GetProvider(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "get", "provider")
 
 	assert.Equal(t, 0, exitCode)
-	// Should list built-in providers (7 remain after extraction)
+	// Should list built-in providers
 	assert.Contains(t, stdout, "http")
 	assert.Contains(t, stdout, "cel")
 	assert.Contains(t, stdout, "file")
@@ -259,6 +259,10 @@ func TestIntegration_GetProvider(t *testing.T) {
 	assert.Contains(t, stdout, "debug")
 	assert.Contains(t, stdout, "go-template")
 	assert.Contains(t, stdout, "message")
+	// Should also list official plugin providers
+	assert.Contains(t, stdout, "exec")
+	assert.Contains(t, stdout, "git")
+	assert.Contains(t, stdout, "directory")
 }
 
 func TestIntegration_GetProviderJSON(t *testing.T) {

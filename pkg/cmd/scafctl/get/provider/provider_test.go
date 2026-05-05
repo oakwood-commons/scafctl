@@ -6,12 +6,14 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -747,5 +749,297 @@ func TestOptions_getRegistry(t *testing.T) {
 
 		result := options.getRegistry(context.Background())
 		assert.NotNil(t, result)
+	})
+}
+
+func TestOptions_RunListProviders_IncludesOfficialProviders(t *testing.T) {
+	t.Run("includes_official_providers_when_registry_in_context", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+		mp := newMockProvider("builtin-prov", "A built-in provider", []provider.Capability{provider.CapabilityFrom})
+		_ = reg.Register(mp)
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+			{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunListProviders(ctx)
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "builtin-prov")
+		assert.Contains(t, output, "exec")
+		assert.Contains(t, output, "git")
+
+		var items []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(output), &items))
+		sources := make(map[string]bool)
+		for _, item := range items {
+			if s, ok := item["source"].(string); ok {
+				sources[s] = true
+			}
+		}
+		assert.True(t, sources["builtin"], "expected at least one builtin provider")
+		assert.True(t, sources["official"], "expected at least one official provider")
+	})
+
+	t.Run("shows_only_builtins_when_official_registry_not_in_context", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+		mp := newMockProvider("builtin-prov", "A built-in provider", []provider.Capability{provider.CapabilityFrom})
+		_ = reg.Register(mp)
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		err := options.RunListProviders(ctx)
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "builtin-prov")
+
+		var items []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(output), &items))
+		for _, item := range items {
+			assert.NotEqual(t, "official", item["source"], "should not contain official providers without registry")
+		}
+	})
+
+	t.Run("excludes_official_providers_when_capability_filter_set", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+		mp := newMockProvider("builtin-prov", "A built-in provider", []provider.Capability{provider.CapabilityFrom})
+		_ = reg.Register(mp)
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			Capability:     "from",
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunListProviders(ctx)
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "builtin-prov")
+		assert.NotContains(t, output, "exec")
+
+		var items []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(output), &items))
+		for _, item := range items {
+			assert.NotEqual(t, "official", item["source"], "should not contain official providers when capability filter set")
+		}
+	})
+
+	t.Run("excludes_official_providers_when_category_filter_set", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+		mp := newMockProvider("builtin-prov", "A built-in provider", []provider.Capability{provider.CapabilityFrom})
+		mp.descriptor.Category = "network"
+		_ = reg.Register(mp)
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			Category:       "network",
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunListProviders(ctx)
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "builtin-prov")
+		assert.NotContains(t, output, "exec")
+
+		var items []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(output), &items))
+		for _, item := range items {
+			assert.NotEqual(t, "official", item["source"], "should not contain official providers when category filter set")
+		}
+	})
+}
+
+func TestOptions_RunGetProvider_FallsBackToOfficialRegistry(t *testing.T) {
+	t.Run("shows_info_for_official_provider_not_in_builtin_registry", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "exec")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "exec")
+		assert.Contains(t, output, "Official plugin provider")
+	})
+
+	t.Run("returns_error_when_provider_not_in_any_registry", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "nonexistent")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("shows_plain_text_for_official_provider_with_default_output", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams: ioStreams,
+			CliParams: cliParams,
+			registry:  reg,
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "oci://catalog/exec", DefaultVersion: "v1.2.0"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "exec")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "official plugin provider")
+		assert.Contains(t, output, "oci://catalog/exec")
+		assert.Contains(t, output, "v1.2.0")
+	})
+
+	t.Run("shows_only_name_for_official_provider_with_quiet_output", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "oci://catalog/exec", DefaultVersion: "v1.2.0"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "exec")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Empty(t, output, "quiet mode should produce no output for official providers, consistent with built-ins")
 	})
 }

@@ -24,20 +24,21 @@ Providers are never invoked implicitly. A provider runs only when explicitly ref
 
 | Feature | Status | Location |
 |---------|--------|----------|
-| Provider Interface | ✅ Implemented | `pkg/provider/provider.go` |
-| Descriptor with schemas | ✅ Implemented | `pkg/provider/provider.go` |
-| All 5 Capabilities | ✅ Implemented | `from`, `transform`, `validation`, `authentication`, `action` |
-| Execution Context | ✅ Implemented | `pkg/provider/context.go` |
-| Input Resolution (literal, rslvr, expr, tmpl) | ✅ Implemented | `pkg/provider/inputs.go` |
-| Schema Validation | ✅ Implemented | `pkg/provider/validation.go` |
-| Executor Lifecycle | ✅ Implemented | `pkg/provider/executor.go` |
-| In-Memory Metrics (`--show-metrics`) | ✅ Implemented | `pkg/provider/metrics.go` |
-| Prometheus Metrics | ✅ Implemented | `pkg/metrics/metrics.go` |
-| Registry with versioning | ✅ Implemented | `pkg/provider/registry.go` |
-| Built-in Providers | ✅ Implemented | `pkg/provider/builtin/` |
-| Capability-required output fields | ✅ Implemented | `CapabilityRequiredOutputFields` |
-| Secret handling (`SensitiveFields`) | ✅ Implemented | Redaction via `SecretMask` |
-| Iteration Context | ✅ Implemented | `__item`, `__index`, aliases |
+| Provider Interface | Implemented | `pkg/provider/provider.go` |
+| Descriptor with schemas | Implemented | `pkg/provider/provider.go` |
+| All 5 Capabilities | Implemented | `from`, `transform`, `validation`, `authentication`, `action` |
+| Execution Context | Implemented | `pkg/provider/context.go` |
+| Input Resolution (literal, rslvr, expr, tmpl) | Implemented | `pkg/provider/inputs.go` |
+| Schema Validation | Implemented | `pkg/provider/validation.go` |
+| Executor Lifecycle | Implemented | `pkg/provider/executor.go` |
+| In-Memory Metrics (`--show-metrics`) | Implemented | `pkg/provider/metrics.go` |
+| Prometheus Metrics | Implemented | `pkg/metrics/metrics.go` |
+| Registry with versioning | Implemented | `pkg/provider/registry.go` |
+| Built-in Providers | Implemented | `pkg/provider/builtin/` |
+| Official Provider Registry | Implemented | `pkg/provider/official/` |
+| Capability-required output fields | Implemented | `CapabilityRequiredOutputFields` |
+| Secret handling (`SensitiveFields`) | Implemented | Redaction via `SecretMask` |
+| Iteration Context | Implemented | `__item`, `__index`, aliases |
 
 ---
 
@@ -64,7 +65,7 @@ A provider is not responsible for:
 
 ## Execution Context
 
-> **Status**: ✅ Implemented in `pkg/provider/context.go`
+> **Status**: Implemented in `pkg/provider/context.go`
 
 Providers are invoked with a resolved execution context.
 
@@ -103,7 +104,7 @@ Both default names and aliases are available simultaneously in the context.
 
 ## Execution Lifecycle
 
-> **Status**: ✅ Implemented in `pkg/provider/executor.go`
+> **Status**: Implemented in `pkg/provider/executor.go`
 
 Providers follow a strict execution pipeline to ensure consistent behavior and validation:
 
@@ -156,13 +157,13 @@ This validation happens in the `Executor`, not in individual providers. Provider
 
 ## Observability & Metrics
 
-> **Status**: ✅ Implemented
+> **Status**: Implemented
 
 Provider execution is instrumented for observability at two levels:
 
 ### In-Memory Metrics (CLI Output)
 
-> **Status**: ✅ Implemented in `pkg/provider/metrics.go`
+> **Status**: Implemented in `pkg/provider/metrics.go`
 
 When running with `--show-metrics`, scafctl collects per-provider execution statistics:
 
@@ -191,7 +192,7 @@ scafctl run solution -f solution.yaml --show-metrics
 
 ### Prometheus Metrics (Observability)
 
-> **Status**: ✅ Implemented in `pkg/metrics/metrics.go`
+> **Status**: Implemented in `pkg/metrics/metrics.go`
 
 Provider metrics are also exported as Prometheus metrics for integration with monitoring systems:
 
@@ -349,7 +350,7 @@ desc := &provider.Descriptor{
 
 ## Provider Capabilities
 
-> **Status**: ✅ Implemented - All 5 capability types active
+> **Status**: Implemented - All 5 capability types active
 
 Providers declare their supported execution contexts through capabilities. Capabilities indicate which parts of the scafctl execution model a provider can participate in.
 
@@ -674,7 +675,7 @@ This interface is illustrative. The exact implementation may evolve, but the con
 
 ## Input Resolution
 
-> **Status**: ✅ Implemented in `pkg/provider/inputs.go`
+> **Status**: Implemented in `pkg/provider/inputs.go`
 
 Provider inputs are resolved by scafctl before execution.
 
@@ -918,6 +919,23 @@ actions:
 ~~~
 
 Action orchestration, dependencies, iteration, and conditional execution are handled outside the provider.
+
+---
+
+## Provider Sources
+
+Providers are classified by source:
+
+| Source | Description | Location |
+|--------|-------------|----------|
+| `builtin` | Compiled into the binary, always available | `pkg/provider/builtin/` |
+| `official` | Auto-fetched from OCI catalog on first use | `pkg/provider/official/` |
+
+The `get providers` command and MCP `list_providers` tool include both sources in their output. Each provider item includes a `source` field indicating its origin.
+
+When looking up a specific provider (`get provider <name>` or `get_provider_schema`), scafctl checks the built-in registry first, then falls back to the official registry. Official providers that are not yet cached locally are auto-fetched on first use in a solution.
+
+The official provider registry can be disabled via `settings.disableOfficialProviders: true` in the configuration file.
 
 ---
 
@@ -1384,7 +1402,7 @@ expiresIn: "55m30s"
 
 ## Security Considerations
 
-> **Status**: ✅ Implemented
+> **Status**: Implemented
 
 Providers handle sensitive data through structured security mechanisms:
 
@@ -1461,7 +1479,7 @@ Providers with `CapabilityAuthentication` have additional requirements:
 
 ## Context Propagation
 
-> **Status**: ✅ Implemented in `pkg/provider/context.go`
+> **Status**: Implemented in `pkg/provider/context.go`
 
 Providers receive and should respect standard Go context patterns:
 
@@ -1580,7 +1598,7 @@ func (p *APIProvider) Execute(ctx context.Context, input any) (*Output, error) {
 
 ## Trace Instrumentation
 
-> **Status**: ✅ Implemented in `pkg/provider/executor.go`
+> **Status**: Implemented in `pkg/provider/executor.go`
 
 Every provider execution is wrapped in an OpenTelemetry span, giving end-to-end visibility across resolver phases and provider calls.
 

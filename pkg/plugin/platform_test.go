@@ -52,3 +52,22 @@ func TestPlatformCacheKey(t *testing.T) {
 	assert.Equal(t, "linux-amd64", PlatformCacheKey("linux/amd64"))
 	assert.Equal(t, "darwin-arm64", PlatformCacheKey("darwin/arm64"))
 }
+
+func TestPlatformIsWindows(t *testing.T) {
+	tests := []struct {
+		platform string
+		want     bool
+	}{
+		{"windows/amd64", true},
+		{"windows/arm64", true},
+		{"windows-amd64", true},
+		{"linux/amd64", false},
+		{"darwin/arm64", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.platform, func(t *testing.T) {
+			assert.Equal(t, tt.want, platformIsWindows(tt.platform))
+		})
+	}
+}

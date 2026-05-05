@@ -15,9 +15,11 @@ import (
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -122,6 +124,7 @@ type Summary struct {
 	Name         string `json:"name" yaml:"name" required:"true"`
 	DisplayName  string `json:"displayName" yaml:"displayName"`
 	Version      string `json:"version" yaml:"version"`
+	Source       string `json:"source" yaml:"source"`
 	Category     string `json:"category" yaml:"category"`
 	Capabilities string `json:"capabilities" yaml:"capabilities"`
 	Description  string `json:"description" yaml:"description"`
@@ -131,24 +134,42 @@ type Summary struct {
 
 // RunListProviders lists all providers
 func (o *Options) RunListProviders(ctx context.Context) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
 	if o.BinaryName == "" {
 		o.BinaryName = settings.CliBinaryName
 	}
 
 	reg := o.getRegistry(ctx)
 	providers := reg.ListProviders()
+	lgr.V(1).Info("loaded built-in provider registry", "count", len(providers))
+	if w != nil {
+		w.Verbosef("Found %d built-in providers", len(providers))
+	}
 
 	// Apply filters
 	filtered := o.filterProviders(providers)
+	lgr.V(2).Info("applied filters to built-in providers",
+		"capability", o.Capability,
+		"category", o.Category,
+		"before", len(providers),
+		"after", len(filtered),
+	)
+	if w != nil && (o.Capability != "" || o.Category != "") {
+		w.Verbosef("After filtering (capability=%q, category=%q): %d providers", o.Capability, o.Category, len(filtered))
+	}
 
 	// Build structured output for kvx
 	output := make([]Summary, 0, len(filtered))
 	for _, p := range filtered {
 		desc := p.Descriptor()
+		lgr.V(3).Info("including built-in provider", "name", desc.Name)
 		output = append(output, Summary{
 			Name:         desc.Name,
 			DisplayName:  desc.DisplayName,
 			Version:      desc.Version.String(),
+			Source:       "builtin",
 			Description:  desc.Description,
 			Capabilities: strings.Join(CapabilitiesToStrings(desc.Capabilities), ", "),
 			Category:     desc.Category,
@@ -157,14 +178,54 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 		})
 	}
 
+	// Include official providers only when no filters are active
+	// (official providers don't expose capability/category metadata).
+	if o.Capability == "" && o.Category == "" {
+		output = o.appendOfficialProviders(ctx, output)
+	}
+
+	if w != nil {
+		w.Verbosef("Total providers: %d", len(output))
+	}
+	lgr.V(1).Info("total providers to display", "count", len(output))
+
 	return o.writeOutput(ctx, output)
 }
 
 // RunGetProvider gets details about a specific provider
 func (o *Options) RunGetProvider(ctx context.Context, name string) error {
+	lgr := logger.FromContext(ctx)
+	lgr.V(1).Info("looking up provider", "name", name)
+
 	reg := o.getRegistry(ctx)
 	p, ok := reg.Get(name)
 	if !ok {
+		lgr.V(1).Info("provider not found in built-in registry, checking official registry", "name", name)
+		// Check if it's an official provider
+		if officialReg := official.RegistryFromContext(ctx); officialReg != nil {
+			if op, found := officialReg.Get(name); found {
+				lgr.V(1).Info("found provider in official registry", "name", name, "catalogRef", op.CatalogRef)
+
+				// Structured output for -o flag (including quiet) or interactive mode.
+				// Quiet mode is handled by kvx (produces no output), consistent with built-in providers.
+				if (o.Output != "" && o.Output != "auto") || o.Interactive {
+					detail := official.Detail(op)
+					return o.writeOutput(ctx, detail)
+				}
+
+				// Default: human-readable text
+				w := writer.FromContext(ctx)
+				if w != nil {
+					w.Plainlnf("Provider %q is an official plugin provider (catalog: %s, version: %s).\n"+
+						"It is auto-fetched on first use in a solution. Use 'plugins install' to pre-fetch.", name, op.CatalogRef, op.DefaultVersion)
+				}
+				return nil
+			}
+			lgr.V(1).Info("provider not found in official registry either", "name", name)
+		} else {
+			lgr.V(1).Info("official registry not available in context")
+		}
+
 		err := fmt.Errorf("provider %q not found", name)
 		if w := writer.FromContext(ctx); w != nil {
 			w.Errorf("%v", err)
@@ -172,6 +233,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
+	lgr.V(1).Info("found provider in built-in registry", "name", name)
 	desc := p.Descriptor()
 
 	// Default: custom formatted view (unless -o is specified)
@@ -181,6 +243,7 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 
 	// Structured output for -o flag
 	output := BuildProviderDetail(*desc)
+	output["source"] = "builtin"
 	return o.writeOutput(ctx, output)
 }
 
@@ -436,15 +499,51 @@ func CapabilitiesToStrings(caps []provider.Capability) []string {
 
 // getRegistry returns the provider registry
 func (o *Options) getRegistry(ctx context.Context) *provider.Registry {
+	lgr := logger.FromContext(ctx)
+
 	if o.registry != nil {
+		lgr.V(2).Info("using injected test registry")
 		return o.registry
 	}
 
 	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
+		lgr.V(1).Info("failed to load default registry, falling back to global", "error", err)
 		return provider.GetGlobalRegistry()
 	}
+	lgr.V(2).Info("using default built-in registry")
 	return reg
+}
+
+// appendOfficialProviders appends official plugin providers from context to the output slice.
+func (o *Options) appendOfficialProviders(ctx context.Context, output []Summary) []Summary {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	items := official.ListItems(ctx)
+	if items == nil {
+		lgr.V(1).Info("official provider registry not available in context")
+		if w != nil {
+			w.Verbosef("Official provider registry not available (check config: settings.disableOfficialProviders)")
+		}
+		return output
+	}
+
+	lgr.V(1).Info("loaded official provider registry", "count", len(items))
+	if w != nil {
+		w.Verbosef("Found %d official plugin providers (auto-fetched on first use)", len(items))
+	}
+	for _, item := range items {
+		lgr.V(3).Info("including official provider", "name", item.Name)
+		output = append(output, Summary{
+			Name:        item.Name,
+			DisplayName: item.DisplayName,
+			Version:     item.Version,
+			Source:      item.Source,
+			Description: item.Description,
+		})
+	}
+	return output
 }
 
 // writeOutput writes the output using kvx
@@ -456,9 +555,10 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 		kvx.WithOutputAppName(o.BinaryName+" get provider"),
 		kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON),
 		kvx.WithIOStreams(o.IOStreams),
-		kvx.WithOutputColumnOrder([]string{"name", "description"}),
+		kvx.WithOutputColumnOrder([]string{"name", "source", "description"}),
 		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
 			"name":         {MaxWidth: 20, Priority: 10},
+			"source":       {MaxWidth: 10, Priority: 8},
 			"displayName":  {Hidden: true},
 			"version":      {Hidden: true},
 			"category":     {Hidden: true},
