@@ -6,6 +6,7 @@ package httpprovider
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1129,6 +1130,7 @@ func TestHTTPProvider_Pagination_DescriptorHasPaginationSchema(t *testing.T) {
 	assert.Contains(t, paginationProp.Properties, "nextURLPath")
 	assert.Contains(t, paginationProp.Properties, "nextURL")
 	assert.Contains(t, paginationProp.Properties, "nextParams")
+	assert.Contains(t, paginationProp.Properties, "bodyTemplate")
 }
 
 func TestHTTPProvider_Pagination_OutputIncludesPagesAndTotalItems(t *testing.T) {
@@ -1259,4 +1261,689 @@ func TestHTTPProvider_Pagination_CollectPath_MissingKeyOnLastPage(t *testing.T) 
 	assert.Len(t, collectedItems, 2, "should have items from page 1 only")
 	// Should have stopped at page 2 (stopWhen treated missing key as stop)
 	assert.Equal(t, 2, data["pages"])
+}
+
+// --- bodyTemplate tests ---
+
+func TestInitialOffset(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		url      string
+		strategy string
+		param    string
+		want     int
+	}{
+		{"offset from URL", "http://x/api?offset=50&limit=10", StrategyOffset, "offset", 50},
+		{"no offset param", "http://x/api?limit=10", StrategyOffset, "offset", 0},
+		{"non-offset strategy", "http://x/api?offset=50", StrategyPageNumber, "offset", 0},
+		{"custom offset param", "http://x/api?skip=25", StrategyOffset, "skip", 25},
+		{"invalid URL", "://bad", StrategyOffset, "offset", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &paginationConfig{Strategy: tt.strategy, OffsetParam: tt.param}
+			assert.Equal(t, tt.want, initialOffset(tt.url, cfg))
+		})
+	}
+}
+
+func TestParsePaginationConfig_BodyTemplate(t *testing.T) {
+	t.Parallel()
+	cfg, err := parsePaginationConfig(map[string]any{
+		"pagination": map[string]any{
+			"strategy":     "pageNumber",
+			"maxPages":     10,
+			"pageSize":     50,
+			"bodyTemplate": `'{"query":"{ items(page: ' + string(__page) + ') { id } }"}'`,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, `'{"query":"{ items(page: ' + string(__page) + ') { id } }"}'`, cfg.BodyTemplate)
+}
+
+func TestParsePaginationConfig_CursorWithPageSize(t *testing.T) {
+	t.Parallel()
+	cfg, err := parsePaginationConfig(map[string]any{
+		"pagination": map[string]any{
+			"strategy":       "cursor",
+			"maxPages":       5,
+			"pageSize":       25,
+			"nextTokenPath":  "body.cursor",
+			"nextTokenParam": "after",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, 25, cfg.PageSize)
+	assert.Equal(t, 25, cfg.pageSize())
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_PageNumber(t *testing.T) {
+	t.Parallel()
+	totalItems := 5
+	pageSize := 2
+
+	items := make([]map[string]any, totalItems)
+	for i := 0; i < totalItems; i++ {
+		items[i] = map[string]any{"id": i + 1, "name": fmt.Sprintf("item-%d", i+1)}
+	}
+
+	var receivedBodies []string
+	var receivedURLs []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedURLs = append(receivedURLs, r.URL.String())
+		body, _ := io.ReadAll(r.Body)
+		receivedBodies = append(receivedBodies, string(body))
+
+		var reqBody map[string]any
+		_ = json.Unmarshal(body, &reqBody)
+
+		page := 1
+		if p, ok := reqBody["page"].(float64); ok {
+			page = int(p)
+		}
+
+		offset := (page - 1) * pageSize
+		end := offset + pageSize
+		if end > totalItems {
+			end = totalItems
+		}
+		var pageItems []map[string]any
+		if offset < totalItems {
+			pageItems = items[offset:end]
+		} else {
+			pageItems = []map[string]any{}
+		}
+
+		resp := map[string]any{
+			"data": map[string]any{
+				"items": pageItems,
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/graphql",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "pageNumber",
+			"maxPages":     10,
+			"pageSize":     pageSize,
+			"bodyTemplate": `'{"page": ' + string(__page) + ', "size": ' + string(__pageSize) + '}'`,
+			"collectPath":  "body.data.items",
+			"stopWhen":     "size(body.data.items) == 0",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+
+	// Verify multiple pages were fetched
+	pages := data["pages"].(int)
+	assert.True(t, pages > 1, "expected multiple pages, got %d", pages)
+
+	// Verify collected items
+	var collectedItems []map[string]any
+	err = json.Unmarshal([]byte(data["body"].(string)), &collectedItems)
+	require.NoError(t, err)
+	assert.Equal(t, totalItems, len(collectedItems))
+
+	// Verify URL stays unchanged across all requests (no query params added)
+	for i, u := range receivedURLs {
+		assert.Equal(t, "/graphql", u, "request %d URL should remain unchanged", i)
+	}
+
+	// Verify that each request body had the correct page number
+	for i, body := range receivedBodies {
+		var parsed map[string]any
+		err := json.Unmarshal([]byte(body), &parsed)
+		require.NoError(t, err, "body %d should be valid JSON", i)
+		assert.Equal(t, float64(i+1), parsed["page"], "page %d body should have correct page number", i+1)
+		assert.Equal(t, float64(pageSize), parsed["size"], "page %d body should have correct page size", i+1)
+	}
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_Offset(t *testing.T) {
+	t.Parallel()
+	totalItems := 7
+	pageSize := 3
+
+	items := make([]map[string]any, totalItems)
+	for i := 0; i < totalItems; i++ {
+		items[i] = map[string]any{"id": i + 1}
+	}
+
+	var receivedURLs []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedURLs = append(receivedURLs, r.URL.String())
+		body, _ := io.ReadAll(r.Body)
+		var reqBody map[string]any
+		_ = json.Unmarshal(body, &reqBody)
+
+		offset := 0
+		if o, ok := reqBody["from"].(float64); ok {
+			offset = int(o)
+		}
+
+		end := offset + pageSize
+		if end > totalItems {
+			end = totalItems
+		}
+		var pageItems []map[string]any
+		if offset < totalItems {
+			pageItems = items[offset:end]
+		} else {
+			pageItems = []map[string]any{}
+		}
+
+		resp := map[string]any{"hits": pageItems}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/_search",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "offset",
+			"maxPages":     10,
+			"limit":        pageSize,
+			"bodyTemplate": `'{"from": ' + string(__offset) + ', "size": ' + string(__pageSize) + '}'`,
+			"collectPath":  "body.hits",
+			"stopWhen":     "size(body.hits) == 0",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	var collectedItems []map[string]any
+	err = json.Unmarshal([]byte(data["body"].(string)), &collectedItems)
+	require.NoError(t, err)
+	assert.Equal(t, totalItems, len(collectedItems))
+
+	// Verify URL stays unchanged across all requests (no query params added)
+	for i, u := range receivedURLs {
+		assert.Equal(t, "/_search", u, "request %d URL should remain unchanged", i)
+	}
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_Cursor(t *testing.T) {
+	t.Parallel()
+	totalItems := 6
+	pageSize := 2
+
+	items := make([]map[string]any, totalItems)
+	for i := 0; i < totalItems; i++ {
+		items[i] = map[string]any{"id": i + 1}
+	}
+
+	var receivedBodies []string
+	var receivedURLs []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedURLs = append(receivedURLs, r.URL.String())
+		body, _ := io.ReadAll(r.Body)
+		receivedBodies = append(receivedBodies, string(body))
+
+		var reqBody map[string]any
+		_ = json.Unmarshal(body, &reqBody)
+
+		offset := 0
+		if cursor, ok := reqBody["after"].(string); ok && cursor != "" {
+			offset, _ = strconv.Atoi(cursor)
+		}
+
+		end := offset + pageSize
+		if end > totalItems {
+			end = totalItems
+		}
+		pageItems := items[offset:end]
+
+		resp := map[string]any{
+			"items": pageItems,
+		}
+		if end < totalItems {
+			resp["nextCursor"] = strconv.Itoa(end)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/graphql",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":       "cursor",
+			"maxPages":       10,
+			"pageSize":       pageSize,
+			"nextTokenPath":  "body.nextCursor",
+			"nextTokenParam": "cursor",
+			"bodyTemplate":   `'{"after": "' + __cursor + '", "first": ' + string(__pageSize) + '}'`,
+			"collectPath":    "body.items",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	pages := data["pages"].(int)
+	assert.Equal(t, 3, pages) // 6 items / 2 per page
+
+	var collectedItems []map[string]any
+	err = json.Unmarshal([]byte(data["body"].(string)), &collectedItems)
+	require.NoError(t, err)
+	assert.Equal(t, totalItems, len(collectedItems))
+
+	// Verify URL stays unchanged across all requests (no query params added)
+	for i, u := range receivedURLs {
+		assert.Equal(t, "/graphql", u, "request %d URL should remain unchanged", i)
+	}
+
+	// Verify body content carries correct cursor values
+	require.Len(t, receivedBodies, 3)
+	var body0, body1, body2 map[string]any
+	require.NoError(t, json.Unmarshal([]byte(receivedBodies[0]), &body0))
+	require.NoError(t, json.Unmarshal([]byte(receivedBodies[1]), &body1))
+	require.NoError(t, json.Unmarshal([]byte(receivedBodies[2]), &body2))
+	assert.Equal(t, "", body0["after"], "first request should have empty cursor")
+	assert.Equal(t, "2", body1["after"], "second request should have cursor '2'")
+	assert.Equal(t, "4", body2["after"], "third request should have cursor '4'")
+	assert.Equal(t, float64(pageSize), body0["first"], "body should include pageSize")
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_ValidationError_GET(t *testing.T) {
+	t.Parallel()
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    "https://api.example.com/items",
+		"method": "GET",
+		"pagination": map[string]any{
+			"strategy":     "pageNumber",
+			"maxPages":     10,
+			"pageSize":     50,
+			"bodyTemplate": `'{"page": ' + string(__page) + '}'`,
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bodyTemplate requires method POST, PUT, or PATCH")
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_InvalidExpression(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items": [{"id": 1}]}`))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/items",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "pageNumber",
+			"maxPages":     10,
+			"pageSize":     50,
+			"bodyTemplate": "invalid_func_that_does_not_exist()",
+			"collectPath":  "body.items",
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bodyTemplate evaluation failed")
+}
+
+func TestMethodSupportsBody(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		method string
+		want   bool
+	}{
+		{"POST", true},
+		{"PUT", true},
+		{"PATCH", true},
+		{"post", true},
+		{"GET", false},
+		{"DELETE", false},
+		{"HEAD", false},
+		{"OPTIONS", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, methodSupportsBody(tt.method), "method %q", tt.method)
+	}
+}
+
+func TestPaginationConfig_PageSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cfg  paginationConfig
+		want int
+	}{
+		{"offset", paginationConfig{Strategy: StrategyOffset, Limit: 50}, 50},
+		{"pageNumber", paginationConfig{Strategy: StrategyPageNumber, PageSize: 25}, 25},
+		{"cursor", paginationConfig{Strategy: StrategyCursor}, 0},
+		{"linkHeader", paginationConfig{Strategy: StrategyLinkHeader}, 0},
+		{"custom", paginationConfig{Strategy: StrategyCustom}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.cfg.pageSize())
+		})
+	}
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_MapResult(t *testing.T) {
+	t.Parallel()
+
+	// Server expects JSON body and returns paginated items
+	totalItems := 4
+	pageSize := 2
+
+	items := make([]map[string]any, totalItems)
+	for i := 0; i < totalItems; i++ {
+		items[i] = map[string]any{"id": i + 1}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var reqBody map[string]any
+		_ = json.Unmarshal(body, &reqBody)
+
+		page := 1
+		if p, ok := reqBody["page"].(float64); ok {
+			page = int(p)
+		}
+
+		offset := (page - 1) * pageSize
+		end := offset + pageSize
+		if end > totalItems {
+			end = totalItems
+		}
+		var pageItems []map[string]any
+		if offset < totalItems {
+			pageItems = items[offset:end]
+		} else {
+			pageItems = []map[string]any{}
+		}
+
+		resp := map[string]any{"items": pageItems}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	// CEL expression that returns a map (not a string) — exercises the json.Marshal branch
+	inputs := map[string]any{
+		"url":    server.URL + "/api",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "pageNumber",
+			"maxPages":     10,
+			"pageSize":     pageSize,
+			"bodyTemplate": `{"page": __page, "size": __pageSize}`,
+			"collectPath":  "body.items",
+			"stopWhen":     "size(body.items) == 0",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	var collectedItems []map[string]any
+	err = json.Unmarshal([]byte(data["body"].(string)), &collectedItems)
+	require.NoError(t, err)
+	assert.Equal(t, totalItems, len(collectedItems))
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_NilResult(t *testing.T) {
+	t.Parallel()
+
+	// Server that accepts empty body
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+
+		resp := map[string]any{
+			"items":    []any{map[string]any{"id": 1, "bodySize": len(body)}},
+			"bodySize": len(body),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	// CEL dyn() wrapper allows null return — exercises the nil branch
+	inputs := map[string]any{
+		"url":    server.URL + "/api",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "pageNumber",
+			"maxPages":     2,
+			"pageSize":     10,
+			"bodyTemplate": `dyn(null)`,
+			"collectPath":  "body.items",
+			"stopWhen":     "page == 2",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	// Verify it ran and that the null body was sent as empty (0 bytes)
+	data := output.Data.(map[string]any)
+	bodyStr, ok := data["body"].(string)
+	require.True(t, ok)
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(bodyStr), &items))
+	require.NotEmpty(t, items)
+	// Each request should have received an empty body (bodySize == 0)
+	for i, item := range items {
+		bs, _ := item["bodySize"].(float64)
+		assert.Equal(t, float64(0), bs, "page %d should have received empty body", i+1)
+	}
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_LinkHeader_StopSignal(t *testing.T) {
+	t.Parallel()
+
+	pageCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageCount++
+		body, _ := io.ReadAll(r.Body)
+		_ = body
+
+		w.Header().Set("Content-Type", "application/json")
+		// Page 1 and 2 include Link header, page 3 does not (= stop).
+		if pageCount < 3 {
+			w.Header().Set("Link", `<http://example.com/next>; rel="next"`)
+		}
+		resp := map[string]any{"items": []map[string]any{{"id": pageCount}}}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/api",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "linkHeader",
+			"maxPages":     10,
+			"bodyTemplate": `'{"fetch": true}'`,
+			"collectPath":  "body.items",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	// Should stop at page 3 because Link header disappears.
+	assert.Equal(t, 3, data["pages"])
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_Custom_StopSignal(t *testing.T) {
+	t.Parallel()
+
+	pageCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageCount++
+		body, _ := io.ReadAll(r.Body)
+		_ = body
+
+		hasNext := pageCount < 3
+		resp := map[string]any{
+			"items":   []map[string]any{{"id": pageCount}},
+			"nextURL": "",
+		}
+		if hasNext {
+			resp["nextURL"] = "http://example.com/page/" + strconv.Itoa(pageCount+1)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/api",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "custom",
+			"maxPages":     10,
+			"nextURL":      `body.nextURL`,
+			"bodyTemplate": `'{"fetch": true}'`,
+			"collectPath":  "body.items",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	// Should stop at page 3 because custom nextURL returns empty.
+	assert.Equal(t, 3, data["pages"])
+}
+
+func TestHTTPProvider_Pagination_BodyTemplate_ShortPage_StopSignal(t *testing.T) {
+	t.Parallel()
+
+	pageSize := 3
+	totalItems := 7 // 3 + 3 + 1 = pages 1, 2, 3 (page 3 is short)
+
+	allItems := make([]map[string]any, totalItems)
+	for i := range allItems {
+		allItems[i] = map[string]any{"id": i + 1}
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var reqBody map[string]any
+		_ = json.Unmarshal(body, &reqBody)
+
+		offset := 0
+		if o, ok := reqBody["offset"].(float64); ok {
+			offset = int(o)
+		}
+		end := offset + pageSize
+		if end > totalItems {
+			end = totalItems
+		}
+
+		var pageItems []map[string]any
+		if offset < totalItems {
+			pageItems = allItems[offset:end]
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Return bare array — triggers checkItemCountStop
+		_ = json.NewEncoder(w).Encode(pageItems)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL + "/data",
+		"method": "POST",
+		"pagination": map[string]any{
+			"strategy":     "offset",
+			"maxPages":     10,
+			"limit":        pageSize,
+			"bodyTemplate": `'{"offset": ' + string(__offset) + ', "limit": ' + string(__pageSize) + '}'`,
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+	// Should stop at page 3 because page 3 has fewer items than pageSize.
+	assert.Equal(t, 3, data["pages"])
 }

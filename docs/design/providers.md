@@ -1074,6 +1074,70 @@ resolve:
         method: GET
 ~~~
 
+#### Body-Based Pagination
+
+For POST-based paginated APIs (GraphQL, Elasticsearch, enterprise search), use
+`bodyTemplate` in the pagination config. This CEL expression is evaluated
+per-page to generate a new request body for each iteration.
+
+Available context variables in `bodyTemplate`:
+
+| Variable | Description |
+|----------|-------------|
+| `__page` | Current page number (starts at `startPage`, default 1) |
+| `__pageSize` | Configured page size (from `pageSize` or `limit`) |
+| `__offset` | Current offset (increments by page size each page; starts from URL offset param if present) |
+| `__cursor` | Cursor token from previous response (cursor strategy) |
+
+When `bodyTemplate` is set, it overrides the top-level `body` field for all
+pages. The URL remains unchanged across pages --- all pagination state is
+carried in the request body.
+
+**GraphQL example:**
+
+~~~yaml
+resolve:
+  with:
+    - provider: http
+      inputs:
+        url: https://api.example.com/graphql
+        method: POST
+        headers:
+          Content-Type: application/json
+        pagination:
+          strategy: pageNumber
+          maxPages: 50
+          pageSize: 100
+          bodyTemplate: |
+            '{"query":"{ items(page: ' + string(__page) + ', size: ' + string(__pageSize) + ') { results { id name } totalPages } }"}'
+          collectPath: "body.data.items.results"
+          stopWhen: "size(body.data.items.results) == 0"
+~~~
+
+**Elasticsearch example:**
+
+~~~yaml
+resolve:
+  with:
+    - provider: http
+      inputs:
+        url: https://es.example.com/my-index/_search
+        method: POST
+        headers:
+          Content-Type: application/json
+        pagination:
+          strategy: offset
+          maxPages: 100
+          limit: 500
+          bodyTemplate: |
+            '{"from": ' + string(__offset) + ', "size": ' + string(__pageSize) + ', "query": {"match_all": {}}}'
+          collectPath: "body.hits.hits"
+          stopWhen: "size(body.hits.hits) == 0"
+~~~
+
+The `bodyTemplate` expression can return a string (sent as-is) or a map/list
+(automatically marshaled to JSON).
+
 ---
 
 ### cel
