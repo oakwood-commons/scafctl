@@ -173,7 +173,7 @@ func TestFormatTypeString_AllKinds(t *testing.T) {
 		{FieldInfo{Kind: reflect.Array, ElemType: "int"}, "[]int"},
 		{FieldInfo{Kind: reflect.Map, KeyType: "string", ElemType: "any"}, "map[string]any"},
 		{FieldInfo{Kind: reflect.Map, Type: "map"}, "map"},
-		{FieldInfo{Kind: reflect.Ptr, Type: "Config"}, "*Config"},
+		{FieldInfo{Kind: reflect.Pointer, Type: "Config"}, "*Config"},
 		{FieldInfo{Kind: reflect.Interface, Type: ""}, "any"},
 		{FieldInfo{Kind: reflect.Interface, Type: "MyInterface"}, "MyInterface"},
 		{FieldInfo{Kind: reflect.String, Type: "string"}, "string"},

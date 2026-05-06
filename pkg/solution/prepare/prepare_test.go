@@ -15,6 +15,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -1092,4 +1093,418 @@ func TestInjectHTTPClientSettings_InjectsValue(t *testing.T) {
 	var settings map[string]any
 	require.NoError(t, json.Unmarshal(raw, &settings))
 	assert.Equal(t, true, settings["allowPrivateIPs"])
+}
+
+func TestWithOfficialAuthHandlers(t *testing.T) {
+	reg := authofficial.NewRegistry()
+	var cfg prepareConfig
+	WithOfficialAuthHandlers(reg)(&cfg)
+	assert.Same(t, reg, cfg.officialAuthHandlers)
+}
+
+func TestMissingOfficialAuthHandlers_SkipsRegistered(t *testing.T) {
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(auth.NewMockHandler("github"))
+
+	officialReg := authofficial.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"token": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "identity",
+								Inputs: map[string]*resolver.ValueRef{
+									"handler": {Literal: "github"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	missing := missingOfficialAuthHandlers(sol, authReg, officialReg)
+	assert.Empty(t, missing)
+}
+
+func TestMissingOfficialAuthHandlers_FindsMissing(t *testing.T) {
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"token": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "identity",
+								Inputs: map[string]*resolver.ValueRef{
+									"handler": {Literal: "github"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	missing := missingOfficialAuthHandlers(sol, authReg, officialReg)
+	require.Len(t, missing, 1)
+	assert.Equal(t, "github", missing[0].Name)
+}
+
+func TestAutoResolveOfficialAuthHandlers_NilRegistry(t *testing.T) {
+	sol := &solution.Solution{}
+	cfg := &prepareConfig{officialAuthHandlers: nil}
+	clients, err := autoResolveOfficialAuthHandlers(context.Background(), sol, nil, cfg)
+	assert.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestAutoResolveOfficialAuthHandlers_NoMissing(t *testing.T) {
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(auth.NewMockHandler("github"))
+
+	officialReg := authofficial.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"token": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "identity",
+								Inputs: map[string]*resolver.ValueRef{
+									"handler": {Literal: "github"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cfg := &prepareConfig{officialAuthHandlers: officialReg}
+	clients, err := autoResolveOfficialAuthHandlers(context.Background(), sol, authReg, cfg)
+	assert.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestAutoResolveOfficialAuthHandlers_StrictModeError(t *testing.T) {
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"token": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "identity",
+								Inputs: map[string]*resolver.ValueRef{
+									"handler": {Literal: "github"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cfg := &prepareConfig{officialAuthHandlers: officialReg, strict: true}
+	clients, err := autoResolveOfficialAuthHandlers(context.Background(), sol, authReg, cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "strict mode")
+	assert.Contains(t, err.Error(), "github")
+	assert.Nil(t, clients)
+}
+
+func TestAutoResolveOfficialAuthHandlers_NoFetcher(t *testing.T) {
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"token": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "identity",
+								Inputs: map[string]*resolver.ValueRef{
+									"handler": {Literal: "github"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cfg := &prepareConfig{officialAuthHandlers: officialReg, pluginFetcher: nil}
+	clients, err := autoResolveOfficialAuthHandlers(context.Background(), sol, authReg, cfg)
+	assert.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestResolveOfficialAuthHandlers_NilOfficialRegistryInContext(t *testing.T) {
+	t.Parallel()
+	authReg := auth.NewRegistry()
+	ctx := context.Background()
+	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
+	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, cooldown, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestResolveOfficialAuthHandlers_NilAuthRegistry(t *testing.T) {
+	t.Parallel()
+	officialReg := authofficial.NewRegistry()
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
+	clients, err := ResolveOfficialAuthHandlers(ctx, nil, cooldown, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestResolveOfficialAuthHandlers_AllRegistered(t *testing.T) {
+	t.Parallel()
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(auth.NewMockHandler("github"))
+	_ = authReg.Register(auth.NewMockHandler("entra"))
+	_ = authReg.Register(auth.NewMockHandler("gcp"))
+
+	officialReg := authofficial.NewRegistry()
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
+
+	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, cooldown, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestResolveOfficialAuthHandlers_SkipsCooldown(t *testing.T) {
+	t.Parallel()
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistry()
+
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+
+	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
+	// Record cooldown for all official handlers
+	for _, name := range officialReg.Names() {
+		require.NoError(t, cooldown.RecordFailure(name))
+	}
+
+	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, cooldown, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients) // All on cooldown, nothing to fetch
+}
+
+// ── WithPluginConfig / WithClientOptions coverage ────────────────────────────
+
+func TestWithPluginConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := &prepareConfig{}
+	opt := WithPluginConfig(&plugin.ProviderConfig{
+		Quiet:      true,
+		NoColor:    true,
+		BinaryName: "testcli",
+	})
+	opt(cfg)
+
+	require.NotNil(t, cfg.pluginCfg)
+	assert.True(t, cfg.pluginCfg.Quiet)
+	assert.True(t, cfg.pluginCfg.NoColor)
+	assert.Equal(t, "testcli", cfg.pluginCfg.BinaryName)
+}
+
+func TestWithClientOptions(t *testing.T) {
+	t.Parallel()
+
+	cfg := &prepareConfig{}
+	opt1 := WithClientOptions(plugin.WithSanitizedEnv())
+	opt1(cfg)
+
+	assert.Len(t, cfg.clientOpts, 1)
+
+	// Append another
+	opt2 := WithClientOptions(plugin.WithSanitizedEnv())
+	opt2(cfg)
+	assert.Len(t, cfg.clientOpts, 2)
+}
+
+// ── ResolveOfficialAuthHandlers deeper paths ─────────────────────────────────
+
+func TestResolveOfficialAuthHandlers_NilCooldown(t *testing.T) {
+	t.Parallel()
+
+	// With nil cooldown, all missing handlers are considered (no cooldown filtering).
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistry()
+
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+
+	// Without a catalog, BuildPluginFetcher will fail and return nil gracefully.
+	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestResolveOfficialAuthHandlers_FetcherUnavailable(t *testing.T) {
+	t.Parallel()
+
+	// When BuildPluginFetcher fails (no catalog chain), the function returns
+	// nil gracefully without error.
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistry()
+
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
+
+	// No config in context → BuildPluginFetcher will fail to build catalog chain.
+	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, cooldown, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestResolveOfficialAuthHandlers_EmptyOfficialRegistry(t *testing.T) {
+	t.Parallel()
+
+	// An empty official registry (0 handlers) should short-circuit.
+	authReg := auth.NewRegistry()
+	officialReg := authofficial.NewRegistryFrom(nil)
+
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
+
+	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, cooldown, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+// ── autoResolveOfficialAuthHandlers with nil authReg after fetch ──────────────
+
+func TestAutoResolveOfficialAuthHandlers_NilAuthRegWithFetcher(t *testing.T) {
+	t.Parallel()
+
+	// When authReg is nil but officialAuthHandlers is set with a fetcher,
+	// missingOfficialAuthHandlers should still find missing (authReg == nil
+	// means nothing is registered) but the function returns nil after fetch
+	// because it can't register.
+	officialReg := authofficial.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"token": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "identity",
+								Inputs: map[string]*resolver.ValueRef{
+									"handler": {Literal: "github"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// No fetcher → returns nil (non-fatal) even though handlers are missing.
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	cfg := &prepareConfig{officialAuthHandlers: officialReg, pluginFetcher: nil}
+	clients, err := autoResolveOfficialAuthHandlers(ctx, sol, nil, cfg)
+	assert.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+// ── autoResolveOfficialProviders strict mode with multiple providers ──────────
+
+func TestAutoResolveOfficialProviders_StrictModeMultipleProviders(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistryFrom([]official.Provider{
+		{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
+		{Name: "helm", CatalogRef: "helm", DefaultVersion: "latest"},
+	})
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{Provider: "git"},
+							{Provider: "helm"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	cfg := &prepareConfig{officialProviders: officialReg, strict: true}
+	clients, err := autoResolveOfficialProviders(context.Background(), sol, reg, cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "strict mode")
+	assert.Contains(t, err.Error(), "git")
+	assert.Contains(t, err.Error(), "helm")
+	assert.Nil(t, clients)
+}
+
+func TestAutoResolveOfficialProviders_NoFetcherWithMissing(t *testing.T) {
+	t.Parallel()
+
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistryFrom([]official.Provider{
+		{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
+	})
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r1": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "git"}},
+					},
+				},
+			},
+		},
+	}
+
+	lgr := logr.Discard()
+	ctx := logger.WithLogger(context.Background(), &lgr)
+	cfg := &prepareConfig{officialProviders: officialReg, pluginFetcher: nil}
+	clients, err := autoResolveOfficialProviders(ctx, sol, reg, cfg)
+	assert.NoError(t, err)
+	assert.Nil(t, clients)
 }

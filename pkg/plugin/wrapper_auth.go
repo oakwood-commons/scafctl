@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
@@ -23,10 +25,11 @@ var (
 // AuthHandlerWrapper wraps a plugin auth handler to implement the auth.Handler
 // (and optionally auth.TokenLister / auth.TokenPurger) interfaces.
 type AuthHandlerWrapper struct {
-	client      *AuthHandlerClient
-	handlerName string
-	info        AuthHandlerInfo
-	mu          sync.RWMutex
+	client         *AuthHandlerClient
+	handlerName    string
+	info           AuthHandlerInfo
+	trustedDomains []string
+	mu             sync.RWMutex
 }
 
 // NewAuthHandlerWrapper creates a new wrapper for a plugin auth handler.
@@ -36,6 +39,20 @@ func NewAuthHandlerWrapper(client *AuthHandlerClient, info AuthHandlerInfo) *Aut
 		handlerName: info.Name,
 		info:        info,
 	}
+}
+
+// SetTrustedDomains sets the trusted verification URI domains for device code
+// URL validation. When non-empty, device code prompts from this handler are
+// validated against these domains (exact match or subdomain).
+func (w *AuthHandlerWrapper) SetTrustedDomains(domains []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if domains == nil {
+		w.trustedDomains = nil
+		return
+	}
+	w.trustedDomains = make([]string, len(domains))
+	copy(w.trustedDomains, domains)
 }
 
 // Name implements auth.Handler.
@@ -79,14 +96,40 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	}
 
 	// Bridge the LoginOptions.DeviceCodeCallback to the plugin's streaming callback.
+	// Includes host-side verification URI validation to prevent phishing via
+	// malicious plugins sending fake device code URLs.
+	loginCtx, cancelCause := context.WithCancelCause(ctx)
+	defer cancelCause(nil)
+
+	// Snapshot trusted domains under lock to avoid races with SetTrustedDomains.
+	w.mu.RLock()
+	trustedSnapshot := make([]string, len(w.trustedDomains))
+	copy(trustedSnapshot, w.trustedDomains)
+	w.mu.RUnlock()
+
 	var deviceCodeCb func(DeviceCodePrompt)
 	if opts.DeviceCodeCallback != nil {
 		deviceCodeCb = func(prompt DeviceCodePrompt) {
+			if err := ValidateVerificationURI(prompt.VerificationURI, trustedSnapshot); err != nil {
+				lgr.Error(err, "device code prompt blocked -- terminating login",
+					"handler", w.handlerName,
+					"uri", prompt.VerificationURI)
+				cancelCause(fmt.Errorf("device code URL validation failed for handler %q: %w",
+					w.handlerName, err))
+				return
+			}
 			opts.DeviceCodeCallback(prompt.UserCode, prompt.VerificationURI, prompt.Message)
 		}
 	}
 
-	resp, err := w.client.plugin.Login(ctx, w.handlerName, req, deviceCodeCb)
+	resp, err := w.client.plugin.Login(loginCtx, w.handlerName, req, deviceCodeCb)
+
+	// Enforce the security check host-side: if the verification URI was
+	// rejected, return that error even if the plugin returned success.
+	if cause := context.Cause(loginCtx); cause != nil {
+		return nil, cause
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("plugin auth handler %s login: %w", w.handlerName, err)
 	}
@@ -165,8 +208,18 @@ func (w *AuthHandlerWrapper) Client() *AuthHandlerClient {
 
 // configureAndRegisterAuthHandlers configures each handler with host-side
 // settings (when cfg is non-nil) and registers it in the auth registry.
+// It also sets trusted verification domains on each wrapper from the official
+// auth handler registry (per-handler) plus config.Auth.TrustedVerificationDomains.
 func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Registry, client *AuthHandlerClient, handlers []AuthHandlerInfo, cfg *ProviderConfig) {
 	lgr := logger.FromContext(ctx)
+
+	// Resolve trusted verification domains from context sources.
+	officialReg := authofficial.RegistryFromContext(ctx)
+	var cfgDomains []string
+	if appCfg := config.FromContext(ctx); appCfg != nil {
+		cfgDomains = appCfg.Auth.TrustedVerificationDomains
+	}
+
 	for _, info := range handlers {
 		if cfg != nil {
 			hostCfg := *cfg
@@ -179,11 +232,32 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		}
 
 		wrapper := NewAuthHandlerWrapper(client, info)
+
+		// Set trusted domains: merge per-handler official domains + global config domains.
+		trusted := buildTrustedDomains(info.Name, officialReg, cfgDomains)
+		if len(trusted) > 0 {
+			wrapper.SetTrustedDomains(trusted)
+		}
+
 		if err := registry.Register(wrapper); err != nil {
 			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
 			continue
 		}
 	}
+}
+
+// buildTrustedDomains merges per-handler official domains with global config domains.
+func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry, cfgDomains []string) []string {
+	var domains []string
+
+	if officialReg != nil {
+		if h, ok := officialReg.Get(handlerName); ok {
+			domains = append(domains, h.TrustedVerificationDomains...)
+		}
+	}
+
+	domains = append(domains, cfgDomains...)
+	return domains
 }
 
 // RegisterAuthHandlerPlugins discovers auth handler plugins and registers them

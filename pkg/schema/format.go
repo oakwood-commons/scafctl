@@ -181,7 +181,7 @@ func (f *Formatter) formatTypeString(info *FieldInfo) string {
 			return fmt.Sprintf("map[%s]%s", info.KeyType, info.ElemType)
 		}
 		return info.Type
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return "*" + info.Type
 	case reflect.Interface:
 		if info.Type == "" {

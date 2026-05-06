@@ -131,3 +131,62 @@ func (s *Spec) ReferencedProviderNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// ReferencedAuthHandlerNames returns the unique, sorted set of auth handler
+// names statically referenced in the solution's resolvers. This scans for
+// identity provider usages with a literal "handler" input value.
+// Dynamic references (CEL expressions, Go templates, resolver refs) are
+// excluded since their values cannot be determined at prepare time.
+func (s *Spec) ReferencedAuthHandlerNames() []string {
+	if s == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+
+	// Helper: extract handler name from an inputs map if it uses the identity provider.
+	extractHandler := func(provider string, inputs map[string]*resolver.ValueRef) {
+		if provider != "identity" || inputs == nil {
+			return
+		}
+		handlerRef, ok := inputs["handler"]
+		if !ok || handlerRef == nil {
+			return
+		}
+		// Only extract statically-known literal string values.
+		if str, ok := handlerRef.Literal.(string); ok && str != "" {
+			seen[str] = struct{}{}
+		}
+	}
+
+	for _, r := range s.Resolvers {
+		if r == nil {
+			continue
+		}
+		if r.Resolve != nil {
+			for _, src := range r.Resolve.With {
+				extractHandler(src.Provider, src.Inputs)
+			}
+		}
+		if r.Transform != nil {
+			for _, t := range r.Transform.With {
+				extractHandler(t.Provider, t.Inputs)
+			}
+		}
+		if r.Validate != nil {
+			for _, v := range r.Validate.With {
+				extractHandler(v.Provider, v.Inputs)
+			}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}

@@ -32,7 +32,7 @@ func FilterItems[T any](ctx context.Context, items []T, filter string) ([]T, err
 		rt := reflect.TypeOf(items[0])
 		if rt.Kind() == reflect.Struct {
 			needsNormalize = true
-		} else if rt.Kind() == reflect.Ptr && rt.Elem().Kind() == reflect.Struct {
+		} else if rt.Kind() == reflect.Pointer && rt.Elem().Kind() == reflect.Struct {
 			needsNormalize = true
 		}
 	}
