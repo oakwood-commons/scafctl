@@ -44,6 +44,13 @@ settings:
   # Default: false
   disableOfficialCatalog: false
 
+  # Disable auto-resolution of official first-party providers. When true,
+  # providers must be either built-in or explicitly declared in bundle.plugins.
+  # The 10 extracted providers (exec, git, env, etc.) will not be
+  # auto-fetched from ghcr.io/oakwood-commons on provider miss.
+  # Default: false
+  disableOfficialProviders: false
+
   # Require OS keyring for secret storage. When true, scafctl will fail
   # instead of falling back to insecure file-based or env-var-based master
   # key storage. Enable this in production or shared CI/CD environments.

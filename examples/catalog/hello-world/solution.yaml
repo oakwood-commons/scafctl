@@ -3,7 +3,10 @@ kind: Solution
 
 metadata:
   name: hello-world
-  version: 0.1.0
+  displayName: Hello World
+  category: developer-tools
+  tags:
+    - catalog
   description: A simple hello world solution for testing build and publish
 
 spec:

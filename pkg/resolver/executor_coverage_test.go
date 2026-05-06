@@ -207,3 +207,24 @@ func BenchmarkOptionsFromAppConfig(b *testing.B) {
 		OptionsFromAppConfig(cfg)
 	}
 }
+
+// ── WithMockedResolvers tests ─────────────────────────────────────────────────
+
+func TestWithMockedResolvers_SetsField(t *testing.T) {
+	t.Parallel()
+	mocks := map[string]any{
+		"api-data":  []any{"item1", "item2"},
+		"api-count": 42,
+	}
+	executor := NewExecutor(nil, WithMockedResolvers(mocks))
+	require.NotNil(t, executor.mockedResolvers)
+	assert.Equal(t, 42, executor.mockedResolvers["api-count"])
+	assert.True(t, executor.isMocked("api-data"))
+	assert.False(t, executor.isMocked("not-mocked"))
+}
+
+func TestIsMocked_NilMap(t *testing.T) {
+	t.Parallel()
+	executor := NewExecutor(nil)
+	assert.False(t, executor.isMocked("anything"))
+}

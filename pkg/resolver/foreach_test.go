@@ -871,6 +871,435 @@ func TestForEach_ChainedForEach(t *testing.T) {
 	assert.Equal(t, []any{3, 5, 7}, arr)
 }
 
+func TestForEachResolve_BasicIteration(t *testing.T) {
+	registry := newMockRegistry()
+
+	// Register provider that fetches "data" for each item
+	err := registry.Register(&mockProvider{
+		name: "http",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			url, _ := inputs["url"].(string)
+			return &provider.Output{Data: map[string]any{"url": url, "status": 200}}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	// Register static provider for the source array
+	err = registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "urls",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{"https://a.com", "https://b.com", "https://c.com"}},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "fetched",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "http",
+						ForEach: &ForEachClause{
+							In:   &ValueRef{Resolver: stringPtr("urls")},
+							Item: "url",
+						},
+						Inputs: map[string]*ValueRef{
+							"url": {Expr: exprPtr("url")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	ctx, err = executor.Execute(ctx, resolvers, nil)
+	require.NoError(t, err)
+
+	result, _ := FromContext(ctx)
+	value, ok := result.Get("fetched")
+	require.True(t, ok)
+
+	arr, ok := value.([]any)
+	require.True(t, ok)
+	require.Len(t, arr, 3)
+
+	first, ok := arr[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "https://a.com", first["url"])
+	assert.Equal(t, 200, first["status"])
+}
+
+func TestForEachResolve_RequiresIn(t *testing.T) {
+	registry := newMockRegistry()
+
+	err := registry.Register(&mockProvider{
+		name: "http",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: "ok"}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "fetched",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "http",
+						ForEach:  &ForEachClause{Item: "x"},
+						Inputs: map[string]*ValueRef{
+							"url": {Literal: "https://example.com"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	_, err = executor.Execute(ctx, resolvers, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forEach.in is required on resolve steps")
+}
+
+func TestForEachResolve_EmptyArray(t *testing.T) {
+	registry := newMockRegistry()
+
+	err := registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = registry.Register(&mockProvider{
+		name: "http",
+		executeFunc: func(_ context.Context, _ map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: "should not be called"}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "items",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{}},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "results",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "http",
+						ForEach: &ForEachClause{
+							In:   &ValueRef{Resolver: stringPtr("items")},
+							Item: "x",
+						},
+						Inputs: map[string]*ValueRef{
+							"url": {Expr: exprPtr("x")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	ctx, err = executor.Execute(ctx, resolvers, nil)
+	require.NoError(t, err)
+
+	result, _ := FromContext(ctx)
+	value, ok := result.Get("results")
+	require.True(t, ok)
+
+	arr, ok := value.([]any)
+	require.True(t, ok)
+	assert.Empty(t, arr)
+}
+
+func TestForEachResolve_ConcurrencyLimit(t *testing.T) {
+	registry := newMockRegistry()
+
+	var maxConcurrent atomic.Int32
+	var currentConcurrent atomic.Int32
+
+	err := registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = registry.Register(&mockProvider{
+		name: "slow",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			cur := currentConcurrent.Add(1)
+			defer currentConcurrent.Add(-1)
+
+			for {
+				old := maxConcurrent.Load()
+				if cur <= old || maxConcurrent.CompareAndSwap(old, cur) {
+					break
+				}
+			}
+
+			time.Sleep(20 * time.Millisecond)
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "items",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{1, 2, 3, 4, 5}},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "results",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "slow",
+						ForEach: &ForEachClause{
+							In:          &ValueRef{Resolver: stringPtr("items")},
+							Item:        "x",
+							Concurrency: 2,
+						},
+						Inputs: map[string]*ValueRef{
+							"value": {Expr: exprPtr("x")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	_, err = executor.Execute(ctx, resolvers, nil)
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, maxConcurrent.Load(), int32(2), "concurrency should be limited to 2")
+}
+
+func TestForEachResolve_FallbackChain(t *testing.T) {
+	registry := newMockRegistry()
+
+	err := registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = registry.Register(&mockProvider{
+		name: "failing",
+		executeFunc: func(_ context.Context, _ map[string]any) (*provider.Output, error) {
+			return nil, fmt.Errorf("network error")
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "items",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{"a", "b"}},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "result",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						// forEach source that fails - should continue to fallback
+						Provider: "failing",
+						ForEach: &ForEachClause{
+							In:   &ValueRef{Resolver: stringPtr("items")},
+							Item: "x",
+						},
+						// Default onError for resolve is continue (fallback chain)
+						Inputs: map[string]*ValueRef{
+							"url": {Expr: exprPtr("x")},
+						},
+					},
+					{
+						// Fallback source
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{"fallback"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	ctx, err = executor.Execute(ctx, resolvers, nil)
+	require.NoError(t, err)
+
+	result, _ := FromContext(ctx)
+	value, ok := result.Get("result")
+	require.True(t, ok)
+	assert.Equal(t, []any{"fallback"}, value)
+}
+
+func TestForEachResolve_DependencyExtraction(t *testing.T) {
+	resolver := &Resolver{
+		Name: "fetched",
+		Resolve: &ResolvePhase{
+			With: []ProviderSource{
+				{
+					Provider: "http",
+					ForEach: &ForEachClause{
+						In:   &ValueRef{Resolver: stringPtr("moduleList")},
+						Item: "mod",
+					},
+					Inputs: map[string]*ValueRef{
+						"url": {Expr: exprPtr("mod.url")},
+					},
+				},
+			},
+		},
+	}
+
+	deps := ExtractDependencies(resolver, nil)
+	assert.Contains(t, deps, "moduleList")
+}
+
+func TestForEachResolve_OnErrorFail(t *testing.T) {
+	registry := newMockRegistry()
+
+	err := registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	require.NoError(t, err)
+
+	err = registry.Register(&mockProvider{
+		name: "failing",
+		executeFunc: func(_ context.Context, _ map[string]any) (*provider.Output, error) {
+			return nil, fmt.Errorf("provider error")
+		},
+	})
+	require.NoError(t, err)
+
+	executor := NewExecutor(registry)
+
+	resolvers := []*Resolver{
+		{
+			Name: "items",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{"a", "b"}},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "result",
+			Type: TypeArray,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "failing",
+						OnError:  ErrorBehaviorFail,
+						ForEach: &ForEachClause{
+							In:   &ValueRef{Resolver: stringPtr("items")},
+							Item: "x",
+						},
+						Inputs: map[string]*ValueRef{
+							"url": {Expr: exprPtr("x")},
+						},
+					},
+					{
+						// This fallback should NOT be reached
+						Provider: "static",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{"fallback"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	_, err = executor.Execute(ctx, resolvers, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forEach failed")
+}
+
 // Helper function to create expression pointers
 func exprPtr(s string) *celexp.Expression {
 	expr := celexp.Expression(s)

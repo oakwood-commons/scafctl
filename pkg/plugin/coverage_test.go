@@ -150,6 +150,8 @@ type mockHostServiceClient struct {
 	listAuthHandlersErr  error
 	getAuthTokenResp     *proto.GetAuthTokenResponse
 	getAuthTokenErr      error
+	getAuthGroupsResp    *proto.GetAuthGroupsResponse
+	getAuthGroupsErr     error
 }
 
 func (m *mockHostServiceClient) GetSecret(_ context.Context, _ *proto.GetSecretRequest, _ ...grpc.CallOption) (*proto.GetSecretResponse, error) {
@@ -178,6 +180,10 @@ func (m *mockHostServiceClient) ListAuthHandlers(_ context.Context, _ *proto.Lis
 
 func (m *mockHostServiceClient) GetAuthToken(_ context.Context, _ *proto.GetAuthTokenRequest, _ ...grpc.CallOption) (*proto.GetAuthTokenResponse, error) {
 	return m.getAuthTokenResp, m.getAuthTokenErr
+}
+
+func (m *mockHostServiceClient) GetAuthGroups(_ context.Context, _ *proto.GetAuthGroupsRequest, _ ...grpc.CallOption) (*proto.GetAuthGroupsResponse, error) {
+	return m.getAuthGroupsResp, m.getAuthGroupsErr
 }
 
 // --- streamingMockPlugin wraps MockProviderPlugin with real streaming ---

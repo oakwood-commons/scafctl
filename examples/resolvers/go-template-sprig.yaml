@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: go-template-sprig-showcase
-  version: 1.0.0
+  displayName: Go Template Sprig Showcase
+  category: resolvers
+  tags:
+    - resolver-example
+    - template
   description: |
     Sprig v3 utility functions available in Go templates. Each resolver
     showcases a different Sprig function category.

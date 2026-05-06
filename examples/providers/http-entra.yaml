@@ -8,7 +8,12 @@ kind: Solution
 
 metadata:
   name: http-entra-example
-  version: 1.0.0
+  displayName: HTTP Entra Example
+  category: providers
+  tags:
+    - entra
+    - http
+    - provider-example
   description: Microsoft Graph API call with Entra authentication
 
 spec:

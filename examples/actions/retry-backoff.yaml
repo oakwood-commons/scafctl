@@ -4,7 +4,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: retry-backoff
-  version: 1.0.0
+  displayName: Retry Backoff
+  category: actions
+  tags:
+    - action-example
+    - retry
+    - workflow
   description: Retry configuration with exponential backoff for flaky operations
 
 spec:

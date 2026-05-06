@@ -2,7 +2,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: child-solution
-  version: 1.0.0
+  displayName: Child Solution
+  category: solutions
+  tags:
+    - solution
   description: Child solution consumed by composition/parent.yaml via the solution provider
 spec:
   resolvers:

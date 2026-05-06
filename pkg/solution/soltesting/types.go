@@ -12,6 +12,7 @@ package soltesting
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -299,6 +300,11 @@ type TestConfig struct {
 	// Cleanup contains suite-level teardown steps run once after all tests complete, even on failure.
 	Cleanup []InitStep `json:"cleanup,omitempty" yaml:"cleanup,omitempty" doc:"Suite-level teardown steps. Run once after all tests complete, even on failure" maxItems:"50"`
 
+	// Files lists shared file paths, globs, or directories copied into every test sandbox.
+	// These are merged with per-test files; per-test entries are appended after config files.
+	// Duplicates are deduplicated during sandbox creation (first-seen-wins).
+	Files []string `json:"files,omitempty" yaml:"files,omitempty" doc:"Shared files copied into every test sandbox" maxItems:"50"`
+
 	// Services defines background services started before tests and stopped after.
 	// Currently supports "http" type which starts a mock HTTP server.
 	Services []ServiceConfig `json:"services,omitempty" yaml:"services,omitempty" doc:"Background services started before tests" maxItems:"10"`
@@ -419,6 +425,39 @@ type TestCase struct {
 
 	// Retries is the number of retry attempts for a failing test.
 	Retries int `json:"retries,omitempty" yaml:"retries,omitempty" doc:"Number of retry attempts for failing tests" maximum:"10"`
+
+	// BaseDir is an optional subdirectory path (relative to the sandbox root)
+	// that controls where the solution and its files are placed within the sandbox.
+	// When set, the sandbox nests all files under this subdirectory, preserving
+	// the directory structure so that repo-root-relative paths in resolvers
+	// resolve correctly.
+	//
+	// Example: if baseDir is "cldctl" and the solution references
+	// "./cldctl/output/data.json", the sandbox places the file at
+	// sandbox/cldctl/output/data.json and the solution at
+	// sandbox/cldctl/solution.yaml.
+	BaseDir string `json:"baseDir,omitempty" yaml:"baseDir,omitempty" doc:"Subdirectory within sandbox for nesting solution files" maxLength:"500"`
+
+	// Inputs maps parameter names to values. Each entry is translated to a
+	// -r key=value CLI argument appended after Args. This is a convenience
+	// shorthand so tests don't have to manually construct -r flags.
+	//
+	// Example:
+	//   inputs:
+	//     environment: prod
+	//     region: us-east-1
+	// is equivalent to: args: ["-r", "environment=prod", "-r", "region=us-east-1"]
+	Inputs map[string]string `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Parameter name to value map; translated to -r key=value args"`
+
+	// Mocks maps resolver names to canned values. Mocked resolvers skip
+	// execution entirely and return the specified value. This enables testing
+	// downstream resolvers and CEL expressions without hitting external APIs.
+	Mocks map[string]any `json:"mocks,omitempty" yaml:"mocks,omitempty" doc:"Resolver name to canned value map; mocked resolvers skip execution"`
+
+	// Services defines per-test background services that are started before
+	// and stopped after this specific test. These supplement (not replace)
+	// suite-level services defined in config.services.
+	Services []ServiceConfig `json:"services,omitempty" yaml:"services,omitempty" doc:"Per-test background services" maxItems:"10"`
 }
 
 // IsTemplate returns true if this test is a template (name starts with _).
@@ -477,9 +516,33 @@ func (tc *TestCase) Validate() error {
 		}
 	}
 
+	// Inputs + Args: reject resolver flags in Args when Inputs is also set
+	if len(tc.Inputs) > 0 {
+		for _, arg := range tc.Args {
+			if arg == "-r" || strings.HasPrefix(arg, "-r=") || arg == "--resolver" || strings.HasPrefix(arg, "--resolver=") {
+				errs = append(errs, "args must not contain resolver flags (-r/--resolver) when inputs is set; use inputs map instead")
+				break
+			}
+		}
+		for k := range tc.Inputs {
+			if k == "" {
+				errs = append(errs, "inputs key must not be empty")
+			}
+		}
+	}
+
 	// Retries validation
 	if tc.Retries < 0 || tc.Retries > MaxRetries {
 		errs = append(errs, fmt.Sprintf("retries must be between 0 and %d", MaxRetries))
+	}
+
+	// BaseDir validation: must be relative, no traversal above sandbox root
+	if tc.BaseDir != "" {
+		if filepath.IsAbs(tc.BaseDir) {
+			errs = append(errs, "baseDir must be a relative path")
+		} else if cleaned := filepath.Clean(tc.BaseDir); cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			errs = append(errs, "baseDir must not contain path traversal (..)")
+		}
 	}
 
 	// Field count limits
@@ -623,6 +686,10 @@ type TestResult struct {
 	RetryAttempt int `json:"retryAttempt,omitempty"`
 	// SandboxPath is the sandbox directory path (when --keep-sandbox is set).
 	SandboxPath string `json:"sandboxPath,omitempty"`
+	// Stdout is the captured stdout from the test command (included on failure).
+	Stdout string `json:"stdout,omitempty"`
+	// Stderr is the captured stderr from the test command (included on failure).
+	Stderr string `json:"stderr,omitempty"`
 }
 
 // AssertionResult captures the outcome of a single assertion.

@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: nested-bundle-example
-  version: 1.0.0
+  displayName: Nested Bundle Example
+  category: solutions
+  tags:
+    - bundling
+    - solution
   description: |
     Nested bundle support where a parent solution references a sub-solution
     with its own file dependencies. The bundler recursively discovers all

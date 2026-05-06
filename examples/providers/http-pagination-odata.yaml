@@ -8,7 +8,12 @@ kind: Solution
 
 metadata:
   name: http-pagination-odata-example
-  version: 1.0.0
+  displayName: HTTP Pagination Odata Example
+  category: providers
+  tags:
+    - http
+    - pagination
+    - provider-example
   description: |
     OData pagination follows @odata.nextLink URLs from the response body.
     Common for Microsoft Graph, Dynamics 365, and OData APIs.

@@ -80,6 +80,7 @@ func Custom() gotmpl.ExtFunctionList {
 		// Collection / list-filtering functions
 		collections.WhereFunc(),
 		collections.SelectFunc(),
+		collections.SafeLenFunc(),
 
 		// Inline CEL evaluation
 		celeval.CelFunc(),

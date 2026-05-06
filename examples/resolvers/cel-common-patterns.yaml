@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: cel-common-patterns
-  version: 1.0.0
+  displayName: CEL Common Patterns
+  category: resolvers
+  tags:
+    - cel
+    - resolver-example
   description: |
     Common CEL patterns for real-world use cases. Covers conditionals,
     string interpolation, map building, default merging, list transforms,

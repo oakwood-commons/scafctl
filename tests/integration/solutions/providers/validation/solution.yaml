@@ -83,6 +83,36 @@ spec:
               expression: "size(__self) >= 3 && size(__self) <= 20"
             message: "Must be between 3 and 20 characters"
 
+    # Dynamic message with expr: prefix
+    dynamicExprMessage:
+      description: Value validated with a dynamic CEL error message
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: valid-name
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^[a-z][a-z0-9-]*$"
+              message: "expr: 'Name \"' + string(__self) + '\" is valid'"
+
+    # Dynamic message with tmpl: prefix
+    dynamicTmplMessage:
+      description: Value validated with a dynamic Go template error message
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello-world
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "size(__self) <= 63"
+              message: "tmpl: Value '{{.__self}}' exceeds max length"
+
   testing:
     config:
       # render-defaults: solution has no workflow.actions section
@@ -127,3 +157,17 @@ spec:
         extends: [_base]
         assertions:
           - expression: '__output.multiValidation == "hello"'
+
+      dynamic-expr-message:
+        description: Verify dynamic CEL message resolver passes
+        extends: [_base]
+        tags: [dynamic-message]
+        assertions:
+          - expression: '__output.dynamicExprMessage == "valid-name"'
+
+      dynamic-tmpl-message:
+        description: Verify dynamic Go template message resolver passes
+        extends: [_base]
+        tags: [dynamic-message]
+        assertions:
+          - expression: '__output.dynamicTmplMessage == "hello-world"'

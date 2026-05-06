@@ -12,9 +12,10 @@ import (
 // Registry manages provider registration and discovery.
 // It ensures global name uniqueness and maintains the latest stable version of each provider.
 type Registry struct {
-	mu        sync.RWMutex
-	providers map[string]Provider // key is provider name
-	options   registryOptions
+	mu         sync.RWMutex
+	providers  map[string]Provider // key is provider name
+	knownNames map[string]bool     // names marked as known without a provider implementation
+	options    registryOptions
 }
 
 // registryOptions contains configuration for the registry.
@@ -44,8 +45,9 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	}
 
 	return &Registry{
-		providers: make(map[string]Provider),
-		options:   options,
+		providers:  make(map[string]Provider),
+		knownNames: make(map[string]bool),
+		options:    options,
 	}
 }
 
@@ -100,6 +102,41 @@ func (r *Registry) Register(p Provider) error {
 	return nil
 }
 
+// MarkKnown records that a provider name exists without registering a full
+// implementation. This is intended for lint/validation where we need to
+// suppress missing-provider warnings for providers that will be fetched at
+// runtime (e.g. bundle.plugins). Get still returns nil, false for these names;
+// only Has returns true.
+func (r *Registry) MarkKnown(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.providers[name]; !exists {
+		r.knownNames[name] = true
+	}
+}
+
+// ShallowClone creates a new Registry that shares the same provider
+// implementations but has an independent knownNames set. Use this when you
+// need to call MarkKnown without mutating the original registry (e.g., lint).
+func (r *Registry) ShallowClone() *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	providers := make(map[string]Provider, len(r.providers))
+	for k, v := range r.providers {
+		providers[k] = v
+	}
+	knownNames := make(map[string]bool, len(r.knownNames))
+	for k, v := range r.knownNames {
+		knownNames[k] = v
+	}
+	return &Registry{
+		providers:  providers,
+		knownNames: knownNames,
+		options:    r.options,
+	}
+}
+
 // Get retrieves a provider by name.
 // Returns the provider and true if found, nil and false otherwise.
 func (r *Registry) Get(name string) (Provider, bool) {
@@ -110,13 +147,15 @@ func (r *Registry) Get(name string) (Provider, bool) {
 	return p, exists
 }
 
-// Has checks if a provider with the given name is registered.
+// Has checks if a provider with the given name is registered or marked as known.
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	_, exists := r.providers[name]
-	return exists
+	if _, exists := r.providers[name]; exists {
+		return true
+	}
+	return r.knownNames[name]
 }
 
 // List returns a list of all registered provider names.

@@ -132,9 +132,40 @@ func TestGenerate_ActionPlanSorted(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, report.ActionPlan, 3)
 
+	// All actions are independent (no deps), so they're in the same phase.
+	// Within a phase, actions are sorted alphabetically.
 	assert.Equal(t, "a-action", report.ActionPlan[0].Name)
 	assert.Equal(t, "m-action", report.ActionPlan[1].Name)
 	assert.Equal(t, "z-action", report.ActionPlan[2].Name)
+}
+
+func TestGenerate_ActionPlanSortedByPhase(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"z-deploy": {Provider: "shell", DependsOn: []string{"a-build"}},
+			"a-build":  {Provider: "shell"},
+		},
+		Finally: map[string]*action.Action{
+			"cleanup": {Provider: "shell"},
+		},
+	}
+
+	report, err := Generate(context.Background(), sol, Options{})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 3)
+
+	// Phase order: a-build (actions, phase 1) -> z-deploy (actions, phase 2) -> cleanup (finally)
+	assert.Equal(t, "a-build", report.ActionPlan[0].Name)
+	assert.Equal(t, "actions", report.ActionPlan[0].Section)
+	assert.Equal(t, 1, report.ActionPlan[0].Phase)
+
+	assert.Equal(t, "z-deploy", report.ActionPlan[1].Name)
+	assert.Equal(t, "actions", report.ActionPlan[1].Section)
+	assert.Equal(t, 2, report.ActionPlan[1].Phase)
+
+	assert.Equal(t, "cleanup", report.ActionPlan[2].Name)
+	assert.Equal(t, "finally", report.ActionPlan[2].Section)
 }
 
 func TestGenerate_NoWorkflow(t *testing.T) {

@@ -7,7 +7,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: exec-shell-types
-  version: 1.0.0
+  displayName: Exec Shell Types
+  category: developer-tools
+  tags:
+    - exec
+    - shell
   description: |
     Different shell interpreters with the exec provider:
     auto (default, embedded POSIX), sh, bash, pwsh, cmd.

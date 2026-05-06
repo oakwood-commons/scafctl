@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -52,8 +53,8 @@ type GoTemplatingContent string
 type MissingKeyOption string
 
 const (
-	// MissingKeyDefault continues execution and prints "<no value>" for missing keys
-	// This is the default behavior
+	// MissingKeyDefault continues execution and prints "<no value>" for missing keys.
+	// Named after Go's missingkey=default template option.
 	MissingKeyDefault MissingKeyOption = "default"
 
 	// MissingKeyZero returns the zero value for the map type's element
@@ -91,9 +92,9 @@ type TemplateOptions struct {
 	Funcs template.FuncMap `json:"-" yaml:"-" doc:"Custom template functions to make available"`
 
 	// MissingKey controls the behavior when a map key is missing
-	// Default: MissingKeyDefault (prints "<no value>")
+	// Default: MissingKeyError (stops execution with an error)
 	// Options: MissingKeyDefault, MissingKeyZero, MissingKeyError
-	MissingKey MissingKeyOption `json:"missingKey,omitempty" yaml:"missingKey,omitempty" doc:"Behavior when a map key is missing" maxLength:"16" example:"default"`
+	MissingKey MissingKeyOption `json:"missingKey,omitempty" yaml:"missingKey,omitempty" doc:"Behavior when a map key is missing (default: error)" maxLength:"16" example:"error"`
 
 	// DisableBuiltinFuncs disables the built-in template functions
 	// By default, basic functions like "html", "js", etc. are available
@@ -409,7 +410,14 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 
 	missingKey := opts.MissingKey
 	if missingKey == "" {
-		missingKey = MissingKeyDefault
+		missingKey = MissingKeyError
+	}
+
+	switch missingKey {
+	case MissingKeyDefault, MissingKeyZero, MissingKeyError:
+		// valid
+	default:
+		return nil, fmt.Errorf("invalid missingKey value %q: must be 'default', 'zero', or 'error'", missingKey)
 	}
 
 	// Build the effective function map keys for cache key generation
@@ -535,7 +543,29 @@ func (s *Service) executeTemplate(ctx context.Context, tmpl *template.Template, 
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, opts.Data); err != nil {
+	data := opts.Data
+
+	// Inject "_" as an alias for the template data when data is a map, so
+	// that both {{ .foo }} and {{ ._.foo }} work, unifying the CEL (_.foo)
+	// and Go template (.foo) access patterns. We copy the map to avoid
+	// mutating the caller's data, and use a shallow copy for the alias
+	// (not a direct self-reference) to avoid infinite recursion when the
+	// data is serialized via {{ toYaml . }} or {{ toJson . }}.
+	//
+	// If the caller already set "_" (e.g. eval template stores non-map root
+	// data there), we preserve it instead of overwriting.
+	if m, ok := data.(map[string]any); ok && m != nil {
+		if _, hasUnderscore := m["_"]; !hasUnderscore {
+			dataCopy := make(map[string]any)
+			maps.Copy(dataCopy, m)
+			alias := make(map[string]any)
+			maps.Copy(alias, m)
+			dataCopy["_"] = alias
+			data = dataCopy
+		}
+	}
+
+	if err := tmpl.Execute(&buf, data); err != nil {
 		lgr.Error(err, "template execution failed",
 			"name", opts.Name,
 			"dataType", fmt.Sprintf("%T", opts.Data))
@@ -591,7 +621,7 @@ func diagnoseTemplateError(err error, opts TemplateOptions) string {
 
 	// Map has no entry.
 	if strings.Contains(msg, "map has no entry for key") {
-		hints = append(hints, "A map key was not found. Use 'index' to safely access map keys, or set missingKey to 'zero' or 'default'.")
+		hints = append(hints, "A map key was not found. Use 'index' to safely access map keys, or set missingKey to 'default' (prints '<no value>'). Note: 'zero' returns the type's zero value, which is nil for map[string]any and still renders as '<no value>'.")
 	}
 
 	// Describe the data type passed.

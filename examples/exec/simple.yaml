@@ -4,7 +4,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: exec-simple
-  version: 1.0.0
+  displayName: Exec Simple
+  category: developer-tools
+  tags:
+    - exec
+    - shell
   description: |
     Basic exec provider usage. Commands run through the embedded POSIX
     shell by default, working identically on Linux, macOS, and Windows.

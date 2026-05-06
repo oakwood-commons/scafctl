@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: http-autoparse-example
-  version: 1.0.0
+  displayName: HTTP Autoparse Example
+  category: providers
+  tags:
+    - http
+    - provider-example
   description: |
     HTTP provider with automatic JSON response parsing. Returns a structured
     object instead of a raw string body, enabling direct field access.

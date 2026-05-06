@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -160,12 +161,14 @@ Examples:
 }
 
 // parseActionArgs splits positional args into action names and dynamic parameters.
-// Bare words are action names, args containing '=' or starting with '@' are parameters.
-// Only URLs (http(s)://, oci://) are auto-detected as solution refs when no -f flag is set.
+// The first positional arg is treated as a catalog/registry reference only if it is
+// unambiguous (versioned ref, registry ref, or URL). Bare names like "deploy" are
+// always treated as action names. Args containing '=' or starting with '@' are
+// always dynamic parameters.
 func parseActionArgs(args []string, options *ActionOptions, fileExplicit bool) {
 	for _, arg := range args {
 		switch {
-		case !fileExplicit && options.File == "" && pkgfilepath.IsURL(arg):
+		case !fileExplicit && options.File == "" && (pkgfilepath.IsURL(arg) || get.IsUnambiguousCatalogReference(arg)):
 			options.File = arg
 			fileExplicit = true
 		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
@@ -245,6 +248,9 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		"names", o.Names,
 		"dryRun", o.DryRun)
 
+	// Prefer action files during auto-discovery.
+	o.discoveryMode = settings.DiscoveryModeAction
+
 	absOutputDir, err := o.resolveOutputDir(ctx, o.DryRun)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
@@ -268,21 +274,29 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	// Set the solution directory for child-solution path resolution.
+	// Set the solution directory for resolver-phase path resolution.
 	// --base-dir takes precedence; otherwise use the solution file's directory.
-	// When SolutionDirectory is set, also set WorkingDirectory so that providers
-	// like file/exec continue to resolve paths against the caller's CWD.
-	// For bundle/catalog runs solutionDir is empty and the process CWD is the
-	// bundle extraction directory, which is the correct base.
-	if o.BaseDir != "" {
+	//
+	// WorkingDirectory is intentionally NOT set for the resolver-phase context.
+	// AbsFromContext checks WorkingDirectory before SolutionDirectory, so setting
+	// both causes WorkingDirectory to win and SolutionDirectory to be ignored.
+	// The action phase sets WorkingDirectory separately via actionCtx.
+	//
+	// For bundle runs (catalog: prefix with non-empty solutionDir), only set
+	// SolutionDirectory so resolver paths resolve against the bundle extraction
+	// directory. For unbundled catalog runs, solutionDir is empty and paths
+	// fall back to the process CWD.
+	isBundleRun := strings.HasPrefix(sol.GetPath(), "catalog:") && solutionDir != ""
+	switch {
+	case o.BaseDir != "":
 		absBaseDir, baseDirErr := filepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
-		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
-	} else if solutionDir != "" {
-		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
+	case isBundleRun:
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
+	case solutionDir != "":
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 

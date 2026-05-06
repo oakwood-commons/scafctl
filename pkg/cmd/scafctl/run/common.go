@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,9 +24,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
@@ -54,9 +57,9 @@ type runCommandConfig struct {
 }
 
 // makeRunEFunc creates a RunE function for run subcommands
-func makeRunEFunc(cfg runCommandConfig, cmdUse string) func(*cobra.Command, []string) error {
+func makeRunEFunc(cfg runCommandConfig, cmdName string) func(*cobra.Command, []string) error {
 	return func(cCmd *cobra.Command, args []string) error {
-		cfg.cliParams.EntryPointSettings.Path = filepath.Join(cfg.path, cmdUse)
+		cfg.cliParams.EntryPointSettings.Path = filepath.Join(cfg.path, cmdName)
 		ctx := settings.IntoContext(cCmd.Context(), cfg.cliParams)
 
 		lgr := logger.FromContext(cCmd.Context())
@@ -192,6 +195,11 @@ type sharedResolverOptions struct {
 	// are excluded.
 	PreRelease bool
 
+	// Strict disables auto-resolution of official providers. When true,
+	// missing official providers produce an error instructing the user to
+	// declare them explicitly in bundle.plugins.
+	Strict bool
+
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
 
@@ -205,6 +213,9 @@ type sharedResolverOptions struct {
 	// For dependency injection in tests
 	getter   get.Interface
 	registry *provider.Registry
+
+	// discoveryMode controls which file names auto-discovery searches for.
+	discoveryMode settings.DiscoveryMode
 }
 
 // getEffectiveResolverConfig returns resolver config values, using app config
@@ -281,9 +292,16 @@ func (o *sharedResolverOptions) buildResolverOutputMap(resolverData map[string]a
 	// --show-sensitive overrides to always reveal.
 	shouldRedact := o.shouldRedactSensitive()
 
+	// Determine whether to exclude internal resolvers: exclude in table/interactive
+	// (human-facing) output, include in structured output for machine consumption.
+	excludeInternal := o.shouldExcludeInternal()
+
 	for name, value := range resolverData {
-		if shouldRedact {
-			if r, ok := sol.Spec.Resolvers[name]; ok && r.Sensitive {
+		if r, ok := sol.Spec.Resolvers[name]; ok {
+			if excludeInternal && r.Internal {
+				continue
+			}
+			if shouldRedact && r.Sensitive {
 				results[name] = "[REDACTED]"
 				continue
 			}
@@ -294,25 +312,31 @@ func (o *sharedResolverOptions) buildResolverOutputMap(resolverData map[string]a
 	return results
 }
 
+// shouldExcludeInternal determines whether internal resolvers should be excluded
+// based on the output format. Structured formats (json, yaml, csv, toml, mermaid)
+// include internal resolvers for machine consumption; table/interactive modes exclude them.
+func (o *sharedResolverOptions) shouldExcludeInternal() bool {
+	format, _ := kvx.ParseOutputFormat(o.Output)
+	return !kvx.IsStructuredFormat(format)
+}
+
 // shouldRedactSensitive determines whether sensitive values should be redacted based on
 // the output format and --show-sensitive flag. Following the Terraform model:
 // - Table/interactive output: redacted (human-facing)
-// - JSON/YAML output: revealed (machine-facing)
+// - Structured output (json, yaml, csv, toml, mermaid, quiet): revealed (machine-facing)
 // - --show-sensitive: always reveals regardless of format
 func (o *sharedResolverOptions) shouldRedactSensitive() bool {
 	if o.ShowSensitive {
 		return false
 	}
 
-	// Structured formats (json, yaml, quiet) are for machine consumption — don't redact
-	format := o.Output
-	switch format {
-	case "json", "yaml", "quiet":
+	format, _ := kvx.ParseOutputFormat(o.Output)
+	// Structured formats are for machine consumption — don't redact.
+	// Quiet is also non-redacting (suppresses output entirely).
+	if kvx.IsStructuredFormat(format) || kvx.IsQuietFormat(format) {
 		return false
-	default:
-		// Table and interactive modes are human-facing — redact
-		return true
 	}
+	return true
 }
 
 // checkValueSizes checks if any values exceed size limits
@@ -476,6 +500,16 @@ func (o *sharedResolverOptions) executeResolvers(
 	if o.SkipTransform {
 		executorOpts = append(executorOpts, resolver.WithSkipTransform(true))
 	}
+
+	// Load mocked resolvers from context or environment (set by test runner).
+	mockedResolvers, err := loadMockedResolvers(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading mocked resolvers: %w", err)
+	}
+	if len(mockedResolvers) > 0 {
+		executorOpts = append(executorOpts, resolver.WithMockedResolvers(mockedResolvers))
+	}
+
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
 
 	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
@@ -573,17 +607,56 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		}))
 	}
 
+	if o.discoveryMode != settings.DiscoveryModeDefault {
+		opts = append(opts, prepare.WithDiscoveryMode(o.discoveryMode))
+	}
+
+	// Wire plugin auto-fetch so that bundle.plugins declarations trigger
+	// automatic download from configured catalogs. Without this, solutions
+	// that declare plugins would silently skip plugin loading.
+	if fetcher, err := buildPluginFetcher(ctx); err == nil {
+		opts = append(opts, prepare.WithPluginFetcher(fetcher))
+	}
+
+	// Load lock file for reproducible plugin resolution. The lock file
+	// lives alongside the solution file (e.g., bundle.lock.yaml).
+	if o.File != "" && o.File != "-" {
+		lockPlugins := loadLockPlugins(o.File)
+		if len(lockPlugins) > 0 {
+			opts = append(opts, prepare.WithLockPlugins(lockPlugins))
+		}
+	}
+
+	// Pass auth registry so auth handler plugins can be registered
+	if authReg := auth.RegistryFromContext(ctx); authReg != nil {
+		opts = append(opts, prepare.WithAuthRegistry(authReg))
+	}
+
+	// Wire official provider auto-resolution from context.
+	if officialReg := official.RegistryFromContext(ctx); officialReg != nil {
+		opts = append(opts, prepare.WithOfficialProviders(officialReg))
+	}
+	if o.Strict {
+		opts = append(opts, prepare.WithStrict(true))
+	}
+
+	// Resolve binary name once for verbose output and user-facing messages.
+	binaryName := settings.CliBinaryName
+	if o.CliParams != nil && o.CliParams.BinaryName != "" {
+		binaryName = o.CliParams.BinaryName
+	}
+
 	// Emit verbose discovery information before loading
 	if w != nil && w.VerboseEnabled() {
 		switch o.File {
 		case "":
-			binaryName := settings.CliBinaryName
-			if o.CliParams != nil && o.CliParams.BinaryName != "" {
-				binaryName = o.CliParams.BinaryName
+			var customActionFiles []string
+			if o.CliParams != nil {
+				customActionFiles = o.CliParams.ActionDiscoveryFileNames
 			}
 			folders := settings.SolutionFoldersFor(binaryName)
-			fileNames := settings.SolutionFileNamesFor(binaryName)
-			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
+			fileNames := settings.FileNamesForMode(o.discoveryMode, binaryName, customActionFiles)
+			w.Verbosef("Auto-discovering solution (binary=%s, mode=%s)", binaryName, o.discoveryMode)
 			w.Verbosef("  Search folders: %v", folders)
 			w.Verbosef("  Search filenames: %v", fileNames)
 		case "-":
@@ -598,11 +671,43 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		return nil, nil, "", func() {}, err
 	}
 
-	if w != nil && w.VerboseEnabled() {
-		w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
-			result.Solution.Metadata.Name,
-			result.Solution.Metadata.Version,
-			result.SolutionDir)
+	if w != nil {
+		sol := result.Solution
+		name := sol.Metadata.Name
+		var ver string
+		if sol.Metadata.Version != nil {
+			ver = sol.Metadata.Version.String()
+		}
+		source := sol.GetPath()
+
+		if w.VerboseEnabled() {
+			w.Verbosef("Solution loaded: %s (version=%s, dir=%s)",
+				name, ver, result.SolutionDir)
+		}
+
+		// Show a concise summary when verbose is enabled.
+		switch {
+		case name != "" && ver != "" && source != "":
+			w.Verbosef("Solution: %s@%s (%s)", name, ver, source)
+		case name != "" && ver != "":
+			w.Verbosef("Solution: %s@%s", name, ver)
+		case name != "" && source != "":
+			w.Verbosef("Solution: %s (%s)", name, source)
+		case name != "":
+			w.Verbosef("Solution: %s", name)
+		case source != "":
+			w.Verbosef("Solution: %s", source)
+		}
+
+		// Emit discovery-specific informational messages.
+		disc := result.DiscoveredFrom
+		if disc.AlternatePath != "" {
+			if disc.IsActionFile {
+				w.Verbosef("  (solution.yaml also found at %s)", disc.AlternatePath)
+			} else {
+				w.Verbosef("  (actions.yaml also found at %s; use '%s run action' to execute actions)", disc.AlternatePath, binaryName)
+			}
+		}
 	}
 
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil
@@ -696,6 +801,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVar(&o.OutputDir, "output-dir", "", "Target directory for action file operations (actions resolve relative paths here instead of CWD)")
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from CWD)")
 	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
+	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
@@ -802,4 +908,97 @@ func extractParameterKeys(resolvers []*resolver.Resolver) []string {
 		}
 	}
 	return keys
+}
+
+// mockedResolversEnvSuffix is the suffix appended to the binary-name-derived
+// env var prefix to form the full environment variable name for mocked resolvers.
+// The full name is {SAFE_PREFIX}_MOCKED_RESOLVERS_FILE.
+const mockedResolversEnvSuffix = "_MOCKED_RESOLVERS_FILE"
+
+// loadMockedResolvers reads the mocked resolvers JSON file. It first checks
+// the context (set by the in-process test runner), then falls back to the
+// environment variable (set by the subprocess test runner).
+// Returns nil if neither source is set.
+func loadMockedResolvers(ctx context.Context) (map[string]any, error) {
+	// Prefer context-based path (race-free for in-process execution).
+	path, ok := settings.MockedResolversFileFromContext(ctx)
+	if !ok {
+		// Fall back to env var for subprocess execution.
+		envVar := settings.SafeEnvPrefix(settings.BinaryNameFromContext(ctx)) + mockedResolversEnvSuffix
+		path = os.Getenv(envVar)
+	}
+	if path == "" {
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path comes from test runner context or env var, not user input
+	if err != nil {
+		return nil, fmt.Errorf("reading mocked resolvers file %q: %w", path, err)
+	}
+
+	var mocks map[string]any
+	if err := json.Unmarshal(data, &mocks); err != nil {
+		return nil, fmt.Errorf("parsing mocked resolvers file: %w", err)
+	}
+
+	return mocks, nil
+}
+
+// buildPluginFetcher creates a plugin.Fetcher from the context's config and
+// auth registry. Delegates to prepare.BuildPluginFetcher.
+func buildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
+	return prepare.BuildPluginFetcher(ctx)
+}
+
+// loadLockPlugins loads plugin entries from a lock file adjacent to the
+// solution file. Returns nil if no lock file exists or it cannot be parsed.
+func loadLockPlugins(solutionPath string) []bundler.LockPlugin {
+	lockPath := filepath.Join(filepath.Dir(solutionPath), bundler.DefaultLockFileName)
+	lockFile, err := bundler.LoadLockFile(lockPath)
+	if err != nil || lockFile == nil {
+		return nil
+	}
+	return lockFile.Plugins
+}
+
+// autoResolveProviderByName checks the official provider registry for a
+// provider name and, if found, auto-fetches it via the plugin fetcher.
+// This enables `run provider <name>` to work for extracted official providers
+// without requiring --plugin-dir or bundle.plugins.
+func autoResolveProviderByName(ctx context.Context, name string, reg *provider.Registry) ([]*plugin.Client, error) {
+	officialReg := official.RegistryFromContext(ctx)
+	if officialReg == nil {
+		return nil, fmt.Errorf("official registry not available")
+	}
+
+	p, ok := officialReg.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("provider %q is not an official provider", name)
+	}
+
+	lgr := logger.FromContext(ctx)
+	if lgr != nil {
+		lgr.V(0).Info("auto-resolving official provider", "provider", name)
+	}
+
+	fetcher, err := buildPluginFetcher(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("building plugin fetcher: %w", err)
+	}
+
+	dep := p.ToPluginDependency()
+	results, err := fetcher.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetching provider %q: %w", name, err)
+	}
+
+	pluginCfg := &plugin.ProviderConfig{
+		BinaryName: settings.BinaryNameFromContext(ctx),
+	}
+	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, pluginCfg)
+	if err != nil {
+		return nil, fmt.Errorf("registering provider %q: %w", name, err)
+	}
+
+	return clients, nil
 }

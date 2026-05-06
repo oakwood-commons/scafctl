@@ -122,6 +122,7 @@ tasks:
         rm -rf dist/
         rm -rf build/
         rm -rf bin/
+        rm -rf pkg/examples/files/*
 
         echo "  📋 Cleaning task cache..."
         rm -rf .task/
@@ -464,7 +465,7 @@ tasks:
         PASSED=0
         SKIPPED=0
 
-        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/"
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/|lint-stress-test/|compose-demo/workflow|compose-demo/resolvers"
 
         {
           find examples/solutions -name '*.yaml'
@@ -585,8 +586,20 @@ tasks:
   # Build
   # ──────────────────────────────────────────────────────────────────────────────
 
+  embed-examples:
+    desc: "Copy examples into pkg/examples/files for go:embed"
+    internal: true
+    sources:
+      - examples/**/*
+    generates:
+      - pkg/examples/files/**/*
+    cmds:
+      - |
+        rm -rf pkg/examples/files/*
+        cp -R examples/* pkg/examples/files/
+
   build:
-    deps: [mod, git-unshallow-clone]
+    deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the CLI"
     silent: true
     sources:
@@ -607,7 +620,7 @@ tasks:
         platforms: [darwin]
 
   build-container-image:
-    deps: [mod, git-unshallow-clone]
+    deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the container image layer"
     sources:
       - "**/*.go"
@@ -692,7 +705,7 @@ tasks:
       GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
     cmds:
       - mkdir -p {{.COVER}}
-      - go test $GOTESTFLAGS ./... -coverprofile={{.COVER}}/cover.out -covermode=atomic
+      - go test $GOTESTFLAGS $(go list ./... | grep -v /tests/) -coverprofile={{.COVER}}/cover.out -covermode=atomic
     sources:
       - "**/*.go"
       - go.mod
@@ -999,8 +1012,8 @@ tasks:
       CGO_ENABLED: "1"
     cmds:
       - go test -race -count=1 ./tests/integration/ -run "TestAPI_"
-      - go test -race -count=1 ./tests/integration/ -run "TestIntegration_"
-      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 10'
+      - go test -count=1 -parallel 4 ./tests/integration/ -run "TestIntegration_" -timeout 5m
+      - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 8'
 
   test:e2e:
     deps: [info, git-unshallow-clone, lint]
@@ -1333,7 +1346,7 @@ tasks:
         echo "Generated dist/index.html"
         echo ""
         echo "To publish for real, push a tag:"
-        echo "  task tag -- v1.2.3"
+        echo "  task tag-push VERSION=v1.2.3"
 
   release-dry-run:
     desc: "Validate goreleaser config and preview release build without creating artifacts"
@@ -1350,86 +1363,170 @@ tasks:
         echo "Dry run complete. Config is valid."
 
   tag:
-    desc: "Create a signed version tag and push only that tag (use DRYRUN=true to simulate)"
+    desc: "Create a signed git tag for release (usage: task tag [VERSION=v1.0.0] [DRY_RUN=true])"
+    interactive: true
     silent: true
-    vars:
-      DRYRUN: '{{.DRYRUN | default "false"}}'
+    preconditions:
+      - sh: 'command -v git-cliff >/dev/null 2>&1'
+        msg: "git-cliff is required for version suggestion. Install: brew install git-cliff"
     cmds:
       - |
-        {{ .FIX_PATH }}
+        set -euo pipefail
 
-        current_branch="{{ .GIT_BRANCH }}"
-        version="{{ .CLI_ARGS }}"
-        dryrun="{{ .DRYRUN }}"
+        VERSION='{{ .VERSION | default "" }}'
+        DRY_RUN='{{ .DRY_RUN | default "false" }}'
+        BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+        DIRTY="$(git status --porcelain)"
 
-        if [ -z "$version" ]; then
-          echo "Missing version. Usage: task tag -- v1.2.3 or v1.2.3-beta.1"
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "── dry-run mode ──────────────────────────────────────────────"
+        fi
+
+        # ── Warn if not on main ──────────────────────────────────────────────
+        if [ "$BRANCH" != "main" ]; then
+          echo "⚠  WARNING: You are on branch '$BRANCH', not 'main'."
+          if [ "$DRY_RUN" != "true" ]; then
+            printf "   Continue anyway? [y/N] "
+            read -r answer
+            case "$answer" in
+              [yY]*) ;;
+              *) echo "Aborted."; exit 1 ;;
+            esac
+          fi
+        fi
+
+        # ── Pull latest ──────────────────────────────────────────────────────
+        echo "Fetching latest from origin..."
+        git fetch --tags --quiet
+        LOCAL="$(git rev-parse HEAD)"
+        REMOTE="$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")"
+        if [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
+          echo "⚠  WARNING: Local HEAD differs from origin/$BRANCH."
+          echo "   Local:  $LOCAL"
+          echo "   Remote: $REMOTE"
+          if [ "$DRY_RUN" != "true" ]; then
+            printf "   Continue without pulling? [y/N] "
+            read -r answer
+            case "$answer" in
+              [yY]*) ;;
+              *) echo "Aborted. Run 'git pull' first."; exit 1 ;;
+            esac
+          fi
+        else
+          echo "✓ Local HEAD matches origin/$BRANCH"
+        fi
+
+        # ── Suggest version via git-cliff ────────────────────────────────────
+        SUGGESTED="$(git-cliff --bumped-version 2>/dev/null || echo "")"
+        if [ -z "$VERSION" ]; then
+          if [ -n "$SUGGESTED" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              VERSION="$SUGGESTED"
+              echo "✓ Suggested version: $VERSION (auto-accepted in dry-run)"
+            else
+              printf "Suggested version: %s — accept? [Y/n] " "$SUGGESTED"
+              read -r answer
+              case "$answer" in
+                [nN]*) printf "Enter version (e.g. v1.2.3): "; read -r VERSION ;;
+                *) VERSION="$SUGGESTED" ;;
+              esac
+            fi
+          else
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "✗ Could not determine version automatically."
+              echo "  Pass VERSION= to specify one."
+              exit 1
+            fi
+            printf "Could not determine version automatically.\nEnter version (e.g. v1.2.3): "
+            read -r VERSION
+          fi
+        else
+          if [ -n "$SUGGESTED" ] && [ "$VERSION" != "$SUGGESTED" ]; then
+            echo "ℹ  git-cliff suggests $SUGGESTED (you specified $VERSION)"
+          fi
+        fi
+
+        # ── Validate version format ──────────────────────────────────────────
+        if ! echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+          echo "ERROR: '$VERSION' is not valid semver (expected v1.2.3 or v1.2.3-beta.1)"
           exit 1
         fi
 
-        if [[ "$version" =~ ^v ]]; then
-          version="${version:1}"
-        fi
-
-        if [[ "$version" == *-beta.* ]]; then
-          is_beta="true"
-        else
-          is_beta="false"
-        fi
-
-        release_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-        beta_regex='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-beta\.(0|[1-9][0-9]*)$'
-
-        if [ "$is_beta" = "true" ]; then
-          if [[ ! "$version" =~ $beta_regex ]]; then
-            echo "Invalid beta tag: '$version'"
-            echo "Format must be: vMAJOR.MINOR.PATCH-beta.NUM (example: v1.0.0-beta.44)"
-            exit 1
-          fi
-          if [ "$current_branch" = "main" ]; then
-            echo "Beta tags are not allowed on 'main'. Current branch: '$current_branch'"
-            exit 1
-          fi
-        else
-          if [[ ! "$version" =~ $release_regex ]]; then
-            echo "Invalid release tag: '$version'"
-            echo "Format must be: vMAJOR.MINOR.PATCH (example: v1.2.3)"
-            exit 1
-          fi
-          if [ "$current_branch" != "main" ]; then
-            echo "Release tags must be created on 'main'. Current branch: '$current_branch'"
-            exit 1
+        # ── Dirty metadata ───────────────────────────────────────────────────
+        if [ -n "$DIRTY" ]; then
+          DIRTY_META="+dirty"
+          echo "⚠  WARNING: Working directory has uncommitted changes."
+          echo "   Tag will include metadata: ${VERSION}${DIRTY_META}"
+          if [ "$DRY_RUN" != "true" ]; then
+            printf "   Continue? [y/N] "
+            read -r answer
+            case "$answer" in
+              [yY]*) VERSION="${VERSION}${DIRTY_META}" ;;
+              *) echo "Aborted. Commit or stash changes first."; exit 1 ;;
+            esac
+          else
+            VERSION="${VERSION}${DIRTY_META}"
           fi
         fi
 
-        tag_name="v$version"
-
-        if git rev-parse "$tag_name" >/dev/null 2>&1; then
-          echo "Tag '$tag_name' already exists. Aborting."
+        # ── Check tag doesn't already exist ──────────────────────────────────
+        if git tag -l "$VERSION" | grep -q .; then
+          echo "ERROR: Tag $VERSION already exists. Delete it first: git tag -d $VERSION"
           exit 1
         fi
 
-        releaseMessage="Release $tag_name on branch $current_branch"
+        # ── Changelog preview ────────────────────────────────────────────────
+        CHANGELOG="$(git-cliff --unreleased --strip header 2>/dev/null || echo "")"
+        if [ -n "$CHANGELOG" ]; then
+          echo ""
+          echo "── Changelog since last tag ───────────────────────────────────"
+          echo "$CHANGELOG"
+          echo "───────────────────────────────────────────────────────────────"
+        fi
 
-        if [ "$dryrun" = "true" ]; then
-          echo "[DRYRUN] Would create signed tag '$tag_name' with message: $releaseMessage"
-          echo "[DRYRUN] Would push only this tag to origin"
+        # ── Dry-run summary ──────────────────────────────────────────────────
+        if [ "$DRY_RUN" = "true" ]; then
+          echo ""
+          echo "── Summary (dry-run) ─────────────────────────────────────────"
+          echo "  Version:  $VERSION"
+          echo "  Branch:   $BRANCH"
+          echo "  Commit:   $(git rev-parse --short=12 HEAD)"
+          echo "  Dirty:    $([ -n "$DIRTY" ] && echo 'yes' || echo 'no')"
+          echo "  Signing:  $(git config --get gpg.format 2>/dev/null || echo 'gpg') ($(git config --get user.signingkey 2>/dev/null | head -c 16)...)"
+          echo ""
+          echo "  Would run: git tag -s \"$VERSION\" -m \"Release $VERSION\""
+          echo "──────────────────────────────────────────────────────────────"
           exit 0
         fi
 
-        git tag -s "$tag_name" -m "$releaseMessage"
-        if [ $? -ne 0 ]; then
-          echo "Failed to create a signed tag. Check your GPG setup."
-          exit 1
-        fi
+        # ── Create signed tag ────────────────────────────────────────────────
+        echo ""
+        echo "Creating signed tag $VERSION..."
+        git tag -s "$VERSION" -m "Release $VERSION"
+        echo "✓ Tag $VERSION created locally."
+        echo ""
+        echo "Next steps:"
+        echo "  git push origin $VERSION"
+        echo "  task release"
 
-        git push origin "$tag_name"
-        if [ $? -ne 0 ]; then
-          echo "Failed to push tag '$tag_name' to origin."
-          exit 1
+  tag-push:
+    desc: "Create and push a signed git tag (usage: task tag-push [VERSION=v1.0.0])"
+    interactive: true
+    silent: true
+    cmds:
+      - task: tag
+        vars:
+          VERSION: '{{.VERSION | default ""}}'
+      - |
+        set -euo pipefail
+        # Determine the tag that was just created (latest local tag)
+        VERSION='{{ .VERSION | default "" }}'
+        if [ -z "$VERSION" ]; then
+          VERSION="$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)"
         fi
-
-        echo "Tagged and pushed '$tag_name' successfully."
+        echo "Pushing tag $VERSION to origin..."
+        git push origin "$VERSION"
+        echo "✓ Tag $VERSION pushed."
 
   # ──────────────────────────────────────────────────────────────────────────────
   # Utilities

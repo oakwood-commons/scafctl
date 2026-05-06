@@ -114,6 +114,11 @@ func ValidateInputKeys(inputs map[string]any, desc *Descriptor) error {
 // capability, validates inputs, sets up the execution context, and calls
 // Execute.  This is the shared domain entry point used by both the CLI
 // command and the MCP tool.
+//
+// When no explicit capability is requested, RunProvider auto-promotes to
+// action mode if the resolved operation is a write operation and the
+// provider supports CapabilityAction.  This allows CLI and MCP callers to
+// run write operations without explicitly specifying --capability action.
 func RunProvider(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	if opts.Provider == nil {
 		return nil, fmt.Errorf("provider is required")
@@ -128,6 +133,20 @@ func RunProvider(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	capability, err := ResolveCapability(desc, opts.Capability)
 	if err != nil {
 		return nil, err
+	}
+
+	// Auto-promote to action when the caller did not explicitly request a
+	// capability and the default (typically "from") would block a write
+	// operation.  This is safe because RunProvider is only called from
+	// direct invocation contexts (CLI, MCP) where there is no resolver
+	// phase to protect.
+	if opts.Capability == "" && capability != CapabilityAction {
+		operation, _ := opts.Inputs["operation"].(string)
+		if operation != "" && desc.IsWriteOperation(operation) {
+			if descriptorHasCapability(desc, CapabilityAction) {
+				capability = CapabilityAction
+			}
+		}
 	}
 
 	// Validate input keys against schema
@@ -156,4 +175,14 @@ func RunProvider(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		DryRun:     result.DryRun,
 		Duration:   elapsed.String(),
 	}, nil
+}
+
+// descriptorHasCapability reports whether the descriptor lists the given capability.
+func descriptorHasCapability(desc *Descriptor, target Capability) bool {
+	for _, c := range desc.Capabilities {
+		if c == target {
+			return true
+		}
+	}
+	return false
 }

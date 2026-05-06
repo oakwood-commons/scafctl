@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/spf13/cobra"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -33,6 +34,20 @@ type Server struct {
 	config    *config.Config
 	version   string
 	name      string
+	rootCmd   *cobra.Command
+
+	// prompts tracks registered prompts for listing. The mcp-go SDK
+	// does not expose a public ListPrompts method, so we maintain our
+	// own slice during registration.
+	prompts []mcp.Prompt
+
+	// coreTools tracks tool names registered by scafctl itself.
+	// Tools not in this set are tagged as plugin/embedder tools.
+	coreTools map[string]struct{}
+
+	// corePrompts tracks prompt names registered by scafctl itself.
+	// Prompts not in this set are tagged as plugin/embedder prompts.
+	corePrompts map[string]struct{}
 
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
@@ -56,6 +71,14 @@ type serverConfig struct {
 	queueSize                int
 	errorLogger              *log.Logger
 	supplementalInstructions string
+	rootCmd                  *cobra.Command
+}
+
+// WithRootCommand sets the cobra root command for CLI introspection tools.
+func WithRootCommand(cmd *cobra.Command) ServerOption {
+	return func(c *serverConfig) {
+		c.rootCmd = cmd
+	}
 }
 
 // WithServerLogger sets the logger for the MCP server.
@@ -404,6 +427,31 @@ func buildInstructions(name, supplemental string) string {
 	return base + "\n\n" + supplemental
 }
 
+// resolveConfig returns the effective configuration by checking, in order:
+//  1. s.config (set during NewServer via WithServerConfig)
+//  2. config.FromContext(s.ctx) (set during PersistentPreRun)
+//  3. config.Global() (loads from disk)
+//
+// This ensures catalog-related handlers see the same config as get_config,
+// even when the MCP server was created without an explicit config reference
+// (e.g. config file doesn't exist at startup but is created later).
+func (s *Server) resolveConfig() *config.Config {
+	if s.config != nil {
+		return s.config
+	}
+	if s.ctx != nil {
+		if cfg := config.FromContext(s.ctx); cfg != nil {
+			return cfg
+		}
+	}
+	cfg, err := config.Global()
+	if err != nil {
+		s.logger.V(1).Info("failed to load global config", "error", err)
+		return nil
+	}
+	return cfg
+}
+
 // NewServer creates a new MCP server with all tools and resources registered.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	cfg := &serverConfig{
@@ -447,12 +495,15 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 
 	s := &Server{
-		ctx:      mcpCtx,
-		version:  cfg.version,
-		name:     cfg.name,
-		registry: cfg.registry,
-		authReg:  cfg.authReg,
-		config:   cfg.config,
+		ctx:         mcpCtx,
+		version:     cfg.version,
+		name:        cfg.name,
+		registry:    cfg.registry,
+		authReg:     cfg.authReg,
+		config:      cfg.config,
+		rootCmd:     cfg.rootCmd,
+		coreTools:   make(map[string]struct{}, 64),
+		corePrompts: make(map[string]struct{}, 16),
 	}
 	if cfg.logger != nil {
 		s.logger = *cfg.logger
@@ -514,36 +565,76 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 }
 
 // Serve starts the MCP server on stdio transport (blocking).
+// Server context values (auth registry, config, settings, logger) are
+// automatically injected into the transport's request context so that
+// all tool handlers -- including those registered by embedders via
+// MCPServer().AddTool() -- can access them.
 func (s *Server) Serve(opts ...server.StdioOption) error {
-	return server.ServeStdio(s.mcpServer, opts...)
+	contextOpt := server.WithStdioContextFunc(func(ctx context.Context) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.StdioOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	return server.ServeStdio(s.mcpServer, allOpts...)
 }
 
 // ServeSSE starts the MCP server on SSE transport at the given address.
-func (s *Server) ServeSSE(addr string) error {
-	s.sseServer = server.NewSSEServer(s.mcpServer)
+// Server context values are injected into every request context (see Serve).
+func (s *Server) ServeSSE(addr string, opts ...server.SSEOption) error {
+	contextOpt := server.WithSSEContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.SSEOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	s.sseServer = server.NewSSEServer(s.mcpServer, allOpts...)
 	s.logger.Info("starting SSE server", "addr", addr)
 	return s.sseServer.Start(addr)
 }
 
 // ServeHTTP starts the MCP server on Streamable HTTP transport at the given address.
-func (s *Server) ServeHTTP(addr string) error {
-	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer)
+// Server context values are injected into every request context (see Serve).
+func (s *Server) ServeHTTP(addr string, opts ...server.StreamableHTTPOption) error {
+	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.StreamableHTTPOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer, allOpts...)
 	s.logger.Info("starting Streamable HTTP server", "addr", addr)
 	return s.httpServer.Start(addr)
 }
 
 // Handler returns an http.Handler for the Streamable HTTP transport.
-// This is useful for embedding the MCP server into an existing HTTP server.
-func (s *Server) Handler() http.Handler {
+// Server context values are injected into every request context (see Serve).
+// If the HTTP server was already created (by a prior call to Handler or ServeHTTP),
+// the existing instance is returned and opts are ignored.
+func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
 	if s.httpServer != nil {
 		return s.httpServer
 	}
-	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer)
+	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
+		return mergeContext(ctx, s.ctx)
+	})
+	allOpts := make([]server.StreamableHTTPOption, len(opts)+1)
+	copy(allOpts, opts)
+	allOpts[len(opts)] = contextOpt
+	s.httpServer = server.NewStreamableHTTPServer(s.mcpServer, allOpts...)
 	return s.httpServer
 }
 
 // MCPServer returns the underlying mcp-go MCPServer.
 // This is useful for advanced operations like sending notifications.
+//
+// Embedders can call MCPServer().AddTool() to register custom tools;
+// these are automatically listed by ListCapabilities with SourcePlugin.
+//
+// Note: prompts added via MCPServer().AddPrompt() will NOT appear in
+// ListCapabilities because the mcp-go SDK does not expose a ListPrompts
+// method. Use [Server.AddPrompt] instead to register prompts that should
+// be discoverable.
 func (s *Server) MCPServer() *server.MCPServer {
 	return s.mcpServer
 }
@@ -675,6 +766,7 @@ func (s *Server) registerTools() {
 
 	// Catalog tools (Phase 3)
 	s.registerCatalogTools()
+	s.registerCatalogSearchTools()
 
 	// Auth tools (Phase 3)
 	s.registerAuthTools()
@@ -699,6 +791,9 @@ func (s *Server) registerTools() {
 
 	// Dry-run tools
 	s.registerDryRunTools()
+
+	// Run tools (execute solutions via domain layer)
+	s.registerRunTools()
 
 	// Config tools
 	s.registerConfigTools()
@@ -729,11 +824,36 @@ func (s *Server) registerTools() {
 
 	// State inspection tools
 	s.registerStateTools()
+
+	// CLI introspection tools
+	s.registerCLITools()
 }
 
 // registerResources registers all MCP resources on the server.
 func (s *Server) registerResources() {
 	s.registerResourceTemplates()
+}
+
+// addTool registers a tool with the MCP server and tracks it as a core
+// tool for listing via ListCapabilities. Embedders that call
+// MCPServer().AddTool() directly will have their tools listed as plugin.
+func (s *Server) addTool(tool mcp.Tool, handler server.ToolHandlerFunc) {
+	s.mcpServer.AddTool(tool, handler)
+	s.coreTools[tool.Name] = struct{}{}
+}
+
+// AddPrompt registers a prompt with the MCP server and tracks it for
+// listing via ListCapabilities. Embedders should use this instead of
+// MCPServer().AddPrompt() to ensure the prompt appears in listings.
+func (s *Server) AddPrompt(prompt mcp.Prompt, handler server.PromptHandlerFunc) {
+	s.mcpServer.AddPrompt(prompt, handler)
+	s.prompts = append(s.prompts, prompt)
+}
+
+// addCorePrompt registers a prompt and marks it as a core prompt.
+func (s *Server) addCorePrompt(prompt mcp.Prompt, handler server.PromptHandlerFunc) {
+	s.AddPrompt(prompt, handler)
+	s.corePrompts[prompt.Name] = struct{}{}
 }
 
 // registerAllPrompts registers all MCP prompts on the server.

@@ -312,9 +312,10 @@ func TestValueRef_Resolve_Tmpl(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "underscore prefix is not supported",
+			name:        "underscore prefix accesses data via alias",
 			tmpl:        "{{ ._.environment }}",
-			expectError: true,
+			expected:    "production",
+			expectError: false,
 		},
 	}
 
@@ -1277,4 +1278,14 @@ func BenchmarkValueRef_Resolve_NestedValueRefs(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestValueRef_ReferencedVariables_ScopedRefs(t *testing.T) {
+	tmpl := gotmpl.GoTemplatingContent(`{{ with .config.data }}{{ .host }}{{ end }}`)
+	vr := ValueRef{Tmpl: &tmpl}
+	vars := vr.ReferencedVariables()
+
+	assert.Contains(t, vars, "config", "root-level ref should be included")
+	_, hasHost := vars["host"]
+	assert.False(t, hasHost, "scoped ref inside {{ with }} should be excluded")
 }

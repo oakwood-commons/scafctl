@@ -48,7 +48,7 @@ func (s *Server) registerTemplateTools() {
 			mcp.Enum("default", "zero", "error"),
 		),
 	)
-	s.mcpServer.AddTool(evaluateGoTemplateTool, s.handleEvaluateGoTemplate)
+	s.addTool(evaluateGoTemplateTool, s.handleEvaluateGoTemplate)
 
 	// validate_expression
 	validateExpressionTool := mcp.NewTool("validate_expression",
@@ -75,7 +75,7 @@ func (s *Server) registerTemplateTools() {
 			mcp.Description("Right delimiter for Go templates (default: '}}')"),
 		),
 	)
-	s.mcpServer.AddTool(validateExpressionTool, s.handleValidateExpression)
+	s.addTool(validateExpressionTool, s.handleValidateExpression)
 
 	// validate_expressions (batch)
 	validateExpressionsTool := mcp.NewTool("validate_expressions",
@@ -99,7 +99,7 @@ func (s *Server) registerTemplateTools() {
 			}),
 		),
 	)
-	s.mcpServer.AddTool(validateExpressionsTool, s.handleValidateExpressions)
+	s.addTool(validateExpressionsTool, s.handleValidateExpressions)
 
 	// list_go_template_functions
 	listGoTemplateFunctionsTool := mcp.NewTool("list_go_template_functions",
@@ -120,7 +120,7 @@ func (s *Server) registerTemplateTools() {
 			mcp.Description("Get details for a specific function by name (substring match)"),
 		),
 	)
-	s.mcpServer.AddTool(listGoTemplateFunctionsTool, s.handleListGoTemplateFunctions)
+	s.addTool(listGoTemplateFunctionsTool, s.handleListGoTemplateFunctions)
 }
 
 // handleEvaluateGoTemplate evaluates a Go template against provided data.

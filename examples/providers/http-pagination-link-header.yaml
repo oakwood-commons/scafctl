@@ -6,7 +6,12 @@ kind: Solution
 
 metadata:
   name: http-pagination-link-header-example
-  version: 1.0.0
+  displayName: HTTP Pagination Link Header Example
+  category: providers
+  tags:
+    - http
+    - pagination
+    - provider-example
   description: |
     Link header pagination (RFC 8288) follows rel="next" links.
     Used by GitHub, GitLab, and many REST APIs.

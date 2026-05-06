@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -42,7 +43,7 @@ func Scan(category string) ([]Example, error) {
 	}
 
 	var items []Example
-	err = fs.WalkDir(examplesFS, root, func(path string, d fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(examplesFS, root, func(fpath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -50,16 +51,24 @@ func Scan(category string) ([]Example, error) {
 			return nil
 		}
 
-		// Only include YAML files
-		ext := filepath.Ext(path)
+		// Only include YAML files (use path.Ext for forward-slash paths from embed.FS)
+		ext := path.Ext(fpath)
 		if ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
 
-		// Get the relative path from the root
-		relPath, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
+		// Get the relative path from the root.
+		// embed.FS always uses forward slashes, so use strings-based trimming
+		// instead of filepath.Rel which produces OS-native separators on Windows.
+		relPath := strings.TrimPrefix(fpath, root+"/")
+		if relPath == fpath {
+			// Fallback for OS filesystem where paths may use native separators
+			var relErr error
+			relPath, relErr = filepath.Rel(root, fpath)
+			if relErr != nil {
+				return relErr
+			}
+			relPath = filepath.ToSlash(relPath)
 		}
 
 		// Determine category from the first directory component
@@ -106,22 +115,24 @@ func Scan(category string) ([]Example, error) {
 }
 
 // Read returns the contents of an example file.
-func Read(path string) (string, error) {
+func Read(exPath string) (string, error) {
 	examplesFS, root, err := getExamplesFS()
 	if err != nil {
 		return "", err
 	}
 
+	// Normalize to forward slashes (embed.FS always uses forward slashes)
+	cleanPath := path.Clean(filepath.ToSlash(exPath))
+
 	// Security: ensure the path doesn't escape
-	cleanPath := filepath.Clean(path)
 	if strings.Contains(cleanPath, "..") {
 		return "", fmt.Errorf("path must not contain '..'")
 	}
 
-	fullPath := filepath.Join(root, cleanPath)
+	fullPath := path.Join(root, cleanPath)
 	content, err := fs.ReadFile(examplesFS, fullPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to read example %q: %w", path, err)
+		return "", fmt.Errorf("failed to read example %q: %w", exPath, err)
 	}
 
 	return string(content), nil
@@ -215,7 +226,7 @@ func findExamplesDir() (string, error) {
 }
 
 // DescriptionFromPath generates a human-readable description from a file path.
-func DescriptionFromPath(path string) string {
+func DescriptionFromPath(exPath string) string {
 	descriptions := map[string]string{
 		// Solutions
 		"solutions/comprehensive/solution.yaml":      "Comprehensive solution demonstrating all features (resolvers, actions, transforms, validation, etc.)",
@@ -296,13 +307,14 @@ func DescriptionFromPath(path string) string {
 		"providers/security-example.yaml":            "Security hardening patterns across providers",
 	}
 
-	if desc, ok := descriptions[path]; ok {
+	if desc, ok := descriptions[exPath]; ok {
 		return desc
 	}
 
-	// Fallback: generate from filename
-	name := filepath.Base(path)
-	name = strings.TrimSuffix(name, filepath.Ext(name))
+	// Fallback: generate from filename.
+	// Use path.Base/path.Ext (forward-slash) since relPaths are normalized to forward slashes.
+	name := path.Base(exPath)
+	name = strings.TrimSuffix(name, path.Ext(name))
 	name = strings.ReplaceAll(name, "-", " ")
 	name = strings.ReplaceAll(name, "_", " ")
 	return strings.Title(name) + " example" //nolint:staticcheck // strings.Title is fine for simple cases

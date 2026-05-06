@@ -28,7 +28,7 @@ func (s *Server) registerErrorTools() {
 			mcp.Description("The error message text to explain. Can be a full error string or snippet from resolver execution, validation, CEL evaluation, or any scafctl operation."),
 		),
 	)
-	s.mcpServer.AddTool(explainErrorTool, s.handleExplainError)
+	s.addTool(explainErrorTool, s.handleExplainError)
 }
 
 // handleExplainError parses an error message and returns a structured explanation.

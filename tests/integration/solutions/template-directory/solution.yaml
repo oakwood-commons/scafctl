@@ -5,6 +5,10 @@ metadata:
   version: 1.0.0
   description: Integration test for directory → render-tree → write-tree pipeline
 
+bundle:
+  include:
+    - "**/*"
+
 spec:
   resolvers:
     vars:

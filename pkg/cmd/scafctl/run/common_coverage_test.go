@@ -6,6 +6,7 @@ package run
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -127,6 +128,7 @@ func TestAddSharedResolverFlags(t *testing.T) {
 		"resolver-timeout",
 		"phase-timeout",
 		"pre-release",
+		"strict",
 	}
 
 	for _, name := range expectedFlags {
@@ -701,4 +703,147 @@ func TestBuildStateSolutionMeta(t *testing.T) {
 		assert.Equal(t, "no-version", meta.Name)
 		assert.Empty(t, meta.Version)
 	})
+}
+
+// ── loadMockedResolvers tests ─────────────────────────────────────────────────
+
+func TestLoadMockedResolvers_Unset(t *testing.T) {
+	ctx := context.Background()
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, mocks)
+}
+
+func TestLoadMockedResolvers_ValidFile_ViaEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mocks.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"greeting":"hello","count":42}`), 0o644))
+
+	envVar := settings.SafeEnvPrefix(settings.CliBinaryName) + mockedResolversEnvSuffix
+	t.Setenv(envVar, path)
+	ctx := context.Background()
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", mocks["greeting"])
+	assert.Equal(t, float64(42), mocks["count"])
+}
+
+func TestLoadMockedResolvers_ValidFile_ViaContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mocks.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"greeting":"hello"}`), 0o644))
+
+	ctx := settings.WithMockedResolversFile(context.Background(), path)
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", mocks["greeting"])
+}
+
+func TestLoadMockedResolvers_ContextTakesPrecedence(t *testing.T) {
+	ctxPath := filepath.Join(t.TempDir(), "ctx-mocks.json")
+	envPath := filepath.Join(t.TempDir(), "env-mocks.json")
+	require.NoError(t, os.WriteFile(ctxPath, []byte(`{"source":"context"}`), 0o644))
+	require.NoError(t, os.WriteFile(envPath, []byte(`{"source":"env"}`), 0o644))
+
+	envVar := settings.SafeEnvPrefix(settings.CliBinaryName) + mockedResolversEnvSuffix
+	t.Setenv(envVar, envPath)
+	ctx := settings.WithMockedResolversFile(context.Background(), ctxPath)
+	mocks, err := loadMockedResolvers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "context", mocks["source"], "context should take precedence over env var")
+}
+
+func TestLoadMockedResolvers_MissingFile(t *testing.T) {
+	ctx := settings.WithMockedResolversFile(context.Background(), "/nonexistent/path.json")
+	_, err := loadMockedResolvers(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading")
+}
+
+func TestLoadMockedResolvers_InvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	require.NoError(t, os.WriteFile(path, []byte(`not json`), 0o644))
+
+	ctx := settings.WithMockedResolversFile(context.Background(), path)
+	_, err := loadMockedResolvers(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing")
+}
+
+// ── shouldExcludeInternal tests ──────────────────────────────────────────────
+
+func TestSharedResolverOptions_ShouldExcludeInternal_TableExcludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "table"}}
+	assert.True(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_JSONIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "json"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_YAMLIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "yaml"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_EmptyExcludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: ""}}
+	assert.True(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_CSVIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "csv"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_TOMLIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "toml"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_ShouldExcludeInternal_MermaidIncludes(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{KvxOutputFlags: flags.KvxOutputFlags{Output: "mermaid"}}
+	assert.False(t, opts.shouldExcludeInternal())
+}
+
+func TestSharedResolverOptions_BuildResolverOutputMap_InternalExcludedInTable(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+	}
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"public":   {Name: "public", Internal: false},
+		"internal": {Name: "internal", Internal: true},
+	}
+	result := opts.buildResolverOutputMap(map[string]any{
+		"public":   "visible",
+		"internal": "hidden",
+	}, sol)
+	assert.Equal(t, "visible", result["public"])
+	assert.NotContains(t, result, "internal")
+}
+
+func TestSharedResolverOptions_BuildResolverOutputMap_InternalIncludedInJSON(t *testing.T) {
+	t.Parallel()
+	opts := &sharedResolverOptions{
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"public":   {Name: "public", Internal: false},
+		"internal": {Name: "internal", Internal: true},
+	}
+	result := opts.buildResolverOutputMap(map[string]any{
+		"public":   "visible",
+		"internal": "also-visible",
+	}, sol)
+	assert.Equal(t, "visible", result["public"])
+	assert.Equal(t, "also-visible", result["internal"])
 }

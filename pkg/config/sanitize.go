@@ -18,6 +18,7 @@ type SanitizedConfig struct {
 	Action     ActionConfig       `json:"action" yaml:"action" doc:"Action execution configuration"`
 	Auth       SanitizedAuth      `json:"auth" yaml:"auth" doc:"Authentication configuration (redacted)"`
 	Build      BuildConfig        `json:"build" yaml:"build" doc:"Build configuration"`
+	APIServer  APIServerConfig    `json:"apiServer,omitempty" yaml:"apiServer,omitempty" doc:"REST API server configuration"`
 }
 
 // SanitizedCatalog redacts auth tokens from catalog config.
@@ -48,6 +49,7 @@ type SanitizedEntraAuth struct {
 	ClientID      string   `json:"clientId,omitempty" yaml:"clientId,omitempty" doc:"Entra ID application client ID" maxLength:"256" example:"00000000-0000-0000-0000-000000000000"`
 	TenantID      string   `json:"tenantId,omitempty" yaml:"tenantId,omitempty" doc:"Entra ID tenant ID" maxLength:"256" example:"00000000-0000-0000-0000-000000000000"`
 	DefaultScopes []string `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" doc:"Default OAuth scopes" maxItems:"20"`
+	DefaultFlow   string   `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default interactive auth flow" maxLength:"32" example:"device_code"`
 }
 
 // SanitizedGitHubAuth contains only non-sensitive GitHub auth fields.
@@ -77,6 +79,7 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 		Resolver:   cfg.Resolver,
 		Action:     cfg.Action,
 		Build:      cfg.Build,
+		APIServer:  cfg.APIServer,
 	}
 
 	// Sanitize catalogs
@@ -104,6 +107,7 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 			ClientID:      cfg.Auth.Entra.ClientID,
 			TenantID:      cfg.Auth.Entra.TenantID,
 			DefaultScopes: cfg.Auth.Entra.DefaultScopes,
+			DefaultFlow:   cfg.Auth.Entra.DefaultFlow,
 		}
 	}
 	if cfg.Auth.GitHub != nil {

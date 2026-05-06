@@ -15,7 +15,7 @@ import (
 // registerConfigTools registers configuration-related MCP tools.
 func (s *Server) registerConfigTools() {
 	getConfigTool := mcp.NewTool("get_config",
-		mcp.WithDescription("Return the current scafctl configuration. Shows catalogs, settings, logging, HTTP client, CEL, resolver, action, auth, and build configuration. Use the optional 'section' parameter to retrieve only a specific section. Sensitive fields (client secrets, tokens) are redacted."),
+		mcp.WithDescription(fmt.Sprintf("Return the current %s configuration. Shows catalogs, settings, logging, HTTP client, CEL, resolver, action, auth, build, and apiServer configuration. Use the optional 'section' parameter to retrieve only a specific section. Sensitive fields (client secrets, tokens) are redacted.", s.name)),
 		mcp.WithTitleAnnotation("Get Configuration"),
 		mcp.WithToolIcons(toolIcons["config"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -24,13 +24,13 @@ func (s *Server) registerConfigTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaGetConfig),
 		mcp.WithString("section",
-			mcp.Description("Optional section to retrieve: 'catalogs', 'settings', 'logging', 'httpClient', 'cel', 'resolver', 'action', 'auth', 'build'. Omit to return the full configuration."),
+			mcp.Description("Optional section to retrieve: 'catalogs', 'settings', 'logging', 'httpClient', 'cel', 'resolver', 'action', 'auth', 'build', 'apiServer'. Omit to return the full configuration."),
 		),
 	)
-	s.mcpServer.AddTool(getConfigTool, s.handleGetConfig)
+	s.addTool(getConfigTool, s.handleGetConfig)
 
 	getConfigPathsTool := mcp.NewTool("get_config_paths",
-		mcp.WithDescription("Return all XDG-compliant filesystem paths used by scafctl. Shows config, data, cache, state, catalog, secrets, plugins, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout."),
+		mcp.WithDescription(fmt.Sprintf("Return all XDG-compliant filesystem paths used by %s. Shows config, data, cache, state, catalog, secrets, plugins, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout.", s.name)),
 		mcp.WithTitleAnnotation("Get Config Paths"),
 		mcp.WithToolIcons(toolIcons["config"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -39,24 +39,17 @@ func (s *Server) registerConfigTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaGetConfigPaths),
 	)
-	s.mcpServer.AddTool(getConfigPathsTool, s.handleGetConfigPaths)
+	s.addTool(getConfigPathsTool, s.handleGetConfigPaths)
 }
 
 // handleGetConfig returns the current configuration (with sensitive fields redacted).
 func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	cfg := s.config
+	cfg := s.resolveConfig()
 	if cfg == nil {
-		cfg = config.FromContext(s.ctx)
-	}
-	if cfg == nil {
-		var err error
-		cfg, err = config.Global()
-		if err != nil {
-			return newStructuredError(ErrCodeConfigError, fmt.Sprintf("no configuration available: %v", err),
-				WithSuggestion("Run 'scafctl config init' to create a default configuration"),
-				WithRelatedTools("get_config_paths"),
-			), nil
-		}
+		return newStructuredError(ErrCodeConfigError, "no configuration available",
+			WithSuggestion(fmt.Sprintf("Run '%s config init' to create a default configuration", s.name)),
+			WithRelatedTools("get_config_paths"),
+		), nil
 	}
 
 	sanitized := config.SanitizeConfig(cfg)
@@ -77,6 +70,7 @@ func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest)
 		"action":     sanitized.Action,
 		"auth":       sanitized.Auth,
 		"build":      sanitized.Build,
+		"apiServer":  sanitized.APIServer,
 	}
 
 	sectionData, ok := validSections[section]

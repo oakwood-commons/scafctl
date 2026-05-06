@@ -9,7 +9,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: snapshot-diff-demo
-  version: 1.0.0
+  displayName: Snapshot Diff Demo
+  category: developer-tools
+  tags:
+    - snapshot
   description: |
     Compare two snapshots to detect changes between runs. Useful for
     regression testing and before/after verification.

@@ -300,3 +300,124 @@ func TestExtendsChainString(t *testing.T) {
 	chain := soltesting.ExtendsChainString(tests, "child")
 	assert.Equal(t, "child -> _parent -> _grandparent", chain)
 }
+
+func TestResolveExtends_InputsMerge(t *testing.T) {
+	tests := map[string]*soltesting.TestCase{
+		"_base": {
+			Name:    "_base",
+			Command: []string{"run", "resolver"},
+			Inputs: map[string]string{
+				"env":    "dev",
+				"region": "us-west-2",
+			},
+		},
+		"child": {
+			Name:    "child",
+			Extends: []string{"_base"},
+			Inputs: map[string]string{
+				"env": "prod",  // override
+				"app": "myapp", // new key
+			},
+			Assertions: []soltesting.Assertion{
+				{Contains: "ok"},
+			},
+		},
+	}
+
+	require.NoError(t, soltesting.ResolveExtends(tests))
+
+	child := tests["child"]
+	assert.Equal(t, "prod", child.Inputs["env"])         // child overrides parent
+	assert.Equal(t, "us-west-2", child.Inputs["region"]) // inherited from parent
+	assert.Equal(t, "myapp", child.Inputs["app"])        // child-only key
+}
+
+func TestResolveExtends_ServicesMerge(t *testing.T) {
+	tests := map[string]*soltesting.TestCase{
+		"_base": {
+			Name:    "_base",
+			Command: []string{"run", "resolver"},
+			Services: []soltesting.ServiceConfig{
+				{Name: "api", Type: "http"},
+			},
+		},
+		"child": {
+			Name:    "child",
+			Extends: []string{"_base"},
+			Services: []soltesting.ServiceConfig{
+				{Name: "db", Type: "http"},
+			},
+			Assertions: []soltesting.Assertion{
+				{Contains: "ok"},
+			},
+		},
+	}
+
+	require.NoError(t, soltesting.ResolveExtends(tests))
+
+	child := tests["child"]
+	assert.Len(t, child.Services, 2)
+	assert.Equal(t, "api", child.Services[0].Name)
+	assert.Equal(t, "db", child.Services[1].Name)
+}
+
+func TestResolveExtends_MocksMerge(t *testing.T) {
+	tests := map[string]*soltesting.TestCase{
+		"_base": {
+			Name:    "_base",
+			Command: []string{"run", "resolver"},
+			Mocks: map[string]any{
+				"token": "base-token",
+				"cfg":   "base-cfg",
+			},
+		},
+		"child": {
+			Name:    "child",
+			Extends: []string{"_base"},
+			Mocks: map[string]any{
+				"token": "child-token", // override
+				"extra": "child-extra", // new key
+			},
+			Assertions: []soltesting.Assertion{
+				{Contains: "ok"},
+			},
+		},
+	}
+
+	require.NoError(t, soltesting.ResolveExtends(tests))
+
+	child := tests["child"]
+	assert.Equal(t, "child-token", child.Mocks["token"]) // child overrides parent
+	assert.Equal(t, "base-cfg", child.Mocks["cfg"])      // inherited from parent
+	assert.Equal(t, "child-extra", child.Mocks["extra"]) // child-only key
+}
+
+func TestResolveExtends_BaseDirMerge(t *testing.T) {
+	tests := map[string]*soltesting.TestCase{
+		"_base": {
+			Name:    "_base",
+			Command: []string{"run", "resolver"},
+			BaseDir: "myapp",
+		},
+		"child-inherits": {
+			Name:    "child-inherits",
+			Extends: []string{"_base"},
+			Assertions: []soltesting.Assertion{
+				{Contains: "ok"},
+			},
+		},
+		"child-overrides": {
+			Name:    "child-overrides",
+			Extends: []string{"_base"},
+			BaseDir: "otherapp",
+			Assertions: []soltesting.Assertion{
+				{Contains: "ok"},
+			},
+		},
+	}
+
+	require.NoError(t, soltesting.ResolveExtends(tests))
+
+	assert.Equal(t, "myapp", tests["child-inherits"].BaseDir, "child should inherit BaseDir from parent")
+	assert.Equal(t, "otherapp", tests["child-overrides"].BaseDir, "child should override BaseDir")
+}

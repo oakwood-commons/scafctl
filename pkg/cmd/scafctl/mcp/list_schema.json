@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCP Capabilities",
+  "description": "Schema for MCP tools and prompts with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "⚡",
+  "x-kvx-collectionTitle": "MCP Capabilities",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "description",
+    "subtitleMaxLines": 2,
+    "badgeFields": ["kind", "source"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "kind", "source"],
+        "layout": "inline"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Hints",
+        "fields": ["readOnly", "destructive"],
+        "layout": "table"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "kind"],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "title": "Kind",
+        "description": "Capability type (tool or prompt)"
+      },
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Capability name"
+      },
+      "title": {
+        "type": "string",
+        "title": "Title",
+        "description": "Display title"
+      },
+      "description": {
+        "type": "string",
+        "title": "Description",
+        "description": "What this capability does"
+      },
+      "source": {
+        "type": "string",
+        "title": "Source",
+        "description": "Where the capability was registered (core or plugin)"
+      },
+      "readOnly": {
+        "type": "boolean",
+        "title": "Read-Only",
+        "description": "Whether the capability only reads data"
+      },
+      "destructive": {
+        "type": "boolean",
+        "title": "Destructive",
+        "description": "Whether the capability can destroy data"
+      }
+    }
+  }
+}

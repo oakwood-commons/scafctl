@@ -3,7 +3,10 @@ kind: Solution
 
 metadata:
   name: scaffold-demo
-  version: 1.0.0
+  displayName: Scaffold Demo
+  category: solutions
+  tags:
+    - solution
   description: Demonstrates test scaffolding with `scafctl test init`
 
 spec:

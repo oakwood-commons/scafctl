@@ -17,7 +17,7 @@ type Options struct {
 	Name string `json:"name" doc:"Solution name" maxLength:"60" example:"my-solution"`
 	// Description is a brief description of what the solution does.
 	Description string `json:"description" doc:"Solution description" maxLength:"200" example:"Deploy to Kubernetes"`
-	// Version is the semver version string (default: "1.0.0").
+	// Version is the semver version string. Optional for local development.
 	Version string `json:"version" doc:"Semantic version" example:"1.0.0"`
 	// Features is a map of features to include in the scaffold.
 	// Valid keys: parameters, resolvers, actions, transforms, validation, tests, composition.
@@ -46,12 +46,8 @@ var ValidFeatures = []string{
 
 // Solution generates a skeleton solution YAML from the given options.
 // If no features are specified, defaults to parameters and resolvers.
-// If version is empty, defaults to "1.0.0".
+// Version is optional; omit for local development, set for catalog publishing.
 func Solution(opts Options) *Result {
-	if opts.Version == "" {
-		opts.Version = "1.0.0"
-	}
-
 	// Default features if none specified
 	if len(opts.Features) == 0 {
 		opts.Features = map[string]bool{
@@ -89,7 +85,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 	b.WriteString("kind: Solution\n")
 	b.WriteString("metadata:\n")
 	fmt.Fprintf(&b, "  name: %s\n", name)
-	fmt.Fprintf(&b, "  version: \"%s\"\n", version)
+	if version != "" {
+		fmt.Fprintf(&b, "  version: \"%s\"\n", version)
+	}
 	fmt.Fprintf(&b, "  description: %s\n", description)
 	b.WriteString("  tags:\n")
 	b.WriteString("    - scaffold\n")
@@ -100,7 +98,7 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 		b.WriteString("  resolvers:\n")
 
 		if features["parameters"] {
-			b.WriteString("    # User-provided input parameter\n")
+			b.WriteString("    # User-provided input (override with -r inputName=your-value)\n")
 			b.WriteString("    inputName:\n")
 			b.WriteString("      type: string\n")
 			b.WriteString("      description: \"A user-provided input value\"\n")
@@ -110,9 +108,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			b.WriteString("          - provider: parameter\n")
 			b.WriteString("            inputs:\n")
 			b.WriteString("              key: inputName\n")
-			b.WriteString("          - provider: static\n")
+			b.WriteString("          - provider: cel\n")
 			b.WriteString("            inputs:\n")
-			b.WriteString("              value: my-value\n")
+			b.WriteString("              expression: \"'my-value'\"\n")
 
 			if features["validation"] {
 				b.WriteString("      validate:\n")
@@ -131,9 +129,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			b.WriteString("      description: \"A static configuration value\"\n")
 			b.WriteString("      resolve:\n")
 			b.WriteString("        with:\n")
-			b.WriteString("          - provider: static\n")
+			b.WriteString("          - provider: cel\n")
 			b.WriteString("            inputs:\n")
-			b.WriteString("              value: \"default-value\"\n")
+			b.WriteString("              expression: \"'default-value'\"\n")
 		}
 
 		if features["transforms"] {
@@ -147,9 +145,9 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 			}
 			b.WriteString("      resolve:\n")
 			b.WriteString("        with:\n")
-			b.WriteString("          - provider: static\n")
+			b.WriteString("          - provider: cel\n")
 			b.WriteString("            inputs:\n")
-			b.WriteString("              value: \"raw-data\"\n")
+			b.WriteString("              expression: \"'raw-data'\"\n")
 			b.WriteString("      transform:\n")
 			b.WriteString("        with:\n")
 			b.WriteString("          - provider: cel\n")
@@ -240,16 +238,15 @@ func BuildYAML(name, description, version string, features map[string]bool, prov
 		if !hasExec && len(providers) == 0 {
 			b.WriteString("      # Example action\n")
 			b.WriteString("      hello:\n")
-			b.WriteString("        provider: exec\n")
+			b.WriteString("        provider: message\n")
 			b.WriteString("        description: \"A simple action\"\n")
 			b.WriteString("        inputs:\n")
-			b.WriteString("          command: echo\n")
 			if features["transforms"] {
-				b.WriteString("          args:\n")
-				b.WriteString("            expr: \"['Hello, ' + _.inputName + ' - processed: ' + _.processed]\"\n")
+				b.WriteString("          message:\n")
+				b.WriteString("            expr: \"'Hello, ' + _.inputName + ' - processed: ' + _.processed\"\n")
 			} else {
-				b.WriteString("          args:\n")
-				b.WriteString("            expr: \"['Hello, ' + _.inputName]\"\n")
+				b.WriteString("          message:\n")
+				b.WriteString("            expr: \"'Hello, ' + _.inputName\"\n")
 			}
 		}
 	}

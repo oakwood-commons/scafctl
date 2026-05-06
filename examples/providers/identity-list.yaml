@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: identity-list-example
-  version: 1.0.0
+  displayName: Identity List Example
+  category: providers
+  tags:
+    - identity
+    - provider-example
   description: List available authentication handlers
 
 spec:

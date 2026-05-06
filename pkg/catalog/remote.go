@@ -13,11 +13,15 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
+	config "github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"oras.land/oras-go/v2"
@@ -29,12 +33,24 @@ import (
 
 // RemoteCatalog implements Catalog interface for OCI registries.
 type RemoteCatalog struct {
-	name       string
-	registry   string
-	repository string
-	client     *auth.Client
-	insecure   bool
-	logger     logr.Logger
+	name              string
+	registry          string
+	repository        string
+	client            *auth.Client
+	insecure          bool
+	logger            logr.Logger
+	enumerator        registryEnumerator
+	discoveryStrategy config.DiscoveryStrategy
+	authHandlerUsed   string
+	credentialSource  atomic.Value // stores string; written from credential callbacks
+
+	// staleCredentials is set to true when OCI operations fall back to
+	// anonymous access because stored credentials were rejected by the
+	// registry. Used by the CLI layer to emit a user-facing warning.
+	staleCredentials atomic.Bool
+
+	// anonOnce ensures switchToAnonymous replaces the client exactly once.
+	anonOnce sync.Once
 }
 
 // RemoteCatalogConfig holds configuration for creating a remote catalog.
@@ -62,6 +78,12 @@ type RemoteCatalogConfig struct {
 	// Insecure allows HTTP connections (for testing)
 	Insecure bool
 
+	// DiscoveryStrategy controls how artifacts are discovered.
+	// Empty or "auto" uses API then index fallback (default).
+	// "index" skips API and fetches the catalog-index directly.
+	// "api" uses API only, no index fallback.
+	DiscoveryStrategy config.DiscoveryStrategy
+
 	// Logger for logging operations
 	Logger logr.Logger
 }
@@ -72,6 +94,15 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		cfg.Name = cfg.Registry
 	}
 
+	rc := &RemoteCatalog{
+		name:              cfg.Name,
+		registry:          cfg.Registry,
+		repository:        cfg.Repository,
+		insecure:          cfg.Insecure,
+		discoveryStrategy: cfg.DiscoveryStrategy,
+		authHandlerUsed:   authHandlerName(cfg.AuthHandler),
+	}
+
 	// Create auth client with retry
 	client := &auth.Client{
 		Client: retry.DefaultClient,
@@ -79,31 +110,51 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 	}
 
 	if cfg.CredentialStore != nil {
-		baseCredFunc := cfg.CredentialStore.CredentialFunc()
 		if cfg.AuthHandler != nil {
-			// Composite credential function: try static credentials first,
-			// fall back to dynamic auth handler bridge
+			// Composite credential function: try auth handler bridge first
+			// (explicit user login), fall back to Docker/native credentials.
+			// This ensures a fresh `auth login <provider>` token is not
+			// shadowed by stale Docker config entries.
 			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
-				cred, err := baseCredFunc(ctx, host)
+				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
+				if bridgeErr == nil {
+					// Auth handler bridge succeeded. Log a warning if Docker
+					// config also has credentials for this host, since those
+					// would have silently taken precedence before this fix.
+					if cfg.Logger.V(1).Enabled() {
+						if dockerCred, dockerSource, _ := cfg.CredentialStore.CredentialWithSource(ctx, host); dockerCred != auth.EmptyCredential {
+							cfg.Logger.V(1).Info("authProvider token used; Docker config credentials for this host were skipped",
+								"handler", cfg.AuthHandler.Name(),
+								"host", host,
+								"dockerSource", dockerSource)
+						}
+					}
+					rc.credentialSource.Store(fmt.Sprintf("%s auth handler token", cfg.AuthHandler.Name()))
+					return auth.Credential{
+						Username: username,
+						Password: password,
+					}, nil
+				}
+				cfg.Logger.V(1).Info("auth handler bridge failed, trying credential store",
+					"handler", cfg.AuthHandler.Name(),
+					"host", host,
+					"error", bridgeErr.Error())
+				// Fall back to credential store (Docker config, native store, etc.)
+				cred, source, err := cfg.CredentialStore.CredentialWithSource(ctx, host)
 				if err == nil && cred != auth.EmptyCredential {
+					rc.credentialSource.Store(source)
 					return cred, nil
 				}
-				// Fall back to auth handler bridge
-				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
-				if bridgeErr != nil {
-					cfg.Logger.V(1).Info("auth handler bridge failed, using anonymous",
-						"handler", cfg.AuthHandler.Name(),
-						"host", host,
-						"error", bridgeErr.Error())
-					return auth.EmptyCredential, nil
-				}
-				return auth.Credential{
-					Username: username,
-					Password: password,
-				}, nil
+				return auth.EmptyCredential, nil
 			}
 		} else {
-			client.Credential = baseCredFunc
+			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
+				cred, source, err := cfg.CredentialStore.CredentialWithSource(ctx, host)
+				if err == nil && source != "" {
+					rc.credentialSource.Store(source)
+				}
+				return cred, err
+			}
 		}
 	} else if cfg.AuthHandler != nil {
 		// No credential store, use auth handler directly
@@ -116,6 +167,7 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 					"error", bridgeErr.Error())
 				return auth.EmptyCredential, nil //nolint:nilerr // graceful degradation to anonymous auth
 			}
+			rc.credentialSource.Store(fmt.Sprintf("%s auth handler token", cfg.AuthHandler.Name()))
 			return auth.Credential{
 				Username: username,
 				Password: password,
@@ -134,14 +186,32 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		}
 	}
 
-	return &RemoteCatalog{
-		name:       cfg.Name,
-		registry:   cfg.Registry,
-		repository: cfg.Repository,
-		client:     client,
-		insecure:   cfg.Insecure,
-		logger:     cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name),
-	}, nil
+	catalogLogger := cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name)
+
+	enumCfg := enumeratorConfig{
+		authHandlerName: authHandlerName(cfg.AuthHandler),
+		authHandler:     cfg.AuthHandler,
+		authScope:       cfg.AuthScope,
+		registry:        cfg.Registry,
+		repository:      cfg.Repository,
+		client:          client,
+		insecure:        cfg.Insecure,
+		logger:          catalogLogger,
+	}
+
+	rc.client = client
+	rc.logger = catalogLogger
+	rc.enumerator = selectEnumerator(enumCfg)
+
+	return rc, nil
+}
+
+// authHandlerName returns the handler name or empty string if nil.
+func authHandlerName(h scafctlauth.Handler) string {
+	if h == nil {
+		return ""
+	}
+	return h.Name()
 }
 
 // Name returns the catalog identifier.
@@ -157,6 +227,133 @@ func (c *RemoteCatalog) Registry() string {
 // Repository returns the base repository path.
 func (c *RemoteCatalog) Repository() string {
 	return c.repository
+}
+
+// clientUpdatable is implemented by enumerators that can update the OCI
+// auth client they use for registry operations.
+type clientUpdatable interface {
+	setClient(client *auth.Client)
+}
+
+// SetClient overrides the OCI auth client used for registry operations.
+// This is useful for injecting credentials in tooling (e.g. push-index).
+// When the catalog enumerator also supports client replacement, it is
+// updated so that enumeration and repository access use the same credentials.
+func (c *RemoteCatalog) SetClient(client *auth.Client) {
+	c.client = client
+
+	if updatable, ok := c.enumerator.(clientUpdatable); ok {
+		updatable.setClient(client)
+	}
+}
+
+// isOCIAuthError returns true if the error looks like a registry
+// authentication/authorization failure (401 or 403).
+func isOCIAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "401") ||
+		strings.Contains(s, "403") ||
+		strings.Contains(s, "unauthorized") ||
+		strings.Contains(s, "denied")
+}
+
+// isOCIServerError returns true if the error looks like a registry
+// internal server error (HTTP 500). The match uses "status code 500" to
+// avoid false positives on port numbers like ":5000".
+func isOCIServerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "status code 500") || strings.Contains(s, "INTERNAL_SERVER_ERROR")
+}
+
+// wrapWithCredentialHint enriches err with a credential diagnostic hint when
+// the registry returned a 500 and the catalog was using non-anonymous credentials.
+// Some registries (e.g. ACR) return 500 instead of 401 for expired tokens.
+func (c *RemoteCatalog) wrapWithCredentialHint(err error) error {
+	if err == nil || !isOCIServerError(err) {
+		return err
+	}
+	src := c.CredentialSource()
+	if src == "" {
+		return err
+	}
+	return fmt.Errorf("%w (hint: registry returned 500 while using %q credentials -- the token may be expired; try re-authenticating)", err, src)
+}
+
+// anonymousClient returns a plain auth.Client with no credentials.
+// Used to retry OCI operations when the stored credentials are rejected
+// (e.g. expired token) but the resource may be publicly accessible.
+func (c *RemoteCatalog) anonymousClient() *auth.Client {
+	client := &auth.Client{
+		Client: retry.DefaultClient,
+		Cache:  auth.NewCache(),
+	}
+	if c.insecure {
+		client.Client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // Opt-in via --insecure flag for local dev/testing only
+				},
+			},
+		}
+	}
+	return client
+}
+
+// switchToAnonymous replaces the OCI client with an anonymous (no-credentials)
+// client and records the fact that stale credentials were detected. All
+// subsequent OCI operations on this RemoteCatalog will use anonymous access.
+// The replacement is guarded by sync.Once so concurrent callers do not race.
+func (c *RemoteCatalog) switchToAnonymous() {
+	c.anonOnce.Do(func() {
+		c.client = c.anonymousClient()
+		c.staleCredentials.Store(true)
+		c.logger.Info("switched to anonymous OCI client — stored credentials were rejected")
+	})
+}
+
+// HasStaleCredentials returns true if any OCI operation during the lifetime
+// of this catalog client fell back to anonymous access because the stored
+// credentials were rejected by the registry. Callers can use this to show
+// a user-facing hint suggesting re-authentication.
+func (c *RemoteCatalog) HasStaleCredentials() bool {
+	return c.staleCredentials.Load()
+}
+
+// SetStaleForTesting marks the catalog as having stale credentials.
+// This is intended for use by CLI-layer tests that need to exercise
+// the user-facing warning path.
+func (c *RemoteCatalog) SetStaleForTesting() {
+	c.staleCredentials.Store(true)
+}
+
+// SetCredentialSourceForTest stores a credential source string.
+// This is intended for use by CLI-layer tests that need to exercise
+// the credential-source display path.
+func (c *RemoteCatalog) SetCredentialSourceForTest(source string) {
+	c.credentialSource.Store(source)
+}
+
+// AuthHandlerUsed returns the name of the auth handler configured for this
+// catalog (e.g. "github", "gcp", "entra"). Returns empty if no handler.
+func (c *RemoteCatalog) AuthHandlerUsed() string {
+	return c.authHandlerUsed
+}
+
+// CredentialSource returns a human-readable description of the credential
+// source that was last resolved for registry authentication (e.g.
+// "docker credential helper (desktop)", "github auth handler token",
+// "native credential store"). Empty when no credentials were resolved.
+func (c *RemoteCatalog) CredentialSource() string {
+	if v, ok := c.credentialSource.Load().(string); ok {
+		return v
+	}
+	return ""
 }
 
 // getRepository creates a remote.Repository for an artifact.
@@ -319,6 +516,21 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 
 // Fetch retrieves an artifact from the remote catalog.
 func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
+	data, info, err := c.fetchInternal(ctx, ref)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("fetch rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		data, info, retryErr := c.fetchInternal(ctx, ref)
+		if retryErr != nil {
+			return nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
+		}
+		return data, info, nil
+	}
+	return data, info, c.wrapWithCredentialHint(err)
+}
+
+func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
 		resolved, err := c.resolveWithKind(ctx, ref)
@@ -384,6 +596,21 @@ func (c *RemoteCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, Artif
 // FetchWithBundle retrieves an artifact's primary content and bundle layer.
 // If the artifact has no bundle layer, bundleData is nil.
 func (c *RemoteCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	data, bundle, info, err := c.fetchWithBundleInternal(ctx, ref)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("fetch rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		data, bundle, info, retryErr := c.fetchWithBundleInternal(ctx, ref)
+		if retryErr != nil {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
+		}
+		return data, bundle, info, nil
+	}
+	return data, bundle, info, c.wrapWithCredentialHint(err)
+}
+
+func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
 	// When no version is specified, resolve to the latest version first.
 	if !ref.HasVersion() && !ref.HasDigest() {
 		resolved, err := c.resolveWithKind(ctx, ref)
@@ -530,6 +757,13 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 
 		tag := c.tagForRef(ref)
 		desc, err := repo.Resolve(ctx, tag)
+		if err != nil && isOCIAuthError(err) {
+			c.logger.V(1).Info("resolve rejected by registry, retrying anonymously",
+				"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+			c.switchToAnonymous()
+			repo.Client = c.client
+			desc, err = repo.Resolve(ctx, tag)
+		}
 		if err != nil {
 			return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 		}
@@ -593,9 +827,30 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 		return nil, err
 	}
 
+	versions, err := c.fetchTags(ctx, repo)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("tag fetch rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		repo.Client = c.client
+		anonVersions, anonErr := c.fetchTags(ctx, repo)
+		if anonErr != nil {
+			return nil, fmt.Errorf("failed to list tags: %w", err)
+		}
+		return anonVersions, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tags: %w", err)
+	}
+
+	return versions, nil
+}
+
+// fetchTags enumerates semver tags from a repository.
+func (c *RemoteCatalog) fetchTags(ctx context.Context, repo *remote.Repository) ([]*semver.Version, error) {
 	var versions []*semver.Version
 
-	err = repo.Tags(ctx, "", func(tags []string) error {
+	err := repo.Tags(ctx, "", func(tags []string) error {
 		for _, tag := range tags {
 			if v, err := semver.NewVersion(tag); err == nil {
 				versions = append(versions, v)
@@ -604,10 +859,60 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tags: %w", err)
+		return nil, err
 	}
 
 	return versions, nil
+}
+
+// ResolveLatestVersions enriches a slice of discovered artifacts with their
+// latest semver version by fetching tags from the registry. Uses bounded
+// concurrency to avoid overwhelming the registry. Artifacts whose tags
+// cannot be fetched are left with an empty LatestVersion.
+func (c *RemoteCatalog) ResolveLatestVersions(ctx context.Context, artifacts []DiscoveredArtifact) {
+	sem := make(chan struct{}, settings.DefaultRegistryConcurrency)
+	var wg sync.WaitGroup
+
+	for i := range artifacts {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			ref := Reference{Kind: artifacts[idx].Kind, Name: artifacts[idx].Name}
+			versions, err := c.listVersions(ctx, ref)
+			if err != nil {
+				c.logger.V(1).Info("failed to resolve latest version",
+					"kind", artifacts[idx].Kind, "name", artifacts[idx].Name, "error", err.Error())
+				return
+			}
+
+			if latest := latestVersion(versions); latest != nil {
+				artifacts[idx].LatestVersion = latest.String()
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// latestVersion returns the highest semver version from the slice, or nil.
+func latestVersion(versions []*semver.Version) *semver.Version {
+	if len(versions) == 0 {
+		return nil
+	}
+	best := versions[0]
+	for _, v := range versions[1:] {
+		if v.GreaterThan(best) {
+			best = v
+		}
+	}
+	return best
 }
 
 // List returns all artifacts matching the criteria.
@@ -635,10 +940,8 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 		return infos, nil
 	}
 
-	// Listing all artifacts in a registry is not well-supported by OCI spec
-	// This would require registry-specific catalog API
-	c.logger.V(1).Info("listing all artifacts not supported for remote catalogs")
-	return nil, nil
+	// Enumerate all artifacts in the registry using the _catalog endpoint.
+	return c.listAllArtifacts(ctx, kind)
 }
 
 // listAcrossKinds searches for an artifact name across all kind paths
@@ -665,6 +968,280 @@ func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]Art
 	return allInfos, nil
 }
 
+// DiscoveredArtifact represents an artifact discovered via registry enumeration.
+// Exported for use by embedders that call ListRepositories directly.
+type DiscoveredArtifact struct {
+	Kind          ArtifactKind `json:"kind"           yaml:"kind"           doc:"Artifact kind" example:"solution" enum:"solution,provider,auth-handler"`
+	Name          string       `json:"name"           yaml:"name"           doc:"Artifact name" example:"starter-kit" maxLength:"255"`
+	LatestVersion string       `json:"latestVersion"  yaml:"latestVersion"  doc:"Latest semver version" example:"1.2.0"`
+
+	// Enriched metadata fields, populated from solution YAML when available.
+	// Empty for old indexes or non-solution artifacts.
+	Description string   `json:"description,omitempty" yaml:"description,omitempty" doc:"Solution description" maxLength:"5000"`
+	DisplayName string   `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-friendly display name" maxLength:"80"`
+	Category    string   `json:"category,omitempty"    yaml:"category,omitempty"    doc:"Solution category" example:"deployment" maxLength:"30"`
+	Tags        []string `json:"tags,omitempty"        yaml:"tags,omitempty"        doc:"Searchable keywords" maxItems:"100"`
+
+	// Extended metadata for MCP and rich discovery. Populated during index push
+	// from the solution YAML's metadata and resolver sections.
+	Maintainers []string         `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"Maintainer names" maxItems:"10"`
+	Links       []DiscoveredLink `json:"links,omitempty"       yaml:"links,omitempty"       doc:"Related links" maxItems:"10"`
+	Providers   []string         `json:"providers,omitempty"   yaml:"providers,omitempty"   doc:"Providers used by the solution" maxItems:"50"`
+	Parameters  []string         `json:"parameters,omitempty"  yaml:"parameters,omitempty"  doc:"Parameter resolver names (user inputs)" maxItems:"50"`
+}
+
+// ToAnnotations converts enriched metadata fields into an OCI annotation map.
+// Only non-empty fields are included.
+func (d DiscoveredArtifact) ToAnnotations() map[string]string {
+	return NewAnnotationBuilder().
+		Set(AnnotationDisplayName, d.DisplayName).
+		Set(AnnotationDescription, d.Description).
+		Set(AnnotationCategory, d.Category).
+		SetTags(d.Tags).
+		Build()
+}
+
+// DiscoveredLink is a named URL reference (documentation, homepage, etc.).
+type DiscoveredLink struct {
+	Name string `json:"name" yaml:"name" doc:"Link label" example:"Documentation" maxLength:"30"`
+	URL  string `json:"url"  yaml:"url"  doc:"Link URL" example:"https://example.com/docs" maxLength:"500"`
+}
+
+// listAllArtifacts enumerates repositories under this catalog's prefix,
+// parses artifact kind+name from the repository paths, and fetches version
+// info for each discovered artifact using bounded concurrency.
+//
+// Filters applied before the expensive tag-fetch step:
+//   - kind: only artifacts of the specified kind
+//   - search pattern: only artifacts whose name contains the query (from context)
+func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind) ([]ArtifactInfo, error) {
+	discovered, err := c.ListRepositories(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pre-filter before the expensive tag-fetch step.
+	searchPattern := SearchPatternFromContext(ctx)
+	var filtered []DiscoveredArtifact
+	for _, d := range discovered {
+		if kind != "" && d.Kind != kind {
+			continue
+		}
+		if !matchesSearchPattern(searchPattern, d.Name) {
+			c.logger.V(1).Info("skipping artifact (search filter)",
+				"name", d.Name, "pattern", searchPattern)
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+
+	// Fetch tags concurrently with bounded parallelism.
+	type result struct {
+		artifact DiscoveredArtifact
+		versions []*semver.Version
+	}
+
+	results := make([]result, len(filtered))
+	sem := make(chan struct{}, settings.DefaultRegistryConcurrency)
+	var wg sync.WaitGroup
+	var failCount atomic.Int32
+
+	for i, d := range filtered {
+		wg.Add(1)
+		go func(idx int, art DiscoveredArtifact) {
+			defer wg.Done()
+
+			// Acquire semaphore slot (or bail on context cancellation).
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+
+			ref := Reference{Kind: art.Kind, Name: art.Name}
+			versions, err := c.listVersions(ctx, ref)
+			if err != nil {
+				failCount.Add(1)
+				c.logger.V(1).Info("failed to list versions for discovered artifact",
+					"kind", art.Kind, "name", art.Name, "error", err.Error())
+				return
+			}
+			results[idx] = result{artifact: art, versions: versions}
+		}(i, d)
+	}
+	wg.Wait()
+
+	if n := failCount.Load(); n > 0 {
+		c.logger.Info("some artifacts could not be listed (version fetch failed)",
+			"failed", n, "total", len(filtered))
+	}
+
+	// Collect results (order preserved by index).
+	var allInfos []ArtifactInfo
+	for _, r := range results {
+		annotations := r.artifact.ToAnnotations()
+		for _, v := range r.versions {
+			allInfos = append(allInfos, ArtifactInfo{
+				Reference:   Reference{Kind: r.artifact.Kind, Name: r.artifact.Name, Version: v},
+				Catalog:     c.name,
+				Annotations: annotations,
+			})
+		}
+	}
+
+	// When all version fetches failed (e.g. 403 on private GHCR packages),
+	// use the LatestVersion already carried by DiscoveredArtifact (populated
+	// by the index fallback in ListRepositories).
+	if len(allInfos) == 0 && len(filtered) > 0 && c.discoveryStrategy != config.DiscoveryStrategyAPI {
+		c.logger.V(1).Info("all version fetches failed, using discovered artifact metadata")
+		for _, d := range filtered {
+			if d.LatestVersion == "" {
+				continue
+			}
+			v, err := semver.NewVersion(d.LatestVersion)
+			if err != nil {
+				c.logger.V(1).Info("skipping artifact with invalid version",
+					"name", d.Name, "version", d.LatestVersion, "error", err.Error())
+				continue
+			}
+			allInfos = append(allInfos, ArtifactInfo{
+				Reference:   Reference{Kind: d.Kind, Name: d.Name, Version: v},
+				Catalog:     c.name,
+				Annotations: d.ToAnnotations(),
+			})
+		}
+	}
+
+	return allInfos, nil
+}
+
+// ListRepositories enumerates all artifact repositories in this catalog using
+// a registry-specific enumerator. The enumerator is selected automatically
+// based on the auth handler name and registry hostname.
+//
+// Returns ErrEnumerationNotSupported if the registry cannot be enumerated.
+func (c *RemoteCatalog) ListRepositories(ctx context.Context) ([]DiscoveredArtifact, error) {
+	// Apply a timeout to the entire enumeration flow so slow or
+	// non-responsive endpoints do not block indefinitely.
+	ctx, cancel := context.WithTimeout(ctx, settings.DefaultHTTPTimeout)
+	defer cancel()
+
+	// Index-only strategy: skip API enumeration entirely.
+	if c.discoveryStrategy == config.DiscoveryStrategyIndex {
+		c.logger.V(1).Info("using index-only discovery strategy")
+		indexed, err := c.FetchIndex(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetching catalog index for %s: %w", c.name, err)
+		}
+		return indexed, nil
+	}
+
+	repos, err := c.enumerator.enumerate(ctx)
+	if err != nil {
+		// If enumeration is not supported (e.g. GHCR without org auth),
+		// fall back to the well-known catalog-index artifact (unless api-only).
+		if IsEnumerationNotSupported(err) && c.discoveryStrategy != config.DiscoveryStrategyAPI {
+			c.logger.V(1).Info("enumeration not supported, trying catalog index fallback")
+			indexed, indexErr := c.FetchIndex(ctx)
+			if indexErr != nil {
+				c.logger.V(1).Info("catalog index fallback failed",
+					"error", indexErr.Error())
+				return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, err)
+			}
+			return indexed, nil
+		}
+		return nil, fmt.Errorf("enumerating repositories in %s: %w", c.name, err)
+	}
+
+	var discovered []DiscoveredArtifact
+	seen := make(map[string]bool)
+
+	for _, repo := range repos {
+		d, ok := c.parseRepositoryPath(repo)
+		if !ok {
+			continue
+		}
+		key := string(d.Kind) + "/" + d.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		discovered = append(discovered, d)
+	}
+
+	// Auto strategy: when API enumeration returns zero results (e.g. GHCR
+	// without org-level auth), fall back to the catalog index artifact.
+	if len(discovered) == 0 && c.discoveryStrategy != config.DiscoveryStrategyAPI {
+		c.logger.V(1).Info("API enumeration returned no results, trying catalog index fallback")
+		indexed, indexErr := c.FetchIndex(ctx)
+		if indexErr != nil {
+			c.logger.V(1).Info("catalog index fallback failed", "error", indexErr.Error())
+			// Not an error — enumeration legitimately returned nothing.
+			return discovered, nil
+		}
+		return indexed, nil
+	}
+
+	// Auto strategy: enrich API-discovered artifacts with index metadata
+	// (LatestVersion, Description, etc.) so callers can use it when per-repo
+	// version fetches are unavailable (e.g. 403 on private GHCR packages).
+	if c.discoveryStrategy != config.DiscoveryStrategyAPI {
+		indexed, indexErr := c.FetchIndex(ctx)
+		if indexErr != nil {
+			c.logger.V(1).Info("index enrichment failed", "error", indexErr.Error())
+		} else {
+			indexMap := make(map[string]DiscoveredArtifact, len(indexed))
+			for _, a := range indexed {
+				indexMap[string(a.Kind)+"/"+a.Name] = a
+			}
+			for i, d := range discovered {
+				key := string(d.Kind) + "/" + d.Name
+				if enriched, ok := indexMap[key]; ok {
+					discovered[i] = enriched
+				}
+			}
+		}
+	}
+
+	c.logger.V(1).Info("discovered artifacts",
+		"count", len(discovered), "registry", c.registry)
+	return discovered, nil
+}
+
+// parseRepositoryPath extracts the artifact kind and name from a full
+// repository path by stripping the catalog's base prefix and splitting
+// the remainder into kind-plural/name segments.
+//
+// Example: given repository="myorg/scafctl" and path="myorg/scafctl/solutions/myapp",
+// returns (ArtifactKindSolution, "myapp", true).
+func (c *RemoteCatalog) parseRepositoryPath(repoPath string) (DiscoveredArtifact, bool) {
+	prefix := c.repository
+	if prefix != "" {
+		if !strings.HasPrefix(repoPath, prefix+"/") {
+			return DiscoveredArtifact{}, false
+		}
+		repoPath = repoPath[len(prefix)+1:]
+	}
+
+	// Expect exactly "kind-plural/name"
+	parts := strings.SplitN(repoPath, "/", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return DiscoveredArtifact{}, false
+	}
+
+	kind, ok := ParseArtifactKindFromPlural(parts[0])
+	if !ok {
+		return DiscoveredArtifact{}, false
+	}
+
+	return DiscoveredArtifact{Kind: kind, Name: parts[1]}, true
+}
+
 // TagInfo represents a single tag in a remote OCI repository.
 type TagInfo struct {
 	Tag      string `json:"tag" yaml:"tag"`
@@ -680,9 +1257,25 @@ func (c *RemoteCatalog) ListTags(ctx context.Context, ref Reference) ([]TagInfo,
 		return nil, err
 	}
 
+	tags, err := c.listTagsFromRepo(ctx, repo, ref)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("tag list rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		repo.Client = c.client
+		tags, retryErr := c.listTagsFromRepo(ctx, repo, ref)
+		if retryErr != nil {
+			return nil, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
+		}
+		return tags, nil
+	}
+	return tags, c.wrapWithCredentialHint(err)
+}
+
+func (c *RemoteCatalog) listTagsFromRepo(ctx context.Context, repo *remote.Repository, ref Reference) ([]TagInfo, error) {
 	var tags []TagInfo
 
-	err = repo.Tags(ctx, "", func(rawTags []string) error {
+	err := repo.Tags(ctx, "", func(rawTags []string) error {
 		for _, tag := range rawTags {
 			info := TagInfo{Tag: tag}
 			if v, parseErr := semver.NewVersion(tag); parseErr == nil {
@@ -725,8 +1318,15 @@ func (c *RemoteCatalog) Exists(ctx context.Context, ref Reference) (bool, error)
 	}
 
 	tag := c.tagForRef(ref)
-	//nolint:errcheck // Resolve error means artifact doesn't exist
 	_, err = repo.Resolve(ctx, tag)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("existence check rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		repo.Client = c.client
+		_, err = repo.Resolve(ctx, tag)
+	}
+	//nolint:errcheck // Resolve error means artifact doesn't exist
 	return err == nil, nil
 }
 
@@ -903,6 +1503,21 @@ type CopyOptions struct {
 
 // CopyTo copies an artifact from this remote catalog to a local catalog.
 func (c *RemoteCatalog) CopyTo(ctx context.Context, ref Reference, target *LocalCatalog, opts CopyOptions) (ArtifactInfo, error) {
+	info, err := c.copyToInternal(ctx, ref, target, opts)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("copy rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		info, retryErr := c.copyToInternal(ctx, ref, target, opts)
+		if retryErr != nil {
+			return ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
+		}
+		return info, nil
+	}
+	return info, c.wrapWithCredentialHint(err)
+}
+
+func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, target *LocalCatalog, opts CopyOptions) (ArtifactInfo, error) {
 	repo, err := c.getRepository(ref)
 	if err != nil {
 		return ArtifactInfo{}, err

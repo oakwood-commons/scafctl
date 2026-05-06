@@ -8,7 +8,11 @@ kind: Solution
 
 metadata:
   name: identity-groups-example
-  version: 1.0.0
+  displayName: Identity Groups Example
+  category: providers
+  tags:
+    - identity
+    - provider-example
   description: Get Entra group memberships for the authenticated user
 
 spec:

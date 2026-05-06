@@ -6,7 +6,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: template-render
-  version: 1.0.0
+  displayName: Template Render
+  category: actions
+  tags:
+    - action-example
+    - template
+    - workflow
   description: |
     Real-world workflow that reads a Go template from the filesystem,
     renders it with configuration data, and writes the output. Demonstrates

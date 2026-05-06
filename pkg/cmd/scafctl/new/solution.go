@@ -99,7 +99,7 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 	cCmd.Flags().StringVarP(&opts.Name, "name", "n", "", "Solution name (lowercase, hyphens, 3-60 chars) (required)")
 	cCmd.Flags().StringVar(&opts.Description, "description", "", "Brief description of the solution (required)")
-	cCmd.Flags().StringVar(&opts.Version, "version", "1.0.0", "Semantic version")
+	cCmd.Flags().StringVar(&opts.Version, "version", "", "Semantic version (optional, for catalog publishing)")
 	cCmd.Flags().StringVar(&opts.Features, "features", "", "Comma-separated features: parameters,resolvers,actions,transforms,validation,tests,composition")
 	cCmd.Flags().StringVar(&opts.Providers, "providers", "", "Comma-separated provider examples to include")
 	cCmd.Flags().StringVarP(&opts.Output, "output", "o", "", "Output file path (default: stdout)")

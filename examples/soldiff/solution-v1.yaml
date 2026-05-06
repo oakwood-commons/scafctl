@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: soldiff-demo
-  version: 1.0.0
+  version: "1.0.0"
+  displayName: Soldiff Demo
+  category: developer-tools
+  tags:
+    - diff
   description: |
     Baseline solution for diff demonstration. Compare structurally against
     solution-v2.yaml to review changes before deploying.

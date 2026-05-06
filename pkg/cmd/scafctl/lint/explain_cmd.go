@@ -48,7 +48,7 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 		`),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
 
 			if lgr := logger.FromContext(cmd.Context()); lgr != nil {

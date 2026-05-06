@@ -116,7 +116,7 @@ func (o *UnsetOptions) Run(ctx context.Context) error {
 // getDefaultValue returns the default value for a configuration key.
 func (o *UnsetOptions) getDefaultValue(key string) any {
 	defaults := map[string]any{
-		"settings.defaultCatalog": "local",
+		"settings.defaultCatalog": "official",
 		"settings.noColor":        false,
 		"settings.quiet":          false,
 		"logging.level":           "none",

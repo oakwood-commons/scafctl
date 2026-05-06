@@ -6,7 +6,11 @@ kind: Solution
 
 metadata:
   name: metadata-full-example
-  version: 1.0.0
+  displayName: Metadata Full Example
+  category: providers
+  tags:
+    - metadata
+    - provider-example
   description: |
     Runtime metadata about scafctl and the current solution. Returns
     version info, CLI args, cwd, entrypoint, command path, and solution metadata.

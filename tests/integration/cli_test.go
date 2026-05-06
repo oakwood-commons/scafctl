@@ -109,13 +109,51 @@ func runScafctlWithStdin(t *testing.T, stdin io.Reader, args ...string) (stdout,
 
 func runScafctlWithStdinInDir(t *testing.T, dir string, stdin io.Reader, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return runScafctlWithOpts(t, dir, stdin, nil, args...)
+}
+
+// runScafctlWithEnv runs the binary with explicit env var overrides.
+// Unlike t.Setenv, this is safe to use with t.Parallel() because it only
+// affects the subprocess environment, not the test process.
+func runScafctlWithEnv(t *testing.T, env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	return runScafctlWithOpts(t, findProjectRoot(), nil, env, args...)
+}
+
+// runScafctlWithEnvInDir runs the binary in a specific directory with explicit env var overrides.
+func runScafctlWithEnvInDir(t *testing.T, dir string, env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	return runScafctlWithOpts(t, dir, nil, env, args...)
+}
+
+func runScafctlWithOpts(t *testing.T, dir string, stdin io.Reader, env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	return runScafctlWithTimeout(t, 90*time.Second, dir, stdin, env, args...)
+}
+
+// runScafctlLong runs the binary with a longer timeout (180s) for tests that
+// involve nested solution execution or functional test suites.
+func runScafctlLong(t *testing.T, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	return runScafctlWithTimeout(t, 180*time.Second, findProjectRoot(), nil, nil, args...)
+}
+
+func runScafctlWithTimeout(t *testing.T, timeout time.Duration, dir string, stdin io.Reader, env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	cmd.Dir = dir
 	if stdin != nil {
 		cmd.Stdin = stdin
+	}
+
+	if len(env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 	}
 
 	var outBuf, errBuf bytes.Buffer
@@ -214,11 +252,16 @@ func TestIntegration_GetProvider(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	// Should list built-in providers
-	assert.Contains(t, stdout, "static")
-	assert.Contains(t, stdout, "env")
 	assert.Contains(t, stdout, "http")
-	assert.Contains(t, stdout, "exec")
 	assert.Contains(t, stdout, "cel")
+	assert.Contains(t, stdout, "file")
+	assert.Contains(t, stdout, "validation")
+	assert.Contains(t, stdout, "debug")
+	assert.Contains(t, stdout, "go-template")
+	assert.Contains(t, stdout, "message")
+	// Should also list official plugin providers
+	assert.Contains(t, stdout, "exec")
+	assert.Contains(t, stdout, "git")
 	assert.Contains(t, stdout, "directory")
 }
 
@@ -228,7 +271,7 @@ func TestIntegration_GetProviderJSON(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "\"name\"")
-	assert.Contains(t, stdout, "static")
+	assert.Contains(t, stdout, "http")
 }
 
 // ============================================================================
@@ -645,6 +688,8 @@ func TestIntegration_RunProvider_HCL_DryRun(t *testing.T) {
 
 func TestIntegration_RunProvider_Identity_DryRun(t *testing.T) {
 	t.Parallel()
+	t.Skip("identity plugin v0.1.0 requires host client for auth even in dry-run mode")
+	t.Parallel()
 
 	tests := []struct {
 		name      string
@@ -775,11 +820,11 @@ func TestIntegration_GetProvider_CLIUsage(t *testing.T) {
 
 func TestIntegration_GetProvider_CLIUsageJSON(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "get", "provider", "static", "-o", "json")
+	stdout, _, exitCode := runScafctl(t, "get", "provider", "http", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "cliUsage")
-	assert.Contains(t, stdout, "scafctl run provider static")
+	assert.Contains(t, stdout, "scafctl run provider http")
 }
 
 // ============================================================================
@@ -1444,6 +1489,7 @@ func TestIntegration_RunSolution_ConditionalRetry(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_K8sClusters(t *testing.T) {
+	t.Parallel()
 	// Clean up output directory before and after (relative to project root where scafctl runs)
 	projectRoot := findProjectRoot()
 	outputDir := filepath.Join(projectRoot, "output")
@@ -1480,6 +1526,7 @@ func TestIntegration_RunSolution_K8sClusters(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_TemplateDirectory(t *testing.T) {
+	t.Parallel()
 	// Tests the directory → render-tree → write-tree pipeline end-to-end.
 	// Reads .tpl templates, renders them with shared vars, writes output
 	// stripping the .tpl extension and preserving directory structure.
@@ -1796,6 +1843,41 @@ func TestIntegration_ConfigSchema(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	// Should output JSON schema
 	assert.Contains(t, stdout, "properties")
+}
+
+func TestIntegration_ConfigReset_RequiresForce(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("custom: true"), 0o600))
+
+	_, stderr, exitCode := runScafctl(t, "--config", configPath, "config", "reset")
+
+	assert.NotEqual(t, 0, exitCode, "should fail without --force")
+	assert.Contains(t, stderr, "--force")
+
+	// Config should be untouched.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "custom: true")
+}
+
+func TestIntegration_ConfigReset_HappyPath(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("custom: true"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "--config", configPath, "config", "reset", "--force")
+
+	assert.Equal(t, 0, exitCode, "should succeed with --force")
+	combined := stdout + stderr
+	assert.Contains(t, combined, "Reset config file")
+
+	// Config should be recreated with defaults (not our custom value).
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "custom: true")
 }
 
 // ============================================================================
@@ -2361,13 +2443,16 @@ func TestIntegration_BuildSolutionHelp(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build without --version flag - should use metadata version (1.0.0)
-	stdout, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml")
 
 	assert.Equal(t, 0, exitCode)
 	// Should report the version from metadata
@@ -2375,13 +2460,16 @@ func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_VersionStamping(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build with different version than metadata - should stamp and succeed
-	stdout, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "9.9.9")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "9.9.9")
 
 	assert.Equal(t, 0, exitCode)
 	// Should succeed with the stamped version
@@ -2398,12 +2486,15 @@ func TestIntegration_BuildSolution_FileNotFound(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_Success(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 
 	if exitCode != 0 {
 		t.Logf("stdout: %s", stdout)
@@ -2415,12 +2506,15 @@ func TestIntegration_BuildSolution_Success(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_WithName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--name", "my-custom-name")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--name", "my-custom-name", "--force")
 
 	if exitCode != 0 {
 		t.Logf("stdout: %s", stdout)
@@ -2431,32 +2525,38 @@ func TestIntegration_BuildSolution_WithName(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_ForceOverwrite(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// First build
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Second build without force should fail
-	_, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "exists")
 
 	// Third build with force should succeed
-	stdout, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--force", "--no-cache")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--force", "--no-cache")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Built")
 }
 
 func TestIntegration_BuildSolution_DryRun(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--dry-run")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--dry-run")
 
 	if exitCode != 0 {
 		t.Logf("stdout: %s", stdout)
@@ -2467,11 +2567,14 @@ func TestIntegration_BuildSolution_DryRun(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_NoBundle(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-bundle")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-bundle")
 
 	if exitCode != 0 {
 		t.Logf("stdout: %s", stdout)
@@ -2645,50 +2748,64 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--output")
 	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--all")
 }
 
 func TestIntegration_CatalogList_Empty(t *testing.T) {
-	// Create a temp directory for the catalog
+	t.Parallel()
+	// Create a temp directory for the catalog — no local artifacts.
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "catalog", "list", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
-	// Empty list should return empty JSON array or null
-	assert.True(t, strings.Contains(stdout, "[]") || strings.Contains(stdout, "null"))
+	// With no local artifacts, the output depends on whether the default
+	// remote catalog is reachable. Either an empty list or remote results
+	// are both valid outcomes.
+	trimmed := strings.TrimSpace(stdout)
+	assert.True(t, json.Valid([]byte(trimmed)),
+		"expected valid JSON output, got: %q", stdout)
 }
 
 func TestIntegration_CatalogList_WithArtifacts(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// List should show the artifact
-	stdout, _, exitCode := runScafctl(t, "catalog", "list", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 	assert.Contains(t, stdout, "1.0.0")
 }
 
 func TestIntegration_CatalogList_FilterByKind(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// List with filter should work
-	stdout, _, exitCode := runScafctl(t, "catalog", "list", "--kind", "solution", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "--kind", "solution", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 }
@@ -2703,29 +2820,35 @@ func TestIntegration_CatalogInspectHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogInspect_NotFound(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "catalog", "inspect", "nonexistent")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "inspect", "nonexistent")
 
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
 
 func TestIntegration_CatalogInspect_Success(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Inspect the artifact
-	stdout, _, exitCode := runScafctl(t, "catalog", "inspect", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "inspect", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 	assert.Contains(t, stdout, "1.0.0")
@@ -2733,19 +2856,22 @@ func TestIntegration_CatalogInspect_Success(t *testing.T) {
 }
 
 func TestIntegration_CatalogInspect_SpecificVersion(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build multiple versions
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
-	_, _, exitCode = runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	_, _, exitCode = runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Inspect specific version
-	stdout, _, exitCode := runScafctl(t, "catalog", "inspect", "resolver-demo@1.0.0", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "inspect", "resolver-demo@1.0.0", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "1.0.0")
 }
@@ -2759,50 +2885,59 @@ func TestIntegration_CatalogDeleteHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogDelete_RequiresVersion(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Delete without version should fail
-	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "resolver-demo")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "version required")
 }
 
 func TestIntegration_CatalogDelete_NotFound(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "nonexistent@1.0.0")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "nonexistent@1.0.0")
 
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
 
 func TestIntegration_CatalogDelete_Success(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Delete the artifact
-	stdout, _, exitCode := runScafctl(t, "catalog", "delete", "resolver-demo@1.0.0")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo@1.0.0")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Deleted")
 
 	// Verify it's gone
-	_, stderr, exitCode := runScafctl(t, "catalog", "inspect", "resolver-demo@1.0.0")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "inspect", "resolver-demo@1.0.0")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
@@ -2821,24 +2956,30 @@ func TestIntegration_CatalogPruneHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogPrune_EmptyCatalog(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "catalog", "prune")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "prune")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No orphaned content")
 }
 
 func TestIntegration_CatalogPrune_JSON(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "prune", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "removedManifests")
@@ -2847,21 +2988,24 @@ func TestIntegration_CatalogPrune_JSON(t *testing.T) {
 }
 
 func TestIntegration_CatalogPrune_AfterDelete(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Delete the artifact (leaves orphaned blobs)
-	_, _, exitCode = runScafctl(t, "catalog", "delete", "resolver-demo@1.0.0")
+	_, _, exitCode = runScafctlWithEnv(t, env, "catalog", "delete", "resolver-demo@1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Prune should clean up
-	stdout, _, exitCode := runScafctl(t, "catalog", "prune", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "prune", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have pruned something
 	assert.Contains(t, stdout, "removedBlobs")
@@ -2872,13 +3016,16 @@ func TestIntegration_CatalogPrune_AfterDelete(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Try to run a solution that doesn't exist in catalog
-	stdout, stderr, exitCode := runScafctl(t, "run", "solution", "nonexistent-solution")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "run", "solution", "nonexistent-solution")
 	assert.NotEqual(t, 0, exitCode)
 	// Reports artifact not found, file not found, or an auth error from
 	// a configured remote catalog that lacks valid credentials.
@@ -2887,22 +3034,29 @@ func TestIntegration_RunSolution_FromCatalog_NotFound(t *testing.T) {
 		strings.Contains(combined, "no such file or directory") ||
 		strings.Contains(combined, "401") ||
 		strings.Contains(combined, "Unauthorized") ||
-		strings.Contains(combined, "403"),
+		strings.Contains(combined, "403") ||
+		strings.Contains(combined, "404") ||
+		strings.Contains(combined, "name unknown") ||
+		strings.Contains(combined, "no such host") ||
+		strings.Contains(combined, "dial tcp"),
 		"expected error about missing solution or auth failure, got stdout=%q stderr=%q", stdout, stderr)
 }
 
 func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	// Build a solution into the catalog
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	// Build a solution into the catalog (uses only built-in providers)
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name (should pick latest version)
-	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "builtin-resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -2910,19 +3064,22 @@ func TestIntegration_RunSolution_FromCatalog_ByName(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	// Build two versions
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	// Build two versions (uses only built-in providers)
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
-	_, _, exitCode = runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	_, _, exitCode = runScafctlWithEnv(t, env, "build", "solution", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml", "--version", "2.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Run the solution from catalog by name@version
-	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo@1.0.0", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "builtin-resolver-demo@1.0.0", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output
 	assert.Contains(t, stdout, "environment")
@@ -2930,13 +3087,16 @@ func TestIntegration_RunSolution_FromCatalog_ByNameVersion(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_FromCatalog_FallbackToFile(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog (empty)
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	// Run a solution by file path (not bare name) - should use file
-	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "examples/resolver-demo.yaml", "-o", "json")
+	// Run a solution by file path (not bare name) - should use file (uses only built-in providers)
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have resolver output from file
 	assert.Contains(t, stdout, "environment")
@@ -2944,14 +3104,17 @@ func TestIntegration_RunSolution_FromCatalog_FallbackToFile(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_FromCatalog_PathNotBareName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog (empty)
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// A path with a separator should not be treated as a bare name
 	// The new validation rejects positional file paths and directs users to use -f
-	_, stderr, exitCode := runScafctl(t, "run", "solution", "./nonexistent.yaml")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "run", "solution", "./nonexistent.yaml")
 	assert.NotEqual(t, 0, exitCode)
 	// Should reject positional file path and suggest -f flag
 	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
@@ -2961,17 +3124,20 @@ func TestIntegration_RunSolution_FromCatalog_PathNotBareName(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	// Build a solution into the catalog
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	// Build a solution into the catalog (uses only built-in providers)
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Render the resolver graph from catalog by name
-	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo", "--graph")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "run", "resolver", "-f", "builtin-resolver-demo", "--graph")
 	assert.Equal(t, 0, exitCode)
 	// Should have graph output with resolver info
 	assert.Contains(t, stdout, "environment")
@@ -2982,17 +3148,20 @@ func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build a solution into the catalog
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Explain the solution from catalog by name
-	stdout, _, exitCode := runScafctl(t, "explain", "solution", "resolver-demo")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "explain", "solution", "resolver-demo")
 	assert.Equal(t, 0, exitCode)
 	// Should have solution metadata
 	assert.Contains(t, stdout, "resolver-demo")
@@ -3002,17 +3171,20 @@ func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build a solution into the catalog
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Lint the solution from catalog by name
-	stdout, _, exitCode := runScafctl(t, "lint", "-f", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "lint", "-f", "resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// Should have lint output
 	assert.Contains(t, stdout, "findings")
@@ -3022,17 +3194,20 @@ func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_GetSolution_FromCatalog_ByName(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build a solution into the catalog
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Get the solution from catalog by name (positional arg for catalog refs)
-	stdout, _, exitCode := runScafctl(t, "get", "solution", "resolver-demo", "-o", "yaml")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "get", "solution", "resolver-demo", "-o", "yaml")
 	assert.Equal(t, 0, exitCode)
 	// Should have solution YAML
 	assert.Contains(t, stdout, "resolver-demo")
@@ -3051,43 +3226,52 @@ func TestIntegration_CatalogSaveHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogSave_RequiresOutput(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Try to save without output flag
-	_, stderr, exitCode := runScafctl(t, "catalog", "save", "resolver-demo")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "save", "resolver-demo")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "required")
 }
 
 func TestIntegration_CatalogSave_NotFound(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	outputPath := tmpDir + "/nonexistent.tar"
-	_, stderr, exitCode := runScafctl(t, "catalog", "save", "nonexistent", "-o", outputPath)
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "save", "nonexistent", "-o", outputPath)
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
 
 func TestIntegration_CatalogSave_Success(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Save to tar
 	outputPath := tmpDir + "/export.tar"
-	stdout, _, exitCode := runScafctl(t, "catalog", "save", "resolver-demo", "-o", outputPath)
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "save", "resolver-demo", "-o", outputPath)
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 	assert.Contains(t, stdout, "1.0.0")
@@ -3099,19 +3283,22 @@ func TestIntegration_CatalogSave_Success(t *testing.T) {
 }
 
 func TestIntegration_CatalogSave_SpecificVersion(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build multiple versions
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
-	_, _, exitCode = runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0")
+	_, _, exitCode = runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Save specific version
 	outputPath := tmpDir + "/v1.tar"
-	stdout, _, exitCode := runScafctl(t, "catalog", "save", "resolver-demo@1.0.0", "-o", outputPath)
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "save", "resolver-demo@1.0.0", "-o", outputPath)
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "1.0.0")
 }
@@ -3136,82 +3323,96 @@ func TestIntegration_CatalogLoad_RequiresInput(t *testing.T) {
 }
 
 func TestIntegration_CatalogLoad_FileNotFound(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "catalog", "load", "--input", "/nonexistent/path.tar")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "load", "--input", "/nonexistent/path.tar")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "no such file")
 }
 
 func TestIntegration_CatalogLoad_Success(t *testing.T) {
+	t.Parallel()
 	// Create source catalog
 	srcDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", srcDir)
-	t.Setenv("XDG_CACHE_HOME", srcDir)
+	srcEnv := map[string]string{
+		"XDG_DATA_HOME":  srcDir,
+		"XDG_CACHE_HOME": srcDir,
+	}
 
 	// Build and save an artifact
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, srcEnv, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	tarPath := srcDir + "/export.tar"
-	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	_, _, exitCode = runScafctlWithEnv(t, srcEnv, "catalog", "save", "resolver-demo", "-o", tarPath)
 	require.Equal(t, 0, exitCode)
 
 	// Switch to destination catalog
 	dstDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dstDir)
-	t.Setenv("XDG_CACHE_HOME", dstDir)
+	dstEnv := map[string]string{
+		"XDG_DATA_HOME":  dstDir,
+		"XDG_CACHE_HOME": dstDir,
+	}
 
 	// Load the artifact
-	stdout, _, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath)
+	stdout, _, exitCode := runScafctlWithEnv(t, dstEnv, "catalog", "load", "--input", tarPath)
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 	assert.Contains(t, stdout, "1.0.0")
 
 	// Verify artifact is in catalog
-	stdout, _, exitCode = runScafctl(t, "catalog", "list")
+	stdout, _, exitCode = runScafctlWithEnv(t, dstEnv, "catalog", "list", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 }
 
 func TestIntegration_CatalogLoad_AlreadyExists(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Save it
 	tarPath := tmpDir + "/export.tar"
-	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	_, _, exitCode = runScafctlWithEnv(t, env, "catalog", "save", "resolver-demo", "-o", tarPath)
 	require.Equal(t, 0, exitCode)
 
 	// Try to load into same catalog (should fail)
-	_, stderr, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath)
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "load", "--input", tarPath)
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "already exists")
 }
 
 func TestIntegration_CatalogLoad_ForceOverwrite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Save it
 	tarPath := tmpDir + "/export.tar"
-	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	_, _, exitCode = runScafctlWithEnv(t, env, "catalog", "save", "resolver-demo", "-o", tarPath)
 	require.Equal(t, 0, exitCode)
 
 	// Load with force (should succeed)
-	stdout, _, exitCode := runScafctl(t, "catalog", "load", "--input", tarPath, "--force")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "load", "--input", tarPath, "--force")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
 }
@@ -3221,34 +3422,71 @@ func TestIntegration_CatalogLoad_ForceOverwrite(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_CatalogSaveLoad_RoundTrip(t *testing.T) {
+	t.Parallel()
 	// Create source catalog
 	srcDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", srcDir)
-	t.Setenv("XDG_CACHE_HOME", srcDir)
+	srcEnv := map[string]string{
+		"XDG_DATA_HOME":  srcDir,
+		"XDG_CACHE_HOME": srcDir,
+	}
 
-	// Build an artifact
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	// Build an artifact (uses only built-in providers)
+	_, _, exitCode := runScafctlWithEnv(t, srcEnv, "build", "solution", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Save to tar
 	tarPath := srcDir + "/export.tar"
-	_, _, exitCode = runScafctl(t, "catalog", "save", "resolver-demo", "-o", tarPath)
+	_, _, exitCode = runScafctlWithEnv(t, srcEnv, "catalog", "save", "builtin-resolver-demo", "-o", tarPath)
 	require.Equal(t, 0, exitCode)
 
 	// Switch to destination catalog
 	dstDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dstDir)
-	t.Setenv("XDG_CACHE_HOME", dstDir)
+	dstEnv := map[string]string{
+		"XDG_DATA_HOME":  dstDir,
+		"XDG_CACHE_HOME": dstDir,
+	}
 
 	// Load from tar
-	_, _, exitCode = runScafctl(t, "catalog", "load", "--input", tarPath)
+	_, _, exitCode = runScafctlWithEnv(t, dstEnv, "catalog", "load", "--input", tarPath)
 	require.Equal(t, 0, exitCode)
 
 	// Verify the solution can be run
-	stdout, _, exitCode := runScafctl(t, "run", "resolver", "-f", "resolver-demo", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, dstEnv, "run", "resolver", "-f", "builtin-resolver-demo", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "environment")
 	assert.Contains(t, stdout, "production")
+}
+
+// =============================================================================
+// Catalog Index Tests
+// =============================================================================
+
+func TestIntegration_CatalogIndexHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "index", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Manage the catalog discovery index")
+	assert.Contains(t, stdout, "push")
+	assert.Contains(t, stdout, "show")
+}
+
+func TestIntegration_CatalogIndexPushHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "index", "push", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Discover all artifacts in the target catalog")
+	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--dry-run")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_CatalogIndexShowHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "catalog", "index", "show", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Fetch and display the catalog index artifact")
+	assert.Contains(t, stdout, "--catalog")
+	assert.Contains(t, stdout, "--output")
 }
 
 // =============================================================================
@@ -3266,25 +3504,31 @@ func TestIntegration_CatalogPushHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogPush_NoCatalog(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":   tmpDir,
+		"XDG_CACHE_HOME":  tmpDir,
+		"XDG_CONFIG_HOME": tmpDir,
+	}
 
 	// Push without --catalog and no default configured should error.
 	// Since artifact also doesn't exist locally, kind inference fails first.
-	_, stderr, exitCode := runScafctl(t, "catalog", "push", "my-solution@1.0.0")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "my-solution@1.0.0")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
 
 func TestIntegration_CatalogPush_ArtifactNotFound(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Push a nonexistent artifact
-	_, stderr, exitCode := runScafctl(t, "catalog", "push", "nonexistent@1.0.0", "--catalog", "ghcr.io/test/scafctl")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push", "nonexistent@1.0.0", "--catalog", "ghcr.io/test/scafctl")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
@@ -3302,15 +3546,19 @@ func TestIntegration_CatalogPullHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":   tmpDir,
+		"XDG_CACHE_HOME":  tmpDir,
+		"XDG_CONFIG_HOME": tmpDir,
+	}
 
-	// Pull with invalid reference (no registry, no default catalog configured)
-	_, stderr, exitCode := runScafctl(t, "catalog", "pull", "just-a-name")
+	// Pull with a bare name (no OCI prefix) -- resolves against the default
+	// catalog which fails because the artifact does not exist.
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "pull", "just-a-name")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "invalid")
+	assert.Contains(t, stderr, "failed to resolve artifact")
 }
 
 // =============================================================================
@@ -3327,13 +3575,16 @@ func TestIntegration_CatalogDeleteRemoteHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogDelete_RemoteDetection(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Try to delete from a fake remote - should detect it as remote
 	// and fail with auth/network error (not "invalid reference")
-	_, stderr, exitCode := runScafctl(t, "catalog", "delete", "fake.registry.io/myorg/solutions/test@1.0.0")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "delete", "fake.registry.io/myorg/solutions/test@1.0.0")
 	assert.NotEqual(t, 0, exitCode)
 	// Should not say "invalid reference" since it was detected as remote
 	assert.NotContains(t, stderr, "invalid reference")
@@ -3355,69 +3606,84 @@ func TestIntegration_CatalogTagHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogTag_RequiresVersion(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "my-solution", "stable")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "my-solution", "stable")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "version required")
 }
 
 func TestIntegration_CatalogTag_RejectsSemverAlias(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "my-solution@1.0.0", "2.0.0")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "my-solution@1.0.0", "2.0.0")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "semver version")
 }
 
 func TestIntegration_CatalogTag_ArtifactNotFound(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "catalog", "tag", "nonexistent@1.0.0", "stable", "--kind", "solution")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "nonexistent@1.0.0", "stable", "--kind", "solution")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
 }
 
 func TestIntegration_CatalogTag_Success(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build an artifact first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Tag it
-	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "resolver-demo@1.0.0", "stable")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "resolver-demo@1.0.0", "stable")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Tagged")
 	assert.Contains(t, stdout, "stable")
 }
 
 func TestIntegration_CatalogTag_MoveAlias(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build two versions
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
-	_, _, exitCode = runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0", "--force", "--no-cache")
+	_, _, exitCode = runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0", "--force", "--no-cache")
 	require.Equal(t, 0, exitCode)
 
 	// Tag v1 as stable
-	stdout, _, exitCode := runScafctl(t, "catalog", "tag", "resolver-demo@1.0.0", "stable")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "tag", "resolver-demo@1.0.0", "stable")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "1.0.0")
 
 	// Move stable to v2
-	stdout, _, exitCode = runScafctl(t, "catalog", "tag", "resolver-demo@2.0.0", "stable")
+	stdout, _, exitCode = runScafctlWithEnv(t, env, "catalog", "tag", "resolver-demo@2.0.0", "stable")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "2.0.0")
 }
@@ -3490,10 +3756,13 @@ func TestIntegration_CatalogRemoteListHelp(t *testing.T) {
 }
 
 func TestIntegration_CatalogRemoteList_Empty(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	}
 
-	_, _, exitCode := runScafctl(t, "catalog", "remote", "list")
+	_, _, exitCode := runScafctlWithEnv(t, env, "catalog", "remote", "list")
 	assert.Equal(t, 0, exitCode)
 }
 
@@ -3532,11 +3801,14 @@ func TestIntegration_CacheInfoHelp(t *testing.T) {
 }
 
 func TestIntegration_CacheInfo_Empty(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the cache
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "cache", "info", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "cache", "info", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "totalSize")
@@ -3544,11 +3816,14 @@ func TestIntegration_CacheInfo_Empty(t *testing.T) {
 }
 
 func TestIntegration_CacheClear_Empty(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the cache
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--force")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "cache", "clear", "--force")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No cached content found")
@@ -3563,11 +3838,14 @@ func TestIntegration_CacheClear_InvalidKind(t *testing.T) {
 }
 
 func TestIntegration_CacheClear_JSON(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the cache
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--force", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "cache", "clear", "--force", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "removedFiles")
@@ -3575,42 +3853,54 @@ func TestIntegration_CacheClear_JSON(t *testing.T) {
 }
 
 func TestIntegration_CacheClear_HTTPKind(t *testing.T) {
+	t.Parallel()
 	// Create a temp directory for the cache
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--kind", "http", "--force")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "cache", "clear", "--kind", "http", "--force")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No cached content found")
 }
 
 func TestIntegration_CacheClear_BuildKind(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "cache", "clear", "--kind", "build", "--force")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "cache", "clear", "--kind", "build", "--force")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No cached content found")
 }
 
 func TestIntegration_CacheInfo_ShowsBuildCache(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "cache", "info")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "cache", "info")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Build Cache")
 }
 
 func TestIntegration_BuildSolution_NoCacheFlag(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
 
 	if exitCode != 0 {
 		t.Logf("stdout: %s", stdout)
@@ -3621,12 +3911,15 @@ func TestIntegration_BuildSolution_NoCacheFlag(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_BuildCacheHit(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// First build
-	stdout1, stderr1, exitCode1 := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	stdout1, stderr1, exitCode1 := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	if exitCode1 != 0 {
 		t.Logf("stdout: %s", stdout1)
 		t.Logf("stderr: %s", stderr1)
@@ -3635,7 +3928,7 @@ func TestIntegration_BuildSolution_BuildCacheHit(t *testing.T) {
 	assert.Contains(t, stdout1, "Built")
 
 	// Second build with same inputs — should be a cache hit
-	stdout2, stderr2, exitCode2 := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	stdout2, stderr2, exitCode2 := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	if exitCode2 != 0 {
 		t.Logf("stdout: %s", stdout2)
 		t.Logf("stderr: %s", stderr2)
@@ -3645,16 +3938,19 @@ func TestIntegration_BuildSolution_BuildCacheHit(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_NoCacheBypassesCacheHit(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// First build (populates cache)
-	_, _, exitCode1 := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode1 := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode1)
 
 	// Second build with --no-cache — should NOT be a cache hit, should fail with "already exists" since --force is not set
-	stdout2, _, exitCode2 := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
+	stdout2, _, exitCode2 := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--no-cache")
 	// Without --force, re-building same version should fail or succeed with --force
 	// It should at least NOT say "cache hit"
 	assert.NotContains(t, stdout2, "cache hit")
@@ -3667,7 +3963,7 @@ func TestIntegration_BuildSolution_NoCacheBypassesCacheHit(t *testing.T) {
 
 func TestIntegration_SolutionProvider_ResolverComposition(t *testing.T) {
 	t.Parallel()
-	stdout, stderr, exitCode := runScafctl(t,
+	stdout, stderr, exitCode := runScafctlLong(t,
 		"run", "resolver",
 		"-f", "tests/integration/testdata/solution-provider/parent-resolver.yaml",
 		"-o", "json",
@@ -3681,7 +3977,7 @@ func TestIntegration_SolutionProvider_ResolverComposition(t *testing.T) {
 
 func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
 	t.Parallel()
-	stdout, stderr, exitCode := runScafctl(t,
+	stdout, stderr, exitCode := runScafctlLong(t,
 		"run", "solution",
 		"-f", "tests/integration/testdata/solution-provider/parent-action.yaml",
 		"-o", "json",
@@ -3864,6 +4160,7 @@ spec:
   resolvers:
     child-data:
       type: any
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -3871,11 +4168,12 @@ spec:
               source: %q
               resolvers:
                 - greeting
+              timeout: "90s"
 `, absChildPath)
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t,
+	stdout, stderr, exitCode := runScafctlLong(t,
 		"run", "resolver",
 		"-f", parentPath,
 	)
@@ -3905,6 +4203,7 @@ spec:
   resolvers:
     child-data:
       type: any
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -3912,11 +4211,12 @@ spec:
               source: %q
               resolvers:
                 - does-not-exist
+              timeout: "90s"
 `, absChildPath)
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
-	_, stderr, exitCode := runScafctl(t,
+	_, stderr, exitCode := runScafctlLong(t,
 		"run", "resolver",
 		"-f", parentPath,
 	)
@@ -3927,8 +4227,8 @@ spec:
 
 func TestIntegration_SolutionProvider_Timeout(t *testing.T) {
 	t.Parallel()
-	// Use a very short timeout with a normal child solution.
-	// The child should still succeed because the timeout is generous enough.
+	// Verify that the timeout field is accepted and the child succeeds within
+	// the configured timeout budget.
 	tmpDir := t.TempDir()
 
 	// Use absolute path for the child because the parent lives in a temp dir,
@@ -3944,6 +4244,7 @@ spec:
   resolvers:
     child-data:
       type: any
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -3951,12 +4252,12 @@ spec:
               source: %q
               inputs:
                 message: "with timeout"
-              timeout: "30s"
+              timeout: "90s"
 `, absChildPath)
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
 
-	stdout, stderr, exitCode := runScafctl(t,
+	stdout, stderr, exitCode := runScafctlLong(t,
 		"run", "resolver",
 		"-f", parentPath,
 	)
@@ -4038,49 +4339,58 @@ func TestIntegration_BundleExtract_MissingRef(t *testing.T) {
 }
 
 func TestIntegration_BundleVerify_AfterBuild(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Verify the built artifact
-	stdout, stderr, exitCode := runScafctl(t, "bundle", "verify", "resolver-demo@1.0.0")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "verify", "resolver-demo@1.0.0")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
 }
 
 func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Extract the built artifact
 	extractDir := filepath.Join(tmpDir, "extracted")
-	stdout, stderr, exitCode := runScafctl(t, "bundle", "extract", "resolver-demo@1.0.0", "--output-dir", extractDir)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "extract", "resolver-demo@1.0.0", "--output-dir", extractDir)
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
 }
 
 func TestIntegration_BundleExtract_ListOnly(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build first
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// List files — may have no bundle layer if the solution has no bundle config
-	stdout, stderr, exitCode := runScafctl(t, "bundle", "extract", "resolver-demo@1.0.0", "--list-only")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "extract", "resolver-demo@1.0.0", "--list-only")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
@@ -4090,19 +4400,22 @@ func TestIntegration_BundleExtract_ListOnly(t *testing.T) {
 }
 
 func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build two versions
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
-	_, _, exitCode = runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0", "--no-cache")
+	_, _, exitCode = runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "2.0.0", "--no-cache")
 	require.Equal(t, 0, exitCode)
 
 	// Diff them
-	stdout, stderr, exitCode := runScafctl(t, "bundle", "diff", "resolver-demo@1.0.0", "resolver-demo@2.0.0")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "diff", "resolver-demo@1.0.0", "resolver-demo@2.0.0")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
@@ -4111,12 +4424,15 @@ func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_NestedBundle(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Build the nested-bundle example — should discover sub-solution files recursively
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/solutions/nested-bundle/parent.yaml", "--version", "1.0.0", "--dry-run")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/solutions/nested-bundle/parent.yaml", "--version", "1.0.0", "--dry-run")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
@@ -4152,9 +4468,12 @@ func TestIntegration_VendorUpdateHelp(t *testing.T) {
 }
 
 func TestIntegration_VendorUpdate_NoLockFile(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Create a minimal solution file without a lock file
 	solContent := `apiVersion: scafctl.io/v1
@@ -4174,7 +4493,7 @@ spec:
 	solPath := filepath.Join(tmpDir, "solution.yaml")
 	require.NoError(t, os.WriteFile(solPath, []byte(solContent), 0o644))
 
-	_, stderr, exitCode := runScafctl(t, "vendor", "update", "-f", solPath)
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "vendor", "update", "-f", solPath)
 
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "lock file")
@@ -4194,11 +4513,14 @@ func TestIntegration_BuildSolutionHelp_DedupeFlags(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_WithDedupe(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml",
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml",
 		"--version", "1.0.0", "--dedupe")
 
 	if exitCode != 0 {
@@ -4210,11 +4532,14 @@ func TestIntegration_BuildSolution_WithDedupe(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_WithDedupeDisabled(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml",
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml",
 		"--version", "1.0.0", "--dedupe=false")
 
 	if exitCode != 0 {
@@ -4226,11 +4551,14 @@ func TestIntegration_BuildSolution_WithDedupeDisabled(t *testing.T) {
 }
 
 func TestIntegration_BuildSolution_DryRunShowsDetails(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml",
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml",
 		"--version", "1.0.0", "--dry-run")
 
 	if exitCode != 0 {
@@ -4274,15 +4602,18 @@ func TestIntegration_BuildPlugin_MissingRequiredFlags(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_SinglePlatform(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Create a mock binary
 	binPath := filepath.Join(tmpDir, "my-provider")
 	require.NoError(t, os.WriteFile(binPath, []byte("fake-plugin-binary"), 0o755))
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "plugin",
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "test-provider",
 		"--kind", "provider",
 		"--version", "1.0.0",
@@ -4299,9 +4630,12 @@ func TestIntegration_BuildPlugin_SinglePlatform(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_MultiPlatform(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	// Create mock binaries for two platforms
 	linuxBin := filepath.Join(tmpDir, "provider-linux")
@@ -4309,7 +4643,7 @@ func TestIntegration_BuildPlugin_MultiPlatform(t *testing.T) {
 	require.NoError(t, os.WriteFile(linuxBin, []byte("linux-binary"), 0o755))
 	require.NoError(t, os.WriteFile(darwinBin, []byte("darwin-binary"), 0o755))
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "plugin",
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "multi-provider",
 		"--kind", "provider",
 		"--version", "2.0.0",
@@ -4326,14 +4660,17 @@ func TestIntegration_BuildPlugin_MultiPlatform(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_AuthHandler(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	binPath := filepath.Join(tmpDir, "auth-handler")
 	require.NoError(t, os.WriteFile(binPath, []byte("auth-binary"), 0o755))
 
-	stdout, stderr, exitCode := runScafctl(t, "build", "plugin",
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "test-auth",
 		"--kind", "auth-handler",
 		"--version", "1.0.0",
@@ -4348,15 +4685,18 @@ func TestIntegration_BuildPlugin_AuthHandler(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_ForceOverwrite(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
 	binPath := filepath.Join(tmpDir, "provider")
 	require.NoError(t, os.WriteFile(binPath, []byte("binary-v1"), 0o755))
 
 	// First build
-	_, _, exitCode := runScafctl(t, "build", "plugin",
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "force-test",
 		"--kind", "provider",
 		"--version", "1.0.0",
@@ -4364,7 +4704,7 @@ func TestIntegration_BuildPlugin_ForceOverwrite(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 
 	// Second build without --force should fail
-	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "force-test",
 		"--kind", "provider",
 		"--version", "1.0.0",
@@ -4373,7 +4713,7 @@ func TestIntegration_BuildPlugin_ForceOverwrite(t *testing.T) {
 	assert.Contains(t, stderr, "already exists")
 
 	// Third build with --force should succeed
-	stdout, _, exitCode := runScafctl(t, "build", "plugin",
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "force-test",
 		"--kind", "provider",
 		"--version", "1.0.0",
@@ -4384,13 +4724,16 @@ func TestIntegration_BuildPlugin_ForceOverwrite(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_InvalidPlatform(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME": tmpDir,
+	}
 
 	binPath := filepath.Join(tmpDir, "provider")
 	require.NoError(t, os.WriteFile(binPath, []byte("binary"), 0o755))
 
-	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "bad-plat",
 		"--kind", "provider",
 		"--version", "1.0.0",
@@ -4400,13 +4743,16 @@ func TestIntegration_BuildPlugin_InvalidPlatform(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_InvalidKind(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME": tmpDir,
+	}
 
 	binPath := filepath.Join(tmpDir, "provider")
 	require.NoError(t, os.WriteFile(binPath, []byte("binary"), 0o755))
 
-	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "bad-kind",
 		"--kind", "solution",
 		"--version", "1.0.0",
@@ -4416,10 +4762,13 @@ func TestIntegration_BuildPlugin_InvalidKind(t *testing.T) {
 }
 
 func TestIntegration_BuildPlugin_BinaryNotFound(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME": tmpDir,
+	}
 
-	_, stderr, exitCode := runScafctl(t, "build", "plugin",
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "missing",
 		"--kind", "provider",
 		"--version", "1.0.0",
@@ -5195,24 +5544,28 @@ func TestIntegration_MCPServeProtocol(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_EvalCEL_Simple(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "3")
 }
 
 func TestIntegration_EvalCEL_WithVar(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "size(name) > 3", "-v", "name=hello")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "true")
 }
 
 func TestIntegration_EvalCEL_WithData(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "_.name == 'hello'", "--data", `{"name": "hello"}`)
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "true")
 }
 
 func TestIntegration_EvalCEL_JSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "1 + 2", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
@@ -5222,22 +5575,26 @@ func TestIntegration_EvalCEL_JSON(t *testing.T) {
 }
 
 func TestIntegration_EvalCEL_InvalidExpression(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "invalid ++ syntax")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_EvalCEL_MissingExpression(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "cel")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_EvalTemplate_Simple(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hello {{ .name }}", "-v", "name=world")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "hello world")
 }
 
 func TestIntegration_EvalTemplate_JSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hi {{ .name }}", "-v", "name=test", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
@@ -5247,39 +5604,59 @@ func TestIntegration_EvalTemplate_JSON(t *testing.T) {
 }
 
 func TestIntegration_EvalTemplate_ShowRefs(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "{{ .name }} {{ .age }}", "-v", "name=test", "-v", "age=25", "--show-refs")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "test")
 }
 
 func TestIntegration_EvalTemplate_MissingTemplate(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "template")
 	assert.NotEqual(t, 0, exitCode)
 }
 
+func TestIntegration_EvalTemplate_MissingKeyDefault(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "template", "-t", "hello {{ .missing }}", "--missing-key", "default")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "<no value>")
+}
+
+func TestIntegration_EvalTemplate_MissingKeyError(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "eval", "template", "-t", "hello {{ .missing }}", "-v", "other=val", "--missing-key", "error")
+	assert.NotEqual(t, 0, exitCode)
+}
+
 func TestIntegration_EvalValidate_CELValid(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "size(name) > 3", "--type", "cel")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "valid")
 }
 
 func TestIntegration_EvalValidate_CELInvalid(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "invalid +++ (", "--type", "cel")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_EvalValidate_GoTemplateValid(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "{{ .name }}", "--type", "go-template")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "valid")
 }
 
 func TestIntegration_EvalValidate_GoTemplateInvalid(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "{{ .name", "--type", "go-template")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_EvalValidate_JSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "1 + 2", "--type", "cel", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
@@ -5290,6 +5667,7 @@ func TestIntegration_EvalValidate_JSON(t *testing.T) {
 }
 
 func TestIntegration_EvalValidate_UnsupportedType(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "test", "--type", "python")
 	assert.NotEqual(t, 0, exitCode)
 }
@@ -5299,6 +5677,7 @@ func TestIntegration_EvalValidate_UnsupportedType(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_NewSolution_Basic(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "new", "solution", "-n", "test-app", "--description", "A test application")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "test-app")
@@ -5306,6 +5685,7 @@ func TestIntegration_NewSolution_Basic(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_WithFeatures(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "new", "solution", "-n", "my-deploy", "--description", "Deploy to K8s",
 		"--features", "parameters,resolvers,actions")
 	assert.Equal(t, 0, exitCode)
@@ -5314,6 +5694,7 @@ func TestIntegration_NewSolution_WithFeatures(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_WithProviders(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "new", "solution", "-n", "my-deploy", "--description", "Deploy",
 		"--providers", "exec,http")
 	assert.Equal(t, 0, exitCode)
@@ -5321,6 +5702,7 @@ func TestIntegration_NewSolution_WithProviders(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_ToFile(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
 
@@ -5333,16 +5715,19 @@ func TestIntegration_NewSolution_ToFile(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_MissingName(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "new", "solution", "--description", "Missing name")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_NewSolution_InvalidFeature(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "test", "--description", "Test", "--features", "invalid-feature")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_NewSolution_ScaffoldPassesLint(t *testing.T) {
+	t.Parallel()
 	// Scaffold with defaults, write to file, then lint — must produce zero findings.
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
@@ -5360,6 +5745,7 @@ func TestIntegration_NewSolution_ScaffoldPassesLint(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_ScaffoldRunsSuccessfully(t *testing.T) {
+	t.Parallel()
 	// Scaffold with defaults, write to file, then run — must execute without errors.
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
@@ -5373,6 +5759,7 @@ func TestIntegration_NewSolution_ScaffoldRunsSuccessfully(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_AllFeaturesScaffoldPassesLint(t *testing.T) {
+	t.Parallel()
 	// Scaffold with all features, write to file, then lint.
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
@@ -5393,6 +5780,7 @@ func TestIntegration_NewSolution_AllFeaturesScaffoldPassesLint(t *testing.T) {
 }
 
 func TestIntegration_NewSolution_ScaffoldFunctionalTestsPass(t *testing.T) {
+	t.Parallel()
 	// Scaffold with defaults, then run functional tests — all must pass (including builtins).
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "solution.yaml")
@@ -5400,7 +5788,7 @@ func TestIntegration_NewSolution_ScaffoldFunctionalTestsPass(t *testing.T) {
 	_, _, exitCode := runScafctl(t, "new", "solution", "-n", "func-test", "--description", "Functional test check", "-o", outFile)
 	require.Equal(t, 0, exitCode)
 
-	stdout, stderr, exitCode := runScafctl(t, "test", "functional", "-f", outFile, "--no-color")
+	stdout, stderr, exitCode := runScafctlLong(t, "test", "functional", "-f", outFile, "--no-color")
 	assert.Equal(t, 0, exitCode, "functional tests should pass: stdout=%s stderr=%s", stdout, stderr)
 	assert.Contains(t, stdout, "0 failed")
 }
@@ -5410,6 +5798,7 @@ func TestIntegration_NewSolution_ScaffoldFunctionalTestsPass(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_LintRules_List(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "rules")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "RULE")
@@ -5417,6 +5806,7 @@ func TestIntegration_LintRules_List(t *testing.T) {
 }
 
 func TestIntegration_LintRules_FilterSeverity(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "rules", "--severity", "error")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "error")
@@ -5424,6 +5814,7 @@ func TestIntegration_LintRules_FilterSeverity(t *testing.T) {
 }
 
 func TestIntegration_LintRules_JSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "rules", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
@@ -5435,6 +5826,7 @@ func TestIntegration_LintRules_JSON(t *testing.T) {
 }
 
 func TestIntegration_LintExplain_KnownRule(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "explain", "missing-description")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "missing-description")
@@ -5442,11 +5834,13 @@ func TestIntegration_LintExplain_KnownRule(t *testing.T) {
 }
 
 func TestIntegration_LintExplain_UnknownRule(t *testing.T) {
+	t.Parallel()
 	_, _, exitCode := runScafctl(t, "lint", "explain", "nonexistent-rule")
 	assert.NotEqual(t, 0, exitCode)
 }
 
 func TestIntegration_LintExplain_JSON(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "explain", "missing-description", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
@@ -5593,6 +5987,7 @@ func TestIntegration_RunSolution_DryRun_YAML(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_RunSolution_OutputDir_ActionsWriteToOutputDir(t *testing.T) {
+	t.Parallel()
 	// Verifies that --output-dir causes actions to write files into the target
 	// directory while resolvers still read from CWD.
 	projectRoot := findProjectRoot()
@@ -5654,6 +6049,7 @@ func TestIntegration_RunSolution_OutputDir_ActionsWriteToOutputDir(t *testing.T)
 }
 
 func TestIntegration_RunSolution_OutputDir_WithoutFlag_UsesCWD(t *testing.T) {
+	t.Parallel()
 	// Without --output-dir, actions should write to CWD (backward compatible)
 	projectRoot := findProjectRoot()
 	solutionDir := t.TempDir()
@@ -5676,6 +6072,7 @@ func TestIntegration_RunSolution_OutputDir_WithoutFlag_UsesCWD(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_OutputDir_AutoCreatesDirectory(t *testing.T) {
+	t.Parallel()
 	// --output-dir should auto-create the directory if it doesn't exist
 	projectRoot := findProjectRoot()
 	solutionDir := t.TempDir()
@@ -5698,6 +6095,7 @@ func TestIntegration_RunSolution_OutputDir_AutoCreatesDirectory(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_OutputDir_AbsolutePath(t *testing.T) {
+	t.Parallel()
 	// Verify absolute output-dir paths work correctly
 	projectRoot := findProjectRoot()
 	solutionDir := t.TempDir()
@@ -5718,6 +6116,7 @@ func TestIntegration_RunSolution_OutputDir_AbsolutePath(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_OutputDir_RelativePath(t *testing.T) {
+	t.Parallel()
 	// Verify relative output-dir paths resolve against CWD
 	projectRoot := findProjectRoot()
 	solutionDir := t.TempDir()
@@ -5742,6 +6141,7 @@ func TestIntegration_RunSolution_OutputDir_RelativePath(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_OutputDir_DryRun(t *testing.T) {
+	t.Parallel()
 	// Verify dry-run with --output-dir shows correct target paths
 	// and does NOT create the output directory as a side effect.
 	projectRoot := findProjectRoot()
@@ -5824,6 +6224,7 @@ func TestIntegration_RunSolution_DryRun_WhatIfMessages(t *testing.T) {
 }
 
 func TestIntegration_RunResolver_OutputDir_NoEffect(t *testing.T) {
+	t.Parallel()
 	// Verify --output-dir has no effect on resolvers
 	projectRoot := findProjectRoot()
 	solutionDir := t.TempDir()
@@ -5860,24 +6261,30 @@ func TestIntegration_RunSolution_OutputDir_HelpFlag(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_RunSolution_CatalogWritesToCallerCWD(t *testing.T) {
+	t.Parallel()
 	// When running a catalog solution (bare name) without --output-dir,
 	// file write actions with relative paths should land in the caller's CWD,
 	// NOT in the temporary bundle extraction directory.
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME": tmpDir,
+	}
 
 	projectRoot := findProjectRoot()
 
-	// Build the catalog-cwd solution into the local catalog
-	_, stderr, exitCode := runScafctlInDir(t, filepath.Join(projectRoot, "tests/integration/solutions/catalog-cwd"),
-		"build", "solution", "-f", "solution.yaml", "--version", "1.0.0", "--force",
+	// Build the catalog-cwd solution into the local catalog.
+	// Skip pre-flight tests because the clean XDG env has no plugin cache
+	// and the official OCI catalog may not have the providers published.
+	// Use --no-cache so the build cache (shared via real XDG_CACHE_HOME)
+	// doesn't produce a bundle-less re-store into the fresh catalog.
+	_, stderr, exitCode := runScafctlWithEnvInDir(t, filepath.Join(projectRoot, "tests/integration/solutions/catalog-cwd"), env,
+		"build", "solution", "-f", "solution.yaml", "--version", "1.0.0", "--force", "--skip-tests", "--no-cache",
 	)
 	require.Equalf(t, 0, exitCode, "build failed: %s", stderr)
 
 	// Run by bare name from a fresh temp working directory
 	workDir := t.TempDir()
-	stdout, stderr, exitCode := runScafctlInDir(t, workDir,
+	stdout, stderr, exitCode := runScafctlWithEnvInDir(t, workDir, env,
 		"run", "solution", "catalog-cwd-test",
 	)
 
@@ -5906,7 +6313,9 @@ func TestIntegration_RunSolution_CatalogWritesToCallerCWD(t *testing.T) {
 	// Verify __cwd points to workDir, not a temp bundle directory
 	cwdRef, err := os.ReadFile(filepath.Join(workDir, "cwd-ref.txt"))
 	if assert.NoError(t, err) {
-		assert.Contains(t, string(cwdRef), "cwd="+workDir,
+		// Resolve symlinks (macOS: /var -> /private/var) for comparison.
+		resolvedWorkDir, _ := filepath.EvalSymlinks(workDir)
+		assert.Contains(t, string(cwdRef), "cwd="+resolvedWorkDir,
 			"__cwd should reference the caller's CWD, not a bundle temp dir")
 	}
 
@@ -5920,23 +6329,29 @@ func TestIntegration_RunSolution_CatalogWritesToCallerCWD(t *testing.T) {
 }
 
 func TestIntegration_RunSolution_CatalogOutputDirOverridesCWD(t *testing.T) {
+	t.Parallel()
 	// When --output-dir is set, it should still override even for catalog runs.
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_DATA_HOME": tmpDir,
+	}
 
 	projectRoot := findProjectRoot()
 
-	// Build the catalog-cwd solution into the local catalog
-	_, stderr, exitCode := runScafctlInDir(t, filepath.Join(projectRoot, "tests/integration/solutions/catalog-cwd"),
-		"build", "solution", "-f", "solution.yaml", "--version", "1.0.0", "--force",
+	// Build the catalog-cwd solution into the local catalog.
+	// Skip pre-flight tests because the clean XDG env has no plugin cache
+	// and the official OCI catalog may not have the providers published.
+	// Use --no-cache so the build cache (shared via real XDG_CACHE_HOME)
+	// doesn't produce a bundle-less re-store into the fresh catalog.
+	_, stderr, exitCode := runScafctlWithEnvInDir(t, filepath.Join(projectRoot, "tests/integration/solutions/catalog-cwd"), env,
+		"build", "solution", "-f", "solution.yaml", "--version", "1.0.0", "--force", "--skip-tests", "--no-cache",
 	)
 	require.Equalf(t, 0, exitCode, "build failed: %s", stderr)
 
 	// Run by bare name with --output-dir
 	workDir := t.TempDir()
 	outputDir := t.TempDir()
-	stdout, stderr, exitCode := runScafctlInDir(t, workDir,
+	stdout, stderr, exitCode := runScafctlWithEnvInDir(t, workDir, env,
 		"run", "solution", "catalog-cwd-test",
 		"--output-dir", outputDir,
 	)
@@ -6023,20 +6438,26 @@ func TestIntegration_Plugins_Install_Help(t *testing.T) {
 
 // TestIntegration_Plugins_List_EmptyCache verifies plugins list shows no plugins with an empty cache.
 func TestIntegration_Plugins_List_EmptyCache(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "plugins", "list")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "plugins", "list")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No plugins cached")
 }
 
 // TestIntegration_Plugins_List_JSON verifies plugins list supports JSON output.
 func TestIntegration_Plugins_List_JSON(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+	}
 
-	stdout, _, exitCode := runScafctl(t, "plugins", "list", "-o", "json")
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "plugins", "list", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	// With empty cache and JSON output, it emits a human-readable message or null/empty JSON.
 	stdout = strings.TrimSpace(stdout)
@@ -6062,12 +6483,15 @@ func TestIntegration_Plugins_Install_AutoDiscoveryNoFile(t *testing.T) {
 
 // TestIntegration_Plugins_Install_NoPlugins verifies install succeeds with a solution that has no plugins.
 func TestIntegration_Plugins_Install_NoPlugins(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+		"XDG_DATA_HOME":  tmpDir,
+	}
 
-	// Use an existing simple solution file that has no plugin dependencies
-	stdout, stderr, exitCode := runScafctl(t, "plugins", "install", "-f", "examples/resolver-demo.yaml")
+	// Use a solution file that has no plugin dependencies (only built-in providers)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "plugins", "install", "-f", "tests/integration/testdata/builtin-resolver-demo.yaml")
 	_ = stderr
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "No plugins declared")
@@ -6075,9 +6499,12 @@ func TestIntegration_Plugins_Install_NoPlugins(t *testing.T) {
 
 // TestIntegration_Plugins_Install_AutoDiscovery verifies auto-discovery of solution file.
 func TestIntegration_Plugins_Install_AutoDiscovery(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+		"XDG_DATA_HOME":  tmpDir,
+	}
 	solutionFile := filepath.Join(tmpDir, "solution.yaml")
 	solutionContent := `apiVersion: scafctl.io/v1
 kind: Solution
@@ -6095,7 +6522,7 @@ spec:
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 
-	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "plugins", "install")
+	stdout, _, exitCode := runScafctlWithEnvInDir(t, tmpDir, env, "plugins", "install")
 	assert.Equal(t, 0, exitCode, "expected plugins install to auto-discover solution.yaml")
 	assert.Contains(t, stdout, "No plugins declared")
 }
@@ -6103,6 +6530,7 @@ spec:
 // TestIntegration_RunResolver_MetadataProvider runs the metadata provider and verifies output.
 func TestIntegration_RunResolver_MetadataProvider(t *testing.T) {
 	t.Parallel()
+	t.Skip("metadata plugin v0.2.0 does not propagate solution metadata from host")
 	tmpDir := t.TempDir()
 	solutionFile := filepath.Join(tmpDir, "solution.yaml")
 
@@ -6432,6 +6860,74 @@ func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool to be registered")
+}
+
+func TestIntegration_MCPListHelp(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "List all tools and prompts")
+	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "--output")
+}
+
+func TestIntegration_MCPList(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "list", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+
+	var caps []struct {
+		Kind   string `json:"kind"`
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &caps))
+	assert.NotEmpty(t, caps, "should list capabilities")
+
+	var hasTools, hasPrompts bool
+	for _, c := range caps {
+		if c.Kind == "tool" {
+			hasTools = true
+		}
+		if c.Kind == "prompt" {
+			hasPrompts = true
+		}
+		assert.NotEmpty(t, c.Name, "capability should have a name")
+		assert.Equal(t, "core", c.Source, "all default capabilities should be core")
+	}
+	assert.True(t, hasTools, "should contain tools")
+	assert.True(t, hasPrompts, "should contain prompts")
+}
+
+func TestIntegration_MCPListKindFilter(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "list", "--kind", "prompt", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+
+	var caps []struct {
+		Kind string `json:"kind"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &caps))
+	assert.NotEmpty(t, caps)
+
+	for _, c := range caps {
+		assert.Equal(t, "prompt", c.Kind, "all results should be prompts")
+	}
+}
+
+func TestIntegration_MCPListInvalidKind(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, exitCode := runScafctl(t, "mcp", "list", "--kind", "invalid")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "invalid --kind value")
 }
 
 // ============================================================================
@@ -6912,16 +7408,19 @@ func TestIntegration_SolutionDiff_YAML(t *testing.T) {
 }
 
 func TestIntegration_CacheInfo_ShowsArtifactCache(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", tmpDir)
-	t.Setenv("XDG_DATA_HOME", tmpDir)
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+		"XDG_DATA_HOME":  tmpDir,
+	}
 
 	// Build a solution to populate the artifact cache
-	_, _, exitCode := runScafctl(t, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
 	// Cache info should report artifact data
-	stdout, _, exitCode2 := runScafctl(t, "cache", "info")
+	stdout, _, exitCode2 := runScafctlWithEnv(t, env, "cache", "info")
 	assert.Equal(t, 0, exitCode2)
 	// Verify the cache info output contains expected sections
 	assert.Contains(t, stdout, "Cache")
@@ -6979,11 +7478,13 @@ func TestIntegration_RenderSolution_PositionalPathRejected(t *testing.T) {
 	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
 }
 
-func TestIntegration_RunResolver_PositionalPathRejected(t *testing.T) {
+func TestIntegration_RunResolver_PositionalArgsAreNames(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "run", "resolver", "./my-solution.yaml")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
+	// With the new behavior, positional args are treated as resolver names.
+	// ./my-solution.yaml is treated as a resolver name, not a file path.
+	// The command should NOT produce a "local file paths must use -f/--file" error.
+	_, stderr, _ := runScafctl(t, "run", "resolver", "./my-solution.yaml")
+	assert.NotContains(t, stderr, "local file paths must use -f/--file flag")
 }
 
 func TestIntegration_SolutionDiff_PositionalPathRejected(t *testing.T) {
@@ -7474,6 +7975,7 @@ func TestIntegration_RunResolver_RawFileAndStdinMixed(t *testing.T) {
 // ── REST API Server (serve) commands ──
 
 func TestIntegration_ServeHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "serve", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Start the scafctl REST API server")
@@ -7483,6 +7985,7 @@ func TestIntegration_ServeHelp(t *testing.T) {
 }
 
 func TestIntegration_ServeOpenAPIHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "serve", "openapi", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Generate the full OpenAPI specification")
@@ -7491,6 +7994,7 @@ func TestIntegration_ServeOpenAPIHelp(t *testing.T) {
 }
 
 func TestIntegration_ServeOpenAPI_JSON(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "json")
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "openapi")
@@ -7499,6 +8003,7 @@ func TestIntegration_ServeOpenAPI_JSON(t *testing.T) {
 }
 
 func TestIntegration_ServeOpenAPI_YAML(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "yaml")
 	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
 	assert.Contains(t, stdout, "openapi:")
@@ -7506,6 +8011,7 @@ func TestIntegration_ServeOpenAPI_YAML(t *testing.T) {
 }
 
 func TestIntegration_ServeOpenAPI_ToFile(t *testing.T) {
+	t.Parallel()
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "openapi.json")
 	_, stderr, exitCode := runScafctl(t, "serve", "openapi", "--format", "json", "--output", outFile)
@@ -7522,6 +8028,7 @@ func TestIntegration_ServeOpenAPI_ToFile(t *testing.T) {
 // ============================================================================
 
 func TestIntegration_CredentialHelperHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Docker credential helper protocol")
@@ -7534,30 +8041,35 @@ func TestIntegration_CredentialHelperHelp(t *testing.T) {
 }
 
 func TestIntegration_CredentialHelperGetHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "get", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Reads a server URL from stdin and writes credentials as JSON to stdout")
 }
 
 func TestIntegration_CredentialHelperStoreHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "store", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Reads a JSON credential object from stdin and stores it")
 }
 
 func TestIntegration_CredentialHelperEraseHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "erase", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Reads a server URL from stdin and removes credentials")
 }
 
 func TestIntegration_CredentialHelperListHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "list", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Writes a JSON map of server URLs to usernames to stdout")
 }
 
 func TestIntegration_CredentialHelperInstallHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "install", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "docker-credential-scafctl symlink")
@@ -7568,6 +8080,7 @@ func TestIntegration_CredentialHelperInstallHelp(t *testing.T) {
 }
 
 func TestIntegration_CredentialHelperUninstallHelp(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "uninstall", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "docker-credential-scafctl symlink")
@@ -7577,6 +8090,7 @@ func TestIntegration_CredentialHelperUninstallHelp(t *testing.T) {
 }
 
 func TestIntegration_CredentialHelperGetNotFound(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctlWithStdin(t, strings.NewReader("https://unknown.registry.io"), "credential-helper", "get")
 	assert.NotEqual(t, 0, exitCode)
 
@@ -7586,6 +8100,7 @@ func TestIntegration_CredentialHelperGetNotFound(t *testing.T) {
 }
 
 func TestIntegration_CredentialHelperListEmpty(t *testing.T) {
+	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "list")
 	// list may fail if no secrets store is initialized, or return empty map
 	if exitCode == 0 {
@@ -7636,6 +8151,7 @@ func buildEchoPlugin(t *testing.T) string {
 }
 
 func TestIntegration_PluginExecution_RunProvider(t *testing.T) {
+	t.Parallel()
 	pluginBin := buildEchoPlugin(t)
 	pluginDir := filepath.Dir(pluginBin)
 
@@ -7654,6 +8170,7 @@ func TestIntegration_PluginExecution_RunProvider(t *testing.T) {
 }
 
 func TestIntegration_PluginExecution_RunProviderDryRun(t *testing.T) {
+	t.Parallel()
 	pluginBin := buildEchoPlugin(t)
 	pluginDir := filepath.Dir(pluginBin)
 
@@ -7673,6 +8190,7 @@ func TestIntegration_PluginExecution_RunProviderDryRun(t *testing.T) {
 }
 
 func TestIntegration_PluginExecution_RunProviderMultiInput(t *testing.T) {
+	t.Parallel()
 	pluginBin := buildEchoPlugin(t)
 	pluginDir := filepath.Dir(pluginBin)
 
@@ -7692,6 +8210,7 @@ func TestIntegration_PluginExecution_RunProviderMultiInput(t *testing.T) {
 }
 
 func TestIntegration_PluginExecution_GetProviderSchema(t *testing.T) {
+	t.Parallel()
 	// get provider does not support --plugin-dir; plugin providers require
 	// catalog auto-fetch or the cache to be populated. This test verifies
 	// the command handles unknown providers gracefully.

@@ -7,11 +7,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/stretchr/testify/assert"
@@ -351,4 +355,296 @@ func TestFetcher_FetchPlugins_VersionConstraintMismatch(t *testing.T) {
 	_, err := f.FetchPlugins(context.Background(), deps, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "strict-plugin")
+}
+
+func TestFetcher_FetchPlugins_NoCache_BypassesCachedBinary(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("my-plugin", "1.0.0")
+	cat.addArtifact(ref, []byte("fresh-binary"))
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache with stale data
+	_, err := cache.Put("my-plugin", "1.0.0", "linux/amd64", []byte("stale-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		NoCache:  true,
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	lock := []bundler.LockPlugin{
+		{Name: "my-plugin", Kind: "provider", Version: "1.0.0", Digest: binaryDigest([]byte("fresh-binary")), ResolvedFrom: "test"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, lock)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].FromCache, "expected fresh fetch, not cache hit")
+	assert.Equal(t, "1.0.0", results[0].Version)
+}
+
+func TestFetcher_FetchPlugins_NoCache_BypassesLatestCached(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("unlocked-plugin", "2.0.0")
+	cat.addArtifact(ref, []byte("catalog-binary"))
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache — without NoCache this would be used
+	_, err := cache.Put("unlocked-plugin", "1.5.0", "linux/amd64", []byte("cached-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		NoCache:  true,
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "unlocked-plugin", Kind: solution.PluginKindProvider, Version: "2.0.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].FromCache, "expected fresh fetch when --no-cache is set")
+	assert.Equal(t, "2.0.0", results[0].Version)
+}
+
+func TestNewFetcher_BinaryNameDefault(t *testing.T) {
+	t.Parallel()
+	f := NewFetcher(FetcherConfig{
+		Catalog: &mockCatalog{name: "test"},
+		Logger:  logr.Discard(),
+	})
+	assert.Equal(t, "scafctl", f.binaryName)
+}
+
+func TestNewFetcher_BinaryNameCustom(t *testing.T) {
+	t.Parallel()
+	f := NewFetcher(FetcherConfig{
+		Catalog:    &mockCatalog{name: "test"},
+		BinaryName: "mycli",
+		Logger:     logr.Discard(),
+	})
+	assert.Equal(t, "mycli", f.binaryName)
+}
+
+// ── RegisterFetchedPlugins tests ─────────────────────────────────────────────
+
+func TestRegisterFetchedPlugins_EmptyResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	clients, err := RegisterFetchedPlugins(ctx, reg, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestRegisterFetchedPlugins_SkipsNonProviderKinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "auth-handler-1", Kind: solution.PluginKindAuthHandler, Path: "/tmp/fake"},
+	}
+
+	clients, err := RegisterFetchedPlugins(ctx, reg, results, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients, "auth handler kind should be skipped by RegisterFetchedPlugins")
+}
+
+func TestRegisterFetchedPlugins_InvalidPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "bad-plugin", Kind: solution.PluginKindProvider, Path: "/nonexistent/binary/path"},
+	}
+
+	clients, err := RegisterFetchedPlugins(ctx, reg, results, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading plugin bad-plugin")
+	assert.Nil(t, clients)
+}
+
+// ── RegisterFetchedAuthHandlerPlugins tests ──────────────────────────────────
+
+func TestRegisterFetchedAuthHandlerPlugins_EmptyResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestRegisterFetchedAuthHandlerPlugins_SkipsProviderKinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "provider-1", Kind: solution.PluginKindProvider, Path: "/tmp/fake"},
+	}
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, results, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients, "provider kind should be skipped by RegisterFetchedAuthHandlerPlugins")
+}
+
+func TestRegisterFetchedAuthHandlerPlugins_InvalidPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+
+	results := []FetchResult{
+		{Name: "bad-handler", Kind: solution.PluginKindAuthHandler, Path: "/nonexistent/binary"},
+	}
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, results, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading auth handler plugin bad-handler")
+	assert.Nil(t, clients)
+}
+
+// --- Catalog allowlist security tests ---
+
+func TestFetcher_CheckCatalogAllowed_NoRestriction(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: nil}
+	assert.NoError(t, f.checkCatalogAllowed("any-catalog"))
+}
+
+func TestFetcher_CheckCatalogAllowed_EmptyResolvedFrom(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
+	err := f.checkCatalogAllowed("")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "origin unknown")
+}
+
+func TestFetcher_CheckCatalogAllowed_EmptyResolvedFrom_NoAllowlist(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: nil}
+	assert.NoError(t, f.checkCatalogAllowed(""))
+}
+
+func TestFetcher_CheckCatalogAllowed_Permitted(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true, "internal": true}}
+	assert.NoError(t, f.checkCatalogAllowed("official"))
+}
+
+func TestFetcher_CheckCatalogAllowed_Rejected(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
+	err := f.checkCatalogAllowed("untrusted-catalog")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
+}
+
+func TestFetcher_CheckCatalogAllowed_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
+	// Allowlist is built with ToLower, and checkCatalogAllowed also lowercases
+	// resolvedFrom, so matching is fully case-insensitive.
+	assert.NoError(t, f.checkCatalogAllowed("official"))
+	assert.NoError(t, f.checkCatalogAllowed("Official"))
+	assert.NoError(t, f.checkCatalogAllowed("OFFICIAL"))
+}
+
+func TestNewFetcher_AllowedCatalogs(t *testing.T) {
+	t.Parallel()
+	cat := newMockCatalog()
+	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
+		Logger:          logr.Discard(),
+		AllowedCatalogs: []string{"Official", "Internal"},
+	})
+	require.NotNil(t, f.allowedCatalogs)
+	assert.True(t, f.allowedCatalogs["official"])
+	assert.True(t, f.allowedCatalogs["internal"])
+	assert.False(t, f.allowedCatalogs["untrusted"])
+}
+
+func TestFetcher_FetchPlugins_CatalogNotAllowed(t *testing.T) {
+	t.Parallel()
+	// Create a catalog that resolves to a non-allowed name
+	cat := newMockCatalog()
+	cat.name = "untrusted"
+
+	binaryData := []byte("fake-plugin-binary")
+	digest := binaryDigest(binaryData)
+
+	ver := semver.MustParse("1.0.0")
+	ref := catalog.Reference{
+		Kind:    catalog.ArtifactKindProvider,
+		Name:    "evil-plugin",
+		Version: ver,
+	}
+	cat.addArtifact(ref, binaryData)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
+		Logger:          logr.Discard(),
+		NoCache:         true,
+		AllowedCatalogs: []string{"official"},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "evil-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	// Provide a lock entry so it hits the locked path with resolvedFrom set
+	lockPlugins := []bundler.LockPlugin{
+		{Name: "evil-plugin", Kind: "provider", Version: "1.0.0", Digest: digest, ResolvedFrom: "untrusted"},
+	}
+
+	_, err := f.FetchPlugins(context.Background(), deps, lockPlugins)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
+}
+
+func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
+	t.Parallel()
+	// Create a pre-populated cache so the no-lock cache-first path is taken.
+	cacheDir := t.TempDir()
+	platform := CurrentPlatform()
+	pluginName := "cached-plugin"
+	binDir := filepath.Join(cacheDir, pluginName, "2.0.0", PlatformCacheKey(platform))
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, pluginName), []byte("#!/bin/sh\n"), 0o755))
+
+	f := NewFetcher(FetcherConfig{
+		Cache:           NewCache(cacheDir),
+		Platform:        platform,
+		Logger:          logr.Discard(),
+		AllowedCatalogs: []string{"approved"},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: pluginName, Kind: solution.PluginKindProvider},
+	}
+
+	// No lock file provided — fetcher uses cache-first path.
+	// Allowlist is set, cached entry has unknown origin → rejected.
+	_, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot verify against allowlist")
 }

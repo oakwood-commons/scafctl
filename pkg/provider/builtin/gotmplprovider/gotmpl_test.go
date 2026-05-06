@@ -70,6 +70,26 @@ func TestGoTemplateProvider_Execute_WithName(t *testing.T) {
 	assert.Equal(t, "my-template", output.Metadata["templateName"])
 }
 
+func TestGoTemplateProvider_Execute_DefaultName(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"greeting": "Hi",
+	})
+
+	inputs := map[string]any{
+		"template": "{{.greeting}}, world!",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	assert.Equal(t, "Hi, world!", output.Data)
+	assert.Equal(t, "template", output.Metadata["templateName"])
+}
+
 func TestGoTemplateProvider_Execute_Conditional(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()
@@ -284,11 +304,12 @@ func TestGoTemplateProvider_Execute_MissingName(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()
 
-	_, err := p.Execute(ctx, map[string]any{
+	output, err := p.Execute(ctx, map[string]any{
 		"template": "Hello",
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "name is required")
+	require.NoError(t, err)
+	assert.Equal(t, "Hello", output.Data)
+	assert.Equal(t, "template", output.Metadata["templateName"])
 }
 
 func TestGoTemplateProvider_Execute_EmptyTemplate(t *testing.T) {
@@ -1192,5 +1213,173 @@ func TestExtractCELDeps(t *testing.T) {
 			found = append(found, name)
 		})
 		assert.Empty(t, found)
+	})
+}
+
+func TestExtractDependencies_DataKeyExclusion(t *testing.T) {
+	t.Run("data keys excluded from template refs", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ toYaml .config }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+			},
+		})
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d, "config should be excluded (provided by data)")
+		}
+	})
+
+	t.Run("resolver ref in template not excluded", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ ._.environment }} {{ .config }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+			},
+		})
+		assert.Contains(t, deps, "environment", "resolver ref should be extracted")
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d, "config should be excluded")
+		}
+	})
+
+	t.Run("no data input does not exclude", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .config }}",
+		})
+		assert.Contains(t, deps, "config")
+	})
+
+	t.Run("multiple data keys all excluded", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .config }} {{ .labels }} {{ ._.resolver1 }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+				"labels": map[string]any{"app": "test"},
+			},
+		})
+		assert.Contains(t, deps, "resolver1")
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d)
+			assert.NotEqual(t, "labels", d)
+		}
+	})
+}
+
+func TestExtractDependencies_ScopedReferences(t *testing.T) {
+	t.Run("with block scopes inner references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": `{{ with .platformAssets.body.data }}{{ .kubeNamespaces }}{{ end }}`,
+		})
+		assert.Contains(t, deps, "platformAssets")
+		for _, d := range deps {
+			assert.NotEqual(t, "kubeNamespaces", d, "scoped ref should not be a dependency")
+		}
+	})
+
+	t.Run("range block scopes inner references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": `{{ range .servers }}{{ .name }}{{ end }}`,
+		})
+		assert.Contains(t, deps, "servers")
+		for _, d := range deps {
+			assert.NotEqual(t, "name", d, "scoped ref should not be a dependency")
+		}
+	})
+
+	t.Run("if block does not scope references", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": `{{ if .enabled }}{{ .value }}{{ end }}`,
+		})
+		assert.Contains(t, deps, "enabled")
+		assert.Contains(t, deps, "value")
+	})
+}
+
+func TestGoTemplateProvider_UnderscoreAlias(t *testing.T) {
+	p := NewGoTemplateProvider()
+
+	t.Run("underscore alias accesses resolver data", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"greeting": "hello",
+		})
+
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   "{{._.greeting}}",
+			"missingKey": "error",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "hello", output.Data)
+	})
+
+	t.Run("both direct and underscore access work", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"name": "world",
+		})
+
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   "{{.name}} {{._.name}}",
+			"missingKey": "error",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world world", output.Data)
+	})
+
+	t.Run("missing key with error default", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"name": "world",
+		})
+
+		_, err := p.Execute(ctx, map[string]any{
+			"template": "{{.nonexistent}}",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "nonexistent")
+	})
+
+	t.Run("shallow copy prevents infinite recursion in serialization", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"name": "world",
+		})
+
+		// Build template data the same way the provider does internally.
+		// Then verify json.Marshal doesn't stack overflow -- proving the
+		// shallow copy breaks the cycle that a self-reference would create.
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   "{{._.name}}",
+			"missingKey": "error",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "world", output.Data)
+
+		// Verify that _._ does NOT exist (proving shallow copy, not self-ref).
+		// With missingKey=default, {{._._.name}} would print "<no value>" if
+		// _._ doesn't exist, vs "world" if it were a self-reference.
+		output2, err := p.Execute(ctx, map[string]any{
+			"template":   `{{._._.name}}`,
+			"missingKey": "default",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "<no value>", output2.Data)
+	})
+
+	t.Run("underscore alias is shallow copy not self-reference", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithResolverContext(ctx, map[string]any{
+			"greeting": "hello",
+		})
+
+		// Verify _._ does NOT exist, proving _ is a shallow copy.
+		// If _ were a self-reference, _._.greeting would return "hello".
+		// With a shallow copy, _._ doesn't exist so it renders <no value>.
+		output, err := p.Execute(ctx, map[string]any{
+			"template":   `{{._._.greeting}}`,
+			"missingKey": "default",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "<no value>", output.Data)
 	})
 }

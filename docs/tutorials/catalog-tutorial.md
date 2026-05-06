@@ -648,6 +648,41 @@ scafctl catalog prune
 - `scafctl catalog prune` removes orphaned blobs and reclaims disk space
 - Always prune after deleting to free up storage
 
+### Delete All Local Artifacts
+
+Use `--all` to remove every artifact from the local catalog at once. This is useful for resetting your local environment:
+
+{{< tabs "catalog-tutorial-cmd-delete-all" >}}
+{{% tab "Bash" %}}
+```bash
+# Interactive (prompts for confirmation)
+scafctl catalog delete --all
+
+# Non-interactive (skip confirmation)
+scafctl catalog delete --all --force
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Interactive (prompts for confirmation)
+scafctl catalog delete --all
+
+# Non-interactive (skip confirmation)
+scafctl catalog delete --all --force
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Expected output:
+
+```
+ ✅ Deleted 5 artifact(s) from local catalog
+```
+
+{{% hint warning %}}
+`--all` only applies to the local catalog. It cannot be combined with `--catalog` for remote registries. Positional arguments are not allowed with `--all`.
+{{% /hint %}}
+
 ---
 
 ## Exporting and Importing

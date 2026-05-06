@@ -27,7 +27,7 @@ func (s *Server) registerExampleTools() {
 			mcp.Enum("solutions", "resolvers", "actions", "providers", "exec", "config", "mcp", "snapshots", "catalog", "auth", "eval", "plugins", "telemetry"),
 		),
 	)
-	s.mcpServer.AddTool(listExamplesTool, s.handleListExamples)
+	s.addTool(listExamplesTool, s.handleListExamples)
 
 	// get_example — read an example file's contents
 	getExampleTool := mcp.NewTool("get_example",
@@ -43,7 +43,7 @@ func (s *Server) registerExampleTools() {
 			mcp.Description("Path of the example file (as returned by list_examples, e.g., 'solutions/email-notifier/solution.yaml')"),
 		),
 	)
-	s.mcpServer.AddTool(getExampleTool, s.handleGetExample)
+	s.addTool(getExampleTool, s.handleGetExample)
 }
 
 // handleListExamples lists available example files.

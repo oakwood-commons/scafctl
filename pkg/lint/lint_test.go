@@ -415,6 +415,43 @@ func TestCollectReferencedResolvers_NestedInArray(t *testing.T) {
 	assert.True(t, refs["env"], "should detect rslvr inside array elements")
 }
 
+func TestCollectReferencedResolvers_StringLiteralWithResolverRef(t *testing.T) {
+	// CEL provider's `expression` input is a plain string literal containing
+	// _.resolverName and has(_.resolverName) patterns. These must be detected.
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"localIpWindows": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "exec"}},
+					},
+				},
+				"localIpUnix": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "exec"}},
+					},
+				},
+				"localIp": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs: map[string]*spec.ValueRef{
+								"expression": {
+									Literal: `has(_.localIpWindows) ? _.localIpWindows : has(_.localIpUnix) ? _.localIpUnix : ""`,
+								},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectReferencedResolvers(sol)
+	assert.True(t, refs["localIpWindows"], "should detect resolver ref in string literal (has pattern)")
+	assert.True(t, refs["localIpUnix"], "should detect resolver ref in string literal (has pattern)")
+}
+
 func TestLintResolverSelfReferences(t *testing.T) {
 	validationProv := newFakeProvider("validation", map[string]*jsonschema.Schema{
 		"expression": {Type: "string"},
@@ -653,6 +690,56 @@ func TestLintEmptyValidateWith(t *testing.T) {
 	findings := filterFindingsByRule(result, "empty-validate-with")
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0].Message, "empty")
+}
+
+func TestLintNonValidationProvider(t *testing.T) {
+	// "static" has CapabilityFrom, not CapabilityValidation
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	validationProv := newFakeProvider("validation", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	validationProv.desc.Capabilities = []provider.Capability{provider.CapabilityValidation}
+
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+	_ = reg.Register(validationProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test-resolver": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "ok"}},
+						}},
+					},
+					Validate: &resolver.ValidatePhase{
+						With: []resolver.ProviderValidation{
+							{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"expression": {Literal: "true"}},
+							},
+							{
+								Provider: "validation",
+								Inputs:   map[string]*spec.ValueRef{"expression": {Literal: "true"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "non-validation-provider")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "static")
+	assert.Contains(t, findings[0].Message, "does not declare validation capability")
 }
 
 func TestLintNullResolverValue(t *testing.T) {
@@ -1095,7 +1182,7 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 		errorCount  int
 	}{
 		{
-			name:        "underscore prefix triggers error",
+			name:        "underscore prefix triggers info",
 			tmpl:        "{{ ._.config.appName }}",
 			expectError: true,
 			errorCount:  1,
@@ -1142,7 +1229,7 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 			if tt.expectError {
 				assert.Len(t, findings, tt.errorCount)
 				if len(findings) > 0 {
-					assert.Equal(t, SeverityError, findings[0].Severity)
+					assert.Equal(t, SeverityInfo, findings[0].Severity)
 				}
 			} else {
 				assert.Empty(t, findings)
@@ -1433,4 +1520,41 @@ func TestLintState_ResolverRefInBackendInputs(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func TestLintResolveForEach(t *testing.T) {
+	prov := newFakeProvider("http", map[string]*jsonschema.Schema{
+		"url": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(prov)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"test-resolver": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{
+								Provider: "http",
+								Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+								ForEach: &resolver.ForEachClause{
+									In:   &spec.ValueRef{Literal: "items"},
+									Item: "item",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "resolve-foreach")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "forEach on resolve step")
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
 }

@@ -3,7 +3,11 @@ kind: Solution
 
 metadata:
   name: hcl-parser-demo
-  version: 1.0.0
+  displayName: HCL Parser Demo
+  category: solutions
+  tags:
+    - hcl
+    - solution
   description: |
     Demonstrates the HCL provider to parse Terraform configuration
     and extract structured information about variables, resources,

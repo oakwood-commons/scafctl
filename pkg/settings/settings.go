@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,14 +16,6 @@ import (
 
 const (
 	CliBinaryName = "scafctl"
-
-	// OfficialCatalogURL is the default OCI catalog where official plugin
-	// artifacts are published.
-	OfficialCatalogURL = "oci://ghcr.io/oakwood-commons"
-
-	// OfficialCatalogName is the display name used for the official catalog
-	// entry in the catalog chain.
-	OfficialCatalogName = "official"
 )
 
 // safeNameRe matches characters that are NOT alphanumeric, underscore, hyphen, or dot.
@@ -96,6 +89,11 @@ const (
 	// DefaultArtifactCacheTTL is the default TTL for the artifact cache.
 	// Catalog artifacts are cached for 24 hours by default.
 	DefaultArtifactCacheTTL = 24 * time.Hour
+
+	// DefaultRegistryConcurrency is the maximum number of concurrent OCI
+	// registry requests when listing artifacts. Bounded to avoid
+	// rate-limiting (429s) on registries like GHCR or Docker Hub.
+	DefaultRegistryConcurrency = 5
 )
 
 // HTTPCacheDirFor returns the HTTP cache directory for the given binary name.
@@ -268,6 +266,32 @@ func DefaultPluginCacheDir() string {
 	return PluginCacheDirFor(CliBinaryName)
 }
 
+// DiscoveryMode controls which file names auto-discovery searches for.
+type DiscoveryMode int
+
+const (
+	// DiscoveryModeDefault searches all known file names (current behavior).
+	DiscoveryModeDefault DiscoveryMode = iota
+	// DiscoveryModeAction searches action files first, then falls back to solution files.
+	DiscoveryModeAction
+	// DiscoveryModeSolution searches only solution files (excludes actions.yaml/yml).
+	DiscoveryModeSolution
+)
+
+// String returns a human-readable label for the discovery mode.
+func (m DiscoveryMode) String() string {
+	switch m {
+	case DiscoveryModeDefault:
+		return "default"
+	case DiscoveryModeAction:
+		return "action"
+	case DiscoveryModeSolution:
+		return "solution"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(m))
+	}
+}
+
 // SolutionFoldersFor returns the solution folder search paths for the given binary name.
 func SolutionFoldersFor(binaryName string) []string {
 	return []string{
@@ -286,7 +310,62 @@ func SolutionFileNamesFor(binaryName string) []string {
 		fmt.Sprintf("%s.yml", binaryName),
 		"solution.json",
 		fmt.Sprintf("%s.json", binaryName),
+		"actions.yaml",
+		"actions.yml",
 	}
+}
+
+// ActionFileNamesFor returns the action-preferred file names for the given binary name.
+// Action files come first, then solution files as fallback.
+func ActionFileNamesFor(binaryName string) []string {
+	return []string{
+		"actions.yaml",
+		"actions.yml",
+		"solution.yaml",
+		"solution.yml",
+		fmt.Sprintf("%s.yaml", binaryName),
+		fmt.Sprintf("%s.yml", binaryName),
+		"solution.json",
+		fmt.Sprintf("%s.json", binaryName),
+	}
+}
+
+// SolutionOnlyFileNamesFor returns file names excluding actions.yaml/yml.
+func SolutionOnlyFileNamesFor(binaryName string) []string {
+	return []string{
+		"solution.yaml",
+		"solution.yml",
+		fmt.Sprintf("%s.yaml", binaryName),
+		fmt.Sprintf("%s.yml", binaryName),
+		"solution.json",
+		fmt.Sprintf("%s.json", binaryName),
+	}
+}
+
+// FileNamesForMode returns the appropriate file name list based on mode and binary name.
+// When customActionFiles is non-empty and mode is DiscoveryModeAction, those file names
+// are used instead of the defaults (with solution files appended as fallback).
+func FileNamesForMode(mode DiscoveryMode, binaryName string, customActionFiles []string) []string {
+	switch mode {
+	case DiscoveryModeDefault:
+		return SolutionFileNamesFor(binaryName)
+	case DiscoveryModeAction:
+		if len(customActionFiles) > 0 {
+			// Concat avoids mutating the caller's backing array.
+			return slices.Concat(customActionFiles, SolutionOnlyFileNamesFor(binaryName))
+		}
+		return ActionFileNamesFor(binaryName)
+	case DiscoveryModeSolution:
+		return SolutionOnlyFileNamesFor(binaryName)
+	default:
+		return SolutionFileNamesFor(binaryName)
+	}
+}
+
+// IsActionFile returns true when the given filename is an action file
+// (actions.yaml or actions.yml).
+func IsActionFile(name string) bool {
+	return name == "actions.yaml" || name == "actions.yml"
 }
 
 // HTTPCacheKeyPrefixFor returns the HTTP cache key prefix for the given binary name.
@@ -332,6 +411,10 @@ type Run struct {
 	Verbose            bool               `json:"verbose" yaml:"verbose" doc:"Whether to enable verbose output"`
 	ExitOnError        bool               `json:"exitOnError" yaml:"exitOnError" doc:"Whether to exit on error"`
 	BinaryName         string             `json:"binaryName" yaml:"binaryName" doc:"Runtime binary name for the CLI" maxLength:"64" example:"scafctl"`
+
+	// ActionDiscoveryFileNames overrides the file names used by "run action"
+	// auto-discovery. When empty, defaults from ActionFileNamesFor are used.
+	ActionDiscoveryFileNames []string `json:"-" yaml:"-"`
 }
 
 // NewCliParams initializes and returns a pointer to a Run struct with default CLI parameters.

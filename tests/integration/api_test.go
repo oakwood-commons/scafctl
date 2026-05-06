@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,10 +23,12 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
 // setupTestServer creates a test HTTP server with all endpoints registered.
@@ -39,7 +42,7 @@ func setupTestServer(t testing.TB) *httptest.Server {
 	}
 
 	reg := provider.NewRegistry()
-	require.NoError(t, reg.Register(staticprovider.New()))
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
 
 	srv, err := api.NewServer(
@@ -176,14 +179,14 @@ func TestAPI_ProvidersEndpoint_Filter(t *testing.T) {
 	defer ts.Close()
 
 	obj := e.GET("/v1/providers").
-		WithQuery("filter", `item.name=="static"`).
+		WithQuery("filter", `item.name=="file"`).
 		Expect().
 		Status(http.StatusOK).
 		JSON().Object()
 
 	items := obj.Value("items").Array()
 	items.Length().IsEqual(1)
-	items.Value(0).Object().Value("name").IsEqual("static")
+	items.Value(0).Object().Value("name").IsEqual("file")
 }
 
 // TestAPI_AdminInfoEndpoint verifies admin info returns server metadata.
@@ -561,6 +564,39 @@ func TestAPI_EvalTemplate_CustomName(t *testing.T) {
 		JSON().Object()
 
 	obj.HasValue("output", "Greetings from integration test")
+}
+
+// TestAPI_EvalTemplate_MissingKeyDefault verifies that missingKey=default renders
+// missing keys as "<no value>" instead of returning an error.
+func TestAPI_EvalTemplate_MissingKeyDefault(t *testing.T) {
+	e, ts := setupExpect(t)
+	defer ts.Close()
+
+	obj := e.POST("/v1/eval/template").
+		WithJSON(map[string]any{
+			"template":   "Hello {{ .missing }}!",
+			"missingKey": "default",
+		}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	obj.HasValue("output", "Hello <no value>!")
+}
+
+// TestAPI_EvalTemplate_MissingKeyError verifies that missing keys return a 400
+// error by default (missingKey=error).
+func TestAPI_EvalTemplate_MissingKeyError(t *testing.T) {
+	e, ts := setupExpect(t)
+	defer ts.Close()
+
+	e.POST("/v1/eval/template").
+		WithJSON(map[string]any{
+			"template": "Hello {{ .missing }}!",
+			"data":     map[string]any{},
+		}).
+		Expect().
+		Status(http.StatusBadRequest)
 }
 
 // ─── Schema Endpoints ───────────────────────────────────────────────────────
@@ -1843,4 +1879,214 @@ func TestAPI_OpenAPISpec_ErrorCodesPresent(t *testing.T) {
 		_, exists := responses[code]
 		assert.True(t, exists, "expected %s response in admin-info endpoint", code)
 	}
+}
+
+// setupTestServerWithPool creates a test server with a plugin pool configured.
+func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.PoolOption) *httptest.Server {
+	t.Helper()
+
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
+	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+
+	pool := plugin.NewPool(nil, reg, logr.Discard(), poolOpts...)
+	t.Cleanup(pool.Shutdown)
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+
+	hctx := srv.HandlerCtx()
+	endpoints.RegisterAll(srv.API(), srv.Router(), hctx)
+
+	return httptest.NewServer(srv.Router())
+}
+
+// serveSolutionWithPlugins creates an HTTP server that serves a solution YAML
+// referencing external plugins. Returns the URL to the solution.
+func serveSolutionWithPlugins(t *testing.T) string {
+	t.Helper()
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: plugin-test
+  description: Test solution with external plugin dependency
+spec:
+  resolvers:
+    greeting:
+      description: A greeting
+      type: string
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: hello
+bundle:
+  plugins:
+    - name: external-plugin
+      kind: provider
+`
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	t.Cleanup(solServer.Close)
+	return solServer.URL + "/solution.yaml"
+}
+
+// TestAPI_SolutionDryRun_PluginExternalDisabled verifies that the dryrun
+// endpoint returns 403 when external plugins are disabled.
+func TestAPI_SolutionDryRun_PluginExternalDisabled(t *testing.T) {
+	ts := setupTestServerWithPool(t, plugin.WithIdleTimeout(0), plugin.WithDisableExternal(true))
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveSolutionWithPlugins(t)
+
+	e.POST("/v1/solutions/dryrun").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusForbidden).
+		HasContentType("application/problem+json").
+		Body().Contains("external plugins disabled")
+}
+
+// TestAPI_SolutionRun_PluginNotAllowed verifies that the run endpoint
+// returns 403 when a plugin is not on the allowlist.
+func TestAPI_SolutionRun_PluginNotAllowed(t *testing.T) {
+	ts := setupTestServerWithPool(t,
+		plugin.WithIdleTimeout(0),
+		plugin.WithAllowedPlugins([]string{"only-this-one"}),
+	)
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveSolutionWithPlugins(t)
+
+	e.POST("/v1/solutions/run").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusForbidden).
+		HasContentType("application/problem+json").
+		Body().Contains("not in allowlist")
+}
+
+// TestAPI_SolutionRender_PluginPoolFull verifies that the render endpoint
+// returns 503 when the plugin pool is at capacity.
+func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
+
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0), plugin.WithMaxPlugins(1))
+	t.Cleanup(pool.Shutdown)
+
+	// Adopt a nil client to fill the single slot
+	pool.Adopt("filler-plugin", nil, solution.PluginDependency{
+		Name: "filler-plugin",
+		Kind: solution.PluginKindProvider,
+	}, nil)
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveSolutionWithPlugins(t)
+
+	e.POST("/v1/solutions/render").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusServiceUnavailable)
+}
+
+// TestAPI_SolutionRun_AllowedCatalogs_Rejected verifies that the run endpoint
+// rejects a plugin when the fetcher's allowedCatalogs blocks it end-to-end.
+func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
+	// Create a pre-populated plugin cache so the fetcher takes the cache path
+	// (which now validates allowedCatalogs).
+	cacheDir := t.TempDir()
+	platform := plugin.CurrentPlatform()
+	pluginName := "external-plugin"
+	pluginBinDir := cacheDir + "/" + pluginName + "/1.0.0/" + plugin.PlatformCacheKey(platform)
+	require.NoError(t, os.MkdirAll(pluginBinDir, 0o755))
+	// Create a fake executable so the cache recognizes it.
+	require.NoError(t, os.WriteFile(pluginBinDir+"/"+pluginName, []byte("#!/bin/sh\n"), 0o755))
+
+	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
+		Cache:           plugin.NewCache(cacheDir),
+		Platform:        platform,
+		AllowedCatalogs: []string{"approved-only"},
+		Logger:          logr.Discard(),
+	})
+
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
+
+	pool := plugin.NewPool(fetcher, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	t.Cleanup(pool.Shutdown)
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveSolutionWithPlugins(t)
+
+	e.POST("/v1/solutions/run").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusBadGateway).
+		HasContentType("application/problem+json").
+		Body().Contains("failed to load required plugins")
 }

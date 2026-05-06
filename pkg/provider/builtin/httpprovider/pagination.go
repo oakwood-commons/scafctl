@@ -247,9 +247,12 @@ func (p *HTTPProvider) executePaginated(
 			"page":       pageCount,
 		}
 
-		// Collect items from this page
+		// Collect items from this page.
+		// Use evaluateCELForPagination so that "no such key" errors (e.g.,
+		// the API returns a different envelope on the last page) are treated
+		// as an empty result instead of a hard failure.
 		if pagCfg.CollectPath != "" {
-			items, err := evaluateCEL(ctx, pagCfg.CollectPath, responseCtx)
+			items, err := evaluateCELForPagination(ctx, pagCfg.CollectPath, responseCtx)
 			if err != nil {
 				return nil, fmt.Errorf("%s: page %d collectPath evaluation failed: %w", ProviderName, pageCount, err)
 			}
@@ -263,11 +266,20 @@ func (p *HTTPProvider) executePaginated(
 			allItems = append(allItems, bodyData)
 		}
 
-		// Check stopWhen condition
+		// Check stopWhen condition.
+		// Use evaluateCELForPagination so that "no such key" errors (e.g.,
+		// size(body.items) when the last page omits "items") are treated
+		// as a stop signal rather than a hard failure.
 		if pagCfg.StopWhen != "" {
-			shouldStop, err := evaluateCEL(ctx, pagCfg.StopWhen, responseCtx)
+			shouldStop, err := evaluateCELForPagination(ctx, pagCfg.StopWhen, responseCtx)
 			if err != nil {
 				return nil, fmt.Errorf("%s: page %d stopWhen evaluation failed: %w", ProviderName, pageCount, err)
+			}
+			// Treat nil (from "no such key") as a stop signal:
+			// if the expected field is missing, the page has no usable data.
+			if shouldStop == nil {
+				lgr.V(1).Info("pagination stopped: stopWhen field not found in response", "page", pageCount)
+				break
 			}
 			if boolVal, ok := shouldStop.(bool); ok && boolVal {
 				lgr.V(1).Info("pagination stopped by stopWhen condition", "page", pageCount)
@@ -634,16 +646,6 @@ func checkItemCountStop(responseCtx map[string]any, pagCfg *paginationConfig) bo
 	}
 
 	return false
-}
-
-// evaluateCEL evaluates a CEL expression with the response context.
-// The response data is available as top-level variables: statusCode, body, rawBody, headers, page.
-func evaluateCEL(ctx context.Context, expression string, responseCtx map[string]any) (any, error) {
-	result, err := celexp.EvaluateExpression(ctx, expression, nil, responseCtx)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 // evaluateCELForPagination evaluates a CEL expression for pagination control.

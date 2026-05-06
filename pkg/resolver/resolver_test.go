@@ -61,6 +61,7 @@ func TestResolver_Structure(t *testing.T) {
 		Description: "A test resolver",
 		DisplayName: "Test Resolver",
 		Sensitive:   true,
+		Internal:    true,
 		Example:     "example-value",
 		Type:        TypeString,
 		When: &Condition{
@@ -103,6 +104,7 @@ func TestResolver_Structure(t *testing.T) {
 	assert.Equal(t, "A test resolver", resolver.Description)
 	assert.Equal(t, "Test Resolver", resolver.DisplayName)
 	assert.True(t, resolver.Sensitive)
+	assert.True(t, resolver.Internal)
 	assert.Equal(t, "example-value", resolver.Example)
 	assert.Equal(t, TypeString, resolver.Type)
 	require.NotNil(t, resolver.When)

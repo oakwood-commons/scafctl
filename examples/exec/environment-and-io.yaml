@@ -4,7 +4,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: exec-environment-io
-  version: 1.0.0
+  displayName: Exec Environment and IO
+  category: developer-tools
+  tags:
+    - environment
+    - exec
+    - shell
   description: Environment variables, stdin piping, and timeout handling
 
 spec:

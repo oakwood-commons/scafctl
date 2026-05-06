@@ -51,6 +51,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
@@ -159,6 +160,18 @@ type RootOptions struct {
 	// binaries. Discovered plugins are registered in the auth.Registry
 	// alongside built-in handlers during PersistentPreRunE.
 	AuthPluginDirs []string
+
+	// ActionDiscoveryFileNames overrides the file names used by "run action"
+	// auto-discovery. When empty, the defaults from
+	// settings.ActionFileNamesFor are used.
+	ActionDiscoveryFileNames []string
+
+	// OfficialProviders overrides the default official provider registry used
+	// for auto-resolution. When nil and DisableOfficialProviders is false,
+	// the default registry (all 10 extracted first-party providers) is used.
+	// Embedders can supply a custom registry via official.NewRegistryFrom to
+	// extend or replace the default set.
+	OfficialProviders *official.Registry
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -208,6 +221,12 @@ func Root(opts *RootOptions) *cobra.Command {
 	settings.RootSolutionFolders = settings.SolutionFoldersFor(binaryName)
 	settings.SolutionFileNames = settings.SolutionFileNamesFor(binaryName)
 
+	// Wire embedder-supplied action discovery file names into cliParams
+	// so they are available via settings.FromContext during command execution.
+	if len(opts.ActionDiscoveryFileNames) > 0 {
+		cliParams.ActionDiscoveryFileNames = opts.ActionDiscoveryFileNames
+	}
+
 	// Resolve IOStreams: use caller-provided or default to OS streams.
 	ioStreams := opts.IOStreams
 	if ioStreams == nil {
@@ -253,6 +272,11 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 			if !cCmd.Flags().Changed("quiet") {
 				cliParams.IsQuiet = cfg.Settings.Quiet
+			}
+
+			// Apply discovery config: config file fills in when embedder didn't set it.
+			if len(cliParams.ActionDiscoveryFileNames) == 0 && len(cfg.Discovery.ActionFiles) > 0 {
+				cliParams.ActionDiscoveryFileNames = cfg.Discovery.ActionFiles
 			}
 
 			// Resolve log level with precedence: flag > --debug > env > config > default ("none")
@@ -367,6 +391,9 @@ func Root(opts *RootOptions) *cobra.Command {
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
 			ctx = config.WithManagerOptions(ctx, configOpts)
+			if len(opts.ConfigDefaults) > 0 {
+				ctx = config.WithBaseDefaults(ctx, opts.ConfigDefaults)
+			}
 
 			// ── Resolve --cwd flag and inject into context ──
 			// This must happen before any path resolution so that downstream
@@ -415,6 +442,7 @@ func Root(opts *RootOptions) *cobra.Command {
 					ClientID:      cfg.Auth.Entra.ClientID,
 					TenantID:      cfg.Auth.Entra.TenantID,
 					DefaultScopes: cfg.Auth.Entra.DefaultScopes,
+					DefaultFlow:   cfg.Auth.Entra.DefaultFlow,
 				}))
 			}
 			entraOpts = append(entraOpts, entra.WithLogger(*lgr))
@@ -523,6 +551,24 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
+
+			// ── Wire official provider registry for auto-resolution ──
+			// When the embedder provides a custom registry, use it.
+			// Otherwise, use the default registry unless disabled in config.
+			if !cfg.Settings.DisableOfficialProviders {
+				officialReg := opts.OfficialProviders
+				if officialReg == nil {
+					officialReg = official.NewRegistry()
+				}
+				source := "default"
+				if opts.OfficialProviders != nil {
+					source = "embedder"
+				}
+				lgr.V(1).Info("official provider registry enabled", "count", officialReg.Len(), "source", source)
+				ctx = official.WithRegistry(ctx, officialReg)
+			} else {
+				lgr.V(1).Info("official provider registry disabled via config")
+			}
 
 			cCmd.SetContext(ctx)
 

@@ -1,0 +1,147 @@
+# Lint stress-test solution -- intentionally triggers many lint rules.
+# Run: scafctl lint -f examples/solutions/lint-stress-test/solution.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-stress-test
+  description: Triggers many lint rules for testing table output
+
+spec:
+  resolvers:
+    # missing-provider
+    bad_provider:
+      type: string
+      resolve:
+        with:
+          - provider: nonexistent-provider
+            inputs:
+              value: hello
+
+    # invalid-expression (bad CEL in when)
+    guarded:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            when: "this is not valid cel %%!!"
+            inputs:
+              value: fallback
+
+    # unused-resolver + missing-description
+    orphan_value:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "nobody uses me"
+
+    # another unused-resolver + missing-description
+    orphan_two:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "also unused"
+
+    # long-timeout
+    slow_call:
+      type: string
+      description: This takes too long
+      timeout: 600s
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "slow"
+
+    # non-validation-provider in validate block
+    wrong_validate:
+      type: string
+      description: Uses wrong provider for validation
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "test"
+      validate:
+        with:
+          - provider: static
+            inputs:
+              value: "true"
+
+    # empty-transform-with
+    empty_transform:
+      type: string
+      description: Has empty transform
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "raw"
+      transform:
+        with: []
+
+    # empty-validate-with
+    empty_validate:
+      type: string
+      description: Has empty validate
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "raw"
+      validate:
+        with: []
+
+    # permissive-result-schema (no constraints)
+    loose_schema:
+      type: string
+      description: Result schema too loose
+      resultSchema:
+        type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "anything goes"
+
+    # missing-description (another one)
+    no_desc:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.bad_provider + _.guarded"
+
+    # used resolver so not everything is unused
+    main_output:
+      type: string
+      description: The main resolver
+      dependsOn:
+        - bad_provider
+        - guarded
+        - slow_call
+        - wrong_validate
+        - empty_transform
+        - empty_validate
+        - loose_schema
+        - no_desc
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "done"
+
+  workflow:
+    actions:
+      deploy:
+        description: Deploy action
+        steps:
+          - provider: exec
+            inputs:
+              command: "echo $USER_INPUT"

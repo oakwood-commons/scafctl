@@ -58,6 +58,12 @@ func ExtractFromTemplate(content, leftDelim, rightDelim string) ([]string, error
 	var result []string
 
 	for _, ref := range templateRefs {
+		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
+		// bodies where dot has been rebound, not to top-level resolvers.
+		if ref.Scoped {
+			continue
+		}
+
 		name := ExtractResolverName(ref.Path)
 		if name != "" && !seen[name] {
 			seen[name] = true

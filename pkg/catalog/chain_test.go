@@ -25,6 +25,7 @@ type mockCatalog struct {
 	deleteFunc          func(ctx context.Context, ref Reference) error
 	fetchFunc           func(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error)
 	fetchWithBundleFunc func(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error)
+	resolveFunc         func(ctx context.Context, ref Reference) (ArtifactInfo, error)
 }
 
 type mockArtifact struct {
@@ -86,6 +87,9 @@ func (m *mockCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byt
 }
 
 func (m *mockCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
+	if m.resolveFunc != nil {
+		return m.resolveFunc(ctx, ref)
+	}
 	a, ok := m.artifacts[ref.String()]
 	if !ok {
 		return ArtifactInfo{}, ErrArtifactNotFound
@@ -396,6 +400,137 @@ func TestChainCatalog_Fetch_NonNotFoundError(t *testing.T) {
 	assert.Equal(t, "good", info.Catalog)
 }
 
+func TestChainCatalog_FetchByPlatform_DelegatesToPlatformAware(t *testing.T) {
+	plain := newMockCatalog("plain")
+	pac := newMockPlatformAwareCatalog("local")
+	ref := testRef("plugin", "1.0.0")
+	pac.fetchByPlatformFunc = func(_ context.Context, r Reference, platform string) ([]byte, ArtifactInfo, error) {
+		return []byte("darwin-arm64-binary"), ArtifactInfo{
+			Reference:   r,
+			Catalog:     "local",
+			Annotations: map[string]string{AnnotationPlatform: platform},
+		}, nil
+	}
+
+	chain, err := NewChainCatalog(logr.Discard(), plain, pac)
+	require.NoError(t, err)
+
+	data, info, err := chain.FetchByPlatform(context.Background(), ref, "darwin/arm64")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("darwin-arm64-binary"), data)
+	assert.Equal(t, "local", info.Catalog)
+	assert.Equal(t, "darwin/arm64", info.Annotations[AnnotationPlatform])
+}
+
+func TestChainCatalog_FetchByPlatform_SkipsNonPlatformAware(t *testing.T) {
+	c1 := newMockCatalog("plain1")
+	c2 := newMockCatalog("plain2")
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	_, _, err = chain.FetchByPlatform(context.Background(), ref, "linux/amd64")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no catalog supports platform-aware fetch")
+}
+
+func TestChainCatalog_FetchByPlatform_FallbackToSecondPlatformAware(t *testing.T) {
+	pac1 := newMockPlatformAwareCatalog("remote")
+	pac2 := newMockPlatformAwareCatalog("local")
+	ref := testRef("plugin", "1.0.0")
+	pac2.fetchByPlatformFunc = func(_ context.Context, r Reference, _ string) ([]byte, ArtifactInfo, error) {
+		return []byte("local-binary"), ArtifactInfo{Reference: r, Catalog: "local"}, nil
+	}
+
+	chain, err := NewChainCatalog(logr.Discard(), pac1, pac2)
+	require.NoError(t, err)
+
+	data, info, err := chain.FetchByPlatform(context.Background(), ref, "linux/amd64")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("local-binary"), data)
+	assert.Equal(t, "local", info.Catalog)
+}
+
+func TestChainCatalog_FetchByPlatform_StopsOnPlatformNotFound(t *testing.T) {
+	pac1 := newMockPlatformAwareCatalog("local")
+	pac1.fetchByPlatformFunc = func(_ context.Context, _ Reference, _ string) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &PlatformNotFoundError{
+			Platform:  "windows/arm64",
+			Available: []string{"linux/amd64", "darwin/arm64"},
+		}
+	}
+	pac2 := newMockPlatformAwareCatalog("remote")
+	pac2.fetchByPlatformFunc = func(_ context.Context, _ Reference, _ string) ([]byte, ArtifactInfo, error) {
+		t.Fatal("should not reach second catalog when PlatformNotFoundError is returned")
+		return nil, ArtifactInfo{}, nil
+	}
+
+	chain, err := NewChainCatalog(logr.Discard(), pac1, pac2)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	_, _, err = chain.FetchByPlatform(context.Background(), ref, "windows/arm64")
+	require.Error(t, err)
+	assert.True(t, IsPlatformNotFound(err))
+}
+
+func TestChainCatalog_ListPlatforms_DelegatesToPlatformAware(t *testing.T) {
+	plain := newMockCatalog("plain")
+	pac := newMockPlatformAwareCatalog("local")
+	pac.listPlatformsFunc = func(_ context.Context, _ Reference) ([]string, error) {
+		return []string{"linux/amd64", "darwin/arm64"}, nil
+	}
+
+	chain, err := NewChainCatalog(logr.Discard(), plain, pac)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	platforms, err := chain.ListPlatforms(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"linux/amd64", "darwin/arm64"}, platforms)
+}
+
+func TestChainCatalog_ListPlatforms_FallbackToSecond(t *testing.T) {
+	pac1 := newMockPlatformAwareCatalog("remote")
+	pac1.listPlatformsFunc = func(_ context.Context, _ Reference) ([]string, error) {
+		return nil, ErrArtifactNotFound
+	}
+	pac2 := newMockPlatformAwareCatalog("local")
+	pac2.listPlatformsFunc = func(_ context.Context, _ Reference) ([]string, error) {
+		return []string{"darwin/arm64"}, nil
+	}
+
+	chain, err := NewChainCatalog(logr.Discard(), pac1, pac2)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	platforms, err := chain.ListPlatforms(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"darwin/arm64"}, platforms)
+}
+
+func TestChainCatalog_ListPlatforms_NoPlatformAware(t *testing.T) {
+	c1 := newMockCatalog("plain")
+
+	chain, err := NewChainCatalog(logr.Discard(), c1)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	_, err = chain.ListPlatforms(context.Background(), ref)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no catalog supports platform listing")
+}
+
+func TestChainCatalog_ImplementsPlatformAwareCatalog(t *testing.T) {
+	chain, err := NewChainCatalog(logr.Discard(), newMockCatalog("test"))
+	require.NoError(t, err)
+
+	var cat interface{} = chain
+	_, ok := cat.(PlatformAwareCatalog)
+	assert.True(t, ok, "ChainCatalog must implement PlatformAwareCatalog")
+}
+
 func TestBuildCatalogChain_NilConfig(t *testing.T) {
 	chain, err := BuildCatalogChain(nil, nil, logr.Discard())
 	require.NoError(t, err)
@@ -533,4 +668,107 @@ func TestNewRemoteCatalog_WithAuthHandlerAndCredStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cat)
+}
+
+func TestBuildCatalogChain_DisableOfficialCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameLocal,
+				Type: config.CatalogTypeFilesystem,
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+		Settings: config.Settings{
+			DisableOfficialCatalog: true,
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Only local should be present (official is disabled).
+	assert.Len(t, chain.catalogs, 1)
+}
+
+func TestBuildCatalogChain_ReservedCatalogsPinned(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameLocal,
+				Type: config.CatalogTypeFilesystem,
+			},
+			{
+				Name: "embedder-catalog",
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com/embedder",
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// local (first) + embedder (middle) + official (last) = 3
+	require.Len(t, chain.catalogs, 3)
+
+	// First catalog is local.
+	assert.IsType(t, &LocalCatalog{}, chain.catalogs[0])
+
+	// Last catalog is official (remote).
+	last, ok := chain.catalogs[2].(*RemoteCatalog)
+	require.True(t, ok)
+	assert.Equal(t, config.CatalogNameOfficial, last.name)
+}
+
+func TestBuildCatalogChain_SkipsReservedNamesFromMiddle(t *testing.T) {
+	t.Parallel()
+
+	// Even if someone puts "local" or "official" as non-reserved-type entries,
+	// they are still filtered out from the middle section.
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameLocal,
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com/should-be-skipped",
+			},
+			{
+				Name: "my-catalog",
+				Type: config.CatalogTypeOCI,
+				URL:  "registry.example.com/mine",
+			},
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/oakwood-commons",
+			},
+		},
+	}
+
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard())
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// local (pinned first) + my-catalog (middle) + official (pinned last) = 3
+	require.Len(t, chain.catalogs, 3)
+
+	middle, ok := chain.catalogs[1].(*RemoteCatalog)
+	require.True(t, ok)
+	assert.Equal(t, "my-catalog", middle.name)
 }

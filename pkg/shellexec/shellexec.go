@@ -188,12 +188,20 @@ func runEmbedded(ctx context.Context, opts *RunOptions, shell ShellType) (*RunRe
 	}
 
 	// Build interpreter options
+	// Guard against nil stdin: the embedded shell's coreutils (e.g. cat)
+	// panic with a nil pointer dereference when stdin is nil because
+	// io.Copy is called with a nil reader. Provide an empty reader instead.
+	stdin := opts.Stdin
+	if stdin == nil {
+		stdin = strings.NewReader("")
+	}
+
 	interpOpts := []interp.RunnerOption{
 		interp.Params("-e"), // errexit: exit on first error
 		interp.Env(expand.ListEnviron(environ...)),
 		interp.ExecHandlers(execHandlers()...),
 		interp.OpenHandler(openHandler),
-		interp.StdIO(opts.Stdin, opts.Stdout, opts.Stderr),
+		interp.StdIO(stdin, opts.Stdout, opts.Stderr),
 	}
 
 	if opts.Dir != "" {

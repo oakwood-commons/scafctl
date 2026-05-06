@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -561,11 +562,16 @@ func (c *GRPCClient) ExecuteProvider(ctx context.Context, providerName string, i
 		return nil, err
 	}
 
-	// Decode output
+	// Decode output using UseNumber to preserve integer types across the
+	// JSON round-trip (standard json.Unmarshal converts all numbers to float64).
 	var output provider.Output
-	if err := json.Unmarshal(resp.Output, &output); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(resp.Output))
+	dec.UseNumber()
+	if err := dec.Decode(&output); err != nil {
 		return nil, fmt.Errorf("failed to decode output: %w", err)
 	}
+	output.Data = normalizeJSONNumbers(output.Data)
+	output.Metadata = normalizeJSONNumbersMap(output.Metadata)
 
 	return &output, nil
 }
@@ -656,9 +662,13 @@ func (c *GRPCClient) ExecuteProviderStream(ctx context.Context, providerName str
 				return err
 			}
 			var output provider.Output
-			if err := json.Unmarshal(v.Result.Output, &output); err != nil {
+			decStream := json.NewDecoder(bytes.NewReader(v.Result.Output))
+			decStream.UseNumber()
+			if err := decStream.Decode(&output); err != nil {
 				return fmt.Errorf("failed to decode output: %w", err)
 			}
+			output.Data = normalizeJSONNumbers(output.Data)
+			output.Metadata = normalizeJSONNumbersMap(output.Metadata)
 			cb(StreamChunk{Result: &output})
 		}
 	}
@@ -1225,4 +1235,40 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) (*provider.Descripto
 	}
 
 	return desc, nil
+}
+
+// normalizeJSONNumbers recursively walks a value decoded with UseNumber() and
+// converts json.Number to int64 (if it fits) or float64, restoring the native
+// Go types that CEL and other consumers expect.
+func normalizeJSONNumbers(v any) any {
+	switch val := v.(type) {
+	case json.Number:
+		if i, err := val.Int64(); err == nil {
+			return i
+		}
+		if f, err := val.Float64(); err == nil {
+			return f
+		}
+		return val.String()
+	case map[string]any:
+		return normalizeJSONNumbersMap(val)
+	case []any:
+		for i, item := range val {
+			val[i] = normalizeJSONNumbers(item)
+		}
+		return val
+	default:
+		return v
+	}
+}
+
+// normalizeJSONNumbersMap applies normalizeJSONNumbers to each value in a map.
+func normalizeJSONNumbersMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	for k, v := range m {
+		m[k] = normalizeJSONNumbers(v)
+	}
+	return m
 }

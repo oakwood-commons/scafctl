@@ -4,6 +4,7 @@
 package test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -19,11 +20,12 @@ func TestCommandTest(t *testing.T) {
 	cmd := CommandTest(cliParams, ioStreams, "scafctl")
 
 	require.NotNil(t, cmd)
-	assert.Equal(t, "test", cmd.Use)
+	assert.Equal(t, "test [reference]", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "t")
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotEmpty(t, cmd.Long)
 	assert.True(t, cmd.SilenceUsage)
+	assert.NotNil(t, cmd.RunE, "parent test command should have RunE (defaults to functional)")
 
 	subCmds := cmd.Commands()
 	require.Len(t, subCmds, 3, "should have 3 subcommands: functional, init, list")
@@ -37,12 +39,31 @@ func TestCommandTest(t *testing.T) {
 	assert.Contains(t, cmdNames, "list")
 }
 
-func TestCommandTest_NoRunE(t *testing.T) {
+func TestCommandTest_DefaultsToFunctional(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
-	cmd := CommandTest(cliParams, ioStreams, "scafctl")
-	assert.Nil(t, cmd.RunE, "parent test command should not have RunE")
+	cmd := CommandTest(cliParams, ioStreams, "mycli")
+	assert.NotNil(t, cmd.RunE, "parent test command should have RunE that defaults to functional")
+	assert.Contains(t, cmd.Long, "without a subcommand")
+}
+
+func TestCommandTest_RunE_NoSolutionFile(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandTest(cliParams, ioStreams, "mycli")
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no solution path provided")
+
+	// Verify EntryPointSettings.Path was set via filepath.Join
+	assert.Equal(t, filepath.Join("mycli", "test"), cliParams.EntryPointSettings.Path)
+	assert.Equal(t, "mycli", cliParams.BinaryName)
 }
 
 func BenchmarkCommandTest(b *testing.B) {

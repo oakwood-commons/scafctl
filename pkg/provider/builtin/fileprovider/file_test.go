@@ -763,7 +763,156 @@ func TestFileProvider_WriteTree_BasicNestedDirs(t *testing.T) {
 	assert.Equal(t, "nested", string(b3))
 }
 
-func TestFileProvider_WriteTree_OutputPathStripExtension(t *testing.T) {
+func TestFileProvider_WriteTree_StripSuffix(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "deployment.yaml.tpl", "content": "apiVersion: apps/v1"},
+			map[string]any{"path": "configs/app.conf.tmpl", "content": "key=value"},
+			map[string]any{"path": "noext", "content": "plain"},
+			map[string]any{"path": ".env", "content": "SECRET=val"},
+		},
+		"stripSuffix": ".tpl",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 4, data["filesWritten"])
+	paths := data["paths"].([]string)
+	// Only .tpl is stripped; .tmpl and others are untouched
+	assert.Equal(t, []string{"deployment.yaml", "configs/app.conf.tmpl", "noext", ".env"}, paths)
+
+	b, err := os.ReadFile(filepath.Join(tmpDir, "deployment.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "apiVersion: apps/v1", string(b))
+
+	// .env is untouched since it doesn't end with .tpl
+	envContent, err := os.ReadFile(filepath.Join(tmpDir, ".env"))
+	require.NoError(t, err)
+	assert.Equal(t, "SECRET=val", string(envContent))
+}
+
+func TestFileProvider_WriteTree_StripSuffixWithOutputPath(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "src/main.go.tmpl", "content": "package main"},
+		},
+		"stripSuffix": ".tmpl",
+		"outputPath":  "out/{{ .__fileName }}",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	// stripSuffix applied first: main.go.tmpl -> main.go
+	// Then outputPath template sees __fileName as main.go
+	assert.Equal(t, []string{"out/main.go"}, paths)
+}
+
+func TestFileProvider_WriteTree_StripSuffixNoMatch(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "main.go", "content": "package main"},
+		},
+		"stripSuffix": ".tmpl",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	// No match — path is unchanged
+	assert.Equal(t, []string{"main.go"}, paths)
+}
+
+func TestFileProvider_WriteTree_StripSuffixEmptyPath(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": ".env", "content": "SECRET=val"},
+		},
+		"stripSuffix": ".env",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolves to empty")
+	assert.Contains(t, err.Error(), ".env")
+}
+
+func TestFileProvider_WriteTree_StripSuffixEmptyPathDryRun(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": ".env", "content": "SECRET=val"},
+		},
+		"stripSuffix": ".env",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolves to empty")
+}
+
+func TestFileProvider_WriteTree_StripSuffixDryRunMatchesLive(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := provider.WithDryRun(context.Background(), true)
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "main.go.tmpl", "content": "package main"},
+			map[string]any{"path": "util.go.tmpl", "content": "package util"},
+		},
+		"stripSuffix": ".tmpl",
+	}
+
+	result, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	data := result.Data.(map[string]any)
+	dryRunPaths := data["paths"].([]string)
+	assert.Equal(t, []string{"main.go", "util.go"}, dryRunPaths,
+		"dry-run paths should reflect stripSuffix application")
+}
+
+func TestFileProvider_WriteTree_OutputPathStemExtraction(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 
@@ -999,7 +1148,7 @@ func TestFileProvider_WriteTree_MissingEntryPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "entries[0].path is required")
 }
 
-func TestFileProvider_WriteTree_MissingEntryContent(t *testing.T) {
+func TestFileProvider_WriteTree_MissingEntryContent_Skipped(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 
@@ -1008,7 +1157,66 @@ func TestFileProvider_WriteTree_MissingEntryContent(t *testing.T) {
 		"operation": "write-tree",
 		"basePath":  tmpDir,
 		"entries": []any{
-			map[string]any{"path": "file.txt"},
+			map[string]any{"path": "dir-only/"},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 0, data["filesWritten"])
+}
+
+func TestFileProvider_WriteTree_MixedFilesAndDirectories(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "src/"},
+			map[string]any{"path": "src/main.go", "content": "package main"},
+			map[string]any{"path": "assets/"},
+			map[string]any{"path": "assets/logo.txt", "content": "LOGO"},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 2, data["filesWritten"])
+
+	paths := data["paths"].([]string)
+	assert.Len(t, paths, 2)
+	assert.Contains(t, paths, "src/main.go")
+	assert.Contains(t, paths, "assets/logo.txt")
+
+	// Verify files were actually written
+	content1, err := os.ReadFile(filepath.Join(tmpDir, "src", "main.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "package main", string(content1))
+
+	content2, err := os.ReadFile(filepath.Join(tmpDir, "assets", "logo.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "LOGO", string(content2))
+}
+
+func TestFileProvider_WriteTree_NonStringContentErrors(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "file.txt", "content": 123},
 		},
 	}
 
@@ -1016,7 +1224,7 @@ func TestFileProvider_WriteTree_MissingEntryContent(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "entries[0].content is required")
+	assert.Contains(t, err.Error(), "entries[0].content must be a string")
 }
 
 func TestFileProvider_WriteTree_DryRun(t *testing.T) {

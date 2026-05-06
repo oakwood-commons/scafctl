@@ -57,9 +57,9 @@ func TestProviderOptions_Run_InvalidOnConflict(t *testing.T) {
 	opts := &ProviderOptions{
 		IOStreams:    terminal.NewIOStreams(nil, nil, nil, false),
 		CliParams:    settings.NewCliParams(),
-		ProviderName: "static", // use the builtin static provider (always available)
+		ProviderName: "message",
 		OnConflict:   "not-a-valid-strategy",
-		InputParams:  []string{"value=hello"},
+		InputParams:  []string{"message=hello"},
 	}
 	opts.Output = "json"
 
@@ -68,8 +68,8 @@ func TestProviderOptions_Run_InvalidOnConflict(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid --on-conflict value")
 }
 
-// TestProviderOptions_Run_StaticProvider verifies the static provider runs successfully.
-func TestProviderOptions_Run_StaticProvider(t *testing.T) {
+// TestProviderOptions_Run_MessageProvider verifies the message provider runs successfully.
+func TestProviderOptions_Run_MessageProvider(t *testing.T) {
 	ctx := newProviderTestCtx(t)
 
 	var out bytes.Buffer
@@ -77,14 +77,14 @@ func TestProviderOptions_Run_StaticProvider(t *testing.T) {
 	opts := &ProviderOptions{
 		IOStreams:    ioStreams,
 		CliParams:    settings.NewCliParams(),
-		ProviderName: "static",
-		InputParams:  []string{"value=hello"},
+		ProviderName: "message",
+		InputParams:  []string{"message=hello"},
 	}
 	opts.Output = "json"
 
 	err := opts.Run(ctx)
 	require.NoError(t, err)
-	assert.NotEmpty(t, out.String(), "static provider should produce output")
+	assert.NotEmpty(t, out.String(), "message provider should produce output")
 }
 
 // ── resolveCapability tests ────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ func TestResolveCapability_Default(t *testing.T) {
 		Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityTransform},
 	}
 
-	capability, err := opts.resolveCapability(desc)
+	capability, err := opts.resolveCapability(desc, nil)
 	require.NoError(t, err)
 	assert.Equal(t, provider.CapabilityFrom, capability)
 }
@@ -116,7 +116,7 @@ func TestResolveCapability_Explicit(t *testing.T) {
 		Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityTransform},
 	}
 
-	capability, err := opts.resolveCapability(desc)
+	capability, err := opts.resolveCapability(desc, nil)
 	require.NoError(t, err)
 	assert.Equal(t, provider.CapabilityTransform, capability)
 }
@@ -133,7 +133,7 @@ func TestResolveCapability_ExplicitNotSupported(t *testing.T) {
 		Capabilities: []provider.Capability{provider.CapabilityFrom}, // no action
 	}
 
-	_, err := opts.resolveCapability(desc)
+	_, err := opts.resolveCapability(desc, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not support capability")
 }
@@ -150,7 +150,7 @@ func TestResolveCapability_Invalid(t *testing.T) {
 		Capabilities: []provider.Capability{provider.CapabilityFrom},
 	}
 
-	_, err := opts.resolveCapability(desc)
+	_, err := opts.resolveCapability(desc, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid capability")
 }
@@ -165,9 +165,133 @@ func TestResolveCapability_NoCapabilities(t *testing.T) {
 		Capabilities: nil, // empty
 	}
 
-	_, err := opts.resolveCapability(desc)
+	_, err := opts.resolveCapability(desc, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "declares no capabilities")
+}
+
+// TestResolveCapability_WriteOpAutoEscalates verifies auto-escalation to action
+// when the operation is a write operation and the provider supports action.
+func TestResolveCapability_WriteOpAutoEscalates(t *testing.T) {
+	t.Parallel()
+
+	opts := &ProviderOptions{}
+	desc := &provider.Descriptor{
+		Name:            "test-provider",
+		Capabilities:    []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+		WriteOperations: []string{"create_issue", "delete_issue"},
+	}
+	inputs := map[string]any{"operation": "create_issue"}
+
+	capability, err := opts.resolveCapability(desc, inputs)
+	require.NoError(t, err)
+	assert.Equal(t, provider.CapabilityAction, capability)
+}
+
+// TestResolveCapability_WriteOpNoActionCap falls through to default when
+// provider does not support the action capability.
+func TestResolveCapability_WriteOpNoActionCap(t *testing.T) {
+	t.Parallel()
+
+	opts := &ProviderOptions{}
+	desc := &provider.Descriptor{
+		Name:            "test-provider",
+		Capabilities:    []provider.Capability{provider.CapabilityFrom},
+		WriteOperations: []string{"create_issue"},
+	}
+	inputs := map[string]any{"operation": "create_issue"}
+
+	capability, err := opts.resolveCapability(desc, inputs)
+	require.NoError(t, err)
+	assert.Equal(t, provider.CapabilityFrom, capability, "should fall back to first capability")
+}
+
+// TestResolveCapability_ReadOpNoEscalation verifies no escalation for read ops.
+func TestResolveCapability_ReadOpNoEscalation(t *testing.T) {
+	t.Parallel()
+
+	opts := &ProviderOptions{}
+	desc := &provider.Descriptor{
+		Name:            "test-provider",
+		Capabilities:    []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+		WriteOperations: []string{"create_issue"},
+	}
+	inputs := map[string]any{"operation": "list_issues"}
+
+	capability, err := opts.resolveCapability(desc, inputs)
+	require.NoError(t, err)
+	assert.Equal(t, provider.CapabilityFrom, capability, "read ops should not escalate")
+}
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+
+// ── redactSensitiveFields tests ───────────────────────────────────────────────
+
+func TestProviderOptions_redactSensitiveFields(t *testing.T) {
+	t.Parallel()
+
+	t.Run("redacts_matching_fields", func(t *testing.T) {
+		t.Parallel()
+		opts := &ProviderOptions{}
+		output := map[string]any{
+			"data": map[string]any{
+				"password": "secret123",
+				"token":    "abc-xyz",
+				"name":     "visible",
+			},
+		}
+		opts.redactSensitiveFields(output, []string{"password", "token"})
+		data := output["data"].(map[string]any)
+		assert.Equal(t, "[REDACTED]", data["password"])
+		assert.Equal(t, "[REDACTED]", data["token"])
+		assert.Equal(t, "visible", data["name"])
+	})
+
+	t.Run("no_data_key_is_noop", func(t *testing.T) {
+		t.Parallel()
+		opts := &ProviderOptions{}
+		output := map[string]any{
+			"status": "ok",
+		}
+		opts.redactSensitiveFields(output, []string{"password"})
+		assert.Equal(t, "ok", output["status"])
+	})
+
+	t.Run("data_not_map_is_noop", func(t *testing.T) {
+		t.Parallel()
+		opts := &ProviderOptions{}
+		output := map[string]any{
+			"data": "just-a-string",
+		}
+		opts.redactSensitiveFields(output, []string{"password"})
+		assert.Equal(t, "just-a-string", output["data"])
+	})
+
+	t.Run("missing_sensitive_field_is_noop", func(t *testing.T) {
+		t.Parallel()
+		opts := &ProviderOptions{}
+		output := map[string]any{
+			"data": map[string]any{
+				"name": "test",
+			},
+		}
+		opts.redactSensitiveFields(output, []string{"nonexistent"})
+		data := output["data"].(map[string]any)
+		assert.Equal(t, "test", data["name"])
+	})
+
+	t.Run("empty_sensitive_list_is_noop", func(t *testing.T) {
+		t.Parallel()
+		opts := &ProviderOptions{}
+		output := map[string]any{
+			"data": map[string]any{
+				"password": "secret",
+			},
+		}
+		opts.redactSensitiveFields(output, nil)
+		data := output["data"].(map[string]any)
+		assert.Equal(t, "secret", data["password"])
+	})
 }
 
 // ── Benchmarks ────────────────────────────────────────────────────────────────
@@ -181,7 +305,7 @@ func BenchmarkResolveCapability_Default(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = opts.resolveCapability(desc)
+		_, _ = opts.resolveCapability(desc, nil)
 	}
 }
 

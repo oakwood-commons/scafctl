@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/clock"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -52,6 +53,7 @@ type Handler struct {
 	httpClientConfig *config.HTTPClientConfig
 	tokenCache       *auth.TokenCache
 	logger           logr.Logger
+	clock            clock.Clock
 }
 
 // Option configures the Handler.
@@ -111,6 +113,14 @@ func WithLogger(lgr logr.Logger) Option {
 	}
 }
 
+// WithClock sets the clock used for timing operations (e.g. polling intervals).
+// Defaults to clock.Real{} when not specified.
+func WithClock(c clock.Clock) Option {
+	return func(h *Handler) {
+		h.clock = c
+	}
+}
+
 // New creates a new GCP auth handler.
 // Secret store initialization is deferred — if it fails, the handler is still
 // created so that metadata operations (Name, SupportedFlows, etc.) work.
@@ -119,6 +129,7 @@ func WithLogger(lgr logr.Logger) Option {
 func New(opts ...Option) (*Handler, error) {
 	h := &Handler{
 		config: DefaultConfig(),
+		clock:  clock.Real{},
 	}
 
 	for _, opt := range opts {
@@ -183,6 +194,7 @@ func (h *Handler) DisplayName() string {
 func (h *Handler) SupportedFlows() []auth.Flow {
 	return []auth.Flow{
 		auth.FlowInteractive,
+		auth.FlowDeviceCode,
 		auth.FlowServicePrincipal,
 		auth.FlowWorkloadIdentity,
 		auth.FlowMetadata,
@@ -219,6 +231,11 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	// Check if service account flow is requested or detected
 	if opts.Flow == auth.FlowServicePrincipal || (opts.Flow == "" && HasServiceAccountCredentials()) {
 		return h.serviceAccountLogin(ctx, opts)
+	}
+
+	// Check if device code flow is explicitly requested
+	if opts.Flow == auth.FlowDeviceCode {
+		return h.deviceCodeLogin(ctx, opts)
 	}
 
 	// Check if gcloud ADC flow is explicitly requested
@@ -435,6 +452,40 @@ func (h *Handler) resolveSourceTokenFunc(ctx context.Context) func(context.Conte
 	return func(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
 		return nil, auth.ErrNotAuthenticated
 	}
+}
+
+// ActiveFlow returns the credential source currently in use, following the same
+// auto-detection priority as resolveSourceTokenFunc:
+// WI > Metadata > SA Key > Stored refresh token (with metadata flow) > gcloud ADC.
+func (h *Handler) ActiveFlow(ctx context.Context) auth.Flow {
+	if HasWorkloadIdentityCredentials() {
+		return auth.FlowWorkloadIdentity
+	}
+
+	metadata, err := h.loadMetadata(ctx)
+	if err == nil && metadata != nil {
+		if metadata.Flow == auth.FlowMetadata {
+			return auth.FlowMetadata
+		}
+	}
+
+	if HasServiceAccountCredentials() {
+		return auth.FlowServicePrincipal
+	}
+
+	if exists, _ := h.secretStore.Exists(ctx, SecretKeyRefreshToken); exists {
+		// Return the flow from stored metadata (e.g. device-code, interactive).
+		if metadata != nil && metadata.Flow != "" {
+			return metadata.Flow
+		}
+		return auth.FlowDeviceCode // default for stored refresh tokens
+	}
+
+	if HasGcloudADCCredentials() {
+		return auth.FlowGcloudADC
+	}
+
+	return ""
 }
 
 // getStoredRefreshToken gets a token using the stored refresh token, with caching.

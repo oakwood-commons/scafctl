@@ -344,6 +344,14 @@ func TestExtFunction_GetName(t *testing.T) {
 	assert.Equal(t, "myFunc", f.GetName())
 }
 
+func TestExtFunction_GetSubNames(t *testing.T) {
+	f := ExtFunction{FunctionNames: []string{"base64.encode", "base64.decode"}}
+	assert.Equal(t, []string{"base64.encode", "base64.decode"}, f.GetSubNames())
+
+	empty := ExtFunction{}
+	assert.Nil(t, empty.GetSubNames())
+}
+
 func TestInitFromAppConfig(t *testing.T) {
 	ResetForTesting()
 	defer ResetForTesting()

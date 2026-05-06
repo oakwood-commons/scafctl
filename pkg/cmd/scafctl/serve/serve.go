@@ -7,15 +7,22 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
 )
@@ -124,6 +131,41 @@ func runServe(ctx context.Context, opts *Options) error {
 		return fmt.Errorf("initializing provider registry: %w", err)
 	}
 
+	// Build official provider registry for auto-resolution
+	var officialReg *official.Registry
+	if cfg.Settings.DisableOfficialProviders {
+		lgr.V(1).Info("official provider auto-resolution disabled by settings")
+	} else {
+		officialReg = official.NewRegistry()
+	}
+
+	// Build plugin fetcher for auto-fetching plugin binaries from catalogs
+	var pluginFetcher *plugin.Fetcher
+	if fetcher, fetchErr := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{
+		AllowedCatalogs: cfg.APIServer.Plugins.AllowedCatalogs,
+	}); fetchErr == nil {
+		pluginFetcher = fetcher
+	} else {
+		lgr.V(1).Info("plugin fetcher not available; official providers will not be pre-loaded", "error", fetchErr)
+	}
+
+	// Pre-load all official providers into the registry at server startup.
+	// This avoids per-request gRPC spawn overhead and ensures the extracted
+	// providers (exec, directory, git, etc.) are available for all endpoints.
+	var pluginClients []*plugin.Client
+	if officialReg != nil && pluginFetcher != nil {
+		clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, pluginFetcher)
+		if preloadErr != nil {
+			lgr.V(0).Info("warning: some official providers could not be pre-loaded", "error", preloadErr)
+		}
+		pluginClients = clients
+	}
+
+	// Create plugin pool for managing external plugin lifecycle.
+	// Pre-loaded official providers are adopted into the pool so their
+	// lifecycle (shutdown) is managed consistently.
+	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients)
+
 	// Build server options
 	serverOpts := []api.ServerOption{
 		api.WithServerLogger(*lgr),
@@ -131,9 +173,16 @@ func runServe(ctx context.Context, opts *Options) error {
 		api.WithServerRegistry(reg),
 		api.WithServerContext(ctx),
 		api.WithServerVersion(settings.VersionInformation.BuildVersion),
+		api.WithServerPluginPool(pluginPool),
 	}
 	if authReg != nil {
 		serverOpts = append(serverOpts, api.WithServerAuthRegistry(authReg))
+	}
+	if pluginFetcher != nil {
+		serverOpts = append(serverOpts, api.WithServerPluginFetcher(pluginFetcher))
+	}
+	if officialReg != nil {
+		serverOpts = append(serverOpts, api.WithServerOfficialProviders(officialReg))
 	}
 
 	// Create server
@@ -161,4 +210,101 @@ func runServe(ctx context.Context, opts *Options) error {
 
 	// Start server (blocks until SIGINT/SIGTERM)
 	return srv.Start()
+}
+
+// preloadOfficialProviders fetches all official providers and registers them
+// into the provider registry. This is called at server startup so that
+// extracted providers (exec, directory, git, etc.) are immediately available
+// for all API endpoints without per-request gRPC spawn overhead.
+//
+// Returns the plugin clients that must be killed on server shutdown.
+// Logs warnings for providers that fail to load but does not fail the
+// server startup.
+func preloadOfficialProviders(
+	ctx context.Context,
+	reg *provider.Registry,
+	officialReg *official.Registry,
+	fetcher *plugin.Fetcher,
+) ([]*plugin.Client, error) {
+	lgr := logger.FromContext(ctx)
+
+	// Build plugin dependencies for all official providers
+	providers := officialReg.Names()
+	deps := make([]solution.PluginDependency, 0, len(providers))
+	for _, name := range providers {
+		p, ok := officialReg.Get(name)
+		if !ok {
+			continue
+		}
+		// Skip providers already in the registry (e.g., builtins)
+		if reg.Has(name) {
+			if lgr != nil {
+				lgr.V(1).Info("official provider already registered, skipping pre-load", "provider", name)
+			}
+			continue
+		}
+		deps = append(deps, p.ToPluginDependency())
+	}
+
+	if len(deps) == 0 {
+		return nil, nil
+	}
+
+	if fetcher == nil {
+		if lgr != nil {
+			lgr.V(1).Info("plugin fetcher not available; cannot pre-load official providers")
+		}
+		return nil, nil
+	}
+
+	if lgr != nil {
+		names := make([]string, len(deps))
+		for i, d := range deps {
+			names[i] = d.Name
+		}
+		lgr.V(0).Info("pre-loading official providers for API server", "providers", names)
+	}
+
+	fetchResults, fetchErr := fetcher.FetchPlugins(ctx, deps, nil)
+	if fetchErr != nil {
+		return nil, fmt.Errorf("fetching official providers: %w", fetchErr)
+	}
+
+	clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, nil)
+	if regErr != nil {
+		return nil, fmt.Errorf("registering official providers: %w", regErr)
+	}
+
+	if lgr != nil {
+		lgr.V(0).Info("pre-loaded official providers", "count", len(clients))
+	}
+
+	return clients, nil
+}
+
+// buildPluginPool creates a Pool configured from the API server settings and
+// adopts any pre-loaded official plugin clients into it.
+func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fetcher, reg *provider.Registry, lgr *logr.Logger, preloaded []*plugin.Client) *plugin.Pool {
+	poolOpts := []plugin.PoolOption{
+		plugin.WithIdleTimeout(5 * time.Minute),
+		plugin.WithMaxPlugins(50),
+		plugin.WithDisableExternal(!cfg.APIServer.Plugins.AllowExternal),
+	}
+	if len(cfg.APIServer.Plugins.AllowedPlugins) > 0 {
+		poolOpts = append(poolOpts, plugin.WithAllowedPlugins(cfg.APIServer.Plugins.AllowedPlugins))
+	}
+	pool := plugin.NewPool(fetcher, reg, *lgr, poolOpts...)
+	for _, c := range preloaded {
+		// Query the client for provider names it registered so the pool can
+		// unregister them on eviction/death.
+		var providers []string
+		if names, err := c.GetProviders(ctx); err == nil {
+			providers = names
+		}
+		pool.Adopt(c.Name(), c, solution.PluginDependency{
+			Name: c.Name(),
+			Kind: solution.PluginKindProvider,
+		}, providers)
+	}
+	return pool
 }

@@ -41,7 +41,7 @@ func (s *Server) registerActionTools() {
 			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(previewActionTool, s.handlePreviewAction)
+	s.addTool(previewActionTool, s.handlePreviewAction)
 }
 
 // handlePreviewAction shows what each action would do with fully resolved inputs.

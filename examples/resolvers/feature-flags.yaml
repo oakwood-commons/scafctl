@@ -4,7 +4,10 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: feature-flags
-  version: 1.0.0
+  displayName: Feature Flags
+  category: resolvers
+  tags:
+    - resolver-example
   description: |
     Feature toggle pattern with fallbacks. Demonstrates fetching flags from
     a remote API with fallback to local defaults, computing derived

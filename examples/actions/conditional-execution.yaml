@@ -6,7 +6,13 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: conditional-execution
-  version: 1.0.0
+  displayName: Conditional Execution
+  category: actions
+  tags:
+    - action-example
+    - conditional
+    - exec
+    - workflow
   description: When conditions for conditional action execution
 
 spec:

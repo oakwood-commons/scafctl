@@ -85,11 +85,11 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 				"template": schemahelper.StringProp("Go template content to render (required for 'render' operation). Resolver data is available as the root context (e.g., .name, .config.host). Use {{.fieldName}} to access values.",
 					schemahelper.WithExample("Hello, {{.name}}!"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(65536))),
-				"name": schemahelper.StringProp("Name for the template, used in error messages and logging. Required for 'render', optional for 'render-tree' (defaults to 'render-tree').",
+				"name": schemahelper.StringProp("Optional name for the template, used in error messages and logging. Defaults to 'template' for 'render' and 'render-tree' for the batch operation.",
 					schemahelper.WithExample("greeting-template"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
-				"missingKey": schemahelper.StringProp("Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error)",
-					schemahelper.WithDefault("default"),
+				"missingKey": schemahelper.StringProp("Behavior when a map key is missing: 'default' (prints <no value>), 'zero' (returns zero value), 'error' (stops with error). Default: error",
+					schemahelper.WithDefault("error"),
 					schemahelper.WithExample("error"),
 					schemahelper.WithEnum("default", "zero", "error")),
 				"leftDelim": schemahelper.StringProp("Left action delimiter (default: '{{'). Change this if your template content contains literal {{",
@@ -335,10 +335,10 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 		return nil, fmt.Errorf("%s: template is required and must be a string", ProviderName)
 	}
 
-	// Extract name (required)
-	templateName, ok := inputs["name"].(string)
-	if !ok || templateName == "" {
-		return nil, fmt.Errorf("%s: name is required and must be a string", ProviderName)
+	// Extract name (optional, defaults to "template")
+	templateName, _ := inputs["name"].(string)
+	if templateName == "" {
+		templateName = "template"
 	}
 
 	// Parse shared rendering options
@@ -419,6 +419,9 @@ func (p *GoTemplateProvider) executeDryRun(inputs map[string]any) (*provider.Out
 
 	templateStr, _ := inputs["template"].(string)
 	templateName, _ := inputs["name"].(string)
+	if templateName == "" {
+		templateName = "template"
+	}
 
 	// Truncate template for display if too long
 	displayTemplate := templateStr
@@ -598,7 +601,7 @@ func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*pr
 
 // parseRenderingOptions extracts missingKey, leftDelim, and rightDelim from inputs.
 func (p *GoTemplateProvider) parseRenderingOptions(inputs map[string]any) (gotmpl.MissingKeyOption, string, string, error) {
-	missingKey := gotmpl.MissingKeyDefault
+	missingKey := gotmpl.MissingKeyError
 	if mk, ok := inputs["missingKey"].(string); ok && mk != "" {
 		switch mk {
 		case "default":
@@ -792,9 +795,26 @@ func extractDependencies(inputs map[string]any) []string {
 		return deps
 	}
 
+	// Build set of keys provided by the data input so we can exclude them
+	// from resolver dependencies. The data map's keys become top-level
+	// template context variables (e.g., data: {config: ...} provides .config)
+	// and should not be treated as resolver references.
+	dataKeys := make(map[string]bool)
+	if dataMap, ok := inputs["data"].(map[string]any); ok {
+		for k := range dataMap {
+			dataKeys[k] = true
+		}
+	}
+
 	// Extract the first segment of each reference path as the dependency name
 	// e.g., ".config.host" -> "config", "._.name" -> "name"
 	for _, ref := range refs {
+		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
+		// bodies where dot has been rebound, not to top-level resolvers.
+		if ref.Scoped {
+			continue
+		}
+
 		path := ref.Path
 		// Strip leading dot if present
 		path = strings.TrimPrefix(path, ".")
@@ -805,6 +825,11 @@ func extractDependencies(inputs map[string]any) []string {
 		// Get first segment (before any dots)
 		if idx := strings.Index(path, "."); idx > 0 {
 			path = path[:idx]
+		}
+
+		// Skip references satisfied by the data input
+		if dataKeys[path] {
+			continue
 		}
 
 		addDep(path)

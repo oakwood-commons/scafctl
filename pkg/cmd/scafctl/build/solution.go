@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
@@ -47,6 +48,7 @@ type SolutionOptions struct {
 	SkipTests       bool
 	IgnorePreflight bool
 	AllowDevVersion bool
+	BaseDir         string
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -215,6 +217,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd.Flags().BoolVar(&options.SkipTests, "skip-tests", false, "Skip functional test pre-flight check")
 	cmd.Flags().BoolVar(&options.IgnorePreflight, "ignore-preflight", false, "Run pre-flight checks but proceed even if they fail")
 	cmd.Flags().BoolVar(&options.AllowDevVersion, "allow-dev-version", false, "Allow build without metadata.version set")
+	cmd.Flags().StringVar(&options.BaseDir, "base-dir", "", "Override base directory for resolving relative paths in the solution (default: solution file's directory)")
 
 	return cmd
 }
@@ -254,15 +257,22 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	}
 	w.Verbosef("Parsed solution: %s (apiVersion: %s)", sol.Metadata.Name, sol.APIVersion)
 
-	// Determine bundle root (directory containing the solution file, or cwd for stdin)
+	// Determine bundle root (--base-dir flag, directory containing the solution file, or cwd for stdin)
 	var bundleRoot string
-	if opts.File == "-" {
+	switch {
+	case opts.BaseDir != "":
+		bundleRoot, err = filepath.Abs(opts.BaseDir)
+		if err != nil {
+			w.Errorf("--base-dir: %v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	case opts.File == "-":
 		bundleRoot, err = os.Getwd()
 		if err != nil {
 			w.Errorf("failed to determine working directory: %v", err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
-	} else {
+	default:
 		absFile, absErr := provider.AbsFromContext(ctx, opts.File)
 		if absErr != nil {
 			w.Errorf("failed to resolve path: %v", absErr)
@@ -282,11 +292,28 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Determine version (priority: --version flag > metadata.version)
-	version, _, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
+	// Determine version (priority: --version flag > metadata.version > auto-increment)
+	version, versionOverride, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
 	if err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		// No explicit version and no metadata version — try auto-increment
+		if opts.Version == "" && sol.Metadata.Version == nil {
+			localCat, catErr := catalog.NewLocalCatalog(*lgr)
+			if catErr == nil {
+				nextVer, nextErr := solution.NextPatchVersion(ctx, localCat, catalog.ArtifactKindSolution, name)
+				if nextErr == nil {
+					version = nextVer
+					w.Infof("Auto-incremented version to %s", version.String())
+					err = nil
+				}
+			}
+		}
+		if err != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	}
+	if versionOverride {
+		w.Warningf("--version %s overrides metadata.version %s", version.String(), sol.Metadata.Version.String())
 	}
 	w.Verbosef("Resolved artifact: %s@%s", name, version.String())
 
@@ -305,6 +332,12 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	// artifact always carries the authoritative values.
 	needsReserialization := false
 	if sol.Metadata.Name != name {
+		// Name mismatch: error unless --force
+		if sol.Metadata.Name != "" && !opts.Force {
+			w.Errorf("name mismatch: --name %q does not match metadata.name %q", name, sol.Metadata.Name)
+			w.Infof("Use --force to override the metadata name")
+			return exitcode.Errorf("name mismatch")
+		}
 		lgr.V(1).Info("stamping artifact name into solution", "from", sol.Metadata.Name, "to", name)
 		sol.Metadata.Name = name
 		needsReserialization = true
@@ -444,6 +477,10 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 	storeResult, err := builder.StoreSolutionArtifact(ctx, localCatalog, name, version, content, br, builder.StoreOptions{
 		Force:            opts.Force,
 		Source:           opts.File,
+		DisplayName:      sol.Metadata.DisplayName,
+		Description:      sol.Metadata.Description,
+		Category:         sol.Metadata.Category,
+		Tags:             sol.Metadata.Tags,
 		ArtifactCacheDir: paths.ArtifactCacheDir(),
 		ArtifactCacheTTL: settings.DefaultArtifactCacheTTL,
 	})
@@ -481,13 +518,14 @@ func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 	}
 
 	br, err := builder.BuildBundle(ctx, sol, solutionContent, bundleRoot, builder.BuildBundleOptions{
-		BundleMaxSize:   opts.BundleMaxSize,
-		NoVendor:        opts.NoVendor,
-		NoCache:         opts.NoCache,
-		DryRun:          opts.DryRun,
-		Dedupe:          opts.Dedupe,
-		DedupeThreshold: opts.DedupeThreshold,
-		Logger:          *lgr,
+		BundleMaxSize:     opts.BundleMaxSize,
+		NoVendor:          opts.NoVendor,
+		NoCache:           opts.NoCache,
+		DryRun:            opts.DryRun,
+		Dedupe:            opts.Dedupe,
+		DedupeThreshold:   opts.DedupeThreshold,
+		Logger:            *lgr,
+		OfficialProviders: official.RegistryFromContext(ctx),
 	})
 	if err != nil {
 		w.Errorf("%v", err)

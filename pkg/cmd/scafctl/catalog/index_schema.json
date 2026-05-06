@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Catalog Index",
+  "description": "Schema for catalog index artifacts with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "📦",
+  "x-kvx-collectionTitle": "Artifacts",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "displayName",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["kind", "category"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["kind", "latestVersion"],
+        "layout": "inline"
+      },
+      {
+        "title": "Display Name",
+        "fields": ["displayName"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Category",
+        "fields": ["category"],
+        "layout": "inline"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["kind", "name"],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "title": "Kind",
+        "enum": ["solution", "provider", "auth-handler"],
+        "x-kvx-priority": 10
+      },
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "maxLength": 30,
+        "x-kvx-priority": 10
+      },
+      "latestVersion": {
+        "type": "string",
+        "title": "Version",
+        "maxLength": 12,
+        "x-kvx-priority": 8
+      },
+      "displayName": {
+        "type": "string",
+        "title": "Display Name",
+        "maxLength": 25,
+        "x-kvx-priority": 6
+      },
+      "category": {
+        "type": "string",
+        "title": "Category",
+        "maxLength": 15,
+        "x-kvx-priority": 4
+      },
+      "tags": {
+        "type": "array",
+        "title": "Tags",
+        "items": { "type": "string" },
+        "x-kvx-priority": 2
+      },
+      "maintainers": {
+        "type": "array",
+        "title": "Maintainers",
+        "items": { "type": "string" },
+        "x-kvx-priority": 2
+      },
+      "links": {
+        "type": "array",
+        "title": "Links",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "url": { "type": "string", "format": "uri" }
+          }
+        },
+        "x-kvx-priority": 2
+      },
+      "providers": {
+        "type": "array",
+        "title": "Providers",
+        "items": { "type": "string" },
+        "x-kvx-priority": 2
+      },
+      "parameters": {
+        "type": "array",
+        "title": "Parameters",
+        "items": { "type": "string" },
+        "x-kvx-priority": 2
+      }
+    }
+  }
+}

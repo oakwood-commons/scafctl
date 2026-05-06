@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/detail"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
@@ -232,7 +233,22 @@ func setProviderHelpFunc(cmd *cobra.Command) {
 
 		prov, ok := reg.Get(providerName)
 		if !ok {
-			return
+			// Try auto-resolving official providers for dynamic help.
+			// The help function may run before PersistentPreRunE sets up context,
+			// so ensure official registry is available.
+			helpCtx := c.Context()
+			if official.RegistryFromContext(helpCtx) == nil {
+				helpCtx = official.WithRegistry(helpCtx, official.NewRegistry())
+			}
+			clients, resolveErr := autoResolveProviderByName(helpCtx, providerName, reg)
+			if resolveErr != nil {
+				return
+			}
+			defer plugin.KillAll(clients)
+			prov, ok = reg.Get(providerName)
+			if !ok {
+				return
+			}
 		}
 
 		helpText := detail.FormatProviderInputHelp(prov.Descriptor())
@@ -333,6 +349,13 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	// Look up the provider
 	prov, ok := reg.Get(o.ProviderName)
 	if !ok {
+		// Auto-resolve official providers on miss.
+		if clients, resolveErr := autoResolveProviderByName(ctx, o.ProviderName, reg); resolveErr == nil {
+			defer plugin.KillAll(clients)
+			prov, ok = reg.Get(o.ProviderName)
+		}
+	}
+	if !ok {
 		err := fmt.Errorf("provider %q not found (use '%s get providers' to list available providers)", o.ProviderName, o.BinaryName)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.FileNotFound)
@@ -380,7 +403,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 
 	// Resolve capability
-	capability, err := o.resolveCapability(desc)
+	capability, err := o.resolveCapability(desc, inputs)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -471,7 +494,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 // resolveCapability determines which capability to use for execution.
 // If --capability is specified, validates and uses it.
 // Otherwise, defaults to the first declared capability.
-func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor) (provider.Capability, error) {
+func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor, inputs map[string]any) (provider.Capability, error) {
 	if o.Capability != "" {
 		requested := provider.Capability(o.Capability)
 		if !requested.IsValid() {
@@ -495,6 +518,17 @@ func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor) (provider
 	// Default to first capability
 	if len(desc.Capabilities) == 0 {
 		return "", fmt.Errorf("provider %q declares no capabilities", desc.Name)
+	}
+
+	// Auto-escalate to action capability when the operation is a write operation.
+	// This lets `run provider` execute write operations (e.g., create_issue)
+	// without requiring an explicit --capability=action flag.
+	if operation, _ := inputs["operation"].(string); operation != "" && desc.IsWriteOperation(operation) {
+		for _, c := range desc.Capabilities {
+			if c == provider.CapabilityAction {
+				return provider.CapabilityAction, nil
+			}
+		}
 	}
 
 	return desc.Capabilities[0], nil

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -11,7 +12,9 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 )
 
 // HandlerContext provides shared dependencies to all API handlers.
@@ -23,6 +26,26 @@ type HandlerContext struct {
 	Logger           logr.Logger
 	IsShuttingDown   *int32
 	StartTime        time.Time
+
+	// PluginFetcher enables auto-fetching of plugin binaries from catalogs
+	// at request time. Used by the solution test endpoint (planned) to resolve
+	// bundle.plugins declarations. Nil when plugin auto-fetch is not configured.
+	PluginFetcher *plugin.Fetcher
+
+	// OfficialProviders holds the registry of first-party extracted providers
+	// for auto-resolution. Used by the solution validate endpoint (planned)
+	// to check provider availability. Nil when official provider support is disabled.
+	OfficialProviders *official.Registry
+
+	// ServerContext carries the server's enriched context with config, auth,
+	// and logger wired. Used by endpoints that call prepare.Solution() and
+	// need these values in context. Reserved for solution test endpoint (planned).
+	ServerContext context.Context
+
+	// PluginPool manages shared, long-lived plugin processes with lazy
+	// initialization and idle eviction. Used by solution endpoints to
+	// ensure external plugins from bundle.plugins are available.
+	PluginPool *plugin.Pool
 }
 
 // NewHandlerContext creates a new HandlerContext with the given dependencies.

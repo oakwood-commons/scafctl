@@ -29,7 +29,7 @@ func (s *Server) registerAPITools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaOpenAPISpec),
 	)
-	s.mcpServer.AddTool(getOpenAPISpecTool, s.handleGetOpenAPISpec)
+	s.addTool(getOpenAPISpecTool, s.handleGetOpenAPISpec)
 
 	getAPIEndpointsTool := mcp.NewTool("list_api_endpoints",
 		mcp.WithDescription("List all available REST API endpoints with their HTTP method, path, summary, and tags. Provides a quick overview of the scafctl API surface without the full OpenAPI spec."),
@@ -41,7 +41,7 @@ func (s *Server) registerAPITools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithRawOutputSchema(outputSchemaAPIEndpoints),
 	)
-	s.mcpServer.AddTool(getAPIEndpointsTool, s.handleListAPIEndpoints)
+	s.addTool(getAPIEndpointsTool, s.handleListAPIEndpoints)
 }
 
 // handleGetOpenAPISpec generates the full OpenAPI spec without starting the server.

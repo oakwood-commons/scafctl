@@ -6,6 +6,7 @@ package gotmplfunction
 import (
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -67,5 +68,43 @@ func BenchmarkCommandGotmplFunction(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+	}
+}
+
+func TestCommandGotmplFunction_SearchFlag(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+
+	f := cmd.Flags().Lookup("search")
+	assert.NotNil(t, f, "search flag should exist")
+	assert.Equal(t, "s", f.Shorthand)
+}
+
+func TestFilterBySearch(t *testing.T) {
+	t.Parallel()
+	funcs := gotmpl.ExtFunctionList{
+		{Name: "toHcl", Description: "Converts a value to HCL format"},
+		{Name: "toYaml", Description: "Converts a value to YAML format"},
+		{Name: "upper", Description: "Converts string to uppercase"},
+	}
+
+	tests := []struct {
+		name    string
+		query   string
+		wantLen int
+	}{
+		{"match by name", "toHcl", 1},
+		{"match by description", "YAML", 1},
+		{"match multiple", "Converts", 3},
+		{"case insensitive", "TOHCL", 1},
+		{"no match", "nonexistent", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := filterBySearch(funcs, tt.query)
+			assert.Len(t, result, tt.wantLen)
+		})
 	}
 }

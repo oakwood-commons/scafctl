@@ -11,6 +11,10 @@ metadata:
     - Actions operate in the output directory (producing output)
     - __cwd built-in variable provides the original working directory
 
+bundle:
+  include:
+    - "**/*"
+
 spec:
   resolvers:
     greeting:

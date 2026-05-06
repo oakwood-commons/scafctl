@@ -3,7 +3,11 @@ kind: Solution
 
 metadata:
   name: taskfile-build
-  version: 1.0.0
+  displayName: Taskfile Build
+  category: solutions
+  tags:
+    - file
+    - solution
   description: Build and release workflow using taskfile patterns
 
 spec:

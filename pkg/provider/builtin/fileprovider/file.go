@@ -96,10 +96,12 @@ func NewFileProvider() *FileProvider {
 				"basePath": schemahelper.StringProp("Destination root directory (required for write-tree operation). Entries are written relative to this path.",
 					schemahelper.WithExample("./output"),
 					schemahelper.WithMaxLength(4096)),
-				"entries": schemahelper.ArrayProp("Array of {path, content} objects to write (required for write-tree operation). Typically produced by the go-template provider's render-tree operation.",
+				"entries": schemahelper.ArrayProp("Array of {path, content} objects to write (required for write-tree operation). "+
+					"Entries without a content field (e.g. directory entries) are silently skipped. "+
+					"Typically produced by the go-template provider's render-tree operation.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A file entry with relative path and content to write",
-						[]string{"path", "content"},
+						"A file entry with relative path and optional content to write",
+						[]string{"path"},
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path within basePath"),
 							"content": schemahelper.StringProp("File content to write"),
@@ -140,6 +142,11 @@ func NewFileProvider() *FileProvider {
 						"Has no effect on other strategies or the write operation.",
 					schemahelper.WithExample(false),
 					schemahelper.WithDefault(false)),
+				"stripSuffix": schemahelper.StringProp(
+					"Strip the given suffix from each entry path before writing (write-tree only). "+
+						"For example, with stripSuffix '.tmpl', 'main.go.tmpl' becomes 'main.go'. "+
+						"Applied before outputPath template if both are set.",
+					schemahelper.WithExample(".tmpl")),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -575,6 +582,7 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	}
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
+	stripSuffix, _ := inputs["stripSuffix"].(string)
 
 	// Parse permissions — default to 0600 (owner read/write only).
 	fileMode := os.FileMode(0o600)
@@ -605,12 +613,22 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 	resolved := make([]resolvedEntry, 0, len(entries))
 	for i, entry := range entries {
 		outputPath := entry.path
+		if stripSuffix != "" {
+			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
+		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("outputPath template failed for entries[%d] (%s): %w", i, entry.path, tmplErr)
 			}
 			outputPath = transformed
+		}
+
+		if outputPath == "" || outputPath == "." {
+			if outputPathTmpl != "" {
+				return nil, fmt.Errorf("entries[%d]: path %q resolves to empty after applying stripSuffix %q and outputPath template %q", i, entry.path, stripSuffix, outputPathTmpl)
+			}
+			return nil, fmt.Errorf("entries[%d]: path %q resolves to empty after applying stripSuffix %q", i, entry.path, stripSuffix)
 		}
 
 		absDest := filepath.Join(absBasePath, outputPath)
@@ -855,9 +873,14 @@ func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTree
 			return nil, fmt.Errorf("entries[%d].path is required and must be a string", i)
 		}
 
-		content, ok := entry["content"].(string)
+		contentRaw, hasContent := entry["content"]
+		if !hasContent || contentRaw == nil {
+			// Skip directory entries (no content key) silently.
+			continue
+		}
+		content, ok := contentRaw.(string)
 		if !ok {
-			return nil, fmt.Errorf("entries[%d].content is required and must be a string", i)
+			return nil, fmt.Errorf("entries[%d].content must be a string, got %T", i, contentRaw)
 		}
 
 		entryOnConflict, _ := entry["onConflict"].(string)
@@ -901,9 +924,10 @@ func (p *FileProvider) renderOutputPath(outputPathTmpl, filePath string) (string
 
 	svc := gotmpl.NewService(nil)
 	result, err := svc.Execute(context.Background(), gotmpl.TemplateOptions{
-		Content: outputPathTmpl,
-		Name:    "outputPath",
-		Data:    data,
+		Content:    outputPathTmpl,
+		Name:       "outputPath",
+		Data:       data,
+		MissingKey: gotmpl.MissingKeyDefault,
 	})
 	if err != nil {
 		return "", err
@@ -939,6 +963,7 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 	}
 
 	outputPathTmpl, _ := inputs["outputPath"].(string)
+	stripSuffix, _ := inputs["stripSuffix"].(string)
 
 	// Invocation-level conflict inputs.
 	invOnConflict, _ := inputs["onConflict"].(string)
@@ -951,12 +976,22 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 
 	for i, entry := range entries {
 		outputPath := entry.path
+		if stripSuffix != "" {
+			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
+		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, entry.path)
+			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("%s: outputPath template failed for entries[%d] (%s): %w", ProviderName, i, entry.path, tmplErr)
 			}
 			outputPath = transformed
+		}
+
+		if outputPath == "" || outputPath == "." {
+			if outputPathTmpl != "" {
+				return nil, fmt.Errorf("%s: entries[%d]: path %q resolves to empty after applying stripSuffix %q and outputPath template %q", ProviderName, i, entry.path, stripSuffix, outputPathTmpl)
+			}
+			return nil, fmt.Errorf("%s: entries[%d]: path %q resolves to empty after applying stripSuffix %q", ProviderName, i, entry.path, stripSuffix)
 		}
 
 		absDest := filepath.Join(absBasePath, outputPath)

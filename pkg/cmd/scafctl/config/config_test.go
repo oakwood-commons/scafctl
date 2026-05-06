@@ -42,6 +42,7 @@ func TestCommandConfig(t *testing.T) {
 	assert.Contains(t, subCmdNames, "get")
 	assert.Contains(t, subCmdNames, "set")
 	assert.Contains(t, subCmdNames, "unset")
+	assert.Contains(t, subCmdNames, "reset")
 }
 
 func TestViewOptions_Run(t *testing.T) {

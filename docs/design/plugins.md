@@ -107,6 +107,43 @@ This mirrors patterns used by Terraform, Vault, Nomad, and Packer.
 
 ---
 
+## Built-in Boundary Rule
+
+A provider stays built-in when **any** of the following apply:
+
+1. **Core engine dependency** -- The provider imports `pkg/celexp` or
+   `pkg/gotmpl`. These packages are tightly coupled to the host's expression
+   and template engines; serializing their state across a gRPC boundary is
+   impractical.
+2. **Serialization-dominated cost** -- The provider's execution is
+   sub-microsecond with zero I/O and no external dependencies. The ~2-6ms
+   gRPC round-trip overhead would represent a 10,000x+ penalty, making the
+   plugin boundary pure waste.
+3. **Orchestration coupling** -- The provider requires direct access to
+   internal host state (e.g., the solution graph, resolver context mutations)
+   that cannot be exposed through `HostService` callbacks.
+
+All other providers default to plugin distribution. This keeps the core binary
+small while ensuring providers that are inherently host-coupled or
+performance-critical remain in-process.
+
+### Current Built-in Providers
+
+| Provider | Reason |
+|----------|--------|
+| `cel` | Imports `pkg/celexp` (rule 1) |
+| `go-template` | Imports `pkg/gotmpl` (rule 1) |
+| `validation` | Imports `pkg/celexp` for CEL-based validation rules (rule 1) |
+| `static` | Sub-microsecond, zero I/O data passthrough (rule 2) |
+| `parameter` | Sub-microsecond, zero I/O context lookup (rule 2) |
+| `http` | General-purpose; kept built-in for bootstrap (no plugin infra needed to fetch plugins) |
+| `file` | General-purpose; kept built-in for bootstrap |
+| `debug` | Development utility, zero external deps |
+| `message` | Terminal output only, coupled to host writer |
+| `solution` | Orchestration coupling -- invokes nested solution runs (rule 3) |
+
+---
+
 ## Plugin Architecture
 
 ### Dependencies
@@ -266,6 +303,47 @@ To disable:
 settings:
   disableOfficialCatalog: true
 ```
+
+### Official Provider Auto-Resolution
+
+scafctl maintains a hardcoded registry of 10 official providers distributed as
+external plugins. When a solution references one of these providers and it is
+not already registered (via `bundle.plugins` or a local plugin), scafctl
+transparently fetches the provider from the official catalog at runtime.
+
+**Official providers**: `directory`, `env`, `exec`, `git`, `github`, `hcl`,
+`identity`, `metadata`, `secret`, `sleep`
+
+**Resolution flow**:
+
+1. Solution references a provider (e.g., `provider: exec`)
+2. scafctl checks the local provider registry -- not found
+3. scafctl checks the official provider list -- match found
+4. Plugin binary is fetched from `ghcr.io/oakwood-commons/providers/exec`
+5. Plugin is cached locally and registered
+6. Execution continues normally
+
+**Key properties**:
+
+- Zero configuration required for local development
+- A warning is logged when auto-resolution occurs (visibility without friction)
+- The `--strict` flag on `run solution` / `run resolver` disables
+  auto-resolution and requires explicit `bundle.plugins` declarations
+- Embedders can override or extend the official list via
+  `RootOptions.OfficialProviders`
+- Air-gapped environments can disable with
+  `settings.disableOfficialProviders: true`
+
+**Strict mode** (`--strict`):
+
+Use in CI/CD to enforce explicit plugin declarations:
+
+~~~bash
+scafctl run solution -f solution.yaml --strict
+~~~
+
+This fails if any provider would require auto-resolution, ensuring all
+dependencies are declared in `bundle.plugins` for reproducibility.
 
 Conceptually:
 

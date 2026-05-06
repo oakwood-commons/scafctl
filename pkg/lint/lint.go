@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	resolverRefs "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
@@ -70,6 +71,13 @@ type Result struct {
 // Solution validates a solution and returns structured lint findings.
 // This function is reusable by both CLI and MCP.
 func Solution(sol *solution.Solution, filePath string, registry *provider.Registry) *Result {
+	if registry == nil {
+		registry = provider.NewRegistry()
+	}
+	// Clone the registry to avoid mutating the shared singleton when
+	// marking bundle.plugins and official providers as known.
+	registry = registryWithBundlePlugins(registry, sol)
+
 	result := &Result{
 		File:     filePath,
 		Findings: make([]*Finding, 0),
@@ -169,6 +177,14 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				"reserved-name")
 		}
 
+		if strings.Contains(name, "-") {
+			result.addFinding(SeverityInfo, "naming", location,
+				fmt.Sprintf("resolver name '%s' contains hyphens — use underscores for CEL compatibility (e.g., '%s')",
+					name, strings.ReplaceAll(name, "-", "_")),
+				"Hyphens in resolver names require quoting in CEL expressions. Use underscores for direct access: _.my_resolver",
+				"hyphenated-name")
+		}
+
 		// A resolver with a validate block exists for its side effect (aborting
 		// execution on validation failure), so it is "used" even if no other
 		// resolver or action references it.
@@ -192,7 +208,7 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				stepLocation := fmt.Sprintf("%s.resolve.with[%d]", location, i)
 
 				if step.Provider != "" {
-					if _, found := registry.Get(step.Provider); !found {
+					if !registry.Has(step.Provider) {
 						result.addFinding(SeverityError, "provider", stepLocation,
 							fmt.Sprintf("provider '%s' not found", step.Provider),
 							"Check spelling or register the provider",
@@ -202,6 +218,14 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 
 				lintNilInputs(step.Inputs, stepLocation, result)
 				lintExpressions(step.Inputs, stepLocation, result)
+
+				// Warn if forEach is used on a resolve step.
+				if step.ForEach != nil {
+					result.addFinding(SeverityWarning, "structure", stepLocation,
+						"forEach on resolve step is not supported; __self is not available during the resolve phase",
+						"Move forEach to a transform step or use a separate resolver to iterate",
+						"resolve-foreach")
+				}
 			}
 		}
 
@@ -230,6 +254,26 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 			for i, step := range res.Validate.With {
 				stepLocation := fmt.Sprintf("%s.validate.with[%d]", location, i)
 				lintNilInputs(step.Inputs, stepLocation, result)
+
+				// Warn if the provider does not declare validation capability.
+				if registry != nil && step.Provider != "" {
+					if p, exists := registry.Get(step.Provider); exists {
+						desc := p.Descriptor()
+						hasValidation := false
+						for _, cap := range desc.Capabilities {
+							if cap == provider.CapabilityValidation {
+								hasValidation = true
+								break
+							}
+						}
+						if !hasValidation {
+							result.addFinding(SeverityWarning, "provider", stepLocation,
+								fmt.Sprintf("provider '%s' does not declare validation capability", step.Provider),
+								"Use the 'validation' provider or another provider with validation capability",
+								"non-validation-provider")
+						}
+					}
+				}
 			}
 		}
 
@@ -361,13 +405,41 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Reg
 	}
 }
 
+// registryWithBundlePlugins creates a shallow clone of the registry and marks
+// provider names declared in sol.Bundle.Plugins as known so the
+// missing-provider lint rule does not fire for plugin-managed providers.
+// The clone ensures the shared singleton registry is not mutated.
+func registryWithBundlePlugins(registry *provider.Registry, sol *solution.Solution) *provider.Registry {
+	clone := registry.ShallowClone()
+	for _, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindProvider && p.Name != "" {
+			clone.MarkKnown(p.Name)
+		}
+	}
+	// Also mark all official providers as known - auto-resolution fetches
+	// them at runtime without requiring explicit bundle.plugins declarations.
+	for _, entry := range official.DefaultProviders() {
+		clone.MarkKnown(entry.Name)
+	}
+	return clone
+}
+
 // registryAdapter adapts provider.Registry to action.RegistryInterface
 type registryAdapter struct {
 	registry *provider.Registry
 }
 
 func (r *registryAdapter) Get(name string) (provider.Provider, bool) {
-	return r.registry.Get(name)
+	p, ok := r.registry.Get(name)
+	if ok {
+		return p, true
+	}
+	// For providers known only by name (bundle.plugins), report as found
+	// so workflow validation doesn't emit a duplicate missing-provider error.
+	if r.registry.Has(name) {
+		return nil, true
+	}
+	return nil, false
 }
 
 func (r *registryAdapter) Has(name string) bool {
@@ -383,7 +455,7 @@ func lintAction(act *action.Action, location string, validDeps map[string]bool, 
 	}
 
 	if act.Provider != "" {
-		if _, found := registry.Get(act.Provider); !found {
+		if !registry.Has(act.Provider) {
 			result.addFinding(SeverityError, "provider", location,
 				fmt.Sprintf("provider '%s' not found", act.Provider),
 				"Check spelling or register the provider",
@@ -508,15 +580,17 @@ func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *
 					"invalid-template")
 			}
 
-			// Check for _.resolverName pattern in Go templates (should be .resolverName)
+			// Check for _.resolverName pattern in Go templates — now valid at
+			// runtime, but worth an informational note since direct access is
+			// shorter and the alias only exists for CEL/template parity.
 			lintTemplateUnderscorePrefix(tmplStr, inputLoc, result)
 		}
 	}
 }
 
-// lintTemplateUnderscorePrefix flags when a Go template uses {{ ._.resolverName }}
-// which is not supported — the correct syntax is {{ .resolverName }}.
-// Uses Go template AST parsing to avoid false positives from literal text.
+// lintTemplateUnderscorePrefix emits an informational finding when a Go
+// template uses {{ ._.resolverName }}. The underscore alias is supported at
+// runtime, but direct access ({{ .resolverName }}) is shorter and preferred.
 func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 	refs, err := gotmpl.GetGoTemplateReferences(tmpl, "", "")
 	if err != nil {
@@ -539,9 +613,9 @@ func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 			continue
 		}
 		seen[name] = true
-		result.addFinding(SeverityError, "template", location,
-			fmt.Sprintf("Go template uses '{{ ._.%s }}' which is not supported — use '{{ .%s }}' instead (the '._' prefix is a CEL convention)", name, name),
-			fmt.Sprintf("Replace '._.%s' with '.%s' in the template", name, name),
+		result.addFinding(SeverityInfo, "template", location,
+			fmt.Sprintf("Go template uses '{{ ._.%s }}' — consider using '{{ .%s }}' for brevity (both work; the '._' alias exists for CEL/template parity)", name, name),
+			fmt.Sprintf("Replace '._.%s' with '.%s' in the template for shorter syntax", name, name),
 			"tmpl-underscore-prefix")
 	}
 }
@@ -585,6 +659,11 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 				tmplRefs, err := gotmpl.GetGoTemplateReferences(string(*vr.Tmpl), "", "")
 				if err == nil {
 					for _, ref := range tmplRefs {
+						// Skip scoped references inside {{ with }}/{{ range }} bodies
+						if ref.Scoped {
+							continue
+						}
+
 						name := resolverRefs.ExtractResolverName(ref.Path)
 						if name != "" {
 							refs[name] = true
@@ -613,6 +692,11 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 // "rslvr", "expr", or "tmpl" key are treated as resolver references.
 func scanLiteralForResolverRefs(v any, pattern *regexp.Regexp, refs map[string]bool) {
 	switch val := v.(type) {
+	case string:
+		// Scan plain string literals for _.resolverName patterns.
+		// This catches CEL expression inputs (e.g., `expression: "has(_.foo)"`),
+		// Go template inputs, and any other string that may reference resolvers.
+		scanExpressionForResolverRefs(val, pattern, refs)
 	case map[string]any:
 		// Check if this map itself is a resolver reference
 		if rslvr, ok := val["rslvr"]; ok {

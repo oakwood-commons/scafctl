@@ -40,7 +40,7 @@ func (s *Server) registerRefsTools() {
 			mcp.Description("Working directory for path resolution. When set, relative file paths resolve against this directory instead of the process CWD."),
 		),
 	)
-	s.mcpServer.AddTool(extractRefssTool, s.handleExtractResolverRefs)
+	s.addTool(extractRefssTool, s.handleExtractResolverRefs)
 }
 
 // handleExtractResolverRefs extracts resolver references from expressions.
@@ -133,6 +133,11 @@ func extractGoTemplateRefs(content string) ([]string, error) {
 
 	var resolverPaths []string
 	for _, ref := range refs {
+		// Skip scoped references inside {{ with }}/{{ range }} bodies
+		if ref.Scoped {
+			continue
+		}
+
 		// Go template references start with "." — look for _.resolverName patterns
 		path := ref.Path
 		path = strings.TrimPrefix(path, ".")

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -75,7 +76,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	}
 
 	cmd := &cobra.Command{
-		Use:     "lint",
+		Use:     "lint [name[@version]]",
 		Aliases: []string{"l", "check"},
 		Short:   "Lint a solution file for issues and best practices",
 		Long: heredoc.Doc(`
@@ -120,9 +121,18 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			# Output as JSON for CI integration
 			scafctl lint -f ./solution.yaml -o json
 		`), settings.CliBinaryName, cliParams.BinaryName),
-		Args: cobra.NoArgs,
+		Args: cobra.MaximumNArgs(1),
+		PreRunE: func(_ *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], options.File, cliParams.BinaryName+" lint"); err != nil {
+					return err
+				}
+				options.File = args[0]
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Use)
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
 			lgr := logger.FromContext(cmd.Context())
 			ctx = logger.WithLogger(ctx, lgr)
@@ -144,6 +154,18 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cmd.AddCommand(CommandExplainRule(cliParams, ioStreams, lintPath))
 
 	return cmd
+}
+
+// findingsColumnHints returns column display hints for the findings table.
+// Fixed columns (severity, rule, location) use static width caps; the
+// message column is marked Flex so it absorbs remaining terminal width.
+func findingsColumnHints() map[string]tui.ColumnHint {
+	return map[string]tui.ColumnHint{
+		"severity": {MaxWidth: 8, DisplayName: "Severity"},
+		"ruleName": {MaxWidth: maxRuleWidth, DisplayName: "Rule"},
+		"location": {MaxWidth: maxLocationWidth, DisplayName: "Location"},
+		"message":  {DisplayName: "Message", Flex: true},
+	}
 }
 
 func runLint(ctx context.Context, opts *Options) error {
@@ -215,10 +237,27 @@ func runLint(ctx context.Context, opts *Options) error {
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(opts.CliParams.NoColor),
 		kvx.WithOutputAppName(opts.BinaryName+" lint"),
+		kvx.WithOutputColumnHints(findingsColumnHints()),
+		kvx.WithOutputColumnOrder([]string{"severity", "ruleName", "location", "message"}),
 	)
 	kvxOpts.IOStreams = opts.IOStreams
 
-	if err := kvxOpts.Write(result); err != nil {
+	// For table output, project findings to the four visible columns so
+	// the columnar renderer sees exactly 4 fields (not the full 9-field
+	// struct) and stays in table mode at narrower terminal widths.
+	// For structured formats (json/yaml), emit the full result with all
+	// fields and summary counts.
+	var outputData any = result
+	if !kvx.IsStructuredFormat(kvxOpts.Format) && opts.Expression == "" {
+		if len(result.Findings) == 0 {
+			w := writer.FromContext(ctx)
+			w.Success("No lint issues found.")
+			return nil
+		}
+		outputData = projectFindings(result.Findings)
+	}
+
+	if err := kvxOpts.Write(outputData); err != nil {
 		writeError(opts, fmt.Sprintf("failed to write output: %v", err))
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
@@ -229,6 +268,32 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	return nil
 }
+
+// projectFindings converts findings to maps with only the four table-visible
+// columns. This keeps the column count low so kvx renders a columnar table
+// instead of falling back to list view at narrow terminal widths.
+// Returns []any so kvx View() recognises the data as a homogeneous array.
+func projectFindings(findings []*pkglint.Finding) []any {
+	rows := make([]any, len(findings))
+	for i, f := range findings {
+		rows[i] = map[string]any{
+			"severity": string(f.Severity),
+			"location": f.Location,
+			"message":  f.Message,
+			"ruleName": f.RuleName,
+		}
+	}
+	return rows
+}
+
+// Column width limits for table rendering. Values are chosen so the four
+// visible columns (severity + rule + location + message + separators)
+// fit comfortably in an 80-column terminal. The message column fills
+// remaining space and is the first to be truncated on narrow terminals.
+const (
+	maxRuleWidth     = 20
+	maxLocationWidth = 20
+)
 
 func getRegistry(ctx context.Context) *provider.Registry {
 	reg, err := builtin.DefaultRegistry(ctx)

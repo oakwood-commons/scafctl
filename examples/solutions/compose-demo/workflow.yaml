@@ -1,0 +1,9 @@
+spec:
+  workflow:
+    actions:
+      greet:
+        provider: message
+        inputs:
+          message:
+            expr: "'Deploying ' + _.app_name + ' to ' + _.environment"
+          type: success

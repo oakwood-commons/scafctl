@@ -154,6 +154,7 @@ type Resolver struct {
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable description" maxLength:"500" example:"Resolves the target deployment environment"`
 	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Display name for UI" maxLength:"80" example:"Environment"`
 	Sensitive   bool   `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"Whether value should be redacted in table output and logs (JSON/YAML output reveals values for machine consumption)" example:"false"`
+	Internal    bool   `json:"internal,omitempty" yaml:"internal,omitempty" doc:"Whether this resolver is internal (excluded from default output, included in structured output)"`
 	Example     any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value for documentation"`
 
 	// Type declaration
@@ -216,6 +217,7 @@ type ProviderSource struct {
 	Inputs   map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
 	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Source-level condition"`
 	OnError  ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Behavior when provider fails (continue, fail). Defaults to continue (fallback chain semantics). Use fail to stop on first error." example:"continue" default:"continue"`
+	ForEach  *ForEachClause       `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iterate over array, executing provider for each element. Requires forEach.in (no __self in resolve phase)."`
 }
 
 // ProviderTransform represents a single transform step

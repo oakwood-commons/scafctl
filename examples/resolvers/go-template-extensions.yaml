@@ -5,7 +5,11 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: go-template-extensions-showcase
-  version: 1.0.0
+  displayName: Go Template Extensions Showcase
+  category: resolvers
+  tags:
+    - resolver-example
+    - template
   description: |
     Custom Go template extension functions provided by scafctl. Covers
     toHcl for HCL generation and toYaml/fromYaml/mustToYaml/mustFromYaml

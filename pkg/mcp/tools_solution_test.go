@@ -96,9 +96,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello!"
+              expression: "'Hello!'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -314,9 +314,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -352,9 +352,9 @@ spec:
   workflow:
     actions:
       greet:
-        provider: exec
+        provider: message
         inputs:
-          command: "echo hello"
+          message: "hello"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -452,9 +452,9 @@ spec:
   workflow:
     actions:
       greet:
-        provider: exec
+        provider: message
         inputs:
-          command: "echo hello"
+          message: "hello"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -491,16 +491,16 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello World"
+              expression: "'Hello World'"
     count:
       type: int
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: 42
+              expression: "42"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -527,7 +527,7 @@ spec:
 		greeting := resolvers["greeting"].(map[string]any)
 		assert.Equal(t, "Hello World", greeting["value"])
 		assert.Equal(t, "resolved", greeting["status"])
-		assert.Equal(t, "static", greeting["provider"])
+		assert.Equal(t, "cel", greeting["provider"])
 
 		// Verify source position is included
 		sourcePos := greeting["sourcePos"]
@@ -550,9 +550,9 @@ spec:
     x:
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "ok"
+              expression: "'ok'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -585,9 +585,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: root
+              expression: "'root'"
     derived:
       type: string
       resolve:
@@ -665,15 +665,15 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
   workflow:
     actions:
       greet:
-        provider: exec
+        provider: message
         inputs:
-          command: "echo hello"
+          message: "hello"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -713,9 +713,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -842,9 +842,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -887,9 +887,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
   workflow:
     actions:
       write-file:
@@ -937,9 +937,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
   workflow:
     actions:
       write-file:
@@ -989,9 +989,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -1024,9 +1024,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -1059,9 +1059,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -1101,9 +1101,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 
@@ -1173,9 +1173,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "hello"
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
 

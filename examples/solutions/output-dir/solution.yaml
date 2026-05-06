@@ -7,7 +7,10 @@ kind: Solution
 
 metadata:
   name: output-dir-demo
-  version: 1.0.0
+  displayName: Output Dir Demo
+  category: solutions
+  tags:
+    - solution
   description: |
     Demonstrates the --output-dir flag and phase-based directory model.
     Resolvers read from CWD, actions write to output-dir.

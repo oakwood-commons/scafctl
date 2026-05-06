@@ -40,6 +40,7 @@ func TestCommandPull_Flags(t *testing.T) {
 		{"as", ""},
 		{"kind", ""},
 		{"force", "false"},
+		{"dry-run", "false"},
 		{"insecure", "false"},
 		{"no-cache", "false"},
 	}

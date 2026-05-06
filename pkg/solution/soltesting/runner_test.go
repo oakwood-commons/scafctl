@@ -607,12 +607,33 @@ func TestBuildEnvMap(t *testing.T) {
 		},
 	}
 
-	env := r.buildEnvMap(tc, config, "/tmp/sandbox")
+	env := r.buildEnvMap(tc, config, "/tmp/sandbox", nil)
 
 	assert.Equal(t, "test-value", env["TEST_VAR"])
 	assert.Equal(t, "config-value", env["CONFIG_VAR"])
 	assert.Equal(t, "from-test", env["OVERRIDE"]) // test overrides config
 	assert.Equal(t, "/tmp/sandbox", env["SCAFCTL_SANDBOX_DIR"])
+}
+
+func TestBuildEnvMap_WithExtraEnv(t *testing.T) {
+	r := &Runner{}
+
+	tc := &TestCase{
+		Env: map[string]string{
+			"TC_VAR":  "from-tc",
+			"OVERLAP": "from-tc",
+		},
+	}
+	extraEnv := map[string]string{
+		"SVC_URL": "http://localhost:9999",
+		"OVERLAP": "from-extra",
+	}
+
+	env := r.buildEnvMap(tc, nil, "/tmp/sandbox", extraEnv)
+
+	assert.Equal(t, "from-tc", env["TC_VAR"])
+	assert.Equal(t, "http://localhost:9999", env["SVC_URL"])
+	assert.Equal(t, "from-extra", env["OVERLAP"], "extraEnv should override tc.Env")
 }
 
 func TestMergeEnvForStep(t *testing.T) {
@@ -1143,4 +1164,105 @@ func BenchmarkReportTable_ProgressShown(b *testing.B) {
 		buf.Reset()
 		_ = reportTable(results, &buf, false, 500*time.Millisecond, true)
 	}
+}
+
+// ── writeMocksFile tests ──────────────────────────────────────────────────────
+
+func TestWriteMocksFile_RoundTrip(t *testing.T) {
+	mocks := map[string]any{
+		"api-data":  []any{"item1", "item2"},
+		"api-count": float64(42),
+	}
+
+	path, err := writeMocksFile(mocks)
+	require.NoError(t, err)
+	defer os.Remove(path)
+
+	// Read back and verify
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var loaded map[string]any
+	require.NoError(t, json.Unmarshal(data, &loaded))
+
+	assert.Equal(t, float64(42), loaded["api-count"])
+	items, ok := loaded["api-data"].([]any)
+	require.True(t, ok)
+	assert.Len(t, items, 2)
+}
+
+func TestWriteMocksFile_EmptyMocks(t *testing.T) {
+	path, err := writeMocksFile(map[string]any{})
+	require.NoError(t, err)
+	defer os.Remove(path)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "{}", string(data))
+}
+
+func TestInputsToArgs_Nil(t *testing.T) {
+	assert.Nil(t, inputsToArgs(nil))
+}
+
+func TestInputsToArgs_Empty(t *testing.T) {
+	assert.Nil(t, inputsToArgs(map[string]string{}))
+}
+
+func TestInputsToArgs_Single(t *testing.T) {
+	result := inputsToArgs(map[string]string{"env": "prod"})
+	assert.Equal(t, []string{"-r", "env=prod"}, result)
+}
+
+func TestInputsToArgs_Multiple_Sorted(t *testing.T) {
+	result := inputsToArgs(map[string]string{
+		"region": "us-east-1",
+		"env":    "staging",
+		"app":    "myservice",
+	})
+	// Keys should be sorted alphabetically for deterministic output
+	assert.Equal(t, []string{
+		"-r", "app=myservice",
+		"-r", "env=staging",
+		"-r", "region=us-east-1",
+	}, result)
+}
+
+func TestStartPerTestServices_HTTP(t *testing.T) {
+	r := &Runner{}
+	services := []ServiceConfig{
+		{
+			Name:       "test-api",
+			Type:       "http",
+			PortEnv:    "TEST_PORT",
+			BaseURLEnv: "TEST_URL",
+			Routes:     nil, // no routes needed for startup test
+		},
+	}
+
+	env, stopFn, err := r.startPerTestServices(services)
+	require.NoError(t, err)
+	defer stopFn()
+
+	assert.NotEmpty(t, env["TEST_PORT"])
+	assert.Contains(t, env["TEST_URL"], "http://127.0.0.1:")
+}
+
+func TestStartPerTestServices_UnsupportedType(t *testing.T) {
+	r := &Runner{}
+	services := []ServiceConfig{
+		{Name: "bad", Type: "grpc"},
+	}
+
+	_, _, err := r.startPerTestServices(services)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported type")
+}
+
+func TestStartPerTestServices_Empty(t *testing.T) {
+	r := &Runner{}
+	env, stopFn, err := r.startPerTestServices(nil)
+	require.NoError(t, err)
+	assert.Empty(t, env)
+	assert.NotNil(t, stopFn) // no-op stop function is still returned
 }

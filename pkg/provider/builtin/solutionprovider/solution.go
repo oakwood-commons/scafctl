@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -41,9 +44,17 @@ type Loader interface {
 
 // SolutionProvider executes sub-solutions and returns their results.
 type SolutionProvider struct {
-	loader     Loader
-	registry   *provider.Registry
-	descriptor *provider.Descriptor
+	loader            Loader
+	registry          *provider.Registry
+	descriptor        *provider.Descriptor
+	officialProviders *official.Registry
+	pluginFetcher     *plugin.Fetcher
+	pluginConfig      *plugin.ProviderConfig
+	clientOpts        []plugin.ClientOption
+
+	// mu protects childClients from concurrent Execute calls.
+	mu           sync.Mutex
+	childClients []*plugin.Client
 }
 
 // Option configures a SolutionProvider.
@@ -59,6 +70,26 @@ func WithRegistry(r *provider.Registry) Option {
 	return func(p *SolutionProvider) { p.registry = r }
 }
 
+// WithOfficialProviders sets the official provider registry for child auto-resolution.
+func WithOfficialProviders(r *official.Registry) Option {
+	return func(p *SolutionProvider) { p.officialProviders = r }
+}
+
+// WithPluginFetcher sets the fetcher used to download plugins for child solutions.
+func WithPluginFetcher(f *plugin.Fetcher) Option {
+	return func(p *SolutionProvider) { p.pluginFetcher = f }
+}
+
+// WithPluginConfig sets plugin configuration for child auto-resolution.
+func WithPluginConfig(cfg *plugin.ProviderConfig) Option {
+	return func(p *SolutionProvider) { p.pluginConfig = cfg }
+}
+
+// WithClientOptions sets plugin client options for child auto-resolution.
+func WithClientOptions(opts ...plugin.ClientOption) Option {
+	return func(p *SolutionProvider) { p.clientOpts = opts }
+}
+
 // New creates a new SolutionProvider with the given options.
 func New(opts ...Option) *SolutionProvider {
 	p := &SolutionProvider{}
@@ -67,6 +98,18 @@ func New(opts ...Option) *SolutionProvider {
 	}
 	p.descriptor = buildDescriptor()
 	return p
+}
+
+// Close kills all plugin clients started by child auto-resolution.
+// Must be called when the solution provider is no longer needed.
+func (p *SolutionProvider) Close() {
+	p.mu.Lock()
+	clients := p.childClients
+	p.childClients = nil
+	p.mu.Unlock()
+	for _, c := range clients {
+		c.Kill()
+	}
 }
 
 // Descriptor returns the provider's metadata and schema.
@@ -128,6 +171,13 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		return nil, fmt.Errorf("solution %q: failed to load: %w", in.Source, err)
 	}
 
+	// Auto-resolve official providers needed by the child solution.
+	// Clients are tracked at the struct level and cleaned up via Close()
+	// to avoid killing shared plugins while parallel Execute calls are in flight.
+	if err := p.autoResolveChildProviders(ctx, sol); err != nil {
+		return nil, fmt.Errorf("solution %q: %w", in.Source, err)
+	}
+
 	// Dry-run: validate source (by loading) but don't execute.
 	if provider.DryRunFromContext(ctx) {
 		mode, _ := provider.ExecutionModeFromContext(ctx)
@@ -177,7 +227,20 @@ func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *soluti
 		lgr.V(1).Info("executing sub-solution resolvers", "count", len(resolvers), "selected", len(in.Resolvers))
 
 		adapter := &resolverRegistryAdapter{registry: p.registry}
-		executor := resolver.NewExecutor(adapter)
+
+		// Derive child executor timeout from the context deadline so the child
+		// respects the parent's timeout budget instead of using the default 30s.
+		var execOpts []resolver.ExecutorOption
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 {
+				execOpts = append(execOpts,
+					resolver.WithPhaseTimeout(remaining),
+					resolver.WithDefaultTimeout(remaining),
+				)
+			}
+		}
+		executor := resolver.NewExecutor(adapter, execOpts...)
 
 		resultCtx, err := executor.Execute(ctx, resolvers, in.Inputs)
 		if err != nil {
@@ -237,7 +300,20 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 		lgr.V(1).Info("executing sub-solution resolvers", "count", len(resolvers), "selected", len(in.Resolvers))
 
 		adapter := &resolverRegistryAdapter{registry: p.registry}
-		resolverExec := resolver.NewExecutor(adapter)
+
+		// Derive child executor timeout from the context deadline so the child
+		// respects the parent's timeout budget instead of using the default 30s.
+		var resolverOpts []resolver.ExecutorOption
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 {
+				resolverOpts = append(resolverOpts,
+					resolver.WithPhaseTimeout(remaining),
+					resolver.WithDefaultTimeout(remaining),
+				)
+			}
+		}
+		resolverExec := resolver.NewExecutor(adapter, resolverOpts...)
 
 		resultCtx, err := resolverExec.Execute(ctx, resolvers, in.Inputs)
 		if err != nil {
@@ -764,4 +840,66 @@ func (r *actionRegistryAdapter) Get(name string) (provider.Provider, bool) {
 
 func (r *actionRegistryAdapter) Has(name string) bool {
 	return r.registry.Has(name)
+}
+
+// autoResolveChildProviders fetches official providers needed by a child
+// solution that are not yet in the parent registry.
+// Clients are appended to p.childClients for deferred cleanup via Close().
+// Returns an error if fetching or registering plugins fails.
+func (p *SolutionProvider) autoResolveChildProviders(ctx context.Context, sol *solution.Solution) error {
+	if p.officialProviders == nil || p.officialProviders.Len() == 0 || p.pluginFetcher == nil {
+		return nil
+	}
+
+	// Use Spec.ReferencedProviderNames() to collect all provider references,
+	// then filter to those that are missing and official.
+	var missing []official.Provider
+	for _, name := range sol.Spec.ReferencedProviderNames() {
+		if p.registry.Has(name) {
+			continue
+		}
+		if op, ok := p.officialProviders.Get(name); ok {
+			missing = append(missing, op)
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil
+	}
+
+	lgr := logger.FromContext(ctx)
+	if lgr != nil {
+		names := make([]string, len(missing))
+		for i, m := range missing {
+			names[i] = m.Name
+		}
+		lgr.V(1).Info("auto-resolving child solution providers", "providers", names)
+	}
+
+	deps := make([]solution.PluginDependency, len(missing))
+	for i, m := range missing {
+		deps[i] = m.ToPluginDependency()
+	}
+
+	results, err := p.pluginFetcher.FetchPlugins(ctx, deps, nil)
+	if err != nil {
+		return fmt.Errorf("auto-fetching child solution providers: %w", err)
+	}
+
+	cfg := p.pluginConfig
+	if cfg == nil {
+		cfg = &plugin.ProviderConfig{}
+	}
+
+	pClients, err := plugin.RegisterFetchedPlugins(ctx, p.registry, results, cfg, p.clientOpts...)
+	if err != nil {
+		return fmt.Errorf("registering child solution providers: %w", err)
+	}
+
+	if len(pClients) > 0 {
+		p.mu.Lock()
+		p.childClients = append(p.childClients, pClients...)
+		p.mu.Unlock()
+	}
+	return nil
 }

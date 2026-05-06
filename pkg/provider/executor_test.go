@@ -696,3 +696,117 @@ func TestExecutor_Execute_ContextCancellation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "context canceled")
 }
+
+// ─── Write Operation Classification Tests ────────────────────────────────────
+
+// newMockWriteClassifierProvider creates a mock with WriteOperations on the Descriptor.
+func newMockWriteClassifierProvider(writeOps []string) *mockExecutableProvider {
+	version, _ := semver.NewVersion("1.0.0")
+	return &mockExecutableProvider{
+		descriptor: &Descriptor{
+			Name:            "test-provider",
+			APIVersion:      "v1",
+			Version:         version,
+			Description:     "Mock provider for testing",
+			Capabilities:    []Capability{CapabilityFrom, CapabilityAction, CapabilityTransform},
+			WriteOperations: writeOps,
+			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
+				"operation": schemahelper.StringProp("Operation to perform"),
+			}),
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"result": schemahelper.StringProp(""),
+				}),
+				CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+					"success": schemahelper.BoolProp(""),
+				}),
+			},
+		},
+	}
+}
+
+func TestValidateWriteOperation_BlocksWriteInResolver(t *testing.T) {
+	t.Parallel()
+
+	p := newMockWriteClassifierProvider([]string{"create_label", "delete_label"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+
+	_, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "create_label",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write operation")
+	assert.Contains(t, err.Error(), "create_label")
+	assert.Contains(t, err.Error(), "workflow action")
+}
+
+func TestValidateWriteOperation_AllowsReadInResolver(t *testing.T) {
+	t.Parallel()
+
+	p := newMockWriteClassifierProvider([]string{"create_label", "delete_label"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+
+	result, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "list_labels",
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestValidateWriteOperation_AllowsWriteInAction(t *testing.T) {
+	t.Parallel()
+
+	p := newMockWriteClassifierProvider([]string{"create_label"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityAction)
+
+	result, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "create_label",
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestValidateWriteOperation_BlocksWriteInTransform(t *testing.T) {
+	t.Parallel()
+
+	p := newMockWriteClassifierProvider([]string{"create_label", "delete_label"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityTransform)
+
+	_, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "create_label",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write operation")
+	assert.Contains(t, err.Error(), "create_label")
+	assert.Contains(t, err.Error(), "workflow action")
+}
+
+func TestValidateWriteOperation_SkipsNonClassifier(t *testing.T) {
+	t.Parallel()
+
+	// Provider without WriteOperations (nil) — no enforcement
+	p := newMockExecutableProvider("test-provider", nil)
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityFrom)
+
+	result, err := executor.Execute(ctx, p, map[string]any{
+		"input1":    "value",
+		"operation": "create_label",
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}

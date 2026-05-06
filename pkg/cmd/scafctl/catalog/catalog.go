@@ -57,6 +57,7 @@ func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandRemote(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandAttach(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandIndex(cliParams, ioStreams, path))
 
 	return cmd
 }
@@ -83,6 +84,42 @@ func hintOnAuthError(ctx context.Context, w *writer.Writer, registry string, err
 			bin, handler, registry)
 	} else {
 		w.Infof("Hint: run '%s catalog login %s' to authenticate", bin, registry)
+	}
+}
+
+// warnStaleCredentials emits a user-facing warning when a RemoteCatalog
+// detected that stored credentials were rejected and fell back to anonymous
+// access. Includes the credential source and a fix command.
+func warnStaleCredentials(ctx context.Context, w *writer.Writer, rc *catalog.RemoteCatalog) {
+	if !rc.HasStaleCredentials() {
+		return
+	}
+
+	registry := rc.Registry()
+	bin := settings.BinaryNameFromContext(ctx)
+
+	// Use the specific credential source when available, fall back to
+	// a handler-based or generic description.
+	source := rc.CredentialSource()
+	if source == "" {
+		if handler := rc.AuthHandlerUsed(); handler != "" {
+			source = fmt.Sprintf("%s auth handler credentials", handler)
+		} else {
+			source = "stored credentials"
+		}
+	}
+
+	w.WarnStderrf("Your %s for %s were rejected — fell back to anonymous access.", source, registry)
+
+	var customHandlers []config.CustomOAuth2Config
+	if cfg := config.FromContext(ctx); cfg != nil {
+		customHandlers = cfg.Auth.CustomOAuth2
+	}
+
+	if handler := catalog.InferAuthHandler(registry, customHandlers); handler != "" {
+		w.PlainStderrf("  To fix: %s auth login %s", bin, handler)
+	} else {
+		w.PlainStderrf("  To fix: %s catalog login %s", bin, registry)
 	}
 }
 
@@ -188,6 +225,19 @@ func resolveAuthScopeForRegistry(ctx context.Context, registry string) string {
 	return catalog.InferDefaultScope(registry)
 }
 
+// resolveDiscoveryStrategy returns the discovery strategy for a named catalog.
+// Returns empty string (treated as "auto") when no catalog config is found.
+func resolveDiscoveryStrategy(ctx context.Context, catalogFlag string) config.DiscoveryStrategy {
+	cfg := config.FromContext(ctx)
+	if cfg == nil || catalogFlag == "" {
+		return ""
+	}
+	if cat, ok := cfg.GetCatalog(catalogFlag); ok {
+		return cat.DiscoveryStrategy
+	}
+	return ""
+}
+
 // verboseRemoteInfo logs user-facing verbose diagnostics about how a remote
 // catalog operation was resolved: registry, repository, auth handler, scope,
 // credential source, and handler auth status.
@@ -244,7 +294,15 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 		w.Verbose("Credentials: bridged from auth handler on-the-fly")
 	} else {
 		w.Verbose("Auth handler: none (using stored registry credentials)")
-		w.Verbosef("Credential source: container auth config or native credential store for %s", registry)
+	}
+}
+
+// verboseCredentialSource logs the actual credential source that was resolved
+// during the most recent OCI operation. Call after the first OCI call (Fetch,
+// List, CopyTo, FetchIndex) so the lazy credential function has executed.
+func verboseCredentialSource(w *writer.Writer, rc *catalog.RemoteCatalog) {
+	if source := rc.CredentialSource(); source != "" {
+		w.Verbosef("Credential source: %s", source)
 	}
 }
 
@@ -364,4 +422,96 @@ func filterPreReleaseArtifacts(artifacts []catalog.ArtifactInfo) []catalog.Artif
 		return artifacts
 	}
 	return stable
+}
+
+// filterArtifactsByCatalog keeps only artifacts whose Catalog field matches the
+// given name (case-sensitive).
+func filterArtifactsByCatalog(artifacts []catalog.ArtifactInfo, catalogName string) []catalog.ArtifactInfo {
+	filtered := make([]catalog.ArtifactInfo, 0, len(artifacts))
+	for _, a := range artifacts {
+		if a.Catalog == catalogName {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
+}
+
+// isConfiguredCatalog returns true if the given name matches a catalog entry
+// in the application configuration.
+func isConfiguredCatalog(ctx context.Context, name string) bool {
+	cfg := config.FromContext(ctx)
+	if cfg == nil {
+		return false
+	}
+	_, ok := cfg.GetCatalog(name)
+	return ok
+}
+
+// deduplicateArtifacts merges rows with the same name+tag+kind across catalogs.
+// When duplicates exist, the row with richer metadata (digest, createdAt) is
+// preferred and catalog names are combined into a comma-separated string.
+func deduplicateArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactInfo {
+	type dedupKey struct {
+		name string
+		tag  string
+		kind catalog.ArtifactKind
+	}
+
+	keyFor := func(a catalog.ArtifactInfo) dedupKey {
+		tag := a.Tag
+		if tag == "" && a.Reference.Version != nil {
+			tag = a.Reference.Version.String()
+		}
+		return dedupKey{name: a.Reference.Name, tag: tag, kind: a.Reference.Kind}
+	}
+
+	seen := make(map[dedupKey]int, len(artifacts)) // key → index in result
+	result := make([]catalog.ArtifactInfo, 0, len(artifacts))
+
+	catalogSet := func(csv string) map[string]struct{} {
+		set := make(map[string]struct{})
+		for _, name := range strings.Split(csv, ", ") {
+			if name != "" {
+				set[name] = struct{}{}
+			}
+		}
+		return set
+	}
+
+	for _, a := range artifacts {
+		k := keyFor(a)
+		if idx, ok := seen[k]; ok {
+			existing := &result[idx]
+
+			// Combine catalog names using exact set membership (not substring).
+			names := catalogSet(existing.Catalog)
+			if _, found := names[a.Catalog]; !found {
+				existing.Catalog = existing.Catalog + ", " + a.Catalog
+			}
+
+			// Prefer richer metadata.
+			if existing.Digest == "" && a.Digest != "" {
+				existing.Digest = a.Digest
+			}
+			if existing.CreatedAt.IsZero() && !a.CreatedAt.IsZero() {
+				existing.CreatedAt = a.CreatedAt
+			}
+			// Merge annotations: keep existing values, fill gaps from the other catalog.
+			if len(a.Annotations) > 0 {
+				if existing.Annotations == nil {
+					existing.Annotations = make(map[string]string, len(a.Annotations))
+				}
+				for k, v := range a.Annotations {
+					if _, found := existing.Annotations[k]; !found {
+						existing.Annotations[k] = v
+					}
+				}
+			}
+		} else {
+			seen[k] = len(result)
+			result = append(result, a)
+		}
+	}
+
+	return result
 }

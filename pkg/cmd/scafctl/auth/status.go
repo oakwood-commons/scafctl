@@ -6,6 +6,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,21 +23,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// authStatusSchema controls table column display: handler, authenticated, email/username,
-// and expiresIn are visible; other fields are hidden in table view but included in json/yaml.
+// authStatusSchema controls table column display. Columns in the "required"
+// array resist truncation in table view. Fields marked "deprecated" are hidden
+// in table output but still included in json/yaml. Property declaration order
+// sets priority tiebreakers (first declared = highest base priority).
 var authStatusSchema = []byte(`{
 	"type": "array",
 	"items": {
 		"type": "object",
-		"required": ["handler", "type", "status"],
+		"required": ["handler", "status"],
 		"properties": {
-			"handler":        { "type": "string", "title": "Handler", "maxLength": 20 },
-			"type":           { "type": "string", "title": "Type", "maxLength": 10 },
-			"status":         { "type": "string", "title": "Status", "maxLength": 30 },
-			"displayName":    { "type": "string", "title": "Name", "maxLength": 20 },
-			"email":          { "type": "string", "title": "Email" },
-			"username":       { "type": "string", "title": "Username" },
-			"expiresIn":      { "type": "string", "title": "Expires In" },
+			"handler":        { "type": "string", "title": "Handler", "maxLength": 16 },
+			"status":         { "type": "string", "title": "Status", "maxLength": 22 },
+			"flow":           { "type": "string", "title": "Flow", "enum": ["device_code", "interactive", "service_principal", "workload_identity", "pat", "gcloud_adc", "github_app", "client_credentials", "token"] },
+			"user":           { "type": "string", "title": "User", "maxLength": 30 },
+			"expiresIn":      { "type": "string", "title": "Expires", "maxLength": 10 },
+			"type":           { "type": "string", "deprecated": true },
+			"displayName":    { "type": "string", "deprecated": true },
+			"email":          { "type": "string", "deprecated": true },
+			"username":       { "type": "string", "deprecated": true },
 			"authenticated":  { "type": "boolean", "deprecated": true },
 			"identityType":   { "type": "string", "deprecated": true },
 			"clientId":       { "type": "string", "deprecated": true },
@@ -139,6 +144,14 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					}
 				}
 
+				// Detect the active credential source if the handler supports it.
+				var flowStr string
+				if reporter, ok := handler.(auth.FlowReporter); ok && status.Authenticated {
+					if f := reporter.ActiveFlow(ctx); f != "" {
+						flowStr = string(f)
+					}
+				}
+
 				result := map[string]any{
 					"handler":       handlerName,
 					"displayName":   handler.DisplayName(),
@@ -147,7 +160,9 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					"authenticated": status.Authenticated,
 					"email":         "",
 					"username":      "",
+					"user":          "",
 					"expiresIn":     "",
+					"flow":          flowStr,
 					"hint":          "",
 					"identityType":  "",
 					"clientId":      "",
@@ -186,6 +201,13 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					if status.Claims.Username != "" {
 						result["username"] = status.Claims.Username
 					}
+					// Derive a compact "user" for the table: prefer email, then username.
+					switch {
+					case status.Claims.Email != "":
+						result["user"] = status.Claims.Email
+					case status.Claims.Username != "":
+						result["user"] = status.Claims.Username
+					}
 					if status.TenantID != "" {
 						result["tenantId"] = status.TenantID
 					}
@@ -223,11 +245,12 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			// Append catalog rows for remote catalogs from config.
 			if len(args) == 0 {
 				results = appendCatalogStatus(ctx, cliParams, results)
+				results = appendRegistryCredentials(results)
 			}
 
 			outputOpts := flags.ToKvxOutputOptions(&outputFlags,
 				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"handler", "type", "status", "displayName", "email", "username", "expiresIn"}),
+				kvx.WithOutputColumnOrder([]string{"handler", "status", "flow", "user", "expiresIn"}),
 				kvx.WithOutputSchemaJSON(authStatusSchema),
 			)
 
@@ -332,7 +355,9 @@ func appendCatalogStatus(ctx context.Context, cliParams *settings.Run, results [
 			"authenticated": authenticated,
 			"email":         "",
 			"username":      "",
+			"user":          displayName,
 			"expiresIn":     "",
+			"flow":          "",
 			"hint":          "",
 			"identityType":  "",
 			"clientId":      "",
@@ -349,6 +374,65 @@ func appendCatalogStatus(ctx context.Context, cliParams *settings.Run, results [
 			result["hint"] = fmt.Sprintf("run '%s catalog login %s' to authenticate", cliParams.BinaryName, registryHost)
 		}
 
+		results = append(results, result)
+	}
+
+	return results
+}
+
+// appendRegistryCredentials adds rows for stored OCI registry credentials
+// (from `catalog login`). These are shown so users can see all credential
+// sources in one place. Registries already represented by a catalog row are
+// skipped to avoid duplicates.
+func appendRegistryCredentials(results []map[string]any) []map[string]any {
+	nativeStore := catalog.NewNativeCredentialStore()
+	creds, err := nativeStore.ListCredentials()
+	if err != nil || len(creds) == 0 {
+		return results
+	}
+
+	// Build set of hosts already represented by a catalog/handler row.
+	existingHosts := make(map[string]struct{}, len(results))
+	for _, r := range results {
+		if h, ok := r["handler"].(string); ok {
+			existingHosts[h] = struct{}{}
+		}
+	}
+
+	// Sort hosts for deterministic output.
+	hosts := make([]string, 0, len(creds))
+	for host := range creds {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+
+	for _, host := range hosts {
+		if _, exists := existingHosts[host]; exists {
+			continue
+		}
+		username := creds[host]
+		result := map[string]any{
+			"handler":       host,
+			"displayName":   host,
+			"type":          "registry",
+			"status":        "stored",
+			"authenticated": true,
+			"email":         "",
+			"username":      username,
+			"user":          username,
+			"expiresIn":     "",
+			"flow":          "token",
+			"hint":          "",
+			"identityType":  "",
+			"clientId":      "",
+			"tokenFile":     "",
+			"name":          "",
+			"tenantId":      "",
+			"expiresAt":     "",
+			"lastRefresh":   "",
+			"scopes":        []string{},
+			"cachedTokens":  0,
+		}
 		results = append(results, result)
 	}
 

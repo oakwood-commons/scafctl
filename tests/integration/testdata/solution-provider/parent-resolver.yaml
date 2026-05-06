@@ -7,6 +7,7 @@ spec:
   resolvers:
     child-data:
       type: any
+      timeout: 90s
       resolve:
         with:
           - provider: solution
@@ -14,3 +15,4 @@ spec:
               source: "child.yaml"
               inputs:
                 message: "passed from parent"
+              timeout: "90s"

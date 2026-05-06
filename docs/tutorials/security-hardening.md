@@ -150,7 +150,30 @@ cat .scafctl.lock.yaml
 1. **Always build lock files** before deploying solutions
 2. **Commit lock files** to version control
 3. **Review digest changes** in lock file diffs during code review
-4. **Use trusted catalogs** — verify catalog registry URLs in config
+4. **Use trusted catalogs** -- verify catalog registry URLs in config
+5. **Use `--strict` in CI** -- enforce explicit `bundle.plugins` declarations
+6. **Declare all plugin providers** -- avoid relying on auto-resolution in production
+
+### Strict Mode for CI/CD
+
+The `--strict` flag disables official provider auto-resolution. In CI/CD, this ensures that all provider dependencies are explicitly declared and version-controlled:
+
+{{< tabs "security-hardening-cmd-strict" >}}
+{{% tab "Bash" %}}
+```bash
+# CI pipeline: fail if any provider is implicitly resolved
+scafctl run solution -f solution.yaml --strict
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# CI pipeline: fail if any provider is implicitly resolved
+scafctl run solution -f solution.yaml --strict
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Without `--strict`, official providers (e.g., `exec`, `git`, `env`) are auto-fetched at runtime. While convenient for development, this introduces network dependencies and potential non-determinism in CI.
 
 ## Authentication Security
 

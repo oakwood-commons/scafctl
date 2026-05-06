@@ -15,6 +15,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -406,6 +407,81 @@ func TestSolutionOptions_writeToFile_WritesContents(t *testing.T) {
 	content, err := os.ReadFile(opts.OutputFile)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"rendered": true}`, string(content))
+}
+
+// ── writeTestOutput tests ────────────────────────────────────────────────────
+
+func TestSolutionOptions_writeTestOutput_ValidJSON(t *testing.T) {
+	t.Parallel()
+
+	ctx := setupWriterContext()
+
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	opts := &SolutionOptions{
+		IOStreams:      &terminal.IOStreams{Out: &buf, ErrOut: &buf},
+		CliParams:      &settings.Run{},
+		File:           dir + "/solution.yaml",
+		TestName:       "my_test",
+		ResolverParams: []string{"env=dev"},
+	}
+
+	rendered := []byte(`{"resolvers":{"env":{"data":{"value":"dev"}}}}`)
+	err := opts.writeTestOutput(ctx, rendered)
+	require.NoError(t, err)
+}
+
+func TestSolutionOptions_writeTestOutput_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	ctx := setupWriterContext()
+
+	var buf bytes.Buffer
+	opts := &SolutionOptions{
+		IOStreams: &terminal.IOStreams{Out: &buf, ErrOut: &buf},
+		CliParams: &settings.Run{ExitOnError: false},
+		File:      "/tmp/sol.yaml",
+	}
+
+	err := opts.writeTestOutput(ctx, []byte("not valid json {{{"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse rendered output")
+}
+
+// ── autoResolveOfficialProviders tests ───────────────────────────────────────
+
+func TestSolutionOptions_autoResolveOfficialProviders_NilSolution(t *testing.T) {
+	t.Parallel()
+
+	ctx := setupWriterContext()
+
+	var buf bytes.Buffer
+	opts := &SolutionOptions{
+		IOStreams: &terminal.IOStreams{Out: &buf, ErrOut: &buf},
+		CliParams: &settings.Run{},
+	}
+
+	// nil solution should not panic and should return nil
+	clients := opts.autoResolveOfficialProviders(ctx, nil, nil)
+	assert.Nil(t, clients)
+}
+
+func TestSolutionOptions_autoResolveOfficialProviders_EmptySolution(t *testing.T) {
+	t.Parallel()
+
+	ctx := setupWriterContext()
+
+	var buf bytes.Buffer
+	opts := &SolutionOptions{
+		IOStreams: &terminal.IOStreams{Out: &buf, ErrOut: &buf},
+		CliParams: &settings.Run{},
+	}
+
+	sol := &solution.Solution{}
+	reg := provider.NewRegistry()
+
+	clients := opts.autoResolveOfficialProviders(ctx, sol, reg)
+	assert.Nil(t, clients)
 }
 
 // ── helper ───────────────────────────────────────────────────────────────────

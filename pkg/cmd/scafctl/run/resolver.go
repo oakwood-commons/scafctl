@@ -67,10 +67,6 @@ type ResolverOptions struct {
 	// DynamicArgs are resolver parameters from positional key=value syntax
 	// (e.g. env=prod region=us-east-1, captured from positional args containing '=').
 	DynamicArgs []string
-
-	// positionalPathErr is set in PreRun when the user passes a local file
-	// path as a positional argument instead of using -f/--file.
-	positionalPathErr error
 }
 
 // CommandResolver creates the 'run resolver' subcommand
@@ -93,7 +89,7 @@ func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	}
 
 	cCmd := &cobra.Command{
-		Use:     "resolver [name[@version]] [resolver-name...] [key=value...]",
+		Use:     "resolver [resolver-name...] [key=value...]",
 		Aliases: []string{"res", "resolvers"},
 		Short:   "Execute resolvers for debugging and inspection",
 		Long: strings.ReplaceAll(`Execute resolvers from a solution without running actions.
@@ -109,26 +105,19 @@ usage summary, and an aggregate summary.
 
 SOLUTION SOURCE:
   Solutions can be loaded from:
-  - Local catalog: Use the solution name (e.g., "my-app" or "my-app@1.2.3")
-  - Local file: Use -f flag or provide a path with separators (e.g., "./solution.yaml")
-  - URL: Provide an HTTP(S) URL, either via -f/--file or as the first positional argument
+  - Local file or catalog: Use -f flag (e.g., -f ./solution.yaml or -f my-app@1.2.3)
+  - URL: Provide an HTTP(S) URL via -f/--file (also detected as a positional arg)
   - Auto-discovery: If no source is specified, searches for solution.yaml in current directory
 
-  When -f/--file is not provided, the first positional argument is used as
-  the solution reference (catalog name, file path, or URL). This matches
-  the behavior of 'scafctl run solution'.
-
 RESOLVER SELECTION:
-  Pass resolver names as positional arguments (after the solution reference)
-  to execute only specific resolvers and their transitive dependencies.
-  When no names are provided, all resolvers in the solution are executed.
+  Pass resolver names as positional arguments to execute only specific
+  resolvers and their transitive dependencies. When no names are provided,
+  all resolvers in the solution are executed.
 
   Examples:
     scafctl run resolver                           Execute all resolvers (auto-discovery)
-    scafctl run resolver my-app                    Execute all resolvers from catalog
-    scafctl run resolver my-app@1.2.3              Execute all resolvers from catalog version
-    scafctl run resolver my-app db config          Execute 'db', 'config', and their deps
-    scafctl run resolver db config -f sol.yaml     Execute 'db', 'config', and their deps
+    scafctl run resolver db config                 Execute 'db', 'config', and their deps
+    scafctl run resolver db config -f my-app       Execute from catalog, filter to db + config
 
 SKIPPING PHASES:
   Use --skip-validation to skip the validation phase of all resolvers.
@@ -168,20 +157,20 @@ EXIT CODES:
   4  File not found
 
 Examples:
-  # Run all resolvers from catalog by name (latest version)
-  scafctl run resolver my-app
+  # Run all resolvers (auto-discovery)
+  scafctl run resolver
 
-  # Run all resolvers from specific catalog version
-  scafctl run resolver my-app@1.2.3
-
-  # Run specific resolvers from catalog
-  scafctl run resolver my-app db config
+  # Run specific resolvers (with their dependencies)
+  scafctl run resolver db config
 
   # Run all resolvers from a solution file
   scafctl run resolver -f ./my-solution.yaml
 
-  # Run specific resolvers (with their dependencies)
-  scafctl run resolver db config -f ./my-solution.yaml
+  # Run specific resolvers from catalog
+  scafctl run resolver db config -f my-app
+
+  # Run all resolvers from specific catalog version
+  scafctl run resolver -f my-app@1.2.3
 
   # Run with parameters (positional key=value — recommended)
   scafctl run resolver -f ./my-solution.yaml env=prod region=us-east1
@@ -243,33 +232,8 @@ Examples:
 			cCmd.Flags().Visit(func(f *pflag.Flag) {
 				options.flagsChanged[f.Name] = true
 			})
-			// Split positional args: bare words are resolver names,
-			// args containing '=' or starting with '@' are dynamic parameters.
-			// When -f/--file is not explicitly set, the first bare word is
-			// treated as the solution reference (catalog name or registry ref).
-			// Local file paths must use -f/--file.
 			fileExplicit := options.flagsChanged["file"]
-			for _, arg := range args {
-				switch {
-				case !fileExplicit && options.File == "" && filepath.IsURL(arg):
-					// URL solution references (may contain '=' in query params)
-					options.File = arg
-					fileExplicit = true
-				case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
-					options.DynamicArgs = append(options.DynamicArgs, arg)
-				case !fileExplicit && options.File == "":
-					// First bare word becomes the solution reference — must be
-					// a catalog name or registry ref, not a local file path.
-					if err := get.ValidatePositionalRef(arg, "", cliParams.BinaryName+" run resolver"); err != nil {
-						options.positionalPathErr = err
-					} else {
-						options.File = arg
-					}
-					fileExplicit = true // only the first one
-				default:
-					options.Names = append(options.Names, arg)
-				}
-			}
+			parseResolverArgs(args, options, fileExplicit)
 		},
 		RunE:         makeRunEFunc(cfg, "resolver"),
 		SilenceUsage: true,
@@ -292,15 +256,29 @@ Examples:
 	return cCmd
 }
 
+// parseResolverArgs splits positional args into resolver names and dynamic parameters.
+// Bare words are resolver names, args containing '=' or starting with '@' are parameters.
+// URLs (http(s)://, oci://) and unambiguous catalog references (versioned refs,
+// registry refs) are auto-detected as solution refs when no -f flag is set.
+// Bare names like "my-resolver" are always treated as resolver names.
+func parseResolverArgs(args []string, options *ResolverOptions, fileExplicit bool) {
+	for _, arg := range args {
+		switch {
+		case !fileExplicit && options.File == "" && (filepath.IsURL(arg) || get.IsUnambiguousCatalogReference(arg)):
+			options.File = arg
+			fileExplicit = true
+		case strings.Contains(arg, "=") || strings.HasPrefix(arg, "@"):
+			options.DynamicArgs = append(options.DynamicArgs, arg)
+		default:
+			options.Names = append(options.Names, arg)
+		}
+	}
+}
+
 // Run executes the resolver-only flow
 func (o *ResolverOptions) Run(ctx context.Context) error {
 	if o.BinaryName == "" {
 		o.BinaryName = settings.CliBinaryName
-	}
-
-	// Fail early if PreRun detected a local file path as positional arg
-	if o.positionalPathErr != nil {
-		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
 	}
 
 	// Include pre-release versions in catalog resolution when --pre-release is set.
@@ -356,13 +334,6 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
-	// Capture the caller's working directory before preparing the solution,
-	// which may chdir into a bundle extraction directory.
-	originalCwd, err := provider.GetWorkingDirectory(ctx)
-	if err != nil {
-		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
-	}
-
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
@@ -370,21 +341,28 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	// Set the solution directory for child-solution path resolution.
+	// Set the solution directory for resolver-phase path resolution.
 	// --base-dir takes precedence; otherwise use the solution file's directory.
-	// When SolutionDirectory is set, also set WorkingDirectory so that providers
-	// like file/exec continue to resolve paths against the caller's CWD.
-	// For bundle/catalog runs solutionDir is empty and the process CWD is the
-	// bundle extraction directory, which is the correct base.
-	if o.BaseDir != "" {
+	//
+	// WorkingDirectory is intentionally NOT set for the resolver-phase context.
+	// AbsFromContext checks WorkingDirectory before SolutionDirectory, so setting
+	// both causes WorkingDirectory to win and SolutionDirectory to be ignored.
+	//
+	// For bundle runs (catalog: prefix with non-empty solutionDir), only set
+	// SolutionDirectory so resolver paths resolve against the bundle extraction
+	// directory. For unbundled catalog runs, solutionDir is empty and paths
+	// fall back to the process CWD.
+	isBundleRun := strings.HasPrefix(sol.GetPath(), "catalog:") && solutionDir != ""
+	switch {
+	case o.BaseDir != "":
 		absBaseDir, baseDirErr := stdfilepath.Abs(o.BaseDir)
 		if baseDirErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("--base-dir: %w", baseDirErr), exitcode.InvalidInput)
 		}
-		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
 		ctx = provider.WithSolutionDirectory(ctx, absBaseDir)
-	} else if solutionDir != "" {
-		ctx = provider.WithWorkingDirectory(ctx, originalCwd)
+	case isBundleRun:
+		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
+	case solutionDir != "":
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 

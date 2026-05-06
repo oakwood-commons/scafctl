@@ -109,3 +109,12 @@ type TokenLister = sdkauth.TokenLister
 
 // TokenPurger is an optional interface for auth handlers that can remove expired tokens.
 type TokenPurger = sdkauth.TokenPurger
+
+// FlowReporter is an optional interface for auth handlers that can report
+// the credential source currently being used (e.g. device-code, gcloud-adc,
+// workload-identity). The status command uses this to display the active flow.
+type FlowReporter interface {
+	// ActiveFlow returns the authentication flow currently in use.
+	// Returns an empty string if the flow cannot be determined.
+	ActiveFlow(ctx context.Context) Flow
+}

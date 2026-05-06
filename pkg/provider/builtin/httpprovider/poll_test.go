@@ -17,19 +17,23 @@ import (
 )
 
 func TestParsePollConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("no poll config", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := parsePollConfig(map[string]any{})
 		require.NoError(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("nil poll", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := parsePollConfig(map[string]any{"poll": nil})
 		require.NoError(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("missing until", func(t *testing.T) {
+		t.Parallel()
 		_, err := parsePollConfig(map[string]any{
 			"poll": map[string]any{
 				"interval": "5s",
@@ -40,6 +44,7 @@ func TestParsePollConfig(t *testing.T) {
 	})
 
 	t.Run("valid full config", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := parsePollConfig(map[string]any{
 			"poll": map[string]any{
 				"until":       "_.body.status == 'done'",
@@ -57,6 +62,7 @@ func TestParsePollConfig(t *testing.T) {
 	})
 
 	t.Run("defaults applied", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := parsePollConfig(map[string]any{
 			"poll": map[string]any{
 				"until": "_.statusCode == 200",
@@ -69,6 +75,7 @@ func TestParsePollConfig(t *testing.T) {
 	})
 
 	t.Run("numeric interval seconds", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := parsePollConfig(map[string]any{
 			"poll": map[string]any{
 				"until":    "true",
@@ -80,6 +87,7 @@ func TestParsePollConfig(t *testing.T) {
 	})
 
 	t.Run("interval too short", func(t *testing.T) {
+		t.Parallel()
 		_, err := parsePollConfig(map[string]any{
 			"poll": map[string]any{
 				"until":    "true",
@@ -92,6 +100,7 @@ func TestParsePollConfig(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_Poll_UntilConditionMet(t *testing.T) {
+	t.Parallel()
 	var callCount atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -131,6 +140,7 @@ func TestHTTPProvider_Execute_Poll_UntilConditionMet(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_Poll_FailWhen(t *testing.T) {
+	t.Parallel()
 	var callCount atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -166,6 +176,7 @@ func TestHTTPProvider_Execute_Poll_FailWhen(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_Poll_MaxAttemptsExhausted(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -197,6 +208,7 @@ func TestHTTPProvider_Execute_Poll_MaxAttemptsExhausted(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_Poll_ContextCancelled(t *testing.T) {
+	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -225,6 +237,7 @@ func TestHTTPProvider_Execute_Poll_ContextCancelled(t *testing.T) {
 }
 
 func TestHTTPProvider_Execute_Poll_WithStringBody(t *testing.T) {
+	t.Parallel()
 	// Test polling with autoParseJson=false (body is a string)
 	var callCount atomic.Int32
 

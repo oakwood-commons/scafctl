@@ -40,9 +40,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello!"
+              expression: "'Hello!'"
 `
 		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o644))
 
@@ -134,17 +134,17 @@ spec:
           - provider: parameter
             inputs:
               key: region
-          - provider: static
+          - provider: cel
             inputs:
-              value: us-east-1
+              expression: "'us-east-1'"
     greeting:
       description: Static greeting
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: hello
+              expression: "'hello'"
 `
 		require.NoError(t, os.WriteFile(solPath, []byte(solYAML), 0o644))
 
@@ -405,9 +405,9 @@ spec:
       type: string
       resolve:
         with:
-          - provider: static
+          - provider: cel
             inputs:
-              value: "Hello!"
+              expression: "'Hello!'"
   testing:
     cases:
       basic-test:
@@ -523,7 +523,7 @@ func TestHandleProviderResource(t *testing.T) {
 		require.NoError(t, err)
 
 		request := mcp.ReadResourceRequest{}
-		request.Params.URI = "provider://exec"
+		request.Params.URI = "provider://message"
 
 		contents, err := srv.handleProviderResource(context.Background(), request)
 		require.NoError(t, err)
@@ -538,7 +538,7 @@ func TestHandleProviderResource(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(textContent.Text), &detail))
 
 		// Verify key fields
-		assert.Equal(t, "exec", detail["name"])
+		assert.Equal(t, "message", detail["name"])
 		assert.NotEmpty(t, detail["description"])
 		assert.NotEmpty(t, detail["capabilities"])
 
@@ -549,11 +549,10 @@ func TestHandleProviderResource(t *testing.T) {
 		require.True(t, ok, "expected schema to have properties")
 		assert.NotEmpty(t, properties, "expected at least one schema property")
 
-		// Verify command is a required input
-		cmdProp, ok := properties["command"].(map[string]any)
-		require.True(t, ok, "expected 'command' property in schema")
-		assert.Equal(t, true, cmdProp["required"])
-		assert.Equal(t, "string", cmdProp["type"])
+		// Verify message is an input
+		msgProp, ok := properties["message"].(map[string]any)
+		require.True(t, ok, "expected 'message' property in schema")
+		assert.Equal(t, "string", msgProp["type"])
 
 		// Verify examples are included
 		examples, ok := detail["examples"].([]any)
@@ -652,23 +651,23 @@ func TestHandleProviderReferenceResource(t *testing.T) {
 			assert.NotEmpty(t, entry["capabilities"], "provider reference entry should have capabilities")
 		}
 
-		// Find exec provider and verify it has required/optional inputs
-		var execEntry map[string]any
+		// Find http provider and verify it has required/optional inputs
+		var httpEntry map[string]any
 		for _, entry := range reference {
-			if entry["name"] == "exec" {
-				execEntry = entry
+			if entry["name"] == "http" {
+				httpEntry = entry
 				break
 			}
 		}
-		require.NotNil(t, execEntry, "expected exec provider in reference")
+		require.NotNil(t, httpEntry, "expected http provider in reference")
 
-		requiredInputs, ok := execEntry["requiredInputs"].(map[string]any)
-		require.True(t, ok, "expected exec to have requiredInputs")
-		assert.Contains(t, requiredInputs, "command", "exec should require 'command' input")
+		requiredInputs, ok := httpEntry["requiredInputs"].(map[string]any)
+		require.True(t, ok, "expected http to have requiredInputs")
+		assert.Contains(t, requiredInputs, "url", "http should require 'url' input")
 
-		optionalInputs, ok := execEntry["optionalInputs"].(map[string]any)
-		require.True(t, ok, "expected exec to have optionalInputs")
-		assert.NotEmpty(t, optionalInputs, "exec should have optional inputs")
+		optionalInputs, ok := httpEntry["optionalInputs"].(map[string]any)
+		require.True(t, ok, "expected http to have optionalInputs")
+		assert.NotEmpty(t, optionalInputs, "http should have optional inputs")
 	})
 
 	t.Run("returns error when registry nil", func(t *testing.T) {
@@ -698,7 +697,7 @@ func TestGetProviderSchemaReturnsStructuredOutput(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "get_provider_schema"
 		request.Params.Arguments = map[string]any{
-			"name": "exec",
+			"name": "message",
 		}
 
 		result, err := srv.handleGetProviderSchema(context.Background(), request)
@@ -710,7 +709,7 @@ func TestGetProviderSchemaReturnsStructuredOutput(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(text), &detail))
 
 		// Verify it uses the structured format (not raw descriptor)
-		assert.Equal(t, "exec", detail["name"])
+		assert.Equal(t, "message", detail["name"])
 
 		// Schema should have flattened required per-property
 		schema, ok := detail["schema"].(map[string]any)
@@ -718,10 +717,9 @@ func TestGetProviderSchemaReturnsStructuredOutput(t *testing.T) {
 		props, ok := schema["properties"].(map[string]any)
 		require.True(t, ok)
 
-		cmdProp, ok := props["command"].(map[string]any)
+		msgProp, ok := props["message"].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, true, cmdProp["required"], "command should be marked as required")
-		assert.Equal(t, "string", cmdProp["type"])
+		assert.Equal(t, "string", msgProp["type"])
 
 		// CLI usage should be included
 		_, hasCLIUsage := detail["cliUsage"]

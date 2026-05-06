@@ -157,6 +157,48 @@ func TestRecordProviderExecution_NilInstruments(t *testing.T) {
 	})
 }
 
+// ── Plugin Resolution metrics tests ──────────────────────────────────────────
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordPluginResolution_CacheHit(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordPluginResolution(context.Background(), "hcl", "cache", 0.02, true)
+	})
+}
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordPluginResolution_RegistryFetch(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordPluginResolution(context.Background(), "hcl", "registry", 5.1, true)
+	})
+}
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordPluginResolution_Failure(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordPluginResolution(context.Background(), "unknown-plugin", "registry", 2.0, false)
+	})
+}
+
+// This test mutates package globals; do NOT add t.Parallel().
+func TestRecordPluginResolution_NilInstruments(t *testing.T) {
+	savedDur := PluginResolutionDuration
+	savedTotal := PluginResolutionTotal
+	PluginResolutionDuration = nil
+	PluginResolutionTotal = nil
+	defer func() {
+		PluginResolutionDuration = savedDur
+		PluginResolutionTotal = savedTotal
+	}()
+
+	assert.NotPanics(t, func() {
+		RecordPluginResolution(context.Background(), "test", "cache", 0.01, true)
+	})
+}
+
 // ── Constants tests ───────────────────────────────────────────────────────────
 
 func TestConstants(t *testing.T) {
@@ -170,6 +212,8 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "path_template", LabelPathTemplate)
 	assert.Equal(t, "provider_name", AttrProviderName)
 	assert.Equal(t, "status", AttrStatus)
+	assert.Equal(t, "plugin_name", AttrPluginName)
+	assert.Equal(t, "source", AttrPluginSource)
 }
 
 // ── Benchmark tests ───────────────────────────────────────────────────────────
@@ -181,6 +225,16 @@ func BenchmarkRecordProviderExecution(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		RecordProviderExecution(ctx, "bench-provider", 0.5, true)
+	}
+}
+
+func BenchmarkRecordPluginResolution(b *testing.B) {
+	_ = InitMetrics(context.Background())
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		RecordPluginResolution(ctx, "bench-plugin", "cache", 0.02, true)
 	}
 }
 

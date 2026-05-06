@@ -15,10 +15,20 @@ import (
 // result. It implements the Catalog interface for read operations (Fetch,
 // Resolve, List, Exists). Write operations (Store, Delete) are forwarded
 // to the first catalog in the chain.
+//
+// It also implements PlatformAwareCatalog by delegating to underlying catalogs
+// that support platform-aware operations (e.g., LocalCatalog with OCI image
+// indexes).
 type ChainCatalog struct {
 	catalogs []Catalog
 	logger   logr.Logger
 }
+
+// Compile-time interface assertions.
+var (
+	_ Catalog              = (*ChainCatalog)(nil)
+	_ PlatformAwareCatalog = (*ChainCatalog)(nil)
+)
 
 // NewChainCatalog creates a ChainCatalog that tries catalogs in order.
 // At least one catalog must be provided.
@@ -137,4 +147,60 @@ func (c *ChainCatalog) Exists(ctx context.Context, ref Reference) (bool, error) 
 // Delete delegates to the first catalog.
 func (c *ChainCatalog) Delete(ctx context.Context, ref Reference) error {
 	return c.catalogs[0].Delete(ctx, ref)
+}
+
+// FetchByPlatform tries each catalog that implements PlatformAwareCatalog in
+// order, returning the first successful result. Catalogs that do not implement
+// PlatformAwareCatalog are skipped. If a catalog explicitly reports the
+// platform is not found (PlatformNotFoundError), the chain stops immediately
+// because the artifact is known to be multi-platform and the platform is
+// genuinely unavailable.
+func (c *ChainCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+	var lastErr error
+	for _, cat := range c.catalogs {
+		pac, ok := cat.(PlatformAwareCatalog)
+		if !ok {
+			continue
+		}
+		data, info, err := pac.FetchByPlatform(ctx, ref, platform)
+		if err == nil {
+			c.logger.V(1).Info("fetched platform artifact", "catalog", cat.Name(), "ref", ref.String(), "platform", platform)
+			return data, info, nil
+		}
+		if IsPlatformNotFound(err) {
+			return nil, ArtifactInfo{}, err
+		}
+		if !errors.Is(err, ErrArtifactNotFound) {
+			c.logger.V(1).Info("catalog platform fetch error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "platform", platform, "error", err)
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		return nil, ArtifactInfo{}, fmt.Errorf("no catalog supports platform-aware fetch for %q", ref.String())
+	}
+	return nil, ArtifactInfo{}, fmt.Errorf("platform artifact %q (%s) not found in any catalog: %w", ref.String(), platform, lastErr)
+}
+
+// ListPlatforms tries each catalog that implements PlatformAwareCatalog in
+// order, returning the first successful result.
+func (c *ChainCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]string, error) {
+	var lastErr error
+	for _, cat := range c.catalogs {
+		pac, ok := cat.(PlatformAwareCatalog)
+		if !ok {
+			continue
+		}
+		platforms, err := pac.ListPlatforms(ctx, ref)
+		if err == nil {
+			return platforms, nil
+		}
+		if !errors.Is(err, ErrArtifactNotFound) {
+			c.logger.V(1).Info("catalog list platforms error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "error", err)
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		return nil, fmt.Errorf("no catalog supports platform listing for %q", ref.String())
+	}
+	return nil, fmt.Errorf("platforms for %q not found in any catalog: %w", ref.String(), lastErr)
 }

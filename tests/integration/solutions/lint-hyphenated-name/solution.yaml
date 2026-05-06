@@ -1,0 +1,52 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-hyphenated-name
+  version: 1.0.0
+  description: |
+    Tests the hyphenated-name lint rule that warns when resolver names
+    contain hyphens (which require quoting in CEL expressions).
+
+spec:
+  resolvers:
+    # This resolver has a hyphenated name — should trigger lint info
+    my-service-name:
+      description: Resolver with hyphenated name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    # This resolver uses underscores — should NOT trigger lint info
+    my_safe_name:
+      description: Resolver with underscored name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      hyphenated-name-detected:
+        description: Lint detects hyphenated resolver name
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, hyphenated-name]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Hyphenated name is info-level, should not cause non-zero exit"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "hyphenated-name")
+            message: "Should detect hyphenated resolver name"
+          - expression: >
+              __output.findings.filter(f, f.ruleName == "hyphenated-name").size() == 1
+            message: "Should only flag the hyphenated resolver, not the underscored one"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "hyphenated-name" && f.severity == "info")
+            message: "Hyphenated-name finding should be info severity"

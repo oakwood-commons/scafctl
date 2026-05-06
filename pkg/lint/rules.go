@@ -55,6 +55,17 @@ var KnownRules = map[string]RuleMeta{
 		Fix:         "Rename the resolver to avoid reserved names. Use descriptive names like 'user-input' or 'api-response' instead.",
 		Examples:    []string{"Reserved names: __actions, __error, __item, __index, _"},
 	},
+	"hyphenated-name": {
+		Rule:        "hyphenated-name",
+		Severity:    string(SeverityInfo),
+		Category:    "naming",
+		Description: "A resolver name contains hyphens, which require bracket notation in CEL expressions.",
+		Why:         "Hyphens in resolver names require quoting in CEL: _[\"my-resolver\"] instead of _.my_resolver. This is more verbose and error-prone.",
+		Fix:         "Use underscores instead of hyphens for CEL-friendly access: my_resolver instead of my-resolver.",
+		Examples: []string{
+			"# Hyphenated (requires quoting in CEL):\nresolvers:\n  my-service:\n    ...\n# Access: _[\"my-service\"]\n\n# Underscored (direct CEL access):\nresolvers:\n  my_service:\n    ...\n# Access: _.my_service",
+		},
+	},
 	"unused-resolver": {
 		Rule:        "unused-resolver",
 		Severity:    string(SeverityWarning),
@@ -264,6 +275,28 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "An empty transform.with array is almost certainly unintentional. The transform phase will be silently skipped, which may cause unexpected resolver output.",
 		Fix:         "Either add transform steps to the with array or remove the transform section entirely.",
 	},
+	"non-validation-provider": {
+		Rule:        "non-validation-provider",
+		Severity:    string(SeverityWarning),
+		Category:    "provider",
+		Description: "A validate.with step uses a provider that does not declare the validation capability.",
+		Why:         "Providers without the validation capability will not produce validation results. The validate phase expects providers that return valid/invalid status. Using other providers here is almost certainly a mistake.",
+		Fix:         "Use the 'validation' provider (for CEL expressions) or another provider that declares the validation capability.",
+		Examples: []string{
+			"validate:\n  with:\n    - provider: validation\n      inputs:\n        expression: size(__self) > 0",
+		},
+	},
+	"resolve-foreach": {
+		Rule:        "resolve-foreach",
+		Severity:    string(SeverityWarning),
+		Category:    "structure",
+		Description: "A resolve.with step uses forEach, which is not supported in the resolve phase.",
+		Why:         "During the resolve phase, __self is not yet available because the resolver is still obtaining its initial value. forEach requires an iterable input, and the resolve phase cannot provide one from the current resolver. Use forEach in the transform phase instead.",
+		Fix:         "Move the forEach clause to a transform step, or use a separate resolver to iterate over an array.",
+		Examples: []string{
+			"# Wrong (forEach in resolve):\nresolve:\n  with:\n    - provider: http\n      forEach:\n        in:\n          expr: items\n\n# Correct (forEach in transform):\ntransform:\n  with:\n    - provider: cel\n      forEach:\n        in:\n          expr: __self\n        item: item",
+		},
+	},
 	"empty-validate-with": {
 		Rule:        "empty-validate-with",
 		Severity:    string(SeverityWarning),
@@ -296,13 +329,13 @@ var KnownRules = map[string]RuleMeta{
 	},
 	"tmpl-underscore-prefix": {
 		Rule:        "tmpl-underscore-prefix",
-		Severity:    string(SeverityError),
+		Severity:    string(SeverityInfo),
 		Category:    "template",
-		Description: "A Go template uses '{{ ._.resolverName }}' which is not supported. Use '{{ .resolverName }}' instead.",
-		Why:         "Go templates spread resolver data at the top level, so resolvers are accessed directly with '{{ .resolverName }}'. The '._' prefix is a CEL convention ('_.resolverName') that does not apply to Go templates. Using '._' in a Go template will cause a runtime error.",
-		Fix:         "Replace '{{ ._.resolverName }}' with '{{ .resolverName }}'. In Go templates, access resolvers directly. Use '._' only in CEL expressions (expr:).",
+		Description: "A Go template uses '{{ ._.resolverName }}' — the underscore alias works but direct access '{{ .resolverName }}' is shorter.",
+		Why:         "Go templates spread resolver data at the top level, so resolvers can be accessed directly with '{{ .resolverName }}'. The '._' alias is injected at runtime for CEL/template parity ('_.resolverName' in CEL, '._.resolverName' in templates). Both forms work, but direct access is preferred for brevity.",
+		Fix:         "Replace '{{ ._.resolverName }}' with '{{ .resolverName }}'. Both work, but direct access is shorter.",
 		Examples: []string{
-			"# Wrong:\ntmpl: \"Deploying {{ ._.config.appName }}\"\n\n# Correct:\ntmpl: \"Deploying {{ .config.appName }}\"",
+			"# Preferred:\ntmpl: \"Deploying {{ .config.appName }}\"\n\n# Also works (via underscore alias):\ntmpl: \"Deploying {{ ._.config.appName }}\"",
 		},
 	},
 	"missing-state-backend": {

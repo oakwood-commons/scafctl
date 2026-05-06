@@ -23,7 +23,7 @@ func (s *Server) registerAuthTools() {
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithRawOutputSchema(outputSchemaAuthStatus),
 	)
-	s.mcpServer.AddTool(authStatusTool, s.handleAuthStatus)
+	s.addTool(authStatusTool, s.handleAuthStatus)
 
 	listAuthHandlersTool := mcp.NewTool("list_auth_handlers",
 		mcp.WithDescription("List all registered auth handlers with their supported flows and capabilities. Unlike auth_status which shows credential state, this tool shows what handlers are available and what they support (device-code, interactive, service-principal, workload-identity, PAT, metadata flows). Use this to understand which auth methods are available before attempting login."),
@@ -34,7 +34,7 @@ func (s *Server) registerAuthTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
-	s.mcpServer.AddTool(listAuthHandlersTool, s.handleListAuthHandlers)
+	s.addTool(listAuthHandlersTool, s.handleListAuthHandlers)
 }
 
 // authHandlerStatus represents the status of a single auth handler.

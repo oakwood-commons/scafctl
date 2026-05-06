@@ -3,7 +3,10 @@ kind: Solution
 
 metadata:
   name: cwd-example
-  version: 1.0.0
+  displayName: Cwd Example
+  category: solutions
+  tags:
+    - solution
   description: |
     Demonstrates the --cwd flag for working directory override.
     All relative paths resolve against the --cwd directory instead of the process CWD.

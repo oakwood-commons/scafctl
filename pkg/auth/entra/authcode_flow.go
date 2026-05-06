@@ -98,12 +98,14 @@ func (h *Handler) authCodeLogin(ctx context.Context, opts auth.LoginOptions) (*a
 
 	// Open browser
 	lgr.V(1).Info("opening browser for authentication", "url", authURL)
-	if err := BrowserOpener(ctx, authURL); err != nil {
+	browserOpenErr := BrowserOpener(ctx, authURL)
+	if browserOpenErr != nil {
 		lgr.V(0).Info("failed to open browser, please open this URL manually", "url", authURL)
-		// Notify via callback if available so the CLI can display the URL
-		if opts.DeviceCodeCallback != nil {
-			opts.DeviceCodeCallback("", authURL, fmt.Sprintf("Open this URL in your browser to authenticate:\n%s", authURL))
-		}
+	}
+	// Always notify the CLI callback with the auth URL so the TUI can show
+	// a "Re-open in browser" action. Empty userCode signals a browser flow.
+	if opts.DeviceCodeCallback != nil {
+		opts.DeviceCodeCallback("", authURL, "Open this URL in your browser to authenticate")
 	}
 
 	// Wait for authorization code or timeout

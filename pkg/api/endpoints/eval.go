@@ -35,9 +35,10 @@ type CELEvalResponse struct {
 // TemplateEvalRequest is the request body for Go template evaluation.
 type TemplateEvalRequest struct {
 	Body struct {
-		Template string         `json:"template" maxLength:"100000" doc:"Go template content"`
-		Data     map[string]any `json:"data,omitempty" doc:"Data context for template rendering"`
-		Name     string         `json:"name,omitempty" maxLength:"255" doc:"Template name" example:"my-template"`
+		Template   string         `json:"template" maxLength:"100000" doc:"Go template content"`
+		Data       map[string]any `json:"data,omitempty" doc:"Data context for template rendering"`
+		Name       string         `json:"name,omitempty" maxLength:"255" doc:"Template name" example:"my-template"`
+		MissingKey string         `json:"missingKey,omitempty" maxLength:"16" doc:"Behavior when a map key is missing: default, zero, error (default: error)" enum:"default,zero,error" example:"error"`
 	}
 }
 
@@ -95,9 +96,10 @@ func RegisterEvalEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefix st
 		defer cancel()
 
 		result, err := gotmpl.Execute(evalCtx, gotmpl.TemplateOptions{
-			Content: input.Body.Template,
-			Name:    name,
-			Data:    input.Body.Data,
+			Content:    input.Body.Template,
+			Name:       name,
+			Data:       input.Body.Data,
+			MissingKey: gotmpl.MissingKeyOption(input.Body.MissingKey),
 		})
 		if err != nil {
 			return nil, huma.NewError(http.StatusBadRequest, fmt.Sprintf("template evaluation failed: %v", err))
