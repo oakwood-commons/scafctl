@@ -30,6 +30,7 @@ type Config struct {
 	Build      BuildConfig      `json:"build,omitempty" yaml:"build,omitempty" mapstructure:"build" doc:"Build command configuration"`
 	APIServer  APIServerConfig  `json:"apiServer,omitempty" yaml:"apiServer,omitempty" mapstructure:"apiServer" doc:"REST API server configuration"`
 	Discovery  DiscoveryConfig  `json:"discovery,omitempty" yaml:"discovery,omitempty" mapstructure:"discovery" doc:"Auto-discovery configuration"`
+	Plugins    PluginsConfig    `json:"plugins,omitempty" yaml:"plugins,omitempty" mapstructure:"plugins" doc:"Plugin management configuration"`
 }
 
 // DiscoveryStrategy controls how a remote catalog discovers available artifacts.
@@ -110,6 +111,13 @@ type Settings struct {
 	// bundle.plugins. Embedders can set this when their CLI should not
 	// auto-fetch providers from the scafctl community catalog.
 	DisableOfficialProviders bool `json:"disableOfficialProviders,omitempty" yaml:"disableOfficialProviders,omitempty" mapstructure:"disableOfficialProviders" doc:"Disable auto-resolution of official first-party providers"`
+
+	// DisableOfficialAuthHandlers prevents auto-resolution of official first-party
+	// auth handlers (entra, github, gcp) published to ghcr.io/oakwood-commons.
+	// When true, auth handlers must be either built-in or explicitly declared in
+	// bundle.plugins. Embedders can set this when their CLI should not
+	// auto-fetch auth handler plugins from the scafctl community catalog.
+	DisableOfficialAuthHandlers bool `json:"disableOfficialAuthHandlers,omitempty" yaml:"disableOfficialAuthHandlers,omitempty" mapstructure:"disableOfficialAuthHandlers" doc:"Disable auto-resolution of official first-party auth handlers"`
 }
 
 // VersionCheckConfig holds version check configuration.
@@ -404,6 +412,12 @@ type GlobalAuthConfig struct {
 
 	// CustomOAuth2 contains user-defined OAuth2 auth handlers.
 	CustomOAuth2 []CustomOAuth2Config `json:"customOAuth2,omitempty" yaml:"customOAuth2,omitempty" mapstructure:"customOAuth2" doc:"User-defined OAuth2 auth handlers for any OAuth2 service" maxItems:"20"`
+
+	// TrustedVerificationDomains are additional domains trusted for device code
+	// verification URIs across all auth handlers. These supplement the hardcoded
+	// per-handler domains from the official auth handler registry. Use this for
+	// org-specific identity providers (e.g., custom GHES hostnames, corporate IDPs).
+	TrustedVerificationDomains []string `json:"trustedVerificationDomains,omitempty" yaml:"trustedVerificationDomains,omitempty" mapstructure:"trustedVerificationDomains" doc:"Additional trusted domains for device code verification URIs" maxItems:"50"`
 }
 
 // EntraAuthConfig contains Entra-specific configuration.
@@ -523,6 +537,36 @@ func (b *BuildConfig) IsAutoCacheRemoteArtifacts() bool {
 		return true
 	}
 	return *b.AutoCacheRemoteArtifacts
+}
+
+// PluginsConfig holds plugin management configuration.
+type PluginsConfig struct {
+	// Signatures controls Sigstore/cosign signature verification for plugin
+	// artifacts (providers and auth handlers). When mode is "off" (default),
+	// only digest verification is performed.
+	Signatures PluginSignaturesConfig `json:"signatures,omitempty" yaml:"signatures,omitempty" mapstructure:"signatures" doc:"Plugin signature verification configuration"`
+
+	// FetchCooldown is the duration to suppress retry attempts after a plugin
+	// auto-fetch failure. Prevents repeated timeout penalties during network
+	// outages. Use Go duration syntax (e.g., "5m", "30s"). Default: 5m.
+	FetchCooldown string `json:"fetchCooldown,omitempty" yaml:"fetchCooldown,omitempty" mapstructure:"fetchCooldown" doc:"Cooldown between failed auto-fetch retries" maxLength:"20" example:"5m"`
+}
+
+// PluginSignaturesConfig holds Sigstore/cosign verification settings for plugins.
+type PluginSignaturesConfig struct {
+	// Mode controls signature verification behavior:
+	//   - "off" (default): digest-only verification, no signature check
+	//   - "warn": verify signature, log warning on failure but proceed
+	//   - "enforce": verify signature, fail on missing or invalid signature
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty" mapstructure:"mode" doc:"Signature verification mode" enum:"off,warn,enforce" maxLength:"10" example:"warn"`
+
+	// TrustedIssuers are OIDC token issuers whose signing certificates are
+	// trusted (e.g., GitHub Actions OIDC provider).
+	TrustedIssuers []string `json:"trustedIssuers,omitempty" yaml:"trustedIssuers,omitempty" mapstructure:"trustedIssuers" doc:"Trusted OIDC certificate issuers" maxItems:"20"`
+
+	// TrustedIdentities are glob patterns matching certificate subject/identity
+	// fields (e.g., "https://github.com/oakwood-commons/*").
+	TrustedIdentities []string `json:"trustedIdentities,omitempty" yaml:"trustedIdentities,omitempty" mapstructure:"trustedIdentities" doc:"Trusted signing identity patterns (glob)" maxItems:"50"`
 }
 
 // DiscoveryConfig holds auto-discovery preferences.

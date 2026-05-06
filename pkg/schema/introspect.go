@@ -121,7 +121,7 @@ func IntrospectType(v any) (*TypeInfo, error) {
 	}
 
 	// Dereference pointer
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -150,7 +150,7 @@ func IntrospectField(v any, path string) (*FieldInfo, error) {
 	}
 
 	// Dereference pointer
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -169,7 +169,7 @@ func navigateToField(t reflect.Type, path []string) (*FieldInfo, error) {
 	}
 
 	// Dereference pointers
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -194,14 +194,14 @@ func navigateToField(t reflect.Type, path []string) (*FieldInfo, error) {
 			if len(path) > 1 {
 				// Get the underlying type for navigation
 				fieldType := f.Type
-				for fieldType.Kind() == reflect.Ptr {
+				for fieldType.Kind() == reflect.Pointer {
 					fieldType = fieldType.Elem()
 				}
 
 				// Handle slices/arrays - navigate into element type
 				if fieldType.Kind() == reflect.Slice || fieldType.Kind() == reflect.Array {
 					fieldType = fieldType.Elem()
-					for fieldType.Kind() == reflect.Ptr {
+					for fieldType.Kind() == reflect.Pointer {
 						fieldType = fieldType.Elem()
 					}
 				}
@@ -209,7 +209,7 @@ func navigateToField(t reflect.Type, path []string) (*FieldInfo, error) {
 				// Handle maps - navigate into value type
 				if fieldType.Kind() == reflect.Map {
 					fieldType = fieldType.Elem()
-					for fieldType.Kind() == reflect.Ptr {
+					for fieldType.Kind() == reflect.Pointer {
 						fieldType = fieldType.Elem()
 					}
 				}
@@ -275,7 +275,7 @@ func introspectFieldWithSeen(f reflect.StructField, depth int, seen map[reflect.
 
 	// Get type information
 	fieldType := f.Type
-	if fieldType.Kind() == reflect.Ptr {
+	if fieldType.Kind() == reflect.Pointer {
 		info.IsPointer = true
 		fieldType = fieldType.Elem()
 	}
@@ -288,7 +288,7 @@ func introspectFieldWithSeen(f reflect.StructField, depth int, seen map[reflect.
 	switch fieldType.Kind() {
 	case reflect.Slice, reflect.Array:
 		elemType := fieldType.Elem()
-		for elemType.Kind() == reflect.Ptr {
+		for elemType.Kind() == reflect.Pointer {
 			elemType = elemType.Elem()
 		}
 		info.ElemType = formatTypeName(elemType)
@@ -302,7 +302,7 @@ func introspectFieldWithSeen(f reflect.StructField, depth int, seen map[reflect.
 	case reflect.Map:
 		info.KeyType = formatTypeName(fieldType.Key())
 		elemType := fieldType.Elem()
-		for elemType.Kind() == reflect.Ptr {
+		for elemType.Kind() == reflect.Pointer {
 			elemType = elemType.Elem()
 		}
 		info.ElemType = formatTypeName(elemType)
@@ -397,7 +397,7 @@ func getJSONName(f reflect.StructField) string {
 func formatTypeName(t reflect.Type) string {
 	//exhaustive:ignore
 	switch t.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return "*" + formatTypeName(t.Elem())
 	case reflect.Slice:
 		return "[]" + formatTypeName(t.Elem())

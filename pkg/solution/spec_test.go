@@ -9,6 +9,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/stretchr/testify/assert"
@@ -848,6 +849,212 @@ func TestSpec_ReferencedProviderNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.spec.ReferencedProviderNames()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSpec_ReferencedAuthHandlerNames(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *Spec
+		want []string
+	}{
+		{
+			name: "nil spec",
+			spec: nil,
+			want: nil,
+		},
+		{
+			name: "empty spec",
+			spec: &Spec{},
+			want: nil,
+		},
+		{
+			name: "no identity provider usage",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{Provider: "parameter"},
+							},
+						},
+					},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "identity provider with literal handler in resolve",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"token": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "github"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"github"},
+		},
+		{
+			name: "identity provider with literal handler in transform",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"token": {
+						Transform: &resolver.TransformPhase{
+							With: []resolver.ProviderTransform{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "entra"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"entra"},
+		},
+		{
+			name: "multiple handlers deduplicates and sorts",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "github"},
+									},
+								},
+							},
+						},
+					},
+					"r2": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "entra"},
+									},
+								},
+							},
+						},
+					},
+					"r3": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "github"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"entra", "github"},
+		},
+		{
+			name: "non-literal handler value ignored",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"token": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Resolver: ptrs.StringPtr("myHandlerName")},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "nil resolver in map skipped",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": nil,
+					"r2": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "gcp"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"gcp"},
+		},
+		{
+			name: "non-identity provider with handler input ignored",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"r1": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{
+								{
+									Provider: "http",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "github"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "identity provider with literal handler in validate",
+			spec: &Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"token": {
+						Validate: &resolver.ValidatePhase{
+							With: []resolver.ProviderValidation{
+								{
+									Provider: "identity",
+									Inputs: map[string]*resolver.ValueRef{
+										"handler": {Literal: "azure-devops"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"azure-devops"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.spec.ReferencedAuthHandlerNames()
 			assert.Equal(t, tt.want, got)
 		})
 	}

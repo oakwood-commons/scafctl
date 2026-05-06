@@ -111,7 +111,7 @@ func getKnownConfigKeys() map[string]bool {
 // Keys are lowercased to match Viper's behavior.
 func extractKeys(t reflect.Type, prefix string, keys map[string]bool) {
 	// Handle pointer types
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -161,7 +161,7 @@ func extractKeys(t reflect.Type, prefix string, keys map[string]bool) {
 			// For slice of structs, add wildcard path
 			if elemType.Kind() == reflect.Struct {
 				extractKeys(elemType, fullKey+".*", keys)
-			} else if elemType.Kind() == reflect.Ptr && elemType.Elem().Kind() == reflect.Struct {
+			} else if elemType.Kind() == reflect.Pointer && elemType.Elem().Kind() == reflect.Struct {
 				extractKeys(elemType.Elem(), fullKey+".*", keys)
 			}
 			continue
@@ -175,7 +175,7 @@ func extractKeys(t reflect.Type, prefix string, keys map[string]bool) {
 		}
 
 		// Handle pointers
-		if fieldType.Kind() == reflect.Ptr {
+		if fieldType.Kind() == reflect.Pointer {
 			fieldType = fieldType.Elem()
 		}
 

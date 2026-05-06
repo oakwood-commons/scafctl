@@ -47,7 +47,7 @@ func SafeLen(v any) (int, error) {
 	rv := reflect.ValueOf(v)
 
 	// Dereference pointers so *[N]T, *[]T, *map, etc. work like builtins.
-	for rv.Kind() == reflect.Ptr {
+	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return 0, nil
 		}
