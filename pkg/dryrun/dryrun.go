@@ -208,7 +208,7 @@ func versionString(v fmt.Stringer) string {
 	}
 	// Handle nil pointer wrapped in a non-nil interface
 	// (e.g. (*semver.Version)(nil) passed as fmt.Stringer).
-	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Ptr && rv.IsNil() {
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
 		return ""
 	}
 	return v.String()

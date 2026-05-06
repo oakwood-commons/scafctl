@@ -688,3 +688,291 @@ func TestAuthHandlerClient_HostServiceID_GRPCClient(t *testing.T) {
 	}
 	assert.Equal(t, uint32(42), client.HostServiceID())
 }
+
+// ── SetTrustedDomains tests ──────────────────────────────────────────────────
+
+func TestAuthHandlerWrapper_SetTrustedDomains(t *testing.T) {
+	t.Parallel()
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: &MockAuthHandlerPlugin{},
+			name:   "test-plugin",
+		},
+		handlerName: "test-handler",
+		info:        AuthHandlerInfo{Name: "test-handler"},
+	}
+
+	// Initially empty
+	assert.Empty(t, w.trustedDomains)
+
+	// Set domains
+	w.SetTrustedDomains([]string{"login.microsoftonline.com", "accounts.google.com"})
+	assert.Equal(t, []string{"login.microsoftonline.com", "accounts.google.com"}, w.trustedDomains)
+
+	// Replace with different domains
+	w.SetTrustedDomains([]string{"github.com"})
+	assert.Equal(t, []string{"github.com"}, w.trustedDomains)
+
+	// Clear
+	w.SetTrustedDomains(nil)
+	assert.Nil(t, w.trustedDomains)
+}
+
+// ── Login with device code validation tests ──────────────────────────────────
+
+func TestAuthHandlerWrapper_Login_DeviceCodeValidURI(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			if cb != nil {
+				cb(DeviceCodePrompt{
+					UserCode:        "WXYZ-5678",
+					VerificationURI: "https://login.microsoftonline.com/common/oauth2/deviceauth",
+					Message:         "Go to the URL and enter the code",
+				})
+			}
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName:    "entra",
+		info:           AuthHandlerInfo{Name: "entra"},
+		trustedDomains: []string{"login.microsoftonline.com"},
+	}
+
+	var gotCode, gotURI, gotMsg string
+	result, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowDeviceCode,
+		DeviceCodeCallback: func(code, uri, msg string) {
+			gotCode = code
+			gotURI = uri
+			gotMsg = msg
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "user@corp.com", result.Claims.Email)
+	assert.Equal(t, "WXYZ-5678", gotCode)
+	assert.Equal(t, "https://login.microsoftonline.com/common/oauth2/deviceauth", gotURI)
+	assert.Equal(t, "Go to the URL and enter the code", gotMsg)
+}
+
+func TestAuthHandlerWrapper_Login_DeviceCodeBlockedURI(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(ctx context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			if cb != nil {
+				cb(DeviceCodePrompt{
+					UserCode:        "EVIL-1234",
+					VerificationURI: "https://evil-phishing.example.com/device",
+					Message:         "Go to fake URL",
+				})
+			}
+			// Simulate the context being cancelled due to validation failure
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName:    "entra",
+		info:           AuthHandlerInfo{Name: "entra"},
+		trustedDomains: []string{"login.microsoftonline.com"},
+	}
+
+	var callbackInvoked bool
+	_, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowDeviceCode,
+		DeviceCodeCallback: func(_, _, _ string) {
+			callbackInvoked = true
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "device code URL validation failed for handler \"entra\"")
+	assert.False(t, callbackInvoked, "original callback should not be invoked for blocked URI")
+}
+
+func TestAuthHandlerWrapper_Login_NoDeviceCodeCallback(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			// cb should be nil when no DeviceCodeCallback is set
+			assert.Nil(t, cb)
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "sp@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName: "entra",
+		info:        AuthHandlerInfo{Name: "entra"},
+	}
+
+	result, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowServicePrincipal,
+		// No DeviceCodeCallback
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "sp@corp.com", result.Claims.Email)
+}
+
+func TestAuthHandlerWrapper_Login_MaliciousPluginIgnoresCancellation(t *testing.T) {
+	t.Parallel()
+
+	// A malicious plugin sends a bad URI, then IGNORES the context cancellation
+	// and returns a successful response anyway. The host must still return an error.
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			if cb != nil {
+				cb(DeviceCodePrompt{
+					UserCode:        "EVIL-9999",
+					VerificationURI: "https://evil-phishing.example.com/device",
+					Message:         "Phishing attempt",
+				})
+			}
+			// Malicious plugin ignores ctx cancellation and returns success.
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "victim@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName:    "entra",
+		info:           AuthHandlerInfo{Name: "entra"},
+		trustedDomains: []string{"login.microsoftonline.com"},
+	}
+
+	_, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowDeviceCode,
+		DeviceCodeCallback: func(_, _, _ string) {
+			t.Fatal("original callback should not be invoked for blocked URI")
+		},
+	})
+	require.Error(t, err, "host must reject even if plugin returns success after URI validation failure")
+	assert.Contains(t, err.Error(), "device code URL validation failed")
+}
+
+func TestAuthHandlerWrapper_Login_PluginError(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+			return nil, assert.AnError
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName: "github",
+		info:        AuthHandlerInfo{Name: "github"},
+	}
+
+	_, err := w.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowDeviceCode})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin auth handler github login:")
+}
+
+func TestAuthHandlerWrapper_Login_DeviceCodeEmptyTrustedDomains(t *testing.T) {
+	t.Parallel()
+
+	// When trustedDomains is empty, any HTTPS URL passes validation.
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			if cb != nil {
+				cb(DeviceCodePrompt{
+					UserCode:        "ABCD-9999",
+					VerificationURI: "https://any-provider.example.com/device",
+					Message:         "Enter code",
+				})
+			}
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@any.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName:    "custom",
+		info:           AuthHandlerInfo{Name: "custom"},
+		trustedDomains: nil, // empty
+	}
+
+	var gotURI string
+	result, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowDeviceCode,
+		DeviceCodeCallback: func(_, uri, _ string) {
+			gotURI = uri
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "user@any.com", result.Claims.Email)
+	assert.Equal(t, "https://any-provider.example.com/device", gotURI)
+}
+
+// ── RegisterAuthHandlerPlugins tests ─────────────────────────────────────────
+
+func TestRegisterAuthHandlerPlugins_EmptyDirs(t *testing.T) {
+	t.Parallel()
+
+	// Empty plugin dir list should discover nothing and return no error.
+	registry := auth.NewRegistry()
+	clients, err := RegisterAuthHandlerPlugins(context.Background(), registry, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, clients)
+}
+
+func TestRegisterAuthHandlerPlugins_NonExistentDir(t *testing.T) {
+	t.Parallel()
+
+	// A non-existent directory should not produce an error (dirs are scanned best-effort).
+	registry := auth.NewRegistry()
+	clients, err := RegisterAuthHandlerPlugins(context.Background(), registry, []string{"/nonexistent/path/xyz"}, nil)
+	require.NoError(t, err)
+	assert.Empty(t, clients)
+}
+
+func TestRegisterAuthHandlerPlugins_EmptyDir(t *testing.T) {
+	t.Parallel()
+
+	// An empty directory should yield no clients.
+	dir := t.TempDir()
+	registry := auth.NewRegistry()
+	clients, err := RegisterAuthHandlerPlugins(context.Background(), registry, []string{dir}, nil)
+	require.NoError(t, err)
+	assert.Empty(t, clients)
+}
