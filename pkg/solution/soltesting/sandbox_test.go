@@ -151,7 +151,9 @@ func TestNewSandbox_RejectsSymlinks(t *testing.T) {
 	dir := setupSandboxDir(t)
 
 	writeSandboxFile(t, dir, "real.txt", "real content")
-	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")))
+	if err := os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")); err != nil {
+		t.Skipf("symlink requires elevated privilege on this OS: %v", err)
+	}
 
 	_, err := soltesting.NewSandbox(
 		filepath.Join(dir, "solution.yaml"),
@@ -180,6 +182,18 @@ func TestNewSandbox_RejectsAbsolutePath(t *testing.T) {
 	_, err := soltesting.NewSandbox(
 		filepath.Join(dir, "solution.yaml"),
 		[]string{"/etc/passwd"},
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
+}
+
+func TestNewSandbox_RejectsDriveRelativePath(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	_, err := soltesting.NewSandbox(
+		filepath.Join(dir, "solution.yaml"),
+		[]string{"C:evil"},
 		nil,
 	)
 	assert.Error(t, err)
@@ -492,6 +506,18 @@ func TestNewSandboxWithBaseDir_RejectsAbsolutePath(t *testing.T) {
 	assert.Contains(t, err.Error(), "must be a relative path")
 }
 
+func TestNewSandboxWithBaseDir_RejectsDriveRelativePath(t *testing.T) {
+	dir := setupSandboxDir(t)
+	_, err := soltesting.NewSandboxWithBaseDir(
+		filepath.Join(dir, "solution.yaml"),
+		"C:evil",
+		nil,
+		nil,
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a relative path")
+}
+
 func TestNewSandboxWithBaseDir_RejectsTraversal(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -514,4 +540,17 @@ func TestNewSandboxWithBaseDir_RejectsTraversal(t *testing.T) {
 			assert.Contains(t, err.Error(), "must not traverse")
 		})
 	}
+}
+
+func TestNewSandboxWithBaseDir_RejectsDriveRelativeFilePath(t *testing.T) {
+	dir := setupSandboxDir(t)
+
+	_, err := soltesting.NewSandboxWithBaseDir(
+		filepath.Join(dir, "solution.yaml"),
+		"myapp",
+		nil,
+		[]string{"C:evil"},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "path traversal")
 }

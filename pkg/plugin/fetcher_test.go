@@ -648,3 +648,17 @@ func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot verify against allowlist")
 }
+
+// ── RegisterCachedPlugin tests ──────────────────────────────────────────────
+
+func TestRegisterCachedPlugin_NotCached(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	// Use a unique name that won't exist in any real cache.
+	clients, err := RegisterCachedPlugin(ctx, "nonexistent-plugin-for-test-"+t.Name(), reg, nil, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in cache")
+	assert.Nil(t, clients)
+}

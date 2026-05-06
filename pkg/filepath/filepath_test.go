@@ -250,3 +250,31 @@ func TestPathExists(t *testing.T) {
 		})
 	}
 }
+
+func TestHasWindowsDrivePrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"uppercase C:", "C:foo", true},
+		{"lowercase d:", "d:dir/file", true},
+		{"full path", "D:\\dir\\file", true},
+		{"just drive", "C:", true},
+		{"empty", "", false},
+		{"single char", "C", false},
+		{"no colon", "foo", false},
+		{"unix absolute", "/etc/passwd", false},
+		{"url", "https://example.com", false},
+		{"non-letter colon", "1:foo", false},
+		{"colon later", "foo:bar", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filepath.HasWindowsDrivePrefix(tt.path)
+			if got != tt.want {
+				t.Errorf("HasWindowsDrivePrefix(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}

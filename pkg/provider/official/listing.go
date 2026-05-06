@@ -29,10 +29,11 @@ func ListItems(ctx context.Context) []ListItem {
 	items := make([]ListItem, 0, len(names))
 	for _, name := range names {
 		p, _ := reg.Get(name)
+		desc := p.descriptionOrFallback()
 		items = append(items, ListItem{
 			Name:         p.Name,
 			DisplayName:  p.Name,
-			Description:  "Official plugin provider (auto-fetched from catalog: " + p.CatalogRef + ")",
+			Description:  desc,
 			Source:       "official",
 			Version:      p.DefaultVersion,
 			Capabilities: []string{},
@@ -50,6 +51,6 @@ func Detail(p Provider) map[string]any {
 		"source":      "official",
 		"catalogRef":  p.CatalogRef,
 		"version":     p.DefaultVersion,
-		"description": "Official plugin provider. Auto-fetched from catalog on first use. Use 'plugins install' to pre-fetch.",
+		"description": p.descriptionOrFallback(),
 	}
 }

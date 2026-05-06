@@ -8,6 +8,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -322,4 +323,146 @@ func BenchmarkProviderOptions_Run_NotFound(b *testing.B) {
 	for b.Loop() {
 		_ = opts.Run(ctx)
 	}
+}
+
+// ── parseProviderInputs tests ─────────────────────────────────────────────────
+
+func TestParseProviderInputs_Simple(t *testing.T) {
+	t.Parallel()
+	ctx := newProviderTestCtx(t)
+	desc := &provider.Descriptor{Name: "test"}
+
+	opts := &ProviderOptions{
+		InputParams: []string{"key=value"},
+	}
+	inputs, err := opts.parseProviderInputs(ctx, desc)
+	require.NoError(t, err)
+	assert.Equal(t, "value", inputs["key"])
+}
+
+func TestParseProviderInputs_InvalidDynamicArgs(t *testing.T) {
+	t.Parallel()
+	ctx := newProviderTestCtx(t)
+	desc := &provider.Descriptor{Name: "test"}
+
+	opts := &ProviderOptions{
+		DynamicArgs: []string{"=no-key"},
+	}
+	_, err := opts.parseProviderInputs(ctx, desc)
+	require.Error(t, err)
+}
+
+func TestParseProviderInputs_SchemaValidation(t *testing.T) {
+	t.Parallel()
+	ctx := newProviderTestCtx(t)
+
+	desc := &provider.Descriptor{
+		Name: "test",
+		Schema: &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"allowed": {Type: "string"},
+			},
+		},
+	}
+
+	opts := &ProviderOptions{
+		InputParams: []string{"typo=value"},
+	}
+	_, err := opts.parseProviderInputs(ctx, desc)
+	require.Error(t, err)
+}
+
+// ── logVerboseExecution tests ─────────────────────────────────────────────────
+
+func TestLogVerboseExecution_WithInputsAndDryRun(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	cliParams := settings.NewCliParams()
+	cliParams.Verbose = true
+	w := writer.New(ioStreams, cliParams)
+
+	opts := &ProviderOptions{DryRun: true}
+	opts.logVerboseExecution(w, provider.CapabilityFrom, map[string]any{"url": "x"})
+
+	output := buf.String()
+	assert.Contains(t, output, "from")
+	assert.Contains(t, output, "url")
+	assert.Contains(t, output, "dry-run")
+}
+
+func TestLogVerboseExecution_NilWriter(t *testing.T) {
+	t.Parallel()
+	opts := &ProviderOptions{}
+	// Should not panic with nil writer
+	opts.logVerboseExecution(nil, provider.CapabilityFrom, nil)
+}
+
+// ── configureExecutionContext tests ───────────────────────────────────────────
+
+func TestConfigureExecutionContext_InvalidConflictStrategy(t *testing.T) {
+	t.Parallel()
+	ctx := newProviderTestCtx(t)
+
+	opts := &ProviderOptions{
+		IOStreams:  terminal.NewIOStreams(nil, nil, nil, false),
+		CliParams:  settings.NewCliParams(),
+		OnConflict: "invalid-strategy",
+	}
+	_, err := opts.configureExecutionContext(ctx, provider.CapabilityAction)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --on-conflict")
+}
+
+func TestConfigureExecutionContext_JsonOutputRedirects(t *testing.T) {
+	t.Parallel()
+
+	var outBuf, errBuf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &outBuf, &errBuf, false)
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	opts := &ProviderOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+	}
+	opts.Output = "json"
+
+	newCtx, err := opts.configureExecutionContext(ctx, provider.CapabilityFrom)
+	require.NoError(t, err)
+	// The IOStreams should be set in context (verify it doesn't panic)
+	assert.NotNil(t, newCtx)
+}
+
+func TestConfigureExecutionContext_OutputDir(t *testing.T) {
+	t.Parallel()
+	ctx := newProviderTestCtx(t)
+
+	opts := &ProviderOptions{
+		IOStreams: terminal.NewIOStreams(nil, nil, nil, false),
+		CliParams: settings.NewCliParams(),
+		OutputDir: t.TempDir(),
+	}
+
+	newCtx, err := opts.configureExecutionContext(ctx, provider.CapabilityAction)
+	require.NoError(t, err)
+	assert.NotNil(t, newCtx)
+}
+
+func TestConfigureExecutionContext_BackupEnabled(t *testing.T) {
+	t.Parallel()
+	ctx := newProviderTestCtx(t)
+
+	opts := &ProviderOptions{
+		IOStreams: terminal.NewIOStreams(nil, nil, nil, false),
+		CliParams: settings.NewCliParams(),
+		Backup:    true,
+	}
+
+	newCtx, err := opts.configureExecutionContext(ctx, provider.CapabilityFrom)
+	require.NoError(t, err)
+	assert.NotNil(t, newCtx)
 }

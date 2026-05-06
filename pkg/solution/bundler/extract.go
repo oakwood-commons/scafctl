@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	actionpkg "github.com/oakwood-commons/scafctl/pkg/action"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
@@ -127,7 +128,7 @@ func IsLocalFilePath(path string) bool {
 	if strings.Contains(path, "@") {
 		return false
 	}
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") || scafpath.HasWindowsDrivePrefix(path) {
 		return false
 	}
 	return true

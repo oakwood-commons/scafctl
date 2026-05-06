@@ -227,6 +227,33 @@ func TestSharedResolverOptions_GetEffectiveResolverConfig_NoFlagsChanged(t *test
 	assert.Equal(t, 5*time.Minute, cfg.PhaseTimeout)
 }
 
+func TestSharedResolverOptions_AppendClientPluginOptions_NoCliParams(t *testing.T) {
+	t.Parallel()
+
+	opts := (&sharedResolverOptions{}).appendClientPluginOptions(nil)
+	assert.Len(t, opts, 0)
+}
+
+func TestSharedResolverOptions_AppendClientPluginOptions_NonDebug(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.MinLogLevel = logger.LevelInfo
+
+	opts := (&sharedResolverOptions{CliParams: cliParams}).appendClientPluginOptions(nil)
+	assert.Len(t, opts, 1)
+}
+
+func TestSharedResolverOptions_AppendClientPluginOptions_Debug(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	cliParams.MinLogLevel = logger.LevelDebug
+
+	opts := (&sharedResolverOptions{CliParams: cliParams}).appendClientPluginOptions(nil)
+	assert.Len(t, opts, 2)
+}
+
 // ── shouldRedactSensitive tests ───────────────────────────────────────────────
 // (supplementary tests in addition to those in resolver_test.go)
 

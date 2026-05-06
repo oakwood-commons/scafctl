@@ -14,6 +14,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -124,7 +125,7 @@ func requireURLPath(path, opName string) error {
 // rejectUnsafePath returns a 400 Huma error if path is unsafe for server-side
 // local file access. Used for output directory parameters only.
 func rejectUnsafePath(path, opName string) error {
-	if strings.Contains(path, "..") || filepath.IsAbs(path) || strings.HasPrefix(path, "~") {
+	if strings.Contains(path, "..") || filepath.IsAbs(path) || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") || strings.HasPrefix(path, "~") || scafpath.HasWindowsDrivePrefix(path) {
 		return huma.NewError(http.StatusBadRequest,
 			fmt.Sprintf("%s: must be a relative path that does not contain '..'", opName))
 	}

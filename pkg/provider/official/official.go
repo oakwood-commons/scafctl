@@ -43,6 +43,9 @@ type Provider struct {
 	// DefaultVersion is the semver constraint applied when auto-resolving
 	// (e.g., ">=0.1.0").
 	DefaultVersion string
+
+	// Description is a human-readable summary of what the provider does.
+	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable summary of the provider"`
 }
 
 // defaultProviders is the canonical list of all 10 extracted first-party
@@ -56,16 +59,16 @@ type Provider struct {
 // performance overhead -- their sub-microsecond execution time was dominated
 // by gRPC serialization cost when used as plugins.
 var defaultProviders = []Provider{
-	{Name: "directory", CatalogRef: "directory", DefaultVersion: "latest"},
-	{Name: "env", CatalogRef: "env", DefaultVersion: "latest"},
-	{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
-	{Name: "git", CatalogRef: "git", DefaultVersion: "latest"},
-	{Name: "github", CatalogRef: "github", DefaultVersion: "latest"},
-	{Name: "hcl", CatalogRef: "hcl", DefaultVersion: "latest"},
-	{Name: "identity", CatalogRef: "identity", DefaultVersion: "latest"},
-	{Name: "metadata", CatalogRef: "metadata", DefaultVersion: "latest"},
-	{Name: "secret", CatalogRef: "secret", DefaultVersion: "latest"},
-	{Name: "sleep", CatalogRef: "sleep", DefaultVersion: "latest"},
+	{Name: "directory", CatalogRef: "directory", DefaultVersion: "latest", Description: "List and read files and directories from the local filesystem"},
+	{Name: "env", CatalogRef: "env", DefaultVersion: "latest", Description: "Read environment variables from the host system"},
+	{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest", Description: "Execute shell commands and capture their output"},
+	{Name: "git", CatalogRef: "git", DefaultVersion: "latest", Description: "Query Git repository information (branches, tags, commits, status)"},
+	{Name: "github", CatalogRef: "github", DefaultVersion: "latest", Description: "Interact with the GitHub API (repos, issues, PRs, releases, and more)"},
+	{Name: "hcl", CatalogRef: "hcl", DefaultVersion: "latest", Description: "Parse and evaluate HCL/Terraform configuration files"},
+	{Name: "identity", CatalogRef: "identity", DefaultVersion: "latest", Description: "Retrieve authenticated identity claims and token metadata"},
+	{Name: "metadata", CatalogRef: "metadata", DefaultVersion: "latest", Description: "Access runtime metadata such as OS, architecture, and build info"},
+	{Name: "secret", CatalogRef: "secret", DefaultVersion: "latest", Description: "Store and retrieve encrypted secrets using the local credential store"},
+	{Name: "sleep", CatalogRef: "sleep", DefaultVersion: "latest", Description: "Pause execution for a specified duration"},
 }
 
 // Registry holds the set of known official providers.
@@ -77,6 +80,15 @@ type Registry struct {
 // all 10 extracted first-party providers.
 func NewRegistry() *Registry {
 	return NewRegistryFrom(defaultProviders)
+}
+
+// descriptionOrFallback returns the provider's Description if set, or a
+// generic fallback string.
+func (p Provider) descriptionOrFallback() string {
+	if p.Description != "" {
+		return p.Description
+	}
+	return "Official plugin provider (auto-fetched from catalog: " + p.CatalogRef + ")"
 }
 
 // NewRegistryFrom creates a registry from a custom provider list.

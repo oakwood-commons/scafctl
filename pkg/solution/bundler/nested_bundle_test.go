@@ -82,7 +82,7 @@ spec:
 		paths[f.RelPath] = true
 	}
 	assert.True(t, paths["sub/child.yaml"], "should include sub/child.yaml")
-	assert.True(t, paths[filepath.Join("sub", "templates", "child.tmpl")], "should include sub/templates/child.tmpl")
+	assert.True(t, paths["sub/templates/child.tmpl"], "should include sub/templates/child.tmpl")
 }
 
 func TestDiscoverFiles_RecursiveSubSolution_CatalogRefs(t *testing.T) {
@@ -254,8 +254,8 @@ spec:
 	}
 
 	assert.True(t, paths["level1/child.yaml"], "should include level1/child.yaml")
-	assert.True(t, paths[filepath.Join("level1", "level2", "grandchild.yaml")], "should include grandchild")
-	assert.True(t, paths[filepath.Join("level1", "level2", "data.json")], "should include grandchild's data.json")
+	assert.True(t, paths["level1/level2/grandchild.yaml"], "should include grandchild")
+	assert.True(t, paths["level1/level2/data.json"], "should include grandchild's data.json")
 }
 
 func TestDiscoverFiles_SubSolutionWithBundleIncludes(t *testing.T) {
@@ -316,8 +316,8 @@ spec:
 	}
 
 	assert.True(t, paths["sub/child.yaml"], "should include sub/child.yaml")
-	assert.True(t, paths[filepath.Join("sub", "configs", "dev.yaml")], "should include sub/configs/dev.yaml via bundle.include")
-	assert.True(t, paths[filepath.Join("sub", "configs", "prod.yaml")], "should include sub/configs/prod.yaml via bundle.include")
+	assert.True(t, paths["sub/configs/dev.yaml"], "should include sub/configs/dev.yaml via bundle.include")
+	assert.True(t, paths["sub/configs/prod.yaml"], "should include sub/configs/prod.yaml via bundle.include")
 }
 
 func TestDiscoverFiles_SubSolutionNotParseable(t *testing.T) {
@@ -620,7 +620,7 @@ spec:
 
 	assert.True(t, paths["parent-template.tmpl"])
 	assert.True(t, paths["sub/child.yaml"])
-	assert.True(t, paths[filepath.Join("sub", "child-template.tmpl")])
+	assert.True(t, paths["sub/child-template.tmpl"])
 
 	// Step 2: Create bundle tar
 	tarData, manifest, err := CreateBundleTar(tmpDir, discovery.LocalFiles, nil)
@@ -700,7 +700,7 @@ spec:
 	}
 
 	assert.True(t, paths["actions/deploy.yaml"], "should include actions/deploy.yaml")
-	assert.True(t, paths[filepath.Join("actions", "deploy.sh")], "should include actions/deploy.sh from sub-solution")
+	assert.True(t, paths["actions/deploy.sh"], "should include actions/deploy.sh from sub-solution")
 }
 
 func TestIdentifySubSolutionFiles(t *testing.T) {
@@ -827,7 +827,7 @@ spec:
 		paths[f.RelPath] = true
 	}
 	assert.True(t, paths["sub/child.yaml"])
-	assert.True(t, paths[filepath.Join("sub", "data.json")])
+	assert.True(t, paths["sub/data.json"])
 }
 
 func TestDiscoverFiles_SelfReferentialCircular(t *testing.T) {

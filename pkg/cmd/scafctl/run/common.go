@@ -598,13 +598,7 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	if o.ShowMetrics && o.IOStreams != nil {
 		opts = append(opts, prepare.WithMetrics(o.IOStreams.ErrOut))
 	}
-	if o.CliParams != nil {
-		opts = append(opts, prepare.WithPluginConfig(&plugin.ProviderConfig{
-			Quiet:      o.CliParams.IsQuiet,
-			NoColor:    o.CliParams.NoColor,
-			BinaryName: o.CliParams.BinaryName,
-		}))
-	}
+	opts = o.appendClientPluginOptions(opts)
 
 	if o.discoveryMode != settings.DiscoveryModeDefault {
 		opts = append(opts, prepare.WithDiscoveryMode(o.discoveryMode))
@@ -710,6 +704,23 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	}
 
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil
+}
+
+func (o *sharedResolverOptions) appendClientPluginOptions(opts []prepare.Option) []prepare.Option {
+	if o.CliParams == nil {
+		return opts
+	}
+
+	opts = append(opts, prepare.WithPluginConfig(&plugin.ProviderConfig{
+		Quiet:      o.CliParams.IsQuiet,
+		NoColor:    o.CliParams.NoColor,
+		BinaryName: o.CliParams.BinaryName,
+	}))
+	if logger.IsDebugLevel(o.CliParams.MinLogLevel) {
+		opts = append(opts, prepare.WithClientOptions(plugin.WithDebugLogging()))
+	}
+
+	return opts
 }
 
 // resolveVersionConstraintForFile resolves a --version constraint against the

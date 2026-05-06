@@ -164,19 +164,21 @@ func TestTestFileReachable_PathTraversal(t *testing.T) {
 }
 
 func TestTestFileReachable_RootSolutionDir(t *testing.T) {
-	// When solutionDir is "/" the old HasPrefix check produced "//" which no
-	// normal path starts with, causing false negatives. The Rel-based check
-	// should correctly handle this edge case.
+	// When solutionDir is the filesystem root, the Rel-based check should still
+	// allow reachable paths under that root.
 	dir := t.TempDir()
-	// dir is an absolute path like /tmp/TestXxx12345; relative to "/" it is
-	// the same path with the leading slash stripped.
-	relDir := dir[1:] // strip leading "/"
+	root := string(filepath.Separator)
+	if volume := filepath.VolumeName(dir); volume != "" {
+		root = volume + string(filepath.Separator)
+	}
+	relDir, err := filepath.Rel(root, dir)
+	require.NoError(t, err)
 
-	// The temp dir exists on disk, so it should be reachable from "/"
-	assert.True(t, testFileReachable("/", relDir))
+	// The temp dir exists on disk, so it should be reachable from the root.
+	assert.True(t, testFileReachable(root, relDir))
 
-	// A nonexistent entry inside / should be false (file missing).
-	assert.False(t, testFileReachable("/", "this_path_does_not_exist_scafctl_xyz"))
+	// A nonexistent entry inside the root should be false (file missing).
+	assert.False(t, testFileReachable(root, "this_path_does_not_exist_scafctl_xyz"))
 }
 
 // ---- lintAction ----

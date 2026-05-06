@@ -6,6 +6,7 @@ package messageprovider
 import (
 	"bytes"
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -15,6 +16,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiRegexp.ReplaceAllString(s, "")
+}
 
 // testCtx returns a context with logger, IOStreams backed by buffers, and optional settings.
 func testCtx(t *testing.T, runSettings *settings.Run) (context.Context, *bytes.Buffer, *bytes.Buffer) {
@@ -441,6 +448,38 @@ func TestMessageProvider_Execute_NewlineDefault(t *testing.T) {
 	require.NoError(t, err)
 	// Default is newline=true.
 	assert.Equal(t, "default newline\n", stdout.String())
+}
+
+func TestMessageProvider_Execute_InfoMultiline_DoesNotPadLines(t *testing.T) {
+	p := NewMessageProvider()
+	ctx, stdout, _ := testCtx(t, &settings.Run{NoColor: false})
+
+	_, err := p.Execute(ctx, map[string]any{
+		"message": "Plugin Template Solution\n\nCommon commands:\n  Show this help:",
+		"type":    "info",
+	})
+	require.NoError(t, err)
+
+	got := strings.Split(strings.TrimSuffix(stripANSI(stdout.String()), "\n"), "\n")
+	require.Len(t, got, 4)
+	assert.Equal(t, "💡 Plugin Template Solution", got[0])
+	assert.Equal(t, "", got[1])
+	assert.Equal(t, "Common commands:", got[2])
+	assert.Equal(t, "  Show this help:", got[3])
+	for _, line := range got {
+		assert.Equal(t, strings.TrimRight(line, " "), line)
+	}
+}
+
+func TestMessageProvider_FormatMessage_InfoMultiline_PreservesLineBreaks(t *testing.T) {
+	p := NewMessageProvider()
+	formatted := p.formatMessage("line one\n\nline two", typeInfo, map[string]any{}, false, false)
+	plain := stripANSI(formatted)
+
+	assert.Equal(t, "💡 line one\n\nline two", plain)
+	for _, line := range strings.Split(plain, "\n") {
+		assert.Equal(t, strings.TrimRight(line, " "), line)
+	}
 }
 
 func TestMessageProvider_Execute_NewlineFalse_CustomStyle(t *testing.T) {

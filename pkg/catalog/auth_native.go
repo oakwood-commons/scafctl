@@ -374,8 +374,18 @@ func (s *NativeCredentialStore) save(creds *nativeCredentialFile) error {
 		return fmt.Errorf("close temporary credential file %s: %w", tmpPath, err)
 	}
 
-	if err := os.Rename(tmpPath, s.path); err != nil { //nolint:gosec // tmpPath is created by os.CreateTemp in the same directory as s.path (XDG config), not user-controlled
-		return fmt.Errorf("rename temporary credential file %s to %s: %w", tmpPath, s.path, err)
+	renameErr := os.Rename(tmpPath, s.path) //nolint:gosec // tmpPath is created by os.CreateTemp in the same directory as s.path (XDG config), not user-controlled
+	if renameErr != nil {
+		// Windows does not reliably support renaming over an existing file.
+		// Retry after removing the destination when it already exists.
+		if _, statErr := os.Stat(s.path); statErr == nil {
+			if removeErr := os.Remove(s.path); removeErr == nil {
+				renameErr = os.Rename(tmpPath, s.path) //nolint:gosec // same rationale as above
+			}
+		}
+		if renameErr != nil {
+			return fmt.Errorf("rename temporary credential file %s to %s: %w", tmpPath, s.path, renameErr)
+		}
 	}
 	removeTmp = false
 

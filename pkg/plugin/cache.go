@@ -4,11 +4,13 @@
 package plugin
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -174,10 +176,17 @@ func (c *Cache) Put(name, version, platform string, data []byte) (string, error)
 	}
 
 	// Check if already cached (another process may have finished first).
-	// On Windows, permission bits are not meaningful so skip the execute check.
+	// If the existing file matches exactly, reuse it. Otherwise, overwrite it
+	// below to recover from stale or corrupted cache entries.
 	if info, err := os.Stat(p); err == nil && !info.IsDir() {
-		if runtime.GOOS == "windows" || info.Mode()&0o111 != 0 {
-			return p, nil
+		existing, readErr := os.ReadFile(p)
+		if readErr == nil && bytes.Equal(existing, data) {
+			if runtime.GOOS == "windows" || info.Mode()&0o111 != 0 {
+				return p, nil
+			}
+		}
+		if err := os.Remove(p); err != nil {
+			return "", fmt.Errorf("removing stale cached plugin binary: %w", err)
 		}
 	}
 
@@ -203,6 +212,15 @@ func (c *Cache) Put(name, version, platform string, data []byte) (string, error)
 		return "", fmt.Errorf("setting plugin binary permissions: %w", err)
 	}
 	if err := os.Rename(tmp, p); err != nil {
+		// Windows does not allow rename-over-existing. Handle races where
+		// another process created the destination between our remove and rename.
+		if _, statErr := os.Stat(p); statErr == nil {
+			if rmErr := os.Remove(p); rmErr == nil {
+				if retryErr := os.Rename(tmp, p); retryErr == nil {
+					return p, nil
+				}
+			}
+		}
 		os.Remove(tmp)
 		return "", fmt.Errorf("moving plugin binary into cache: %w", err)
 	}
@@ -282,6 +300,59 @@ type CachedPlugin struct {
 	Platform string `json:"platform" yaml:"platform" doc:"Target platform (os/arch)"`
 	Path     string `json:"path" yaml:"path" doc:"Absolute path to cached binary"`
 	Size     int64  `json:"size" yaml:"size" doc:"Binary size in bytes"`
+}
+
+// GetLatestBinary returns the path to the newest cached binary for the given
+// name on the current platform. Returns the path, version, and true if found.
+func (c *Cache) GetLatestBinary(name string) (string, string, bool) {
+	return c.GetLatestCached(name, CurrentPlatform())
+}
+
+// ListCurrentPlatform returns cached plugins that match the current platform.
+// When multiple versions of the same plugin are cached, only the latest
+// (by semver) is included.
+func (c *Cache) ListCurrentPlatform() ([]CachedPlugin, error) {
+	all, err := c.List()
+	if err != nil {
+		return nil, err
+	}
+	platform := CurrentPlatform()
+
+	// Collect unique plugin names that have binaries for the current platform.
+	names := make(map[string]bool)
+	for _, p := range all {
+		if p.Platform == platform {
+			names[p.Name] = true
+		}
+	}
+
+	// For each unique name, resolve the latest version via semver comparison.
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+
+	result := make([]CachedPlugin, 0, len(sorted))
+	for _, name := range sorted {
+		path, version, ok := c.GetLatestCached(name, platform)
+		if !ok {
+			continue
+		}
+		info, err := os.Stat(path)
+		var size int64
+		if err == nil {
+			size = info.Size()
+		}
+		result = append(result, CachedPlugin{
+			Name:     name,
+			Version:  version,
+			Platform: platform,
+			Path:     path,
+			Size:     size,
+		})
+	}
+	return result, nil
 }
 
 // binaryPath returns the expected path for a cached plugin binary.

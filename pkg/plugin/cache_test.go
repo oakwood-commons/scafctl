@@ -178,6 +178,70 @@ func TestCache_AtomicWrite(t *testing.T) {
 	}
 }
 
+func TestCache_Put_ReplacesStaleExistingBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	name := "test-plugin"
+	version := "1.0.0"
+	platform := "windows/amd64"
+
+	first := []byte("stale-binary")
+	second := []byte("fresh-binary")
+
+	path, err := cache.Put(name, version, platform, first)
+	require.NoError(t, err)
+
+	// Simulate a stale cached file by replacing contents directly.
+	require.NoError(t, os.WriteFile(path, []byte("corrupted"), 0o644))
+
+	path2, err := cache.Put(name, version, platform, second)
+	require.NoError(t, err)
+	assert.Equal(t, path, path2)
+
+	data, err := os.ReadFile(path2)
+	require.NoError(t, err)
+	assert.Equal(t, second, data)
+}
+
+func TestCache_Put_RenameRetryAfterConflictingPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	name := "test-plugin"
+	version := "1.0.0"
+	platform := "windows/amd64"
+
+	binaryPath := cache.binaryPath(name, version, platform)
+	require.NoError(t, os.MkdirAll(binaryPath, 0o755))
+
+	data := []byte("fresh-binary")
+	path, err := cache.Put(name, version, platform, data)
+	require.NoError(t, err)
+	assert.Equal(t, binaryPath, path)
+
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, data, content)
+}
+
+func TestCache_Put_RenameFailsWhenDestinationIsNonEmptyDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	name := "test-plugin"
+	version := "1.0.0"
+	platform := "windows/amd64"
+
+	binaryPath := cache.binaryPath(name, version, platform)
+	require.NoError(t, os.MkdirAll(binaryPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binaryPath, "keep.txt"), []byte("x"), 0o644))
+
+	_, err := cache.Put(name, version, platform, []byte("fresh-binary"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "moving plugin binary into cache")
+}
+
 func TestCache_DefaultDir(t *testing.T) {
 	cache := NewCache("")
 	assert.NotEmpty(t, cache.Dir())
@@ -286,4 +350,103 @@ func TestCache_Get_MigrationFallback_NotTriggeredForNonWindows(t *testing.T) {
 	// If the binary doesn't exist at the expected path, Get returns false — no fallback.
 	_, ok := cache.Get(name, version, platform, "")
 	assert.False(t, ok, "Get should return false for missing linux binary")
+}
+
+func TestCache_GetLatestBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+	platform := CurrentPlatform()
+
+	// Put two versions
+	_, err := cache.Put("myplugin", "1.0.0", platform, []byte("v1"))
+	require.NoError(t, err)
+	_, err = cache.Put("myplugin", "2.0.0", platform, []byte("v2"))
+	require.NoError(t, err)
+
+	path, version, ok := cache.GetLatestBinary("myplugin")
+	assert.True(t, ok)
+	assert.Equal(t, "2.0.0", version)
+	assert.Contains(t, path, "myplugin")
+}
+
+func TestCache_GetLatestBinary_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	_, _, ok := cache.GetLatestBinary("nonexistent")
+	assert.False(t, ok)
+}
+
+func TestCache_ListCurrentPlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+	platform := CurrentPlatform()
+
+	// Put plugins for current platform and a different one
+	_, err := cache.Put("plugin-a", "1.0.0", platform, []byte("a"))
+	require.NoError(t, err)
+	_, err = cache.Put("plugin-b", "1.0.0", platform, []byte("b"))
+	require.NoError(t, err)
+	_, err = cache.Put("plugin-c", "1.0.0", "fake/arch", []byte("c"))
+	require.NoError(t, err)
+
+	// List should only return plugins for current platform
+	result, err := cache.ListCurrentPlatform()
+	require.NoError(t, err)
+	assert.Len(t, result, 2)
+
+	names := make(map[string]bool)
+	for _, p := range result {
+		names[p.Name] = true
+	}
+	assert.True(t, names["plugin-a"])
+	assert.True(t, names["plugin-b"])
+	assert.False(t, names["plugin-c"])
+}
+
+func TestCache_ListCurrentPlatform_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	result, err := cache.ListCurrentPlatform()
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestCache_ListCurrentPlatform_DeduplicatesVersions(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+	platform := CurrentPlatform()
+
+	// Put two versions of the same plugin
+	_, err := cache.Put("myplugin", "1.0.0", platform, []byte("v1"))
+	require.NoError(t, err)
+	_, err = cache.Put("myplugin", "2.0.0", platform, []byte("v2"))
+	require.NoError(t, err)
+
+	result, err := cache.ListCurrentPlatform()
+	require.NoError(t, err)
+	assert.Len(t, result, 1, "should deduplicate by name")
+	assert.Equal(t, "myplugin", result[0].Name)
+}
+
+func TestCache_ListCurrentPlatform_PicksLatestSemver(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+	platform := CurrentPlatform()
+
+	// Put versions in non-semver directory order (1.0.0, 10.0.0, 2.0.0).
+	// Directory listing returns lexicographic order: 1.0.0, 10.0.0, 2.0.0.
+	// The result must reflect proper semver comparison: 10.0.0.
+	_, err := cache.Put("myplugin", "1.0.0", platform, []byte("v1"))
+	require.NoError(t, err)
+	_, err = cache.Put("myplugin", "10.0.0", platform, []byte("v10"))
+	require.NoError(t, err)
+	_, err = cache.Put("myplugin", "2.0.0", platform, []byte("v2"))
+	require.NoError(t, err)
+
+	result, err := cache.ListCurrentPlatform()
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "10.0.0", result[0].Version, "should pick latest by semver, not directory order")
 }

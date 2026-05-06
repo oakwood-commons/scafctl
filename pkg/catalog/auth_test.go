@@ -276,7 +276,7 @@ func TestCredentialStore_Credential_NativeStoreFallbackWhenNoDockerConfig(t *tes
 
 func TestFindDockerConfig_DockerConfigEnv(t *testing.T) {
 	tmpDir := t.TempDir()
-	configPath := tmpDir + "/config.json"
+	configPath := filepath.Join(tmpDir, "config.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
 	t.Setenv("DOCKER_CONFIG", tmpDir)
 

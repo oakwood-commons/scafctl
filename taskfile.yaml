@@ -91,8 +91,11 @@ vars:
     sh: git rev-parse --abbrev-ref HEAD || echo "unknown"
   BENCH_FILE: "bench/{{.DATE}}.{{.GIT_SHA}}.txt"
   BENCH_BASELINE: "bench/baseline.txt"
-  COVER: "{{.ROOT_DIR | toSlash }}/cover"
+  COVER: "{{.ROOT_DIR | toSlash }}/.task/cover"
   DEFAULT_GOCACHE: "{{.ROOT_DIR | toSlash}}/.gocache"
+  HAS_CC:
+    sh: command -v "$(go env CC)" >/dev/null 2>&1 && echo true || echo false
+  RACE_FLAG: '{{ if eq .HAS_CC "true" }}-race{{ end }}'
 
 env:
   CGO_ENABLED: "0"
@@ -471,7 +474,8 @@ tasks:
           find examples/solutions -name '*.yaml'
           find tests/integration/solutions -name 'solution.yaml'
         } | while IFS= read -r file; do
-          if echo "$file" | grep -qE "$EXCLUDE"; then
+          file_norm="$(echo "$file" | tr '\\' '/')"
+          if echo "$file_norm" | grep -qE "$EXCLUDE"; then
             SKIPPED=$((SKIPPED + 1))
             continue
           fi
@@ -489,7 +493,8 @@ tasks:
             find examples/solutions -name '*.yaml'
             find tests/integration/solutions -name 'solution.yaml'
           } | while IFS= read -r file; do
-            echo "$file" | grep -qE "$EXCLUDE" && continue
+            file_norm="$(echo "$file" | tr '\\' '/')"
+            echo "$file_norm" | grep -qE "$EXCLUDE" && continue
             "$BINARY" lint -f "$file" --no-color -o quiet >/dev/null 2>&1 || echo "FAIL"
           done | grep -c "FAIL" || true
         )
@@ -505,7 +510,7 @@ tasks:
           {
             find examples/solutions -name '*.yaml'
             find tests/integration/solutions -name 'solution.yaml'
-          } | grep -cE "$EXCLUDE" || true
+          } | tr '\\' '/' | grep -cE "$EXCLUDE" || true
         )
 
         PASS_COUNT=$((TOTAL - FAIL_COUNT - SKIP_COUNT))
@@ -713,6 +718,9 @@ tasks:
 
   test:race:
     desc: "Run tests with race detector enabled"
+    preconditions:
+      - sh: '[ "{{.HAS_CC}}" = "true" ]'
+        msg: "Skipping race tests: no C compiler found -- race detector requires cgo"
     env:
       GOFLAGS: '{{.GOFLAGS | default "-count=1"}}'
       GOTESTFLAGS: '{{.GOTESTFLAGS | default "-shuffle=on"}}'
@@ -1009,9 +1017,9 @@ tasks:
     desc: "Integration tests (API + CLI + solution functional)"
     run: once
     env:
-      CGO_ENABLED: "1"
+      CGO_ENABLED: '{{ if eq .HAS_CC "true" }}1{{ else }}0{{ end }}'
     cmds:
-      - go test -race -count=1 ./tests/integration/ -run "TestAPI_"
+      - go test {{.RACE_FLAG}} -count=1 ./tests/integration/ -run "TestAPI_"
       - go test -count=1 -parallel 4 ./tests/integration/ -run "TestIntegration_" -timeout 5m
       - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 8'
 

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 )
 
 // ResolvePath resolves a filesystem path based on the current execution context.
@@ -25,7 +27,7 @@ import (
 // When resolving against an output directory, the result is validated to ensure it
 // does not escape the output directory via parent traversal (e.g., "../../../etc/passwd").
 func ResolvePath(ctx context.Context, path string) (string, error) {
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) || scafpath.HasWindowsDrivePrefix(path) || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") {
 		return filepath.Clean(path), nil
 	}
 
@@ -83,7 +85,7 @@ func ValidateDirectory(dir string) (string, error) {
 // use ResolvePath (which validates containment for output directories) or
 // perform additional checks after calling this function.
 func AbsFromContext(ctx context.Context, path string) (string, error) {
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) || scafpath.HasWindowsDrivePrefix(path) || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") {
 		return filepath.Clean(path), nil
 	}
 	if cwd, ok := WorkingDirectoryFromContext(ctx); ok && cwd != "" {

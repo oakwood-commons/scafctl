@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/adrg/xdg"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -261,6 +264,10 @@ func TestOptions_RunListProviders(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// Isolate from real plugin cache on the host.
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			xdg.Reload()
+
 			var outBuf bytes.Buffer
 			ioStreams := &terminal.IOStreams{
 				Out:    &outBuf,
@@ -1042,4 +1049,228 @@ func TestOptions_RunGetProvider_FallsBackToOfficialRegistry(t *testing.T) {
 		output := outBuf.String()
 		assert.Empty(t, output, "quiet mode should produce no output for official providers, consistent with built-ins")
 	})
+}
+
+func TestOptions_appendCachedPlugins(t *testing.T) {
+	t.Run("skips_cached_plugins_that_fail_probing", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		// Create a fake cached plugin binary (not a real plugin, probe will fail).
+		cache := plugin.NewCache(filepath.Join(cacheDir, "scafctl", "plugins"))
+		_, err := cache.Put("myplugin", "1.0.0", plugin.CurrentPlatform(), []byte("binary"))
+		require.NoError(t, err)
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		options := &Options{IOStreams: ioStreams, CliParams: cliParams}
+		output := options.appendCachedPlugins(ctx, nil)
+
+		assert.Empty(t, output, "fake binaries that fail probing should be excluded")
+	})
+
+	t.Run("skips_already_listed_names", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		cache := plugin.NewCache(filepath.Join(cacheDir, "scafctl", "plugins"))
+		_, err := cache.Put("duplicate", "1.0.0", plugin.CurrentPlatform(), []byte("binary"))
+		require.NoError(t, err)
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		options := &Options{IOStreams: ioStreams, CliParams: cliParams}
+		existing := []Summary{{Name: "duplicate", Source: "builtin"}}
+		output := options.appendCachedPlugins(ctx, existing)
+
+		assert.Len(t, output, 1, "should not add duplicate")
+		assert.Equal(t, "builtin", output[0].Source)
+	})
+
+	t.Run("handles_empty_cache", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+		xdg.Reload()
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{}
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		options := &Options{IOStreams: ioStreams, CliParams: cliParams}
+		output := options.appendCachedPlugins(ctx, nil)
+
+		assert.Empty(t, output)
+	})
+}
+
+func TestOptions_RunGetProvider_FallsBackToCachedPlugin(t *testing.T) {
+	t.Run("returns_not_found_for_non_provider_cached_binary", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		// Put a fake binary (not a real provider plugin) in cache.
+		cache := plugin.NewCache(filepath.Join(cacheDir, "scafctl", "plugins"))
+		_, err := cache.Put("myplugin", "2.0.0", plugin.CurrentPlatform(), []byte("binary"))
+		require.NoError(t, err)
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom(nil)
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err = options.RunGetProvider(ctx, "myplugin")
+		require.Error(t, err, "fake binary should fail validation")
+		assert.Contains(t, err.Error(), "not found")
+	})
+}
+
+func TestPrintProviderDetail_RendersAllSections(t *testing.T) {
+	t.Parallel()
+
+	desc := &provider.Descriptor{
+		Name:         "test-provider",
+		DisplayName:  "Test Provider",
+		Description:  "A test provider for unit tests",
+		APIVersion:   "v1",
+		Version:      semver.MustParse("2.3.0"),
+		Category:     "testing",
+		Tags:         []string{"unit", "ci"},
+		Beta:         true,
+		IsDeprecated: true,
+		Capabilities: []provider.Capability{
+			provider.CapabilityFrom,
+			provider.CapabilityTransform,
+		},
+		Schema: schemahelper.ObjectSchema([]string{"url"}, map[string]*jsonschema.Schema{
+			"url":    schemahelper.StringProp("Target URL"),
+			"method": {Type: "string", Default: []byte(`"GET"`), Enum: []any{"GET", "POST"}},
+		}),
+		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+			provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"body": schemahelper.StringProp("Response body"),
+			}),
+		},
+		SensitiveFields: []string{"token"},
+		Links: []provider.Link{
+			{Name: "Docs", URL: "https://example.com/docs"},
+		},
+		Maintainers: []provider.Contact{
+			{Name: "Test Author", Email: "test@example.com"},
+		},
+		Examples: []provider.Example{
+			{
+				Name:        "basic",
+				Description: "Basic GET request",
+				YAML:        "url: https://example.com\nmethod: GET",
+			},
+		},
+	}
+
+	var outBuf bytes.Buffer
+	ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+	cliParams := &settings.Run{NoColor: true}
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	options := &Options{IOStreams: ioStreams, CliParams: cliParams}
+	err := options.printProviderDetail(ctx, desc)
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "test-provider")
+	assert.Contains(t, output, "Test Provider")
+	assert.Contains(t, output, "2.3.0")
+	assert.Contains(t, output, "A test provider for unit tests")
+	assert.Contains(t, output, "testing")
+	assert.Contains(t, output, "unit, ci")
+	assert.Contains(t, output, "BETA")
+	assert.Contains(t, output, "DEPRECATED")
+	assert.Contains(t, output, "[from]")
+	assert.Contains(t, output, "[transform]")
+	assert.Contains(t, output, "url")
+	assert.Contains(t, output, "(string)")
+	assert.Contains(t, output, "GET")
+	assert.Contains(t, output, "body")
+	assert.Contains(t, output, "Docs")
+	assert.Contains(t, output, "https://example.com/docs")
+	assert.Contains(t, output, "Test Author")
+	assert.Contains(t, output, "basic")
+	assert.Contains(t, output, "Basic GET request")
+}
+
+func TestPrintProviderDetail_NilWriter(t *testing.T) {
+	t.Parallel()
+
+	desc := &provider.Descriptor{
+		Name:       "minimal",
+		APIVersion: "v1",
+		Version:    semver.MustParse("1.0.0"),
+	}
+
+	// Context without a writer should return nil
+	err := (&Options{}).printProviderDetail(context.Background(), desc)
+	require.NoError(t, err)
+}
+
+func TestGenerateCLIExamples_Delegate(t *testing.T) {
+	t.Parallel()
+
+	desc := &provider.Descriptor{
+		Name:       "static",
+		APIVersion: "v1",
+		Version:    semver.MustParse("1.0.0"),
+		Capabilities: []provider.Capability{
+			provider.CapabilityFrom,
+		},
+		Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+			"value": schemahelper.StringProp("Static value"),
+		}),
+	}
+	examples := GenerateCLIExamples(desc)
+	assert.NotEmpty(t, examples)
+}
+
+func TestSchemaPlaceholder_Delegate(t *testing.T) {
+	t.Parallel()
+
+	prop := &jsonschema.Schema{Type: "string"}
+	result := SchemaPlaceholder("myfield", prop)
+	assert.Contains(t, result, "myfield")
+}
+
+func TestBuildProviderDetail_Delegate(t *testing.T) {
+	t.Parallel()
+
+	desc := provider.Descriptor{
+		Name:       "test",
+		APIVersion: "v1",
+		Version:    semver.MustParse("1.0.0"),
+	}
+	detail := BuildProviderDetail(desc)
+	assert.Equal(t, "test", detail["name"])
 }

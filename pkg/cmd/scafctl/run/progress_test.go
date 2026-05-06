@@ -94,6 +94,7 @@ func TestProgressReporter_Failed_UnknownResolver(t *testing.T) {
 func TestProgressReporter_Wait(t *testing.T) {
 	t.Parallel()
 	pr := NewProgressReporter(io.Discard, 1)
+	pr.startTime = time.Now().Add(-time.Millisecond)
 	pr.StartPhase(1, []string{"resolver-a"})
 	pr.Complete("resolver-a", 50*time.Millisecond)
 
@@ -104,7 +105,7 @@ func TestProgressReporter_Wait(t *testing.T) {
 func TestProgressReporter_TotalDuration(t *testing.T) {
 	t.Parallel()
 	pr := NewProgressReporter(io.Discard, 1)
-	time.Sleep(1 * time.Millisecond) // Ensure non-zero elapsed time.
+	pr.startTime = time.Now().Add(-time.Millisecond) // Ensure non-zero elapsed time.
 
 	dur := pr.TotalDuration()
 	assert.Greater(t, dur, time.Duration(0))

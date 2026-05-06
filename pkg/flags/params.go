@@ -167,8 +167,7 @@ func ParseResolverFlags(values []string) (map[string]any, error) {
 // but additionally supports @- to read parameters from stdin as YAML or JSON.
 //
 // Supported formats:
-//   - key=value: Simple key-value pair
-//   - key=value1,value2: Multiple values (becomes an array)
+//   - key=value: Simple key-value pair (commas are literal, not array separators)
 //   - key=@-: Read raw stdin content as the value for key
 //   - key=@file: Read raw file content as the value for key
 //   - @file.yaml: Load all parameters from a YAML file
@@ -235,23 +234,17 @@ func ParseResolverFlagsWithStdin(values []string, stdin io.Reader) (map[string]a
 				result[key] = MergeValue(result[key], raw)
 			}
 		} else {
-			// Parse key=value using ParseKeyValueCSV
-			parsed, err := ParseKeyValueCSV([]string{v})
+			// Parse key=value — each entry is a standalone pair, so use
+			// ParseKeyValue (no CSV comma splitting). Commas in values are
+			// preserved as literal characters.
+			parsed, err := ParseKeyValue([]string{v})
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse parameter %q: %w", v, err)
 			}
 			// Merge parsed values
 			for k, vals := range parsed {
-				// Convert []string to appropriate type
-				if len(vals) == 1 {
-					result[k] = MergeValue(result[k], vals[0])
-				} else {
-					// Multiple values - convert to []any
-					anyVals := make([]any, len(vals))
-					for i, s := range vals {
-						anyVals[i] = s
-					}
-					result[k] = MergeValue(result[k], anyVals)
+				for _, s := range vals {
+					result[k] = MergeValue(result[k], s)
 				}
 			}
 		}

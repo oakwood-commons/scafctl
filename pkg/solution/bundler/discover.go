@@ -12,6 +12,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 
 	actionpkg "github.com/oakwood-commons/scafctl/pkg/action"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
@@ -335,16 +336,18 @@ func collectSubSolutionActions(actions map[string]*actionpkg.Action, subFiles *[
 
 // addFileEntry validates and adds a file to the discovery result, respecting ignore rules.
 func addFileEntry(result *DiscoveryResult, seen map[string]bool, cfg *discoverConfig, bundleRoot, relPath string, source DiscoverySource) error {
-	// Normalize
-	relPath = filepath.Clean(relPath)
+	// Normalize — clean first, then convert to forward slashes so bundle
+	// paths are always slash-separated regardless of OS.
+	relPath = filepath.ToSlash(filepath.Clean(relPath))
 
-	// Reject absolute paths
-	if filepath.IsAbs(relPath) {
+	// Reject absolute paths (covers Unix /…, Windows C:/…, and root-relative /… after ToSlash)
+	// Also reject Windows drive-relative paths like "C:foo" that bypass IsAbs().
+	if filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "/") || scafpath.HasWindowsDrivePrefix(relPath) {
 		return fmt.Errorf("absolute path not allowed in bundle: %s", relPath)
 	}
 
 	// Reject path traversal above bundle root
-	if strings.HasPrefix(relPath, ".."+string(filepath.Separator)) || relPath == ".." {
+	if strings.HasPrefix(relPath, "../") || relPath == ".." {
 		return fmt.Errorf("path escapes bundle root: %s", relPath)
 	}
 
@@ -516,7 +519,7 @@ func isLocalPath(path string) bool {
 		return false
 	}
 	// Absolute paths — technically these are local but forbidden in bundles
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") {
 		return false
 	}
 	return true
