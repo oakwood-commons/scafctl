@@ -40,7 +40,8 @@ func TestFormatBytes(t *testing.T) {
 func TestClearDirectory_NonExistent(t *testing.T) {
 	t.Parallel()
 
-	files, bytes, err := ClearDirectory("/nonexistent/path", "")
+	missingDir := filepath.Join(t.TempDir(), "does-not-exist")
+	files, bytes, err := ClearDirectory(missingDir, "")
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), files)
 	assert.Equal(t, int64(0), bytes)
@@ -97,9 +98,10 @@ func TestClearDirectory_WithPattern(t *testing.T) {
 func TestGetCacheInfo_NonExistent(t *testing.T) {
 	t.Parallel()
 
-	info := GetCacheInfo("Test", "/nonexistent/path", "test cache")
+	missingDir := filepath.Join(t.TempDir(), "does-not-exist")
+	info := GetCacheInfo("Test", missingDir, "test cache")
 	assert.Equal(t, "Test", info.Name)
-	assert.Equal(t, "/nonexistent/path", info.Path)
+	assert.Equal(t, missingDir, info.Path)
 	assert.Equal(t, "test cache", info.Description)
 	assert.Equal(t, int64(0), info.Size)
 	assert.Equal(t, int64(0), info.FileCount)

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,9 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmpDir)
 
 	binaryPath = filepath.Join(tmpDir, "scafctl")
+	if runtime.GOOS == "windows" {
+		binaryPath += ".exe"
+	}
 
 	// Build from project root
 	projectRoot := findProjectRoot()
@@ -975,7 +979,7 @@ func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 	)
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.True(t, strings.Contains(stderr, "not found") || strings.Contains(stderr, "no such file"))
+	assert.True(t, strings.Contains(stderr, "not found") || strings.Contains(stderr, "no such file") || strings.Contains(stderr, "cannot find"))
 }
 
 func TestIntegration_RunSolution_InvalidYAML(t *testing.T) {
@@ -1646,6 +1650,9 @@ spec:
 
 func TestIntegration_RunSolution_RetryIfWithRetryEnabled(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a shell script which requires /bin/sh")
+	}
 	// Test that retryIf: "true" allows retries on actual errors
 	// This creates a temp script that succeeds on second run
 	tmpDir := t.TempDir()
@@ -1655,11 +1662,11 @@ func TestIntegration_RunSolution_RetryIfWithRetryEnabled(t *testing.T) {
 
 	// Create a script that fails first time, succeeds second time
 	script := `#!/bin/sh
-if [ -f "` + counterFile + `" ]; then
+if [ -f "` + filepath.ToSlash(counterFile) + `" ]; then
   echo "Second attempt - success"
   exit 0
 else
-  echo "1" > "` + counterFile + `"
+  echo "1" > "` + filepath.ToSlash(counterFile) + `"
   exit 1
 fi
 `
@@ -1686,7 +1693,7 @@ spec:
           # Always retry on error (won't trigger for exit code failures)
           retryIf: "true"
         inputs:
-          command: "` + scriptPath + `"
+          command: "` + filepath.ToSlash(scriptPath) + `"
 `
 	require.NoError(t, os.WriteFile(solutionPath, []byte(solution), 0o644))
 
@@ -3332,7 +3339,7 @@ func TestIntegration_CatalogLoad_FileNotFound(t *testing.T) {
 
 	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "load", "--input", "/nonexistent/path.tar")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "no such file")
+	assert.True(t, strings.Contains(stderr, "no such file") || strings.Contains(stderr, "cannot find"))
 }
 
 func TestIntegration_CatalogLoad_Success(t *testing.T) {
@@ -4051,7 +4058,7 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "` + childPath + `"
+              source: "` + filepath.ToSlash(childPath) + `"
               propagateErrors: false
 `
 	parentPath := filepath.Join(tmpDir, "parent.yaml")
@@ -4088,7 +4095,7 @@ spec:
         with:
           - provider: solution
             inputs:
-              source: "` + filepath.Join(tmpDir, "self.yaml") + `"
+              source: "` + filepath.ToSlash(filepath.Join(tmpDir, "self.yaml")) + `"
               maxDepth: 1
 `
 	selfPath := filepath.Join(tmpDir, "self.yaml")
@@ -4768,11 +4775,12 @@ func TestIntegration_BuildPlugin_BinaryNotFound(t *testing.T) {
 		"XDG_DATA_HOME": tmpDir,
 	}
 
+	missingBin := filepath.Join(t.TempDir(), "nonexistent-binary")
 	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "plugin",
 		"--name", "missing",
 		"--kind", "provider",
 		"--version", "1.0.0",
-		"--platform", "linux/amd64=/nonexistent/path")
+		"--platform", "linux/amd64="+missingBin)
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "binary not found")
 }
@@ -4808,7 +4816,7 @@ spec:
           - provider: directory
             inputs:
               operation: list
-              path: "` + tmpDir + `"
+              path: "` + filepath.ToSlash(tmpDir) + `"
               recursive: true
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
@@ -8132,6 +8140,9 @@ func buildEchoPlugin(t *testing.T) string {
 			t.Fatalf("failed to create temp dir for echo plugin: %v", err)
 		}
 		binPath := filepath.Join(tmpDir, "scafctl-plugin-echo")
+		if runtime.GOOS == "windows" {
+			binPath += ".exe"
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()

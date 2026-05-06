@@ -830,7 +830,7 @@ func testFileReachable(solutionDir, entry string) bool {
 	cleaned := filepath.Clean(entry)
 
 	// Reject path traversal and absolute paths — let other rules handle those.
-	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "\\") {
 		return true // don't double-flag, other rules will catch this
 	}
 

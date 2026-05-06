@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
@@ -55,6 +56,16 @@ func NewProviderWrapper(client *Client, providerName string, opts ...WrapperOpti
 		return nil, fmt.Errorf("failed to get provider descriptor: %w", err)
 	}
 
+	// GetProviders is the authoritative source of externally addressable provider
+	// names. Normalize the descriptor name so registry lookup uses the same key
+	// that resolver steps and action definitions reference.
+	if desc.Name != providerName {
+		desc.Name = providerName
+	}
+	if len(desc.OutputSchemas) == 0 {
+		desc.OutputSchemas = fallbackOutputSchemas(desc.Capabilities)
+	}
+
 	w := &ProviderWrapper{
 		client:       client,
 		providerName: providerName,
@@ -95,6 +106,56 @@ func NewProviderWrapper(client *Client, providerName string, opts ...WrapperOpti
 	}
 
 	return w, nil
+}
+
+func fallbackOutputSchemas(capabilities []provider.Capability) map[provider.Capability]*jsonschema.Schema {
+	if len(capabilities) == 0 {
+		return nil
+	}
+
+	schemas := make(map[provider.Capability]*jsonschema.Schema, len(capabilities))
+	for _, capability := range capabilities {
+		schemas[capability] = fallbackOutputSchema(capability)
+	}
+
+	return schemas
+}
+
+func fallbackOutputSchema(capability provider.Capability) *jsonschema.Schema {
+	switch capability {
+	case provider.CapabilityValidation:
+		return &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"valid":  {Type: "boolean"},
+				"errors": {Type: "array"},
+			},
+		}
+	case provider.CapabilityAuthentication:
+		return &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"authenticated": {Type: "boolean"},
+				"token":         {Type: "string"},
+			},
+		}
+	case provider.CapabilityAction:
+		return &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"success": {Type: "boolean"},
+			},
+		}
+	case provider.CapabilityFrom, provider.CapabilityTransform:
+		fallthrough
+	default:
+		return &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"result": {},
+			},
+		}
+	}
 }
 
 // Descriptor returns the provider descriptor

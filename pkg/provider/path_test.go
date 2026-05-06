@@ -160,7 +160,7 @@ func TestResolvePath(t *testing.T) {
 
 			result, err := ResolvePath(ctx, tt.path)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
+			assert.Equal(t, filepath.FromSlash(tt.expected), result)
 		})
 	}
 }
@@ -207,12 +207,13 @@ func TestValidatePathContainment_SymlinkEscape(t *testing.T) {
 	outsideDir := t.TempDir()
 
 	link := filepath.Join(baseDir, "link")
-	err := os.Symlink(outsideDir, link)
-	require.NoError(t, err)
+	if err := os.Symlink(outsideDir, link); err != nil {
+		t.Skipf("symlink requires elevated privilege on this OS: %v", err)
+	}
 
 	// A path through the symlink should be caught even though it's lexically inside baseDir.
 	resolved := filepath.Join(baseDir, "link", "secret.txt")
-	err = validatePathContainment(baseDir, resolved)
+	err := validatePathContainment(baseDir, resolved)
 	assert.Error(t, err, "symlink escape should be detected")
 	assert.Contains(t, err.Error(), "escapes base directory")
 }
@@ -224,11 +225,12 @@ func TestValidatePathContainment_SymlinkWithinBaseDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(subDir, 0o755))
 
 	link := filepath.Join(baseDir, "link")
-	err := os.Symlink(subDir, link)
-	require.NoError(t, err)
+	if err := os.Symlink(subDir, link); err != nil {
+		t.Skipf("symlink requires elevated privilege on this OS: %v", err)
+	}
 
 	resolved := filepath.Join(baseDir, "link", "file.txt")
-	err = validatePathContainment(baseDir, resolved)
+	err := validatePathContainment(baseDir, resolved)
 	assert.NoError(t, err, "symlink within base dir should be allowed")
 }
 
@@ -300,7 +302,7 @@ func TestAbsFromContext_WithContextCWD(t *testing.T) {
 
 	result, err := AbsFromContext(ctx, "relative/path.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/custom/cwd/relative/path.txt", result)
+	assert.Equal(t, filepath.FromSlash("/custom/cwd/relative/path.txt"), result)
 }
 
 func TestAbsFromContext_AbsolutePathIgnoresContextCWD(t *testing.T) {
@@ -309,7 +311,47 @@ func TestAbsFromContext_AbsolutePathIgnoresContextCWD(t *testing.T) {
 
 	result, err := AbsFromContext(ctx, "/absolute/path.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/absolute/path.txt", result)
+	assert.Equal(t, filepath.FromSlash("/absolute/path.txt"), result)
+}
+
+func TestResolvePath_BackslashRootRelative(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/should/not/use")
+
+	result, err := ResolvePath(ctx, `\temp\file`)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Clean(`\temp\file`), result)
+}
+
+func TestResolvePath_DriveRelativeTreatedAsRooted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/should/not/use")
+
+	result, err := ResolvePath(ctx, "C:foo")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Clean("C:foo"), result)
+}
+
+func TestAbsFromContext_BackslashRootRelative(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/should/not/use")
+
+	result, err := AbsFromContext(ctx, `\temp\file`)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Clean(`\temp\file`), result)
+}
+
+func TestAbsFromContext_DriveRelativeTreatedAsRooted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ctx = WithWorkingDirectory(ctx, "/should/not/use")
+
+	result, err := AbsFromContext(ctx, "C:foo")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Clean("C:foo"), result)
 }
 
 func TestAbsFromContext_EmptyContextCWDFallsBack(t *testing.T) {
@@ -330,7 +372,7 @@ func TestAbsFromContext_SolutionDirectoryFallback(t *testing.T) {
 
 	result, err := AbsFromContext(ctx, "relative/path.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/solution/dir/relative/path.txt", result)
+	assert.Equal(t, filepath.FromSlash("/solution/dir/relative/path.txt"), result)
 }
 
 func TestAbsFromContext_WorkingDirTakesPrecedenceOverSolutionDir(t *testing.T) {
@@ -340,7 +382,7 @@ func TestAbsFromContext_WorkingDirTakesPrecedenceOverSolutionDir(t *testing.T) {
 
 	result, err := AbsFromContext(ctx, "relative/path.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/working/dir/relative/path.txt", result)
+	assert.Equal(t, filepath.FromSlash("/working/dir/relative/path.txt"), result)
 }
 
 // ── GetWorkingDirectory tests ──
@@ -372,7 +414,7 @@ func TestResolvePath_WithContextCWD(t *testing.T) {
 
 	result, err := ResolvePath(ctx, "subdir/file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/custom/cwd/subdir/file.txt", result)
+	assert.Equal(t, filepath.FromSlash("/custom/cwd/subdir/file.txt"), result)
 }
 
 func TestResolvePath_ActionModeOutputDirTakesPrecedenceOverContextCWD(t *testing.T) {
@@ -383,7 +425,7 @@ func TestResolvePath_ActionModeOutputDirTakesPrecedenceOverContextCWD(t *testing
 
 	result, err := ResolvePath(ctx, "subdir/file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/output/dir/subdir/file.txt", result)
+	assert.Equal(t, filepath.FromSlash("/output/dir/subdir/file.txt"), result)
 }
 
 func TestResolvePath_ActionModeContextCWDUsedWithoutOutputDir(t *testing.T) {
@@ -396,7 +438,7 @@ func TestResolvePath_ActionModeContextCWDUsedWithoutOutputDir(t *testing.T) {
 
 	result, err := ResolvePath(ctx, "output/file.txt")
 	require.NoError(t, err)
-	assert.Equal(t, "/caller/project/output/file.txt", result)
+	assert.Equal(t, filepath.FromSlash("/caller/project/output/file.txt"), result)
 }
 
 func BenchmarkResolvePath_ActionModeContextCWDNoOutputDir(b *testing.B) {

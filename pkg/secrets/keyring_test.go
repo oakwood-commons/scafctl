@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -333,6 +334,10 @@ func TestFileKeyring_Get(t *testing.T) {
 
 func TestFileKeyring_Set(t *testing.T) {
 	t.Run("writes key to file with correct permissions", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("Windows does not enforce Unix permission bits")
+		}
+
 		dir := t.TempDir()
 		kr := newFileKeyring(dir)
 

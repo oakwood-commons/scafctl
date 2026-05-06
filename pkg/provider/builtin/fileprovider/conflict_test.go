@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -162,6 +163,9 @@ func TestBackupFile(t *testing.T) {
 }
 
 func TestBackupFile_PreservesPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce Unix permission bits")
+	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f.txt")
 	require.NoError(t, os.WriteFile(p, []byte("data"), 0o755))

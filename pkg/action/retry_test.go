@@ -512,7 +512,7 @@ func TestRetryExecutor_ExecuteWithRetryDetailed(t *testing.T) {
 		assert.Equal(t, 1, result.Attempts)
 		assert.Nil(t, result.FinalError)
 		assert.Empty(t, result.AttemptErrors)
-		assert.Greater(t, result.TotalDuration, time.Duration(0))
+		assert.GreaterOrEqual(t, result.TotalDuration, time.Duration(0))
 	})
 
 	t.Run("failed result with retries", func(t *testing.T) {

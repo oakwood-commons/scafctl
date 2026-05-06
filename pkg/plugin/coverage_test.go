@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
@@ -255,6 +256,123 @@ func TestGRPCClient_GetProviders_Error(t *testing.T) {
 
 	_, err := client.GetProviders(context.Background())
 	require.Error(t, err)
+}
+
+func TestNewProviderWrapper_NormalizesDescriptorNameForRegistryLookup(t *testing.T) {
+	tests := []struct {
+		name           string
+		descriptorName string
+	}{
+		{name: "empty descriptor name", descriptorName: ""},
+		{name: "mismatched descriptor name", descriptorName: "plugin-internal-name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockProviderPlugin{
+				providers: []string{"goscript"},
+				descriptors: map[string]*provider.Descriptor{
+					"goscript": {
+						Name:        tt.descriptorName,
+						DisplayName: "Go Script",
+						Description: "Execute Go script providers from an external plugin",
+						APIVersion:  "v1",
+						Version:     semver.MustParse("1.0.0"),
+						Capabilities: []provider.Capability{
+							provider.CapabilityFrom,
+						},
+						Schema: &jsonschema.Schema{
+							Type: "object",
+							Properties: map[string]*jsonschema.Schema{
+								"script": {Type: "string"},
+							},
+						},
+						OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+							provider.CapabilityFrom: {
+								Type: "object",
+								Properties: map[string]*jsonschema.Schema{
+									"result": {Type: "string"},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "scafctl-plugin-goscript"}, "goscript")
+			require.NoError(t, err)
+			assert.Equal(t, "goscript", wrapper.Descriptor().Name)
+
+			reg := provider.NewRegistry()
+			require.NoError(t, reg.Register(wrapper))
+
+			registered, ok := reg.Get("goscript")
+			require.True(t, ok)
+			assert.Equal(t, "goscript", registered.Descriptor().Name)
+		})
+	}
+}
+
+func TestNewProviderWrapper_AddsFallbackOutputSchemasForLegacyPlugins(t *testing.T) {
+	mock := &MockProviderPlugin{
+		providers: []string{"goscript"},
+		descriptors: map[string]*provider.Descriptor{
+			"goscript": {
+				Name:        "goscript",
+				DisplayName: "Go Script",
+				Description: "Executes inline Go scripts with a yaegi interpreter",
+				APIVersion:  "v1",
+				Version:     semver.MustParse("1.0.0"),
+				Capabilities: []provider.Capability{
+					provider.CapabilityFrom,
+					provider.CapabilityTransform,
+					provider.CapabilityAction,
+				},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"script": {Type: "string"},
+					},
+				},
+			},
+		},
+	}
+
+	wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "goscript"}, "goscript")
+	require.NoError(t, err)
+	require.Len(t, wrapper.Descriptor().OutputSchemas, 3)
+	assert.Contains(t, wrapper.Descriptor().OutputSchemas, provider.CapabilityFrom)
+	assert.Contains(t, wrapper.Descriptor().OutputSchemas, provider.CapabilityTransform)
+	assert.Contains(t, wrapper.Descriptor().OutputSchemas, provider.CapabilityAction)
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(wrapper))
+	_, ok := reg.Get("goscript")
+	require.True(t, ok)
+}
+
+func TestFallbackOutputSchema_ValidationCapability(t *testing.T) {
+	t.Parallel()
+	schema := fallbackOutputSchema(provider.CapabilityValidation)
+	require.NotNil(t, schema)
+	assert.Equal(t, "object", schema.Type)
+	assert.Contains(t, schema.Properties, "valid")
+	assert.Contains(t, schema.Properties, "errors")
+}
+
+func TestFallbackOutputSchema_AuthenticationCapability(t *testing.T) {
+	t.Parallel()
+	schema := fallbackOutputSchema(provider.CapabilityAuthentication)
+	require.NotNil(t, schema)
+	assert.Equal(t, "object", schema.Type)
+	assert.Contains(t, schema.Properties, "authenticated")
+	assert.Contains(t, schema.Properties, "token")
+}
+
+func TestFallbackOutputSchemas_EmptyCapabilities(t *testing.T) {
+	t.Parallel()
+	schemas := fallbackOutputSchemas(nil)
+	assert.Nil(t, schemas)
 }
 
 func TestGRPCClient_GetProviderDescriptor_Success(t *testing.T) {

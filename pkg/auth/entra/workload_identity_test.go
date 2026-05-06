@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -650,7 +651,7 @@ func TestHandler_AcquireWorkloadIdentityToken_ExpiredFederatedToken(t *testing.T
 	// Should clearly state the token has expired (not just echo the raw OAuth error)
 	assert.Contains(t, err.Error(), "expired federated token")
 	// Should reference the token file path so users know where to look
-	assert.Contains(t, err.Error(), tokenFile)
+	assert.Contains(t, err.Error(), strings.ReplaceAll(tokenFile, "\\", "\\\\"))
 }
 
 // TestHandler_AcquireWorkloadIdentityToken_ExpiredFederatedToken_DirectToken

@@ -234,6 +234,8 @@ func TestRejectUnsafePath_Direct(t *testing.T) {
 		{"relative/safe/path", false},
 		{"just-a-name", false},
 		{"subdir/nested", false},
+		{"C:foo", true},
+		{"D:dir/file", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {

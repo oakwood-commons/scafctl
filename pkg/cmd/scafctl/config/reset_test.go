@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/adrg/xdg"
+
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -94,6 +96,7 @@ func TestResetOptions_AllSucceeds(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmpDir, "state"))
+	xdg.Reload() // Re-read env vars; cached at init time on Windows.
 
 	var stdout, stderr bytes.Buffer
 	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)

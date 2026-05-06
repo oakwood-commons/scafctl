@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
@@ -182,6 +183,7 @@ func (o *Options) RunListProviders(ctx context.Context) error {
 	// (official providers don't expose capability/category metadata).
 	if o.Capability == "" && o.Category == "" {
 		output = o.appendOfficialProviders(ctx, output)
+		output = o.appendCachedPlugins(ctx, output)
 	}
 
 	if w != nil {
@@ -224,6 +226,33 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 			lgr.V(1).Info("provider not found in official registry either", "name", name)
 		} else {
 			lgr.V(1).Info("official registry not available in context")
+		}
+
+		// Fallback: check the local plugin cache.
+		cache := plugin.NewCache(settings.PluginCacheDirFor(o.BinaryName))
+		if binPath, version, found := cache.GetLatestBinary(name); found {
+			// Validate the cached binary actually exposes providers before reporting it.
+			if _, ok := plugin.ProbePluginDescription(ctx, binPath, name); !ok {
+				lgr.V(1).Info("cached binary is not a valid provider plugin", "name", name, "path", binPath)
+			} else {
+				lgr.V(1).Info("found provider in plugin cache", "name", name, "version", version, "path", binPath)
+				w := writer.FromContext(ctx)
+				cachedDetail := map[string]any{
+					"name":    name,
+					"version": version,
+					"source":  "local",
+					"path":    binPath,
+				}
+				if (o.Output != "" && o.Output != "auto") || o.Interactive {
+					return o.writeOutput(ctx, cachedDetail)
+				}
+				if w != nil {
+					w.Plainlnf("Provider %q is a locally cached plugin provider (version: %s).\n"+
+						"Binary: %s\n"+
+						"Use '%s run provider %s' to execute it directly.", name, version, binPath, o.BinaryName, name)
+				}
+				return nil
+			}
 		}
 
 		err := fmt.Errorf("provider %q not found", name)
@@ -543,6 +572,46 @@ func (o *Options) appendOfficialProviders(ctx context.Context, output []Summary)
 			Description: item.Description,
 		})
 	}
+	return output
+}
+
+// appendCachedPlugins discovers locally cached plugin providers and adds them
+// to the output list, skipping any names already present (builtin or official).
+func (o *Options) appendCachedPlugins(ctx context.Context, output []Summary) []Summary {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	cache := plugin.NewCache(settings.PluginCacheDirFor(o.BinaryName))
+	cached, err := cache.ListCurrentPlatform()
+	if err != nil {
+		lgr.V(1).Info("failed to list cached plugins", "error", err)
+		return output
+	}
+	if len(cached) == 0 {
+		return output
+	}
+
+	// Build a set of already-listed names to avoid duplicates.
+	seen := make(map[string]bool, len(output))
+	for _, s := range output {
+		seen[s.Name] = true
+	}
+
+	infos := plugin.DescribeCachedPlugins(ctx, cached, seen)
+	for _, info := range infos {
+		output = append(output, Summary{
+			Name:        info.Name,
+			Version:     info.Version,
+			Source:      "local",
+			Description: info.Description,
+		})
+	}
+
+	lgr.V(1).Info("appended cached plugin providers", "count", len(infos))
+	if w != nil && len(infos) > 0 {
+		w.Verbosef("Found %d locally cached plugin providers", len(infos))
+	}
+
 	return output
 }
 

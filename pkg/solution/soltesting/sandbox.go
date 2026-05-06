@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/bmatcuk/doublestar/v4"
+
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,7 +72,7 @@ func NewSandboxWithBaseDir(solutionPath, baseDir string, bundleFiles, testFiles 
 // validateBaseDir rejects absolute paths and path-traversal attempts to prevent
 // files from being written outside the sandbox root.
 func validateBaseDir(baseDir string) error {
-	if filepath.IsAbs(baseDir) {
+	if filepath.IsAbs(baseDir) || strings.HasPrefix(baseDir, "/") || strings.HasPrefix(baseDir, "\\") || scafpath.HasWindowsDrivePrefix(baseDir) {
 		return fmt.Errorf("baseDir must be a relative path, got %q", baseDir)
 	}
 	cleaned := filepath.Clean(baseDir)
@@ -282,7 +284,7 @@ func (s *Sandbox) Cleanup() {
 func (s *Sandbox) copyFile(sourceDir, relPath string) error {
 	// Reject path traversal
 	cleaned := filepath.Clean(relPath)
-	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) || scafpath.HasWindowsDrivePrefix(cleaned) || strings.HasPrefix(relPath, "/") || strings.HasPrefix(relPath, "\\") {
 		return fmt.Errorf(
 			"path traversal rejected: %q — test files must be within the solution directory. "+
 				"Move or copy the file alongside solution.yaml, or use 'init' steps instead",
@@ -344,7 +346,7 @@ func (s *Sandbox) copyFileWithPrefix(sourceDir, relPath, prefix string) error {
 	}
 	// Reject path traversal
 	cleaned := filepath.Clean(relPath)
-	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) || scafpath.HasWindowsDrivePrefix(cleaned) || strings.HasPrefix(relPath, "/") || strings.HasPrefix(relPath, "\\") {
 		return fmt.Errorf(
 			"path traversal rejected: %q — test files must be within the solution directory. "+
 				"Move or copy the file alongside solution.yaml, or use 'init' steps instead",

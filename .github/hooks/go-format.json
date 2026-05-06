@@ -3,7 +3,20 @@
     "PostToolUse": [
       {
         "type": "command",
-        "command": ".github/hooks/scripts/go-format.sh",
+        "platform": "win32",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File .github/hooks/scripts/go-format.ps1",
+        "timeout": 10
+      },
+      {
+        "type": "command",
+        "platform": "darwin",
+        "command": "bash .github/hooks/scripts/go-format.sh",
+        "timeout": 10
+      },
+      {
+        "type": "command",
+        "platform": "linux",
+        "command": "bash .github/hooks/scripts/go-format.sh",
         "timeout": 10
       }
     ]

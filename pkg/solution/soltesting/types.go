@@ -19,6 +19,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockexec"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting/mockserver"
 	"gopkg.in/yaml.v3"
@@ -538,7 +539,7 @@ func (tc *TestCase) Validate() error {
 
 	// BaseDir validation: must be relative, no traversal above sandbox root
 	if tc.BaseDir != "" {
-		if filepath.IsAbs(tc.BaseDir) {
+		if filepath.IsAbs(tc.BaseDir) || strings.HasPrefix(tc.BaseDir, "/") || strings.HasPrefix(tc.BaseDir, "\\") || scafpath.HasWindowsDrivePrefix(tc.BaseDir) {
 			errs = append(errs, "baseDir must be a relative path")
 		} else if cleaned := filepath.Clean(tc.BaseDir); cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 			errs = append(errs, "baseDir must not contain path traversal (..)")

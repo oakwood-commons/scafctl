@@ -9,9 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -19,10 +22,12 @@ import (
 
 // pluginConfig holds the parameters needed to create a plugin client.
 type pluginConfig struct {
-	handshake  *HandshakeConfigData
-	pluginName string
-	grpcPlugin plugin.Plugin
-	cmdFn      func(string) *exec.Cmd // builds the exec.Cmd for the plugin binary
+	handshake    *HandshakeConfigData
+	pluginName   string
+	grpcPlugin   plugin.Plugin
+	cmdFn        func(string) *exec.Cmd // builds the exec.Cmd for the plugin binary
+	logger       hclog.Logger           // if nil, a null logger is used
+	startTimeout time.Duration          // if >0, bounds plugin startup/handshake
 }
 
 // connectPlugin creates a go-plugin client, connects, and dispenses the named plugin.
@@ -36,7 +41,7 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 	}
 
 	//nolint:noctx // Context not available at plugin initialization time
-	client := plugin.NewClient(&plugin.ClientConfig{
+	clientConfig := &plugin.ClientConfig{
 		HandshakeConfig: plugin.HandshakeConfig{
 			ProtocolVersion:  cfg.handshake.ProtocolVersion,
 			MagicCookieKey:   cfg.handshake.MagicCookieKey,
@@ -47,7 +52,15 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 		},
 		Cmd:              cmdFn(pluginPath),
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-	})
+		// Always set an explicit logger so HC_LOG env vars cannot force debug
+		// output during normal command invocations. When debug mode is active
+		// the caller provides a real logger via pluginConfig.logger.
+		Logger: pluginLogger(cfg.logger),
+	}
+	if cfg.startTimeout > 0 {
+		clientConfig.StartTimeout = cfg.startTimeout
+	}
+	client := plugin.NewClient(clientConfig)
 
 	rpcClient, err := client.Client()
 	if err != nil {
@@ -62,6 +75,16 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 	}
 
 	return raw, client, nil
+}
+
+// pluginLogger returns cfg.logger when non-nil, otherwise a null logger.
+// This prevents hclog from auto-detecting HC_LOG or HASHICORP_LOG env vars
+// and emitting debug output during normal (non-debug) invocations.
+func pluginLogger(l hclog.Logger) hclog.Logger {
+	if l != nil {
+		return l
+	}
+	return hclog.NewNullLogger()
 }
 
 // safeEnvKeys is the set of environment variables that are safe to pass to
@@ -149,7 +172,9 @@ func discoverExecutables[T any](pluginDirs []string, newClientFn func(path strin
 			if err != nil {
 				continue
 			}
-			if fi.Mode()&0o111 == 0 {
+			// On Windows permission bits are not meaningful; accept any
+			// regular file. On Unix require at least one execute bit.
+			if runtime.GOOS != "windows" && fi.Mode()&0o111 == 0 {
 				continue
 			}
 			if seen[path] {
@@ -191,8 +216,10 @@ type Client struct {
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
-	hostDeps    *HostServiceDeps
-	sanitizeEnv bool // strip sensitive env vars from plugin process
+	hostDeps     *HostServiceDeps
+	sanitizeEnv  bool          // strip sensitive env vars from plugin process
+	debugLog     bool          // emit plugin startup/lifecycle debug traces
+	startTimeout time.Duration // bounds plugin startup/handshake
 }
 
 // WithHostDeps provides host-side dependencies (secrets, auth) that are
@@ -212,8 +239,39 @@ func WithSanitizedEnv() ClientOption {
 	}
 }
 
-// NewClient creates a new plugin client
-func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
+// WithDebugLogging enables plugin lifecycle debug traces (plugin started,
+// RPC address, protocol negotiation) in the hclog output. Pass this option
+// when --debug or --log-level debug is active so plugin internals are
+// visible. Without it a null logger is used and no plugin noise appears.
+func WithDebugLogging() ClientOption {
+	return func(o *clientOptions) {
+		o.debugLog = true
+	}
+}
+
+// WithStartTimeout bounds the plugin startup/handshake phase.
+// If the plugin binary does not complete the gRPC handshake within
+// this duration, the connection attempt fails and the process is killed.
+func WithStartTimeout(d time.Duration) ClientOption {
+	return func(o *clientOptions) {
+		o.startTimeout = d
+	}
+}
+
+// buildPluginClient is a shared helper that processes options, builds the command
+// function, constructs an hclog logger if needed, and returns the result.
+func buildPluginClient[T any](
+	pluginPath string,
+	opts []ClientOption,
+	connectFn func(string, pluginConfig) (any, *plugin.Client, error),
+	makeCfg func(clientOptions, hclog.Logger, func(string) *exec.Cmd) pluginConfig,
+	assertPlugin func(any) (T, error),
+) (T, *plugin.Client, error) {
+	var zero T
+	if connectFn == nil {
+		connectFn = connectPlugin
+	}
+
 	var o clientOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -224,20 +282,62 @@ func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
 		cmdFn = pluginCmdSanitized
 	}
 
-	raw, client, err := connectPlugin(pluginPath, pluginConfig{
-		handshake:  HandshakeConfig,
-		pluginName: PluginName,
-		grpcPlugin: &GRPCPlugin{HostDeps: o.hostDeps},
-		cmdFn:      cmdFn,
-	})
-	if err != nil {
-		return nil, err
+	var hcLogger hclog.Logger
+	if o.debugLog {
+		hcLogger = hclog.New(&hclog.LoggerOptions{
+			Name:  "plugin",
+			Level: hclog.Debug,
+		})
 	}
 
-	providerPlugin, ok := raw.(ProviderPlugin)
-	if !ok {
+	cfg := makeCfg(o, hcLogger, cmdFn)
+	raw, client, err := connectFn(pluginPath, cfg)
+	if err != nil {
+		return zero, nil, err
+	}
+
+	typed, err := assertPlugin(raw)
+	if err != nil {
 		client.Kill()
-		return nil, fmt.Errorf("plugin does not implement ProviderPlugin interface")
+		return zero, nil, err
+	}
+
+	return typed, client, nil
+}
+
+// newClientWithConnector creates a provider plugin client using the given connector.
+// Tests use this to cover success and failure paths without spawning real binaries.
+//
+//nolint:dupl // ProviderPlugin and AuthHandlerPlugin connectors share structure but serve distinct types
+func newClientWithConnector(
+	pluginPath string,
+	connectFn func(string, pluginConfig) (any, *plugin.Client, error),
+	opts ...ClientOption,
+) (*Client, error) {
+	providerPlugin, client, err := buildPluginClient(
+		pluginPath,
+		opts,
+		connectFn,
+		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
+			return pluginConfig{
+				handshake:    HandshakeConfig,
+				pluginName:   PluginName,
+				grpcPlugin:   &GRPCPlugin{HostDeps: o.hostDeps},
+				cmdFn:        cmdFn,
+				logger:       logger,
+				startTimeout: o.startTimeout,
+			}
+		},
+		func(raw any) (ProviderPlugin, error) {
+			p, ok := raw.(ProviderPlugin)
+			if !ok {
+				return nil, fmt.Errorf("plugin does not implement ProviderPlugin interface")
+			}
+			return p, nil
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Client{
@@ -246,6 +346,11 @@ func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
 		path:         pluginPath,
 		name:         pluginNameFromPath(pluginPath),
 	}, nil
+}
+
+// NewClient creates a new plugin client.
+func NewClient(pluginPath string, opts ...ClientOption) (*Client, error) {
+	return newClientWithConnector(pluginPath, connectPlugin, opts...)
 }
 
 // GetProviders returns all provider names exposed by this plugin
@@ -341,32 +446,39 @@ type AuthHandlerClient struct {
 	name         string
 }
 
-// NewAuthHandlerClient creates a new auth handler plugin client.
-func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandlerClient, error) {
-	var o clientOptions
-	for _, opt := range opts {
-		opt(&o)
-	}
-
-	cmdFn := pluginCmd
-	if o.sanitizeEnv {
-		cmdFn = pluginCmdSanitized
-	}
-
-	raw, client, err := connectPlugin(pluginPath, pluginConfig{
-		handshake:  AuthHandlerHandshakeConfig,
-		pluginName: AuthHandlerPluginName,
-		grpcPlugin: &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
-		cmdFn:      cmdFn,
-	})
+// newAuthHandlerClientWithConnector creates an auth handler plugin client
+// using the given connector. Tests use this for deterministic branch coverage.
+//
+//nolint:dupl // AuthHandlerPlugin and ProviderPlugin connectors share structure but serve distinct types
+func newAuthHandlerClientWithConnector(
+	pluginPath string,
+	connectFn func(string, pluginConfig) (any, *plugin.Client, error),
+	opts ...ClientOption,
+) (*AuthHandlerClient, error) {
+	authPlugin, client, err := buildPluginClient(
+		pluginPath,
+		opts,
+		connectFn,
+		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
+			return pluginConfig{
+				handshake:    AuthHandlerHandshakeConfig,
+				pluginName:   AuthHandlerPluginName,
+				grpcPlugin:   &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
+				cmdFn:        cmdFn,
+				logger:       logger,
+				startTimeout: o.startTimeout,
+			}
+		},
+		func(raw any) (AuthHandlerPlugin, error) {
+			p, ok := raw.(AuthHandlerPlugin)
+			if !ok {
+				return nil, fmt.Errorf("plugin does not implement AuthHandlerPlugin interface")
+			}
+			return p, nil
+		},
+	)
 	if err != nil {
 		return nil, err
-	}
-
-	authPlugin, ok := raw.(AuthHandlerPlugin)
-	if !ok {
-		client.Kill()
-		return nil, fmt.Errorf("plugin does not implement AuthHandlerPlugin interface")
 	}
 
 	return &AuthHandlerClient{
@@ -375,6 +487,11 @@ func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandler
 		path:         pluginPath,
 		name:         pluginNameFromPath(pluginPath),
 	}, nil
+}
+
+// NewAuthHandlerClient creates a new auth handler plugin client.
+func NewAuthHandlerClient(pluginPath string, opts ...ClientOption) (*AuthHandlerClient, error) {
+	return newAuthHandlerClientWithConnector(pluginPath, connectPlugin, opts...)
 }
 
 // GetAuthHandlers returns all auth handler names exposed by this plugin.
