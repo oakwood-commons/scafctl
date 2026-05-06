@@ -1,0 +1,108 @@
+# Run: scafctl run solution -f examples/providers/http-body-pagination.yaml
+# Run: scafctl run resolver -f examples/providers/http-body-pagination.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-body-pagination-example
+  displayName: HTTP Body-Based Pagination Example
+  category: providers
+  tags:
+    - http
+    - pagination
+    - graphql
+    - provider-example
+  description: |
+    Demonstrates POST body-based pagination using bodyTemplate.
+    This pattern is used for GraphQL APIs, Elasticsearch, and other
+    POST-based paginated endpoints where pagination parameters are
+    sent in the request body rather than URL query parameters.
+
+spec:
+  resolvers:
+    # GraphQL page-number pagination with bodyTemplate
+    graphql-items:
+      description: Fetch all items via GraphQL with page-number pagination in the request body
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.example.com/graphql"
+              method: POST
+              headers:
+                Content-Type: application/json
+                Authorization: "Bearer ${GRAPHQL_TOKEN}"
+              pagination:
+                strategy: pageNumber
+                maxPages: 50
+                pageSize: 100
+                bodyTemplate: |
+                  '{"query":"{ items(page: ' + string(__page) + ', size: ' + string(__pageSize) + ') { results { id name createdAt } totalPages } }"}'
+                collectPath: "body.data.items.results"
+                stopWhen: "size(body.data.items.results) == 0"
+
+    # Elasticsearch offset pagination with bodyTemplate
+    elasticsearch-results:
+      description: Fetch all search results from Elasticsearch using offset-based body pagination
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://es.example.com/my-index/_search"
+              method: POST
+              headers:
+                Content-Type: application/json
+              pagination:
+                strategy: offset
+                maxPages: 100
+                limit: 500
+                bodyTemplate: |
+                  '{"from": ' + string(__offset) + ', "size": ' + string(__pageSize) + ', "query": {"match_all": {}}}'
+                collectPath: "body.hits.hits"
+                stopWhen: "size(body.hits.hits) == 0"
+
+    # Cursor-based GraphQL pagination (e.g., GitHub GraphQL API)
+    cursor-graphql:
+      description: Fetch repositories via cursor-based GraphQL pagination
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.github.com/graphql"
+              method: POST
+              headers:
+                Content-Type: application/json
+                Authorization: "Bearer ${GITHUB_TOKEN}"
+              pagination:
+                strategy: cursor
+                maxPages: 20
+                pageSize: 50
+                nextTokenPath: "body.data.viewer.repositories.pageInfo.endCursor"
+                bodyTemplate: |
+                  '{"query":"{ viewer { repositories(first: ' + string(__pageSize) + ', after: ' + (__cursor != "" ? '"' + __cursor + '"' : 'null') + ') { nodes { name } pageInfo { endCursor hasNextPage } } } }"}'
+                collectPath: "body.data.viewer.repositories.nodes"
+                stopWhen: "body.data.viewer.repositories.pageInfo.hasNextPage == false"
+
+    # bodyTemplate returning a map (auto-marshaled to JSON)
+    map-body-template:
+      description: Demonstrates bodyTemplate returning a map instead of a string
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.example.com/search"
+              method: POST
+              headers:
+                Content-Type: application/json
+              pagination:
+                strategy: pageNumber
+                maxPages: 10
+                pageSize: 25
+                bodyTemplate: '{"page": __page, "size": __pageSize, "query": "test"}'
+                collectPath: "body.results"
+                stopWhen: "size(body.results) == 0"
