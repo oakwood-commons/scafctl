@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1910,6 +1911,9 @@ func TestWrite_Backup_OnAppend(t *testing.T) {
 }
 
 func TestWrite_Backup_PreservesPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce Unix permission bits")
+	}
 	t.Parallel()
 	p := NewFileProvider()
 	tmpDir := t.TempDir()

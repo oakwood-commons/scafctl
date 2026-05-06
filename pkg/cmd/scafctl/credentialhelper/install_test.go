@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -54,6 +55,10 @@ func TestCreateSymlink(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("creates symlink", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation may require elevated privilege on Windows")
+		}
+
 		dir := t.TempDir()
 		linkPath := filepath.Join(dir, "docker-credential-test")
 
@@ -66,11 +71,15 @@ func TestCreateSymlink(t *testing.T) {
 	})
 
 	t.Run("replaces existing symlink", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation may require elevated privilege on Windows")
+		}
+
 		dir := t.TempDir()
 		linkPath := filepath.Join(dir, "docker-credential-test")
 
 		// Create initial symlink
-		require.NoError(t, os.Symlink("/nonexistent", linkPath))
+		require.NoError(t, os.Symlink(filepath.FromSlash("/nonexistent"), linkPath))
 
 		// Should replace it
 		err := createSymlink(exe, linkPath)
@@ -229,8 +238,9 @@ func TestRemoveFromContainerConfig(t *testing.T) {
 
 func TestDockerConfigPath(t *testing.T) {
 	t.Run("uses DOCKER_CONFIG env", func(t *testing.T) {
-		t.Setenv("DOCKER_CONFIG", "/custom/docker")
-		assert.Equal(t, "/custom/docker/config.json", dockerConfigPath())
+		customDir := filepath.FromSlash("/custom/docker")
+		t.Setenv("DOCKER_CONFIG", customDir)
+		assert.Equal(t, filepath.Join(customDir, "config.json"), dockerConfigPath())
 	})
 
 	t.Run("defaults to ~/.docker", func(t *testing.T) {

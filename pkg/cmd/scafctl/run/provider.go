@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -241,14 +242,22 @@ func setProviderHelpFunc(cmd *cobra.Command) {
 				helpCtx = official.WithRegistry(helpCtx, official.NewRegistry())
 			}
 			clients, resolveErr := autoResolveProviderByName(helpCtx, providerName, reg)
-			if resolveErr != nil {
-				return
+			if resolveErr == nil {
+				defer plugin.KillAll(clients)
+				prov, ok = reg.Get(providerName)
 			}
-			defer plugin.KillAll(clients)
-			prov, ok = reg.Get(providerName)
-			if !ok {
-				return
+		}
+		if !ok {
+			// Fallback: try loading from the local plugin cache.
+			// nil config is intentional — help probe doesn't need quiet/color settings.
+			clients, cacheErr := plugin.RegisterCachedPlugin(c.Context(), providerName, reg, nil, settings.PluginCacheDirFor(settings.BinaryNameFromContext(c.Context())))
+			if cacheErr == nil {
+				defer plugin.KillAll(clients)
+				prov, ok = reg.Get(providerName)
 			}
+		}
+		if !ok {
+			return
 		}
 
 		helpText := detail.FormatProviderInputHelp(prov.Descriptor())
@@ -332,14 +341,18 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 
 	// Load plugin providers if requested
+	pluginCfg := &plugin.ProviderConfig{
+		Quiet:      o.CliParams.IsQuiet,
+		NoColor:    o.CliParams.NoColor,
+		BinaryName: o.CliParams.BinaryName,
+	}
+	var clientOpts []plugin.ClientOption
+	if logger.IsDebugLevel(o.CliParams.MinLogLevel) {
+		clientOpts = append(clientOpts, plugin.WithDebugLogging())
+	}
 	if len(o.PluginDirs) > 0 {
 		lgr.V(1).Info("loading plugin providers", "dirs", o.PluginDirs)
-		pluginCfg := &plugin.ProviderConfig{
-			Quiet:      o.CliParams.IsQuiet,
-			NoColor:    o.CliParams.NoColor,
-			BinaryName: o.CliParams.BinaryName,
-		}
-		clients, err := plugin.RegisterPluginProviders(ctx, reg, o.PluginDirs, pluginCfg)
+		clients, err := plugin.RegisterPluginProviders(ctx, reg, o.PluginDirs, pluginCfg, clientOpts...)
 		if err != nil {
 			w.Warningf("failed to load some plugins: %v", err)
 		}
@@ -353,6 +366,19 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 		if clients, resolveErr := autoResolveProviderByName(ctx, o.ProviderName, reg); resolveErr == nil {
 			defer plugin.KillAll(clients)
 			prov, ok = reg.Get(o.ProviderName)
+			if ok && w != nil {
+				w.Verbosef("Resolved provider %q from official registry", o.ProviderName)
+			}
+		}
+	}
+	if !ok {
+		// Fallback: try loading from the local plugin cache.
+		if clients, cacheErr := plugin.RegisterCachedPlugin(ctx, o.ProviderName, reg, pluginCfg, settings.PluginCacheDirFor(o.BinaryName), clientOpts...); cacheErr == nil {
+			defer plugin.KillAll(clients)
+			prov, ok = reg.Get(o.ProviderName)
+			if ok && w != nil {
+				w.Verbosef("Resolved provider %q from local plugin cache", o.ProviderName)
+			}
 		}
 	}
 	if !ok {
@@ -363,43 +389,18 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 
 	desc := prov.Descriptor()
 
-	// Parse dynamic arguments (--key=value and key=value from argv)
-	extraParsed, err := flags.ParseDynamicInputArgs(o.DynamicArgs)
-	if err != nil {
-		err := fmt.Errorf("failed to parse input arguments: %w", err)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	// Merge: --input values first, then dynamic args (last-wins on conflict)
-	allParams := make([]string, 0, len(o.InputParams)+len(extraParsed))
-	allParams = append(allParams, o.InputParams...)
-	allParams = append(allParams, extraParsed...)
-
-	// Parse input parameters (pass stdin for @- support)
-	var stdinReader io.Reader
-	if o.IOStreams != nil {
-		stdinReader = o.IOStreams.In
-	}
-	inputs, err := flags.ParseResolverFlagsWithStdin(allParams, stdinReader)
-	if err != nil {
-		err := fmt.Errorf("failed to parse input parameters: %w", err)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	lgr.V(1).Info("parsed inputs", "count", len(inputs))
-
-	// Validate input keys against provider schema (early typo detection)
-	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
-		validKeys := make([]string, 0, len(desc.Schema.Properties))
-		for k := range desc.Schema.Properties {
-			validKeys = append(validKeys, k)
+	// Emit verbose provider summary
+	if w != nil && w.VerboseEnabled() {
+		w.Verbosef("Provider: %s (version=%s, capabilities=%v)", desc.Name, desc.Version, desc.Capabilities)
+		if desc.Description != "" {
+			w.Verbosef("  %s", desc.Description)
 		}
-		if err := flags.ValidateInputKeys(inputs, validKeys, fmt.Sprintf("provider %q", desc.Name)); err != nil {
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
+	}
+
+	// Parse and validate inputs
+	inputs, err := o.parseProviderInputs(ctx, desc)
+	if err != nil {
+		return err
 	}
 
 	// Resolve capability
@@ -410,59 +411,12 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 
 	lgr.V(1).Info("using capability", "capability", capability)
+	o.logVerboseExecution(w, capability, inputs)
 
-	// Set up execution context
-	ctx = provider.WithExecutionMode(ctx, capability)
-	ctx = provider.WithDryRun(ctx, o.DryRun)
-
-	// Inject IOStreams so streaming providers (exec, message, etc.) can write to the terminal.
-	// For structured output modes (json/yaml), route provider stdout to stderr to
-	// avoid corrupting the structured envelope that kvx writes to stdout.
-	// For quiet mode, discard all provider output to honour the --quiet contract.
-	if o.IOStreams != nil {
-		providerOut := o.IOStreams.Out
-		providerErr := o.IOStreams.ErrOut
-		switch strings.ToLower(o.Output) {
-		case "json", "yaml":
-			providerOut = o.IOStreams.ErrOut
-		case "quiet":
-			providerOut = io.Discard
-			providerErr = io.Discard
-		}
-		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{
-			Out:    providerOut,
-			ErrOut: providerErr,
-		})
-	}
-
-	// Inject conflict strategy and backup into context for file providers
-	if o.OnConflict != "" {
-		if !fileprovider.ConflictStrategy(o.OnConflict).IsValid() {
-			err := fmt.Errorf("invalid --on-conflict value %q (valid: error, overwrite, skip, skip-unchanged, append)", o.OnConflict)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-		ctx = provider.WithConflictStrategy(ctx, o.OnConflict)
-	}
-	if o.Backup {
-		ctx = provider.WithBackup(ctx, true)
-	}
-
-	// Set output directory for action capabilities.
-	// In dry-run mode, resolve the path without creating the directory.
-	if o.OutputDir != "" && capability == provider.CapabilityAction {
-		absDir, err := provider.AbsFromContext(ctx, o.OutputDir)
-		if err != nil {
-			w.Errorf("failed to resolve output directory %q: %v", o.OutputDir, err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-		if !o.DryRun {
-			if err := os.MkdirAll(absDir, 0o755); err != nil {
-				w.Errorf("failed to create output directory %q: %v", absDir, err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-		}
-		ctx = provider.WithOutputDirectory(ctx, absDir)
+	// Configure execution context (IOStreams, conflict strategy, output dir)
+	ctx, err = o.configureExecutionContext(ctx, capability)
+	if err != nil {
+		return err
 	}
 
 	// Execute the provider
@@ -473,6 +427,10 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	if err != nil {
 		w.Errorf("provider execution failed: %v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	if w != nil {
+		w.Verbosef("Completed in %s", elapsed.Round(time.Millisecond))
 	}
 
 	lgr.V(1).Info("provider executed",
@@ -532,6 +490,127 @@ func (o *ProviderOptions) resolveCapability(desc *provider.Descriptor, inputs ma
 	}
 
 	return desc.Capabilities[0], nil
+}
+
+// parseProviderInputs parses dynamic args, stdin, and --input flags into a
+// merged input map. It also validates keys against the provider schema.
+func (o *ProviderOptions) parseProviderInputs(ctx context.Context, desc *provider.Descriptor) (map[string]any, error) {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	extraParsed, err := flags.ParseDynamicInputArgs(o.DynamicArgs)
+	if err != nil {
+		err := fmt.Errorf("failed to parse input arguments: %w", err)
+		w.Errorf("%v", err)
+		return nil, exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	allParams := make([]string, 0, len(o.InputParams)+len(extraParsed))
+	allParams = append(allParams, o.InputParams...)
+	allParams = append(allParams, extraParsed...)
+
+	var stdinReader io.Reader
+	if o.IOStreams != nil {
+		stdinReader = o.IOStreams.In
+	}
+	inputs, err := flags.ParseResolverFlagsWithStdin(allParams, stdinReader)
+	if err != nil {
+		err := fmt.Errorf("failed to parse input parameters: %w", err)
+		w.Errorf("%v", err)
+		return nil, exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	lgr.V(1).Info("parsed inputs", "count", len(inputs))
+
+	if desc.Schema != nil && len(desc.Schema.Properties) > 0 {
+		validKeys := make([]string, 0, len(desc.Schema.Properties))
+		for k := range desc.Schema.Properties {
+			validKeys = append(validKeys, k)
+		}
+		if err := flags.ValidateInputKeys(inputs, validKeys, fmt.Sprintf("provider %q", desc.Name)); err != nil {
+			w.Errorf("%v", err)
+			return nil, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+	}
+
+	return inputs, nil
+}
+
+// logVerboseExecution emits verbose-level output summarising the capability,
+// input keys, and dry-run state about to be executed.
+func (o *ProviderOptions) logVerboseExecution(w *writer.Writer, capability provider.Capability, inputs map[string]any) {
+	if w == nil {
+		return
+	}
+	w.Verbosef("Capability: %s", capability)
+	if len(inputs) > 0 {
+		keys := make([]string, 0, len(inputs))
+		for k := range inputs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		w.Verbosef("Inputs: %v", keys)
+	}
+	if o.DryRun {
+		w.Verbose("Mode: dry-run")
+	}
+}
+
+// configureExecutionContext sets execution mode, dry-run, IOStreams, conflict
+// strategy, backup, and output directory on the context.
+func (o *ProviderOptions) configureExecutionContext(ctx context.Context, capability provider.Capability) (context.Context, error) {
+	w := writer.FromContext(ctx)
+
+	ctx = provider.WithExecutionMode(ctx, capability)
+	ctx = provider.WithDryRun(ctx, o.DryRun)
+
+	// Inject IOStreams so streaming providers can write to the terminal.
+	// For structured output modes, route provider stdout to stderr.
+	// For quiet mode, discard all provider output.
+	if o.IOStreams != nil {
+		providerOut := o.IOStreams.Out
+		providerErr := o.IOStreams.ErrOut
+		switch strings.ToLower(o.Output) {
+		case "json", "yaml":
+			providerOut = o.IOStreams.ErrOut
+		case "quiet":
+			providerOut = io.Discard
+			providerErr = io.Discard
+		}
+		ctx = provider.WithIOStreams(ctx, &provider.IOStreams{
+			Out:    providerOut,
+			ErrOut: providerErr,
+		})
+	}
+
+	if o.OnConflict != "" {
+		if !fileprovider.ConflictStrategy(o.OnConflict).IsValid() {
+			err := fmt.Errorf("invalid --on-conflict value %q (valid: error, overwrite, skip, skip-unchanged, append)", o.OnConflict)
+			w.Errorf("%v", err)
+			return ctx, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		ctx = provider.WithConflictStrategy(ctx, o.OnConflict)
+	}
+	if o.Backup {
+		ctx = provider.WithBackup(ctx, true)
+	}
+
+	if o.OutputDir != "" && capability == provider.CapabilityAction {
+		absDir, err := provider.AbsFromContext(ctx, o.OutputDir)
+		if err != nil {
+			w.Errorf("failed to resolve output directory %q: %v", o.OutputDir, err)
+			return ctx, exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		if !o.DryRun {
+			if err := os.MkdirAll(absDir, 0o755); err != nil {
+				w.Errorf("failed to create output directory %q: %v", absDir, err)
+				return ctx, exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+		}
+		ctx = provider.WithOutputDirectory(ctx, absDir)
+	}
+
+	return ctx, nil
 }
 
 // buildOutput constructs the output map from an execution result

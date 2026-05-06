@@ -3,7 +3,20 @@
     "PreToolUse": [
       {
         "type": "command",
-        "command": ".github/hooks/scripts/git-safety.sh",
+        "platform": "win32",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File .github/hooks/scripts/git-safety.ps1",
+        "timeout": 5
+      },
+      {
+        "type": "command",
+        "platform": "darwin",
+        "command": "bash .github/hooks/scripts/git-safety.sh",
+        "timeout": 5
+      },
+      {
+        "type": "command",
+        "platform": "linux",
+        "command": "bash .github/hooks/scripts/git-safety.sh",
         "timeout": 5
       }
     ]

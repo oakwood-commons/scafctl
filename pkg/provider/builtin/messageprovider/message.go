@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/charmbracelet/lipgloss"
@@ -562,8 +563,13 @@ func (p *MessageProvider) formatMessage(text, msgType string, inputs map[string]
 		style = style.Italic(true)
 	}
 
-	// Render: icon + [label] + styled message
-	styled := style.Render(text)
+	// Render each line independently so multiline messages preserve their natural
+	// line widths instead of becoming a padded lipgloss block.
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = style.Render(line)
+	}
+	styled := strings.Join(lines, "\n")
 
 	// Prepend label in dimmed brackets if provided.
 	if label, ok := inputs[fieldLabel].(string); ok && label != "" {

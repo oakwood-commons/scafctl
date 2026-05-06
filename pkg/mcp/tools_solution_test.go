@@ -1147,11 +1147,12 @@ func TestHandleRunSolutionTests(t *testing.T) {
 	t.Run("nonexistent path returns error", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
+		missingPath := filepath.Join(t.TempDir(), "does-not-exist")
 
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "run_solution_tests"
 		request.Params.Arguments = map[string]any{
-			"path": "/nonexistent/path",
+			"path": missingPath,
 		}
 
 		result, err := srv.handleRunSolutionTests(context.Background(), request)

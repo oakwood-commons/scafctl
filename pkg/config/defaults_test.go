@@ -6,6 +6,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -127,6 +128,10 @@ func TestEnsureDefaults_PreservesUserDefaultCatalog(t *testing.T) {
 }
 
 func TestEnsureDefaults_FilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce Unix permission bits")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
@@ -361,12 +366,11 @@ func TestEmbeddedCatalogDefaults(t *testing.T) {
 func TestEnsureDefaults_StatError(t *testing.T) {
 	t.Parallel()
 
-	// Use a path under a non-existent directory that we can't stat due to
-	// a permission error simulation. On macOS/Linux, /dev/null is a file,
-	// so /dev/null/config.yaml triggers a "not a directory" error from Stat.
-	err := EnsureDefaults("/dev/null/config.yaml")
+	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
+	err := EnsureDefaults(filepath.Join(parentFile, "config.yaml"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "checking config file")
+	assert.Contains(t, err.Error(), "config")
 }
 
 func TestEnsureDefaults_ReservedCatalogEnforced(t *testing.T) {

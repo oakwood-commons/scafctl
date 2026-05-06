@@ -153,19 +153,19 @@ func TestEnsureSecretsDir(t *testing.T) {
 
 func TestSecretFilePath(t *testing.T) {
 	t.Run("returns correct path with extension", func(t *testing.T) {
-		dir := "/path/to/secrets"
+		dir := filepath.FromSlash("/path/to/secrets")
 		name := "my-secret"
 
 		path := secretFilePath(dir, name)
-		assert.Equal(t, "/path/to/secrets/my-secret.enc", path)
+		assert.Equal(t, filepath.Join(dir, "my-secret.enc"), path)
 	})
 
 	t.Run("handles special characters in name", func(t *testing.T) {
-		dir := "/path/to/secrets"
+		dir := filepath.FromSlash("/path/to/secrets")
 		name := "my.secret_v2"
 
 		path := secretFilePath(dir, name)
-		assert.Equal(t, "/path/to/secrets/my.secret_v2.enc", path)
+		assert.Equal(t, filepath.Join(dir, "my.secret_v2.enc"), path)
 	})
 }
 

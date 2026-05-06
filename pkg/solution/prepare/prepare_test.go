@@ -187,7 +187,7 @@ metadata:
 			WithGetter(getter),
 		)
 		require.NoError(t, err)
-		assert.Equal(t, "/custom/dir/subdir", result.SolutionDir)
+		assert.Equal(t, filepath.FromSlash("/custom/dir/subdir"), result.SolutionDir)
 		result.Cleanup()
 	})
 
@@ -467,7 +467,7 @@ func TestNewDefaultGetter_UsesContextBinaryName(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	found := getter.FindSolution()
-	assert.Equal(t, filepath.Join("cldctl", "solution.yaml"), found)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("cldctl", "solution.yaml")), found)
 }
 
 func TestNewDefaultGetter_DefaultBinaryName(t *testing.T) {
@@ -492,7 +492,7 @@ func TestNewDefaultGetter_DefaultBinaryName(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	found := getter.FindSolution()
-	assert.Equal(t, filepath.Join(settings.CliBinaryName, "solution.yaml"), found)
+	assert.Equal(t, filepath.ToSlash(filepath.Join(settings.CliBinaryName, "solution.yaml")), found)
 }
 
 func TestNewDefaultGetter_CustomBinaryDoesNotFindDefault(t *testing.T) {

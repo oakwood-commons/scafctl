@@ -413,6 +413,20 @@ func TestTestCase_Validate_BaseDirAbsoluteRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "baseDir must be a relative path")
 }
 
+func TestTestCase_Validate_BaseDirDriveRelativeRejected(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:    "test",
+		Command: []string{"run", "resolver"},
+		BaseDir: "C:evil",
+		Assertions: []soltesting.Assertion{
+			{Contains: "hello"},
+		},
+	}
+	err := tc.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "baseDir must be a relative path")
+}
+
 func TestTestCase_Validate_BaseDirTraversalRejected(t *testing.T) {
 	tests := []struct {
 		name    string

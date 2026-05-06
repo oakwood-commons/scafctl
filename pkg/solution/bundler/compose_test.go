@@ -5,6 +5,7 @@ package bundler
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -52,7 +53,7 @@ func TestCompose_MergesResolvers(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"resolvers.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/resolvers.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/resolvers.yaml" {
 			return []byte(`
 spec:
   resolvers:
@@ -77,7 +78,7 @@ func TestCompose_MergesActions(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"workflow.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/workflow.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/workflow.yaml" {
 			return []byte(`
 spec:
   workflow:
@@ -100,7 +101,7 @@ func TestCompose_RejectsDuplicateResolvers(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"resolvers.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/resolvers.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/resolvers.yaml" {
 			return []byte(`
 spec:
   resolvers:
@@ -124,7 +125,7 @@ func TestCompose_RejectsDuplicateActions(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"a.yaml", "b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/a.yaml":
 			return []byte(`
 spec:
@@ -159,7 +160,7 @@ func TestCompose_MergesIncludePatterns(t *testing.T) {
 	sol.Bundle.Include = []string{"templates/*.tmpl"}
 	sol.Compose = []string{"extra.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/extra.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/extra.yaml" {
 			return []byte(`
 bundle:
   include:
@@ -215,7 +216,7 @@ func TestCompose_MultipleFiles(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"resolvers.yaml", "workflow.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/resolvers.yaml":
 			return []byte(`
 spec:
@@ -252,7 +253,7 @@ func TestCompose_DoesNotModifyOriginal(t *testing.T) {
 	sol.Compose = []string{"resolvers.yaml"}
 	originalResolverCount := len(sol.Spec.Resolvers)
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/resolvers.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/resolvers.yaml" {
 			return []byte(`
 spec:
   resolvers:
@@ -280,7 +281,7 @@ func TestCompose_MergesTests(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"tests.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/tests.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/tests.yaml" {
 			return []byte(`
 spec:
   testing:
@@ -307,7 +308,7 @@ func TestCompose_MergesTestsFromMultipleFiles(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"tests-a.yaml", "tests-b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/tests-a.yaml":
 			return []byte(`
 spec:
@@ -343,7 +344,7 @@ func TestCompose_RejectsDuplicateTests(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"tests-a.yaml", "tests-b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/tests-a.yaml":
 			return []byte(`
 spec:
@@ -379,7 +380,7 @@ func TestCompose_MergesTestConfig_SkipBuiltins_TrueWins(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"a.yaml", "b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/a.yaml":
 			return []byte(`
 spec:
@@ -408,7 +409,7 @@ func TestCompose_MergesTestConfig_SkipBuiltins_UnionNames(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"a.yaml", "b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/a.yaml":
 			return []byte(`
 spec:
@@ -441,7 +442,7 @@ func TestCompose_MergesTestConfig_Setup_Appended(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"a.yaml", "b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/a.yaml":
 			return []byte(`
 spec:
@@ -474,7 +475,7 @@ func TestCompose_MergesTestConfig_Cleanup_Appended(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"a.yaml", "b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/a.yaml":
 			return []byte(`
 spec:
@@ -507,7 +508,7 @@ func TestCompose_MergesTestConfig_Env_LastWins(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"a.yaml", "b.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		switch path {
+		switch filepath.ToSlash(path) {
 		case "/tmp/bundle/a.yaml":
 			return []byte(`
 spec:
@@ -544,7 +545,7 @@ func TestCompose_SolutionWithInlineTests_PreservedAfterCompose(t *testing.T) {
 	// Manually set some inline tests on the root solution
 	// This verifies backward compat — solutions without tests still work
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/extra.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/extra.yaml" {
 			return []byte(`
 spec:
   resolvers:
@@ -568,7 +569,7 @@ func TestCompose_TestConfigNil_WhenNoTestConfigDefined(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"resolvers.yaml"}
 	readFile := func(path string) ([]byte, error) {
-		if path == "/tmp/bundle/resolvers.yaml" {
+		if filepath.ToSlash(path) == "/tmp/bundle/resolvers.yaml" {
 			return []byte(`
 spec:
   resolvers:
@@ -595,6 +596,8 @@ func TestIsLocalFilePath(t *testing.T) {
 	assert.False(t, IsLocalFilePath("oci://registry/repo@sha256:abc"))
 	assert.False(t, IsLocalFilePath("name@1.2.3"))
 	assert.False(t, IsLocalFilePath("/absolute/path"))
+	assert.False(t, IsLocalFilePath("C:foo"), "Windows drive-relative path should not be local")
+	assert.False(t, IsLocalFilePath("D:dir/file"), "Windows drive-relative path should not be local")
 }
 
 func TestExtractResolverName(t *testing.T) {

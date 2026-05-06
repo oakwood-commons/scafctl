@@ -516,6 +516,28 @@ func (f *Fetcher) checkCatalogAllowed(resolvedFrom string) error {
 	return nil
 }
 
+// RegisterCachedPlugin looks up a provider plugin by name in the local cache,
+// starts it, and registers its providers into the given registry.
+// Returns the created clients (caller must Kill them on cleanup) or an error
+// if the plugin is not cached.
+func RegisterCachedPlugin(ctx context.Context, name string, registry *provider.Registry, cfg *ProviderConfig, cacheDir string, clientOpts ...ClientOption) ([]*Client, error) {
+	cache := NewCache(cacheDir)
+	path, version, ok := cache.GetLatestBinary(name)
+	if !ok {
+		return nil, fmt.Errorf("plugin %q not found in cache", name)
+	}
+
+	results := []FetchResult{{
+		Name:      name,
+		Kind:      solution.PluginKindProvider,
+		Version:   version,
+		Path:      path,
+		FromCache: true,
+	}}
+
+	return RegisterFetchedPlugins(ctx, registry, results, cfg, clientOpts...)
+}
+
 func findLockPlugin(plugins []bundler.LockPlugin, name, kind string) *bundler.LockPlugin {
 	for i := range plugins {
 		if plugins[i].Name == name && plugins[i].Kind == kind {

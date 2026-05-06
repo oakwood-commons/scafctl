@@ -641,6 +641,41 @@ func TestParseResolverFlagsWithStdin(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds maximum raw read size")
 	})
+
+	t.Run("comma in value is preserved as literal string", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := ParseResolverFlagsWithStdin([]string{"value=a,b,c"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"value": "a,b,c"}, result)
+	})
+
+	t.Run("Go source with commas is preserved", func(t *testing.T) {
+		t.Parallel()
+
+		goSource := `package main
+
+func Run(input map[string]interface{}) (interface{}, error) { return 42, nil }`
+		result, err := ParseResolverFlagsWithStdin([]string{"script=" + goSource}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"script": goSource}, result)
+	})
+
+	t.Run("repeated keys merge into array without comma splitting", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := ParseResolverFlagsWithStdin([]string{"env=prod", "env=qa"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"env": []any{"prod", "qa"}}, result)
+	})
+
+	t.Run("value with equals signs and commas preserved", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := ParseResolverFlagsWithStdin([]string{"query=SELECT a, b FROM t WHERE x=1"}, nil)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"query": "SELECT a, b FROM t WHERE x=1"}, result)
+	})
 }
 
 func TestParseValueRef(t *testing.T) {

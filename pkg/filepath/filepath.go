@@ -63,6 +63,17 @@ func PathExists(path string, statFunc fs.StatFunc) bool {
 	return false
 }
 
+// HasWindowsDrivePrefix returns true if path starts with a Windows drive letter
+// pattern like "C:" or "D:". This check works on all platforms, unlike
+// filepath.VolumeName which only recognises drive letters on Windows.
+func HasWindowsDrivePrefix(path string) bool {
+	if len(path) < 2 {
+		return false
+	}
+	letter := path[0]
+	return path[1] == ':' && ((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z'))
+}
+
 // IsURL checks whether the given path string is a valid HTTP or HTTPS URL.
 // It returns true if the path starts with "http" (case-insensitive) and can be parsed as a valid URL,
 // otherwise it returns false.

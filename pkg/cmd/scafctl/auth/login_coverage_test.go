@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adrg/xdg"
+
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -471,7 +473,11 @@ func TestCommandLogin_CustomHandler_Force(t *testing.T) {
 // TestBridgeAuthToRegistryPostLogin_Success verifies that credentials are stored
 // after a successful token bridge.
 func TestBridgeAuthToRegistryPostLogin_Success(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+	xdg.Reload()
 
 	ctx, buf := newTestContext(t)
 	w := writer.New(terminal.NewIOStreams(nil, buf, buf, false), settings.NewCliParams())
@@ -513,7 +519,11 @@ func TestBridgeAuthToRegistryPostLogin_GetTokenError(t *testing.T) {
 
 // TestCommandLogin_WithRegistryBridge tests the --registry flag path after successful login.
 func TestCommandLogin_WithRegistryBridge(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+	xdg.Reload() // Re-read env vars; cached at init time on Windows.
 
 	ctx, buf := newTestContext(t)
 
@@ -650,7 +660,11 @@ func TestDiscoverRegistriesForHandler_NoMatch(t *testing.T) {
 // TestCommandLogin_AutoBridgeFromConfig verifies that auth login automatically
 // bridges to registries discovered from config (no --registry needed).
 func TestCommandLogin_AutoBridgeFromConfig(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+	xdg.Reload()
 
 	ctx, buf := newTestContext(t)
 
@@ -699,7 +713,11 @@ func TestCommandLogin_AutoBridgeFromConfig(t *testing.T) {
 // TestBridgeAuthToRegistryPostLogin_WithScope verifies that bridge passes the
 // scope through to GetToken when a scope is provided.
 func TestBridgeAuthToRegistryPostLogin_WithScope(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+	xdg.Reload()
 
 	ctx, buf := newTestContext(t)
 	w := writer.New(terminal.NewIOStreams(nil, buf, buf, false), settings.NewCliParams())
@@ -723,7 +741,11 @@ func TestBridgeAuthToRegistryPostLogin_WithScope(t *testing.T) {
 // TestCommandLogin_AutoBridgeWithScope verifies that auto-bridge uses the
 // catalog's authScope when --registry-scope CLI flag is empty.
 func TestCommandLogin_AutoBridgeWithScope(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("XDG_STATE_HOME", tmpDir)
+	xdg.Reload()
 
 	ctx, buf := newTestContext(t)
 

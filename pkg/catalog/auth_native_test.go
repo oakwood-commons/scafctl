@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -129,6 +130,10 @@ func TestNativeCredentialStore_Overwrite(t *testing.T) {
 }
 
 func TestNativeCredentialStore_FilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce Unix permission bits")
+	}
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "registries.json")
 	store := NewNativeCredentialStoreWithPath(path)
@@ -400,10 +405,10 @@ func TestDeleteContainerAuth_LegacyFallback(t *testing.T) {
 }
 
 func TestDetectContainerAuthFile_EnvVar(t *testing.T) {
-	t.Setenv("REGISTRY_AUTH_FILE", "/custom/auth.json")
+	t.Setenv("REGISTRY_AUTH_FILE", filepath.FromSlash("/custom/auth.json"))
 	got, err := detectContainerAuthFile()
 	require.NoError(t, err)
-	assert.Equal(t, "/custom/auth.json", got)
+	assert.Equal(t, filepath.FromSlash("/custom/auth.json"), got)
 }
 
 func TestDetectContainerAuthFile_PodmanExists(t *testing.T) {
@@ -415,6 +420,7 @@ func TestDetectContainerAuthFile_PodmanExists(t *testing.T) {
 	t.Setenv("REGISTRY_AUTH_FILE", "")
 	// Override home so detectContainerAuthFile finds our file
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	got, err := detectContainerAuthFile()
 	require.NoError(t, err)
 	assert.Equal(t, podmanPath, got)
@@ -471,8 +477,9 @@ func TestNativeCredentialStore_GetCredential_Normalized(t *testing.T) {
 }
 
 func TestNativeCredentialStore_SaveLoad_InvalidPath(t *testing.T) {
-	// Saving to an unwritable path should return an error
-	store := NewNativeCredentialStoreWithPath("/nonexistent/path/registries.json")
+	parentFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(parentFile, []byte("x"), 0o600))
+	store := NewNativeCredentialStoreWithPath(filepath.Join(parentFile, "registries.json"))
 	err := store.SetCredential("ghcr.io", "user", "pass", "")
 	assert.Error(t, err)
 }

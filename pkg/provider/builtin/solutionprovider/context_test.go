@@ -5,6 +5,7 @@ package solutionprovider
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -163,7 +164,7 @@ func TestCanonicalize_CatalogReference(t *testing.T) {
 
 func TestCanonicalize_AbsolutePath(t *testing.T) {
 	got := Canonicalize(context.Background(), "/home/user/infra.yaml")
-	assert.Equal(t, "/home/user/infra.yaml", got)
+	assert.Equal(t, filepath.FromSlash("/home/user/infra.yaml"), got)
 }
 
 func TestCanonicalize_RelativePath(t *testing.T) {
