@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	oauth "github.com/oakwood-commons/oauth-helpers"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/auth/oauth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
