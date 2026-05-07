@@ -15,7 +15,6 @@ import (
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
-	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
@@ -54,7 +53,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
@@ -173,13 +171,6 @@ type RootOptions struct {
 	// Embedders can supply a custom registry via official.NewRegistryFrom to
 	// extend or replace the default set.
 	OfficialProviders *official.Registry
-
-	// OfficialAuthHandlers overrides the default official auth handler registry
-	// used for auto-resolution. When nil and DisableOfficialAuthHandlers is
-	// false, the default registry (3 extracted first-party auth handlers) is
-	// used. Embedders can supply a custom registry via
-	// authofficial.NewRegistryFrom to extend or replace the default set.
-	OfficialAuthHandlers *authofficial.Registry
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -543,24 +534,6 @@ func Root(opts *RootOptions) *cobra.Command {
 				}
 			}
 
-			// ── Wire official auth handler registry for auto-resolution ──
-			// Must be wired before RegisterAuthHandlerPlugins so that plugin wrappers
-			// can read trusted verification domains from the official registry in context.
-			if !cfg.Settings.DisableOfficialAuthHandlers {
-				authOfficialReg := opts.OfficialAuthHandlers
-				if authOfficialReg == nil {
-					authOfficialReg = authofficial.NewRegistry()
-				}
-				source := "default"
-				if opts.OfficialAuthHandlers != nil {
-					source = "embedder"
-				}
-				lgr.V(1).Info("official auth handler registry enabled", "count", authOfficialReg.Len(), "source", source)
-				ctx = authofficial.WithRegistry(ctx, authOfficialReg)
-			} else {
-				lgr.V(1).Info("official auth handler registry disabled via config")
-			}
-
 			// Register auth handler plugins if directories are configured
 			if len(opts.AuthPluginDirs) > 0 {
 				lgr.V(1).Info("loading auth handler plugins", "dirs", opts.AuthPluginDirs)
@@ -594,33 +567,6 @@ func Root(opts *RootOptions) *cobra.Command {
 				ctx = official.WithRegistry(ctx, officialReg)
 			} else {
 				lgr.V(1).Info("official provider registry disabled via config")
-			}
-
-			// Best-effort auto-fetch of official auth handlers not yet registered.
-			// This covers direct CLI commands (e.g., "auth login github") that bypass
-			// the solution prepare pipeline.
-			if !cfg.Settings.DisableOfficialAuthHandlers {
-				var cooldownDuration time.Duration
-				if cfg.Plugins.FetchCooldown != "" {
-					if parsed, parseErr := time.ParseDuration(cfg.Plugins.FetchCooldown); parseErr == nil {
-						cooldownDuration = parsed
-					} else {
-						lgr.Info("invalid plugins.fetchCooldown value, using default",
-							"value", cfg.Plugins.FetchCooldown,
-							"error", parseErr.Error(),
-							"default", plugin.DefaultFetchCooldown)
-					}
-				}
-				cooldown := plugin.NewFetchCooldown(paths.PluginCacheDir(), cooldownDuration)
-				pluginCfg := &plugin.ProviderConfig{
-					Quiet:      cliParams.IsQuiet,
-					NoColor:    cliParams.NoColor,
-					BinaryName: binaryName,
-				}
-				officialAuthClients, _ := prepare.ResolveOfficialAuthHandlers(ctx, authRegistry, cooldown, pluginCfg)
-				if len(officialAuthClients) > 0 {
-					authPluginClients = append(authPluginClients, officialAuthClients...)
-				}
 			}
 
 			cCmd.SetContext(ctx)
