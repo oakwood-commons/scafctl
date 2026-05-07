@@ -20,8 +20,8 @@ type StoreOptions struct {
 	// Force overwrites an existing version in the catalog.
 	Force bool `json:"force,omitempty" yaml:"force,omitempty" doc:"Overwrite existing version"`
 
-	// Source is the path to the solution file, recorded as an annotation.
-	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"Source file path for annotation"`
+	// Source is the origin of the solution (repository URL or file path), stored as org.opencontainers.image.source.
+	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"Source repository URL or file path"`
 
 	// DisplayName is the human-readable name, stored as an OCI annotation.
 	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name"`
@@ -34,6 +34,10 @@ type StoreOptions struct {
 
 	// Tags are searchable keywords, stored as a comma-separated OCI annotation.
 	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable tags"`
+
+	// Annotations is a free-form map merged into OCI annotations.
+	// Engine-set annotations take precedence over user-supplied ones.
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"User-supplied annotations"`
 
 	// ArtifactCacheDir is the path to the artifact cache directory.
 	// When non-empty, the corresponding artifact cache entry is invalidated
@@ -71,6 +75,7 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 	}
 
 	annotations := catalog.NewAnnotationBuilder().
+		SetMap(opts.Annotations).
 		Set(catalog.AnnotationSource, opts.Source).
 		Set(catalog.AnnotationDisplayName, opts.DisplayName).
 		Set(catalog.AnnotationDescription, opts.Description).

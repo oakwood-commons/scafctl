@@ -378,7 +378,8 @@ func matchesSearch(a catalog.DiscoveredArtifact, query string) bool {
 	return strings.Contains(strings.ToLower(a.Name), query) ||
 		strings.Contains(strings.ToLower(a.DisplayName), query) ||
 		strings.Contains(strings.ToLower(a.Description), query) ||
-		strings.Contains(strings.ToLower(a.Category), query)
+		strings.Contains(strings.ToLower(a.Category), query) ||
+		strings.Contains(strings.ToLower(a.Source), query)
 }
 
 // writeIndexList writes the index artifact list using kvx output options.

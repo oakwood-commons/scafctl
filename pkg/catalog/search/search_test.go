@@ -508,6 +508,8 @@ func TestCopyEnrichedMetadata(t *testing.T) {
 		Links:       []catalog.DiscoveredLink{{Name: "docs", URL: "https://example.com"}},
 		Providers:   []string{"http"},
 		Parameters:  []string{"env"},
+		Source:      "https://github.com/example/repo",
+		Annotations: map[string]string{"team": "platform"},
 	}
 
 	dst := &catalog.DiscoveredArtifact{Name: "target"}
@@ -521,4 +523,6 @@ func TestCopyEnrichedMetadata(t *testing.T) {
 	assert.Equal(t, []catalog.DiscoveredLink{{Name: "docs", URL: "https://example.com"}}, dst.Links)
 	assert.Equal(t, []string{"http"}, dst.Providers)
 	assert.Equal(t, []string{"env"}, dst.Parameters)
+	assert.Equal(t, "https://github.com/example/repo", dst.Source)
+	assert.Equal(t, map[string]string{"team": "platform"}, dst.Annotations)
 }

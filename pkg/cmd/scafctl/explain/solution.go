@@ -6,6 +6,7 @@ package explain
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -124,6 +125,20 @@ func (o *SolutionOptions) printSolutionExplanation(w *writer.Writer, exp *Soluti
 	w.Plainlnf("  Version:    %s", exp.Version)
 	if exp.Category != "" {
 		w.Plainlnf("  Category:   %s", exp.Category)
+	}
+	if exp.Source != "" {
+		w.Plainlnf("  Source:     %s", exp.Source)
+	}
+	if len(exp.Annotations) > 0 {
+		w.Plainln("  Annotations:")
+		keys := make([]string, 0, len(exp.Annotations))
+		for k := range exp.Annotations {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			w.Plainlnf("    %s: %s", k, exp.Annotations[k])
+		}
 	}
 	w.Plainln("")
 

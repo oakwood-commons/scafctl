@@ -925,7 +925,7 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 // registry from context and builds a plugin fetcher on demand.
 // Returns the plugin clients created (caller must defer Kill on each), or nil
 // when no providers needed resolution or fetching failed non-fatally.
-func ResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry) ([]*plugin.Client, error) {
+func ResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry, clientOpts ...plugin.ClientOption) ([]*plugin.Client, error) {
 	officialReg := official.RegistryFromContext(ctx)
 	if officialReg == nil || officialReg.Len() == 0 {
 		return nil, nil
@@ -957,7 +957,7 @@ func ResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *
 	if err != nil {
 		return nil, fmt.Errorf("auto-fetching official providers: %w", err)
 	}
-	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, nil)
+	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, nil, clientOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("registering auto-resolved official providers: %w", err)
 	}
@@ -1080,6 +1080,7 @@ func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Soluti
 		Description string   `json:"description"`
 		Category    string   `json:"category"`
 		Tags        []string `json:"tags"`
+		Source      string   `json:"source,omitempty"`
 	}
 
 	solMeta := solutionMeta{}
@@ -1089,6 +1090,7 @@ func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Soluti
 		solMeta.Description = sol.Metadata.Description
 		solMeta.Category = sol.Metadata.Category
 		solMeta.Tags = sol.Metadata.Tags
+		solMeta.Source = sol.Metadata.Source
 		if sol.Metadata.Version != nil {
 			solMeta.Version = sol.Metadata.Version.String()
 		}

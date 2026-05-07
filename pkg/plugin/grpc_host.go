@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"google.golang.org/grpc"
@@ -477,4 +479,77 @@ func (c *HostServiceClient) GetAuthGroups(ctx context.Context, handler string) (
 		return nil, fmt.Errorf("host GetAuthGroups: %s", resp.Error)
 	}
 	return resp.Groups, nil
+}
+
+// HostDepsFromAuthRegistry builds a HostServiceDeps that delegates auth
+// callbacks to the given auth.Registry. Returns nil when the registry is nil,
+// so callers can safely pass the result to WithHostDeps without a nil check.
+func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
+	if authReg == nil {
+		return nil
+	}
+	return &HostServiceDeps{
+		AuthTokenFunc: func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) {
+			// Resolve empty handler name to the default (first registered) handler.
+			if handler == "" {
+				handlers := authReg.List()
+				if len(handlers) == 0 {
+					return &proto.GetAuthTokenResponse{
+						Error: "no auth handlers registered",
+					}, nil
+				}
+				handler = handlers[0]
+			}
+			h, err := authReg.Get(handler)
+			if err != nil {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("auth handler %q: %v", handler, err),
+				}, nil
+			}
+			// Clamp to non-negative so a malicious/buggy plugin cannot
+			// bypass the DefaultMinValidFor fallback in token acquisition.
+			if minValidFor < 0 {
+				minValidFor = 0
+			}
+			token, err := h.GetToken(ctx, auth.TokenOptions{
+				Scope:        scope,
+				MinValidFor:  time.Duration(minValidFor) * time.Second,
+				ForceRefresh: forceRefresh,
+			})
+			if err != nil {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("get token from %q: %v", handler, err),
+				}, nil
+			}
+			return &proto.GetAuthTokenResponse{
+				AccessToken:   token.AccessToken,
+				TokenType:     token.TokenType,
+				ExpiresAtUnix: token.ExpiresAt.Unix(),
+				Scope:         token.Scope,
+			}, nil
+		},
+		AuthHandlersFunc: func(_ context.Context) ([]string, string, error) {
+			handlers := authReg.List()
+			var defaultHandler string
+			if len(handlers) > 0 {
+				defaultHandler = handlers[0]
+			}
+			return handlers, defaultHandler, nil
+		},
+	}
+}
+
+// AuthClientOptsFromContext extracts the auth registry from ctx and returns
+// ClientOption(s) that wire host-side auth deps into plugin clients.
+// Returns nil when no auth registry is available in the context.
+func AuthClientOptsFromContext(ctx context.Context) []ClientOption {
+	authReg := auth.RegistryFromContext(ctx)
+	if authReg == nil {
+		return nil
+	}
+	deps := HostDepsFromAuthRegistry(authReg)
+	if deps == nil {
+		return nil
+	}
+	return []ClientOption{WithHostDeps(deps)}
 }

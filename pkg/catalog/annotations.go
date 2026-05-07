@@ -99,6 +99,17 @@ func (b *AnnotationBuilder) SetTags(tags []string) *AnnotationBuilder {
 	return b
 }
 
+// SetMap merges all entries from the given map, skipping empty values.
+// Existing keys are overwritten.
+func (b *AnnotationBuilder) SetMap(m map[string]string) *AnnotationBuilder {
+	for k, v := range m {
+		if v != "" {
+			b.annotations[k] = v
+		}
+	}
+	return b
+}
+
 // Build returns the annotation map.
 func (b *AnnotationBuilder) Build() map[string]string {
 	return b.annotations

@@ -40,6 +40,9 @@ type SolutionExplanation struct {
 	Actions   []ActionInfo   `json:"actions,omitempty" yaml:"actions,omitempty" doc:"Action configurations" maxItems:"1000"`
 	Finally   []ActionInfo   `json:"finally,omitempty" yaml:"finally,omitempty" doc:"Finally/cleanup actions" maxItems:"100"`
 
+	Source      string            `json:"source,omitempty" yaml:"source,omitempty" doc:"Source repository URL" maxLength:"500"`
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"Free-form key-value annotations"`
+
 	Tags        []string         `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Solution tags" maxItems:"50"`
 	Links       []LinkInfo       `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links" maxItems:"50"`
 	Maintainers []MaintainerInfo `json:"maintainers,omitempty" yaml:"maintainers,omitempty" doc:"Solution maintainers" maxItems:"20"`
@@ -145,6 +148,12 @@ func BuildSolutionExplanation(sol *solution.Solution) *SolutionExplanation {
 	}
 	if sol.Metadata.Category != "" {
 		exp.Category = sol.Metadata.Category
+	}
+	if sol.Metadata.Source != "" {
+		exp.Source = sol.Metadata.Source
+	}
+	if len(sol.Metadata.Annotations) > 0 {
+		exp.Annotations = sol.Metadata.Annotations
 	}
 
 	// Catalog info
