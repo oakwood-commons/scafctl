@@ -988,12 +988,17 @@ type DiscoveredArtifact struct {
 	Links       []DiscoveredLink `json:"links,omitempty"       yaml:"links,omitempty"       doc:"Related links" maxItems:"10"`
 	Providers   []string         `json:"providers,omitempty"   yaml:"providers,omitempty"   doc:"Providers used by the solution" maxItems:"50"`
 	Parameters  []string         `json:"parameters,omitempty"  yaml:"parameters,omitempty"  doc:"Parameter resolver names (user inputs)" maxItems:"50"`
+
+	Source      string            `json:"source,omitempty"      yaml:"source,omitempty"      doc:"Source repository URL" maxLength:"500"`
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"Free-form key-value annotations"`
 }
 
 // ToAnnotations converts enriched metadata fields into an OCI annotation map.
 // Only non-empty fields are included.
 func (d DiscoveredArtifact) ToAnnotations() map[string]string {
 	return NewAnnotationBuilder().
+		SetMap(d.Annotations).
+		Set(AnnotationSource, d.Source).
 		Set(AnnotationDisplayName, d.DisplayName).
 		Set(AnnotationDescription, d.Description).
 		Set(AnnotationCategory, d.Category).

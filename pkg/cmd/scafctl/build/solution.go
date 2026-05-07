@@ -474,13 +474,20 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 
 	// Store the artifact (handles dedup vs traditional, plus build cache)
 	w.Verbose("Storing artifact in local catalog")
+	// Prefer metadata.source (repo URL); fall back to the build file path
+	// so OCI provenance is never blank.
+	source := sol.Metadata.Source
+	if source == "" {
+		source = opts.File
+	}
 	storeResult, err := builder.StoreSolutionArtifact(ctx, localCatalog, name, version, content, br, builder.StoreOptions{
 		Force:            opts.Force,
-		Source:           opts.File,
+		Source:           source,
 		DisplayName:      sol.Metadata.DisplayName,
 		Description:      sol.Metadata.Description,
 		Category:         sol.Metadata.Category,
 		Tags:             sol.Metadata.Tags,
+		Annotations:      sol.Metadata.Annotations,
 		ArtifactCacheDir: paths.ArtifactCacheDir(),
 		ArtifactCacheTTL: settings.DefaultArtifactCacheTTL,
 	})

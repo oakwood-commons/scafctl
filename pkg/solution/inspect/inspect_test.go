@@ -134,12 +134,16 @@ func TestBuildSolutionExplanation_WithDisplayName(t *testing.T) {
 	sol.Metadata.Description = "A test solution"
 	sol.Metadata.Category = "infra"
 	sol.Metadata.Tags = []string{"a", "b"}
+	sol.Metadata.Source = "https://github.com/example/sol"
+	sol.Metadata.Annotations = map[string]string{"team": "platform"}
 
 	exp := BuildSolutionExplanation(sol)
 	assert.Equal(t, "My Solution", exp.DisplayName)
 	assert.Equal(t, "A test solution", exp.Description)
 	assert.Equal(t, "infra", exp.Category)
 	assert.Equal(t, []string{"a", "b"}, exp.Tags)
+	assert.Equal(t, "https://github.com/example/sol", exp.Source)
+	assert.Equal(t, map[string]string{"team": "platform"}, exp.Annotations)
 }
 
 func TestBuildSolutionExplanation_WithLinks(t *testing.T) {

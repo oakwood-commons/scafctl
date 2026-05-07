@@ -129,6 +129,13 @@ type Metadata struct {
 
 	// Banner is a URL or path to a banner image for the solution
 	Banner string `json:"banner,omitempty" yaml:"banner,omitempty" doc:"URL or path to the solution banner" maxLength:"500" pattern:"^((http|https|file):\\/\\/.+|[a-zA-Z0-9_-]+\\.(png|jpg|jpeg|svg|gif))$" required:"false"`
+
+	// Source is the URL to the solution's source code repository
+	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"URL to the solution source repository" maxLength:"500" required:"false"`
+
+	// Annotations is a free-form map of key-value metadata for tooling and humans.
+	// Not interpreted by the engine. Follows the Kubernetes annotation pattern.
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"Free-form key-value annotations" required:"false"`
 }
 
 // Catalog controls distribution and visibility of the solution.

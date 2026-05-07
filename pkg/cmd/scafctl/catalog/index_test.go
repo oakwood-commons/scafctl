@@ -404,11 +404,13 @@ func TestMatchesSearch(t *testing.T) {
 		DisplayName: "Hello World Starter",
 		Description: "A minimal getting-started solution",
 		Category:    "templates",
+		Source:      "https://github.com/example/hello-world",
 	}
 
 	assert.True(t, matchesSearch(a, "hello"))
 	assert.True(t, matchesSearch(a, "starter"))
 	assert.True(t, matchesSearch(a, "minimal"))
 	assert.True(t, matchesSearch(a, "templates"))
+	assert.True(t, matchesSearch(a, "github.com/example"))
 	assert.False(t, matchesSearch(a, "nonexistent"))
 }
