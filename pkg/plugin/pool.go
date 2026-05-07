@@ -80,6 +80,7 @@ type poolOptions struct {
 	clock           func() time.Time // for testing
 	allowedPlugins  map[string]bool  // nil means allow all
 	disableExternal bool             // reject all non-adopted plugins
+	clientOpts      []ClientOption   // extra options for spawned plugin clients
 }
 
 // defaultPoolOptions returns sensible defaults.
@@ -144,6 +145,13 @@ func WithAllowedPlugins(names []string) PoolOption {
 // for API server deployments.
 func WithDisableExternal(disabled bool) PoolOption {
 	return func(o *poolOptions) { o.disableExternal = disabled }
+}
+
+// WithClientOptions sets additional ClientOption values that are passed to
+// every plugin client spawned by the pool. Use this to inject host-side
+// dependencies such as auth registries (via WithHostDeps).
+func WithClientOptions(opts ...ClientOption) PoolOption {
+	return func(o *poolOptions) { o.clientOpts = append(o.clientOpts, opts...) }
 }
 
 // PoolStats holds pool metrics.
@@ -372,7 +380,10 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
 	result := results[0]
 
 	// Spawn client with sanitized environment (pool is API-server context)
-	client, err := NewClient(result.Path, WithSanitizedEnv())
+	clientOpts := make([]ClientOption, 1, 1+len(p.opts.clientOpts))
+	clientOpts[0] = WithSanitizedEnv()
+	clientOpts = append(clientOpts, p.opts.clientOpts...)
+	client, err := NewClient(result.Path, clientOpts...)
 	if err != nil {
 		entry.failWith(fmt.Errorf("starting process: %w", err))
 		return

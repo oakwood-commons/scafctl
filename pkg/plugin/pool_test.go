@@ -43,6 +43,31 @@ func TestNewPool_Options(t *testing.T) {
 	assert.Equal(t, time.Minute, p.opts.healthInterval)
 }
 
+func TestNewPool_WithClientOptions(t *testing.T) {
+	reg := provider.NewRegistry()
+	opt1 := WithSanitizedEnv()
+	p := NewPool(nil, reg, logr.Discard(),
+		WithIdleTimeout(0),
+		WithClientOptions(opt1),
+	)
+	defer p.Shutdown()
+
+	assert.Len(t, p.opts.clientOpts, 1)
+}
+
+func TestNewPool_WithClientOptions_Multiple(t *testing.T) {
+	reg := provider.NewRegistry()
+	opt1 := WithSanitizedEnv()
+	opt2 := WithSanitizedEnv()
+	p := NewPool(nil, reg, logr.Discard(),
+		WithIdleTimeout(0),
+		WithClientOptions(opt1, opt2),
+	)
+	defer p.Shutdown()
+
+	assert.Len(t, p.opts.clientOpts, 2)
+}
+
 func TestPool_Adopt(t *testing.T) {
 	reg := provider.NewRegistry()
 	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
