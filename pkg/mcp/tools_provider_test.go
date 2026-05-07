@@ -964,7 +964,7 @@ func TestEnsureProvider(t *testing.T) {
 }
 
 func TestHandleRunProvider_AutoResolve_NoPool(t *testing.T) {
-	// When no pool is configured, unknown providers should still return NOT_FOUND
+	// When no pool is configured, unknown providers should return LOAD_FAILED
 	reg, err := builtin.DefaultRegistry(context.Background())
 	require.NoError(t, err)
 	srv, err := NewServer(
@@ -984,7 +984,8 @@ func TestHandleRunProvider_AutoResolve_NoPool(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	text := result.Content[0].(mcp.TextContent).Text
-	assert.Contains(t, text, "NOT_FOUND")
+	assert.Contains(t, text, "LOAD_FAILED")
+	assert.Contains(t, text, "plugin pool not configured")
 }
 
 func TestHandleGetProviderSchema_AutoResolve_NoPool(t *testing.T) {
