@@ -224,7 +224,10 @@ func buildMCPPluginPool(ctx context.Context, cfg *config.Config, reg *provider.R
 
 	// Create plugin pool for lazy auto-resolution of official providers.
 	// MCP is interactive so we allow all official plugins by default.
+	// Disable env sanitization so plugins can access host credentials
+	// (SSH_AUTH_SOCK, GITHUB_TOKEN, etc.) during interactive sessions.
 	var poolOpts []plugin.PoolOption
+	poolOpts = append(poolOpts, plugin.WithSanitizeEnv(false))
 	// Wire auth host dependencies so plugins can use host auth
 	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
 		poolOpts = append(poolOpts, plugin.WithClientOptions(authOpts...))

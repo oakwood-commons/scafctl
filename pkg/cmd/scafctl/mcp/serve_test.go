@@ -128,4 +128,14 @@ func TestBuildMCPPluginPool(t *testing.T) {
 		officialReg := official.RegistryFromContext(ctx)
 		assert.NotNil(t, officialReg, "official registry should be in context")
 	})
+
+	t.Run("pool does not sanitize env for MCP interactive sessions", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		pool, _ := buildMCPPluginPool(context.Background(), nil, reg, &lgr)
+		defer pool.Shutdown()
+
+		// MCP pools should not sanitize env so host credentials are available
+		assert.False(t, pool.SanitizeEnv(), "MCP pool should not sanitize env")
+	})
 }

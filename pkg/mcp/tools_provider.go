@@ -18,8 +18,8 @@ import (
 
 // ensureProvider attempts to auto-resolve a provider that is not in the
 // registry by looking it up in the official provider registry and loading
-// it via the plugin pool. Returns a release function (may be nil) that the
-// caller must defer. Returns an error if the provider cannot be resolved.
+// it via the plugin pool. On success, returns a non-nil release function
+// that the caller must defer. Returns an error if the provider cannot be resolved.
 func (s *Server) ensureProvider(ctx context.Context, name string) (release func(), err error) {
 	if s.pluginPool == nil {
 		return nil, fmt.Errorf("provider %q not found and plugin pool not configured", name)
@@ -396,10 +396,16 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 	if !ok {
 		// Try auto-resolving via the plugin pool
 		release, resolveErr := s.ensureProvider(ctx, name)
-		if resolveErr == nil {
-			defer release()
-			prov, ok = s.registry.Get(name)
+		if resolveErr != nil {
+			return newStructuredError(ErrCodeLoadFailed,
+				fmt.Sprintf("failed to load provider %q: %v", name, resolveErr),
+				WithField("provider"),
+				WithSuggestion("Check plugin pool configuration and provider availability"),
+				WithRelatedTools("list_providers"),
+			), nil
 		}
+		defer release()
+		prov, ok = s.registry.Get(name)
 	}
 	if !ok {
 		availableNames := ""

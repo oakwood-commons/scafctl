@@ -17,8 +17,9 @@ import (
 )
 
 // ensureAPIProvider attempts to auto-resolve an official plugin provider via
-// the plugin pool. Returns a release function (may be nil) and the resolved
-// provider, or an error if the provider cannot be loaded.
+// the plugin pool. On success, returns the resolved provider and a non-nil
+// release function that the caller must defer. Returns an error if the
+// provider cannot be loaded.
 func ensureAPIProvider(ctx context.Context, hctx *api.HandlerContext, name string) (provider.Provider, func(), error) {
 	if hctx.PluginPool == nil || hctx.OfficialProviders == nil {
 		return nil, nil, api.NotFoundError("provider", name)

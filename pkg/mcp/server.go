@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -482,6 +483,12 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	// Guard against empty server name.
 	if strings.TrimSpace(cfg.name) == "" {
 		cfg.name = settings.CliBinaryName
+	}
+
+	// Validate that a registry is set when a plugin pool is configured,
+	// otherwise ensureProvider would panic on nil registry access.
+	if cfg.pluginPool != nil && cfg.registry == nil {
+		return nil, errors.New("WithServerPluginPool requires WithServerRegistry")
 	}
 
 	// Build the MCP context for tool handlers

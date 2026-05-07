@@ -81,6 +81,7 @@ type poolOptions struct {
 	allowedPlugins  map[string]bool  // nil means allow all
 	disableExternal bool             // reject all non-adopted plugins
 	clientOpts      []ClientOption   // extra options for spawned plugin clients
+	sanitizeEnv     bool             // prepend WithSanitizedEnv() on spawn
 }
 
 // defaultPoolOptions returns sensible defaults.
@@ -90,6 +91,7 @@ func defaultPoolOptions() poolOptions {
 		maxPlugins:     50,
 		healthInterval: 30 * time.Second,
 		clock:          time.Now,
+		sanitizeEnv:    true,
 	}
 }
 
@@ -152,6 +154,14 @@ func WithDisableExternal(disabled bool) PoolOption {
 // dependencies such as auth registries (via WithHostDeps).
 func WithClientOptions(opts ...ClientOption) PoolOption {
 	return func(o *poolOptions) { o.clientOpts = append(o.clientOpts, opts...) }
+}
+
+// WithSanitizeEnv controls whether spawned plugin clients get a sanitized
+// environment (true) or inherit the host environment (false). Defaults to true.
+// API server deployments should use true; MCP interactive sessions may use
+// false so plugins can access host credentials (SSH_AUTH_SOCK, tokens, etc.).
+func WithSanitizeEnv(sanitize bool) PoolOption {
+	return func(o *poolOptions) { o.sanitizeEnv = sanitize }
 }
 
 // PoolStats holds pool metrics.
@@ -379,10 +389,16 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
 
 	result := results[0]
 
-	// Spawn client with sanitized environment (pool is API-server context)
-	clientOpts := make([]ClientOption, 1, 1+len(p.opts.clientOpts))
-	clientOpts[0] = WithSanitizedEnv()
-	clientOpts = append(clientOpts, p.opts.clientOpts...)
+	// Spawn client, optionally sanitizing the environment.
+	var clientOpts []ClientOption
+	if p.opts.sanitizeEnv {
+		clientOpts = make([]ClientOption, 1, 1+len(p.opts.clientOpts))
+		clientOpts[0] = WithSanitizedEnv()
+		clientOpts = append(clientOpts, p.opts.clientOpts...)
+	} else {
+		clientOpts = make([]ClientOption, 0, len(p.opts.clientOpts))
+		clientOpts = append(clientOpts, p.opts.clientOpts...)
+	}
 	client, err := NewClient(result.Path, clientOpts...)
 	if err != nil {
 		entry.failWith(fmt.Errorf("starting process: %w", err))
@@ -409,6 +425,13 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
 			p.logger.V(1).Info("provider not registered (name taken)",
 				"plugin", entry.dep.Name, "provider", provName, "error", rErr)
 			continue
+		}
+		// Configure the provider so the plugin receives the host service ID.
+		// Without this call, the plugin cannot dial back to the host for auth
+		// tokens or other host services.
+		if cErr := wrapper.Configure(ctx, ProviderConfig{}); cErr != nil {
+			p.logger.V(1).Info("failed to configure plugin provider",
+				"plugin", entry.dep.Name, "provider", provName, "error", cErr)
 		}
 		registered = append(registered, provName)
 	}
@@ -610,6 +633,12 @@ func (p *Pool) Stats() PoolStats {
 		entry.mu.Unlock()
 	}
 	return stats
+}
+
+// SanitizeEnv reports whether this pool sanitizes the environment for spawned
+// plugin clients. See [WithSanitizeEnv].
+func (p *Pool) SanitizeEnv() bool {
+	return p.opts.sanitizeEnv
 }
 
 // Shutdown kills all managed plugin processes. Called once on server stop.
