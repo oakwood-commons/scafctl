@@ -17,9 +17,10 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ auth.Handler     = (*AuthHandlerWrapper)(nil)
-	_ auth.TokenLister = (*AuthHandlerWrapper)(nil)
-	_ auth.TokenPurger = (*AuthHandlerWrapper)(nil)
+	_ auth.Handler      = (*AuthHandlerWrapper)(nil)
+	_ auth.TokenLister  = (*AuthHandlerWrapper)(nil)
+	_ auth.TokenPurger  = (*AuthHandlerWrapper)(nil)
+	_ auth.FlowDetector = (*AuthHandlerWrapper)(nil)
 )
 
 // AuthHandlerWrapper wraps a plugin auth handler to implement the auth.Handler
@@ -199,6 +200,11 @@ func (w *AuthHandlerWrapper) ListCachedTokens(ctx context.Context) ([]*auth.Cach
 // PurgeExpiredTokens implements auth.TokenPurger.
 func (w *AuthHandlerWrapper) PurgeExpiredTokens(ctx context.Context) (int, error) {
 	return w.client.plugin.PurgeExpiredTokens(ctx, w.handlerName)
+}
+
+// DetectAvailableFlows implements auth.FlowDetector.
+func (w *AuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]auth.FlowAvailability, error) {
+	return w.client.plugin.DetectAvailableFlows(ctx, w.handlerName)
 }
 
 // Client returns the underlying plugin client.

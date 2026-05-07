@@ -15,6 +15,7 @@ import (
 	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
 	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
@@ -171,6 +172,13 @@ type RootOptions struct {
 	// Embedders can supply a custom registry via official.NewRegistryFrom to
 	// extend or replace the default set.
 	OfficialProviders *official.Registry
+
+	// OfficialAuthHandlers overrides the default official auth handler registry
+	// used for auto-resolution. When nil and DisableOfficialAuthHandlers is
+	// false, the default registry (3 extracted first-party auth handlers) is
+	// used. Embedders can supply a custom registry via
+	// authofficial.NewRegistryFrom to extend or replace the default set.
+	OfficialAuthHandlers *authofficial.Registry
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -532,6 +540,27 @@ func Root(opts *RootOptions) *cobra.Command {
 						lgr.V(1).Info("warning: failed to register custom OAuth2 handler", "name", customCfg.Name, "error", regErr)
 					}
 				}
+			}
+
+			// ── Wire official auth handler registry for auto-resolution ──
+			// Same pattern as official providers. When the embedder provides a
+			// custom registry, use it. Otherwise, use the default registry
+			// unless disabled in config.
+			// NOTE: This must be wired before RegisterAuthHandlerPlugins so that
+			// configureAndRegisterAuthHandlers can read per-handler TrustedVerificationDomains.
+			if !cfg.Settings.DisableOfficialAuthHandlers {
+				officialAuthReg := opts.OfficialAuthHandlers
+				if officialAuthReg == nil {
+					officialAuthReg = authofficial.NewRegistry()
+				}
+				source := "default"
+				if opts.OfficialAuthHandlers != nil {
+					source = "embedder"
+				}
+				lgr.V(1).Info("official auth handler registry enabled", "count", officialAuthReg.Len(), "source", source)
+				ctx = authofficial.WithRegistry(ctx, officialAuthReg)
+			} else {
+				lgr.V(1).Info("official auth handler registry disabled via config")
 			}
 
 			// Register auth handler plugins if directories are configured

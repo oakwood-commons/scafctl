@@ -17,18 +17,19 @@ import (
 
 // MockAuthHandlerPlugin implements AuthHandlerPlugin for testing.
 type MockAuthHandlerPlugin struct {
-	handlers     []AuthHandlerInfo
-	loginFunc    func(ctx context.Context, name string, req LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error)
-	logoutFunc   func(ctx context.Context, name string) error
-	statusFunc   func(ctx context.Context, name string) (*auth.Status, error)
-	tokenFunc    func(ctx context.Context, name string, req TokenRequest) (*TokenResponse, error)
-	listFunc     func(ctx context.Context, name string) ([]*auth.CachedTokenInfo, error)
-	purgeFunc    func(ctx context.Context, name string) (int, error)
-	configureErr error
-	lastConfig   *ProviderConfig
-	stopErr      error
-	stopCalled   bool
-	stopHandler  string
+	handlers        []AuthHandlerInfo
+	loginFunc       func(ctx context.Context, name string, req LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error)
+	logoutFunc      func(ctx context.Context, name string) error
+	statusFunc      func(ctx context.Context, name string) (*auth.Status, error)
+	tokenFunc       func(ctx context.Context, name string, req TokenRequest) (*TokenResponse, error)
+	listFunc        func(ctx context.Context, name string) ([]*auth.CachedTokenInfo, error)
+	purgeFunc       func(ctx context.Context, name string) (int, error)
+	detectFlowsFunc func(ctx context.Context, name string) ([]FlowAvailability, error)
+	configureErr    error
+	lastConfig      *ProviderConfig
+	stopErr         error
+	stopCalled      bool
+	stopHandler     string
 }
 
 func (m *MockAuthHandlerPlugin) GetAuthHandlers(ctx context.Context) ([]AuthHandlerInfo, error) {
@@ -138,6 +139,14 @@ func (m *MockAuthHandlerPlugin) StopAuthHandler(_ context.Context, handlerName s
 	m.stopCalled = true
 	m.stopHandler = handlerName
 	return m.stopErr
+}
+
+//nolint:revive // all params required by interface
+func (m *MockAuthHandlerPlugin) DetectAvailableFlows(ctx context.Context, handlerName string) ([]FlowAvailability, error) {
+	if m.detectFlowsFunc != nil {
+		return m.detectFlowsFunc(ctx, handlerName)
+	}
+	return nil, nil
 }
 
 func TestAuthHandlerGRPC_GetAuthHandlers(t *testing.T) {

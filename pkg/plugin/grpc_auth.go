@@ -212,6 +212,25 @@ func (s *AuthHandlerGRPCServer) PurgeExpiredTokens(ctx context.Context, req *pro
 	}, nil
 }
 
+// DetectAvailableFlows implements the DetectAvailableFlows RPC.
+func (s *AuthHandlerGRPCServer) DetectAvailableFlows(ctx context.Context, req *proto.DetectAvailableFlowsRequest) (*proto.DetectAvailableFlowsResponse, error) {
+	flows, err := s.Impl.DetectAvailableFlows(ctx, req.HandlerName)
+	if err != nil {
+		//nolint:nilerr // Error is communicated via response, not gRPC error
+		return &proto.DetectAvailableFlowsResponse{Error: err.Error()}, nil
+	}
+
+	protoFlows := make([]*proto.FlowAvailability, len(flows))
+	for i, f := range flows {
+		protoFlows[i] = &proto.FlowAvailability{
+			Flow:      string(f.Flow),
+			Available: f.Available,
+			Reason:    f.Reason,
+		}
+	}
+	return &proto.DetectAvailableFlowsResponse{Flows: protoFlows}, nil
+}
+
 // ConfigureAuthHandler implements the ConfigureAuthHandler RPC.
 func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *proto.ConfigureAuthHandlerRequest) (*proto.ConfigureAuthHandlerResponse, error) {
 	settings := make(map[string]json.RawMessage, len(req.Settings))
@@ -403,6 +422,35 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 		return fmt.Errorf("configure auth handler failed: %s", resp.Error)
 	}
 	return nil
+}
+
+// DetectAvailableFlows implements AuthHandlerPlugin.DetectAvailableFlows.
+func (c *AuthHandlerGRPCClient) DetectAvailableFlows(ctx context.Context, handlerName string) ([]FlowAvailability, error) {
+	resp, err := c.client.DetectAvailableFlows(ctx, &proto.DetectAvailableFlowsRequest{
+		HandlerName: handlerName,
+	})
+	if err != nil {
+		// Older plugins (SDK <0.5.0) may not implement DetectAvailableFlows.
+		// Degrade gracefully: return empty list so the host falls back to
+		// default flow selection.
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return []FlowAvailability{}, nil
+		}
+		return nil, fmt.Errorf("detect available flows RPC failed: %w", err)
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("detect available flows: %s", resp.Error)
+	}
+
+	flows := make([]FlowAvailability, len(resp.Flows))
+	for i, f := range resp.Flows {
+		flows[i] = FlowAvailability{
+			Flow:      auth.Flow(f.Flow),
+			Available: f.Available,
+			Reason:    f.Reason,
+		}
+	}
+	return flows, nil
 }
 
 // StopAuthHandler implements AuthHandlerPlugin.StopAuthHandler.

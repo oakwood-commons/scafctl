@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 )
 
 // Handler defines the interface for authentication handlers.
@@ -117,4 +118,21 @@ type FlowReporter interface {
 	// ActiveFlow returns the authentication flow currently in use.
 	// Returns an empty string if the flow cannot be determined.
 	ActiveFlow(ctx context.Context) Flow
+}
+
+// FlowAvailability reports whether a specific auth flow is available based on
+// environment credentials or configuration.
+type FlowAvailability = sdkplugin.FlowAvailability
+
+// FlowDetector is an optional interface for auth handlers that can report which
+// flows have pre-existing environment credentials (e.g., PAT in GITHUB_TOKEN,
+// workload identity in AZURE_FEDERATED_TOKEN_FILE). The CLI uses this for flow
+// auto-selection without importing handler-specific packages.
+//
+// Plugin auth handlers implement this via the SDK's DetectAvailableFlows RPC.
+// Built-in handlers (like oauth2) may optionally implement this interface.
+type FlowDetector interface {
+	// DetectAvailableFlows returns the availability of each supported auth flow
+	// based on the current environment (env vars, config files, metadata endpoints).
+	DetectAvailableFlows(ctx context.Context) ([]FlowAvailability, error)
 }

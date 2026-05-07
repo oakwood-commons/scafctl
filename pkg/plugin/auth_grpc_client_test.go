@@ -45,6 +45,8 @@ type mockAuthHandlerServiceClient struct {
 	purgeExpiredTokensErr    error
 	stopAuthHandlerResp      *proto.StopAuthHandlerResponse
 	stopAuthHandlerErr       error
+	detectAvailableFlowsResp *proto.DetectAvailableFlowsResponse
+	detectAvailableFlowsErr  error
 }
 
 func (m *mockAuthHandlerServiceClient) GetAuthHandlers(_ context.Context, _ *proto.GetAuthHandlersRequest, _ ...grpc.CallOption) (*proto.GetAuthHandlersResponse, error) {
@@ -84,6 +86,10 @@ func (m *mockAuthHandlerServiceClient) PurgeExpiredTokens(_ context.Context, _ *
 
 func (m *mockAuthHandlerServiceClient) StopAuthHandler(_ context.Context, _ *proto.StopAuthHandlerRequest, _ ...grpc.CallOption) (*proto.StopAuthHandlerResponse, error) {
 	return m.stopAuthHandlerResp, m.stopAuthHandlerErr
+}
+
+func (m *mockAuthHandlerServiceClient) DetectAvailableFlows(_ context.Context, _ *proto.DetectAvailableFlowsRequest, _ ...grpc.CallOption) (*proto.DetectAvailableFlowsResponse, error) {
+	return m.detectAvailableFlowsResp, m.detectAvailableFlowsErr
 }
 
 // --- Mock login stream ---
@@ -636,6 +642,90 @@ func TestAuthHandlerGRPCClient_StopAuthHandler_OtherError(t *testing.T) {
 }
 
 // =====================================================================
+// AuthHandlerGRPCClient DetectAvailableFlows tests
+// =====================================================================
+
+func TestAuthHandlerGRPCClient_DetectAvailableFlows_Success(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		detectAvailableFlowsResp: &proto.DetectAvailableFlowsResponse{
+			Flows: []*proto.FlowAvailability{
+				{Flow: "pat", Available: true, Reason: "GITHUB_TOKEN is set"},
+				{Flow: "device_code", Available: false, Reason: ""},
+			},
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	flows, err := client.DetectAvailableFlows(context.Background(), "github")
+	require.NoError(t, err)
+	require.Len(t, flows, 2)
+
+	assert.Equal(t, auth.Flow("pat"), flows[0].Flow)
+	assert.True(t, flows[0].Available)
+	assert.Equal(t, "GITHUB_TOKEN is set", flows[0].Reason)
+
+	assert.Equal(t, auth.Flow("device_code"), flows[1].Flow)
+	assert.False(t, flows[1].Available)
+}
+
+func TestAuthHandlerGRPCClient_DetectAvailableFlows_ResponseError(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		detectAvailableFlowsResp: &proto.DetectAvailableFlowsResponse{
+			Error: "detection failed: handler not configured",
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.DetectAvailableFlows(context.Background(), "github")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "handler not configured")
+}
+
+func TestAuthHandlerGRPCClient_DetectAvailableFlows_Unimplemented(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		detectAvailableFlowsErr: status.Error(codes.Unimplemented, "not supported"),
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	flows, err := client.DetectAvailableFlows(context.Background(), "github")
+	require.NoError(t, err) // should degrade gracefully
+	assert.Empty(t, flows)  // empty result, no error
+	assert.NotNil(t, flows) // must be empty slice, not nil
+}
+
+func TestAuthHandlerGRPCClient_DetectAvailableFlows_OtherError(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		detectAvailableFlowsErr: errors.New("transport error"),
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.DetectAvailableFlows(context.Background(), "github")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "detect available flows RPC failed")
+}
+
+func TestAuthHandlerGRPCClient_DetectAvailableFlows_EmptyList(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		detectAvailableFlowsResp: &proto.DetectAvailableFlowsResponse{},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	flows, err := client.DetectAvailableFlows(context.Background(), "github")
+	require.NoError(t, err)
+	assert.Empty(t, flows)
+}
+
+// =====================================================================
 // AuthHandlerGRPCServer tests for uncovered server methods
 // =====================================================================
 
@@ -731,6 +821,46 @@ func TestAuthHandlerGRPCServer_PurgeExpiredTokens_Error(t *testing.T) {
 
 	_, err := server.PurgeExpiredTokens(context.Background(), &proto.PurgeExpiredTokensRequest{HandlerName: "test"})
 	require.Error(t, err)
+}
+
+func TestAuthHandlerGRPCServer_DetectAvailableFlows_Success(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		detectFlowsFunc: func(_ context.Context, _ string) ([]FlowAvailability, error) {
+			return []FlowAvailability{
+				{Flow: "pat", Available: true, Reason: "GITHUB_TOKEN is set"},
+				{Flow: "device_code", Available: false},
+			}, nil
+		},
+	}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+
+	resp, err := server.DetectAvailableFlows(context.Background(), &proto.DetectAvailableFlowsRequest{HandlerName: "github"})
+	require.NoError(t, err)
+	require.Empty(t, resp.Error)
+	require.Len(t, resp.Flows, 2)
+	assert.Equal(t, "pat", resp.Flows[0].Flow)
+	assert.True(t, resp.Flows[0].Available)
+	assert.Equal(t, "GITHUB_TOKEN is set", resp.Flows[0].Reason)
+	assert.Equal(t, "device_code", resp.Flows[1].Flow)
+	assert.False(t, resp.Flows[1].Available)
+}
+
+func TestAuthHandlerGRPCServer_DetectAvailableFlows_Error(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		detectFlowsFunc: func(_ context.Context, _ string) ([]FlowAvailability, error) {
+			return nil, fmt.Errorf("detection failed")
+		},
+	}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+
+	resp, err := server.DetectAvailableFlows(context.Background(), &proto.DetectAvailableFlowsRequest{HandlerName: "github"})
+	require.NoError(t, err) // gRPC error is communicated via response, not gRPC error
+	assert.Equal(t, "detection failed", resp.Error)
+	assert.Empty(t, resp.Flows)
 }
 
 // =====================================================================
@@ -1139,6 +1269,51 @@ func TestAuthHandlerWrapper_InjectAuth_EmptyTokenType(t *testing.T) {
 	assert.Equal(t, "Bearer my-token", req.Header.Get("Authorization"))
 }
 
+func TestAuthHandlerWrapper_DetectAvailableFlows_Success(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{
+		detectFlowsFunc: func(_ context.Context, _ string) ([]FlowAvailability, error) {
+			return []FlowAvailability{
+				{Flow: "pat", Available: true, Reason: "GITHUB_TOKEN is set"},
+			}, nil
+		},
+	}
+	w := &AuthHandlerWrapper{
+		client:      &AuthHandlerClient{plugin: mock, name: "p"},
+		handlerName: "github",
+		info:        AuthHandlerInfo{Name: "github"},
+	}
+
+	flows, err := w.DetectAvailableFlows(context.Background())
+	require.NoError(t, err)
+	require.Len(t, flows, 1)
+	assert.Equal(t, auth.Flow("pat"), flows[0].Flow)
+	assert.True(t, flows[0].Available)
+}
+
+func TestAuthHandlerWrapper_DetectAvailableFlows_Empty(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{} // default returns nil, nil
+	w := &AuthHandlerWrapper{
+		client:      &AuthHandlerClient{plugin: mock, name: "p"},
+		handlerName: "h",
+		info:        AuthHandlerInfo{Name: "h"},
+	}
+
+	flows, err := w.DetectAvailableFlows(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, flows)
+}
+
+func TestAuthHandlerWrapper_ImplementsFlowDetector(t *testing.T) {
+	t.Parallel()
+
+	w := &AuthHandlerWrapper{}
+	var _ auth.FlowDetector = w // compile-time check
+}
+
 // =====================================================================
 // errAuthPlugin helper for error-path server tests
 // =====================================================================
@@ -1181,4 +1356,8 @@ func (e *errAuthPlugin) ConfigureAuthHandler(_ context.Context, _ string, _ Prov
 
 func (e *errAuthPlugin) StopAuthHandler(_ context.Context, _ string) error {
 	return e.err
+}
+
+func (e *errAuthPlugin) DetectAvailableFlows(_ context.Context, _ string) ([]FlowAvailability, error) {
+	return nil, e.err
 }

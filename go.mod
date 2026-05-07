@@ -1,6 +1,6 @@
 module github.com/oakwood-commons/scafctl
 
-go 1.26.2
+go 1.26.3
 
 require (
 	charm.land/bubbletea/v2 v2.0.6
@@ -32,7 +32,7 @@ require (
 	github.com/oakwood-commons/httpc v0.1.0
 	github.com/oakwood-commons/kvx v0.12.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0
-	github.com/oakwood-commons/scafctl-plugin-sdk v0.4.0
+	github.com/oakwood-commons/scafctl-plugin-sdk v0.5.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pelletier/go-toml/v2 v2.3.0
@@ -61,7 +61,7 @@ require (
 	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260427160629-7cedc36a6bc4
-	google.golang.org/grpc v1.80.0
+	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.36.0
