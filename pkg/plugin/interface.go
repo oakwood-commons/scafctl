@@ -38,6 +38,10 @@ type TokenRequest = sdkplugin.TokenRequest
 // TokenResponse contains the result of a plugin GetToken call.
 type TokenResponse = sdkplugin.TokenResponse
 
+// FlowAvailability reports whether a specific auth flow is available based on
+// environment credentials or configuration.
+type FlowAvailability = sdkplugin.FlowAvailability
+
 // AuthHandlerPlugin is the interface that auth handler plugins must implement.
 type AuthHandlerPlugin = sdkplugin.AuthHandlerPlugin
 

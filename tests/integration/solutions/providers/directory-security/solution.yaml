@@ -90,6 +90,8 @@ spec:
         description: Verify symlinks are silently skipped during listing
         extends: [_base]
         args: ["symlinkDir", "-o", "json"]
+        skip: 'os == "windows"'
+        skipReason: "Symlink creation requires elevated privileges or Developer Mode on Windows"
         init:
           - command: |
               mkdir -p symlink-test-dir

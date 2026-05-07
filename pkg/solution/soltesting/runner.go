@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -938,9 +939,19 @@ func (r *Runner) checkExitCode(tc *TestCase, output *CommandOutput) bool {
 
 // evaluateSkipExpression evaluates a CEL skip expression.
 func (r *Runner) evaluateSkipExpression(ctx context.Context, expr string) (bool, error) {
+	// Use GOOS/GOARCH env vars if set (e.g., cross-compilation), otherwise
+	// fall back to runtime values so skip expressions work without env setup.
+	goOS := os.Getenv("GOOS")
+	if goOS == "" {
+		goOS = runtime.GOOS
+	}
+	goArch := os.Getenv("GOARCH")
+	if goArch == "" {
+		goArch = runtime.GOARCH
+	}
 	envVars := map[string]any{
-		"os":         os.Getenv("GOOS"),
-		"arch":       os.Getenv("GOARCH"),
+		"os":         goOS,
+		"arch":       goArch,
 		"subprocess": r.BinaryPath != "",
 	}
 

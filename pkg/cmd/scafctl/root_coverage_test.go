@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -406,4 +407,105 @@ func TestRoot_BinaryName_Empty(t *testing.T) {
 	t.Parallel()
 	cmd := Root(&RootOptions{BinaryName: ""})
 	assert.Equal(t, "scafctl", cmd.Use)
+}
+
+// TestRoot_OfficialAuthHandlerRegistry_Enabled verifies that the official auth
+// handler registry is wired into the context when not disabled.
+func TestRoot_OfficialAuthHandlerRegistry_Enabled(t *testing.T) {
+	t.Parallel()
+
+	var registryFromCtx *authofficial.Registry
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{
+		IOStreams: ioStreams,
+		PreRunHook: func(cmd *cobra.Command, _ []string) error {
+			registryFromCtx = authofficial.RegistryFromContext(cmd.Context())
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.NotNil(t, registryFromCtx, "official auth handler registry should be set in context")
+	assert.Equal(t, 3, registryFromCtx.Len(), "default registry should contain 3 handlers")
+}
+
+// TestRoot_OfficialAuthHandlerRegistry_CustomEmbedder verifies that an
+// embedder-supplied registry is used instead of the default.
+func TestRoot_OfficialAuthHandlerRegistry_CustomEmbedder(t *testing.T) {
+	t.Parallel()
+
+	customRegistry := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "custom-handler", CatalogRef: "custom", DefaultVersion: "latest", MinSDKVersion: "0.1.0"},
+	})
+
+	var registryFromCtx *authofficial.Registry
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{
+		IOStreams:            ioStreams,
+		OfficialAuthHandlers: customRegistry,
+		PreRunHook: func(cmd *cobra.Command, _ []string) error {
+			registryFromCtx = authofficial.RegistryFromContext(cmd.Context())
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.NotNil(t, registryFromCtx, "embedder registry should be set in context")
+	assert.Equal(t, 1, registryFromCtx.Len(), "embedder registry should contain 1 handler")
+	_, found := registryFromCtx.Get("custom-handler")
+	assert.True(t, found, "embedder registry should contain the custom handler")
+}
+
+// TestRoot_OfficialAuthHandlerRegistry_Disabled verifies that the official auth
+// handler registry is nil in context when disabled via config.
+func TestRoot_OfficialAuthHandlerRegistry_Disabled(t *testing.T) {
+	t.Parallel()
+
+	disabledCfg := []byte("settings:\n  disableOfficialAuthHandlers: true\n")
+
+	var registryFromCtx *authofficial.Registry
+	hookCalled := false
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{
+		IOStreams:      ioStreams,
+		ConfigDefaults: disabledCfg,
+		PreRunHook: func(cmd *cobra.Command, _ []string) error {
+			registryFromCtx = authofficial.RegistryFromContext(cmd.Context())
+			hookCalled = true
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.True(t, hookCalled, "PreRunHook should have been called")
+	assert.Nil(t, registryFromCtx, "official auth handler registry should be nil when disabled")
+}
+
+// TestRoot_OfficialAuthHandlerRegistry_Enabled_NonDefaultBinary verifies that the
+// registry is wired correctly when using a custom BinaryName (embedder scenario).
+func TestRoot_OfficialAuthHandlerRegistry_Enabled_NonDefaultBinary(t *testing.T) {
+	t.Parallel()
+
+	var registryFromCtx *authofficial.Registry
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{
+		IOStreams:  ioStreams,
+		BinaryName: "mycli",
+		PreRunHook: func(cmd *cobra.Command, _ []string) error {
+			registryFromCtx = authofficial.RegistryFromContext(cmd.Context())
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.NotNil(t, registryFromCtx, "official auth handler registry should be set for custom binary")
+	assert.Equal(t, 3, registryFromCtx.Len())
 }
