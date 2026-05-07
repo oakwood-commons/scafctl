@@ -5,7 +5,9 @@ package soltesting
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/shellexec"
@@ -80,6 +82,34 @@ func TestEvaluateSkipExpression_NonBoolResult(t *testing.T) {
 	_, err := runner.evaluateSkipExpression(ctx, `"string_value"`)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must return bool")
+}
+
+func TestEvaluateSkipExpression_OSVariable(t *testing.T) {
+	t.Setenv("GOOS", "")
+	runner := &Runner{
+		IOStreams: &terminal.IOStreams{Out: os.Stdout, ErrOut: os.Stderr},
+	}
+	ctx := context.Background()
+
+	// os variable should equal runtime.GOOS when GOOS env var is not set
+	expr := fmt.Sprintf(`os == "%s"`, runtime.GOOS)
+	result, err := runner.evaluateSkipExpression(ctx, expr)
+	require.NoError(t, err)
+	assert.True(t, result)
+}
+
+func TestEvaluateSkipExpression_ArchVariable(t *testing.T) {
+	t.Setenv("GOARCH", "")
+	runner := &Runner{
+		IOStreams: &terminal.IOStreams{Out: os.Stdout, ErrOut: os.Stderr},
+	}
+	ctx := context.Background()
+
+	// arch variable should equal runtime.GOARCH when GOARCH env var is not set
+	expr := fmt.Sprintf(`arch == "%s"`, runtime.GOARCH)
+	result, err := runner.evaluateSkipExpression(ctx, expr)
+	require.NoError(t, err)
+	assert.True(t, result)
 }
 
 func TestComposeExecMocks_MatchingRule(t *testing.T) {
