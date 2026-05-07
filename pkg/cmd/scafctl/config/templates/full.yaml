@@ -253,3 +253,26 @@ catalogs:
 #     metadata:
 #       team: platform
 #       environment: production
+
+# =============================================================================
+# Plugins - Plugin management configuration
+# =============================================================================
+plugins:
+  # Sigstore/cosign signature verification for plugin binaries
+  signatures:
+    # Verification mode:
+    #   "off"     - No signature verification (default)
+    #   "warn"    - Verify but only log warnings on failure
+    #   "enforce" - Require valid signatures; block unsigned plugins
+    # Default: "off"
+    mode: "off"
+
+    # OIDC issuers whose signing certificates are trusted
+    # Required when mode is "warn" or "enforce"
+    # trustedIssuers:
+    #   - "https://token.actions.githubusercontent.com"
+
+    # Glob patterns matching trusted signing identities
+    # Required when mode is "warn" or "enforce"
+    # trustedIdentities:
+    #   - "https://github.com/oakwood-commons/*"

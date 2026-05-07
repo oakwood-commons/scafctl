@@ -101,7 +101,7 @@ scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 
 ## Next Steps
 
-- [Extension Concepts](extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
-- [Provider Development Guide](provider-development.md) — Build providers (builtin + plugin)
-- [Auth Handler Development Guide](auth-handler-development.md) — Build auth handlers (builtin + plugin)
-- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) — Catalog-based distribution
+- [Extension Concepts](extension-concepts.md) -- Provider vs Auth Handler vs Plugin terminology
+- [Provider Development Guide](provider-development.md) -- Build providers (builtin + plugin)
+- [Auth Handler Development Guide](auth-handler-development.md) -- Build auth handlers (builtin + plugin)
+- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) -- Catalog-based distribution and signature verification

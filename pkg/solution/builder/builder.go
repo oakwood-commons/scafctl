@@ -17,6 +17,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -191,6 +193,7 @@ func BuildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 			PluginResolver:  pluginResolver,
 			PlatformCatalog: localCat,
 			Platform:        runtime.GOOS + "/" + runtime.GOARCH,
+			VerifySignature: buildLockSignatureVerifier(ctx, lgr),
 		})
 		if pluginErr != nil {
 			// Plugin resolution failure is a warning, not a hard error —
@@ -474,4 +477,55 @@ func autoInjectOfficialPlugins(
 		}
 	}
 	return injected
+}
+
+// buildLockSignatureVerifier returns a VerifySignature callback for the bundler
+// when a signature policy is active. It checks the context for an explicit
+// policy override first, then falls back to the app configuration
+// (config.Plugins.Signatures). Returns nil when signatures are disabled,
+// which causes VendorPlugins to skip verification.
+func buildLockSignatureVerifier(ctx context.Context, lgr logr.Logger) func(context.Context, string) (*bundler.LockPluginSignature, error) {
+	policy := plugin.SignaturePolicyFromContext(ctx)
+	if policy == nil {
+		policy = signaturePolicyFromAppConfig(config.FromContext(ctx), lgr)
+	}
+	if !policy.IsEnabled() {
+		return nil
+	}
+	verifier := plugin.NewSignatureVerifier()
+	return func(ctx context.Context, imageRef string) (*bundler.LockPluginSignature, error) {
+		result, err := verifier.VerifySignature(ctx, imageRef, policy)
+		if err != nil {
+			if handleErr := plugin.HandleVerificationError(policy, err, lgr,
+				"imageRef", imageRef); handleErr != nil {
+				return nil, handleErr
+			}
+			return nil, nil
+		}
+		if result == nil || !result.Verified {
+			return nil, nil
+		}
+		return &bundler.LockPluginSignature{
+			Issuer:   result.Issuer,
+			Identity: result.Identity,
+			SignedAt: result.SignedAt,
+		}, nil
+	}
+}
+
+// signaturePolicyFromAppConfig derives a SignaturePolicy from the app
+// configuration using the shared plugin.SignaturePolicyFromRaw helper.
+// Returns nil when the config is nil, mode is "off", empty, or invalid.
+func signaturePolicyFromAppConfig(appCfg *config.Config, lgr logr.Logger) *plugin.SignaturePolicy {
+	if appCfg == nil {
+		return nil
+	}
+	sigCfg := appCfg.Plugins.Signatures
+	policy, err := plugin.SignaturePolicyFromRaw(sigCfg.Mode, sigCfg.TrustedIssuers, sigCfg.TrustedIdentities)
+	if err != nil {
+		lgr.Info("invalid plugin signature mode in config, defaulting to off",
+			"mode", sigCfg.Mode, "error", err)
+		return nil
+	}
+	return policy
 }

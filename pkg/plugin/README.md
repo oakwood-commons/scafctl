@@ -207,6 +207,38 @@ See `examples/plugins/echo/` for a complete example plugin implementation.
 - Failed plugins don't crash the main process
 - Secret access is scoped by plugin-specific prefix
 - Auth handler access restricted by AllowedAuthHandlers allowlist
+- Plugin binary signatures can be verified via Sigstore/cosign (see below)
+
+## Signature Verification
+
+Plugin binaries fetched from catalogs support Sigstore/cosign keyless signature
+verification. This is controlled by a `SignaturePolicy`:
+
+| Mode | Behavior |
+|------|----------|
+| `off` | Digest-only verification (default) |
+| `warn` | Verify signature; warn on failure |
+| `enforce` | Verify signature; fail on missing or invalid signature |
+
+### Types
+
+- `SignaturePolicy` -- policy with `Mode`, `TrustedIssuers`, and `TrustedIdentities`
+- `SignatureMode` -- string enum: `off`, `warn`, `enforce`
+- `SignatureResult` -- verification outcome with `Verified`, `Issuer`, `Identity`, `SignedAt`
+- `SignatureVerifier` -- interface for signature verification implementations
+
+### Build Tags
+
+The cosign implementation is behind a `cosign` build tag:
+
+- **With tag**: `cosign.go` provides a real Sigstore verifier
+- **Without tag** (default): `cosign_stub.go` returns `ErrCosignNotAvailable`
+
+### Context API
+
+- `WithSignaturePolicy(ctx, policy)` -- store a policy in context
+- `SignaturePolicyFromContext(ctx)` -- retrieve a policy from context
+- `HandleVerificationError(policy, err, logger)` -- apply mode-based error handling
 
 ## Testing
 
