@@ -600,6 +600,12 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	}
 	opts = o.appendClientPluginOptions(opts)
 
+	// Wire auth host deps so that plugin providers can request auth tokens
+	// from the host process via gRPC HostService.
+	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
+		opts = append(opts, prepare.WithClientOptions(authOpts...))
+	}
+
 	if o.discoveryMode != settings.DiscoveryModeDefault {
 		opts = append(opts, prepare.WithDiscoveryMode(o.discoveryMode))
 	}
@@ -982,7 +988,8 @@ func autoResolveProviderByName(ctx context.Context, name string, reg *provider.R
 	pluginCfg := &plugin.ProviderConfig{
 		BinaryName: settings.BinaryNameFromContext(ctx),
 	}
-	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, pluginCfg)
+	clientOpts := plugin.AuthClientOptsFromContext(ctx)
+	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, pluginCfg, clientOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("registering provider %q: %w", name, err)
 	}

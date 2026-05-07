@@ -270,7 +270,9 @@ func preloadOfficialProviders(
 		return nil, fmt.Errorf("fetching official providers: %w", fetchErr)
 	}
 
-	clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, nil)
+	clientOpts := plugin.AuthClientOptsFromContext(ctx)
+
+	clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, nil, clientOpts...)
 	if regErr != nil {
 		return nil, fmt.Errorf("registering official providers: %w", regErr)
 	}

@@ -350,6 +350,7 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	if logger.IsDebugLevel(o.CliParams.MinLogLevel) {
 		clientOpts = append(clientOpts, plugin.WithDebugLogging())
 	}
+	clientOpts = append(clientOpts, plugin.AuthClientOptsFromContext(ctx)...)
 	if len(o.PluginDirs) > 0 {
 		lgr.V(1).Info("loading plugin providers", "dirs", o.PluginDirs)
 		clients, err := plugin.RegisterPluginProviders(ctx, reg, o.PluginDirs, pluginCfg, clientOpts...)

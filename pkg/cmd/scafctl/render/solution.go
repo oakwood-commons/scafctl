@@ -623,7 +623,8 @@ func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
 // the solution that are missing from the registry. Returns plugin clients
 // that should be closed when done.
 func (o *SolutionOptions) autoResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry) []*plugin.Client {
-	clients, err := prepare.ResolveOfficialProviders(ctx, sol, reg)
+	clientOpts := plugin.AuthClientOptsFromContext(ctx)
+	clients, err := prepare.ResolveOfficialProviders(ctx, sol, reg, clientOpts...)
 	if err != nil {
 		lgr := logger.FromContext(ctx)
 		if lgr != nil {

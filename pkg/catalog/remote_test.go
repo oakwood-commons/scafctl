@@ -919,12 +919,16 @@ func TestDiscoveredArtifact_ToAnnotations(t *testing.T) {
 			Description: "A test app",
 			Category:    "deployment",
 			Tags:        []string{"go", "cloud"},
+			Source:      "https://github.com/example/my-app",
+			Annotations: map[string]string{"team": "platform"},
 		}
 		ann := d.ToAnnotations()
 		assert.Equal(t, "My Application", ann[AnnotationDisplayName])
 		assert.Equal(t, "A test app", ann[AnnotationDescription])
 		assert.Equal(t, "deployment", ann[AnnotationCategory])
 		assert.Equal(t, "go,cloud", ann[AnnotationTags])
+		assert.Equal(t, "https://github.com/example/my-app", ann[AnnotationSource])
+		assert.Equal(t, "platform", ann["team"])
 	})
 
 	t.Run("omits empty fields", func(t *testing.T) {
@@ -938,6 +942,18 @@ func TestDiscoveredArtifact_ToAnnotations(t *testing.T) {
 		assert.NotContains(t, ann, AnnotationDescription)
 		assert.NotContains(t, ann, AnnotationCategory)
 		assert.NotContains(t, ann, AnnotationTags)
+	})
+
+	t.Run("user annotations do not override engine keys", func(t *testing.T) {
+		t.Parallel()
+		d := DiscoveredArtifact{
+			Name:        "conflict",
+			DisplayName: "Engine Name",
+			Annotations: map[string]string{AnnotationDisplayName: "User Name", "custom": "value"},
+		}
+		ann := d.ToAnnotations()
+		assert.Equal(t, "Engine Name", ann[AnnotationDisplayName], "engine-set key must win")
+		assert.Equal(t, "value", ann["custom"])
 	})
 
 	t.Run("returns empty map when no metadata", func(t *testing.T) {

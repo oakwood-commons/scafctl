@@ -126,6 +126,26 @@ metadata:
 	}
 }
 
+func TestSolution_UnmarshalSourceAndAnnotations(t *testing.T) {
+	yamlBytes := []byte(`
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+  version: 1.0.0
+  source: https://github.com/example/test-solution
+  annotations:
+    team: platform
+    costCenter: "12345"
+`)
+	var s Solution
+	require.NoError(t, s.UnmarshalFromBytes(yamlBytes))
+	assert.Equal(t, "https://github.com/example/test-solution", s.Metadata.Source)
+	require.Len(t, s.Metadata.Annotations, 2)
+	assert.Equal(t, "platform", s.Metadata.Annotations["team"])
+	assert.Equal(t, "12345", s.Metadata.Annotations["costCenter"])
+}
+
 func TestSolution_ToJSON(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -177,6 +177,8 @@ func EnrichArtifacts(ctx context.Context, lgr logr.Logger, rc catalog.Catalog, a
 		a.DisplayName = sol.Metadata.DisplayName
 		a.Category = sol.Metadata.Category
 		a.Tags = sol.Metadata.Tags
+		a.Source = sol.Metadata.Source
+		a.Annotations = sol.Metadata.Annotations
 
 		// Extended metadata for MCP and rich discovery.
 		for _, m := range sol.Metadata.Maintainers {
@@ -461,4 +463,6 @@ func copyEnrichedMetadata(dst *catalog.DiscoveredArtifact, src catalog.Discovere
 	dst.Links = src.Links
 	dst.Providers = src.Providers
 	dst.Parameters = src.Parameters
+	dst.Source = src.Source
+	dst.Annotations = src.Annotations
 }
