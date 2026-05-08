@@ -650,6 +650,110 @@ See the [Multi-Platform Plugin Build Tutorial](../tutorials/multi-platform-plugi
 
 ---
 
+## Signature Verification
+
+Plugin binaries fetched from catalogs can be verified using
+[Sigstore/cosign](https://docs.sigstore.dev/) keyless signatures. This protects
+against supply chain attacks by ensuring that only binaries signed by trusted
+identities are loaded.
+
+### Verification Modes
+
+| Mode | Behavior |
+|------|----------|
+| `off` (default) | Digest-only verification; no signature check |
+| `warn` | Verify signature; log a warning on failure but continue |
+| `enforce` | Verify signature; fail on missing or invalid signature |
+
+### Configuration
+
+Set the verification policy in `~/.config/scafctl/config.yaml`:
+
+```yaml
+plugins:
+  signatures:
+    mode: "warn"
+    trustedIssuers:
+      - "https://token.actions.githubusercontent.com"
+    trustedIdentities:
+      - "https://github.com/oakwood-commons/*"
+```
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `off`, `warn`, or `enforce` |
+| `trustedIssuers` | OIDC token issuers whose signing certificates are trusted |
+| `trustedIdentities` | Glob patterns matching the certificate subject/identity |
+
+Both `trustedIssuers` and `trustedIdentities` must have at least one entry when
+mode is `warn` or `enforce`.
+
+### How It Works
+
+1. A plugin binary is fetched from a catalog as an OCI artifact
+2. If signature verification is enabled, the verifier queries the Sigstore
+   transparency log (Rekor) for a cosign signature on the artifact
+3. The signing certificate is validated against Fulcio root certificates
+4. The certificate's OIDC issuer and subject identity are matched against the
+   policy's `trustedIssuers` and `trustedIdentities`
+5. On success, the `SignatureResult` records the issuer, identity, and timestamp
+6. On failure, the policy mode determines whether execution is blocked (`enforce`)
+   or continues with a warning (`warn`)
+
+### Keyless Signing (Sigstore)
+
+scafctl uses Sigstore's keyless signing model:
+
+- No private keys to manage or rotate
+- Signing certificates are issued by Fulcio using short-lived OIDC tokens
+- Signatures are recorded in the Rekor transparency log
+- Verification checks certificate validity, OIDC issuer, and subject identity
+
+This is the same model used by projects like Kubernetes and npm for supply chain
+security.
+
+### Build Tag Gating
+
+The cosign verification library is behind a Go build tag (`cosign`) to avoid
+pulling heavy dependencies into the default binary:
+
+- **With cosign**: `go build -tags cosign` -- full Sigstore verification
+- **Without cosign** (default): a stub verifier returns `ErrCosignNotAvailable`
+
+When the stub is active and mode is `warn`, a warning is logged. When mode is
+`enforce`, execution fails with a clear error indicating the binary needs to be
+rebuilt with the `cosign` tag.
+
+### Embedder Override
+
+Embedders can enforce a signature policy programmatically via `RootOptions`:
+
+```go
+opts := &scafctl.RootOptions{
+    PluginSignaturePolicy: &plugin.SignaturePolicy{
+        Mode:              plugin.SignatureModeEnforce,
+        TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+        TrustedIdentities: []string{"https://github.com/my-org/*"},
+    },
+}
+```
+
+This takes precedence over user configuration, allowing embedders to enforce
+stricter policies without relying on user-managed config files.
+
+### Context Propagation
+
+The signature policy flows through the context:
+
+1. `RootOptions.PluginSignaturePolicy` (embedder override, highest priority)
+2. `plugin.SignaturePolicyFromContext(ctx)` (set via `WithSignaturePolicy`)
+3. `config.Plugins.Signatures` (user configuration, lowest priority)
+
+The `prepare.BuildPluginFetcherWithConfig` function resolves the policy using
+this priority chain.
+
+---
+
 ## Summary
 
 Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.

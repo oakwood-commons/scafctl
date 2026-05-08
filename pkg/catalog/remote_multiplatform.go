@@ -79,11 +79,11 @@ func (c *RemoteCatalog) fetchByPlatformInternal(ctx context.Context, ref Referen
 			return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch platform manifest: %w", err)
 		}
 
-		return c.extractLayerContent(ctx, repo, platManifestData, ref, platform)
+		return c.extractLayerContent(ctx, repo, platManifestData, ref, platform, platDesc.Digest.String())
 	}
 
 	// Single-platform manifest — extract content directly.
-	return c.extractLayerContent(ctx, repo, topData, ref, "")
+	return c.extractLayerContent(ctx, repo, topData, ref, "", topDesc.Digest.String())
 }
 
 // extractLayerContent unmarshals a manifest and fetches the first content layer.
@@ -93,6 +93,7 @@ func (c *RemoteCatalog) extractLayerContent(
 	manifestData []byte,
 	ref Reference,
 	platform string,
+	manifestDigest string,
 ) ([]byte, ArtifactInfo, error) {
 	var manifest ocispec.Manifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
@@ -126,6 +127,7 @@ func (c *RemoteCatalog) extractLayerContent(
 	info := ArtifactInfo{
 		Reference:   ref,
 		Digest:      manifest.Layers[0].Digest.String(),
+		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDigest,
 		CreatedAt:   createdAt,
 		Size:        int64(len(contentData)),
 		Annotations: annotations,

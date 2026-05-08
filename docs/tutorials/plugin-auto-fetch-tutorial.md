@@ -145,6 +145,90 @@ Run 'scafctl build solution' to generate a lock file with pinned digests
 
 This mandatory digest verification prevents supply chain attacks where a compromised catalog or man-in-the-middle attacker could serve a malicious binary. Always use lock files for production deployments.
 
+## Signature Verification
+
+Beyond digest verification, scafctl supports [Sigstore/cosign](https://docs.sigstore.dev/) keyless signature verification for plugin binaries. This provides cryptographic proof that a plugin was built by a trusted identity.
+
+### Configuring Signature Verification
+
+Add the `plugins.signatures` section to your config:
+
+```yaml
+# ~/.config/scafctl/config.yaml
+plugins:
+  signatures:
+    mode: "warn"          # or "enforce"
+    trustedIssuers:
+      - "https://token.actions.githubusercontent.com"
+    trustedIdentities:
+      - "https://github.com/oakwood-commons/*"
+```
+
+### Verification Modes
+
+| Mode | Behavior |
+|------|----------|
+| `off` (default) | No signature check; digest verification only |
+| `warn` | Verify signature; log a warning on failure but continue execution |
+| `enforce` | Verify signature; fail with an error on missing or invalid signature |
+
+### How Verification Works
+
+When a plugin binary is fetched from a catalog with signature verification enabled:
+
+1. The OCI artifact digest is resolved from the catalog
+2. scafctl queries the Rekor transparency log for a cosign signature
+3. The signing certificate is validated against Fulcio CA roots
+4. The certificate's OIDC issuer and identity are matched against the policy
+5. On success, the verification result is logged (issuer, identity, timestamp)
+6. On failure, the mode determines the outcome (warn or fail)
+
+### Build Tag Requirement
+
+Signature verification requires the `cosign` build tag:
+
+{{< tabs "plugin-signature-build" >}}
+{{% tab "Bash" %}}
+```bash
+# Build scafctl with cosign signature verification support
+go build -tags cosign -o scafctl ./cmd/scafctl/scafctl.go
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Without the build tag, the stub verifier logs a warning (`warn` mode) or returns
+an error (`enforce` mode) indicating that cosign support is not compiled in.
+
+### Embedder Policy Override
+
+Embedders can enforce a signature policy programmatically, overriding user config:
+
+```go
+opts := &scafctl.RootOptions{
+    PluginSignaturePolicy: &plugin.SignaturePolicy{
+        Mode:              plugin.SignatureModeEnforce,
+        TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+        TrustedIdentities: []string{"https://github.com/my-org/*"},
+    },
+}
+```
+
+### CI/CD Recommendation
+
+For production CI/CD pipelines, combine signature enforcement with strict mode:
+
+{{< tabs "plugin-signature-ci" >}}
+{{% tab "Bash" %}}
+```bash
+# Enforce both explicit plugin declarations and valid signatures
+scafctl run solution -f solution.yaml --strict
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+With `plugins.signatures.mode: "enforce"` in the CI config, this ensures all
+plugins are declared, version-pinned, and cryptographically signed.
+
 ## Catalog Chain
 
 Plugins are resolved through a catalog chain that tries sources in order:

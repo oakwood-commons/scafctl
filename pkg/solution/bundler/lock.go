@@ -72,6 +72,25 @@ type LockPlugin struct {
 
 	// ResolvedFrom is the source registry or catalog.
 	ResolvedFrom string `json:"resolvedFrom" yaml:"resolvedFrom" doc:"Source registry or catalog" maxLength:"255" example:"plugins.example.com"`
+
+	// Signature holds Sigstore/cosign verification metadata captured at lock
+	// time. Nil when the plugin was locked without signature verification.
+	Signature *LockPluginSignature `json:"signature,omitempty" yaml:"signature,omitempty" doc:"Signature verification metadata"`
+}
+
+// LockPluginSignature records cosign signature metadata captured during the
+// lock (build) phase to allow verification auditing and drift detection.
+type LockPluginSignature struct {
+	// Issuer is the OIDC token issuer from the signing certificate
+	// (e.g., "https://token.actions.githubusercontent.com").
+	Issuer string `json:"issuer" yaml:"issuer" doc:"OIDC certificate issuer" example:"https://token.actions.githubusercontent.com" maxLength:"255"`
+
+	// Identity is the certificate subject identity
+	// (e.g., "https://github.com/oakwood-commons/scafctl-plugin-auth-entra/.github/workflows/release.yaml@refs/tags/v1.0.0").
+	Identity string `json:"identity" yaml:"identity" doc:"Certificate subject identity" example:"https://github.com/oakwood-commons/scafctl-plugin-auth-entra/.github/workflows/release.yaml@refs/tags/v1.0.0" maxLength:"500"`
+
+	// SignedAt is the signature timestamp in RFC 3339 format.
+	SignedAt string `json:"signedAt" yaml:"signedAt" doc:"Signature timestamp (RFC 3339)" example:"2026-01-15T10:30:00Z" pattern:"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})$" patternDescription:"RFC 3339 timestamp" maxLength:"30"`
 }
 
 // FindDependency returns the lock entry for the given ref, or nil if not found.

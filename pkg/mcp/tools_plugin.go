@@ -5,9 +5,11 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
@@ -62,6 +64,25 @@ func (s *Server) registerPluginTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	s.addTool(listOfficialProvidersTool, s.handleListOfficialProviders)
+
+	// get_signature_policy
+	getSignaturePolicyTool := mcp.NewTool("get_signature_policy",
+		mcp.WithDescription(fmt.Sprintf(
+			"Get the current plugin signature verification policy for %s. "+
+				"Returns the effective signature mode (off, warn, enforce), "+
+				"trusted OIDC issuers, trusted identity patterns, and whether "+
+				"cosign verification is available in this build. "+
+				"Use this to inspect how plugin binary signatures are verified.",
+			s.name,
+		)),
+		mcp.WithTitleAnnotation("Get Plugin Signature Policy"),
+		mcp.WithToolIcons(toolIcons["plugin"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+	s.addTool(getSignaturePolicyTool, s.handleGetSignaturePolicy)
 }
 
 // handleListPlugins lists cached plugin binaries.
@@ -113,4 +134,59 @@ func (s *Server) handleListOfficialProviders(_ context.Context, _ mcp.CallToolRe
 	}
 
 	return mcp.NewToolResultJSON(items)
+}
+
+// signaturePolicyResponse is the response structure for get_signature_policy.
+type signaturePolicyResponse struct {
+	Mode              string   `json:"mode"`
+	TrustedIssuers    []string `json:"trustedIssuers,omitempty"`
+	TrustedIdentities []string `json:"trustedIdentities,omitempty"`
+	CosignAvailable   bool     `json:"cosignAvailable"`
+}
+
+// handleGetSignaturePolicy returns the effective plugin signature verification policy.
+func (s *Server) handleGetSignaturePolicy(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Check context-level override first.
+	policy := plugin.SignaturePolicyFromContext(s.ctx)
+
+	// Fall back to config.
+	if policy == nil {
+		cfg := s.resolveConfig()
+		if cfg != nil {
+			policy = signaturePolicyFromConfig(cfg)
+		}
+	}
+
+	// Default to off.
+	resp := signaturePolicyResponse{Mode: string(plugin.SignatureModeOff)}
+	if policy != nil && policy.IsEnabled() {
+		resp.Mode = string(policy.Mode)
+		resp.TrustedIssuers = policy.TrustedIssuers
+		resp.TrustedIdentities = policy.TrustedIdentities
+	}
+
+	// Probe cosign availability by attempting verification with an enabled
+	// policy. The stub returns ErrCosignNotAvailable; the real implementation
+	// returns a ref-parsing error (neither is ErrCosignNotAvailable == false).
+	verifier := plugin.NewSignatureVerifier()
+	probePolicy := &plugin.SignaturePolicy{Mode: plugin.SignatureModeWarn, TrustedIssuers: []string{"*"}, TrustedIdentities: []string{"*"}}
+	_, err := verifier.VerifySignature(context.Background(), "probe://noop", probePolicy)
+	resp.CosignAvailable = err == nil || !errors.Is(err, plugin.ErrCosignNotAvailable)
+
+	return mcp.NewToolResultJSON(resp)
+}
+
+// signaturePolicyFromConfig converts config to a SignaturePolicy using the
+// shared plugin.SignaturePolicyFromRaw helper.
+// Returns nil when mode is off, empty, or invalid.
+func signaturePolicyFromConfig(cfg *config.Config) *plugin.SignaturePolicy {
+	if cfg == nil {
+		return nil
+	}
+	sigCfg := cfg.Plugins.Signatures
+	policy, err := plugin.SignaturePolicyFromRaw(sigCfg.Mode, sigCfg.TrustedIssuers, sigCfg.TrustedIdentities)
+	if err != nil {
+		return nil
+	}
+	return policy
 }

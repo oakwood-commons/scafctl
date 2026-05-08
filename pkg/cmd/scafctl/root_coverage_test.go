@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -508,4 +509,64 @@ func TestRoot_OfficialAuthHandlerRegistry_Enabled_NonDefaultBinary(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, registryFromCtx, "official auth handler registry should be set for custom binary")
 	assert.Equal(t, 3, registryFromCtx.Len())
+}
+
+// TestRoot_PluginSignaturePolicy_Wired verifies that PluginSignaturePolicy is
+// stored in context so downstream code can retrieve it.
+func TestRoot_PluginSignaturePolicy_Wired(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	policy := &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeEnforce,
+		TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+		TrustedIdentities: []string{"https://github.com/oakwood-commons/*"},
+	}
+
+	var captured *plugin.SignaturePolicy
+	probe := &cobra.Command{
+		Use: "probe",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			captured = plugin.SignaturePolicyFromContext(cmd.Context())
+			return nil
+		},
+	}
+
+	cmd := Root(&RootOptions{
+		IOStreams:             ioStreams,
+		PluginSignaturePolicy: policy,
+	})
+	cmd.AddCommand(probe)
+	cmd.SetArgs([]string{"probe"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	require.NotNil(t, captured, "SignaturePolicy should be available in context")
+	assert.Equal(t, plugin.SignatureModeEnforce, captured.Mode)
+	assert.Equal(t, policy.TrustedIssuers, captured.TrustedIssuers)
+	assert.Equal(t, policy.TrustedIdentities, captured.TrustedIdentities)
+}
+
+// TestRoot_PluginSignaturePolicy_NilByDefault verifies context has no
+// SignaturePolicy when none is configured.
+func TestRoot_PluginSignaturePolicy_NilByDefault(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	var captured *plugin.SignaturePolicy
+	probe := &cobra.Command{
+		Use: "probe",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			captured = plugin.SignaturePolicyFromContext(cmd.Context())
+			return nil
+		},
+	}
+
+	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd.AddCommand(probe)
+	cmd.SetArgs([]string{"probe"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Nil(t, captured, "SignaturePolicy should be nil when not configured")
 }

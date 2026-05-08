@@ -1508,3 +1508,84 @@ func TestAutoResolveOfficialProviders_NoFetcherWithMissing(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, clients)
 }
+
+func TestSignaturePolicyFromConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want *plugin.SignaturePolicy
+	}{
+		{
+			name: "nil config returns nil",
+			cfg:  nil,
+			want: nil,
+		},
+		{
+			name: "empty mode returns nil",
+			cfg: &config.Config{
+				Plugins: config.PluginsConfig{
+					Signatures: config.PluginSignaturesConfig{Mode: ""},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "off mode returns nil",
+			cfg: &config.Config{
+				Plugins: config.PluginsConfig{
+					Signatures: config.PluginSignaturesConfig{Mode: "off"},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "invalid mode returns nil",
+			cfg: &config.Config{
+				Plugins: config.PluginsConfig{
+					Signatures: config.PluginSignaturesConfig{Mode: "invalid"},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "warn mode returns policy",
+			cfg: &config.Config{
+				Plugins: config.PluginsConfig{
+					Signatures: config.PluginSignaturesConfig{
+						Mode:              "warn",
+						TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+						TrustedIdentities: []string{"https://github.com/org/*"},
+					},
+				},
+			},
+			want: &plugin.SignaturePolicy{
+				Mode:              plugin.SignatureModeWarn,
+				TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+				TrustedIdentities: []string{"https://github.com/org/*"},
+			},
+		},
+		{
+			name: "enforce mode returns policy",
+			cfg: &config.Config{
+				Plugins: config.PluginsConfig{
+					Signatures: config.PluginSignaturesConfig{
+						Mode:              "enforce",
+						TrustedIssuers:    []string{"https://issuer.example.com"},
+						TrustedIdentities: []string{"https://github.com/oakwood-commons/*"},
+					},
+				},
+			},
+			want: &plugin.SignaturePolicy{
+				Mode:              plugin.SignatureModeEnforce,
+				TrustedIssuers:    []string{"https://issuer.example.com"},
+				TrustedIdentities: []string{"https://github.com/oakwood-commons/*"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := signaturePolicyFromConfig(tt.cfg, logr.Discard())
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

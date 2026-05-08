@@ -1,0 +1,66 @@
+name: Sign Plugin OCI Artifact
+
+# Reusable workflow for signing plugin OCI artifacts with cosign (keyless OIDC).
+# Plugin repositories call this workflow after pushing their release artifact
+# to an OCI registry. The signature is stored alongside the artifact in the
+# same registry and can be verified by scafctl during plugin fetch.
+#
+# Usage in plugin repos:
+#   jobs:
+#     sign:
+#       uses: oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@main
+#       with:
+#         image-ref: ghcr.io/oakwood-commons/scafctl-plugin-auth-entra/providers/entra@sha256:abc123...
+#       permissions:
+#         id-token: write
+#         packages: write
+
+on:
+  workflow_call:
+    inputs:
+      image-ref:
+        description: 'Full OCI image reference to sign (registry/repo@digest)'
+        required: true
+        type: string
+      cosign-version:
+        description: 'Cosign version to install'
+        required: false
+        type: string
+        default: 'v2.6.3'
+
+permissions:
+  id-token: write   # Required for OIDC token (Fulcio certificate issuance)
+  packages: write   # Required to push signature to registry
+
+jobs:
+  sign:
+    name: Cosign Sign
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+        with:
+          cosign-release: ${{ inputs.cosign-version }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign artifact with cosign (keyless)
+        env:
+          IMAGE_REF: ${{ inputs.image-ref }}
+        run: |
+          cosign sign --yes --recursive "$IMAGE_REF"
+
+      - name: Verify signature
+        env:
+          IMAGE_REF: ${{ inputs.image-ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          cosign verify \
+            --certificate-identity-regexp="https://github.com/${REPO}/.*" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "$IMAGE_REF"

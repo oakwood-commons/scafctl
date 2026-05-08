@@ -179,6 +179,12 @@ type RootOptions struct {
 	// used. Embedders can supply a custom registry via
 	// authofficial.NewRegistryFrom to extend or replace the default set.
 	OfficialAuthHandlers *authofficial.Registry
+
+	// PluginSignaturePolicy overrides the plugin signature verification policy.
+	// When nil, the policy is derived from the app configuration
+	// (config.Plugins.Signatures). Embedders can supply a policy directly
+	// to enforce stricter verification without relying on user config.
+	PluginSignaturePolicy *plugin.SignaturePolicy
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -596,6 +602,11 @@ func Root(opts *RootOptions) *cobra.Command {
 				ctx = official.WithRegistry(ctx, officialReg)
 			} else {
 				lgr.V(1).Info("official provider registry disabled via config")
+			}
+
+			// ── Wire plugin signature policy override ──
+			if opts.PluginSignaturePolicy != nil {
+				ctx = plugin.WithSignaturePolicy(ctx, opts.PluginSignaturePolicy)
 			}
 
 			cCmd.SetContext(ctx)
