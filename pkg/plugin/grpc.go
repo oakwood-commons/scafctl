@@ -737,8 +737,13 @@ func buildExecuteProviderRequest(ctx context.Context, providerName string, input
 	}
 
 	// Working directory
-	if dir, ok := provider.WorkingDirectoryFromContext(ctx); ok {
+	if dir, ok := provider.WorkingDirectoryFromContext(ctx); ok && dir != "" {
 		req.WorkingDirectory = dir
+	} else if solDir, ok := provider.SolutionDirectoryFromContext(ctx); ok && solDir != "" {
+		// When no explicit working directory is set (e.g., resolver phase),
+		// fall back to the solution directory so plugin providers resolve
+		// relative paths the same way builtin providers do.
+		req.WorkingDirectory = solDir
 	}
 
 	// Output directory

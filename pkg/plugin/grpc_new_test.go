@@ -173,6 +173,45 @@ func TestGRPCServer_ExecuteProvider_ExtendedContext(t *testing.T) {
 	assert.Equal(t, []string{"go", "test"}, meta.Tags)
 }
 
+func TestBuildExecuteProviderRequest_SolutionDirectoryFallback(t *testing.T) {
+	t.Run("uses solution directory when working directory not set", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithSolutionDirectory(ctx, "/path/to/solution")
+
+		req, err := buildExecuteProviderRequest(ctx, "test-provider", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Equal(t, "/path/to/solution", req.WorkingDirectory)
+	})
+
+	t.Run("working directory takes precedence over solution directory", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithWorkingDirectory(ctx, "/explicit/work")
+		ctx = provider.WithSolutionDirectory(ctx, "/path/to/solution")
+
+		req, err := buildExecuteProviderRequest(ctx, "test-provider", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Equal(t, "/explicit/work", req.WorkingDirectory)
+	})
+
+	t.Run("empty working directory falls through to solution directory", func(t *testing.T) {
+		ctx := context.Background()
+		ctx = provider.WithWorkingDirectory(ctx, "")
+		ctx = provider.WithSolutionDirectory(ctx, "/path/to/solution")
+
+		req, err := buildExecuteProviderRequest(ctx, "test-provider", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Equal(t, "/path/to/solution", req.WorkingDirectory)
+	})
+
+	t.Run("no directory set leaves working directory empty", func(t *testing.T) {
+		ctx := context.Background()
+
+		req, err := buildExecuteProviderRequest(ctx, "test-provider", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Empty(t, req.WorkingDirectory)
+	})
+}
+
 func TestBuildExecuteProviderRequest_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	ctx = provider.WithDryRun(ctx, true)
