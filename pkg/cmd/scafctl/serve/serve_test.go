@@ -7,10 +7,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,4 +118,70 @@ func TestPreloadOfficialProviders_NilFetcher(t *testing.T) {
 	clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, nil)
 	assert.Nil(t, clients)
 	assert.Nil(t, preloadErr)
+}
+
+func TestBuildPluginPool_AuthWiring(t *testing.T) {
+	// When an auth registry is in context, buildPluginPool should wire
+	// auth client options into the pool.
+	authReg := auth.NewRegistry()
+	ctx := auth.WithRegistry(context.Background(), authReg)
+	reg := provider.NewRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal: true,
+			},
+		},
+	}
+
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	defer pool.Shutdown()
+
+	// Pool should have been created (non-nil) with auth options forwarded.
+	// We can't inspect internal opts directly, but verify pool is functional.
+	assert.NotNil(t, pool)
+}
+
+func TestBuildPluginPool_SanitizesEnv(t *testing.T) {
+	// API server pools should sanitize env by default (the default is true).
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal: false,
+			},
+		},
+	}
+
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	defer pool.Shutdown()
+
+	// API server pools sanitize env by default
+	assert.True(t, pool.SanitizeEnv())
+}
+
+func TestBuildPluginPool_AllowedPlugins(t *testing.T) {
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal:  true,
+				AllowedPlugins: []string{"foo", "bar"},
+			},
+		},
+	}
+
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	defer pool.Shutdown()
+
+	// Verify that a non-allowed plugin is rejected
+	_, err := pool.EnsureAndAcquire(ctx, []solution.PluginDependency{
+		{Name: "not-allowed", Kind: solution.PluginKindProvider},
+	})
+	assert.ErrorIs(t, err, plugin.ErrPluginNotAllowed)
 }

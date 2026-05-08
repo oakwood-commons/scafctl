@@ -43,6 +43,53 @@ func TestNewPool_Options(t *testing.T) {
 	assert.Equal(t, time.Minute, p.opts.healthInterval)
 }
 
+func TestNewPool_WithClientOptions(t *testing.T) {
+	reg := provider.NewRegistry()
+	opt1 := WithSanitizedEnv()
+	p := NewPool(nil, reg, logr.Discard(),
+		WithIdleTimeout(0),
+		WithClientOptions(opt1),
+	)
+	defer p.Shutdown()
+
+	assert.Len(t, p.opts.clientOpts, 1)
+}
+
+func TestNewPool_WithClientOptions_Multiple(t *testing.T) {
+	reg := provider.NewRegistry()
+	opt1 := WithSanitizedEnv()
+	opt2 := WithSanitizedEnv()
+	p := NewPool(nil, reg, logr.Discard(),
+		WithIdleTimeout(0),
+		WithClientOptions(opt1, opt2),
+	)
+	defer p.Shutdown()
+
+	assert.Len(t, p.opts.clientOpts, 2)
+}
+
+func TestNewPool_WithSanitizeEnv(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	t.Run("defaults to true", func(t *testing.T) {
+		p := NewPool(nil, reg, logr.Discard())
+		defer p.Shutdown()
+		assert.True(t, p.SanitizeEnv())
+	})
+
+	t.Run("can be disabled", func(t *testing.T) {
+		p := NewPool(nil, reg, logr.Discard(), WithSanitizeEnv(false))
+		defer p.Shutdown()
+		assert.False(t, p.SanitizeEnv())
+	})
+
+	t.Run("can be explicitly enabled", func(t *testing.T) {
+		p := NewPool(nil, reg, logr.Discard(), WithSanitizeEnv(true))
+		defer p.Shutdown()
+		assert.True(t, p.SanitizeEnv())
+	})
+}
+
 func TestPool_Adopt(t *testing.T) {
 	reg := provider.NewRegistry()
 	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
