@@ -391,6 +391,80 @@ func TestFetcher_FetchPlugins_NoCache_BypassesCachedBinary(t *testing.T) {
 	assert.Equal(t, "1.0.0", results[0].Version)
 }
 
+func TestFetcher_FetchPlugins_EnforceMode_BypassesCache(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("signed-plugin", "1.0.0")
+	cat.addArtifact(ref, []byte("fresh-binary"))
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache
+	_, err := cache.Put("signed-plugin", "1.0.0", "linux/amd64", []byte("fresh-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+		SignaturePolicy: &SignaturePolicy{
+			Mode:              SignatureModeEnforce,
+			TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+			TrustedIdentities: []string{"https://github.com/org/*"},
+		},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "signed-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	lock := []bundler.LockPlugin{
+		{Name: "signed-plugin", Kind: "provider", Version: "1.0.0", Digest: binaryDigest([]byte("fresh-binary")), ResolvedFrom: "test"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, lock)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.False(t, results[0].FromCache, "enforce mode must bypass cache for signature verification")
+}
+
+func TestFetcher_FetchPlugins_WarnMode_UsesCache(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("warn-plugin", "1.0.0")
+	cat.addArtifact(ref, []byte("the-binary"))
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache
+	_, err := cache.Put("warn-plugin", "1.0.0", "linux/amd64", []byte("cached-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+		SignaturePolicy: &SignaturePolicy{
+			Mode:              SignatureModeWarn,
+			TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+			TrustedIdentities: []string{"https://github.com/org/*"},
+		},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "warn-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	lock := []bundler.LockPlugin{
+		{Name: "warn-plugin", Kind: "provider", Version: "1.0.0", ResolvedFrom: "test"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, lock)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].FromCache, "warn mode should allow cache hits")
+}
+
 func TestFetcher_FetchPlugins_NoCache_BypassesLatestCached(t *testing.T) {
 	cat := newMockCatalog()
 	ref := testRef("unlocked-plugin", "2.0.0")

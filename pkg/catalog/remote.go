@@ -507,6 +507,7 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 	return ArtifactInfo{
 		Reference:   ref,
 		Digest:      manifestDesc.Digest.String(),
+		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDesc.Digest.String(),
 		CreatedAt:   now,
 		Size:        int64(len(content)),
 		Annotations: annotations,
@@ -584,6 +585,7 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 	info := ArtifactInfo{
 		Reference:   ref,
 		Digest:      manifestDesc.Digest.String(),
+		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDesc.Digest.String(),
 		CreatedAt:   createdAt,
 		Size:        int64(len(contentData)),
 		Annotations: manifest.Annotations,

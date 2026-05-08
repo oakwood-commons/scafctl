@@ -327,6 +327,37 @@ auth:
   #   clientId: "your-client-id"
 
 # =============================================================================
+# Plugins - Plugin artifact management
+# =============================================================================
+plugins:
+  # Signature verification for plugin binaries (providers and auth handlers).
+  # Uses Sigstore/cosign keyless verification against Fulcio and Rekor.
+  signatures:
+    # Verification mode:
+    #   "off" (default) - Digest-only verification, no signature check
+    #   "warn"          - Verify signature, log warning on failure but proceed
+    #   "enforce"       - Verify signature, fail on missing or invalid signature
+    # Default: "off"
+    mode: "off"
+
+    # Trusted OIDC token issuers whose signing certificates are accepted.
+    # Required when mode is "warn" or "enforce".
+    # Example: GitHub Actions OIDC provider
+    # trustedIssuers:
+    #   - "https://token.actions.githubusercontent.com"
+
+    # Trusted certificate identity patterns (glob).
+    # Matched against the certificate subject/identity (URI SAN).
+    # Required when mode is "warn" or "enforce".
+    # trustedIdentities:
+    #   - "https://github.com/oakwood-commons/*"
+
+  # Cooldown between failed auto-fetch retries.
+  # Prevents repeated timeout penalties during network outages.
+  # Default: "5m"
+  # fetchCooldown: "5m"
+
+# =============================================================================
 # Catalogs - Registered solution catalogs
 # =============================================================================
 # Catalogs are sources for solutions, resolvers, and actions.

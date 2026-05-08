@@ -260,3 +260,69 @@ func TestVendorPlugins_VersionConstraintViolation(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "does not satisfy constraint")
 }
+
+func TestVendorPlugins_WithSignatureVerification(t *testing.T) {
+	ctx := testContext()
+
+	resolver := &mockPluginResolver{
+		plugins: map[string]catalog.ArtifactInfo{
+			"signed-plugin:provider": {
+				Reference: catalog.Reference{
+					Kind:    catalog.ArtifactKindProvider,
+					Name:    "signed-plugin",
+					Version: semver.MustParse("2.0.0"),
+				},
+				Digest:   "sha256:def456",
+				ImageRef: "ghcr.io/org/plugins/providers/signed-plugin@sha256:manifest123",
+				Catalog:  "remote-catalog",
+			},
+		},
+	}
+
+	plugins := []solution.PluginDependency{
+		{Name: "signed-plugin", Kind: solution.PluginKindProvider, Version: "^2.0.0"},
+	}
+
+	t.Run("records signature metadata", func(t *testing.T) {
+		result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
+			PluginResolver: resolver,
+			VerifySignature: func(_ context.Context, imageRef string) (*LockPluginSignature, error) {
+				assert.Equal(t, "ghcr.io/org/plugins/providers/signed-plugin@sha256:manifest123", imageRef)
+				return &LockPluginSignature{
+					Issuer:   "https://token.actions.githubusercontent.com",
+					Identity: "https://github.com/org/plugin/.github/workflows/release.yaml@refs/tags/v2.0.0",
+					SignedAt: "2025-06-01T10:00:00Z",
+				}, nil
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, result.ResolvedPlugins, 1)
+		require.NotNil(t, result.ResolvedPlugins[0].Signature)
+		assert.Equal(t, "https://token.actions.githubusercontent.com", result.ResolvedPlugins[0].Signature.Issuer)
+		assert.Equal(t, "2025-06-01T10:00:00Z", result.ResolvedPlugins[0].Signature.SignedAt)
+	})
+
+	t.Run("nil signature on warn-mode failure", func(t *testing.T) {
+		result, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
+			PluginResolver: resolver,
+			VerifySignature: func(_ context.Context, _ string) (*LockPluginSignature, error) {
+				// Warn mode: caller returns nil (no error to propagate)
+				return nil, nil
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, result.ResolvedPlugins, 1)
+		assert.Nil(t, result.ResolvedPlugins[0].Signature)
+	})
+
+	t.Run("error on enforce-mode failure", func(t *testing.T) {
+		_, err := VendorPlugins(ctx, plugins, nil, VendorPluginsOptions{
+			PluginResolver: resolver,
+			VerifySignature: func(_ context.Context, _ string) (*LockPluginSignature, error) {
+				return nil, assert.AnError
+			},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "signature verification failed during lock")
+	})
+}

@@ -36,6 +36,12 @@ type VendorPluginsOptions struct {
 	// Platform is the target platform string (e.g., "darwin/arm64") used with
 	// PlatformCatalog to resolve platform-specific content digests.
 	Platform string
+
+	// VerifySignature, if set, is called to verify plugin signatures at lock
+	// time. It receives the OCI image reference and returns signature metadata
+	// to record in the lock file. On error, the function should decide whether
+	// to fail (enforce mode) or return nil (warn mode).
+	VerifySignature func(ctx context.Context, imageRef string) (*LockPluginSignature, error)
 }
 
 // VendorPluginsResult describes the outcome of plugin vendoring.
@@ -134,12 +140,23 @@ func VendorPlugins(ctx context.Context, plugins []solution.PluginDependency, exi
 			digest = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(resolvedVersion)))
 		}
 
+		// Verify signature if a verifier function is provided and imageRef is available.
+		var sigMeta *LockPluginSignature
+		if opts.VerifySignature != nil && info.ImageRef != "" {
+			sig, sigErr := opts.VerifySignature(ctx, info.ImageRef)
+			if sigErr != nil {
+				return nil, fmt.Errorf("plugin %s: signature verification failed during lock: %w", p.Name, sigErr)
+			}
+			sigMeta = sig
+		}
+
 		lockEntry := LockPlugin{
 			Name:         p.Name,
 			Kind:         string(p.Kind),
 			Version:      resolvedVersion,
 			Digest:       digest,
 			ResolvedFrom: info.Catalog,
+			Signature:    sigMeta,
 		}
 
 		lgr.V(1).Info("resolved plugin",

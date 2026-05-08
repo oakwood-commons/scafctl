@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -339,4 +341,130 @@ func TestAutoInjectOfficialPlugins_DeduplicatesProviders(t *testing.T) {
 
 	assert.Len(t, injected, 1, "same provider used twice should only be injected once")
 	assert.Len(t, sol.Bundle.Plugins, 1)
+}
+
+func TestBuildLockSignatureVerifier_NilPolicy(t *testing.T) {
+	ctx := context.Background()
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	assert.Nil(t, fn, "should return nil when no policy in context or config")
+}
+
+func TestBuildLockSignatureVerifier_ConfigFallback(t *testing.T) {
+	// No policy in context, but config has enforce mode — should derive from config.
+	appCfg := &config.Config{}
+	appCfg.Plugins.Signatures.Mode = "enforce"
+	appCfg.Plugins.Signatures.TrustedIssuers = []string{"https://issuer.example.com"}
+	appCfg.Plugins.Signatures.TrustedIdentities = []string{"https://github.com/org/*"}
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NotNil(t, fn, "should derive policy from config when context has no policy")
+}
+
+func TestBuildLockSignatureVerifier_ConfigFallback_Off(t *testing.T) {
+	// Config has mode=off — should return nil.
+	appCfg := &config.Config{}
+	appCfg.Plugins.Signatures.Mode = "off"
+	ctx := config.WithConfig(context.Background(), appCfg)
+
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	assert.Nil(t, fn, "should return nil when config mode is off")
+}
+
+func TestBuildLockSignatureVerifier_ContextOverridesConfig(t *testing.T) {
+	// Context policy is off, config is enforce — context wins.
+	appCfg := &config.Config{}
+	appCfg.Plugins.Signatures.Mode = "enforce"
+	appCfg.Plugins.Signatures.TrustedIssuers = []string{"https://issuer.example.com"}
+	appCfg.Plugins.Signatures.TrustedIdentities = []string{"https://github.com/org/*"}
+	ctx := config.WithConfig(context.Background(), appCfg)
+	ctx = plugin.WithSignaturePolicy(ctx, &plugin.SignaturePolicy{Mode: plugin.SignatureModeOff})
+
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	assert.Nil(t, fn, "context policy should take precedence over config")
+}
+
+func TestBuildLockSignatureVerifier_OffPolicy(t *testing.T) {
+	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
+		Mode: plugin.SignatureModeOff,
+	})
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	assert.Nil(t, fn, "should return nil when policy mode is off")
+}
+
+func TestBuildLockSignatureVerifier_EnforceReturnsError(t *testing.T) {
+	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeEnforce,
+		TrustedIssuers:    []string{"https://issuer.example.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	})
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NotNil(t, fn, "should return a callback when policy is active")
+
+	// The stub verifier returns ErrCosignNotAvailable, which should be
+	// propagated as an error in enforce mode.
+	result, err := fn(ctx, "ghcr.io/org/plugin@sha256:abc123")
+	assert.Nil(t, result)
+	require.Error(t, err)
+}
+
+func TestBuildLockSignatureVerifier_WarnReturnsNil(t *testing.T) {
+	ctx := plugin.WithSignaturePolicy(context.Background(), &plugin.SignaturePolicy{
+		Mode:              plugin.SignatureModeWarn,
+		TrustedIssuers:    []string{"https://issuer.example.com"},
+		TrustedIdentities: []string{"https://github.com/org/*"},
+	})
+	fn := buildLockSignatureVerifier(ctx, logr.Discard())
+	require.NotNil(t, fn, "should return a callback when policy is active")
+
+	// The stub verifier returns ErrCosignNotAvailable; in warn mode,
+	// the callback logs and returns nil.
+	result, err := fn(ctx, "ghcr.io/org/plugin@sha256:abc123")
+	assert.Nil(t, result)
+	assert.NoError(t, err)
+}
+
+func TestSignaturePolicyFromConfig_NilConfig(t *testing.T) {
+	policy := signaturePolicyFromAppConfig(nil, logr.Discard())
+	assert.Nil(t, policy)
+}
+
+func TestSignaturePolicyFromConfig_OffMode(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Plugins.Signatures.Mode = "off"
+	policy := signaturePolicyFromAppConfig(cfg, logr.Discard())
+	assert.Nil(t, policy)
+}
+
+func TestSignaturePolicyFromConfig_EmptyMode(t *testing.T) {
+	cfg := &config.Config{}
+	policy := signaturePolicyFromAppConfig(cfg, logr.Discard())
+	assert.Nil(t, policy)
+}
+
+func TestSignaturePolicyFromConfig_InvalidMode(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Plugins.Signatures.Mode = "bogus"
+	policy := signaturePolicyFromAppConfig(cfg, logr.Discard())
+	assert.Nil(t, policy, "invalid mode should return nil")
+}
+
+func TestSignaturePolicyFromConfig_EnforceMode(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Plugins.Signatures.Mode = "enforce"
+	cfg.Plugins.Signatures.TrustedIssuers = []string{"https://issuer.example.com"}
+	cfg.Plugins.Signatures.TrustedIdentities = []string{"https://github.com/org/*"}
+	policy := signaturePolicyFromAppConfig(cfg, logr.Discard())
+	require.NotNil(t, policy)
+	assert.Equal(t, plugin.SignatureModeEnforce, policy.Mode)
+	assert.Equal(t, []string{"https://issuer.example.com"}, policy.TrustedIssuers)
+	assert.Equal(t, []string{"https://github.com/org/*"}, policy.TrustedIdentities)
+}
+
+func TestSignaturePolicyFromConfig_WarnMode(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Plugins.Signatures.Mode = "warn"
+	policy := signaturePolicyFromAppConfig(cfg, logr.Discard())
+	require.NotNil(t, policy)
+	assert.Equal(t, plugin.SignatureModeWarn, policy.Mode)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 )
@@ -29,6 +30,8 @@ type Fetcher struct {
 	noCache         bool
 	logger          logr.Logger
 	allowedCatalogs map[string]bool // if non-nil, only these catalog names are permitted
+	sigPolicy       *SignaturePolicy
+	sigVerifier     SignatureVerifier
 }
 
 // FetcherConfig configures a Fetcher.
@@ -54,6 +57,15 @@ type FetcherConfig struct {
 	// from. If empty, all catalogs are allowed.
 	AllowedCatalogs []string
 
+	// SignaturePolicy configures Sigstore/cosign signature verification.
+	// When nil or Mode is "off", no signature verification is performed.
+	SignaturePolicy *SignaturePolicy
+
+	// SignatureVerifier is the implementation used for OCI signature checks.
+	// When nil, NewSignatureVerifier() is used (cosign if built with the
+	// "cosign" tag, otherwise a no-op stub).
+	SignatureVerifier SignatureVerifier
+
 	// Logger for logging operations.
 	Logger logr.Logger
 }
@@ -72,7 +84,7 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 
 	binaryName := cfg.BinaryName
 	if binaryName == "" {
-		binaryName = "scafctl" // fallback must match settings.CliBinaryName
+		binaryName = settings.CliBinaryName
 	}
 
 	var allowedCatalogs map[string]bool
@@ -83,6 +95,11 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		}
 	}
 
+	sigVerifier := cfg.SignatureVerifier
+	if sigVerifier == nil {
+		sigVerifier = NewSignatureVerifier()
+	}
+
 	return &Fetcher{
 		binaryName:      binaryName,
 		catalogFetcher:  catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
@@ -91,6 +108,8 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		noCache:         cfg.NoCache,
 		logger:          cfg.Logger.WithName("plugin-fetcher"),
 		allowedCatalogs: allowedCatalogs,
+		sigPolicy:       cfg.SignaturePolicy,
+		sigVerifier:     sigVerifier,
 	}
 }
 
@@ -113,6 +132,13 @@ type FetchResult struct {
 
 	// FromCache indicates whether the binary was served from cache.
 	FromCache bool
+
+	// Signature holds signature verification metadata when verification
+	// was performed. Nil when signatures are disabled or the binary was cached.
+	//
+	// TODO: surface Signature in CLI output/audit log so users can inspect
+	// verification results after a fetch.
+	Signature *SignatureResult
 
 	// Catalog is the catalog name the plugin was fetched from (empty if cached).
 	Catalog string
@@ -282,8 +308,13 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		}
 	}
 
-	// Check local cache
-	if !f.noCache {
+	// Check local cache.
+	//
+	// In enforce mode, cache reads are skipped so every execution performs a
+	// fresh fetch with signature verification. In warn mode, cache hits are
+	// allowed because verification is advisory.
+	skipCache := f.noCache || (f.sigPolicy != nil && f.sigPolicy.Mode == SignatureModeEnforce)
+	if !skipCache {
 		if cachedPath, ok := f.cache.Get(dep.Name, version, f.platform, expectedDigest); ok {
 			f.logger.V(1).Info("plugin found in cache",
 				"name", dep.Name,
@@ -339,6 +370,15 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		)
 	}
 
+	// Signature verification (after digest passes, before caching).
+	var sigResult *SignatureResult
+	if f.sigPolicy.IsEnabled() && fetchInfo.ImageRef != "" {
+		sigResult, err = f.verifySignature(ctx, dep.Name, version, fetchInfo.ImageRef)
+		if err != nil {
+			return FetchResult{}, err
+		}
+	}
+
 	// Write to cache
 	cachedPath, err := f.cache.Put(dep.Name, version, f.platform, data)
 	if err != nil {
@@ -373,7 +413,36 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		Digest:    digest,
 		FromCache: false,
 		Catalog:   resolvedFrom,
+		Signature: sigResult,
 	}, nil
+}
+
+// verifySignature performs Sigstore/cosign signature verification against the
+// configured policy. In "warn" mode, failures are logged but do not block
+// execution. In "enforce" mode, failures return an error.
+func (f *Fetcher) verifySignature(ctx context.Context, name, version, imageRef string) (*SignatureResult, error) {
+	f.logger.V(1).Info("verifying plugin signature",
+		"name", name,
+		"version", version,
+		"imageRef", imageRef,
+		"mode", string(f.sigPolicy.Mode))
+
+	result, err := f.sigVerifier.VerifySignature(ctx, imageRef, f.sigPolicy)
+	if err != nil {
+		wrapped := fmt.Errorf("plugin %s@%s: %w", name, version, err)
+		return nil, HandleVerificationError(f.sigPolicy, wrapped, f.logger,
+			"name", name, "version", version)
+	}
+
+	if result != nil && result.Verified {
+		f.logger.V(1).Info("plugin signature verified",
+			"name", name,
+			"version", version,
+			"issuer", result.Issuer,
+			"identity", result.Identity)
+	}
+
+	return result, nil
 }
 
 // Paths returns just the binary paths from a slice of FetchResult.

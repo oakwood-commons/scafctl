@@ -166,3 +166,56 @@ func TestHandleListOfficialProviders(t *testing.T) {
 		assert.Equal(t, "my-custom-two", items[1].CatalogRef)
 	})
 }
+
+func TestHandleGetSignaturePolicy(t *testing.T) {
+	t.Run("returns off mode with no config", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_signature_policy"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleGetSignaturePolicy(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var resp signaturePolicyResponse
+		require.NoError(t, json.Unmarshal([]byte(text), &resp))
+
+		assert.Equal(t, "off", resp.Mode)
+		assert.Empty(t, resp.TrustedIssuers)
+		assert.Empty(t, resp.TrustedIdentities)
+		// Without cosign build tag, cosignAvailable should be false.
+		assert.False(t, resp.CosignAvailable)
+	})
+
+	t.Run("returns policy from context", func(t *testing.T) {
+		policy := &plugin.SignaturePolicy{
+			Mode:              plugin.SignatureModeEnforce,
+			TrustedIssuers:    []string{"https://token.actions.githubusercontent.com"},
+			TrustedIdentities: []string{"https://github.com/oakwood-commons/*"},
+		}
+		ctx := plugin.WithSignaturePolicy(context.Background(), policy)
+
+		srv, err := NewServer(WithServerVersion("test"), WithServerContext(ctx))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_signature_policy"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleGetSignaturePolicy(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var resp signaturePolicyResponse
+		require.NoError(t, json.Unmarshal([]byte(text), &resp))
+
+		assert.Equal(t, "enforce", resp.Mode)
+		assert.Equal(t, []string{"https://token.actions.githubusercontent.com"}, resp.TrustedIssuers)
+		assert.Equal(t, []string{"https://github.com/oakwood-commons/*"}, resp.TrustedIdentities)
+	})
+}

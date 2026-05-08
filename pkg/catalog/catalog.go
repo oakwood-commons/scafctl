@@ -194,6 +194,11 @@ type ArtifactInfo struct {
 	// Digest is the content digest (sha256:...).
 	Digest string `json:"digest" yaml:"digest" doc:"Content digest"`
 
+	// ImageRef is the full OCI image reference suitable for cosign verification
+	// (e.g., "ghcr.io/org/plugins/providers/name@sha256:abc123...").
+	// Populated only by remote catalogs; empty for local catalogs.
+	ImageRef string `json:"imageRef,omitempty" yaml:"imageRef,omitempty" doc:"Full OCI image reference for signature verification"`
+
 	// CreatedAt is when the artifact was stored.
 	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" doc:"Storage timestamp"`
 

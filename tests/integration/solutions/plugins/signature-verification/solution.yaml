@@ -1,0 +1,43 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: plugin-signature-verification-test
+  version: 1.0.0
+  description: Tests for plugin signature verification policy configuration
+
+spec:
+  resolvers:
+    greeting:
+      description: Static value to verify solution loads
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from signature test
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      # Verify that the solution runs successfully with default config
+      # (signature mode defaults to "off", so no verification occurs).
+      resolver-runs-with-default-config:
+        description: Solution runs with default signature config (mode=off)
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: greeting
+
+      # Verify that config init --full output includes plugins.signatures
+      # section so users can discover and configure signature verification.
+      config-help-shows-plugins:
+        description: Config init --full includes plugins.signatures
+        command: [config, init, --full, --dry-run]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "signatures"
+            target: combined

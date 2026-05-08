@@ -884,6 +884,9 @@ type PluginFetcherOverrides struct {
 	Platform string
 	// NoCache bypasses the local cache when true.
 	NoCache bool
+	// SignaturePolicy overrides the signature verification policy derived
+	// from config. When non-nil, takes precedence over config values.
+	SignaturePolicy *plugin.SignaturePolicy
 }
 
 // BuildPluginFetcherWithConfig creates a plugin.Fetcher from the context's
@@ -910,6 +913,16 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 		BinaryName:      settings.BinaryNameFromContext(ctx),
 		Logger:          fetcherLogger,
 		AllowedCatalogs: override.AllowedCatalogs,
+		SignaturePolicy: override.SignaturePolicy,
+	}
+	if cfg.SignaturePolicy == nil {
+		cfg.SignaturePolicy = plugin.SignaturePolicyFromContext(ctx)
+	}
+	if cfg.SignaturePolicy == nil {
+		cfg.SignaturePolicy = signaturePolicyFromConfig(appCfg, fetcherLogger)
+	}
+	if err := cfg.SignaturePolicy.Validate(); err != nil {
+		return nil, fmt.Errorf("plugin signature policy: %w", err)
 	}
 	if override.Platform != "" {
 		cfg.Platform = override.Platform
@@ -918,6 +931,23 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 		cfg.NoCache = true
 	}
 	return plugin.NewFetcher(cfg), nil
+}
+
+// signaturePolicyFromConfig converts the app configuration's plugin signature
+// settings into a SignaturePolicy using the shared plugin.SignaturePolicyFromRaw
+// helper. Returns nil when the config is nil, mode is "off", empty, or invalid.
+func signaturePolicyFromConfig(appCfg *config.Config, lgr logr.Logger) *plugin.SignaturePolicy {
+	if appCfg == nil {
+		return nil
+	}
+	sigCfg := appCfg.Plugins.Signatures
+	policy, err := plugin.SignaturePolicyFromRaw(sigCfg.Mode, sigCfg.TrustedIssuers, sigCfg.TrustedIdentities)
+	if err != nil {
+		lgr.Info("invalid plugin signature mode in config, defaulting to off",
+			"mode", sigCfg.Mode, "error", err)
+		return nil
+	}
+	return policy
 }
 
 // ResolveOfficialProviders fetches any official providers referenced by the
