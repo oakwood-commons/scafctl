@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
@@ -420,4 +421,22 @@ func TestHandler_ReturnsCachedInstance(t *testing.T) {
 	h1 := srv.Handler()
 	h2 := srv.Handler()
 	assert.Equal(t, h1, h2, "Handler() should return the same instance on subsequent calls")
+}
+
+func TestNewServer_PluginPoolRequiresRegistry(t *testing.T) {
+	reg := provider.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard())
+	defer pool.Shutdown()
+
+	t.Run("pool without registry returns error", func(t *testing.T) {
+		_, err := NewServer(WithServerPluginPool(pool))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WithServerPluginPool requires WithServerRegistry")
+	})
+
+	t.Run("pool with registry succeeds", func(t *testing.T) {
+		srv, err := NewServer(WithServerPluginPool(pool), WithServerRegistry(reg))
+		require.NoError(t, err)
+		assert.NotNil(t, srv)
+	})
 }

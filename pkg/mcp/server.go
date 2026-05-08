@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
@@ -49,6 +51,11 @@ type Server struct {
 	// Prompts not in this set are tagged as plugin/embedder prompts.
 	corePrompts map[string]struct{}
 
+	// pluginPool manages shared, long-lived plugin processes with lazy
+	// initialization and idle eviction. When set, provider tool handlers
+	// auto-resolve official plugins on demand.
+	pluginPool *plugin.Pool
+
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
 	// httpServer is the Streamable HTTP transport server (nil for stdio).
@@ -72,12 +79,23 @@ type serverConfig struct {
 	errorLogger              *log.Logger
 	supplementalInstructions string
 	rootCmd                  *cobra.Command
+	pluginPool               *plugin.Pool
 }
 
 // WithRootCommand sets the cobra root command for CLI introspection tools.
 func WithRootCommand(cmd *cobra.Command) ServerOption {
 	return func(c *serverConfig) {
 		c.rootCmd = cmd
+	}
+}
+
+// WithServerPluginPool sets the plugin pool for auto-resolving official
+// plugin providers on demand. When set, provider tool handlers (run_provider,
+// get_provider_schema, get_provider_output_shape) will attempt to fetch and
+// load official plugins that are not yet in the provider registry.
+func WithServerPluginPool(pool *plugin.Pool) ServerOption {
+	return func(c *serverConfig) {
+		c.pluginPool = pool
 	}
 }
 
@@ -467,6 +485,12 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cfg.name = settings.CliBinaryName
 	}
 
+	// Validate that a registry is set when a plugin pool is configured,
+	// otherwise ensureProvider would panic on nil registry access.
+	if cfg.pluginPool != nil && cfg.registry == nil {
+		return nil, errors.New("WithServerPluginPool requires WithServerRegistry")
+	}
+
 	// Build the MCP context for tool handlers
 	var ctxOpts []ContextOption
 	if cfg.config != nil {
@@ -502,6 +526,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		authReg:     cfg.authReg,
 		config:      cfg.config,
 		rootCmd:     cfg.rootCmd,
+		pluginPool:  cfg.pluginPool,
 		coreTools:   make(map[string]struct{}, 64),
 		corePrompts: make(map[string]struct{}, 16),
 	}

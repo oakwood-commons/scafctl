@@ -8,13 +8,18 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	mcpserver "github.com/oakwood-commons/scafctl/pkg/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -122,12 +127,18 @@ func runServe(ctx context.Context, opts *ServeOptions) error {
 		return fmt.Errorf("initializing provider registry: %w", err)
 	}
 
+	// Build the plugin pool for on-demand official provider auto-resolution.
+	pluginPool, poolCtx := buildMCPPluginPool(ctx, cfg, reg, lgr)
+	defer pluginPool.Shutdown()
+	ctx = poolCtx
+
 	// Build server options
 	serverOpts := []mcpserver.ServerOption{
 		mcpserver.WithServerLogger(*lgr),
 		mcpserver.WithServerRegistry(reg),
 		mcpserver.WithServerContext(ctx),
 		mcpserver.WithServerVersion(settings.VersionInformation.BuildVersion),
+		mcpserver.WithServerPluginPool(pluginPool),
 	}
 	if s, ok := settings.FromContext(ctx); ok && s.BinaryName != "" {
 		serverOpts = append(serverOpts, mcpserver.WithServerName(s.BinaryName))
@@ -186,4 +197,41 @@ func runServe(ctx context.Context, opts *ServeOptions) error {
 	default:
 		return fmt.Errorf("unsupported transport %q: use stdio, sse, or http", opts.Transport)
 	}
+}
+
+// buildMCPPluginPool creates the official provider registry, plugin fetcher,
+// and plugin pool for the MCP server. The returned context has the official
+// registry injected. Pool defaults (5m idle timeout, 50 max plugins) are used.
+func buildMCPPluginPool(ctx context.Context, cfg *config.Config, reg *provider.Registry, lgr *logr.Logger) (*plugin.Pool, context.Context) {
+	// Build official provider registry for auto-resolution
+	var officialReg *official.Registry
+	if cfg == nil || !cfg.Settings.DisableOfficialProviders {
+		officialReg = official.NewRegistry()
+		ctx = official.WithRegistry(ctx, officialReg)
+	} else {
+		lgr.V(1).Info("official provider auto-resolution disabled by settings")
+	}
+
+	// Build plugin fetcher for on-demand plugin loading
+	var pluginFetcher *plugin.Fetcher
+	if officialReg != nil {
+		if fetcher, fetchErr := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{}); fetchErr == nil {
+			pluginFetcher = fetcher
+		} else {
+			lgr.V(1).Info("plugin fetcher not available; official providers will only be available from cache", "error", fetchErr)
+		}
+	}
+
+	// Create plugin pool for lazy auto-resolution of official providers.
+	// MCP is interactive so we allow all official plugins by default.
+	// Disable env sanitization so plugins can access host credentials
+	// (SSH_AUTH_SOCK, GITHUB_TOKEN, etc.) during interactive sessions.
+	var poolOpts []plugin.PoolOption
+	poolOpts = append(poolOpts, plugin.WithSanitizeEnv(false))
+	// Wire auth host dependencies so plugins can use host auth
+	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
+		poolOpts = append(poolOpts, plugin.WithClientOptions(authOpts...))
+	}
+	pool := plugin.NewPool(pluginFetcher, reg, *lgr, poolOpts...)
+	return pool, ctx
 }

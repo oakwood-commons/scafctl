@@ -11,8 +11,36 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/oakwood-commons/scafctl/pkg/api"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
+
+// ensureAPIProvider attempts to auto-resolve an official plugin provider via
+// the plugin pool. On success, returns the resolved provider and a non-nil
+// release function that the caller must defer. Returns an error if the
+// provider cannot be loaded.
+func ensureAPIProvider(ctx context.Context, hctx *api.HandlerContext, name string) (provider.Provider, func(), error) {
+	if hctx.PluginPool == nil || hctx.OfficialProviders == nil {
+		return nil, nil, api.NotFoundError("provider", name)
+	}
+	op, found := hctx.OfficialProviders.Get(name)
+	if !found {
+		return nil, nil, api.NotFoundError("provider", name)
+	}
+	dep := op.ToPluginDependency()
+	release, err := hctx.PluginPool.EnsureAndAcquire(ctx, []solution.PluginDependency{dep})
+	if err != nil {
+		status := plugin.PoolErrorHTTPStatus(err)
+		return nil, nil, huma.NewError(status, fmt.Sprintf("failed to load plugin for provider %q: %v", name, err))
+	}
+	p, ok := hctx.ProviderRegistry.Get(name)
+	if !ok {
+		release()
+		return nil, nil, api.NotFoundError("provider", name)
+	}
+	return p, release, nil
+}
 
 // ProviderListItem represents a provider in API responses.
 type ProviderListItem struct {
@@ -101,7 +129,7 @@ func RegisterProviderEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Summary:     "Get provider details",
 		Description: "Returns detailed information about a specific provider.",
 		Tags:        []string{"Providers"},
-	}, hctx, http.StatusOK), func(_ context.Context, input *struct {
+	}, hctx, http.StatusOK), func(ctx context.Context, input *struct {
 		Name string `path:"name" maxLength:"255" doc:"Provider name"`
 	},
 	) (*ProviderDetailResponse, error) {
@@ -111,7 +139,13 @@ func RegisterProviderEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 
 		p, ok := hctx.ProviderRegistry.Get(input.Name)
 		if !ok {
-			return nil, api.NotFoundError("provider", input.Name)
+			// Try auto-resolving via the plugin pool
+			resolved, release, err := ensureAPIProvider(ctx, hctx, input.Name)
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			p = resolved
 		}
 
 		desc := p.Descriptor()
@@ -133,7 +167,7 @@ func RegisterProviderEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Summary:     "Get provider JSON schema",
 		Description: "Returns the input JSON schema for a specific provider.",
 		Tags:        []string{"Providers"},
-	}, hctx, http.StatusOK), func(_ context.Context, input *struct {
+	}, hctx, http.StatusOK), func(ctx context.Context, input *struct {
 		Name string `path:"name" maxLength:"255" doc:"Provider name"`
 	},
 	) (*ProviderSchemaResponse, error) {
@@ -143,7 +177,13 @@ func RegisterProviderEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 
 		p, ok := hctx.ProviderRegistry.Get(input.Name)
 		if !ok {
-			return nil, api.NotFoundError("provider", input.Name)
+			// Try auto-resolving via the plugin pool
+			resolved, release, err := ensureAPIProvider(ctx, hctx, input.Name)
+			if err != nil {
+				return nil, err
+			}
+			defer release()
+			p = resolved
 		}
 
 		desc := p.Descriptor()

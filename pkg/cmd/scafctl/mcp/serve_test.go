@@ -4,8 +4,13 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -82,5 +87,55 @@ func TestServeOptions(t *testing.T) {
 		assert.Empty(t, opts.Transport)
 		assert.Empty(t, opts.LogFile)
 		assert.False(t, opts.Info)
+	})
+}
+
+func TestBuildMCPPluginPool(t *testing.T) {
+	t.Run("nil config enables official registry", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		pool, ctx := buildMCPPluginPool(context.Background(), nil, reg, &lgr)
+		defer pool.Shutdown()
+
+		// Official registry should be injected into context
+		officialReg := official.RegistryFromContext(ctx)
+		assert.NotNil(t, officialReg, "official registry should be in context")
+	})
+
+	t.Run("DisableOfficialProviders skips official registry", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		cfg := &config.Config{
+			Settings: config.Settings{DisableOfficialProviders: true},
+		}
+		pool, ctx := buildMCPPluginPool(context.Background(), cfg, reg, &lgr)
+		defer pool.Shutdown()
+
+		// Official registry should NOT be in context
+		officialReg := official.RegistryFromContext(ctx)
+		assert.Nil(t, officialReg, "official registry should not be in context when disabled")
+	})
+
+	t.Run("enabled config creates official registry", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		cfg := &config.Config{
+			Settings: config.Settings{DisableOfficialProviders: false},
+		}
+		pool, ctx := buildMCPPluginPool(context.Background(), cfg, reg, &lgr)
+		defer pool.Shutdown()
+
+		officialReg := official.RegistryFromContext(ctx)
+		assert.NotNil(t, officialReg, "official registry should be in context")
+	})
+
+	t.Run("pool does not sanitize env for MCP interactive sessions", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		pool, _ := buildMCPPluginPool(context.Background(), nil, reg, &lgr)
+		defer pool.Shutdown()
+
+		// MCP pools should not sanitize env so host credentials are available
+		assert.False(t, pool.SanitizeEnv(), "MCP pool should not sanitize env")
 	})
 }

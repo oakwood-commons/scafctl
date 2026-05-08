@@ -11,13 +11,16 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/go-logr/logr"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 )
 
@@ -213,4 +216,124 @@ func BenchmarkBuildProviderList(b *testing.B) {
 	for b.Loop() {
 		buildProviderList(reg)
 	}
+}
+
+func TestEnsureAPIProvider_NilPool(t *testing.T) {
+	hctx := &api.HandlerContext{
+		ProviderRegistry: provider.NewRegistry(),
+	}
+	_, _, err := ensureAPIProvider(context.Background(), hctx, "exec")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestEnsureAPIProvider_NilOfficialProviders(t *testing.T) {
+	reg := provider.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	hctx := &api.HandlerContext{
+		ProviderRegistry: reg,
+		PluginPool:       pool,
+	}
+	_, _, err := ensureAPIProvider(context.Background(), hctx, "exec")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestEnsureAPIProvider_UnknownProvider(t *testing.T) {
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	hctx := &api.HandlerContext{
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	_, _, err := ensureAPIProvider(context.Background(), hctx, "nonexistent-provider")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestEnsureAPIProvider_NoFetcher(t *testing.T) {
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	hctx := &api.HandlerContext{
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	_, _, err := ensureAPIProvider(context.Background(), hctx, "exec")
+	assert.Error(t, err)
+	// Pool returns a Huma error when fetcher is nil
+	assert.Contains(t, err.Error(), "exec")
+}
+
+func TestGetProvider_AutoResolve_Fallback(t *testing.T) {
+	// When pool has no fetcher, get-provider returns the pool error (502)
+	_, testAPI := humatest.New(t)
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	var shutting int32
+	hctx := &api.HandlerContext{
+		Config:            &config.Config{},
+		IsShuttingDown:    &shutting,
+		StartTime:         time.Now(),
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	RegisterProviderEndpoints(testAPI, hctx, "/v1")
+
+	resp := testAPI.Get("/v1/providers/exec")
+	assert.Equal(t, http.StatusBadGateway, resp.Code)
+}
+
+func TestGetProviderSchema_AutoResolve_Fallback(t *testing.T) {
+	// When pool has no fetcher, get-provider-schema returns the pool error (502)
+	_, testAPI := humatest.New(t)
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	var shutting int32
+	hctx := &api.HandlerContext{
+		Config:            &config.Config{},
+		IsShuttingDown:    &shutting,
+		StartTime:         time.Now(),
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	RegisterProviderEndpoints(testAPI, hctx, "/v1")
+
+	resp := testAPI.Get("/v1/providers/exec/schema")
+	assert.Equal(t, http.StatusBadGateway, resp.Code)
+}
+
+func TestGetProvider_NoPool_Returns404(t *testing.T) {
+	// When no pool is configured, unknown providers return 404
+	_, testAPI := humatest.New(t)
+	reg := provider.NewRegistry()
+
+	var shutting int32
+	hctx := &api.HandlerContext{
+		Config:           &config.Config{},
+		IsShuttingDown:   &shutting,
+		StartTime:        time.Now(),
+		ProviderRegistry: reg,
+	}
+	RegisterProviderEndpoints(testAPI, hctx, "/v1")
+
+	resp := testAPI.Get("/v1/providers/exec")
+	assert.Equal(t, http.StatusNotFound, resp.Code)
 }

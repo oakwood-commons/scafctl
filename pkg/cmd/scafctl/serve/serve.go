@@ -295,6 +295,10 @@ func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fe
 	if len(cfg.APIServer.Plugins.AllowedPlugins) > 0 {
 		poolOpts = append(poolOpts, plugin.WithAllowedPlugins(cfg.APIServer.Plugins.AllowedPlugins))
 	}
+	// Wire auth host dependencies so plugins can use host auth
+	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
+		poolOpts = append(poolOpts, plugin.WithClientOptions(authOpts...))
+	}
 	pool := plugin.NewPool(fetcher, reg, *lgr, poolOpts...)
 	for _, c := range preloaded {
 		// Query the client for provider names it registered so the pool can
