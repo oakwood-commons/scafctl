@@ -5,10 +5,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
@@ -136,6 +138,11 @@ func (s *Server) registerProviderTools() {
 		),
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Preview what would happen without executing. Defaults to false."),
+		),
+		mcp.WithString("expression",
+			mcp.Description("Optional CEL expression to filter/transform the provider output before returning. "+
+				"The result object is bound to '_' (e.g., '_.data', 'size(_.data)', '_.data.filter(x, x.status == \"open\")'). "+
+				"Use this to reduce large outputs to only the fields you need."),
 		),
 	)
 	s.addTool(runProviderTool, s.handleRunProvider)
@@ -433,5 +440,41 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 		), nil
 	}
 
+	// Apply optional CEL expression to transform/filter the result.
+	expression := request.GetString("expression", "")
+	if expression != "" {
+		// Convert struct to map for CEL access.
+		resultMap, marshalErr := structToMap(result)
+		if marshalErr != nil {
+			return newStructuredError(ErrCodeExecFailed,
+				fmt.Sprintf("failed to prepare result for CEL evaluation: %v", marshalErr),
+			), nil
+		}
+		transformed, celErr := celexp.EvaluateExpression(ctx, expression, resultMap, nil)
+		if celErr != nil {
+			return newStructuredError(ErrCodeExecFailed,
+				fmt.Sprintf("CEL expression evaluation failed: %v", celErr),
+				WithField("expression"),
+				WithSuggestion("Use validate_expression to check CEL syntax first"),
+				WithRelatedTools("validate_expression", "list_cel_functions"),
+			), nil
+		}
+		return mcp.NewToolResultJSON(transformed)
+	}
+
 	return mcp.NewToolResultJSON(result)
+}
+
+// structToMap converts a Go struct to a map[string]any via JSON round-trip
+// so that CEL expressions can access fields by name.
+func structToMap(v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }

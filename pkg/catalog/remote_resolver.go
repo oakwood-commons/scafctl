@@ -29,6 +29,13 @@ type RemoteSolutionResolverConfig struct {
 	// Insecure allows HTTP connections to registries (for testing).
 	Insecure bool
 
+	// ArtifactCache enables caching of fetched remote solutions.
+	// When set, fetched artifacts are stored and served from cache within TTL.
+	ArtifactCache ArtifactCacher
+
+	// NoCache disables artifact caching even when ArtifactCache is set.
+	NoCache bool
+
 	// Logger for logging operations.
 	Logger logr.Logger
 }
@@ -41,6 +48,8 @@ type RemoteSolutionResolver struct {
 	authHandlerFunc func(registry string) scafctlauth.Handler
 	authScopeFunc   func(registry string) string
 	insecure        bool
+	artifactCache   ArtifactCacher
+	noCache         bool
 	logger          logr.Logger
 }
 
@@ -51,6 +60,8 @@ func NewRemoteSolutionResolver(cfg RemoteSolutionResolverConfig) *RemoteSolution
 		authHandlerFunc: cfg.AuthHandlerFunc,
 		authScopeFunc:   cfg.AuthScopeFunc,
 		insecure:        cfg.Insecure,
+		artifactCache:   cfg.ArtifactCache,
+		noCache:         cfg.NoCache,
 		logger:          cfg.Logger.WithName("remote-solution-resolver"),
 	}
 }
@@ -62,6 +73,22 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 	remoteRef, err := ParseRemoteReference(rawRef)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid remote reference %q: %w", rawRef, err)
+	}
+
+	// Check artifact cache before fetching from remote registry.
+	if !r.noCache && r.artifactCache != nil {
+		cacheKey := remoteRef.Registry + "/" + remoteRef.Repository + "/" + remoteRef.Name
+		cacheVersion := remoteRef.Tag
+		if cacheVersion == "" {
+			cacheVersion = "latest"
+		}
+		cached, cachedBundle, ok, cacheErr := r.artifactCache.Get(string(ArtifactKindSolution), cacheKey, cacheVersion)
+		if cacheErr != nil {
+			r.logger.V(1).Info("artifact cache get error (ignoring)", "error", cacheErr)
+		} else if ok {
+			r.logger.V(1).Info("artifact cache hit for remote solution", "ref", rawRef)
+			return cached, cachedBundle, nil
+		}
 	}
 
 	// Track whether the ref originally had an explicit kind path segment.
@@ -124,6 +151,19 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		"version", info.Reference.Version,
 		"digest", info.Digest,
 		"hasBundle", len(bundleData) > 0)
+
+	// Store in artifact cache for future reuse.
+	// Use remoteRef.Tag as the version key to match the Get lookup above.
+	if !r.noCache && r.artifactCache != nil {
+		cacheKey := remoteRef.Registry + "/" + remoteRef.Repository + "/" + remoteRef.Name
+		putVersion := remoteRef.Tag
+		if putVersion == "" {
+			putVersion = "latest"
+		}
+		if putErr := r.artifactCache.Put(string(ArtifactKindSolution), cacheKey, putVersion, info.Digest, content, bundleData); putErr != nil {
+			r.logger.V(1).Info("artifact cache put error (ignoring)", "error", putErr)
+		}
+	}
 
 	return content, bundleData, nil
 }

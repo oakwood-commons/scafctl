@@ -15,6 +15,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/git"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -48,6 +49,8 @@ type SolutionOptions struct {
 	SkipTests       bool
 	IgnorePreflight bool
 	AllowDevVersion bool
+	AllowDirty      bool
+	NoGitMetadata   bool
 	BaseDir         string
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
@@ -217,6 +220,8 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd.Flags().BoolVar(&options.SkipTests, "skip-tests", false, "Skip functional test pre-flight check")
 	cmd.Flags().BoolVar(&options.IgnorePreflight, "ignore-preflight", false, "Run pre-flight checks but proceed even if they fail")
 	cmd.Flags().BoolVar(&options.AllowDevVersion, "allow-dev-version", false, "Allow build without metadata.version set")
+	cmd.Flags().BoolVar(&options.AllowDirty, "allow-dirty", false, "Suppress warning when building from a dirty working tree")
+	cmd.Flags().BoolVar(&options.NoGitMetadata, "no-git-metadata", false, "Skip git commit and dirty-state annotations on the built artifact")
 	cmd.Flags().StringVar(&options.BaseDir, "base-dir", "", "Override base directory for resolving relative paths in the solution (default: solution file's directory)")
 
 	return cmd
@@ -326,6 +331,26 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		}
 		w.Infof("Set metadata.version, pass --version, or use %s build solution --allow-dev-version to build anyway", binaryName)
 		return exitcode.Errorf("dev version not allowed")
+	}
+
+	// Git metadata: detect dirty state and record commit info as annotations.
+	if !opts.NoGitMetadata {
+		repoStatus, gitErr := git.GetRepositoryStatus(ctx, bundleRoot)
+		if gitErr != nil {
+			lgr.V(1).Info("git metadata unavailable", "error", gitErr)
+		} else if repoStatus.IsRepo {
+			if repoStatus.IsDirty && !opts.AllowDirty {
+				w.Warningf("Building from a dirty working tree (uncommitted changes detected)")
+			}
+			if sol.Metadata.Annotations == nil {
+				sol.Metadata.Annotations = make(map[string]string)
+			}
+			sol.Metadata.Annotations[catalog.AnnotationBuildCommit] = repoStatus.Commit
+			if repoStatus.IsDirty {
+				sol.Metadata.Annotations[catalog.AnnotationBuildDirty] = "true"
+			}
+			w.Verbosef("Git metadata: commit=%s dirty=%v", repoStatus.Commit, repoStatus.IsDirty)
+		}
 	}
 
 	// Stamp resolved name and version into the solution so the stored

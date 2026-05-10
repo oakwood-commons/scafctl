@@ -69,6 +69,12 @@ const (
 	// depends on the catalog implementation, so it must not be assumed to be
 	// descriptor-only or digest-stable.
 	AnnotationOrigin = "dev.scafctl.artifact.origin"
+
+	// AnnotationBuildCommit is the short git commit SHA at build time.
+	AnnotationBuildCommit = "dev.scafctl.build.commit"
+
+	// AnnotationBuildDirty indicates the working tree had uncommitted changes at build time.
+	AnnotationBuildDirty = "dev.scafctl.build.dirty"
 )
 
 // AnnotationBuilder helps construct annotation maps.

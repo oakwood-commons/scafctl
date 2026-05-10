@@ -13,11 +13,13 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -35,6 +37,9 @@ type InstallOptions struct {
 	Platform  string
 	CacheDir  string
 	NoCache   bool
+	Kind      string
+	Version   string
+	DryRun    bool
 }
 
 // CommandInstall creates the install subcommand.
@@ -45,30 +50,39 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	}
 
 	cmd := &cobra.Command{
-		Use:          "install",
-		Short:        "Pre-fetch plugin binaries declared in a solution",
+		Use:          "install [plugin-name ...]",
+		Short:        "Pre-fetch plugin binaries by name or from a solution",
 		SilenceUsage: true,
 		Long: strings.ReplaceAll(heredoc.Doc(`
-			Pre-fetch and cache plugin binaries declared in a solution's
-			bundle.plugins section.
+			Pre-fetch and cache plugin binaries. Plugins can be specified
+			by name (standalone mode) or loaded from a solution's
+			bundle.plugins section (solution mode).
 
-			This command resolves plugin version constraints against configured
-			catalogs, downloads the binaries, and stores them in the local
-			plugin cache. Subsequent 'scafctl run solution' invocations will
-			use the cached binaries without network access.
+			In standalone mode, plugin names are resolved against the
+			official provider and auth handler registries, then fetched
+			from the configured catalog.
 
 			Examples:
-			  # Install plugins for a solution
+			  # Install a single plugin by name
+			  scafctl plugins install github
+
+			  # Install multiple plugins
+			  scafctl plugins install github exec env
+
+			  # Install a specific version
+			  scafctl plugins install github --version ">=0.3.0"
+
+			  # Install an auth handler plugin
+			  scafctl plugins install github --kind auth-handler
+
+			  # Install plugins from a solution file
 			  scafctl plugins install -f solution.yaml
 
 			  # Install for a different platform (e.g., for CI)
 			  scafctl plugins install -f solution.yaml --platform linux/amd64
-
-			  # Use a custom cache directory
-			  scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
 		`), settings.CliBinaryName, cliParams.BinaryName),
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
 			w := writer.FromContext(cmd.Context())
 			if w == nil {
 				w = writer.New(ioStreams, cliParams)
@@ -80,7 +94,7 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 				ctx = logger.WithLogger(ctx, lgr)
 			}
 
-			return runInstall(ctx, opts)
+			return runInstall(ctx, opts, args)
 		},
 	}
 
@@ -88,45 +102,61 @@ func CommandInstall(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cmd.Flags().StringVar(&opts.Platform, "platform", "", "Target platform (default: current, e.g., linux/amd64)")
 	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", fmt.Sprintf("Plugin cache directory (default: $XDG_CACHE_HOME/%s/plugins/)", path))
 	cmd.Flags().BoolVar(&opts.NoCache, "no-cache", false, "Bypass the plugin cache and fetch directly from the catalog")
+	cmd.Flags().StringVar(&opts.Kind, "kind", "provider", "Plugin kind: provider or auth-handler")
+	cmd.Flags().StringVar(&opts.Version, "version", "", "Version constraint for standalone plugins (e.g., \">=0.3.0\", \"latest\")")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be installed without fetching")
 
 	return cmd
 }
 
-func runInstall(ctx context.Context, opts *InstallOptions) error {
+func runInstall(ctx context.Context, opts *InstallOptions, args []string) error {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
 	}
 	lgr := logger.FromContext(ctx)
 
-	// Auto-discover solution file if not provided
-	filePath := opts.File
-	if filePath == "" {
-		filePath = get.NewGetterFromContext(ctx).FindSolution()
-	}
-	if filePath == "" {
-		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f)")
-		w.Errorf("%s", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+	// Determine plugins: from positional args (standalone) or solution file.
+	var plugins []solution.PluginDependency
+	var lockPlugins []bundler.LockPlugin
+
+	if len(args) > 0 {
+		// Standalone mode: build dependencies from plugin names.
+		w.Verbosef("Standalone mode: resolving %d plugin name(s)", len(args))
+		resolved, err := resolveStandalonePlugins(ctx, args, opts.Kind, opts.Version)
+		if err != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		}
+		plugins = resolved
+	} else {
+		// Solution mode: load from file.
+		w.Verbosef("Solution mode: loading plugins from file")
+		var err error
+		plugins, lockPlugins, err = loadPluginsFromSolution(ctx, opts)
+		if err != nil {
+			return err
+		}
 	}
 
-	// Load the solution
-	sol, err := loadSolution(filePath)
-	if err != nil {
-		w.Errorf("failed to load solution: %v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	if len(sol.Bundle.Plugins) == 0 {
-		w.Infof("No plugins declared in solution — nothing to install.")
+	if len(plugins) == 0 {
 		return nil
 	}
 
-	// Load lock file if available
-	lockFile, _ := bundler.LoadLockFile(filepath.Join(filepath.Dir(filePath), bundler.DefaultLockFileName))
-	var lockPlugins []bundler.LockPlugin
-	if lockFile != nil {
-		lockPlugins = lockFile.Plugins
+	for _, p := range plugins {
+		w.Verbosef("  Plugin: %s (kind=%s, version=%s)", p.Name, p.Kind, p.Version)
+	}
+
+	if opts.DryRun {
+		w.Infof("Dry run: would install %d plugin(s):", len(plugins))
+		for _, p := range plugins {
+			ver := p.Version
+			if ver == "" {
+				ver = "latest"
+			}
+			w.Infof("  %s (%s) %s", p.Name, p.Kind, ver)
+		}
+		return nil
 	}
 
 	// Build catalog chain from config
@@ -155,9 +185,9 @@ func runInstall(ctx context.Context, opts *InstallOptions) error {
 	})
 
 	// Fetch all plugins
-	w.Infof("Installing %d plugin(s)...", len(sol.Bundle.Plugins))
+	w.Infof("Installing %d plugin(s)...", len(plugins))
 
-	results, err := fetcher.FetchPlugins(ctx, sol.Bundle.Plugins, lockPlugins)
+	results, err := fetcher.FetchPlugins(ctx, plugins, lockPlugins)
 	if err != nil {
 		w.Errorf("failed to install plugins: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
@@ -186,4 +216,112 @@ func loadSolution(path string) (*solution.Solution, error) {
 		return nil, fmt.Errorf("parsing solution from %s: %w", path, err)
 	}
 	return &sol, nil
+}
+
+// resolveStandalonePlugins converts positional plugin name arguments into
+// PluginDependency entries by looking up each name in the official provider
+// and auth handler registries from context (falling back to default registries).
+// Names not found in any registry are still accepted -- catalog resolution
+// will determine if they exist.
+func resolveStandalonePlugins(ctx context.Context, names []string, kind, version string) ([]solution.PluginDependency, error) {
+	pluginKind := solution.PluginKind(kind)
+	if !pluginKind.IsValid() {
+		return nil, fmt.Errorf("invalid plugin kind %q (valid: provider, auth-handler)", kind)
+	}
+
+	provReg := official.RegistryFromContext(ctx)
+	if provReg == nil {
+		provReg = official.NewRegistry()
+	}
+	authReg := authofficial.RegistryFromContext(ctx)
+	if authReg == nil {
+		authReg = authofficial.NewRegistry()
+	}
+	deps := make([]solution.PluginDependency, 0, len(names))
+
+	for _, name := range names {
+		// Parse optional name@version syntax.
+		pluginName, pluginVersion := parseNameVersion(name)
+		if version != "" {
+			pluginVersion = version // --version flag overrides inline version
+		}
+
+		var dep solution.PluginDependency
+
+		switch pluginKind {
+		case solution.PluginKindProvider:
+			if p, ok := provReg.Get(pluginName); ok {
+				dep = p.ToPluginDependency()
+				if pluginVersion != "" {
+					dep.Version = pluginVersion
+				}
+			} else {
+				dep = solution.PluginDependency{
+					Name:    pluginName,
+					Kind:    solution.PluginKindProvider,
+					Version: pluginVersion,
+				}
+			}
+		case solution.PluginKindAuthHandler:
+			if h, ok := authReg.Get(pluginName); ok {
+				dep = h.ToPluginDependency()
+				if pluginVersion != "" {
+					dep.Version = pluginVersion
+				}
+			} else {
+				dep = solution.PluginDependency{
+					Name:    pluginName,
+					Kind:    solution.PluginKindAuthHandler,
+					Version: pluginVersion,
+				}
+			}
+		}
+
+		deps = append(deps, dep)
+	}
+
+	return deps, nil
+}
+
+// parseNameVersion splits "name@version" into (name, version).
+// If no "@" is present, returns (input, "").
+func parseNameVersion(s string) (string, string) {
+	if idx := strings.LastIndex(s, "@"); idx > 0 {
+		return s[:idx], s[idx+1:]
+	}
+	return s, ""
+}
+
+// loadPluginsFromSolution loads plugin dependencies from a solution file.
+func loadPluginsFromSolution(ctx context.Context, opts *InstallOptions) ([]solution.PluginDependency, []bundler.LockPlugin, error) {
+	w := writer.FromContext(ctx)
+
+	filePath := opts.File
+	if filePath == "" {
+		filePath = get.NewGetterFromContext(ctx).FindSolution()
+	}
+	if filePath == "" {
+		err := fmt.Errorf("no plugin names or solution file provided; use positional args or --file (-f)")
+		w.Errorf("%s", err)
+		return nil, nil, exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	sol, err := loadSolution(filePath)
+	if err != nil {
+		w.Errorf("failed to load solution: %v", err)
+		return nil, nil, exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
+	if len(sol.Bundle.Plugins) == 0 {
+		w.Infof("No plugins declared in solution — nothing to install.")
+		return nil, nil, nil
+	}
+
+	lockFile, _ := bundler.LoadLockFile(filepath.Join(filepath.Dir(filePath), bundler.DefaultLockFileName))
+	var lockPlugins []bundler.LockPlugin
+	if lockFile != nil {
+		lockPlugins = lockFile.Plugins
+	}
+
+	return sol.Bundle.Plugins, lockPlugins, nil
 }
