@@ -531,6 +531,87 @@ func TestHandleRunProvider(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 		assert.Equal(t, "message", output["provider"])
 	})
+
+	t.Run("applies CEL expression to result", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider":   "cel",
+			"inputs":     map[string]any{"expression": "'hello world'"},
+			"expression": "_.data",
+		}
+
+		result, err := srv.handleRunProvider(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		// The CEL expression '_.data' extracts just the data field
+		assert.Contains(t, text, "hello world")
+		// Should NOT contain the wrapper fields like "provider", "capability"
+		assert.NotContains(t, text, "\"provider\"")
+	})
+
+	t.Run("returns error for invalid CEL expression", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider":   "cel",
+			"inputs":     map[string]any{"expression": "'hello'"},
+			"expression": "_.nonexistent.deep.field",
+		}
+
+		result, err := srv.handleRunProvider(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "CEL expression evaluation failed")
+	})
+
+	t.Run("no expression returns full result", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider": "cel",
+			"inputs":   map[string]any{"expression": "'hello world'"},
+		}
+
+		result, err := srv.handleRunProvider(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+		// Full result includes wrapper fields
+		assert.Equal(t, "cel", output["provider"])
+		assert.Equal(t, "transform", output["capability"])
+	})
 }
 
 func TestEnsureProvider(t *testing.T) {

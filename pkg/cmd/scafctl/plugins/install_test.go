@@ -48,9 +48,9 @@ func TestRunInstall_NoFileProvided_NoAutoDiscover(t *testing.T) {
 		File:      "",
 	}
 
-	err := runInstall(ctx, opts)
+	err := runInstall(ctx, opts, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no solution path provided")
+	assert.Contains(t, err.Error(), "no plugin names or solution file provided")
 }
 
 func TestRunInstall_FileNotFound(t *testing.T) {
@@ -63,7 +63,7 @@ func TestRunInstall_FileNotFound(t *testing.T) {
 		File:      "/nonexistent/path/solution.yaml",
 	}
 
-	err := runInstall(ctx, opts)
+	err := runInstall(ctx, opts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading solution")
 }
@@ -83,7 +83,7 @@ func TestRunInstall_InvalidYAML(t *testing.T) {
 		File:      solFile,
 	}
 
-	err = runInstall(ctx, opts)
+	err = runInstall(ctx, opts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing solution")
 }
@@ -110,7 +110,7 @@ spec:
 		File:      solFile,
 	}
 
-	err = runInstall(ctx, opts)
+	err = runInstall(ctx, opts, nil)
 	require.NoError(t, err, "no plugins declared should succeed with no-op")
 }
 
@@ -152,4 +152,116 @@ func TestLoadSolution_InvalidContent(t *testing.T) {
 	_, err = loadSolution(solFile)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing solution")
+}
+
+func TestResolveStandalonePlugins_OfficialProvider(t *testing.T) {
+	t.Parallel()
+
+	deps, err := resolveStandalonePlugins(t.Context(), []string{"github"}, "provider", "")
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, "provider", string(deps[0].Kind))
+	assert.NotEmpty(t, deps[0].Name)
+}
+
+func TestResolveStandalonePlugins_MultiplePlugins(t *testing.T) {
+	t.Parallel()
+
+	deps, err := resolveStandalonePlugins(t.Context(), []string{"github", "exec", "env"}, "provider", "")
+	require.NoError(t, err)
+	assert.Len(t, deps, 3)
+}
+
+func TestResolveStandalonePlugins_VersionOverride(t *testing.T) {
+	t.Parallel()
+
+	deps, err := resolveStandalonePlugins(t.Context(), []string{"github"}, "provider", ">=0.3.0")
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, ">=0.3.0", deps[0].Version)
+}
+
+func TestResolveStandalonePlugins_InlineVersion(t *testing.T) {
+	t.Parallel()
+
+	deps, err := resolveStandalonePlugins(t.Context(), []string{"github@0.2.0"}, "provider", "")
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, "0.2.0", deps[0].Version)
+}
+
+func TestResolveStandalonePlugins_UnknownPlugin(t *testing.T) {
+	t.Parallel()
+
+	// Unknown names should still produce a dependency (catalog will resolve or fail)
+	deps, err := resolveStandalonePlugins(t.Context(), []string{"my-custom-plugin"}, "provider", "")
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, "my-custom-plugin", deps[0].Name)
+	assert.Equal(t, "provider", string(deps[0].Kind))
+}
+
+func TestResolveStandalonePlugins_AuthHandler(t *testing.T) {
+	t.Parallel()
+
+	deps, err := resolveStandalonePlugins(t.Context(), []string{"github"}, "auth-handler", "")
+	require.NoError(t, err)
+	require.Len(t, deps, 1)
+	assert.Equal(t, "auth-handler", string(deps[0].Kind))
+}
+
+func TestResolveStandalonePlugins_InvalidKind(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveStandalonePlugins(t.Context(), []string{"github"}, "invalid-kind", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid plugin kind")
+}
+
+func TestParseNameVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input   string
+		name    string
+		version string
+	}{
+		{"github", "github", ""},
+		{"github@0.2.0", "github", "0.2.0"},
+		{"github@>=0.3.0", "github", ">=0.3.0"},
+		{"my-plugin@latest", "my-plugin", "latest"},
+		{"@invalid", "@invalid", ""}, // edge: no name before @
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			name, version := parseNameVersion(tt.input)
+			assert.Equal(t, tt.name, name)
+			assert.Equal(t, tt.version, version)
+		})
+	}
+}
+
+func TestRunInstall_DryRun(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &InstallOptions{
+		CliParams: settings.NewCliParams(),
+		IOStreams: ioStreams,
+		DryRun:    true, Kind: "provider",
+	}
+
+	err := runInstall(ctx, opts, []string{"github", "exec"})
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "Dry run")
+	assert.Contains(t, output, "github")
+	assert.Contains(t, output, "exec")
 }

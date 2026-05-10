@@ -480,6 +480,12 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 	if lgr != nil {
 		getterOpts = append(getterOpts, get.WithLogger(*lgr))
 
+		// Create shared artifact cache for both catalog and remote resolvers.
+		var artifactCache catalog.ArtifactCacher
+		if !noCache {
+			artifactCache = cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
+		}
+
 		localCatalog, err := catalog.NewLocalCatalog(*lgr)
 		if err == nil {
 			// Build SolutionResolverOptions with optional artifact cache
@@ -487,8 +493,7 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 				catalog.WithResolverNoCache(noCache),
 				catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
 			}
-			if !noCache {
-				artifactCache := cache.NewArtifactCache(paths.ArtifactCacheDir(), settings.DefaultArtifactCacheTTL)
+			if artifactCache != nil {
 				resolverOpts = append(resolverOpts, catalog.WithResolverArtifactCache(artifactCache))
 			}
 			catResolver := catalog.NewSolutionResolver(localCatalog, *lgr, resolverOpts...)
@@ -553,7 +558,9 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 				}
 				return ""
 			},
-			Logger: *lgr,
+			Logger:        *lgr,
+			ArtifactCache: artifactCache,
+			NoCache:       noCache,
 		})
 		getterOpts = append(getterOpts, get.WithRemoteResolver(remoteResolver))
 	}

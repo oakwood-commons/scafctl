@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -60,6 +61,8 @@ func TestCommandBuildSolution_Flags(t *testing.T) {
 		{"skip-tests", "false"},
 		{"ignore-preflight", "false"},
 		{"allow-dev-version", "false"},
+		{"allow-dirty", "false"},
+		{"no-git-metadata", "false"},
 		{"base-dir", ""},
 	}
 
@@ -601,6 +604,7 @@ spec: {}
 		CliParams:     settings.NewCliParams(),
 		DryRun:        true,
 		NoBundle:      true,
+		NoGitMetadata: true,
 		BundleMaxSize: "50MB",
 	}
 
@@ -663,4 +667,96 @@ func TestRunBuildSolution_StdinImpliesNoBundle(t *testing.T) {
 	f := cmd.Flags().Lookup("file")
 	require.NotNil(t, f)
 	assert.Contains(t, f.Usage, "stdin")
+}
+
+func TestRunBuildSolution_DirtyTreeWarns(t *testing.T) {
+	t.Parallel()
+
+	// Create a git repo with a dirty file.
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, string(out))
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@test.com")
+	runGit("config", "user.name", "test")
+
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: dirty-test\n  version: 1.0.0\nspec: {}\n"
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+	runGit("add", ".")
+	runGit("commit", "-m", "initial")
+
+	// Make it dirty.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("dirty"), 0o644))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          solFile,
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		DryRun:        true,
+		BundleMaxSize: "50MB",
+	}
+
+	err := runBuildSolution(ctx, opts)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "dirty")
+}
+
+func TestRunBuildSolution_AllowDirtyProceeds(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, string(out))
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@test.com")
+	runGit("config", "user.name", "test")
+
+	solFile := filepath.Join(dir, "solution.yaml")
+	content := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: dirty-ok\n  version: 1.0.0\nspec: {}\n"
+	require.NoError(t, os.WriteFile(solFile, []byte(content), 0o600))
+	runGit("add", ".")
+	runGit("commit", "-m", "initial")
+
+	// Make dirty.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra.txt"), []byte("dirty"), 0o644))
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(t.Context(), w)
+
+	opts := &SolutionOptions{
+		File:          solFile,
+		IOStreams:     ioStreams,
+		CliParams:     settings.NewCliParams(),
+		DryRun:        true,
+		AllowDirty:    true,
+		BundleMaxSize: "50MB",
+	}
+
+	err := runBuildSolution(ctx, opts)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "dirty-ok@1.0.0")
 }

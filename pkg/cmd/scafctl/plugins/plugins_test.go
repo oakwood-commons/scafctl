@@ -36,7 +36,7 @@ func TestCommandInstall(t *testing.T) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandInstall(cliParams, ioStreams, "scafctl/plugins")
 	require.NotNil(t, cmd)
-	assert.Equal(t, "install", cmd.Use)
+	assert.Equal(t, "install [plugin-name ...]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }
@@ -53,6 +53,10 @@ func TestCommandInstall_Flags(t *testing.T) {
 		{"file", "file", ""},
 		{"platform", "platform", ""},
 		{"cache-dir", "cache-dir", ""},
+		{"no-cache", "no-cache", "false"},
+		{"kind", "kind", "provider"},
+		{"version", "version", ""},
+		{"dry-run", "dry-run", "false"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
