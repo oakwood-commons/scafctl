@@ -6486,7 +6486,7 @@ func TestIntegration_Plugins_Install_AutoDiscoveryNoFile(t *testing.T) {
 	emptyDir := t.TempDir()
 	_, stderr, exitCode := runScafctlInDir(t, emptyDir, "plugins", "install")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "no solution path provided")
+	assert.Contains(t, stderr, "no plugin names or solution file provided")
 }
 
 // TestIntegration_Plugins_Install_NoPlugins verifies install succeeds with a solution that has no plugins.
@@ -6533,6 +6533,30 @@ spec:
 	stdout, _, exitCode := runScafctlWithEnvInDir(t, tmpDir, env, "plugins", "install")
 	assert.Equal(t, 0, exitCode, "expected plugins install to auto-discover solution.yaml")
 	assert.Contains(t, stdout, "No plugins declared")
+}
+
+// TestIntegration_Plugins_Install_StandaloneDryRun verifies standalone mode with --dry-run.
+func TestIntegration_Plugins_Install_StandaloneDryRun(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_CACHE_HOME": tmpDir,
+		"XDG_DATA_HOME":  tmpDir,
+	}
+
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "plugins", "install", "github", "--kind", "provider", "--dry-run")
+	assert.Equal(t, 0, exitCode, "expected dry-run to succeed")
+	assert.Contains(t, stdout, "Dry run")
+	assert.Contains(t, stdout, "github")
+}
+
+// TestIntegration_Plugins_Install_InvalidKind verifies error on invalid --kind flag.
+func TestIntegration_Plugins_Install_InvalidKind(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, exitCode := runScafctl(t, "plugins", "install", "github", "--kind", "invalid")
+	assert.NotEqual(t, 0, exitCode, "expected non-zero exit for invalid kind")
+	assert.Contains(t, stderr, "invalid plugin kind")
 }
 
 // TestIntegration_RunResolver_MetadataProvider runs the metadata provider and verifies output.
