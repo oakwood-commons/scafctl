@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
 // testProvider is a minimal provider for endpoint test registration.
@@ -274,6 +275,29 @@ func TestEnsureAPIProvider_NoFetcher(t *testing.T) {
 	assert.Contains(t, err.Error(), "exec")
 }
 
+func TestEnsureAPIProvider_RegistryMiss(t *testing.T) {
+	// EnsureAndAcquire succeeds (provider is already known in pool's registry)
+	// but the handler context uses a different registry for lookup.
+	poolReg := provider.NewRegistry()
+	handlerReg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+
+	// Mark the name as known in the pool's registry so Ensure passes
+	poolReg.MarkKnown("exec")
+
+	pool := plugin.NewPool(nil, poolReg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	hctx := &api.HandlerContext{
+		ProviderRegistry:  handlerReg, // different registry — lookup misses
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	_, _, err := ensureAPIProvider(context.Background(), hctx, "exec")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
 func TestGetProvider_AutoResolve_Fallback(t *testing.T) {
 	// When pool has no fetcher, get-provider returns the pool error (502)
 	_, testAPI := humatest.New(t)
@@ -335,5 +359,89 @@ func TestGetProvider_NoPool_Returns404(t *testing.T) {
 	RegisterProviderEndpoints(testAPI, hctx, "/v1")
 
 	resp := testAPI.Get("/v1/providers/exec")
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+}
+
+func TestEnsureAPIProvider_Success(t *testing.T) {
+	// When pool has an adopted entry and the provider is registered in the
+	// handler's registry, ensureAPIProvider should return the provider.
+	reg := newRegistryWithProvider(t, "exec")
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt a mock client so EnsureAndAcquire succeeds
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", new(plugin.Client), dep, nil)
+
+	hctx := &api.HandlerContext{
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	p, release, err := ensureAPIProvider(context.Background(), hctx, "exec")
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.NotNil(t, release)
+	assert.Equal(t, "exec", p.Descriptor().Name)
+	release()
+}
+
+func TestGetProvider_AutoResolve_Adopted(t *testing.T) {
+	// When pool has an adopted entry but the provider is NOT registered,
+	// the detail endpoint should return 404 because EnsureAndAcquire
+	// succeeds (entry exists) but the registry lookup in the handler fails.
+	_, testAPI := humatest.New(t)
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt entry but do NOT register provider — simulates post-spawn
+	// where pool entry exists but registry lookup in handler fails.
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", new(plugin.Client), dep, nil)
+
+	var shutting int32
+	hctx := &api.HandlerContext{
+		Config:            &config.Config{},
+		IsShuttingDown:    &shutting,
+		StartTime:         time.Now(),
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	RegisterProviderEndpoints(testAPI, hctx, "/v1")
+
+	// Provider is not in registry, pool entry is adopted but no provider
+	// registered — ensureAPIProvider succeeds (EnsureAndAcquire) but then
+	// ProviderRegistry.Get fails, returning 404.
+	resp := testAPI.Get("/v1/providers/exec")
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+}
+
+func TestGetProviderSchema_AutoResolve_Adopted(t *testing.T) {
+	// Same as above but for the schema endpoint.
+	_, testAPI := humatest.New(t)
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", new(plugin.Client), dep, nil)
+
+	var shutting int32
+	hctx := &api.HandlerContext{
+		Config:            &config.Config{},
+		IsShuttingDown:    &shutting,
+		StartTime:         time.Now(),
+		ProviderRegistry:  reg,
+		PluginPool:        pool,
+		OfficialProviders: officialReg,
+	}
+	RegisterProviderEndpoints(testAPI, hctx, "/v1")
+
+	resp := testAPI.Get("/v1/providers/exec/schema")
 	assert.Equal(t, http.StatusNotFound, resp.Code)
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -854,6 +855,145 @@ func TestHandleGetProviderOutputShape_MissingName(t *testing.T) {
 	assert.True(t, result.IsError)
 	text := result.Content[0].(mcp.TextContent).Text
 	assert.Contains(t, text, "INVALID_INPUT")
+}
+
+func TestHandleRunProvider_AutoResolve_PoolError(t *testing.T) {
+	// When pool exists with official registry but EnsureAndAcquire fails (no fetcher),
+	// handleRunProvider should return LOAD_FAILED with the pool error.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "run_provider"
+	request.Params.Arguments = map[string]any{
+		"provider": "exec",
+		"inputs":   map[string]any{},
+	}
+
+	result, err := srv.handleRunProvider(context.Background(), request)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := result.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, "LOAD_FAILED")
+	assert.Contains(t, text, "exec")
+}
+
+func TestHandleRunProvider_AutoResolve_RegistryMiss(t *testing.T) {
+	// When auto-resolve succeeds (adopted entry) but provider is still not in
+	// the registry, handleRunProvider should fall through to NOT_FOUND.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt a mock client so EnsureAndAcquire succeeds
+	mockClient := &plugin.Client{}
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", mockClient, dep, nil)
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "run_provider"
+	request.Params.Arguments = map[string]any{
+		"provider": "exec",
+		"inputs":   map[string]any{},
+	}
+
+	result, err := srv.handleRunProvider(context.Background(), request)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := result.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, "NOT_FOUND")
+}
+
+func TestHandleGetProviderSchema_AutoResolve_RegistryMiss(t *testing.T) {
+	// When auto-resolve succeeds but provider is still not in the registry,
+	// handleGetProviderSchema should fall back to official registry info.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt so EnsureAndAcquire succeeds
+	mockClient := &plugin.Client{}
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", mockClient, dep, nil)
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "get_provider_schema"
+	request.Params.Arguments = map[string]any{
+		"name": "exec",
+	}
+
+	result, err := srv.handleGetProviderSchema(context.Background(), request)
+	require.NoError(t, err)
+	// Falls through to official registry fallback
+	assert.False(t, result.IsError)
+	text := result.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, "exec")
+}
+
+func TestHandleGetProviderOutputShape_AutoResolve_RegistryMiss(t *testing.T) {
+	// When auto-resolve succeeds but provider is still not in the registry,
+	// handleGetProviderOutputShape should return NOT_FOUND.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt so EnsureAndAcquire succeeds
+	mockClient := &plugin.Client{}
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", mockClient, dep, nil)
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "get_provider_output_shape"
+	request.Params.Arguments = map[string]any{
+		"name": "exec",
+	}
+
+	result, err := srv.handleGetProviderOutputShape(context.Background(), request)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := result.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, "NOT_FOUND")
 }
 
 func TestProviderSource(t *testing.T) {

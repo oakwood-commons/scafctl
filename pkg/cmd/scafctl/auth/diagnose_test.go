@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/diagnose"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -472,5 +473,64 @@ func BenchmarkDiagnose_Authenticated(b *testing.B) {
 		cmd.SetContext(ctx)
 		cmd.SetArgs([]string{})
 		_ = cmd.Execute()
+	}
+}
+
+func TestHandlerSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		setup    func() *auth.Registry
+		query    string
+		expected string
+	}{
+		{
+			name:     "nil registry",
+			setup:    func() *auth.Registry { return nil },
+			query:    "github",
+			expected: "not found",
+		},
+		{
+			name: "handler not registered",
+			setup: func() *auth.Registry {
+				r := auth.NewRegistry()
+				_ = r.Register(auth.NewMockHandler("entra"))
+				return r
+			},
+			query:    "github",
+			expected: "not found",
+		},
+		{
+			name: "built-in handler",
+			setup: func() *auth.Registry {
+				r := auth.NewRegistry()
+				_ = r.Register(auth.NewMockHandler("github"))
+				return r
+			},
+			query:    "github",
+			expected: "built-in",
+		},
+		{
+			name: "plugin handler",
+			setup: func() *auth.Registry {
+				r := auth.NewRegistry()
+				wrapper := plugin.NewAuthHandlerWrapper(nil, plugin.AuthHandlerInfo{
+					Name: "github",
+				})
+				_ = r.Register(wrapper)
+				return r
+			},
+			query:    "github",
+			expected: "plugin",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg := tc.setup()
+			assert.Equal(t, tc.expected, handlerSource(reg, tc.query))
+		})
 	}
 }
