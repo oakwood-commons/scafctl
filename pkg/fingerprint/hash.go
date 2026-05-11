@@ -1,0 +1,55 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
+package fingerprint
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+// HashFiles computes a deterministic SHA-256 hash over the contents of all
+// files matching the given glob patterns, resolved relative to baseDir.
+// Files are sorted lexicographically before hashing for determinism.
+// The hash includes both file paths and contents so that renames are detected.
+// Returns empty string and nil error if patterns is empty.
+func HashFiles(baseDir string, patterns []string) (string, error) {
+	if len(patterns) == 0 {
+		return "", nil
+	}
+
+	files, err := ExpandGlobs(baseDir, patterns)
+	if err != nil {
+		return "", err
+	}
+
+	return hashFileList(baseDir, files)
+}
+
+// hashFileList computes a SHA-256 hash over the given sorted file list.
+func hashFileList(baseDir string, files []string) (string, error) {
+	h := sha256.New()
+
+	for _, relPath := range files {
+		// Include file path in hash so renames are detected
+		fmt.Fprintf(h, "file:%s\n", relPath)
+
+		absPath := filepath.Join(baseDir, relPath)
+		f, err := os.Open(absPath)
+		if err != nil {
+			return "", fmt.Errorf("reading %q: %w", relPath, err)
+		}
+
+		if _, err := io.Copy(h, f); err != nil {
+			f.Close()
+			return "", fmt.Errorf("hashing %q: %w", relPath, err)
+		}
+		f.Close()
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}

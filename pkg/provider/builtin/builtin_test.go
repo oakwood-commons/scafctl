@@ -69,8 +69,8 @@ func TestDefaultRegistry(t *testing.T) {
 func TestProviderNames(t *testing.T) {
 	names := ProviderNames()
 
-	// Should have all built-in providers
-	expectedCount := 20 // http, env, cel, file, directory, validation, exec, git, debug, sleep, parameter, static, go-template, secret, identity, hcl, github, metadata, message, state
+	// Should have all built-in providers (10 remain after plugin extraction)
+	expectedCount := 10 // http, cel, file, validation, debug, go-template, message, state, static, parameter
 	assert.Len(t, names, expectedCount, "should have %d built-in providers", expectedCount)
 
 	// Verify expected names are present

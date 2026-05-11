@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/dryrun"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -64,6 +65,10 @@ type SolutionOptions struct {
 	// Force overrides --on-conflict to "skip-unchanged", allowing re-runs of
 	// solutions that produce identical files without errors.
 	Force bool
+
+	// SkipFingerprint disables fingerprint-based up-to-date checks.
+	// When true, all actions execute regardless of whether sources have changed.
+	SkipFingerprint bool
 
 	// Backup enables .bak backup creation before mutating existing files.
 	Backup bool
@@ -240,6 +245,7 @@ Examples:
 	// File conflict strategy flags
 	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append) (default: error)")
 	cCmd.Flags().BoolVar(&options.Force, "force", false, "Skip unchanged files and write only new or modified content (shorthand for --on-conflict skip-unchanged)")
+	cCmd.Flags().BoolVar(&options.SkipFingerprint, "skip-fingerprint", false, "Disable fingerprint-based up-to-date checks (re-run all actions)")
 	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
 
 	return cCmd
@@ -551,6 +557,8 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
 		action.WithIOStreams(o.getActionIOStreams()),
 		action.WithCwd(originalCwd),
+		action.WithFingerprintChecker(fingerprint.NewChecker(stateData)),
+		action.WithNoCache(o.SkipFingerprint),
 	)
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)

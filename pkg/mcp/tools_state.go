@@ -27,7 +27,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State file path relative to the XDG state directory (e.g., 'my-app-state.json')"),
 		),
 	)
-	s.mcpServer.AddTool(listTool, s.handleStateList)
+	s.addTool(listTool, s.handleStateList)
 
 	getTool := mcp.NewTool("state_get",
 		mcp.WithDescription(fmt.Sprintf("Get a single entry from a %s state file by key. Returns the value, type, and metadata for the specified key.", s.name)),
@@ -46,7 +46,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State entry key to retrieve (typically a resolver name)"),
 		),
 	)
-	s.mcpServer.AddTool(getTool, s.handleStateGet)
+	s.addTool(getTool, s.handleStateGet)
 
 	deleteTool := mcp.NewTool("state_delete",
 		mcp.WithDescription(fmt.Sprintf("Delete a single entry from a %s state file by key, or clear all entries. This modifies the state file on disk.", s.name)),
@@ -64,7 +64,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State entry key to delete. Omit to clear all entries."),
 		),
 	)
-	s.mcpServer.AddTool(deleteTool, s.handleStateDelete)
+	s.addTool(deleteTool, s.handleStateDelete)
 }
 
 // handleStateList lists all entries in a state file.
