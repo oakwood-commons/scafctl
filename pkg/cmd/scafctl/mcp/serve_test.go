@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -137,5 +139,33 @@ func TestBuildMCPPluginPool(t *testing.T) {
 
 		// MCP pools should not sanitize env so host credentials are available
 		assert.False(t, pool.SanitizeEnv(), "MCP pool should not sanitize env")
+	})
+
+	t.Run("wires auth client opts when auth registry in context", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		authReg := auth.NewRegistry()
+		ctx := auth.WithRegistry(context.Background(), authReg)
+
+		pool, resultCtx := buildMCPPluginPool(ctx, nil, reg, &lgr)
+		defer pool.Shutdown()
+
+		// Auth opts should be wired into the pool via WithClientOptions
+		opts := plugin.AuthClientOptsFromContext(resultCtx)
+		assert.NotNil(t, opts, "auth client opts should be available from context")
+		assert.False(t, pool.SanitizeEnv())
+		// Verify client opts were actually wired into the pool configuration
+		assert.Greater(t, pool.ClientOptsLen(), 0, "pool should have client opts configured from auth registry")
+	})
+
+	t.Run("no auth client opts when no auth registry", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		pool, resultCtx := buildMCPPluginPool(context.Background(), nil, reg, &lgr)
+		defer pool.Shutdown()
+
+		opts := plugin.AuthClientOptsFromContext(resultCtx)
+		assert.Nil(t, opts, "no auth client opts when no auth registry")
+		assert.Equal(t, 0, pool.ClientOptsLen(), "pool should have no client opts without auth registry")
 	})
 }

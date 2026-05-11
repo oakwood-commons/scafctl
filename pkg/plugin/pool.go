@@ -366,6 +366,23 @@ func (p *Pool) waitAndValidate(ctx context.Context, entry *poolEntry) error {
 	return nil
 }
 
+// buildSpawnClientOpts builds the ClientOption slice used when spawning a
+// plugin process. When sanitize is true, WithSanitizedEnv() is prepended.
+func buildSpawnClientOpts(sanitize bool, extraOpts []ClientOption) []ClientOption {
+	if sanitize {
+		opts := make([]ClientOption, 1, 1+len(extraOpts))
+		opts[0] = WithSanitizedEnv()
+		opts = append(opts, extraOpts...)
+		return opts
+	}
+	if len(extraOpts) == 0 {
+		return nil
+	}
+	opts := make([]ClientOption, len(extraOpts))
+	copy(opts, extraOpts)
+	return opts
+}
+
 // spawn fetches and starts a plugin, updating the entry state.
 func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
 	defer close(entry.ready)
@@ -390,15 +407,7 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
 	result := results[0]
 
 	// Spawn client, optionally sanitizing the environment.
-	var clientOpts []ClientOption
-	if p.opts.sanitizeEnv {
-		clientOpts = make([]ClientOption, 1, 1+len(p.opts.clientOpts))
-		clientOpts[0] = WithSanitizedEnv()
-		clientOpts = append(clientOpts, p.opts.clientOpts...)
-	} else {
-		clientOpts = make([]ClientOption, 0, len(p.opts.clientOpts))
-		clientOpts = append(clientOpts, p.opts.clientOpts...)
-	}
+	clientOpts := buildSpawnClientOpts(p.opts.sanitizeEnv, p.opts.clientOpts)
 	client, err := NewClient(result.Path, clientOpts...)
 	if err != nil {
 		entry.failWith(fmt.Errorf("starting process: %w", err))
@@ -639,6 +648,12 @@ func (p *Pool) Stats() PoolStats {
 // plugin clients. See [WithSanitizeEnv].
 func (p *Pool) SanitizeEnv() bool {
 	return p.opts.sanitizeEnv
+}
+
+// ClientOptsLen returns the number of extra client options configured on the pool.
+// This is primarily useful for testing that WithClientOptions was wired correctly.
+func (p *Pool) ClientOptsLen() int {
+	return len(p.opts.clientOpts)
 }
 
 // Shutdown kills all managed plugin processes. Called once on server stop.
