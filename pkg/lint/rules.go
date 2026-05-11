@@ -338,6 +338,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Preferred:\ntmpl: \"Deploying {{ .config.appName }}\"\n\n# Also works (via underscore alias):\ntmpl: \"Deploying {{ ._.config.appName }}\"",
 		},
 	},
+	"unused-suppression": {
+		Rule:        "unused-suppression",
+		Severity:    string(SeverityInfo),
+		Category:    "suppression",
+		Description: "A suppression directive (scafctl-lint-ignore/disable) did not match any lint finding.",
+		Why:         "Unused suppressions indicate stale comments left after fixing an issue, or misspelled rule names. Removing them keeps the codebase clean and prevents masking future issues.",
+		Fix:         "Remove the suppression comment or fix the rule name. Check for typos in the rule name after the colon.",
+		Examples: []string{
+			"# Line suppression:\n# scafctl-lint-ignore: exec-command-injection\n\n# Block suppression:\n# scafctl-lint-disable: exec-command-injection\n...\n# scafctl-lint-enable: exec-command-injection\n\n# File-level suppression:\n# scafctl-lint-disable-file: exec-command-injection",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

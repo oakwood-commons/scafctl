@@ -102,6 +102,11 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 
+	// Apply suppression directives parsed from inline YAML comments.
+	suppressions := ParseDirectives(sol.RawContent(), filePath)
+	result.Findings = suppressions.Filter(result.Findings)
+	result.Findings = append(result.Findings, suppressions.UnusedFindings()...)
+
 	for _, f := range result.Findings {
 		switch f.Severity {
 		case SeverityError:
