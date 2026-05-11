@@ -54,6 +54,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	solprepare "github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
@@ -586,6 +587,45 @@ func Root(opts *RootOptions) *cobra.Command {
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
+			// Wire plugin signature policy unconditionally so all downstream
+			// plugin operations (auth handlers, providers, solution prepare)
+			// respect the embedder's policy regardless of feature flags.
+			if opts.PluginSignaturePolicy != nil {
+				ctx = plugin.WithSignaturePolicy(ctx, opts.PluginSignaturePolicy)
+			}
+
+			// ── Auto-resolve official auth handlers for direct CLI commands ──
+			// The prepare pipeline handles solution-level auto-resolution, but
+			// direct CLI commands (auth login, auth status, auth token) bypass
+			// the prepare pipeline. This fetches any missing official auth
+			// handlers so they are available for all CLI commands.
+			if !cfg.Settings.DisableOfficialAuthHandlers {
+				var cooldownDuration time.Duration
+				if cfg.Plugins.FetchCooldown != "" {
+					if d, parseErr := time.ParseDuration(cfg.Plugins.FetchCooldown); parseErr == nil {
+						cooldownDuration = d
+					} else {
+						lgr.V(1).Info("invalid plugins.fetchCooldown duration, using default", "value", cfg.Plugins.FetchCooldown, "error", parseErr)
+					}
+				}
+				cooldown := plugin.NewFetchCooldown(settings.PluginCacheDirFor(binaryName), cooldownDuration)
+				pluginCfg := &plugin.ProviderConfig{
+					Quiet:      cliParams.IsQuiet,
+					NoColor:    cliParams.NoColor,
+					BinaryName: binaryName,
+				}
+				hostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
+				if hostDeps != nil && secretErr == nil {
+					hostDeps.SecretStore = sharedSecretStore
+				}
+				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
+				officialAuthClients, resolveErr := solprepare.ResolveOfficialAuthHandlers(ctx, authRegistry, cooldown, pluginCfg, clientOpts...)
+				if resolveErr != nil {
+					lgr.V(1).Info("auto-resolve official auth handlers failed", "error", resolveErr)
+				}
+				authPluginClients = append(authPluginClients, officialAuthClients...)
+			}
+
 			// ── Wire official provider registry for auto-resolution ──
 			// When the embedder provides a custom registry, use it.
 			// Otherwise, use the default registry unless disabled in config.
@@ -602,11 +642,6 @@ func Root(opts *RootOptions) *cobra.Command {
 				ctx = official.WithRegistry(ctx, officialReg)
 			} else {
 				lgr.V(1).Info("official provider registry disabled via config")
-			}
-
-			// ── Wire plugin signature policy override ──
-			if opts.PluginSignaturePolicy != nil {
-				ctx = plugin.WithSignaturePolicy(ctx, opts.PluginSignaturePolicy)
 			}
 
 			cCmd.SetContext(ctx)

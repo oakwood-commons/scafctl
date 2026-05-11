@@ -1044,6 +1044,34 @@ func TestConfigureAndRegisterAuthHandlers_DuplicateSkipped(t *testing.T) {
 	assert.Equal(t, "Pre", h.DisplayName())
 }
 
+func TestConfigureAndRegisterAuthHandlers_DuplicateSkipsConfig(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockAuthHandlerPlugin{}
+	ahClient := &AuthHandlerClient{
+		plugin: mock,
+		name:   "test-plugin",
+	}
+	registry := auth.NewRegistry()
+
+	// Pre-register a handler
+	preWrapper := NewAuthHandlerWrapper(ahClient, AuthHandlerInfo{Name: "handler-a", DisplayName: "Pre"})
+	require.NoError(t, registry.Register(preWrapper))
+
+	// Try to register duplicate with config containing settings (simulates secrets)
+	handlers := []AuthHandlerInfo{
+		{Name: "handler-a", DisplayName: "Dup"},
+	}
+	cfg := &ProviderConfig{
+		BinaryName: "mycli",
+		Settings:   map[string]json.RawMessage{"client_secret": json.RawMessage(`"super-secret"`)},
+	}
+	configureAndRegisterAuthHandlers(context.Background(), registry, ahClient, handlers, cfg)
+
+	// ConfigureAuthHandler must NOT have been called — no secrets leaked
+	assert.Nil(t, mock.lastConfig, "ConfigureAuthHandler should not be called for duplicate handler")
+}
+
 func TestConfigureAndRegisterAuthHandlers_ConfigureError(t *testing.T) {
 	t.Parallel()
 

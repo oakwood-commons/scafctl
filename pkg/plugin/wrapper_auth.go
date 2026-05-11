@@ -5,7 +5,9 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"sync"
 
@@ -227,14 +229,12 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 	}
 
 	for _, info := range handlers {
-		if cfg != nil {
-			hostCfg := *cfg
-			hostCfg.HostServiceID = client.HostServiceID()
-			if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
-				lgr.Info("failed to configure auth handler plugin",
-					"handler", info.Name,
-					"error", cfgErr)
-			}
+		// Pre-check registration before sending config to the plugin.
+		// This avoids leaking secrets (via ConfigureAuthHandler) to a
+		// plugin whose handler name collides with an existing entry.
+		if registry.Has(info.Name) {
+			lgr.V(1).Info("skipping auth handler: name already registered", "handler", info.Name)
+			continue
 		}
 
 		wrapper := NewAuthHandlerWrapper(client, info)
@@ -248,6 +248,20 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 		if err := registry.Register(wrapper); err != nil {
 			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
 			continue
+		}
+
+		// Configure only after successful registration so secrets are
+		// never sent to a plugin that won't actually be used.
+		if cfg != nil {
+			hostCfg := *cfg
+			hostCfg.Settings = maps.Clone(cfg.Settings)
+			hostCfg.HostServiceID = client.HostServiceID()
+			injectAuthHandlerSettings(ctx, info.Name, &hostCfg)
+			if cfgErr := client.ConfigureAuthHandler(ctx, info.Name, hostCfg); cfgErr != nil {
+				lgr.Info("failed to configure auth handler plugin",
+					"handler", info.Name,
+					"error", cfgErr)
+			}
 		}
 	}
 }
@@ -264,6 +278,48 @@ func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry,
 
 	domains = append(domains, cfgDomains...)
 	return domains
+}
+
+// injectAuthHandlerSettings reads per-handler auth configuration from the app
+// config and serializes it into cfg.Settings[handlerName] so the plugin can
+// apply host-side overrides (clientId, hostname, scopes, etc.).
+func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *ProviderConfig) {
+	appCfg := config.FromContext(ctx)
+	if appCfg == nil {
+		return
+	}
+
+	var raw json.RawMessage
+	var err error
+
+	switch handlerName {
+	case "github":
+		if appCfg.Auth.GitHub == nil {
+			return
+		}
+		raw, err = json.Marshal(appCfg.Auth.GitHub) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+	case "entra":
+		if appCfg.Auth.Entra == nil {
+			return
+		}
+		raw, err = json.Marshal(appCfg.Auth.Entra)
+	case "gcp":
+		if appCfg.Auth.GCP == nil {
+			return
+		}
+		raw, err = json.Marshal(appCfg.Auth.GCP) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+	default:
+		return
+	}
+
+	if err != nil || len(raw) == 0 || string(raw) == "{}" {
+		return
+	}
+
+	if cfg.Settings == nil {
+		cfg.Settings = make(map[string]json.RawMessage)
+	}
+	cfg.Settings[handlerName] = raw
 }
 
 // RegisterAuthHandlerPlugins discovers auth handler plugins and registers them

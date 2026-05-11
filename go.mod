@@ -33,7 +33,7 @@ require (
 	github.com/oakwood-commons/httpc v0.1.0
 	github.com/oakwood-commons/kvx v0.12.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0
-	github.com/oakwood-commons/scafctl-plugin-sdk v0.5.0
+	github.com/oakwood-commons/scafctl-plugin-sdk v0.5.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pelletier/go-toml/v2 v2.3.0
