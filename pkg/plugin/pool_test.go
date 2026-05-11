@@ -90,6 +90,64 @@ func TestNewPool_WithSanitizeEnv(t *testing.T) {
 	})
 }
 
+func TestBuildSpawnClientOpts(t *testing.T) {
+	// applyOpts applies a slice of ClientOption to a fresh clientOptions struct
+	// and returns the result for assertion.
+	applyOpts := func(opts []ClientOption) clientOptions {
+		var co clientOptions
+		for _, o := range opts {
+			o(&co)
+		}
+		return co
+	}
+
+	t.Run("sanitize true prepends WithSanitizedEnv", func(t *testing.T) {
+		extra := []ClientOption{WithDebugLogging()} // dummy extra opt
+		opts := buildSpawnClientOpts(true, extra)
+		assert.Len(t, opts, 2)
+		// First option should set sanitizeEnv.
+		var first clientOptions
+		opts[0](&first)
+		assert.True(t, first.sanitizeEnv, "first option must set sanitizeEnv")
+		// All opts applied should have both flags.
+		co := applyOpts(opts)
+		assert.True(t, co.sanitizeEnv)
+		assert.True(t, co.debugLog)
+	})
+
+	t.Run("sanitize false does not prepend", func(t *testing.T) {
+		extra := []ClientOption{WithDebugLogging()}
+		opts := buildSpawnClientOpts(false, extra)
+		assert.Len(t, opts, 1)
+		co := applyOpts(opts)
+		assert.False(t, co.sanitizeEnv, "sanitizeEnv must not be set")
+		assert.True(t, co.debugLog)
+	})
+
+	t.Run("sanitize true with no extras", func(t *testing.T) {
+		opts := buildSpawnClientOpts(true, nil)
+		assert.Len(t, opts, 1)
+		co := applyOpts(opts)
+		assert.True(t, co.sanitizeEnv)
+	})
+
+	t.Run("sanitize false with no extras", func(t *testing.T) {
+		opts := buildSpawnClientOpts(false, nil)
+		assert.Empty(t, opts)
+	})
+
+	t.Run("sanitize true with multiple extras", func(t *testing.T) {
+		extra := []ClientOption{WithDebugLogging(), WithDebugLogging()}
+		opts := buildSpawnClientOpts(true, extra)
+		assert.Len(t, opts, 3)
+		// First must be the sanitize option.
+		var first clientOptions
+		opts[0](&first)
+		assert.True(t, first.sanitizeEnv)
+		assert.False(t, first.debugLog, "first option must only set sanitizeEnv")
+	})
+}
+
 func TestPool_Adopt(t *testing.T) {
 	reg := provider.NewRegistry()
 	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))

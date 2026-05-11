@@ -1982,6 +1982,14 @@ func TestIntegration_AuthTokenHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--force-refresh")
 }
 
+func TestIntegration_AuthMigrateHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "migrate", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "migrate")
+}
+
 func TestIntegration_AuthLoginGCPHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "auth", "login", "gcp", "--help")

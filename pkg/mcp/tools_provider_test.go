@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -856,127 +857,27 @@ func TestHandleGetProviderOutputShape_MissingName(t *testing.T) {
 	assert.Contains(t, text, "INVALID_INPUT")
 }
 
-func TestProviderSource(t *testing.T) {
-	t.Run("returns builtin when no official registry", func(t *testing.T) {
-		srv, err := NewServer(WithServerVersion("test"))
-		require.NoError(t, err)
-		assert.Equal(t, "builtin", srv.providerSource("exec"))
-	})
+func TestHandleRunProvider_AutoResolve_PoolError(t *testing.T) {
+	// When pool exists with official registry but EnsureAndAcquire fails (no fetcher),
+	// handleRunProvider should return LOAD_FAILED with the pool error.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
 
-	t.Run("returns official for known official provider", func(t *testing.T) {
-		officialReg := official.NewRegistry()
-		ctx := official.WithRegistry(context.Background(), officialReg)
-		srv, err := NewServer(
-			WithServerVersion("test"),
-			WithServerContext(ctx),
-		)
-		require.NoError(t, err)
-
-		// "exec" is a known official provider
-		assert.Equal(t, "official", srv.providerSource("exec"))
-	})
-
-	t.Run("returns builtin for unknown provider", func(t *testing.T) {
-		officialReg := official.NewRegistry()
-		ctx := official.WithRegistry(context.Background(), officialReg)
-		srv, err := NewServer(
-			WithServerVersion("test"),
-			WithServerContext(ctx),
-		)
-		require.NoError(t, err)
-
-		assert.Equal(t, "builtin", srv.providerSource("custom-provider"))
-	})
-}
-
-func TestEnsureProvider(t *testing.T) {
-	t.Run("returns error when pool is nil", func(t *testing.T) {
-		srv, err := NewServer(
-			WithServerVersion("test"),
-		)
-		require.NoError(t, err)
-
-		release, err := srv.ensureProvider(context.Background(), "exec")
-		assert.Error(t, err)
-		assert.Nil(t, release)
-		assert.Contains(t, err.Error(), "plugin pool not configured")
-	})
-
-	t.Run("returns error when official registry not in context", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
-		defer pool.Shutdown()
-
-		srv, err := NewServer(
-			WithServerVersion("test"),
-			WithServerRegistry(reg),
-			WithServerPluginPool(pool),
-		)
-		require.NoError(t, err)
-
-		release, err := srv.ensureProvider(context.Background(), "exec")
-		assert.Error(t, err)
-		assert.Nil(t, release)
-		assert.Contains(t, err.Error(), "official registry not available")
-	})
-
-	t.Run("returns error for unknown provider", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		officialReg := official.NewRegistry()
-		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
-		defer pool.Shutdown()
-
-		ctx := official.WithRegistry(context.Background(), officialReg)
-		srv, err := NewServer(
-			WithServerVersion("test"),
-			WithServerRegistry(reg),
-			WithServerPluginPool(pool),
-			WithServerContext(ctx),
-		)
-		require.NoError(t, err)
-
-		release, err := srv.ensureProvider(context.Background(), "nonexistent-provider")
-		assert.Error(t, err)
-		assert.Nil(t, release)
-		assert.Contains(t, err.Error(), "not a known official provider")
-	})
-
-	t.Run("returns error when pool has no fetcher", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		officialReg := official.NewRegistry()
-		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
-		defer pool.Shutdown()
-
-		ctx := official.WithRegistry(context.Background(), officialReg)
-		srv, err := NewServer(
-			WithServerVersion("test"),
-			WithServerRegistry(reg),
-			WithServerPluginPool(pool),
-			WithServerContext(ctx),
-		)
-		require.NoError(t, err)
-
-		release, err := srv.ensureProvider(context.Background(), "exec")
-		assert.Error(t, err)
-		assert.Nil(t, release)
-		assert.Contains(t, err.Error(), "loading plugin")
-	})
-}
-
-func TestHandleRunProvider_AutoResolve_NoPool(t *testing.T) {
-	// When no pool is configured, unknown providers should return LOAD_FAILED
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
 	srv, err := NewServer(
 		WithServerRegistry(reg),
 		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
 	)
 	require.NoError(t, err)
 
 	request := mcp.CallToolRequest{}
 	request.Params.Name = "run_provider"
 	request.Params.Arguments = map[string]any{
-		"provider": "nonexistent",
+		"provider": "exec",
 		"inputs":   map[string]any{},
 	}
 
@@ -985,123 +886,107 @@ func TestHandleRunProvider_AutoResolve_NoPool(t *testing.T) {
 	assert.True(t, result.IsError)
 	text := result.Content[0].(mcp.TextContent).Text
 	assert.Contains(t, text, "LOAD_FAILED")
-	assert.Contains(t, text, "plugin pool not configured")
+	assert.Contains(t, text, "exec")
 }
 
-func TestHandleGetProviderSchema_AutoResolve_NoPool(t *testing.T) {
-	// When no pool is configured, unknown providers should still return NOT_FOUND
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
+func TestHandleRunProvider_AutoResolve_RegistryMiss(t *testing.T) {
+	// When auto-resolve succeeds (adopted entry) but provider is still not in
+	// the registry, handleRunProvider should fall through to NOT_FOUND.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt a mock client so EnsureAndAcquire succeeds
+	mockClient := &plugin.Client{}
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", mockClient, dep, nil)
+
 	srv, err := NewServer(
 		WithServerRegistry(reg),
 		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "run_provider"
+	request.Params.Arguments = map[string]any{
+		"provider": "exec",
+		"inputs":   map[string]any{},
+	}
+
+	result, err := srv.handleRunProvider(context.Background(), request)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := result.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, "NOT_FOUND")
+}
+
+func TestHandleGetProviderSchema_AutoResolve_RegistryMiss(t *testing.T) {
+	// When auto-resolve succeeds but provider is still not in the registry,
+	// handleGetProviderSchema should fall back to official registry info.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt so EnsureAndAcquire succeeds
+	mockClient := &plugin.Client{}
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", mockClient, dep, nil)
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
 	)
 	require.NoError(t, err)
 
 	request := mcp.CallToolRequest{}
 	request.Params.Name = "get_provider_schema"
 	request.Params.Arguments = map[string]any{
-		"name": "nonexistent",
+		"name": "exec",
 	}
 
 	result, err := srv.handleGetProviderSchema(context.Background(), request)
 	require.NoError(t, err)
-	assert.True(t, result.IsError)
-	text := result.Content[0].(mcp.TextContent).Text
-	assert.Contains(t, text, "NOT_FOUND")
-}
-
-func TestHandleGetProviderOutputShape_AutoResolve_NoPool(t *testing.T) {
-	// When no pool is configured, unknown providers should still return NOT_FOUND
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
-	srv, err := NewServer(
-		WithServerRegistry(reg),
-		WithServerVersion("test"),
-	)
-	require.NoError(t, err)
-
-	request := mcp.CallToolRequest{}
-	request.Params.Name = "get_provider_output_shape"
-	request.Params.Arguments = map[string]any{
-		"name": "nonexistent",
-	}
-
-	result, err := srv.handleGetProviderOutputShape(context.Background(), request)
-	require.NoError(t, err)
-	assert.True(t, result.IsError)
-	text := result.Content[0].(mcp.TextContent).Text
-	assert.Contains(t, text, "NOT_FOUND")
-}
-
-func TestHandleGetProviderOutputShape_AllCapabilities(t *testing.T) {
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
-	srv, err := NewServer(
-		WithServerRegistry(reg),
-		WithServerVersion("test"),
-	)
-	require.NoError(t, err)
-
-	request := mcp.CallToolRequest{}
-	request.Params.Name = "get_provider_output_shape"
-	request.Params.Arguments = map[string]any{
-		"name": "cel",
-	}
-
-	result, err := srv.handleGetProviderOutputShape(context.Background(), request)
-	require.NoError(t, err)
+	// Falls through to official registry fallback
 	assert.False(t, result.IsError)
-
 	text := result.Content[0].(mcp.TextContent).Text
-	var output map[string]any
-	require.NoError(t, json.Unmarshal([]byte(text), &output))
-	assert.Equal(t, "cel", output["provider"])
-	assert.NotNil(t, output["outputSchemas"], "expected outputSchemas for all capabilities")
+	assert.Contains(t, text, "exec")
 }
 
-func TestHandleGetProviderOutputShape_SingleCapability(t *testing.T) {
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
+func TestHandleGetProviderOutputShape_AutoResolve_RegistryMiss(t *testing.T) {
+	// When auto-resolve succeeds but provider is still not in the registry,
+	// handleGetProviderOutputShape should return NOT_FOUND.
+	reg := provider.NewRegistry()
+	officialReg := official.NewRegistry()
+	ctx := official.WithRegistry(context.Background(), officialReg)
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	defer pool.Shutdown()
+
+	// Adopt so EnsureAndAcquire succeeds
+	mockClient := &plugin.Client{}
+	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}
+	pool.Adopt("exec", mockClient, dep, nil)
+
 	srv, err := NewServer(
 		WithServerRegistry(reg),
 		WithServerVersion("test"),
+		WithServerContext(ctx),
+		WithServerPluginPool(pool),
 	)
 	require.NoError(t, err)
 
 	request := mcp.CallToolRequest{}
 	request.Params.Name = "get_provider_output_shape"
 	request.Params.Arguments = map[string]any{
-		"name":       "cel",
-		"capability": "transform",
-	}
-
-	result, err := srv.handleGetProviderOutputShape(context.Background(), request)
-	require.NoError(t, err)
-	assert.False(t, result.IsError)
-
-	text := result.Content[0].(mcp.TextContent).Text
-	var output map[string]any
-	require.NoError(t, json.Unmarshal([]byte(text), &output))
-	assert.Equal(t, "cel", output["provider"])
-	assert.Equal(t, "transform", output["capability"])
-	assert.NotNil(t, output["outputSchema"])
-}
-
-func TestHandleGetProviderOutputShape_InvalidCapability(t *testing.T) {
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
-	srv, err := NewServer(
-		WithServerRegistry(reg),
-		WithServerVersion("test"),
-	)
-	require.NoError(t, err)
-
-	request := mcp.CallToolRequest{}
-	request.Params.Name = "get_provider_output_shape"
-	request.Params.Arguments = map[string]any{
-		"name":       "cel",
-		"capability": "authentication",
+		"name": "exec",
 	}
 
 	result, err := srv.handleGetProviderOutputShape(context.Background(), request)
@@ -1109,26 +994,6 @@ func TestHandleGetProviderOutputShape_InvalidCapability(t *testing.T) {
 	assert.True(t, result.IsError)
 	text := result.Content[0].(mcp.TextContent).Text
 	assert.Contains(t, text, "NOT_FOUND")
-}
-
-func TestHandleGetProviderOutputShape_MissingName(t *testing.T) {
-	reg, err := builtin.DefaultRegistry(context.Background())
-	require.NoError(t, err)
-	srv, err := NewServer(
-		WithServerRegistry(reg),
-		WithServerVersion("test"),
-	)
-	require.NoError(t, err)
-
-	request := mcp.CallToolRequest{}
-	request.Params.Name = "get_provider_output_shape"
-	request.Params.Arguments = map[string]any{}
-
-	result, err := srv.handleGetProviderOutputShape(context.Background(), request)
-	require.NoError(t, err)
-	assert.True(t, result.IsError)
-	text := result.Content[0].(mcp.TextContent).Text
-	assert.Contains(t, text, "INVALID_INPUT")
 }
 
 func TestProviderSource(t *testing.T) {
