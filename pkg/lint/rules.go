@@ -400,6 +400,25 @@ var KnownRules = map[string]RuleMeta{
 			"resolvers:\n  cluster_id:\n    type: string\n    immutable: true\n    saveToState: true\n    resolve:\n      with:\n        - provider: state        # read cached value first\n          inputs:\n            key: \"cluster_id\"\n            required: false\n        - provider: exec          # fallback: generate new value\n          inputs:\n            command: \"uuidgen\"",
 		},
 	},
+	"unused-suppression": {
+		Rule:        "unused-suppression",
+		Severity:    string(SeverityInfo),
+		Category:    "suppression",
+		Description: "A suppression directive (scafctl-lint-ignore/disable) did not match any lint finding.",
+		Why:         "Unused suppressions indicate stale comments left after fixing an issue, or misspelled rule names. Removing them keeps the codebase clean and prevents masking future issues.",
+		Fix:         "Remove the suppression comment or fix the rule name. Check for typos in the rule name after the colon.",
+		Examples: []string{
+			"# Line suppression:\n# scafctl-lint-ignore: exec-command-injection\n\n# Block suppression:\n# scafctl-lint-disable: exec-command-injection\n...\n# scafctl-lint-enable: exec-command-injection\n\n# File-level suppression:\n# scafctl-lint-disable-file: exec-command-injection",
+		},
+	},
+	"explicit-on-finally": {
+		Rule:        "explicit-on-finally",
+		Severity:    string(SeverityWarning),
+		Category:    "workflow",
+		Description: "A finally action has explicit: true, which has no effect because finally actions always run.",
+		Why:         "Finally actions execute unconditionally after all regular actions complete. Setting explicit: true is misleading because the action cannot be excluded from execution.",
+		Fix:         "Remove explicit: true from the finally action, or move the action to workflow.actions if it should be opt-in.",
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)
