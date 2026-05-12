@@ -9,11 +9,6 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
-	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
-	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
-	"github.com/oakwood-commons/scafctl/pkg/config"
-	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
 // handlerContextKey is used for test injection of handlers.
@@ -93,97 +88,11 @@ func validateHandlerName(ctx context.Context, handlerName string) error {
 	return fmt.Errorf("unknown auth handler: %s (registered: %v)", handlerName, handlers)
 }
 
-// getEntraHandlerWithOverrides creates an Entra handler with optional tenant and client ID overrides.
-// The flags take precedence over config.
-//
-//nolint:dupl // Entra and GitHub handler construction share structure but use different types and config paths.
-func getEntraHandlerWithOverrides(ctx context.Context, tenantOverride, clientIDOverride string) (auth.Handler, error) {
-	// Check for test-injected handler
-	if h := handlerFromContext(ctx); h != nil {
-		return h, nil
-	}
-
-	entraCfg := &entra.Config{}
-	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.Entra != nil {
-		entraCfg.ClientID = cfg.Auth.Entra.ClientID
-		entraCfg.TenantID = cfg.Auth.Entra.TenantID
-		entraCfg.DefaultScopes = cfg.Auth.Entra.DefaultScopes
-		entraCfg.DefaultFlow = cfg.Auth.Entra.DefaultFlow
-	}
-
-	applyOverride(&entraCfg.TenantID, tenantOverride)
-	applyOverride(&entraCfg.ClientID, clientIDOverride)
-
-	var opts []entra.Option
-	if entraCfg.ClientID != "" || entraCfg.TenantID != "" || len(entraCfg.DefaultScopes) > 0 || entraCfg.DefaultFlow != "" {
-		opts = append(opts, entra.WithConfig(entraCfg))
-	}
-	opts = append(opts, entra.WithLogger(*logger.FromContext(ctx)))
-
-	return entra.New(opts...)
-}
-
-// getGitHubHandlerWithOverrides creates a GitHub handler with optional hostname and client ID overrides.
-// The flags take precedence over config.
-//
-//nolint:dupl // GitHub and Entra handler construction share structure but use different types and config paths.
-func getGitHubHandlerWithOverrides(ctx context.Context, hostnameOverride, clientIDOverride string) (auth.Handler, error) {
-	// Check for test-injected handler
-	if h := handlerFromContext(ctx); h != nil {
-		return h, nil
-	}
-
-	ghCfg := &ghauth.Config{}
-	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.GitHub != nil {
-		ghCfg.ClientID = cfg.Auth.GitHub.ClientID
-		ghCfg.Hostname = cfg.Auth.GitHub.Hostname
-		ghCfg.DefaultScopes = cfg.Auth.GitHub.DefaultScopes
-	}
-
-	applyOverride(&ghCfg.Hostname, hostnameOverride)
-	applyOverride(&ghCfg.ClientID, clientIDOverride)
-
-	var opts []ghauth.Option
-	if ghCfg.ClientID != "" || ghCfg.Hostname != "" || len(ghCfg.DefaultScopes) > 0 {
-		opts = append(opts, ghauth.WithConfig(ghCfg))
-	}
-	opts = append(opts, ghauth.WithLogger(*logger.FromContext(ctx)))
-
-	return ghauth.New(opts...)
-}
-
-// getGCPHandlerWithOverrides creates a GCP handler with optional client ID and impersonation overrides.
-// The flags take precedence over config.
-func getGCPHandlerWithOverrides(ctx context.Context, clientIDOverride, impersonateOverride string) (auth.Handler, error) {
-	// Check for test-injected handler
-	if h := handlerFromContext(ctx); h != nil {
-		return h, nil
-	}
-
-	gcpCfg := &gcpauth.Config{}
-	if cfg := config.FromContext(ctx); cfg != nil && cfg.Auth.GCP != nil {
-		gcpCfg.ClientID = cfg.Auth.GCP.ClientID
-		gcpCfg.ClientSecret = cfg.Auth.GCP.ClientSecret
-		gcpCfg.DefaultScopes = cfg.Auth.GCP.DefaultScopes
-		gcpCfg.ImpersonateServiceAccount = cfg.Auth.GCP.ImpersonateServiceAccount
-		gcpCfg.Project = cfg.Auth.GCP.Project
-	}
-
-	applyOverride(&gcpCfg.ClientID, clientIDOverride)
-	applyOverride(&gcpCfg.ImpersonateServiceAccount, impersonateOverride)
-
-	var opts []gcpauth.Option
-	if gcpCfg.ClientID != "" || gcpCfg.ImpersonateServiceAccount != "" || len(gcpCfg.DefaultScopes) > 0 {
-		opts = append(opts, gcpauth.WithConfig(gcpCfg))
-	}
-	opts = append(opts, gcpauth.WithLogger(*logger.FromContext(ctx)))
-
-	return gcpauth.New(opts...)
-}
-
-// applyOverride sets the target to the override value if it is non-empty.
-func applyOverride(target *string, override string) {
-	if override != "" {
-		*target = override
-	}
+// getHandlerWithOverrides retrieves a handler from the registry.
+// Override parameters are accepted for backward compatibility with CLI flags
+// but are no-ops for plugin-based handlers (which are pre-configured via
+// ConfigureAuthHandler RPC). When builtins are removed, these parameters
+// will be dropped entirely.
+func getHandlerWithOverrides(ctx context.Context, handlerName, _, _, _, _ string) (auth.Handler, error) {
+	return getHandler(ctx, handlerName)
 }

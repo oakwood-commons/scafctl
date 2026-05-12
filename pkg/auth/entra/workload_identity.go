@@ -21,11 +21,11 @@ import (
 // Environment variable names for workload identity (Azure SDK convention).
 const (
 	// EnvAzureFederatedTokenFile is the path to the projected service account token.
-	EnvAzureFederatedTokenFile = "AZURE_FEDERATED_TOKEN_FILE" //nolint:gosec // This is the env var name, not a credential
+	EnvAzureFederatedTokenFile = auth.EnvAzureFederatedTokenFile //nolint:gosec // This is the env var name, not a credential
 
 	// EnvAzureFederatedToken is the raw federated token (for testing/debugging).
 	// Takes precedence over EnvAzureFederatedTokenFile if both are set.
-	EnvAzureFederatedToken = "AZURE_FEDERATED_TOKEN" //nolint:gosec // This is the env var name, not a credential
+	EnvAzureFederatedToken = auth.EnvAzureFederatedToken //nolint:gosec // This is the env var name, not a credential
 
 	// EnvAzureAuthorityHost is the Azure AD authority host (optional).
 	EnvAzureAuthorityHost = "AZURE_AUTHORITY_HOST"

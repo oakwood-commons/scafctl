@@ -534,3 +534,103 @@ func TestHandlerSource(t *testing.T) {
 		})
 	}
 }
+
+func TestCommandDiagnose_StartupLatency_BuiltIn(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// Set up an auth registry with a built-in mock handler.
+	registry := auth.NewRegistry()
+	mock := auth.NewMockHandler("test-handler")
+	mock.SetNotAuthenticated()
+	require.NoError(t, registry.Register(mock))
+	ctx = auth.WithRegistry(ctx, registry)
+
+	cmd := CommandDiagnose(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "n/a (built-in, not measured)")
+}
+
+func TestCommandDiagnose_StartupLatency_Plugin(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// Set up an auth registry with both a plugin wrapper (for startup latency)
+	// and a built-in mock (for the status check section).
+	registry := auth.NewRegistry()
+	wrapper := plugin.NewAuthHandlerWrapper(nil, plugin.AuthHandlerInfo{
+		Name: "test-plugin",
+	})
+	wrapper.SetStartupLatency(50 * time.Millisecond)
+	require.NoError(t, registry.Register(wrapper))
+
+	// Also register a built-in mock so the status check doesn't panic.
+	builtIn := auth.NewMockHandler("builtin-handler")
+	builtIn.SetNotAuthenticated()
+	require.NoError(t, registry.Register(builtIn))
+	ctx = auth.WithRegistry(ctx, registry)
+
+	// Scope to builtin-handler for status checks; startup latency is still emitted for all.
+	cmd := CommandDiagnose(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"builtin-handler"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := buf.String()
+	// The built-in handler should report "n/a (built-in, not measured)"
+	assert.Contains(t, output, "n/a (built-in, not measured)")
+}
+
+func TestCommandDiagnose_StartupLatency_SlowPlugin(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// Set up an auth registry with a slow plugin wrapper and a built-in mock
+	// so the status check (section 4) uses the mock instead of the nil-client wrapper.
+	registry := auth.NewRegistry()
+	wrapper := plugin.NewAuthHandlerWrapper(nil, plugin.AuthHandlerInfo{
+		Name: "slow-plugin",
+	})
+	wrapper.SetStartupLatency(3 * time.Second) // over pluginStartupWarnThreshold
+	require.NoError(t, registry.Register(wrapper))
+
+	builtIn := auth.NewMockHandler("builtin-handler")
+	builtIn.SetNotAuthenticated()
+	require.NoError(t, registry.Register(builtIn))
+	ctx = auth.WithRegistry(ctx, registry)
+
+	// Scope to builtin-handler for status checks; startup latency is still emitted for all.
+	cmd := CommandDiagnose(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"builtin-handler"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "slow startup")
+	assert.Contains(t, output, "[warn]")
+}

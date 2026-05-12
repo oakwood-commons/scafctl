@@ -10,12 +10,20 @@ import (
 	"maps"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// authTracer is the OpenTelemetry tracer for auth handler plugin operations.
+var authTracer = otel.Tracer("scafctl/plugin/auth")
 
 // Compile-time interface checks.
 var (
@@ -32,6 +40,7 @@ type AuthHandlerWrapper struct {
 	handlerName    string
 	info           AuthHandlerInfo
 	trustedDomains []string
+	startupLatency time.Duration
 	mu             sync.RWMutex
 }
 
@@ -88,6 +97,10 @@ func (w *AuthHandlerWrapper) Capabilities() []auth.Capability {
 
 // Login implements auth.Handler.
 func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	ctx, span := authTracer.Start(ctx, "auth.plugin.login",
+		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
+	defer span.End()
+
 	lgr := logger.FromContext(ctx)
 	lgr.V(1).Info("login via plugin auth handler", "handler", w.handlerName)
 
@@ -150,11 +163,19 @@ func (w *AuthHandlerWrapper) Logout(ctx context.Context) error {
 
 // Status implements auth.Handler.
 func (w *AuthHandlerWrapper) Status(ctx context.Context) (*auth.Status, error) {
+	ctx, span := authTracer.Start(ctx, "auth.plugin.status",
+		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
+	defer span.End()
+
 	return w.client.plugin.GetStatus(ctx, w.handlerName)
 }
 
 // GetToken implements auth.Handler.
 func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	ctx, span := authTracer.Start(ctx, "auth.plugin.get_token",
+		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
+	defer span.End()
+
 	req := TokenRequest{
 		Scope:        opts.Scope,
 		MinValidFor:  opts.MinValidFor,
@@ -214,11 +235,26 @@ func (w *AuthHandlerWrapper) Client() *AuthHandlerClient {
 	return w.client
 }
 
+// StartupLatency returns the plugin process startup latency.
+func (w *AuthHandlerWrapper) StartupLatency() time.Duration {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.startupLatency
+}
+
+// SetStartupLatency records the plugin process startup latency.
+func (w *AuthHandlerWrapper) SetStartupLatency(d time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startupLatency = d
+}
+
 // configureAndRegisterAuthHandlers configures each handler with host-side
 // settings (when cfg is non-nil) and registers it in the auth registry.
 // It also sets trusted verification domains on each wrapper from the official
 // auth handler registry (per-handler) plus config.Auth.TrustedVerificationDomains.
-func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Registry, client *AuthHandlerClient, handlers []AuthHandlerInfo, cfg *ProviderConfig) {
+// Returns the names of successfully registered handlers.
+func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Registry, client *AuthHandlerClient, handlers []AuthHandlerInfo, cfg *ProviderConfig) []string {
 	lgr := logger.FromContext(ctx)
 
 	// Resolve trusted verification domains from context sources.
@@ -227,6 +263,8 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 	if appCfg := config.FromContext(ctx); appCfg != nil {
 		cfgDomains = appCfg.Auth.TrustedVerificationDomains
 	}
+
+	var registered []string
 
 	for _, info := range handlers {
 		// Pre-check registration before sending config to the plugin.
@@ -250,6 +288,8 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 			continue
 		}
 
+		registered = append(registered, info.Name)
+
 		// Configure only after successful registration so secrets are
 		// never sent to a plugin that won't actually be used.
 		if cfg != nil {
@@ -263,6 +303,27 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 					"error", cfgErr)
 			}
 		}
+	}
+
+	return registered
+}
+
+// propagateStartupLatency sets startup latency on each wrapper registered by a
+// specific client and records the associated metric. It iterates only the given
+// handler names instead of scanning the full registry.
+func propagateStartupLatency(ctx context.Context, registry *auth.Registry, client *AuthHandlerClient, names []string) {
+	startupDuration := client.StartupDuration()
+	for _, name := range names {
+		h, err := registry.Get(name)
+		if err != nil {
+			continue
+		}
+		w, ok := h.(*AuthHandlerWrapper)
+		if !ok {
+			continue
+		}
+		w.SetStartupLatency(startupDuration)
+		metrics.RecordAuthPluginStartup(ctx, name, startupDuration.Seconds())
 	}
 }
 
@@ -340,7 +401,9 @@ func RegisterAuthHandlerPlugins(ctx context.Context, registry *auth.Registry, pl
 			continue
 		}
 
-		configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
+		registered := configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
+		propagateStartupLatency(ctx, registry, client, registered)
+
 		allClients = append(allClients, client)
 	}
 

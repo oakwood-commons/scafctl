@@ -151,3 +151,38 @@ func TestCommandStatus_JSONOutput(t *testing.T) {
 	assert.Contains(t, output, "Test User")
 	assert.Contains(t, output, "authenticated")
 }
+
+func TestQueryHandlerStatuses_DeterministicOrder(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	// Register multiple handlers.
+	registry := auth.NewRegistry()
+	for _, name := range []string{"zulu", "alpha", "mike"} {
+		mock := auth.NewMockHandler(name)
+		mock.StatusResult = &auth.Status{Authenticated: false}
+		require.NoError(t, registry.Register(mock))
+	}
+	ctx = auth.WithRegistry(ctx, registry)
+	cliParams := settings.NewCliParams()
+
+	// Request in a specific order; results should preserve that order.
+	results, warnings := queryHandlerStatuses(ctx, cliParams, []string{"zulu", "alpha", "mike"})
+	assert.Empty(t, warnings)
+	require.Len(t, results, 3)
+
+	assert.Equal(t, "zulu", results[0]["handler"])
+	assert.Equal(t, "alpha", results[1]["handler"])
+	assert.Equal(t, "mike", results[2]["handler"])
+}
+
+func TestQueryHandlerStatuses_WarningOnFailure(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	// No registry means handler lookup will fail.
+	cliParams := settings.NewCliParams()
+
+	results, warnings := queryHandlerStatuses(ctx, cliParams, []string{"missing"})
+	assert.Empty(t, results)
+	assert.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "Failed to initialize missing")
+}

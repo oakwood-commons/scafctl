@@ -161,3 +161,24 @@ var (
 	_ TokenLister = (*MockHandler)(nil)
 	_ TokenPurger = (*MockHandler)(nil)
 )
+
+// MockFlowDetectorHandler embeds MockHandler and adds FlowDetector support.
+type MockFlowDetectorHandler struct {
+	*MockHandler
+	DetectFlowsResult []FlowAvailability
+	DetectFlowsErr    error
+}
+
+// NewMockFlowDetectorHandler creates a mock handler that implements FlowDetector.
+func NewMockFlowDetectorHandler(name string) *MockFlowDetectorHandler {
+	return &MockFlowDetectorHandler{
+		MockHandler: NewMockHandler(name),
+	}
+}
+
+// DetectAvailableFlows implements FlowDetector.
+func (m *MockFlowDetectorHandler) DetectAvailableFlows(_ context.Context) ([]FlowAvailability, error) {
+	return m.DetectFlowsResult, m.DetectFlowsErr
+}
+
+var _ FlowDetector = (*MockFlowDetectorHandler)(nil)
