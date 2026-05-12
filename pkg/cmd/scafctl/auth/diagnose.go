@@ -24,6 +24,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// pluginStartupWarnThreshold is the latency above which a plugin handler
+// startup is flagged as slow during 'auth diagnose'.
+const pluginStartupWarnThreshold = 2 * time.Second
+
 // clockSkewCheckFunc is the function used to perform the clock skew check.
 // Tests can replace this to avoid real network calls.
 var clockSkewCheckFunc = diagnose.RunClockSkewCheck
@@ -134,6 +138,38 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						Status:   status,
 						Message:  fmt.Sprintf("Handler source: %s", source),
 					})
+				}
+			}
+
+			// ── 1.6. Plugin startup latency ──────────────────────────────────
+			if authReg != nil {
+				for _, name := range handlerNames {
+					h, hErr := authReg.Get(name)
+					if hErr != nil {
+						continue
+					}
+					if pw, ok := h.(*plugin.AuthHandlerWrapper); ok {
+						latency := pw.StartupLatency()
+						status := diagnose.StatusOK
+						msg := fmt.Sprintf("Handler startup: %s (plugin)", latency.Round(time.Millisecond))
+						if latency > pluginStartupWarnThreshold {
+							status = diagnose.StatusWarn
+							msg += " -- slow startup"
+						}
+						addCheck(diagnose.Check{
+							Category: "startup",
+							Name:     fmt.Sprintf("%s: startup latency", name),
+							Status:   status,
+							Message:  msg,
+						})
+					} else {
+						addCheck(diagnose.Check{
+							Category: "startup",
+							Name:     fmt.Sprintf("%s: startup latency", name),
+							Status:   diagnose.StatusOK,
+							Message:  "Handler startup: n/a (built-in, not measured)",
+						})
+					}
 				}
 			}
 

@@ -1932,6 +1932,35 @@ func TestIntegration_AuthHelp(t *testing.T) {
 	assert.Contains(t, stdout, "login")
 	assert.Contains(t, stdout, "logout")
 	assert.Contains(t, stdout, "status")
+	assert.Contains(t, stdout, "handlers")
+}
+
+func TestIntegration_AuthHandlers(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "handlers")
+
+	assert.Equal(t, 0, exitCode)
+	// The command should produce output listing available handlers.
+	assert.NotEmpty(t, stdout)
+}
+
+func TestIntegration_AuthHandlersJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "handlers", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	// JSON output must be valid and parseable.
+	var parsed []map[string]any
+	err := json.Unmarshal([]byte(stdout), &parsed)
+	assert.NoError(t, err, "output should be valid JSON")
+}
+
+func TestIntegration_AuthHandlersHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "handlers", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "handlers")
 }
 
 func TestIntegration_AuthList(t *testing.T) {

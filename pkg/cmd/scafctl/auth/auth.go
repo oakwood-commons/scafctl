@@ -42,6 +42,7 @@ func CommandAuth(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandDiagnose(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(CommandHandlers(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, cmdPath))

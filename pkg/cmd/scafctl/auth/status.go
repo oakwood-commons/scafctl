@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -16,11 +17,16 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 )
 
 // authStatusSchema controls table column display. Columns in the "required"
@@ -116,124 +122,10 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				handlers = []string{handlerName}
 			}
 
-			results := make([]map[string]any, 0, len(handlers))
+			results, warnings := queryHandlerStatuses(ctx, cliParams, handlers)
 
-			for _, handlerName := range handlers {
-				handler, err := getHandler(ctx, handlerName)
-				if err != nil {
-					w.Warningf("Failed to initialize %s: %v", handlerName, err)
-					continue
-				}
-
-				status, err := handler.Status(ctx)
-				if err != nil {
-					w.Warningf("Failed to check %s status: %v", handlerName, err)
-					continue
-				}
-
-				// Always include all columns so kvx detects a homogeneous
-				// array and renders a proper columnar table. The schema
-				// controls which columns are visible in table vs json/yaml.
-				// Derive a human-readable status string
-				statusStr := "valid"
-				if !status.Authenticated {
-					if status.Reason != "" {
-						statusStr = status.Reason
-					} else {
-						statusStr = "not logged in"
-					}
-				}
-
-				// Detect the active credential source if the handler supports it.
-				var flowStr string
-				if reporter, ok := handler.(auth.FlowReporter); ok && status.Authenticated {
-					if f := reporter.ActiveFlow(ctx); f != "" {
-						flowStr = string(f)
-					}
-				}
-
-				result := map[string]any{
-					"handler":       handlerName,
-					"displayName":   handler.DisplayName(),
-					"type":          "handler",
-					"status":        statusStr,
-					"authenticated": status.Authenticated,
-					"email":         "",
-					"username":      "",
-					"user":          "",
-					"expiresIn":     "",
-					"flow":          flowStr,
-					"hint":          "",
-					"identityType":  "",
-					"clientId":      "",
-					"tokenFile":     "",
-					"name":          "",
-					"tenantId":      "",
-					"expiresAt":     "",
-					"lastRefresh":   "",
-					"scopes":        []string{},
-					"cachedTokens":  0,
-				}
-
-				if !status.Authenticated {
-					result["hint"] = fmt.Sprintf("run '%s auth login %s' to authenticate", cliParams.BinaryName, handlerName)
-				}
-
-				if status.IdentityType != "" {
-					result["identityType"] = string(status.IdentityType)
-				}
-
-				if status.ClientID != "" {
-					result["clientId"] = status.ClientID
-				}
-
-				if status.IdentityType == auth.IdentityTypeWorkloadIdentity && status.TokenFile != "" {
-					result["tokenFile"] = status.TokenFile
-				}
-
-				if status.Authenticated && status.Claims != nil {
-					if status.Claims.Email != "" {
-						result["email"] = status.Claims.Email
-					}
-					if status.Claims.Name != "" {
-						result["name"] = status.Claims.Name
-					}
-					if status.Claims.Username != "" {
-						result["username"] = status.Claims.Username
-					}
-					// Derive a compact "user" for the table: prefer email, then username.
-					switch {
-					case status.Claims.Email != "":
-						result["user"] = status.Claims.Email
-					case status.Claims.Username != "":
-						result["user"] = status.Claims.Username
-					}
-					if status.TenantID != "" {
-						result["tenantId"] = status.TenantID
-					}
-					if !status.ExpiresAt.IsZero() {
-						result["expiresAt"] = status.ExpiresAt
-						if timeUntil := time.Until(status.ExpiresAt); timeUntil > 0 {
-							result["expiresIn"] = humanDuration(timeUntil)
-						}
-					}
-					if !status.LastRefresh.IsZero() {
-						result["lastRefresh"] = status.LastRefresh
-					}
-				}
-
-				if len(status.Scopes) > 0 {
-					result["scopes"] = status.Scopes
-				}
-
-				// Cached token count (when available).
-				if lister, ok := handler.(auth.TokenLister); ok {
-					if tokens, err := lister.ListCachedTokens(ctx); err == nil {
-						result["cachedTokens"] = len(tokens)
-					}
-				}
-
-				results = append(results, result)
+			for _, warn := range warnings {
+				w.Warningf("%s", warn)
 			}
 
 			if len(results) == 0 {
@@ -293,6 +185,177 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().BoolVar(&exitCodeFlag, "exit-code", false, "Exit non-zero if any handler is not authenticated (useful for scripting)")
 	cmd.Flags().DurationVar(&warnWithin, "warn-within", 0, "Exit non-zero if any authenticated handler's token expires within this duration (e.g. 10m, 1h)")
 	return cmd
+}
+
+// queryHandlerStatuses queries all handlers for their authentication status
+// concurrently using errgroup. Results are returned in the same order as the
+// input handlers slice for deterministic output regardless of which handler
+// responds first.
+func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers []string) ([]map[string]any, []string) {
+	tracer := otel.Tracer("scafctl/auth")
+	ctx, span := tracer.Start(ctx, "auth.status.query_all",
+		trace.WithAttributes(attribute.Int("auth.handler_count", len(handlers))))
+	defer span.End()
+
+	type indexedResult struct {
+		index  int
+		result map[string]any
+	}
+
+	var (
+		mu       sync.Mutex
+		indexed  []indexedResult
+		warnings []string
+	)
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for i, handlerName := range handlers {
+		g.Go(func() error {
+			statusStart := time.Now()
+
+			handler, err := getHandler(gCtx, handlerName)
+			if err != nil {
+				metrics.RecordAuthStatus(gCtx, handlerName, time.Since(statusStart).Seconds(), false)
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("Failed to initialize %s: %v", handlerName, err))
+				mu.Unlock()
+				return nil
+			}
+
+			st, err := handler.Status(gCtx)
+			if err != nil {
+				metrics.RecordAuthStatus(gCtx, handlerName, time.Since(statusStart).Seconds(), false)
+				mu.Lock()
+				warnings = append(warnings, fmt.Sprintf("Failed to check %s status: %v", handlerName, err))
+				mu.Unlock()
+				return nil
+			}
+
+			metrics.RecordAuthStatus(gCtx, handlerName, time.Since(statusStart).Seconds(), true)
+			result := buildStatusResult(gCtx, cliParams, handlerName, handler, st)
+
+			mu.Lock()
+			indexed = append(indexed, indexedResult{index: i, result: result})
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	// errgroup never returns an error (we handle errors inline).
+	_ = g.Wait()
+
+	// Sort by original index for deterministic output order.
+	sort.Slice(indexed, func(i, j int) bool {
+		return indexed[i].index < indexed[j].index
+	})
+
+	results := make([]map[string]any, 0, len(indexed))
+	for _, ir := range indexed {
+		results = append(results, ir.result)
+	}
+
+	return results, warnings
+}
+
+// buildStatusResult constructs the result map for a single handler status query.
+func buildStatusResult(ctx context.Context, cliParams *settings.Run, handlerName string, handler auth.Handler, status *auth.Status) map[string]any {
+	statusStr := "valid"
+	if !status.Authenticated {
+		if status.Reason != "" {
+			statusStr = status.Reason
+		} else {
+			statusStr = "not logged in"
+		}
+	}
+
+	var flowStr string
+	if reporter, ok := handler.(auth.FlowReporter); ok && status.Authenticated {
+		if f := reporter.ActiveFlow(ctx); f != "" {
+			flowStr = string(f)
+		}
+	}
+
+	result := map[string]any{
+		"handler":       handlerName,
+		"displayName":   handler.DisplayName(),
+		"type":          "handler",
+		"status":        statusStr,
+		"authenticated": status.Authenticated,
+		"email":         "",
+		"username":      "",
+		"user":          "",
+		"expiresIn":     "",
+		"flow":          flowStr,
+		"hint":          "",
+		"identityType":  "",
+		"clientId":      "",
+		"tokenFile":     "",
+		"name":          "",
+		"tenantId":      "",
+		"expiresAt":     "",
+		"lastRefresh":   "",
+		"scopes":        []string{},
+		"cachedTokens":  0,
+	}
+
+	if !status.Authenticated {
+		result["hint"] = fmt.Sprintf("run '%s auth login %s' to authenticate", cliParams.BinaryName, handlerName)
+	}
+
+	if status.IdentityType != "" {
+		result["identityType"] = string(status.IdentityType)
+	}
+
+	if status.ClientID != "" {
+		result["clientId"] = status.ClientID
+	}
+
+	if status.IdentityType == auth.IdentityTypeWorkloadIdentity && status.TokenFile != "" {
+		result["tokenFile"] = status.TokenFile
+	}
+
+	if status.Authenticated && status.Claims != nil {
+		if status.Claims.Email != "" {
+			result["email"] = status.Claims.Email
+		}
+		if status.Claims.Name != "" {
+			result["name"] = status.Claims.Name
+		}
+		if status.Claims.Username != "" {
+			result["username"] = status.Claims.Username
+		}
+		switch {
+		case status.Claims.Email != "":
+			result["user"] = status.Claims.Email
+		case status.Claims.Username != "":
+			result["user"] = status.Claims.Username
+		}
+		if status.TenantID != "" {
+			result["tenantId"] = status.TenantID
+		}
+		if !status.ExpiresAt.IsZero() {
+			result["expiresAt"] = status.ExpiresAt
+			if timeUntil := time.Until(status.ExpiresAt); timeUntil > 0 {
+				result["expiresIn"] = humanDuration(timeUntil)
+			}
+		}
+		if !status.LastRefresh.IsZero() {
+			result["lastRefresh"] = status.LastRefresh
+		}
+	}
+
+	if len(status.Scopes) > 0 {
+		result["scopes"] = status.Scopes
+	}
+
+	if lister, ok := handler.(auth.TokenLister); ok {
+		if tokens, err := lister.ListCachedTokens(ctx); err == nil {
+			result["cachedTokens"] = len(tokens)
+		}
+	}
+
+	return result
 }
 
 // appendCatalogStatus adds a row for each remote (OCI) catalog from config,

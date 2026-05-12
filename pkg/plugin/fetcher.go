@@ -547,7 +547,8 @@ func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Regis
 			return nil, fmt.Errorf("getting auth handlers from plugin %s: %w", r.Name, err)
 		}
 
-		configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
+		registered := configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
+		propagateStartupLatency(ctx, registry, client, registered)
 
 		clients = append(clients, client)
 	}
