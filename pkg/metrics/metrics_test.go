@@ -32,6 +32,9 @@ func TestInitMetrics(t *testing.T) {
 	assert.NotNil(t, GetSolutionTimeHistogram)
 	assert.NotNil(t, ProviderExecutionDuration)
 	assert.NotNil(t, ProviderExecutionTotal)
+	assert.NotNil(t, AuthPluginStartupDuration)
+	assert.NotNil(t, AuthLoginDuration)
+	assert.NotNil(t, AuthStatusDuration)
 }
 
 // Not parallel: calls InitMetrics which mutates package-level globals.
@@ -214,6 +217,8 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "status", AttrStatus)
 	assert.Equal(t, "plugin_name", AttrPluginName)
 	assert.Equal(t, "source", AttrPluginSource)
+	assert.Equal(t, "auth_handler", AttrAuthHandler)
+	assert.Equal(t, "auth_flow", AttrAuthFlow)
 }
 
 // ── Benchmark tests ───────────────────────────────────────────────────────────
@@ -255,5 +260,104 @@ func BenchmarkSetCircuitBreakerState(b *testing.B) {
 	for b.Loop() {
 		SetCircuitBreakerState("bench-host", float64(i%3))
 		i++
+	}
+}
+
+// ── RecordAuthPluginStartup tests ────────────────────────────────────────────
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordAuthPluginStartup_Success(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordAuthPluginStartup(context.Background(), "entra", 0.35)
+	})
+}
+
+// This test mutates package globals; do NOT add t.Parallel().
+func TestRecordAuthPluginStartup_NilInstrument(t *testing.T) {
+	saved := AuthPluginStartupDuration
+	AuthPluginStartupDuration = nil
+	defer func() { AuthPluginStartupDuration = saved }()
+
+	assert.NotPanics(t, func() {
+		RecordAuthPluginStartup(context.Background(), "test", 0.5)
+	})
+}
+
+// ── RecordAuthLogin tests ────────────────────────────────────────────────────
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordAuthLogin_Success(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordAuthLogin(context.Background(), "github", "device_code", 2.5, true)
+	})
+}
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordAuthLogin_Failure(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordAuthLogin(context.Background(), "entra", "interactive", 5.0, false)
+	})
+}
+
+// This test mutates package globals; do NOT add t.Parallel().
+func TestRecordAuthLogin_NilInstrument(t *testing.T) {
+	saved := AuthLoginDuration
+	AuthLoginDuration = nil
+	defer func() { AuthLoginDuration = saved }()
+
+	assert.NotPanics(t, func() {
+		RecordAuthLogin(context.Background(), "test", "device_code", 1.0, true)
+	})
+}
+
+// ── RecordAuthStatus tests ───────────────────────────────────────────────────
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordAuthStatus_Success(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordAuthStatus(context.Background(), "gcp", 0.1, true)
+	})
+}
+
+// Not parallel: calls InitMetrics which mutates package-level globals.
+func TestRecordAuthStatus_Failure(t *testing.T) {
+	_ = InitMetrics(context.Background())
+	assert.NotPanics(t, func() {
+		RecordAuthStatus(context.Background(), "entra", 0.3, false)
+	})
+}
+
+// This test mutates package globals; do NOT add t.Parallel().
+func TestRecordAuthStatus_NilInstrument(t *testing.T) {
+	saved := AuthStatusDuration
+	AuthStatusDuration = nil
+	defer func() { AuthStatusDuration = saved }()
+
+	assert.NotPanics(t, func() {
+		RecordAuthStatus(context.Background(), "test", 0.1, true)
+	})
+}
+
+func BenchmarkRecordAuthLogin(b *testing.B) {
+	_ = InitMetrics(context.Background())
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		RecordAuthLogin(ctx, "bench-handler", "device_code", 1.5, true)
+	}
+}
+
+func BenchmarkRecordAuthStatus(b *testing.B) {
+	_ = InitMetrics(context.Background())
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		RecordAuthStatus(ctx, "bench-handler", 0.05, true)
 	}
 }

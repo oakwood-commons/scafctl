@@ -64,6 +64,10 @@ var (
 
 	PluginResolutionDuration metric.Float64Histogram
 	PluginResolutionTotal    metric.Int64Counter
+
+	AuthPluginStartupDuration metric.Float64Histogram
+	AuthLoginDuration         metric.Float64Histogram
+	AuthStatusDuration        metric.Float64Histogram
 )
 
 // private instruments
@@ -236,6 +240,33 @@ func InitMetrics(_ context.Context) error {
 			initErr = fmt.Errorf("PluginResolutionTotal: %w", err)
 			return
 		}
+
+		AuthPluginStartupDuration, err = m.Float64Histogram(fmt.Sprintf("%s_auth_plugin_startup_duration_seconds", n),
+			metric.WithDescription("Auth handler plugin startup duration in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("AuthPluginStartupDuration: %w", err)
+			return
+		}
+
+		AuthLoginDuration, err = m.Float64Histogram(fmt.Sprintf("%s_auth_login_duration_seconds", n),
+			metric.WithDescription("Auth login duration in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("AuthLoginDuration: %w", err)
+			return
+		}
+
+		AuthStatusDuration, err = m.Float64Histogram(fmt.Sprintf("%s_auth_status_duration_seconds", n),
+			metric.WithDescription("Auth status query duration in seconds"),
+			metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(requestTimesBuckets...))
+		if err != nil {
+			initErr = fmt.Errorf("AuthStatusDuration: %w", err)
+			return
+		}
 	})
 	return initErr
 }
@@ -321,4 +352,51 @@ func RecordProviderExecution(ctx context.Context, providerName string, duration 
 	)
 	ProviderExecutionDuration.Record(ctx, duration, attrs)
 	ProviderExecutionTotal.Add(ctx, 1, attrs)
+}
+
+// Attribute key constants for auth metrics.
+const (
+	AttrAuthHandler = "auth_handler"
+	AttrAuthFlow    = "auth_flow"
+)
+
+// RecordAuthPluginStartup records auth handler plugin startup latency.
+func RecordAuthPluginStartup(ctx context.Context, handlerName string, duration float64) {
+	if AuthPluginStartupDuration == nil {
+		return
+	}
+	AuthPluginStartupDuration.Record(ctx, duration, metric.WithAttributes(
+		attribute.String(AttrAuthHandler, handlerName),
+	))
+}
+
+// RecordAuthLogin records auth login duration.
+func RecordAuthLogin(ctx context.Context, handlerName, flow string, duration float64, success bool) {
+	if AuthLoginDuration == nil {
+		return
+	}
+	status := "success"
+	if !success {
+		status = "failure"
+	}
+	AuthLoginDuration.Record(ctx, duration, metric.WithAttributes(
+		attribute.String(AttrAuthHandler, handlerName),
+		attribute.String(AttrAuthFlow, flow),
+		attribute.String(AttrStatus, status),
+	))
+}
+
+// RecordAuthStatus records auth status query duration.
+func RecordAuthStatus(ctx context.Context, handlerName string, duration float64, success bool) {
+	if AuthStatusDuration == nil {
+		return
+	}
+	status := "success"
+	if !success {
+		status = "failure"
+	}
+	AuthStatusDuration.Record(ctx, duration, metric.WithAttributes(
+		attribute.String(AttrAuthHandler, handlerName),
+		attribute.String(AttrStatus, status),
+	))
 }

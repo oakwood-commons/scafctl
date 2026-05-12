@@ -116,3 +116,23 @@ func TestGetHandler_NoContext(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no auth registry in context")
 }
+
+func TestGetHandlerWithOverrides_DelegatesToGetHandler(t *testing.T) {
+	registry := auth.NewRegistry()
+	mock := auth.NewMockHandler("github")
+	require.NoError(t, registry.Register(mock))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	// Override params are accepted but ignored (plugins are pre-configured).
+	handler, err := getHandlerWithOverrides(ctx, "github", "tenant", "client", "host", "impersonate")
+	require.NoError(t, err)
+	assert.Equal(t, "github", handler.Name())
+}
+
+func TestGetHandlerWithOverrides_NotFound(t *testing.T) {
+	registry := auth.NewRegistry()
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	_, err := getHandlerWithOverrides(ctx, "missing", "", "", "", "")
+	assert.Error(t, err)
+}

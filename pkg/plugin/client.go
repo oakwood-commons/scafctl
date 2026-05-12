@@ -440,10 +440,11 @@ func Discover(pluginDirs []string, opts ...ClientOption) ([]*Client, error) {
 
 // AuthHandlerClient wraps a plugin client for auth handler plugins.
 type AuthHandlerClient struct {
-	pluginClient *plugin.Client
-	plugin       AuthHandlerPlugin
-	path         string
-	name         string
+	pluginClient    *plugin.Client
+	plugin          AuthHandlerPlugin
+	path            string
+	name            string
+	startupDuration time.Duration
 }
 
 // newAuthHandlerClientWithConnector creates an auth handler plugin client
@@ -455,6 +456,7 @@ func newAuthHandlerClientWithConnector(
 	connectFn func(string, pluginConfig) (any, *plugin.Client, error),
 	opts ...ClientOption,
 ) (*AuthHandlerClient, error) {
+	startupStart := time.Now()
 	authPlugin, client, err := buildPluginClient(
 		pluginPath,
 		opts,
@@ -482,10 +484,11 @@ func newAuthHandlerClientWithConnector(
 	}
 
 	return &AuthHandlerClient{
-		pluginClient: client,
-		plugin:       authPlugin,
-		path:         pluginPath,
-		name:         pluginNameFromPath(pluginPath),
+		pluginClient:    client,
+		plugin:          authPlugin,
+		path:            pluginPath,
+		name:            pluginNameFromPath(pluginPath),
+		startupDuration: time.Since(startupStart),
 	}, nil
 }
 
@@ -553,6 +556,11 @@ func (c *AuthHandlerClient) Name() string {
 // Path returns the plugin path.
 func (c *AuthHandlerClient) Path() string {
 	return c.path
+}
+
+// StartupDuration returns the time taken to start and handshake with the plugin process.
+func (c *AuthHandlerClient) StartupDuration() time.Duration {
+	return c.startupDuration
 }
 
 // DiscoverAuthHandlers discovers auth handler plugins from the given directories.
