@@ -393,6 +393,124 @@ func TestManagerSave(t *testing.T) {
 	}
 }
 
+func TestManagerSave_Immutable(t *testing.T) {
+	baseConfig := &Config{
+		Enabled: literalValueRef(true),
+		Backend: Backend{
+			Provider: "mock-state",
+			Inputs:   map[string]*spec.ValueRef{},
+		},
+	}
+
+	t.Run("first write sets immutable flag", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", SaveToState: true, Immutable: true},
+		}
+		sd := NewData()
+		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
+
+		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		assert.NoError(t, err)
+		assert.Contains(t, sd.Values, "cluster_id")
+		assert.True(t, sd.Values["cluster_id"].Immutable)
+		assert.Equal(t, "uuid-1234", sd.Values["cluster_id"].Value)
+	})
+
+	t.Run("same value is no-op", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", SaveToState: true, Immutable: true},
+		}
+
+		// Pre-populate state with the same value and immutable flag
+		sd := NewData()
+		sd.Values["cluster_id"] = &Entry{
+			Value:     "uuid-1234",
+			Type:      "string",
+			UpdatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			Immutable: true,
+		}
+		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
+
+		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		assert.NoError(t, err)
+		// Timestamp should remain unchanged (entry was skipped)
+		assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), sd.Values["cluster_id"].UpdatedAt)
+	})
+
+	t.Run("different value errors", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-5678-new",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", SaveToState: true, Immutable: true},
+		}
+
+		// Pre-populate state with different value
+		sd := NewData()
+		sd.Values["cluster_id"] = &Entry{
+			Value:     "uuid-1234-old",
+			Type:      "string",
+			Immutable: true,
+		}
+		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
+
+		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
+		assert.Contains(t, err.Error(), "cluster_id")
+		assert.Contains(t, err.Error(), "scafctl state delete")
+
+		// Backend should NOT have been called (save aborted)
+		assert.Empty(t, backend.saveCalls)
+	})
+
+	t.Run("non-immutable resolver does not set flag", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("env", &resolver.ExecutionResult{
+			Value:  "prod",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		resolvers := []*resolver.Resolver{
+			{Name: "env", Type: "string", SaveToState: true, Immutable: false},
+		}
+		sd := NewData()
+		solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
+
+		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
+		assert.NoError(t, err)
+		assert.Contains(t, sd.Values, "env")
+		assert.False(t, sd.Values["env"].Immutable)
+	})
+}
+
 func TestManagerRequiredResolvers(t *testing.T) {
 	tests := []struct {
 		name   string

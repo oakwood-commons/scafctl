@@ -1052,6 +1052,7 @@ func lintState(sol *solution.Solution, result *Result, registry *provider.Regist
 	lintStateResolverRefs(sol, result)
 	lintStateSensitive(sol, result)
 	lintStateCircularDeps(sol, result)
+	lintImmutableResolvers(sol, result)
 }
 
 // lintStateBackend validates the backend provider configuration.
@@ -1199,4 +1200,40 @@ func collectStateResolverRefs(sol *solution.Solution) map[string]bool {
 	}
 
 	return refs
+}
+
+// lintImmutableResolvers checks for misconfigured immutable resolvers.
+func lintImmutableResolvers(sol *solution.Solution, result *Result) {
+	for name, res := range sol.Spec.Resolvers {
+		if res == nil || !res.Immutable {
+			continue
+		}
+		location := fmt.Sprintf("resolvers.%s", name)
+
+		// immutable: true without saveToState: true is pointless.
+		if !res.SaveToState {
+			result.addFinding(SeverityWarning, "state", location,
+				fmt.Sprintf("resolver '%s' has immutable: true but saveToState is not true -- immutable has no effect", name),
+				"Add saveToState: true to persist the value, or remove immutable: true",
+				"immutable-without-save")
+			continue
+		}
+
+		// immutable + saveToState but no state provider in resolve chain.
+		if res.Resolve != nil {
+			hasStateRead := false
+			for _, step := range res.Resolve.With {
+				if stateReadProviders[step.Provider] {
+					hasStateRead = true
+					break
+				}
+			}
+			if !hasStateRead {
+				result.addFinding(SeverityWarning, "state", location,
+					fmt.Sprintf("resolver '%s' is immutable with saveToState but does not read from the state provider -- will error on subsequent runs", name),
+					"Add a state provider step at the start of the resolve chain to read the cached value",
+					"immutable-no-state-read")
+			}
+		}
+	}
 }

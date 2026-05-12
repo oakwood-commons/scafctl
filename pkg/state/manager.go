@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -136,10 +137,20 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 			continue
 		}
 
+		// Enforce immutability: if the entry already exists and is immutable,
+		// skip silently when the value is unchanged, or error when it differs.
+		if existing, exists := stateData.Values[r.Name]; exists && existing.Immutable {
+			if reflect.DeepEqual(existing.Value, result.Value) {
+				continue // same value — no-op
+			}
+			return fmt.Errorf("%w %q; use 'scafctl state delete' to remove it first", ErrImmutableEntry, r.Name)
+		}
+
 		stateData.Values[r.Name] = &Entry{
 			Value:     result.Value,
 			Type:      string(r.Type),
 			UpdatedAt: now,
+			Immutable: r.Immutable,
 		}
 	}
 

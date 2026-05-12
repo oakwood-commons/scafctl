@@ -6,6 +6,7 @@ package fingerprint
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -52,4 +53,21 @@ func hashFileList(baseDir string, files []string) (string, error) {
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// HashInputs computes a deterministic SHA-256 hash over the resolved action
+// inputs map. Uses json.Marshal which sorts map keys lexicographically.
+// Returns empty string and nil error if inputs is nil or empty.
+func HashInputs(inputs map[string]any) (string, error) {
+	if len(inputs) == 0 {
+		return "", nil
+	}
+
+	data, err := json.Marshal(inputs)
+	if err != nil {
+		return "", fmt.Errorf("serializing inputs: %w", err)
+	}
+
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:]), nil
 }

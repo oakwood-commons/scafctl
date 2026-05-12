@@ -32,12 +32,12 @@ State does not:
 | `SaveToState` field on Resolver | Done | `pkg/resolver/resolver.go` |
 | `pkg/state/` package (types, manager, context, store) | Done | `pkg/state/` |
 | `file` provider state operations | Done | `pkg/provider/builtin/fileprovider/file_state.go` |
-| `github` provider state operations | Done | `pkg/provider/builtin/githubprovider/github_state.go` |
+| `github` provider state operations | External | Separate repository (not part of this project) |
 | `state` resolver-facing provider | Done | `pkg/provider/builtin/stateprovider/` |
 | State loading lifecycle (pre-execution) | Done | `pkg/cmd/scafctl/run/solution.go`, `resolver.go` |
 | `scafctl state` CLI commands | Done | `pkg/cmd/scafctl/state/` |
 | Validation rules (circular deps, sensitive warnings) | Done | `pkg/lint/` |
-| Immutable resolver support | 🔮 Future | See [Immutable Resolvers](#immutable-resolvers-future-enhancement) |
+| Immutable resolver support | Done | `pkg/resolver/resolver.go` (field), `pkg/state/manager.go` (enforcement), `pkg/lint/` (rules) |
 
 ---
 
@@ -228,7 +228,7 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
 | `value` | `any` | The stored resolver value |
 | `type` | `string` | The resolver's declared type (string, int, float, bool, array, any) |
 | `updatedAt` | `timestamp` | When this entry was last written |
-| `immutable` | `bool` | Whether this entry is locked (future enhancement -- see [Immutable Resolvers](#immutable-resolvers-future-enhancement)) |
+| `immutable` | `bool` | Whether this entry is locked permanently (see [Immutable Resolvers](#immutable-resolvers)) |
 
 ### Command Capture
 
@@ -325,7 +325,7 @@ Used by actions to explicitly write values to state:
 |-------|------|----------|---------|-------------|
 | `key` | string | Yes | -- | State entry key |
 | `value` | ValueRef | Yes | -- | Value to store |
-| `immutable` | bool | No | `false` | Lock value permanently (future enhancement) |
+| `immutable` | bool | No | `false` | Lock value permanently |
 
 Example -- action that writes to state:
 
@@ -392,7 +392,7 @@ The backend is a provider capability, so new backends are just providers impleme
 | Backend | Provider Name | Inputs |
 |---------|---------------|--------|
 | Local file (built-in) | `file` | `path` |
-| GitHub repo (built-in) | `github` | `owner`, `repo`, `path`, `branch` |
+| GitHub repo (external) | `github` | `owner`, `repo`, `path`, `branch` |
 | S3 (future) | `s3` (or plugin) | `bucket`, `key`, `region` |
 | HTTP API (future) | `http` (or plugin) | `url`, `method`, `headers` |
 
@@ -528,7 +528,7 @@ A `scafctl state` command group provides manual state management, mirroring the 
 | `pkg/state/store.go` | `LoadFromFile()` / `SaveToFile()` for direct file I/O (used by CLI commands) |
 | `pkg/state/mock.go` | Mock state for testing |
 | `pkg/provider/builtin/fileprovider/file_state.go` | State operations for `file` provider (`CapabilityState`) |
-| `pkg/provider/builtin/githubprovider/github_state.go` | State operations for `github` provider (`CapabilityState`) |
+| (external) `github` provider | State operations for `github` provider (`CapabilityState`) -- separate repository |
 | `pkg/provider/builtin/stateprovider/` | `state` resolver/action provider (`CapabilityFrom`, `CapabilityAction`) |
 | `pkg/cmd/scafctl/state/` | CLI commands (`list`, `get`, `set`, `delete`, `clear`) |
 
@@ -551,15 +551,22 @@ A `scafctl state` command group provides manual state management, mirroring the 
 
 ---
 
-## Immutable Resolvers (Future Enhancement)
+## Immutable Resolvers
 
-A future `immutable: true` field on the `Resolver` struct enables locking state values permanently after first write.
+The `immutable: true` field on the `Resolver` struct locks state values permanently after first write.
 
 ### Behavior
 
 - When a resolver has both `immutable: true` and `saveToState: true`, the `Entry.Immutable` flag is set to `true` on first write
-- On subsequent runs, any attempt to overwrite an immutable state entry is rejected with an error -- both via `saveToState` auto-persistence and via the `state` provider write mode
+- On subsequent runs, if the resolver produces the same value, the save is a silent no-op; if the value differs, `Save()` returns `ErrImmutableEntry`
 - The only way to change an immutable value is via `scafctl state delete` or `scafctl state clear`
+
+### Lint Rules
+
+| Rule | Severity | Trigger |
+|------|----------|---------|
+| `immutable-without-save` | Warning | `immutable: true` without `saveToState: true` |
+| `immutable-no-state-read` | Warning | `immutable: true` + `saveToState: true` but no `state` provider in resolve chain |
 
 ### Example
 
@@ -567,7 +574,7 @@ A future `immutable: true` field on the `Resolver` struct enables locking state 
 resolvers:
   cluster_id:
     type: string
-    immutable: true       # future enhancement
+    immutable: true
     saveToState: true
     resolve:
       with:
@@ -581,10 +588,6 @@ resolvers:
 ~~~
 
 On the first run: `state` returns null, `exec` generates a UUID, `saveToState` persists it as immutable. On all subsequent runs: `state` returns the locked UUID, the fallback chain stops, and the value cannot be overwritten.
-
-### Infrastructure
-
-The `Entry.Immutable` field is included in the state data schema from day one, defaulting to `false`. Enforcement is deferred to a future release.
 
 ---
 

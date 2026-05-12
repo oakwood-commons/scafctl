@@ -550,19 +550,17 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	// Fingerprint-based up-to-date check: skip if sources/generates unchanged
+	// Phase 1: File-based fingerprint check (cheap, before input resolution).
+	// If files changed, we know we need to re-execute -- skip Phase 2.
+	var filesFresh bool
 	if e.fingerprintChecker != nil && !e.noCache && len(action.Sources) > 0 {
-		fpResult, fpErr := e.fingerprintChecker.Check(ctx, actionName, action.Sources, action.Generates, e.cwd)
+		fpResult, fpErr := e.fingerprintChecker.CheckFiles(ctx, actionName, action.Sources, action.Generates, e.cwd)
 		if fpErr != nil {
 			// Log warning and continue execution (fail-open)
-			logger.FromContext(ctx).V(0).Info("fingerprint check failed, executing action",
+			logger.FromContext(ctx).V(0).Info("fingerprint file check failed, executing action",
 				"action", actionName, "error", fpErr.Error())
 		} else if !fpResult.Stale {
-			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
-			if e.progressCallback != nil {
-				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
-			}
-			return nil
+			filesFresh = true
 		}
 	}
 
@@ -576,6 +574,22 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return err
+	}
+
+	// Phase 2: Input-based fingerprint check (only when files were fresh).
+	// Compares resolved inputs hash against stored state to detect resolver changes.
+	if filesFresh {
+		fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, resolvedInputs)
+		if fpErr != nil {
+			logger.FromContext(ctx).V(0).Info("fingerprint inputs check failed, executing action",
+				"action", actionName, "error", fpErr.Error())
+		} else if !fpResult.Stale {
+			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
+			if e.progressCallback != nil {
+				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+			}
+			return nil
+		}
 	}
 
 	// Mark as running
@@ -679,7 +693,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Record fingerprint after successful execution
 	if e.fingerprintChecker != nil && len(action.Sources) > 0 {
-		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd); recordErr != nil {
+		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd, resolvedInputs); recordErr != nil {
 			logger.FromContext(ctx).V(0).Info("fingerprint record failed",
 				"action", actionName, "error", recordErr.Error())
 		}

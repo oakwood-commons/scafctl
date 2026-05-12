@@ -378,6 +378,28 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "State configuration is resolved before resolver execution using only CLI parameters (-r flags) and environment data. Direct rslvr: references will fail at runtime because resolver results do not exist yet.",
 		Fix:         "Use a CEL expression referencing CLI parameters instead, e.g.:\n  path:\n    expr: \"__params.appName + '-state.json'\"\nwhere appName is passed via -r appName=myapp.",
 	},
+	"immutable-without-save": {
+		Rule:        "immutable-without-save",
+		Severity:    string(SeverityWarning),
+		Category:    "state",
+		Description: "A resolver has immutable: true but saveToState is not true.",
+		Why:         "The immutable flag only affects state persistence. Without saveToState: true, the value is never written to state, so immutable has no effect.",
+		Fix:         "Either add saveToState: true to persist the value, or remove immutable: true.",
+		Examples: []string{
+			"resolvers:\n  cluster_id:\n    type: string\n    immutable: true\n    saveToState: true\n    resolve:\n      with:\n        - provider: state\n          inputs:\n            key: \"cluster_id\"\n            required: false\n        - provider: exec\n          inputs:\n            command: \"uuidgen\"",
+		},
+	},
+	"immutable-no-state-read": {
+		Rule:        "immutable-no-state-read",
+		Severity:    string(SeverityWarning),
+		Category:    "state",
+		Description: "A resolver has immutable: true and saveToState: true but does not read from the state provider in its resolve chain.",
+		Why:         "Without the state provider in the resolve chain, the resolver always re-executes its providers and attempts to overwrite the locked value. This causes an error instead of gracefully reusing the cached value.",
+		Fix:         "Add a state provider step at the start of the resolve chain to read the persisted value before falling back to other providers.",
+		Examples: []string{
+			"resolvers:\n  cluster_id:\n    type: string\n    immutable: true\n    saveToState: true\n    resolve:\n      with:\n        - provider: state        # read cached value first\n          inputs:\n            key: \"cluster_id\"\n            required: false\n        - provider: exec          # fallback: generate new value\n          inputs:\n            command: \"uuidgen\"",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

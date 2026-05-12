@@ -1,0 +1,135 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-immutable-overwrite
+  version: 1.0.0
+  description: |
+    Functional tests for immutable state overwrite protection.
+    Verifies that Save() rejects attempts to overwrite an immutable entry
+    with a different value, and that same-value writes are allowed.
+
+    This solution intentionally omits the state provider from the resolver
+    chain to force the resolver to always produce its static value, which
+    triggers the Save() immutability check when state already contains a
+    different value.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+
+spec:
+  resolvers:
+    # Static-only resolver with immutable flag. No state provider in the
+    # chain means the resolver always resolves to "fixed-value" regardless
+    # of what is in state. This is deliberate for testing the Save() guard.
+    value:
+      description: Immutable value resolved from static (no state read)
+      type: string
+      immutable: true
+      saveToState: true
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "fixed-value"
+
+  testing:
+    config:
+      # resolve-defaults: resolver depends on state context
+      # render-defaults: solution has no workflow.actions section
+      # lint-clean: intentionally triggers immutable-no-state-read warning
+      skipBuiltins: [resolve-defaults, render-defaults, lint-clean]
+
+    cases:
+      # =====================================================================
+      # First write succeeds (empty state, no conflict)
+      # =====================================================================
+      first-write-succeeds:
+        description: First write to empty state succeeds with immutable flag set
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, immutable, smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-overwrite-first
+        init:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-first && mkdir -p /tmp/scafctl-it-overwrite-first/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-first"
+        assertions:
+          - expression: __exitCode == 0
+            message: "First write should succeed"
+          - expression: __output.value == "fixed-value"
+            message: "Resolver should produce static value"
+
+      # =====================================================================
+      # Same-value write succeeds (immutable no-op)
+      # =====================================================================
+      same-value-succeeds:
+        description: Writing same value to immutable entry is a no-op
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, immutable]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-overwrite-same
+        init:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-same && mkdir -p /tmp/scafctl-it-overwrite-same/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"values":{"value":{"value":"fixed-value","type":"string","updatedAt":"2025-01-01T00:00:00Z","immutable":true}}}'
+              > /tmp/scafctl-it-overwrite-same/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-same"
+        assertions:
+          - expression: __exitCode == 0
+            message: "Same-value write should succeed silently"
+          - expression: __output.value == "fixed-value"
+            message: "Resolver should produce its static value"
+
+      # =====================================================================
+      # Different-value write is blocked
+      # =====================================================================
+      different-value-blocked:
+        description: Overwrite of immutable entry with different value errors
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, immutable, negative]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-overwrite-blocked
+        init:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-blocked && mkdir -p /tmp/scafctl-it-overwrite-blocked/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"values":{"value":{"value":"original-locked","type":"string","updatedAt":"2025-01-01T00:00:00Z","immutable":true}}}'
+              > /tmp/scafctl-it-overwrite-blocked/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-blocked"
+        assertions:
+          - expression: __exitCode != 0
+            message: "Should fail when trying to overwrite immutable entry with different value"
+          - expression: '__stderr.contains("immutable")'
+            message: "Error message should mention immutable"
+
+      # =====================================================================
+      # Non-immutable entry CAN be overwritten
+      # =====================================================================
+      non-immutable-overwrite-allowed:
+        description: Non-immutable entry can be overwritten with different value
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, immutable]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-overwrite-allowed
+        init:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-allowed && mkdir -p /tmp/scafctl-it-overwrite-allowed/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"values":{"value":{"value":"old-different-value","type":"string","updatedAt":"2025-01-01T00:00:00Z","immutable":false}}}'
+              > /tmp/scafctl-it-overwrite-allowed/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-overwrite-allowed"
+        assertions:
+          - expression: __exitCode == 0
+            message: "Non-immutable entry should allow overwrite"
+          - expression: __output.value == "fixed-value"
+            message: "Resolver should produce its static value"

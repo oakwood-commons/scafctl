@@ -101,3 +101,111 @@ func BenchmarkHashFiles(b *testing.B) {
 		_, _ = HashFiles(dir, []string{"**/*.go"})
 	}
 }
+
+func TestHashInputs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil inputs returns empty string", func(t *testing.T) {
+		t.Parallel()
+		hash, err := HashInputs(nil)
+		require.NoError(t, err)
+		assert.Empty(t, hash)
+	})
+
+	t.Run("empty inputs returns empty string", func(t *testing.T) {
+		t.Parallel()
+		hash, err := HashInputs(map[string]any{})
+		require.NoError(t, err)
+		assert.Empty(t, hash)
+	})
+
+	t.Run("deterministic hash for same inputs", func(t *testing.T) {
+		t.Parallel()
+		inputs := map[string]any{"env": "staging", "port": 8080}
+
+		hash1, err := HashInputs(inputs)
+		require.NoError(t, err)
+
+		hash2, err := HashInputs(inputs)
+		require.NoError(t, err)
+
+		assert.Equal(t, hash1, hash2)
+		assert.Len(t, hash1, 64) // SHA-256 hex is 64 chars
+	})
+
+	t.Run("key ordering does not affect hash", func(t *testing.T) {
+		t.Parallel()
+		// Go maps are unordered; json.Marshal sorts keys.
+		// Create two maps with different insertion order.
+		m1 := map[string]any{"a": 1, "b": 2, "c": 3}
+		m2 := map[string]any{"c": 3, "a": 1, "b": 2}
+
+		hash1, err := HashInputs(m1)
+		require.NoError(t, err)
+
+		hash2, err := HashInputs(m2)
+		require.NoError(t, err)
+
+		assert.Equal(t, hash1, hash2)
+	})
+
+	t.Run("different values produce different hash", func(t *testing.T) {
+		t.Parallel()
+		hash1, err := HashInputs(map[string]any{"env": "staging"})
+		require.NoError(t, err)
+
+		hash2, err := HashInputs(map[string]any{"env": "production"})
+		require.NoError(t, err)
+
+		assert.NotEqual(t, hash1, hash2)
+	})
+
+	t.Run("type sensitivity", func(t *testing.T) {
+		t.Parallel()
+		hash1, err := HashInputs(map[string]any{"port": 8080})
+		require.NoError(t, err)
+
+		hash2, err := HashInputs(map[string]any{"port": "8080"})
+		require.NoError(t, err)
+
+		assert.NotEqual(t, hash1, hash2)
+	})
+
+	t.Run("nested structures hash correctly", func(t *testing.T) {
+		t.Parallel()
+		inputs := map[string]any{
+			"config": map[string]any{
+				"nested": "value",
+				"list":   []any{1, 2, 3},
+			},
+		}
+
+		hash1, err := HashInputs(inputs)
+		require.NoError(t, err)
+
+		hash2, err := HashInputs(inputs)
+		require.NoError(t, err)
+
+		assert.Equal(t, hash1, hash2)
+		assert.Len(t, hash1, 64)
+	})
+}
+
+func BenchmarkHashInputs(b *testing.B) {
+	inputs := map[string]any{
+		"env":     "production",
+		"port":    8080,
+		"verbose": true,
+		"config": map[string]any{
+			"database": "postgres://localhost/db",
+			"cache":    "redis://localhost:6379",
+		},
+		"tags": []any{"web", "api", "v2"},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = HashInputs(inputs)
+	}
+}

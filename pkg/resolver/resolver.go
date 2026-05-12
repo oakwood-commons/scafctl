@@ -175,6 +175,12 @@ type Resolver struct {
 	// configured provider -- saveToState does not cause implicit reads from state.
 	SaveToState bool `json:"saveToState,omitempty" yaml:"saveToState,omitempty" doc:"Persist resolver result to state after execution" example:"true"`
 
+	// Immutable locks the state entry permanently after first write. On subsequent
+	// runs the resolver should read its value from the state provider -- attempts to
+	// overwrite an immutable entry with a different value will error. Only meaningful
+	// when SaveToState is also true.
+	Immutable bool `json:"immutable,omitempty" yaml:"immutable,omitempty" doc:"Lock state value permanently after first write (requires saveToState)" example:"true"`
+
 	// Phases
 	Resolve   *ResolvePhase   `json:"resolve" yaml:"resolve" doc:"Value resolution phase"`
 	Transform *TransformPhase `json:"transform,omitempty" yaml:"transform,omitempty" doc:"Value transformation phase"`

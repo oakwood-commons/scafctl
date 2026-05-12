@@ -1311,3 +1311,94 @@ func TestExecutor_Execute_FingerprintNoCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, execCount) // Incremented despite up-to-date
 }
+
+func TestExecutor_Execute_FingerprintInputsChanged(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/template.tpl", []byte("hello {{ .env }}"), 0o644))
+
+	execCount := 0
+	var lastInputs any
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, inputs any) (*provider.Output, error) {
+			execCount++
+			lastInputs = inputs
+			return &provider.Output{Data: map[string]any{"result": "generated"}}, nil
+		},
+	})
+
+	stateData := &state.Data{Values: make(map[string]*state.Entry)}
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// First run with name=staging
+	workflow1 := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "staging"},
+				},
+			},
+		},
+	}
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err := executor.Execute(context.Background(), workflow1)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second run: same sources, but different input value (name=production)
+	// This simulates a resolver change -- the template file hasn't changed
+	// but the data feeding into it has.
+	workflow2 := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "production"},
+				},
+			},
+		},
+	}
+
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err = executor2.Execute(context.Background(), workflow2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount) // Should re-execute due to input change
+
+	// Verify the provider received the new inputs
+	inputMap, ok := lastInputs.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "production", inputMap["name"])
+
+	// Third run: same inputs as second run -- should skip
+	executor3 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	result, err := executor3.Execute(context.Background(), workflow2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount) // NOT incremented
+	assert.Equal(t, StatusSkipped, result.Actions["generate"].Status)
+	assert.Equal(t, SkipReasonUpToDate, result.Actions["generate"].SkipReason)
+}

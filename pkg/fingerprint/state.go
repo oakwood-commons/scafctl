@@ -20,6 +20,11 @@ func generatesKey(actionName string) string {
 	return fmt.Sprintf("__fingerprint:%s:generates", actionName)
 }
 
+// inputsKey returns the state entry key for an action's inputs fingerprint.
+func inputsKey(actionName string) string {
+	return fmt.Sprintf("__fingerprint:%s:inputs", actionName)
+}
+
 // LoadSourcesHash retrieves the previously stored sources hash from state.
 // Returns empty string if not found.
 func LoadSourcesHash(data *state.Data, actionName string) string {
@@ -48,10 +53,24 @@ func LoadGeneratesHash(data *state.Data, actionName string) string {
 	return s
 }
 
+// LoadInputsHash retrieves the previously stored inputs hash from state.
+// Returns empty string if not found.
+func LoadInputsHash(data *state.Data, actionName string) string {
+	if data == nil || data.Values == nil {
+		return ""
+	}
+	entry, ok := data.Values[inputsKey(actionName)]
+	if !ok || entry == nil {
+		return ""
+	}
+	s, _ := entry.Value.(string)
+	return s
+}
+
 // SaveHashes stores the current fingerprint hashes into state data.
-// Both sources and generates hashes are stored. If generatesHash is empty
-// (no generates patterns), only sources is stored.
-func SaveHashes(data *state.Data, actionName, sourcesHash, generatesHash string) {
+// Sources hash is always stored. Generates and inputs hashes are stored
+// only when non-empty.
+func SaveHashes(data *state.Data, actionName, sourcesHash, generatesHash, inputsHash string) {
 	if data == nil {
 		return
 	}
@@ -68,6 +87,14 @@ func SaveHashes(data *state.Data, actionName, sourcesHash, generatesHash string)
 	if generatesHash != "" {
 		data.Values[generatesKey(actionName)] = &state.Entry{
 			Value:     generatesHash,
+			Type:      "string",
+			UpdatedAt: time.Now().UTC(),
+		}
+	}
+
+	if inputsHash != "" {
+		data.Values[inputsKey(actionName)] = &state.Entry{
+			Value:     inputsHash,
 			Type:      "string",
 			UpdatedAt: time.Now().UTC(),
 		}

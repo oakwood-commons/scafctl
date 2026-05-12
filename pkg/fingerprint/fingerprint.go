@@ -9,6 +9,7 @@ package fingerprint
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
@@ -28,6 +29,9 @@ const (
 
 	// ReasonGeneratesMissing indicates one or more generated files don't exist.
 	ReasonGeneratesMissing Reason = "generates missing"
+
+	// ReasonInputsChanged indicates resolved action inputs have changed since last run.
+	ReasonInputsChanged Reason = "inputs changed"
 
 	// ReasonUpToDate indicates all fingerprints match -- action can be skipped.
 	ReasonUpToDate Reason = "up-to-date"
@@ -50,6 +54,12 @@ type Result struct {
 	// PreviousGeneratesHash is the stored hash of generates from last successful run.
 	PreviousGeneratesHash string
 
+	// InputsHash is the SHA-256 hash of current resolved inputs.
+	InputsHash string
+
+	// PreviousInputsHash is the stored hash of inputs from last successful run.
+	PreviousInputsHash string
+
 	// Reason provides a human-readable explanation.
 	Reason Reason
 }
@@ -65,16 +75,18 @@ func NewChecker(stateData *state.Data) *Checker {
 	return &Checker{stateData: stateData}
 }
 
-// Check compares current file fingerprints against stored state.
-// baseDir is the working directory for resolving relative globs.
+// CheckFiles performs Phase 1 of the two-phase fingerprint check: it compares
+// source/generates file hashes against stored state. If the returned Result has
+// Stale==true, the caller should execute the action without calling CheckInputs.
+// If Stale==false, the caller should resolve inputs and call CheckInputs.
 //
 // Staleness logic:
-//  1. No previous state → stale (first run)
-//  2. Sources hash mismatch → stale (sources changed)
-//  3. If generates declared: generated files missing → stale
-//  4. If generates declared: generates hash mismatch → stale (externally modified)
-//  5. All match → up-to-date (skip)
-func (c *Checker) Check(_ context.Context, actionName string, sources, generates []string, baseDir string) (*Result, error) {
+//  1. No previous state -> stale (first run)
+//  2. Sources hash mismatch -> stale (sources changed)
+//  3. If generates declared: generated files missing -> stale
+//  4. If generates declared: generates hash mismatch -> stale (externally modified)
+//  5. All file hashes match -> not stale (proceed to CheckInputs)
+func (c *Checker) CheckFiles(_ context.Context, actionName string, sources, generates []string, baseDir string) (*Result, error) {
 	result := &Result{}
 
 	// Compute current sources hash
@@ -133,15 +145,84 @@ func (c *Checker) Check(_ context.Context, actionName string, sources, generates
 		}
 	}
 
-	// Everything matches — up-to-date
+	// File hashes all match -- caller should proceed to CheckInputs
 	result.Stale = false
 	result.Reason = ReasonUpToDate
 	return result, nil
 }
 
-// Record stores the current fingerprints (sources + generates) after a successful action.
-// Call this after action execution to persist the new baseline.
-func (c *Checker) Record(_ context.Context, actionName string, sources, generates []string, baseDir string) error {
+// CheckInputs performs Phase 2 of the two-phase fingerprint check: it compares
+// resolved input hashes against stored state. Only call this when CheckFiles
+// returned Stale==false (files match). resolvedInputs is the full map returned
+// by the executor's resolveInputs().
+func (c *Checker) CheckInputs(_ context.Context, actionName string, resolvedInputs map[string]any) (*Result, error) {
+	result := &Result{}
+
+	inputsHash, err := HashInputs(resolvedInputs)
+	if err != nil {
+		return nil, fmt.Errorf("hashing inputs for action %q: %w", actionName, err)
+	}
+	result.InputsHash = inputsHash
+
+	// Load previous inputs hash from state
+	result.PreviousInputsHash = LoadInputsHash(c.stateData, actionName)
+
+	// Both empty means no inputs were ever involved -- up-to-date
+	if inputsHash == "" && result.PreviousInputsHash == "" {
+		result.Stale = false
+		result.Reason = ReasonUpToDate
+		return result, nil
+	}
+
+	// No previous inputs hash -- treat as first run (handles state migration)
+	if result.PreviousInputsHash == "" {
+		result.Stale = true
+		result.Reason = ReasonFirstRun
+		return result, nil
+	}
+
+	// Inputs changed
+	if inputsHash != result.PreviousInputsHash {
+		result.Stale = true
+		result.Reason = ReasonInputsChanged
+		return result, nil
+	}
+
+	// Everything matches -- up-to-date
+	result.Stale = false
+	result.Reason = ReasonUpToDate
+	return result, nil
+}
+
+// Check compares current file fingerprints and resolved inputs against stored state.
+// This is a convenience method that calls CheckFiles and CheckInputs sequentially.
+// For two-phase usage in the executor, prefer calling CheckFiles and CheckInputs separately.
+func (c *Checker) Check(ctx context.Context, actionName string, sources, generates []string, baseDir string, resolvedInputs map[string]any) (*Result, error) {
+	fileResult, err := c.CheckFiles(ctx, actionName, sources, generates, baseDir)
+	if err != nil {
+		return nil, err
+	}
+	if fileResult.Stale {
+		return fileResult, nil
+	}
+
+	inputResult, err := c.CheckInputs(ctx, actionName, resolvedInputs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge file hashes into input result for completeness
+	inputResult.CurrentHash = fileResult.CurrentHash
+	inputResult.PreviousHash = fileResult.PreviousHash
+	inputResult.GeneratesHash = fileResult.GeneratesHash
+	inputResult.PreviousGeneratesHash = fileResult.PreviousGeneratesHash
+
+	return inputResult, nil
+}
+
+// Record stores the current fingerprints (sources + generates + inputs) after a
+// successful action. Call this after action execution to persist the new baseline.
+func (c *Checker) Record(_ context.Context, actionName string, sources, generates []string, baseDir string, resolvedInputs map[string]any) error {
 	sourcesHash, err := HashFiles(baseDir, sources)
 	if err != nil {
 		return err
@@ -159,7 +240,15 @@ func (c *Checker) Record(_ context.Context, actionName string, sources, generate
 		}
 	}
 
-	SaveHashes(c.stateData, actionName, sourcesHash, generatesHash)
+	var inputsHash string
+	if len(resolvedInputs) > 0 {
+		inputsHash, err = HashInputs(resolvedInputs)
+		if err != nil {
+			return fmt.Errorf("hashing inputs for action %q: %w", actionName, err)
+		}
+	}
+
+	SaveHashes(c.stateData, actionName, sourcesHash, generatesHash, inputsHash)
 	return nil
 }
 

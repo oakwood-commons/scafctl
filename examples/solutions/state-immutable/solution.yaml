@@ -1,0 +1,119 @@
+# =============================================================================
+# Immutable Resolvers Example
+# =============================================================================
+# Demonstrates immutable state entries that lock values permanently after
+# first write. This is useful for infrastructure identifiers (cluster IDs,
+# deployment UUIDs, tenant keys) that must remain stable across all future
+# runs.
+#
+# How it works:
+#   - A resolver with immutable: true + saveToState: true locks its value
+#     in state after the first execution.
+#   - On subsequent runs, the state provider returns the locked value and
+#     the fallback chain stops -- the value is never regenerated.
+#   - Attempting to overwrite an immutable entry (via state set) produces
+#     an error. The only way to reset is scafctl state delete.
+#
+# Usage:
+#   # First run -- provide deployment ID and region, both saved to state
+#   scafctl run resolver -f solution.yaml -r deployment_id=deploy-abc123 -r region=us-east-1
+#
+#   # Second run -- no parameters needed, both loaded from state
+#   scafctl run resolver -f solution.yaml
+#
+#   # Inspect state to see immutable flag
+#   scafctl state list --path state-immutable-demo.json
+#
+#   # Override region (mutable) -- works fine
+#   scafctl run resolver -f solution.yaml -r region=eu-west-1
+#
+#   # Try overriding deployment_id (immutable) via state set -- blocked!
+#   scafctl state set --path state-immutable-demo.json --key deployment_id --value "deploy-NEW"
+#
+#   # Delete the immutable entry to start fresh
+#   scafctl state delete --path state-immutable-demo.json --key deployment_id
+#
+# Lint check -- verify no immutable misconfigurations:
+#   scafctl lint -f solution.yaml
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-immutable-example
+  version: 1.0.0
+  description: Demonstrates immutable resolver state entries
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "state-immutable-demo.json"
+
+spec:
+  resolvers:
+    # =========================================================================
+    # Immutable resolver -- locked after first write
+    # =========================================================================
+    # On first run, the state provider returns null (no state file exists),
+    # so the fallback chain continues to the parameter provider which asks
+    # for a deployment ID. The result is saved to state with immutable: true.
+    # On all subsequent runs, the state provider returns the locked value
+    # and the chain stops. The value can never change unless you manually
+    # delete the state entry.
+    deployment_id:
+      description: Unique deployment identifier (locked after first generation)
+      type: string
+      immutable: true
+      saveToState: true
+      resolve:
+        with:
+          - provider: state
+            onError: continue
+            inputs:
+              key: "deployment_id"
+              required: true
+          - provider: parameter
+            inputs:
+              key: "deployment_id"
+
+    # =========================================================================
+    # Mutable resolver -- can be updated on each run
+    # =========================================================================
+    # This resolver also uses state persistence, but is NOT immutable.
+    # The parameter provider comes first, so passing -r region=<value>
+    # always overrides the state. If no parameter is given, the last saved
+    # value is used. On the very first run with no parameter, the static
+    # default "us-west-2" is used.
+    region:
+      description: Target deployment region (can be changed between runs)
+      type: string
+      saveToState: true
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: "region"
+          - provider: state
+            onError: continue
+            inputs:
+              key: "region"
+              required: true
+          - provider: static
+            inputs:
+              value: "us-west-2"
+
+    # =========================================================================
+    # Computed resolver -- uses the immutable deployment_id
+    # =========================================================================
+    deployment_info:
+      description: Summary combining locked deployment ID with current region
+      type: string
+      dependsOn: [deployment_id, region]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'Deployment ' + _.deployment_id + ' in ' + _.region"

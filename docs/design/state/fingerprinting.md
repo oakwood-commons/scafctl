@@ -289,7 +289,7 @@ known file contents to verify hash behavior deterministically.
 
 | Asset | Location | Content |
 |-------|----------|---------|
-| Design doc | `docs/design/fingerprinting.md` (this file) | Architecture, staleness logic, interface contracts |
+| Design doc | `docs/design/state/fingerprinting.md` (this file) | Architecture, staleness logic, interface contracts |
 | Tutorial | `docs/tutorials/fingerprinting-tutorial.md` | Step-by-step: build solution with sources/generates |
 | Example solution | `examples/solutions/fingerprint-build.yaml` | Go build with source tracking |
 | Provider reference update | `docs/tutorials/provider-reference.md` | Note on exec + sources interplay |
@@ -374,3 +374,123 @@ spec:
 
 **After manually editing `dist/myapp`** (unlikely but illustrative): `build` re-executes
 (generates modified), `test` unaffected (no generates declared).
+
+---
+
+## 11. Input Hashing (Resolved Inputs)
+
+### Problem
+
+File fingerprinting alone is insufficient when resolver-driven inputs change but
+source/template files remain unchanged. For example, a Go template `config.yaml.tpl`
+stays the same, but a resolver changes `environment` from `"staging"` to `"production"`.
+The file-based fingerprint sees no change and skips the action -- producing stale output.
+
+### Solution: Two-Phase Fingerprint Check
+
+The fingerprint check is split into two phases to avoid unnecessary (and potentially
+expensive) input resolution when files have already changed:
+
+~~~
+Phase 1 (CheckFiles) -- before input resolution:
+  1. Hash source files
+  2. Hash generated files
+  3. Compare against stored hashes
+  4. If files changed -> stale (skip Phase 2, proceed to execute)
+
+Phase 2 (CheckInputs) -- after input resolution:
+  1. Hash resolved inputs (JSON-serialized, SHA-256)
+  2. Compare against stored inputs hash
+  3. If inputs changed -> stale (proceed to execute)
+  4. If inputs unchanged -> up-to-date (skip action)
+~~~
+
+### Staleness Matrix (Updated)
+
+| Sources | Generates | Inputs | Result | Reason |
+|---------|-----------|--------|--------|--------|
+| No previous state | -- | -- | Stale | `first run` |
+| Changed | -- | -- | Stale | `sources changed` |
+| Match | Missing | -- | Stale | `generates missing` |
+| Match | Changed | -- | Stale | `generates modified` |
+| Match | Match | Changed | Stale | `inputs changed` |
+| Match | Match | Match | Up-to-date | `up-to-date` |
+| Match | Match | Both empty | Up-to-date | No inputs declared |
+
+### API Changes
+
+~~~go
+// pkg/fingerprint/fingerprint.go
+
+const ReasonInputsChanged Reason = "inputs changed"
+
+// Result now includes:
+type Result struct {
+    // ... existing fields ...
+    InputsHash         string  // SHA-256 of current resolved inputs
+    PreviousInputsHash string  // Stored hash from last run
+}
+
+// Check is split into two methods:
+func (c *Checker) CheckFiles(actionName string, sources, generates []string, baseDir string) (*Result, error)
+func (c *Checker) CheckInputs(actionName string, resolvedInputs map[string]any) (*Result, error)
+
+// Record now accepts resolved inputs:
+func (c *Checker) Record(actionName string, sources, generates []string, baseDir string, resolvedInputs map[string]any) error
+~~~
+
+~~~go
+// pkg/fingerprint/hash.go
+
+// HashInputs computes a deterministic SHA-256 hash of resolved action inputs.
+// Uses JSON marshaling for deterministic serialization (Go's encoding/json
+// sorts map keys). Returns empty string for nil or empty inputs.
+func HashInputs(inputs map[string]any) (string, error)
+~~~
+
+~~~go
+// pkg/fingerprint/state.go
+
+// State key format: "__fingerprint:<action>:inputs"
+func inputsKey(actionName string) string
+func LoadInputsHash(stateData *state.Data, actionName string) string
+// SaveHashes now stores inputs hash alongside sources and generates hashes.
+func SaveHashes(stateData *state.Data, actionName, sourcesHash, generatesHash, inputsHash string)
+~~~
+
+### Executor Integration
+
+In `pkg/action/executor.go`, the fingerprint check is restructured:
+
+~~~go
+// Phase 1: File-based check (cheap, before input resolution)
+fpResult, err := fpChecker.CheckFiles(actionName, action.Sources, action.Generates, cwd)
+if fpResult.Stale {
+    // Files changed -- must re-execute, resolve inputs and run
+    resolvedInputs := resolveInputs(...)
+    callProvider(...)
+    fpChecker.Record(actionName, sources, generates, cwd, resolvedInputs)
+    return
+}
+
+// Phase 2: Input-based check (after resolver evaluation)
+resolvedInputs := resolveInputs(...)
+inputResult, err := fpChecker.CheckInputs(actionName, resolvedInputs)
+if inputResult.Stale {
+    // Inputs changed -- re-execute
+    callProvider(...)
+    fpChecker.Record(actionName, sources, generates, cwd, resolvedInputs)
+    return
+}
+
+// Both files and inputs match -- skip
+skip(SkipReasonUpToDate)
+~~~
+
+### Edge Cases
+
+- **No inputs declared**: Both current and previous inputs hashes are empty -- treated as up-to-date
+  (inputs are not a factor when none are configured).
+- **First run with inputs**: No previous hash exists -- action executes and stores the hash.
+- **Non-deterministic inputs**: If inputs contain timestamps or random values, they will
+  change on every run, effectively disabling the skip optimization for that action.

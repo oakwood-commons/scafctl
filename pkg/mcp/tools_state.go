@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -65,6 +67,33 @@ func (s *Server) registerStateTools() {
 		),
 	)
 	s.addTool(deleteTool, s.handleStateDelete)
+
+	setTool := mcp.NewTool("state_set",
+		mcp.WithDescription(fmt.Sprintf("Set or update a single entry in a %s state file. This modifies the state file on disk. Immutable entries cannot be overwritten.", s.name)),
+		mcp.WithTitleAnnotation("Set State Entry"),
+		mcp.WithToolIcons(toolIcons["config"]),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("State file path relative to the XDG state directory"),
+		),
+		mcp.WithString("key",
+			mcp.Required(),
+			mcp.Description("State entry key to set"),
+		),
+		mcp.WithString("value",
+			mcp.Required(),
+			mcp.Description("Value to store"),
+		),
+		mcp.WithString("type",
+			mcp.Description("Value type for coercion: string (default), int, float, bool"),
+			mcp.Enum("string", "int", "float", "bool"),
+		),
+	)
+	s.addTool(setTool, s.handleStateSet)
 }
 
 // handleStateList lists all entries in a state file.
@@ -206,4 +235,75 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 		"success": true,
 		"message": fmt.Sprintf("cleared %d entries", count),
 	})
+}
+
+// handleStateSet sets or updates a single state entry.
+func (s *Server) handleStateSet(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path := request.GetString("path", "")
+	if path == "" {
+		return newStructuredError(ErrCodeInvalidInput, "path is required",
+			WithField("path"),
+			WithSuggestion("Provide the state file path (e.g., 'my-app-state.json')"),
+		), nil
+	}
+
+	key := request.GetString("key", "")
+	if key == "" {
+		return newStructuredError(ErrCodeInvalidInput, "key is required",
+			WithField("key"),
+		), nil
+	}
+
+	value := request.GetString("value", "")
+
+	sd, err := state.LoadFromFile(path)
+	if err != nil {
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err),
+			WithSuggestion("Check that the path is correct and the file is valid JSON"),
+		), nil
+	}
+
+	// Check immutability
+	if existing, ok := sd.Values[key]; ok && existing.Immutable {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("key %q is immutable and cannot be modified", key),
+			WithField("key"),
+			WithSuggestion("Use state_delete to remove the key first, then set it again"),
+			WithRelatedTools("state_delete"),
+		), nil
+	}
+
+	typ := request.GetString("type", "string")
+	sd.Values[key] = &state.Entry{
+		Value:     coerceStateValue(value, typ),
+		Type:      typ,
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	if err := state.SaveToFile(path, sd); err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
+	}
+
+	return mcp.NewToolResultJSON(map[string]any{
+		"success": true,
+		"message": fmt.Sprintf("set key %q", key),
+	})
+}
+
+// coerceStateValue converts a string value to the appropriate Go type.
+func coerceStateValue(raw, typ string) any {
+	switch typ {
+	case "int":
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return v
+		}
+	case "float":
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
+			return v
+		}
+	case "bool":
+		if v, err := strconv.ParseBool(raw); err == nil {
+			return v
+		}
+	}
+	return raw
 }

@@ -1558,3 +1558,112 @@ func TestLintResolveForEach(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "forEach on resolve step")
 	assert.Equal(t, SeverityWarning, findings[0].Severity)
 }
+
+func TestLintImmutable_WithoutSaveToState(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: true,
+					// saveToState is NOT set
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "immutable-without-save")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "immutable has no effect")
+}
+
+func TestLintImmutable_NoStateRead(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:        "string",
+					Immutable:   true,
+					SaveToState: true,
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+						// No state provider -- only exec
+						{Provider: "exec"},
+					}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("exec", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "immutable-no-state-read")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "does not read from the state provider")
+}
+
+func TestLintImmutable_CorrectConfig_NoWarnings(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:        "string",
+					Immutable:   true,
+					SaveToState: true,
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+						{Provider: "state"},
+						{Provider: "exec"},
+					}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("state", nil))
+	_ = reg.Register(newFakeProvider("exec", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	immutableFindings := filterFindingsByRule(result, "immutable-without-save")
+	assert.Empty(t, immutableFindings)
+	noReadFindings := filterFindingsByRule(result, "immutable-no-state-read")
+	assert.Empty(t, noReadFindings)
+}
