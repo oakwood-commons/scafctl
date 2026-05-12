@@ -1057,6 +1057,36 @@ func TestLintWorkflow_FinallyWithForEach(t *testing.T) {
 	assert.Contains(t, findings[0].Location, "cleanup")
 }
 
+func TestLintWorkflow_ExplicitOnFinally(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"main": {
+						Name:        "main",
+						Description: "main action",
+					},
+				},
+				Finally: map[string]*action.Action{
+					"cleanup": {
+						Name:        "cleanup",
+						Description: "cleanup action",
+						Explicit:    true,
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "explicit-on-finally")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Location, "cleanup")
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+}
+
 func TestLintAction_MissingProviderAndLongTimeout(t *testing.T) {
 	reg := provider.NewRegistry()
 

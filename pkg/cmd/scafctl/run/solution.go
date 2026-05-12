@@ -422,13 +422,15 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Finally actions are always preserved. Filtering happens on the original workflow
 	// before graph building so that pruned actions never enter the DAG.
 	workflow := sol.Spec.Workflow
-	if len(o.ActionNames) > 0 {
+	{
 		filtered, filterErr := action.FilterWorkflowActions(workflow, o.ActionNames)
 		if filterErr != nil {
 			return o.exitWithCode(ctx, filterErr, exitcode.InvalidInput)
 		}
 		workflow = filtered
-		lgr.V(1).Info("action filter applied", "targets", o.ActionNames, "remaining", len(workflow.Actions))
+		if len(o.ActionNames) > 0 {
+			lgr.V(1).Info("action filter applied", "targets", o.ActionNames, "remaining", len(workflow.Actions))
+		}
 	}
 
 	// Parse resolver parameters (pass stdin for @- support)

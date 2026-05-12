@@ -392,6 +392,13 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Reg
 				"Move the action to workflow.actions or remove forEach",
 				"finally-with-foreach")
 		}
+
+		if act.Explicit {
+			result.addFinding(SeverityWarning, "workflow", location,
+				"explicit: true has no effect on finally actions",
+				"Remove explicit: true or move the action to workflow.actions",
+				"explicit-on-finally")
+		}
 	}
 
 	// Validate workflow structure (circular deps, etc.)

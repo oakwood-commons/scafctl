@@ -56,6 +56,11 @@ type Action struct {
 	// Sensitive indicates the action handles sensitive data (masks in logs).
 	Sensitive bool `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"If true, inputs and outputs are masked in logs"`
 
+	// Explicit marks this action as opt-in only. When true, the action is excluded
+	// from bare "run action" invocations and only runs when explicitly named on the CLI.
+	// Default is false (action runs normally). Not meaningful on finally actions.
+	Explicit bool `json:"explicit,omitempty" yaml:"explicit,omitempty" doc:"If true, action only runs when explicitly named on the CLI"`
+
 	// Provider specifies which action provider to use for execution.
 	// The provider must have CapabilityAction.
 	Provider string `json:"provider" yaml:"provider" doc:"Action provider name" maxLength:"100" example:"shell"`

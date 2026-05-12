@@ -88,6 +88,71 @@ func TestFilterResolversWithDependencies_TargetOnly(t *testing.T) {
 	assert.Equal(t, "b", result[0].Name)
 }
 
+func TestFilterResolversWithDependencies_ExplicitExcluded(t *testing.T) {
+	t.Parallel()
+
+	resolvers := []*resolver.Resolver{
+		{Name: "a"},
+		{Name: "b"},
+		{Name: "debug", Explicit: true},
+	}
+
+	// Bare invocation excludes explicit
+	result := FilterResolversWithDependencies(resolvers, nil, nil)
+	assert.Len(t, result, 2)
+	assert.Equal(t, "a", result[0].Name)
+	assert.Equal(t, "b", result[1].Name)
+}
+
+func TestFilterResolversWithDependencies_ExplicitIncludedWhenNamed(t *testing.T) {
+	t.Parallel()
+
+	resolvers := []*resolver.Resolver{
+		{Name: "a"},
+		{Name: "debug", Explicit: true, Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{{Provider: "static"}},
+		}},
+	}
+
+	result := FilterResolversWithDependencies(resolvers, []string{"debug"}, nil)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "debug", result[0].Name)
+}
+
+func TestFilterResolversWithDependencies_NoExplicitUnchanged(t *testing.T) {
+	t.Parallel()
+
+	resolvers := []*resolver.Resolver{
+		{Name: "a"},
+		{Name: "b"},
+	}
+
+	// No explicit resolvers — returns original slice
+	result := FilterResolversWithDependencies(resolvers, nil, nil)
+	assert.Len(t, result, 2)
+	assert.Equal(t, resolvers, result, "should return original slice when no explicit resolvers exist")
+}
+
+func TestFilterResolversWithDependencies_ExplicitDepPreserved(t *testing.T) {
+	t.Parallel()
+
+	resolvers := []*resolver.Resolver{
+		{Name: "config", Explicit: true, Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{{Provider: "static"}},
+		}},
+		{Name: "app", DependsOn: []string{"config"}, Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{{Provider: "static"}},
+		}},
+	}
+
+	// Bare invocation: "app" is non-explicit and depends on "config" (explicit).
+	// The dependency closure must preserve "config".
+	result := FilterResolversWithDependencies(resolvers, nil, nil)
+	assert.Len(t, result, 2)
+	assert.Equal(t, "config", result[0].Name, "explicit dep should be preserved")
+	assert.Equal(t, "app", result[1].Name)
+}
+
 func TestBuildExecutionData(t *testing.T) {
 	t.Parallel()
 
