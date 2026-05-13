@@ -353,11 +353,10 @@ func TestTokenCache_GetCorruptedData(t *testing.T) {
 	err := store.Set(ctx, key, []byte("not valid json"))
 	require.NoError(t, err)
 
-	// Should return error for corrupted data
+	// Corrupted data is silently discarded (returns nil) to trigger reacquisition.
 	got, err := cache.Get(ctx, flow, fp, scope)
-	require.Error(t, err)
-	assert.Nil(t, got)
-	assert.Contains(t, err.Error(), "unmarshal")
+	require.NoError(t, err)
+	assert.Nil(t, got, "corrupted cache data should be discarded, not cause an error")
 }
 
 func TestTokenCache_ExpiredToken(t *testing.T) {
@@ -507,6 +506,7 @@ func TestCachedToken_Marshaling(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond) // JSON loses precision below milliseconds
 
 	cached := CachedToken{
+		Version:     CachedTokenVersion,
 		AccessToken: "test-token",
 		TokenType:   "Bearer",
 		ExpiresAt:   now.Add(1 * time.Hour),
@@ -523,6 +523,7 @@ func TestCachedToken_Marshaling(t *testing.T) {
 	err = json.Unmarshal(data, &decoded)
 	require.NoError(t, err)
 
+	assert.Equal(t, CachedTokenVersion, decoded.Version)
 	assert.Equal(t, cached.AccessToken, decoded.AccessToken)
 	assert.Equal(t, cached.TokenType, decoded.TokenType)
 	assert.Equal(t, cached.Scope, decoded.Scope)
@@ -530,6 +531,80 @@ func TestCachedToken_Marshaling(t *testing.T) {
 	assert.Equal(t, cached.Fingerprint, decoded.Fingerprint)
 	assert.WithinDuration(t, cached.ExpiresAt, decoded.ExpiresAt, time.Millisecond)
 	assert.WithinDuration(t, cached.CachedAt, decoded.CachedAt, time.Millisecond)
+}
+
+func TestCachedToken_LegacyVersionZero(t *testing.T) {
+	// Tokens cached before the version field was added will unmarshal with version=0.
+	// They should still be returned (backward compatible).
+	store := secrets.NewMockStore()
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	legacyJSON := `{"accessToken":"legacy-tok","tokenType":"Bearer","expiresAt":"2099-01-01T00:00:00Z","scope":"read","flow":"device_code","cachedAt":"2025-01-01T00:00:00Z"}`
+	key := cache.CacheKey(FlowDeviceCode, "", "read")
+	require.NoError(t, store.Set(ctx, key, []byte(legacyJSON)))
+
+	token, err := cache.Get(ctx, FlowDeviceCode, "", "read")
+	require.NoError(t, err)
+	require.NotNil(t, token, "legacy version-0 tokens must still be readable")
+	assert.Equal(t, "legacy-tok", token.AccessToken)
+}
+
+func TestCachedToken_FutureVersionDiscarded(t *testing.T) {
+	// Tokens with a version higher than CachedTokenVersion should be discarded
+	// (return nil) to trigger re-acquisition as a safe fallback.
+	store := secrets.NewMockStore()
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	futureJSON := fmt.Sprintf(`{"version":%d,"accessToken":"future-tok","tokenType":"Bearer","expiresAt":"2099-01-01T00:00:00Z","scope":"read","flow":"device_code","cachedAt":"2025-01-01T00:00:00Z"}`, CachedTokenVersion+1)
+	key := cache.CacheKey(FlowDeviceCode, "", "read")
+	require.NoError(t, store.Set(ctx, key, []byte(futureJSON)))
+
+	token, err := cache.Get(ctx, FlowDeviceCode, "", "read")
+	require.NoError(t, err)
+	assert.Nil(t, token, "future-version tokens must be discarded")
+}
+
+func TestCachedToken_FutureVersionIncompatibleSchema(t *testing.T) {
+	// A future version may change field types (e.g. expiresAt becomes an int).
+	// The two-phase unmarshal must short-circuit on the version check and return
+	// nil without ever attempting to deserialize the incompatible full struct.
+	store := secrets.NewMockStore()
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	incompatibleJSON := fmt.Sprintf(
+		`{"version":%d,"accessToken":"future-tok","tokenType":"Bearer","expiresAt":12345,"scope":"read","flow":"device_code","cachedAt":"2025-01-01T00:00:00Z"}`,
+		CachedTokenVersion+1,
+	)
+	key := cache.CacheKey(FlowDeviceCode, "", "read")
+	require.NoError(t, store.Set(ctx, key, []byte(incompatibleJSON)))
+
+	token, err := cache.Get(ctx, FlowDeviceCode, "", "read")
+	require.NoError(t, err, "incompatible future schema must not cause an error")
+	assert.Nil(t, token, "incompatible future-version tokens must be discarded")
+}
+
+func TestTokenCache_Set_IncludesVersion(t *testing.T) {
+	store := secrets.NewMockStore()
+	cache := newTestCache(store)
+	ctx := context.Background()
+
+	err := cache.Set(ctx, FlowInteractive, "fp", "scope", &Token{
+		AccessToken: "tok",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	key := cache.CacheKey(FlowInteractive, "fp", "scope")
+	data, err := store.Get(ctx, key)
+	require.NoError(t, err)
+
+	var cached CachedToken
+	require.NoError(t, json.Unmarshal(data, &cached))
+	assert.Equal(t, CachedTokenVersion, cached.Version)
 }
 
 func TestTokenCache_Prefix(t *testing.T) {
