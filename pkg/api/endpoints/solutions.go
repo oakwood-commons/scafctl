@@ -109,16 +109,65 @@ type SolutionTestResponse struct {
 	}
 }
 
-// requireURLPath returns a 400 Huma error if path is not an HTTP or HTTPS URL.
-// API-supplied solution paths must be URLs — local file system access is not
-// permitted via the API, as the server cannot safely access arbitrary local
-// paths supplied by remote callers.
-func requireURLPath(path, opName string) error {
-	lower := strings.ToLower(path)
-	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+// requireRemotePath returns a 400 Huma error if path looks like a local
+// filesystem reference. The API server accepts HTTP/HTTPS URLs and catalog
+// names. Local file paths are blocked because the server cannot safely
+// access arbitrary paths supplied by remote callers.
+func requireRemotePath(path, opName string) error {
+	if path == "" {
 		return huma.NewError(http.StatusBadRequest,
-			fmt.Sprintf("%s: path must be an HTTP or HTTPS URL", opName))
+			fmt.Sprintf("%s: path is required", opName))
 	}
+
+	// Reject path-traversal segments regardless of surrounding context.
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return huma.NewError(http.StatusBadRequest,
+				fmt.Sprintf("%s: path must not contain '..' segments", opName))
+		}
+	}
+
+	lower := strings.ToLower(path)
+
+	// Explicitly allowed schemes.
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return nil
+	}
+
+	// Block all other URL schemes (file://, ftp://, data://, oci://, etc.).
+	if strings.Contains(lower, "://") {
+		return huma.NewError(http.StatusBadRequest,
+			fmt.Sprintf("%s: unsupported URL scheme; only http:// and https:// are allowed", opName))
+	}
+
+	// Block obvious local-path indicators.
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, ".") ||
+		strings.HasPrefix(path, "~") || strings.Contains(path, "\\") ||
+		scafpath.HasWindowsDrivePrefix(path) {
+		return huma.NewError(http.StatusBadRequest,
+			fmt.Sprintf("%s: path must be a URL or catalog reference, not a local file path", opName))
+	}
+
+	// Bare filenames ending in .yaml/.yml/.json are almost certainly local files.
+	if strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".json") {
+		return huma.NewError(http.StatusBadRequest,
+			fmt.Sprintf("%s: path must be a URL or catalog reference, not a local file path", opName))
+	}
+
+	// Paths containing "/" are either registry refs (ghcr.io/org/sol) or
+	// relative local paths (configs/secret, dir/../../etc/passwd). Registry
+	// hostnames always contain "." or ":" in the first segment; plain
+	// directory names do not. Block the latter to prevent path traversal.
+	if strings.Contains(path, "/") {
+		firstSegment := strings.SplitN(path, "/", 2)[0]
+		if !strings.Contains(firstSegment, ".") && !strings.Contains(firstSegment, ":") {
+			return huma.NewError(http.StatusBadRequest,
+				fmt.Sprintf("%s: path must be a URL or catalog reference, not a local file path", opName))
+		}
+	}
+
+	// Anything else is treated as a catalog reference (e.g. "my-app",
+	// "my-app@1.0.0", "ghcr.io/org/solution").
 	return nil
 }
 
@@ -145,7 +194,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Validates a solution file and returns findings (errors, warnings, info).",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionLintRequest) (*SolutionLintResponse, error) {
-		if err := requireURLPath(input.Body.Path, "solution-lint"); err != nil {
+		if err := requireRemotePath(input.Body.Path, "solution-lint"); err != nil {
 			return nil, err
 		}
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
@@ -166,7 +215,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Loads a solution and returns its full structural explanation.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionInspectRequest) (*SolutionInspectResponse, error) {
-		if err := requireURLPath(input.Body.Path, "solution-inspect"); err != nil {
+		if err := requireRemotePath(input.Body.Path, "solution-inspect"); err != nil {
 			return nil, err
 		}
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
@@ -187,7 +236,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Performs a dry run of the solution, showing what actions would be taken without executing them.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionDryRunRequest) (*SolutionDryRunResponse, error) {
-		if err := requireURLPath(input.Body.Path, "solution-dryrun"); err != nil {
+		if err := requireRemotePath(input.Body.Path, "solution-dryrun"); err != nil {
 			return nil, err
 		}
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
@@ -226,7 +275,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Executes a solution: resolves all inputs and runs the action workflow.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionRunRequest) (*SolutionRunResponse, error) {
-		if err := requireURLPath(input.Body.Path, "solution-run"); err != nil {
+		if err := requireRemotePath(input.Body.Path, "solution-run"); err != nil {
 			return nil, err
 		}
 		if input.Body.OutputDir != "" {
@@ -290,7 +339,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Resolves all inputs in a solution without executing actions. Returns the resolved values.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionRenderRequest) (*SolutionRenderResponse, error) {
-		if err := requireURLPath(input.Body.Path, "solution-render"); err != nil {
+		if err := requireRemotePath(input.Body.Path, "solution-render"); err != nil {
 			return nil, err
 		}
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
@@ -330,7 +379,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		Description: "Validates a solution's structure and workflow against the provider registry.",
 		Tags:        []string{"Solutions"},
 	}, hctx, http.StatusOK), func(ctx context.Context, input *SolutionTestRequest) (*SolutionTestResponse, error) {
-		if err := requireURLPath(input.Body.Path, "solution-test"); err != nil {
+		if err := requireRemotePath(input.Body.Path, "solution-test"); err != nil {
 			return nil, err
 		}
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)

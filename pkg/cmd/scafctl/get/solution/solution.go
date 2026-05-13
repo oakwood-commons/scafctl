@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/cache"
@@ -35,6 +36,7 @@ type CmdOptionsVersion struct {
 	Output    string
 	File      string
 	NoCache   bool
+	Local     bool
 }
 
 func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
@@ -42,8 +44,33 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 	cCmd := &cobra.Command{
 		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol", "SOL", "Solution", "solutions"},
-		Short:   fmt.Sprintf("Gets %s solutions", strings.SplitN(path, "/", 2)[0]),
-		Args:    cobra.MaximumNArgs(1),
+		Short:   fmt.Sprintf("List or get %s solutions", strings.SplitN(path, "/", 2)[0]),
+		Long: strings.ReplaceAll(`List solutions from the catalog or get details about a specific solution.
+
+Without arguments, lists solutions from the configured catalog (and local catalog).
+With a name argument or --file flag, shows details for a specific solution.
+Use --local to auto-discover and display a solution from the current directory.
+
+Examples:
+  # List all solutions in the catalog
+  scafctl get solutions
+
+  # Get a specific solution from the catalog
+  scafctl get solution my-solution
+
+  # Get a specific version
+  scafctl get solution my-solution@1.0.0
+
+  # Auto-discover and display a local solution
+  scafctl get solution --local
+
+  # Get a solution from a file
+  scafctl get solution -f ./solution.yaml
+
+  # Output as JSON
+  scafctl get solution my-solution -o json
+`, settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Name())
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
@@ -79,13 +106,20 @@ func CommandSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
+
+			// No args, no --file, and not --local: list solutions from catalog
+			if len(args) == 0 && options.File == "" && !options.Local {
+				return options.ListSolutions(ctx)
+			}
+
 			return options.GetSolution(ctx)
 		},
 		SilenceUsage: true,
 	}
 	cCmd.PersistentFlags().StringVarP(&options.Output, "output", "o", "", fmt.Sprintf("Output format. One of: (%s)", strings.Join(ValidOutputTypes, ", ")))
-	cCmd.PersistentFlags().StringVarP(&options.File, "file", "f", "", "Path to the solution. This can be a local file path or a URL. If not provided, the command will attempt to locate a solution file in default locations.")
+	cCmd.PersistentFlags().StringVarP(&options.File, "file", "f", "", "Path to the solution. This can be a local file path or a URL. If not provided and no arguments given, lists catalog solutions.")
 	cCmd.PersistentFlags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
+	cCmd.PersistentFlags().BoolVar(&options.Local, "local", false, "Auto-discover and display a solution from the current directory")
 	return cCmd
 }
 
@@ -175,6 +209,103 @@ func (o *CmdOptionsVersion) GetSolutionWithGetter(ctx context.Context, getter ge
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 	return nil
+}
+
+// ListSolutions lists solutions from the local and configured catalogs.
+func (o *CmdOptionsVersion) ListSolutions(ctx context.Context) error {
+	lgr := logger.FromContext(ctx)
+	w := writer.FromContext(ctx)
+
+	var artifacts []catalog.ArtifactInfo
+
+	// List from local catalog
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		localArtifacts, listErr := localCatalog.List(ctx, catalog.ArtifactKindSolution, "")
+		if listErr != nil {
+			lgr.V(1).Info("failed to list local solutions", "error", listErr)
+		} else {
+			artifacts = append(artifacts, localArtifacts...)
+		}
+	} else {
+		lgr.V(1).Info("local catalog not available", "error", err)
+	}
+
+	// List from remote catalogs
+	remoteCatalogs := catalog.RemoteCatalogsFromContext(ctx, *lgr)
+	for _, rc := range remoteCatalogs {
+		remoteArtifacts, listErr := rc.List(ctx, catalog.ArtifactKindSolution, "")
+		if listErr != nil {
+			lgr.V(1).Info("failed to list remote solutions", "catalog", rc.Name(), "error", listErr)
+			continue
+		}
+		artifacts = append(artifacts, remoteArtifacts...)
+	}
+
+	if len(artifacts) == 0 {
+		if w != nil {
+			w.Infof("No solutions found. Use '%s get solution --local' to auto-discover a local solution.", o.CliParams.BinaryName)
+		}
+		return nil
+	}
+
+	items := deduplicateAndFormatSolutions(artifacts)
+
+	format := o.Output
+	if format == "" {
+		format = "auto"
+	}
+	kvxOpts := flags.NewKvxOutputOptionsFromFlags(
+		format,
+		false,
+		"",
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.CliParams.BinaryName+" get solution"),
+	)
+	kvxOpts.IOStreams = o.IOStreams
+	return kvxOpts.Write(items)
+}
+
+// deduplicateAndFormatSolutions deduplicates artifacts by name (keeping the
+// highest version) and returns sorted display items.
+func deduplicateAndFormatSolutions(artifacts []catalog.ArtifactInfo) []solutionListItem {
+	latestByName := make(map[string]catalog.ArtifactInfo)
+	for _, a := range artifacts {
+		existing, ok := latestByName[a.Reference.Name]
+		if !ok {
+			latestByName[a.Reference.Name] = a
+			continue
+		}
+		if a.Reference.Version != nil && (existing.Reference.Version == nil || a.Reference.Version.GreaterThan(existing.Reference.Version)) {
+			latestByName[a.Reference.Name] = a
+		}
+	}
+
+	items := make([]solutionListItem, 0, len(latestByName))
+	for _, a := range latestByName {
+		version := ""
+		if a.Reference.Version != nil {
+			version = a.Reference.Version.String()
+		}
+		items = append(items, solutionListItem{
+			Name:    a.Reference.Name,
+			Version: version,
+			Kind:    string(a.Reference.Kind),
+			Catalog: a.Catalog,
+		})
+	}
+
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items
+}
+
+// solutionListItem is a display-friendly representation for solution listing.
+type solutionListItem struct {
+	Name    string `json:"name" yaml:"name"`
+	Version string `json:"version" yaml:"version"`
+	Kind    string `json:"kind" yaml:"kind"`
+	Catalog string `json:"catalog" yaml:"catalog"`
 }
 
 // solutionSummary is a display-friendly representation of a solution.

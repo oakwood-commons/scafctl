@@ -131,6 +131,18 @@ func TestCommandPush_LocalRefNoCatalog(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCommandPush_LatestFlag(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
+
+	f := cmd.Flags().Lookup("latest")
+	require.NotNil(t, f, "latest flag should exist")
+	assert.Equal(t, "false", f.DefValue)
+}
+
 func BenchmarkCommandPush(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()

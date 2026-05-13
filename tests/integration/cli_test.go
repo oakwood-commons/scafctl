@@ -2841,10 +2841,14 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 func TestIntegration_CatalogList_Empty(t *testing.T) {
 	t.Parallel()
 	// Create a temp directory for the catalog — no local artifacts.
+	// XDG_CONFIG_HOME is also isolated to prevent the binary from reading
+	// the real config, which may reference remote catalogs that require
+	// auth or are unreachable in CI.
 	tmpDir := t.TempDir()
 	env := map[string]string{
-		"XDG_DATA_HOME":  tmpDir,
-		"XDG_CACHE_HOME": tmpDir,
+		"XDG_DATA_HOME":   tmpDir,
+		"XDG_CACHE_HOME":  tmpDir,
+		"XDG_CONFIG_HOME": tmpDir,
 	}
 
 	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")

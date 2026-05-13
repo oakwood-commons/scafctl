@@ -212,3 +212,115 @@ func BenchmarkNextPatchVersion(b *testing.B) {
 		_, _ = NextPatchVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app")
 	}
 }
+
+func TestParseBumpLevel(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    BumpLevel
+		wantErr bool
+	}{
+		{"patch", BumpPatch, false},
+		{"minor", BumpMinor, false},
+		{"major", BumpMajor, false},
+		{"PATCH", BumpPatch, false},
+		{"Minor", BumpMinor, false},
+		{"invalid", "", true},
+		{"", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseBumpLevel(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "invalid bump level")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+func TestBumpVersion(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("patch bump", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Version: semver.MustParse("1.2.3")}},
+			},
+		}
+		v, err := BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpPatch)
+		require.NoError(t, err)
+		assert.Equal(t, "1.2.4", v.String())
+	})
+
+	t.Run("minor bump", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Version: semver.MustParse("1.2.3")}},
+			},
+		}
+		v, err := BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpMinor)
+		require.NoError(t, err)
+		assert.Equal(t, "1.3.0", v.String())
+	})
+
+	t.Run("major bump", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Version: semver.MustParse("1.2.3")}},
+			},
+		}
+		v, err := BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpMajor)
+		require.NoError(t, err)
+		assert.Equal(t, "2.0.0", v.String())
+	})
+
+	t.Run("no existing versions returns ErrNoVersions", func(t *testing.T) {
+		cat := &mockCatalog{}
+		_, err := BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpPatch)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no existing versions")
+		var noVersions *ErrNoVersions
+		assert.ErrorAs(t, err, &noVersions)
+		assert.Equal(t, "my-app", noVersions.Name)
+	})
+
+	t.Run("catalog list error", func(t *testing.T) {
+		cat := &mockCatalog{listErr: assert.AnError}
+		_, err := BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpPatch)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "listing catalog versions")
+	})
+
+	t.Run("picks highest version from multiple", func(t *testing.T) {
+		cat := &mockCatalog{
+			artifacts: []catalog.ArtifactInfo{
+				{Reference: catalog.Reference{Version: semver.MustParse("1.0.0")}},
+				{Reference: catalog.Reference{Version: semver.MustParse("3.1.0")}},
+				{Reference: catalog.Reference{Version: semver.MustParse("2.5.0")}},
+			},
+		}
+		v, err := BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpMinor)
+		require.NoError(t, err)
+		assert.Equal(t, "3.2.0", v.String())
+	})
+}
+
+func BenchmarkBumpVersion(b *testing.B) {
+	ctx := context.Background()
+	cat := &mockCatalog{
+		artifacts: []catalog.ArtifactInfo{
+			{Reference: catalog.Reference{Version: semver.MustParse("1.0.0")}},
+			{Reference: catalog.Reference{Version: semver.MustParse("1.2.3")}},
+			{Reference: catalog.Reference{Version: semver.MustParse("1.1.0")}},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = BumpVersion(ctx, cat, catalog.ArtifactKindSolution, "my-app", BumpMinor)
+	}
+}
