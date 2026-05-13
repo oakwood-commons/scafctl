@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/httpprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
 )
@@ -52,6 +53,11 @@ func registerAllToRegistry(ctx context.Context, reg *provider.Registry) error {
 		messageprovider.NewMessageProvider(),
 		staticprovider.New(),
 		parameterprovider.NewParameterProvider(),
+		// solution provider is registered bare (no runtime deps). At execution
+		// time, callers inject a loader and registry via context (preferred) or
+		// via Configure() (legacy fallback). See prepare.Solution() which builds
+		// a ProviderCtx function to inject these deps per execution.
+		solutionprovider.New(),
 	}
 
 	lgr.V(2).Info("registering built-in providers", "count", len(providers))
@@ -87,5 +93,6 @@ func ProviderNames() []string {
 		"message",
 		"static",
 		"parameter",
+		"solution",
 	}
 }

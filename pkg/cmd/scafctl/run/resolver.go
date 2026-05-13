@@ -335,7 +335,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 
 	// Prepare solution: load, set up registry, handle bundles
-	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
+	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
 		// When no -f/--file was provided, auto-discovery failed to find a
 		// solution file, and the first positional arg looks like a catalog
@@ -344,13 +344,16 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			o.File = o.Names[0]
 			o.Names = o.Names[1:]
 			lgr.V(1).Info("retrying with first positional arg as catalog reference", "file", o.File)
-			sol, reg, solutionDir, cleanup, err = o.prepareSolutionForExecution(ctx)
+			sol, reg, solutionDir, cleanup, providerCtx, err = o.prepareSolutionForExecution(ctx)
 		}
 		if err != nil {
 			return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 		}
 	}
 	defer cleanup()
+	if providerCtx != nil {
+		ctx = providerCtx(ctx)
+	}
 
 	// Set the solution directory for resolver-phase path resolution.
 	// --base-dir takes precedence; otherwise use the solution file's directory.

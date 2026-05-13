@@ -268,11 +268,14 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("failed to get working directory: %w", err), exitcode.GeneralError)
 	}
 
-	sol, reg, solutionDir, cleanup, err := o.prepareSolutionForExecution(ctx)
+	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 	}
 	defer cleanup()
+	if providerCtx != nil {
+		ctx = providerCtx(ctx)
+	}
 
 	// Set the solution directory for resolver-phase path resolution.
 	// --base-dir takes precedence; otherwise use the solution file's directory.

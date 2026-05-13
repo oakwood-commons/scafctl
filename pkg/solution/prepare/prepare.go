@@ -194,6 +194,12 @@ type Result struct {
 	// DiscoveredFrom holds metadata about how the solution file was discovered.
 	// Only populated when auto-discovery is used (path was empty).
 	DiscoveredFrom get.DiscoveryResult `json:"-" yaml:"-"`
+	// ProviderCtx enriches a context with solution provider dependencies
+	// (loader, registry, plugin deps, client tracker). Callers must apply
+	// this to the execution context before running resolvers or actions so
+	// the solution provider can resolve sub-solutions. May be nil when no
+	// solution provider is registered.
+	ProviderCtx func(ctx context.Context) context.Context `json:"-" yaml:"-"`
 }
 
 // Solution loads a solution from the given path, extracts any bundle,
@@ -431,33 +437,36 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		}
 	}
 
-	// Register the solution provider
-	if !reg.Has(solutionprovider.ProviderName) {
-		solOpts := []solutionprovider.Option{
-			solutionprovider.WithLoader(getter),
-			solutionprovider.WithRegistry(reg),
+	// Build a context enrichment function that injects solution provider
+	// dependencies via context. This avoids mutating the shared singleton
+	// in DefaultRegistry and keeps per-execution state isolated.
+	var providerCtx func(ctx context.Context) context.Context
+	if reg.Has(solutionprovider.ProviderName) {
+		tracker := solutionprovider.NewChildClientTracker()
+
+		providerCtx = func(ctx context.Context) context.Context {
+			ctx = solutionprovider.WithLoaderCtx(ctx, getter)
+			ctx = solutionprovider.WithProviderRegistry(ctx, reg)
+			ctx = solutionprovider.WithChildClientTracker(ctx, tracker)
+			if cfg.officialProviders != nil {
+				ctx = solutionprovider.WithOfficialProvidersCtx(ctx, cfg.officialProviders)
+			}
+			if cfg.pluginFetcher != nil {
+				ctx = solutionprovider.WithPluginFetcherCtx(ctx, cfg.pluginFetcher)
+			}
+			if cfg.pluginCfg != nil {
+				ctx = solutionprovider.WithPluginConfigCtx(ctx, cfg.pluginCfg)
+			}
+			if len(cfg.clientOpts) > 0 {
+				ctx = solutionprovider.WithClientOptionsCtx(ctx, cfg.clientOpts)
+			}
+			return ctx
 		}
-		if cfg.officialProviders != nil {
-			solOpts = append(solOpts, solutionprovider.WithOfficialProviders(cfg.officialProviders))
-		}
-		if cfg.pluginFetcher != nil {
-			solOpts = append(solOpts, solutionprovider.WithPluginFetcher(cfg.pluginFetcher))
-		}
-		if cfg.pluginCfg != nil {
-			solOpts = append(solOpts, solutionprovider.WithPluginConfig(cfg.pluginCfg))
-		}
-		if len(cfg.clientOpts) > 0 {
-			solOpts = append(solOpts, solutionprovider.WithClientOptions(cfg.clientOpts...))
-		}
-		solProvider := solutionprovider.New(solOpts...)
-		if err := reg.Register(solProvider); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("registering solution provider: %w", err)
-		}
-		// Add solution provider cleanup to kill child plugin clients.
+
+		// Add tracker cleanup to kill child plugin clients for this run only.
 		origCleanup := cleanup
 		cleanup = func() {
-			solProvider.Close()
+			tracker.Close()
 			origCleanup()
 		}
 	}
@@ -468,6 +477,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		SolutionDir:    solutionDir,
 		Cleanup:        cleanup,
 		DiscoveredFrom: discoveredFrom,
+		ProviderCtx:    providerCtx,
 	}, nil
 }
 

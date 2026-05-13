@@ -578,7 +578,7 @@ func (o *sharedResolverOptions) executeResolvers(
 //
 // This method delegates to the standalone prepare.PrepareSolution function,
 // passing CLI-specific options (getter, registry, stdin, metrics).
-func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, string, func(), error) {
+func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, string, func(), func(context.Context) context.Context, error) {
 	w := writer.FromContext(ctx)
 
 	var opts []prepare.Option
@@ -667,7 +667,7 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 
 	result, err := prepare.Solution(ctx, o.File, opts...)
 	if err != nil {
-		return nil, nil, "", func() {}, err
+		return nil, nil, "", func() {}, nil, err
 	}
 
 	if w != nil {
@@ -709,7 +709,7 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		}
 	}
 
-	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, nil
+	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, result.ProviderCtx, nil
 }
 
 func (o *sharedResolverOptions) appendClientPluginOptions(opts []prepare.Option) []prepare.Option {
