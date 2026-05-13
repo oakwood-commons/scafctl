@@ -5,6 +5,7 @@ package build
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,6 +53,7 @@ type SolutionOptions struct {
 	AllowDirty      bool
 	NoGitMetadata   bool
 	BaseDir         string
+	Bump            string
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -123,6 +125,16 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Validate --bump value early
+			if options.Bump != "" {
+				if _, err := solution.ParseBumpLevel(options.Bump); err != nil {
+					if w := writer.FromContext(cmd.Context()); w != nil {
+						w.Errorf("%v", err)
+					}
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			}
+
 			// Parse -t/--tag if provided: supports both "name@version" and
 			// full remote refs like "registry/repo/solutions/name@version".
 			if options.Tag != "" {
@@ -180,6 +192,15 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 				}
 			}
 
+			// --bump conflicts with --version (explicit or derived from --tag)
+			if options.Bump != "" && options.Version != "" {
+				err := fmt.Errorf("--bump cannot be used together with --version or a versioned --tag")
+				if w := writer.FromContext(cmd.Context()); w != nil {
+					w.Errorf("%v", err)
+				}
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			if options.File == "" {
 				getter := get.NewGetterFromContext(cmd.Context())
 				options.File = getter.FindSolution()
@@ -223,6 +244,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd.Flags().BoolVar(&options.AllowDirty, "allow-dirty", false, "Suppress warning when building from a dirty working tree")
 	cmd.Flags().BoolVar(&options.NoGitMetadata, "no-git-metadata", false, "Skip git commit and dirty-state annotations on the built artifact")
 	cmd.Flags().StringVar(&options.BaseDir, "base-dir", "", "Override base directory for resolving relative paths in the solution (default: solution file's directory)")
+	cmd.Flags().StringVar(&options.Bump, "bump", "", "Auto-increment version based on last published version (patch, minor, major)")
 
 	return cmd
 }
@@ -297,24 +319,48 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Determine version (priority: --version flag > metadata.version > auto-increment)
-	version, versionOverride, err := solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
-	if err != nil {
-		// No explicit version and no metadata version — try auto-increment
-		if opts.Version == "" && sol.Metadata.Version == nil {
-			localCat, catErr := catalog.NewLocalCatalog(*lgr)
-			if catErr == nil {
-				nextVer, nextErr := solution.NextPatchVersion(ctx, localCat, catalog.ArtifactKindSolution, name)
-				if nextErr == nil {
-					version = nextVer
-					w.Infof("Auto-incremented version to %s", version.String())
-					err = nil
+	// Determine version (priority: --bump > --version flag > metadata.version > auto-increment)
+	var version *semver.Version
+	var versionOverride bool
+	if opts.Bump != "" {
+		bumpLevel, _ := solution.ParseBumpLevel(opts.Bump) // already validated
+		localCat, catErr := catalog.NewLocalCatalog(*lgr)
+		if catErr != nil {
+			w.Errorf("--bump requires a local catalog: %v", catErr)
+			return exitcode.WithCode(catErr, exitcode.CatalogError)
+		}
+		bumpVer, bumpErr := solution.BumpVersion(ctx, localCat, catalog.ArtifactKindSolution, name, bumpLevel)
+		if bumpErr != nil {
+			w.Errorf("--bump: %v", bumpErr)
+			code := exitcode.CatalogError
+			var noVersions *solution.ErrNoVersions
+			if errors.As(bumpErr, &noVersions) {
+				code = exitcode.InvalidInput
+			}
+			return exitcode.WithCode(bumpErr, code)
+		}
+		version = bumpVer
+		w.Infof("Bumped version to %s (%s)", version.String(), opts.Bump)
+	} else {
+		var err error
+		version, versionOverride, err = solution.ResolveArtifactVersion(opts.Version, sol.Metadata.Version)
+		if err != nil {
+			// No explicit version and no metadata version — try auto-increment
+			if opts.Version == "" && sol.Metadata.Version == nil {
+				localCat, catErr := catalog.NewLocalCatalog(*lgr)
+				if catErr == nil {
+					nextVer, nextErr := solution.NextPatchVersion(ctx, localCat, catalog.ArtifactKindSolution, name)
+					if nextErr == nil {
+						version = nextVer
+						w.Infof("Auto-incremented version to %s", version.String())
+						err = nil
+					}
 				}
 			}
-		}
-		if err != nil {
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
 		}
 	}
 	if versionOverride {
@@ -348,9 +394,15 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 			sol.Metadata.Annotations[catalog.AnnotationBuildCommit] = repoStatus.Commit
 			if repoStatus.IsDirty {
 				sol.Metadata.Annotations[catalog.AnnotationBuildDirty] = "true"
+			} else {
+				delete(sol.Metadata.Annotations, catalog.AnnotationBuildDirty)
 			}
 			w.Verbosef("Git metadata: commit=%s dirty=%v", repoStatus.Commit, repoStatus.IsDirty)
 		}
+	} else {
+		// --no-git-metadata: strip any pre-existing build annotations.
+		delete(sol.Metadata.Annotations, catalog.AnnotationBuildCommit)
+		delete(sol.Metadata.Annotations, catalog.AnnotationBuildDirty)
 	}
 
 	// Stamp resolved name and version into the solution so the stored

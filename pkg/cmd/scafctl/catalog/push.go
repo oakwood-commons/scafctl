@@ -35,6 +35,7 @@ type PushOptions struct {
 	DryRun     bool   // Show what would be pushed without pushing (--dry-run)
 	Insecure   bool   // Allow HTTP (--insecure)
 	SBOM       bool   // Auto-generate and attach SBOM (--sbom)
+	Latest     bool   // Tag the pushed version as "latest" (--latest)
 	CliParams  *settings.Run
 	IOStreams  *terminal.IOStreams
 }
@@ -103,6 +104,7 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pushed without actually pushing")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.SBOM, "sbom", false, "Auto-generate and attach an SPDX SBOM after pushing")
+	cmd.Flags().BoolVar(&options.Latest, "latest", false, "Tag the pushed version as 'latest' in the remote registry")
 
 	return cmd
 }
@@ -253,6 +255,9 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		if opts.Force {
 			w.Infof("  --force: would overwrite if exists")
 		}
+		if opts.Latest {
+			w.Infof("  --latest: would tag as \"latest\"")
+		}
 		return nil
 	}
 
@@ -328,6 +333,24 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		if err := attachSBOM(ctx, opts, localCatalog, remoteCatalog, ref); err != nil {
 			w.Warningf("SBOM attachment failed: %v", err)
 			// Non-fatal: the push itself succeeded
+		}
+	}
+
+	// Tag as "latest" in the remote registry if requested.
+	// This intentionally bypasses catalog.ValidateAlias (which rejects "latest")
+	// because push --latest is a publish-time concern, not a manual alias operation.
+	if opts.Latest {
+		tagRef := ref
+		if opts.TargetName != "" {
+			tagRef.Name = opts.TargetName
+		}
+		w.Infof("Tagging %s@%s as \"latest\"...", displayName, tagRef.Version.String())
+		_, tagErr := remoteCatalog.Tag(ctx, tagRef, "latest")
+		if tagErr != nil {
+			w.Warningf("failed to tag as latest: %v", tagErr)
+			// Non-fatal: the push itself succeeded
+		} else {
+			w.Successf("Tagged %s@%s as \"latest\"", displayName, ref.Version.String())
 		}
 	}
 

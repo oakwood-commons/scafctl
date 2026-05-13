@@ -7,8 +7,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"sync"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/adrg/xdg"
+	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	solutionpkg "github.com/oakwood-commons/scafctl/pkg/solution"
@@ -19,6 +25,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// xdgMu serialises tests that mutate the global xdg.DataHome variable.
+var xdgMu sync.Mutex
 
 func TestCmdOptionsVersion_GetSolutionWithGetter(t *testing.T) {
 	t.Run("successful get from local file with json output", func(t *testing.T) {
@@ -449,4 +458,258 @@ func BenchmarkCommandSolution_Structure(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandSolution(cliParams, ioStreams, "get")
 	}
+}
+
+func TestCommandSolution_LocalFlag(t *testing.T) {
+	t.Run("--local flag is registered", func(t *testing.T) {
+		cliParams := &settings.Run{NoColor: true, BinaryName: "testcli"}
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandSolution(cliParams, ioStreams, "get")
+
+		localFlag := cmd.PersistentFlags().Lookup("local")
+		require.NotNil(t, localFlag, "--local flag should be registered")
+		assert.Equal(t, "false", localFlag.DefValue)
+	})
+}
+
+func TestCommandSolution_HelpText(t *testing.T) {
+	t.Run("short description mentions listing", func(t *testing.T) {
+		cliParams := &settings.Run{NoColor: true, BinaryName: "testcli"}
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandSolution(cliParams, ioStreams, "get")
+
+		assert.Contains(t, cmd.Short, "List or get")
+	})
+
+	t.Run("long description mentions --local", func(t *testing.T) {
+		cliParams := &settings.Run{NoColor: true, BinaryName: "testcli"}
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandSolution(cliParams, ioStreams, "get")
+
+		assert.Contains(t, cmd.Long, "--local")
+	})
+
+	t.Run("embedder binary name in long description", func(t *testing.T) {
+		cliParams := &settings.Run{NoColor: true, BinaryName: "mycli"}
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd := CommandSolution(cliParams, ioStreams, "get")
+
+		assert.Contains(t, cmd.Long, "mycli")
+	})
+}
+
+func TestListSolutions_OutputFormat(t *testing.T) {
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
+
+	options := &CmdOptionsVersion{
+		IOStreams: ioStreams,
+		CliParams: &settings.Run{
+			NoColor:    true,
+			BinaryName: "testcli",
+		},
+		Output: "json",
+	}
+
+	w := writer.New(ioStreams, options.CliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err := options.ListSolutions(ctx)
+	require.NoError(t, err)
+	// Should produce JSON output (either empty hint or list of solutions)
+	output := outBuf.String()
+	assert.NotEmpty(t, output)
+}
+
+func TestListSolutions_WithLocalArtifacts(t *testing.T) {
+	// Cannot be parallel: temporarily redirects xdg.DataHome.
+	xdgMu.Lock()
+	tmpDir := t.TempDir()
+	origDataHome := xdg.DataHome
+	xdg.DataHome = tmpDir
+	t.Cleanup(func() {
+		xdg.DataHome = origDataHome
+		xdgMu.Unlock()
+	})
+
+	// Pre-populate a local catalog with a solution.
+	lgr := logr.Discard()
+	localCat, err := catalog.NewLocalCatalogAt(
+		filepath.Join(tmpDir, "scafctl", "catalog"), lgr)
+	require.NoError(t, err)
+
+	solYAML := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: list-test\n  version: 1.0.0\nspec: {}\n")
+	ref := catalog.Reference{
+		Kind:    catalog.ArtifactKindSolution,
+		Name:    "list-test",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err = localCat.Store(context.Background(), ref, solYAML, nil, nil, false)
+	require.NoError(t, err)
+
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
+
+	options := &CmdOptionsVersion{
+		IOStreams: ioStreams,
+		CliParams: &settings.Run{
+			NoColor:    true,
+			BinaryName: "testcli",
+		},
+		Output: "json",
+	}
+
+	w := writer.New(ioStreams, options.CliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err = options.ListSolutions(ctx)
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "list-test")
+	assert.Contains(t, output, "1.0.0")
+}
+
+func TestListSolutions_WithMultipleArtifacts(t *testing.T) {
+	xdgMu.Lock()
+	tmpDir := t.TempDir()
+	origDataHome := xdg.DataHome
+	xdg.DataHome = tmpDir
+	t.Cleanup(func() {
+		xdg.DataHome = origDataHome
+		xdgMu.Unlock()
+	})
+
+	lgr := logr.Discard()
+	localCat, err := catalog.NewLocalCatalogAt(
+		filepath.Join(tmpDir, "scafctl", "catalog"), lgr)
+	require.NoError(t, err)
+
+	for _, item := range []struct{ name, ver string }{
+		{"alpha-sol", "1.0.0"},
+		{"alpha-sol", "2.0.0"},
+		{"beta-sol", "0.5.0"},
+	} {
+		ref := catalog.Reference{
+			Kind:    catalog.ArtifactKindSolution,
+			Name:    item.name,
+			Version: semver.MustParse(item.ver),
+		}
+		_, storeErr := localCat.Store(context.Background(), ref,
+			[]byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: "+item.name+"\n  version: "+item.ver+"\nspec: {}\n"),
+			nil, nil, false)
+		require.NoError(t, storeErr)
+	}
+
+	outBuf := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: &bytes.Buffer{}}
+
+	options := &CmdOptionsVersion{
+		IOStreams: ioStreams,
+		CliParams: &settings.Run{
+			NoColor:    true,
+			BinaryName: "testcli",
+		},
+		Output: "json",
+	}
+
+	w := writer.New(ioStreams, options.CliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err = options.ListSolutions(ctx)
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	// Deduplication: alpha-sol should show 2.0.0 (highest), not 1.0.0.
+	assert.Contains(t, output, "alpha-sol")
+	assert.Contains(t, output, "2.0.0")
+	assert.Contains(t, output, "beta-sol")
+	assert.Contains(t, output, "0.5.0")
+}
+
+func TestDeduplicateAndFormatSolutions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deduplicates by name keeping highest version", func(t *testing.T) {
+		t.Parallel()
+		artifacts := []catalog.ArtifactInfo{
+			{Reference: catalog.Reference{Name: "app-a", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")}, Catalog: "local"},
+			{Reference: catalog.Reference{Name: "app-a", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("2.0.0")}, Catalog: "local"},
+			{Reference: catalog.Reference{Name: "app-b", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("0.1.0")}, Catalog: "remote"},
+		}
+		items := deduplicateAndFormatSolutions(artifacts)
+		require.Len(t, items, 2)
+		assert.Equal(t, "app-a", items[0].Name)
+		assert.Equal(t, "2.0.0", items[0].Version)
+		assert.Equal(t, "app-b", items[1].Name)
+		assert.Equal(t, "0.1.0", items[1].Version)
+	})
+
+	t.Run("sorted alphabetically by name", func(t *testing.T) {
+		t.Parallel()
+		artifacts := []catalog.ArtifactInfo{
+			{Reference: catalog.Reference{Name: "zebra", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")}, Catalog: "local"},
+			{Reference: catalog.Reference{Name: "alpha", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")}, Catalog: "local"},
+			{Reference: catalog.Reference{Name: "mid", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")}, Catalog: "remote"},
+		}
+		items := deduplicateAndFormatSolutions(artifacts)
+		require.Len(t, items, 3)
+		assert.Equal(t, "alpha", items[0].Name)
+		assert.Equal(t, "mid", items[1].Name)
+		assert.Equal(t, "zebra", items[2].Name)
+	})
+
+	t.Run("nil version kept when no versioned duplicate", func(t *testing.T) {
+		t.Parallel()
+		artifacts := []catalog.ArtifactInfo{
+			{Reference: catalog.Reference{Name: "app-c", Kind: catalog.ArtifactKindSolution}, Catalog: "local"},
+		}
+		items := deduplicateAndFormatSolutions(artifacts)
+		require.Len(t, items, 1)
+		assert.Equal(t, "app-c", items[0].Name)
+		assert.Equal(t, "", items[0].Version)
+	})
+
+	t.Run("versioned beats nil version", func(t *testing.T) {
+		t.Parallel()
+		artifacts := []catalog.ArtifactInfo{
+			{Reference: catalog.Reference{Name: "app-d", Kind: catalog.ArtifactKindSolution}, Catalog: "local"},
+			{Reference: catalog.Reference{Name: "app-d", Kind: catalog.ArtifactKindSolution, Version: semver.MustParse("1.0.0")}, Catalog: "remote"},
+		}
+		items := deduplicateAndFormatSolutions(artifacts)
+		require.Len(t, items, 1)
+		assert.Equal(t, "1.0.0", items[0].Version)
+		assert.Equal(t, "remote", items[0].Catalog)
+	})
+
+	t.Run("empty input returns nil", func(t *testing.T) {
+		t.Parallel()
+		items := deduplicateAndFormatSolutions(nil)
+		assert.Empty(t, items)
+	})
+}
+
+func TestCommandSolution_NoArgsCallsListSolutions(t *testing.T) {
+	t.Parallel()
+
+	outBuf := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: outBuf, ErrOut: errBuf}
+	cliParams := &settings.Run{NoColor: true, BinaryName: "testcli"}
+
+	w := writer.New(ioStreams, cliParams)
+	cmd := CommandSolution(cliParams, ioStreams, "get")
+	cmd.SetArgs([]string{}) // no args
+	ctx := writer.WithWriter(context.Background(), w)
+	cmd.SetContext(ctx)
+
+	// No args, no --file, no --local: should call ListSolutions.
+	// Without a real catalog this produces "No solutions found" info message.
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	combined := outBuf.String() + errBuf.String()
+	assert.Contains(t, combined, "No solutions found")
 }

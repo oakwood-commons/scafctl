@@ -250,7 +250,7 @@ func TestRejectUnsafePath_Direct(t *testing.T) {
 }
 
 // TestSolutionRun_UnsafeOutputDir_ViaURL passes a valid HTTP URL for path so that
-// requireURLPath succeeds, then verifies rejectUnsafePath blocks the unsafe outputDir.
+// requireRemotePath succeeds, then verifies rejectUnsafePath blocks the unsafe outputDir.
 func TestSolutionRun_UnsafeOutputDir_ViaURL(t *testing.T) {
 	unsafe := []string{"/etc/passwd", "../secret", "~/evil"}
 	for _, tc := range unsafe {
@@ -263,5 +263,79 @@ func TestSolutionRun_UnsafeOutputDir_ViaURL(t *testing.T) {
 			resp := testAPI.Post("/v1/solutions/run", body, "Content-Type: application/json")
 			assert.Equal(t, http.StatusBadRequest, resp.Code, "expected 400 for unsafe outputDir %q", tc)
 		})
+	}
+}
+
+// ── requireRemotePath tests ──
+
+func TestRequireRemotePath_AllowedPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "https URL", path: "https://example.com/solution.yaml"},
+		{name: "http URL", path: "http://example.com/solution.yaml"},
+		{name: "catalog name", path: "my-solution"},
+		{name: "versioned catalog ref", path: "my-solution@1.0.0"},
+		{name: "registry ref", path: "ghcr.io/org/solution"},
+		{name: "registry ref with port", path: "localhost:5000/solution"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := requireRemotePath(tt.path, "test-op")
+			assert.NoError(t, err, "path %q should be allowed", tt.path)
+		})
+	}
+}
+
+func TestRequireRemotePath_BlockedPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "absolute unix path", path: "/etc/solution.yaml"},
+		{name: "relative dot path", path: "./solution.yaml"},
+		{name: "parent dir path", path: "../solution.yaml"},
+		{name: "home tilde", path: "~/solutions/my-app.yaml"},
+		{name: "windows backslash", path: "dir\\solution.yaml"},
+		{name: "windows drive", path: "C:\\solutions\\app.yaml"},
+		{name: "bare yaml file", path: "solution.yaml"},
+		{name: "bare yml file", path: "solution.yml"},
+		{name: "bare json file", path: "config.json"},
+		{name: "empty string", path: ""},
+		{name: "file scheme", path: "file:///etc/passwd"},
+		{name: "file scheme uppercase", path: "FILE:///etc/passwd"},
+		{name: "oci scheme", path: "oci://ghcr.io/org/solution:1.0.0"},
+		{name: "relative dir path", path: "configs/secret"},
+		{name: "path traversal", path: "dir/../../etc/passwd"},
+		{name: "path traversal via hostname", path: "ghcr.io/../../etc/passwd"},
+		{name: "path traversal in https URL", path: "https://example.com/../etc/passwd"},
+		{name: "nested relative", path: "a/b/c/solution"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := requireRemotePath(tt.path, "test-op")
+			assert.Error(t, err, "path %q should be blocked", tt.path)
+		})
+	}
+}
+
+func TestRequireRemotePath_CatalogNameViaRunEndpoint(t *testing.T) {
+	_, testAPI := humatest.New(t)
+	hctx := newTestHandlerContext(t)
+	RegisterSolutionEndpoints(testAPI, hctx, "/v1")
+
+	// Catalog name should pass validation (will fail later at resolution, not here)
+	resp := testAPI.Post("/v1/solutions/run", `{"path": "entra-user-groups"}`)
+	// Should NOT be 400 "path must be a URL" — any non-400 or a different 400 is acceptable
+	if resp.Code == http.StatusBadRequest {
+		assert.NotContains(t, resp.Body.String(), "not a local file path",
+			"catalog name should not be rejected as a local file path")
 	}
 }
