@@ -5,12 +5,20 @@ name: Sign Plugin OCI Artifact
 # to an OCI registry. The signature is stored alongside the artifact in the
 # same registry and can be verified by scafctl during plugin fetch.
 #
+# Versioning:
+#   This workflow is pinned by callers via the `sign-plugin/v1` tag.
+#   After merging changes, update the tag to the current HEAD of main:
+#     git checkout main && git pull
+#     git tag -f sign-plugin/v1 HEAD
+#     git push --force-with-lease origin refs/tags/sign-plugin/v1
+#   This propagates the change to all plugin repos on their next workflow run.
+#
 # Usage in plugin repos:
 #   jobs:
 #     sign:
-#       uses: oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@main
+#       uses: oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@sign-plugin/v1
 #       with:
-#         image-ref: ghcr.io/oakwood-commons/scafctl-plugin-auth-entra/providers/entra@sha256:abc123...
+#         image-ref: ghcr.io/oakwood-commons/providers/sleep@sha256:abc123...
 #       permissions:
 #         id-token: write
 #         packages: write
