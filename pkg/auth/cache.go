@@ -29,8 +29,13 @@ type TokenCache struct {
 	prefix      string
 }
 
+// CachedTokenVersion is the current serialization format version for cached tokens.
+// Increment when making breaking changes to the CachedToken schema.
+const CachedTokenVersion = 1
+
 // CachedToken is the structure stored on disk for each cached token.
 type CachedToken struct {
+	Version     int       `json:"version" yaml:"version" doc:"Schema version of the cached token format" minimum:"0" maximum:"100" example:"1"`
 	AccessToken string    `json:"accessToken" yaml:"accessToken" doc:"The cached access token" maxLength:"65536"` //nolint:gosec // G117: not a hardcoded credential, stores runtime token data
 	TokenType   string    `json:"tokenType" yaml:"tokenType" doc:"Token type, typically Bearer" example:"Bearer" maxLength:"64"`
 	ExpiresAt   time.Time `json:"expiresAt" yaml:"expiresAt" doc:"Time the token expires"`
@@ -72,6 +77,19 @@ func (c *TokenCache) Get(ctx context.Context, flow Flow, fingerprint, scope stri
 		return nil, fmt.Errorf("failed to read cached token: %w", err)
 	}
 
+	// Two-phase unmarshal: decode only the version first so that incompatible
+	// future schemas (e.g. changed field types) never cause an unmarshal error.
+	var envelope struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		// Completely unparseable JSON -- discard silently and reacquire.
+		return nil, nil //nolint:nilerr // intentional: corrupt cache should trigger reacquisition, not propagate
+	}
+	if envelope.Version > CachedTokenVersion {
+		return nil, nil
+	}
+
 	var cached CachedToken
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal cached token: %w", err)
@@ -93,6 +111,7 @@ func (c *TokenCache) Set(ctx context.Context, flow Flow, fingerprint, scope stri
 	key := c.CacheKey(flow, fingerprint, scope)
 
 	cached := CachedToken{
+		Version:     CachedTokenVersion,
 		AccessToken: token.AccessToken,
 		TokenType:   token.TokenType,
 		ExpiresAt:   token.ExpiresAt,
