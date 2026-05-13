@@ -26,8 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' }}
-      # count=5 is enough for benchstat statistical significance while keeping runtime reasonable
-      BENCH_COUNT: 5
+      # benchstat requires >= 6 samples for finite confidence intervals
+      BENCH_COUNT: 6
       BENCH_TIME: 1s
     steps:
       - name: Checkout PR branch

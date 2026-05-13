@@ -87,12 +87,3 @@ func validateHandlerName(ctx context.Context, handlerName string) error {
 	}
 	return fmt.Errorf("unknown auth handler: %s (registered: %v)", handlerName, handlers)
 }
-
-// getHandlerWithOverrides retrieves a handler from the registry.
-// Override parameters are accepted for backward compatibility with CLI flags
-// but are no-ops for plugin-based handlers (which are pre-configured via
-// ConfigureAuthHandler RPC). When builtins are removed, these parameters
-// will be dropped entirely.
-func getHandlerWithOverrides(ctx context.Context, handlerName, _, _, _, _ string) (auth.Handler, error) {
-	return getHandler(ctx, handlerName)
-}

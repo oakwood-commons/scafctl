@@ -3,10 +3,13 @@ package diagnose
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunEnvVarChecks(t *testing.T) {
@@ -56,7 +59,10 @@ func TestRunEnvVarChecks_WithGitHubVars(t *testing.T) {
 }
 
 func TestRunEnvVarChecks_WithGCPVars(t *testing.T) {
-	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/key.json")
+	// Create a valid service account file so the check passes.
+	saFile := filepath.Join(t.TempDir(), "sa.json")
+	require.NoError(t, os.WriteFile(saFile, []byte(`{"type":"service_account"}`), 0o600))
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", saFile)
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "my-project")
 
 	checks := RunEnvVarChecks()
@@ -69,6 +75,89 @@ func TestRunEnvVarChecks_WithGCPVars(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "should have an OK check for GCP vars")
+}
+
+func TestRunEnvVarChecks_WithGCPExternalAccount(t *testing.T) {
+	extFile := filepath.Join(t.TempDir(), "ext.json")
+	require.NoError(t, os.WriteFile(extFile, []byte(`{"type":"external_account"}`), 0o600))
+	t.Setenv("GOOGLE_EXTERNAL_ACCOUNT", extFile)
+
+	checks := RunEnvVarChecks()
+
+	found := false
+	for _, c := range checks {
+		if c.Name == "env gcp: workload-identity credentials" && c.Status == StatusOK {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "should have an OK workload-identity check for valid external account file")
+}
+
+func TestValidateGCPCredentialsFile_Valid(t *testing.T) {
+	saFile := filepath.Join(t.TempDir(), "sa.json")
+	require.NoError(t, os.WriteFile(saFile, []byte(`{"type":"service_account"}`), 0o600))
+
+	check := validateGCPCredentialsFile(saFile)
+	assert.Equal(t, StatusOK, check.Status)
+	assert.Contains(t, check.Message, "valid service account key")
+}
+
+func TestValidateGCPCredentialsFile_MissingFile(t *testing.T) {
+	check := validateGCPCredentialsFile("/nonexistent/path/sa.json")
+	assert.Equal(t, StatusWarn, check.Status)
+	assert.Contains(t, check.Message, "not readable")
+}
+
+func TestValidateGCPCredentialsFile_InvalidJSON(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "bad.json")
+	require.NoError(t, os.WriteFile(f, []byte("not json"), 0o600))
+
+	check := validateGCPCredentialsFile(f)
+	assert.Equal(t, StatusWarn, check.Status)
+	assert.Contains(t, check.Message, "not valid JSON")
+}
+
+func TestValidateGCPCredentialsFile_WrongType(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "wrong.json")
+	require.NoError(t, os.WriteFile(f, []byte(`{"type":"authorized_user"}`), 0o600))
+
+	check := validateGCPCredentialsFile(f)
+	assert.Equal(t, StatusWarn, check.Status)
+	assert.Contains(t, check.Message, `"authorized_user"`)
+}
+
+func TestValidateGCPExternalAccountFile_Valid(t *testing.T) {
+	extFile := filepath.Join(t.TempDir(), "ext.json")
+	require.NoError(t, os.WriteFile(extFile, []byte(`{"type":"external_account"}`), 0o600))
+
+	check := validateGCPExternalAccountFile(extFile)
+	assert.Equal(t, StatusOK, check.Status)
+	assert.Contains(t, check.Message, "workload identity environment detected")
+}
+
+func TestValidateGCPExternalAccountFile_MissingFile(t *testing.T) {
+	check := validateGCPExternalAccountFile("/nonexistent/path/ext.json")
+	assert.Equal(t, StatusWarn, check.Status)
+	assert.Contains(t, check.Message, "not readable")
+}
+
+func TestValidateGCPExternalAccountFile_InvalidJSON(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "bad.json")
+	require.NoError(t, os.WriteFile(f, []byte("not json"), 0o600))
+
+	check := validateGCPExternalAccountFile(f)
+	assert.Equal(t, StatusWarn, check.Status)
+	assert.Contains(t, check.Message, "not valid JSON")
+}
+
+func TestValidateGCPExternalAccountFile_WrongType(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "wrong.json")
+	require.NoError(t, os.WriteFile(f, []byte(`{"type":"service_account"}`), 0o600))
+
+	check := validateGCPExternalAccountFile(f)
+	assert.Equal(t, StatusWarn, check.Status)
+	assert.Contains(t, check.Message, `"service_account"`)
 }
 
 func TestCheckStatus_Values(t *testing.T) {
