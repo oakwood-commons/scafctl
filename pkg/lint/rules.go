@@ -349,6 +349,14 @@ var KnownRules = map[string]RuleMeta{
 			"# Line suppression:\n# scafctl-lint-ignore: exec-command-injection\n\n# Block suppression:\n# scafctl-lint-disable: exec-command-injection\n...\n# scafctl-lint-enable: exec-command-injection\n\n# File-level suppression:\n# scafctl-lint-disable-file: exec-command-injection",
 		},
 	},
+	"explicit-on-finally": {
+		Rule:        "explicit-on-finally",
+		Severity:    string(SeverityWarning),
+		Category:    "workflow",
+		Description: "A finally action has explicit: true, which has no effect because finally actions always run.",
+		Why:         "Finally actions execute unconditionally after all regular actions complete. Setting explicit: true is misleading because the action cannot be excluded from execution.",
+		Fix:         "Remove explicit: true from the finally action, or move the action to workflow.actions if it should be opt-in.",
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

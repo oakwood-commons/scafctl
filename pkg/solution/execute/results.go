@@ -54,12 +54,60 @@ func ResolverProviderName(r *resolver.Resolver) string {
 }
 
 // FilterResolversWithDependencies returns the specified resolvers and all their dependencies.
-// When targetNames is empty, all resolvers are returned.
+// When targetNames is empty, explicit resolvers are excluded unless they are
+// transitively required by a non-explicit resolver.
 // Uses resolver.ExtractDependencies to detect dependencies from CEL expressions,
 // Go templates, explicit rslvr: references, and provider-specific extraction.
 func FilterResolversWithDependencies(resolvers []*resolver.Resolver, targetNames []string, lookup resolver.DescriptorLookup) []*resolver.Resolver {
 	if len(targetNames) == 0 {
-		return resolvers
+		// Exclude explicit resolvers from bare invocations, but preserve
+		// dependency closure: start from all non-explicit resolvers, then
+		// collect their transitive deps (which may include explicit ones).
+		hasExplicit := false
+		for _, r := range resolvers {
+			if r.Explicit {
+				hasExplicit = true
+				break
+			}
+		}
+		if !hasExplicit {
+			return resolvers
+		}
+
+		resolverMap := make(map[string]*resolver.Resolver, len(resolvers))
+		for _, r := range resolvers {
+			resolverMap[r.Name] = r
+		}
+
+		needed := make(map[string]bool)
+		var collectDeps func(name string)
+		collectDeps = func(name string) {
+			if needed[name] {
+				return
+			}
+			r, exists := resolverMap[name]
+			if !exists {
+				return
+			}
+			needed[name] = true
+			deps := resolver.ExtractDependencies(r, lookup)
+			for _, dep := range deps {
+				collectDeps(dep)
+			}
+		}
+		for _, r := range resolvers {
+			if !r.Explicit {
+				collectDeps(r.Name)
+			}
+		}
+
+		var result []*resolver.Resolver
+		for _, r := range resolvers {
+			if needed[r.Name] {
+				result = append(result, r)
+			}
+		}
+		return result
 	}
 
 	// Build a map of resolvers by name

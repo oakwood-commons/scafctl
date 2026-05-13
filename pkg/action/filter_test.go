@@ -136,3 +136,102 @@ func TestFilterWorkflowActions_MissingDependency(t *testing.T) {
 	assert.NotNil(t, result.Actions["build"])
 	assert.Nil(t, result.Actions["missing"], "missing dep should not appear in filtered actions")
 }
+
+func TestFilterWorkflowActions_ExplicitExcluded(t *testing.T) {
+	t.Parallel()
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"build": {Name: "build"},
+			"test":  {Name: "test", DependsOn: []string{"build"}},
+			"info":  {Name: "info", Explicit: true},
+		},
+		Finally: map[string]*Action{
+			"cleanup": {Name: "cleanup"},
+		},
+	}
+
+	// Bare invocation excludes explicit
+	result, err := FilterWorkflowActions(w, nil)
+	require.NoError(t, err)
+	assert.Len(t, result.Actions, 2)
+	assert.NotNil(t, result.Actions["build"])
+	assert.NotNil(t, result.Actions["test"])
+	assert.Nil(t, result.Actions["info"])
+	assert.Len(t, result.Finally, 1)
+
+	// Explicit naming includes explicit
+	result, err = FilterWorkflowActions(w, []string{"info"})
+	require.NoError(t, err)
+	assert.Len(t, result.Actions, 1)
+	assert.NotNil(t, result.Actions["info"])
+}
+
+func TestFilterWorkflowActions_ExplicitAsDepIncluded(t *testing.T) {
+	t.Parallel()
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"setup":  {Name: "setup", Explicit: true},
+			"deploy": {Name: "deploy", DependsOn: []string{"setup"}},
+		},
+	}
+
+	// Naming "deploy" pulls in explicit "setup" via deps
+	result, err := FilterWorkflowActions(w, []string{"deploy"})
+	require.NoError(t, err)
+	assert.Len(t, result.Actions, 2)
+	assert.NotNil(t, result.Actions["setup"])
+	assert.NotNil(t, result.Actions["deploy"])
+}
+
+func TestFilterWorkflowActions_AllExplicit(t *testing.T) {
+	t.Parallel()
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"info":  {Name: "info", Explicit: true},
+			"debug": {Name: "debug", Explicit: true},
+		},
+	}
+
+	// Bare invocation with all explicit results in empty actions
+	result, err := FilterWorkflowActions(w, nil)
+	require.NoError(t, err)
+	assert.Len(t, result.Actions, 0)
+}
+
+func TestFilterWorkflowActions_ExplicitDepPreserved(t *testing.T) {
+	t.Parallel()
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"setup":  {Name: "setup", Explicit: true},
+			"deploy": {Name: "deploy", DependsOn: []string{"setup"}},
+		},
+	}
+
+	// Bare invocation: "deploy" is non-explicit and depends on "setup" (explicit).
+	// The dependency closure must pull "setup" in so the graph is valid.
+	result, err := FilterWorkflowActions(w, nil)
+	require.NoError(t, err)
+	assert.Len(t, result.Actions, 2)
+	assert.NotNil(t, result.Actions["setup"], "explicit dep should be preserved")
+	assert.NotNil(t, result.Actions["deploy"])
+}
+
+func TestFilterWorkflowActions_NoExplicitUnchanged(t *testing.T) {
+	t.Parallel()
+
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"build": {Name: "build"},
+			"test":  {Name: "test"},
+		},
+	}
+
+	// No explicit actions — returns original workflow
+	result, err := FilterWorkflowActions(w, nil)
+	require.NoError(t, err)
+	assert.Equal(t, w, result, "should return original workflow when no explicit actions exist")
+}
