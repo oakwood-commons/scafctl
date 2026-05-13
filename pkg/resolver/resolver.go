@@ -155,6 +155,7 @@ type Resolver struct {
 	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Display name for UI" maxLength:"80" example:"Environment"`
 	Sensitive   bool   `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"Whether value should be redacted in table output and logs (JSON/YAML output reveals values for machine consumption)" example:"false"`
 	Internal    bool   `json:"internal,omitempty" yaml:"internal,omitempty" doc:"Whether this resolver is internal (excluded from default output, included in structured output)"`
+	Explicit    bool   `json:"explicit,omitempty" yaml:"explicit,omitempty" doc:"If true, resolver only runs when explicitly named on the CLI"`
 	Example     any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value for documentation"`
 
 	// Type declaration

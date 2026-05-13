@@ -314,13 +314,15 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 
 	// Apply action filter
 	workflow := sol.Spec.Workflow
-	if len(o.Names) > 0 {
+	{
 		filtered, filterErr := action.FilterWorkflowActions(workflow, o.Names)
 		if filterErr != nil {
 			return o.exitWithCode(ctx, filterErr, exitcode.InvalidInput)
 		}
 		workflow = filtered
-		lgr.V(1).Info("action filter applied", "targets", o.Names, "remaining", len(workflow.Actions))
+		if len(o.Names) > 0 {
+			lgr.V(1).Info("action filter applied", "targets", o.Names, "remaining", len(workflow.Actions))
+		}
 	}
 
 	// Parse resolver parameters

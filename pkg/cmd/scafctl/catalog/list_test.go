@@ -227,7 +227,7 @@ func TestArtifactListSchema_RequiredFields(t *testing.T) {
 	assert.NotContains(t, requiredNames, "digest")
 }
 
-func TestArtifactListSchema_DigestVisible(t *testing.T) {
+func TestArtifactListSchema_DigestHiddenInTable(t *testing.T) {
 	t.Parallel()
 
 	var schema map[string]any
@@ -238,10 +238,10 @@ func TestArtifactListSchema_DigestVisible(t *testing.T) {
 	props := items["properties"].(map[string]any)
 	digest := props["digest"].(map[string]any)
 
-	// Digest should be visible (no deprecated flag)
-	_, hasDeprecated := digest["deprecated"]
-	assert.False(t, hasDeprecated, "digest column should not be deprecated (must be visible)")
-	assert.Equal(t, "Digest", digest["title"])
+	// Digest should be hidden from table view (deprecated flag set)
+	deprecated, ok := digest["deprecated"]
+	assert.True(t, ok, "digest column should have deprecated flag")
+	assert.Equal(t, true, deprecated, "digest column should be deprecated (hidden from table view)")
 }
 
 func TestArtifactListSchema_HiddenFields(t *testing.T) {
@@ -254,8 +254,8 @@ func TestArtifactListSchema_HiddenFields(t *testing.T) {
 	items := schema["items"].(map[string]any)
 	props := items["properties"].(map[string]any)
 
-	// version and createdAt should be hidden
-	for _, field := range []string{"version", "createdAt"} {
+	// version, createdAt, and digest should be hidden
+	for _, field := range []string{"version", "createdAt", "digest"} {
 		fieldMap := props[field].(map[string]any)
 		deprecated, ok := fieldMap["deprecated"]
 		assert.True(t, ok, "field %q should have deprecated", field)

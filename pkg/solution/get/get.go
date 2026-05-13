@@ -5,6 +5,7 @@ package get
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,10 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// ErrNoSolutionFound is returned when no solution path was provided and
+// auto-discovery did not find a solution file in any default location.
+var ErrNoSolutionFound = errors.New("no solution path provided and no solution file found in default locations")
 
 // CatalogResolver is an interface for fetching solutions from a catalog.
 // This avoids a circular dependency with the catalog package.
@@ -278,7 +283,7 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 	}()
 
 	if path == "" {
-		return nil, fmt.Errorf("no solution path provided and no solution file found in default locations")
+		return nil, ErrNoSolutionFound
 	}
 
 	// Check if this is a bare name that should be resolved from catalog.
@@ -340,7 +345,7 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 	}()
 
 	if path == "" {
-		return nil, nil, fmt.Errorf("no solution path provided and no solution file found in default locations")
+		return nil, nil, ErrNoSolutionFound
 	}
 
 	// Check if this is a bare name that should be resolved from catalog

@@ -2275,3 +2275,40 @@ func TestParseResolverArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestResolverOptions_Run_CatalogFallback(t *testing.T) {
+	t.Parallel()
+
+	// When File is empty and the first positional arg is a catalog-style name,
+	// Run() should retry using that arg as the solution source after
+	// auto-discovery fails. The retry will also fail (no catalog configured),
+	// but we verify the fallback path is taken by checking that File is set
+	// and the arg is removed from Names.
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "",
+		},
+		Names: []string{"my-solution"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	// Run will fail because no catalog is configured, but the fallback
+	// should move Names[0] to File.
+	err := opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Equal(t, "my-solution", opts.File, "fallback should set File to the first positional arg")
+	assert.Empty(t, opts.Names, "fallback should remove the arg from Names")
+}

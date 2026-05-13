@@ -10,14 +10,63 @@ import (
 
 // FilterWorkflowActions returns a new Workflow containing only the specified
 // actions and their transitive dependsOn dependencies. Finally actions are
-// always included regardless of the filter. When targetNames is empty the
-// original workflow is returned unchanged.
+// always included regardless of the filter. When targetNames is empty,
+// explicit actions (and their exclusive dependents) are excluded; any
+// non-explicit action whose transitive deps include an explicit action will
+// still pull that explicit action into the result.
 //
 // An error is returned if any target name does not match an action in the
 // workflow's actions section.
 func FilterWorkflowActions(w *Workflow, targetNames []string) (*Workflow, error) {
-	if len(targetNames) == 0 || w == nil {
+	if w == nil {
 		return w, nil
+	}
+
+	if len(targetNames) == 0 {
+		// Exclude explicit actions from bare invocations, but preserve
+		// dependency closure: start from all non-explicit actions, then
+		// collect their transitive deps (which may include explicit ones).
+		hasExplicit := false
+		for _, act := range w.Actions {
+			if act.Explicit {
+				hasExplicit = true
+				break
+			}
+		}
+		if !hasExplicit {
+			return w, nil
+		}
+
+		needed := make(map[string]bool)
+		var collectDeps func(name string)
+		collectDeps = func(name string) {
+			if needed[name] {
+				return
+			}
+			a, exists := w.Actions[name]
+			if !exists || a == nil {
+				return
+			}
+			needed[name] = true
+			for _, dep := range a.DependsOn {
+				collectDeps(dep)
+			}
+		}
+		for name, act := range w.Actions {
+			if !act.Explicit {
+				collectDeps(name)
+			}
+		}
+
+		filtered := &Workflow{
+			Actions:          make(map[string]*Action, len(needed)),
+			Finally:          w.Finally,
+			ResultSchemaMode: w.ResultSchemaMode,
+		}
+		for name := range needed {
+			filtered.Actions[name] = w.Actions[name]
+		}
+		return filtered, nil
 	}
 
 	// Build alias → name map for resolving alias references

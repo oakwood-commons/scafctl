@@ -59,13 +59,12 @@ var listColumnHints = map[string]tui.ColumnHint{
 	"kind":        {MaxWidth: 12, Priority: 10},
 	"displayName": {MaxWidth: 25, Priority: 6, DisplayName: "display name"},
 	"category":    {MaxWidth: 15, Priority: 4},
-	"digest":      {MaxWidth: 40, Priority: 2},
 	"catalog":     {MaxWidth: 25, Priority: 8},
 }
 
 // artifactListSchema controls table column display. Columns in the "required" array
-// (name, tag, kind, catalog) resist truncation; digest is visible but lower priority.
-// version and createdAt are hidden in table view but included in json/yaml output.
+// (name, tag, kind, catalog) resist truncation.
+// version, createdAt, and digest are hidden in table view but included in json/yaml output.
 var artifactListSchema = []byte(`{
 	"type": "array",
 	"items": {
@@ -79,7 +78,7 @@ var artifactListSchema = []byte(`{
 			"category":    { "type": "string", "title": "Category" },
 			"catalog":     { "type": "string", "title": "Catalog" },
 			"version":     { "type": "string", "deprecated": true },
-			"digest":      { "type": "string", "title": "Digest" },
+			"digest":      { "type": "string", "deprecated": true },
 			"createdAt":   { "type": "string", "deprecated": true }
 		}
 	}
