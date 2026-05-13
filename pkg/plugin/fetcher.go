@@ -195,6 +195,7 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 // doFetchOne performs the actual resolution and fetch logic for a single plugin.
 func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency, lockPlugins []bundler.LockPlugin) (FetchResult, error) {
 	kind := pluginKindToArtifactKind(dep.Kind)
+	cacheKey := PluginCacheKey(dep.Name, dep.Kind)
 
 	// Check lock file for a pinned version
 	locked := findLockPlugin(lockPlugins, dep.Name, string(dep.Kind))
@@ -220,7 +221,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		// No lock file — prefer cached version to avoid network latency.
 		// Only resolve from catalog if no cached version exists.
 		if !f.noCache {
-			if cachedPath, cachedVer, ok := f.cache.GetLatestCached(dep.Name, f.platform); ok {
+			if cachedPath, cachedVer, ok := f.cache.GetLatestCached(cacheKey, f.platform); ok {
 				// If a version constraint is specified, verify the cached version satisfies it.
 				useCached := true
 				if dep.Version != "" && !strings.EqualFold(dep.Version, "latest") {
@@ -260,7 +261,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		if err != nil {
 			// Fallback: if catalog resolution fails, check if a cached version exists.
 			if !f.noCache {
-				if cachedPath, cachedVer, ok := f.cache.GetLatestCached(dep.Name, f.platform); ok {
+				if cachedPath, cachedVer, ok := f.cache.GetLatestCached(cacheKey, f.platform); ok {
 					// Security: reject cached plugins when an allowlist is configured
 					// but cache lacks catalog origin metadata.
 					if allowErr := f.checkCatalogAllowed(""); allowErr != nil {
@@ -315,7 +316,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 	// allowed because verification is advisory.
 	skipCache := f.noCache || (f.sigPolicy != nil && f.sigPolicy.Mode == SignatureModeEnforce)
 	if !skipCache {
-		if cachedPath, ok := f.cache.Get(dep.Name, version, f.platform, expectedDigest); ok {
+		if cachedPath, ok := f.cache.Get(cacheKey, version, f.platform, expectedDigest); ok {
 			f.logger.V(1).Info("plugin found in cache",
 				"name", dep.Name,
 				"version", version,
@@ -380,7 +381,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 	}
 
 	// Write to cache
-	cachedPath, err := f.cache.Put(dep.Name, version, f.platform, data)
+	cachedPath, err := f.cache.Put(cacheKey, version, f.platform, data)
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("caching binary: %w", err)
 	}
@@ -388,7 +389,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 	digest := fetchInfo.Digest
 	if digest == "" {
 		// Compute digest from the downloaded data
-		d, err := f.cache.Digest(dep.Name, version, f.platform)
+		d, err := f.cache.Digest(cacheKey, version, f.platform)
 		if err == nil {
 			digest = d
 		}
@@ -566,6 +567,18 @@ func pluginKindToArtifactKind(kind solution.PluginKind) catalog.ArtifactKind {
 	default:
 		return catalog.ArtifactKind(string(kind))
 	}
+}
+
+// PluginCacheKey returns a cache-safe key for a plugin that avoids namespace
+// collisions between different plugin kinds. Provider plugins use the bare
+// name (e.g. "github") for backward compatibility with existing caches.
+// Auth-handler plugins are prefixed (e.g. "auth-handler-github") so a provider
+// named "github" and an auth-handler named "github" occupy separate cache slots.
+func PluginCacheKey(name string, kind solution.PluginKind) string {
+	if kind == solution.PluginKindAuthHandler {
+		return "auth-handler-" + name
+	}
+	return name
 }
 
 // findLockPlugin looks up a lock plugin entry by name and kind.

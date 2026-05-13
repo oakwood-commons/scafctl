@@ -11,9 +11,6 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/auth/entra"
-	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
-	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -448,81 +445,8 @@ func Root(opts *RootOptions) *cobra.Command {
 				lgr.V(1).Info("shared secrets store unavailable; auth handlers will create their own", "error", secretErr)
 			}
 
-			// Initialize auth registry with Entra handler
+			// Initialize auth registry
 			authRegistry := auth.NewRegistry()
-			var entraOpts []entra.Option
-			if cfg.Auth.Entra != nil {
-				entraOpts = append(entraOpts, entra.WithConfig(&entra.Config{
-					ClientID:      cfg.Auth.Entra.ClientID,
-					TenantID:      cfg.Auth.Entra.TenantID,
-					DefaultScopes: cfg.Auth.Entra.DefaultScopes,
-					DefaultFlow:   cfg.Auth.Entra.DefaultFlow,
-				}))
-			}
-			entraOpts = append(entraOpts, entra.WithLogger(*lgr))
-			if secretErr == nil {
-				entraOpts = append(entraOpts, entra.WithSecretStore(sharedSecretStore))
-			}
-			entraHandler, err := entra.New(entraOpts...)
-			if err != nil {
-				lgr.V(1).Info("warning: failed to initialize Entra auth handler", "error", err)
-			} else {
-				if regErr := authRegistry.Register(entraHandler); regErr != nil {
-					lgr.V(1).Info("warning: failed to register Entra auth handler", "error", regErr)
-				}
-			}
-
-			// Initialize GitHub auth handler
-			var ghOpts []ghauth.Option
-			if cfg.Auth.GitHub != nil {
-				ghOpts = append(ghOpts, ghauth.WithConfig(&ghauth.Config{
-					ClientID:             cfg.Auth.GitHub.ClientID,
-					ClientSecret:         cfg.Auth.GitHub.ClientSecret,
-					Hostname:             cfg.Auth.GitHub.Hostname,
-					DefaultScopes:        cfg.Auth.GitHub.DefaultScopes,
-					AppID:                cfg.Auth.GitHub.AppID,
-					InstallationID:       cfg.Auth.GitHub.InstallationID,
-					PrivateKey:           cfg.Auth.GitHub.PrivateKey,
-					PrivateKeyPath:       cfg.Auth.GitHub.PrivateKeyPath,
-					PrivateKeySecretName: cfg.Auth.GitHub.PrivateKeySecretName,
-				}))
-			}
-			ghOpts = append(ghOpts, ghauth.WithLogger(*lgr))
-			if secretErr == nil {
-				ghOpts = append(ghOpts, ghauth.WithSecretStore(sharedSecretStore))
-			}
-			ghHandler, err := ghauth.New(ghOpts...)
-			if err != nil {
-				lgr.V(1).Info("warning: failed to initialize GitHub auth handler", "error", err)
-			} else {
-				if regErr := authRegistry.Register(ghHandler); regErr != nil {
-					lgr.V(1).Info("warning: failed to register GitHub auth handler", "error", regErr)
-				}
-			}
-
-			// Initialize GCP auth handler
-			var gcpOpts []gcpauth.Option
-			if cfg.Auth.GCP != nil {
-				gcpOpts = append(gcpOpts, gcpauth.WithConfig(&gcpauth.Config{
-					ClientID:                  cfg.Auth.GCP.ClientID,
-					ClientSecret:              cfg.Auth.GCP.ClientSecret,
-					DefaultScopes:             cfg.Auth.GCP.DefaultScopes,
-					ImpersonateServiceAccount: cfg.Auth.GCP.ImpersonateServiceAccount,
-					Project:                   cfg.Auth.GCP.Project,
-				}))
-			}
-			gcpOpts = append(gcpOpts, gcpauth.WithLogger(*lgr))
-			if secretErr == nil {
-				gcpOpts = append(gcpOpts, gcpauth.WithSecretStore(sharedSecretStore))
-			}
-			gcpHandler, err := gcpauth.New(gcpOpts...)
-			if err != nil {
-				lgr.V(1).Info("warning: failed to initialize GCP auth handler", "error", err)
-			} else {
-				if regErr := authRegistry.Register(gcpHandler); regErr != nil {
-					lgr.V(1).Info("warning: failed to register GCP auth handler", "error", regErr)
-				}
-			}
 
 			// Register custom OAuth2 handlers from config
 			for _, customCfg := range cfg.Auth.CustomOAuth2 {
@@ -598,8 +522,10 @@ func Root(opts *RootOptions) *cobra.Command {
 			// The prepare pipeline handles solution-level auto-resolution, but
 			// direct CLI commands (auth login, auth status, auth token) bypass
 			// the prepare pipeline. This fetches any missing official auth
-			// handlers so they are available for all CLI commands.
-			if !cfg.Settings.DisableOfficialAuthHandlers {
+			// handlers so they are available for auth/serve/mcp commands.
+			// Skipped for unrelated commands (version, cache, plugins, etc.)
+			// to avoid unnecessary network round-trips to the plugin catalog.
+			if !cfg.Settings.DisableOfficialAuthHandlers && commandNeedsAuthHandlers(cCmd) {
 				var cooldownDuration time.Duration
 				if cfg.Plugins.FetchCooldown != "" {
 					if d, parseErr := time.ParseDuration(cfg.Plugins.FetchCooldown); parseErr == nil {
@@ -784,4 +710,18 @@ func Root(opts *RootOptions) *cobra.Command {
 func withGroup(group string, cmd *cobra.Command) *cobra.Command {
 	cmd.GroupID = group
 	return cmd
+}
+
+// commandNeedsAuthHandlers reports whether the invoked command requires auth
+// handler plugins to be available. Commands that directly use the auth
+// registry need auto-resolution. Solution-running commands (run, render)
+// handle resolution through the prepare pipeline and are excluded.
+func commandNeedsAuthHandlers(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "auth", "serve", "mcp", "catalog", "authhandler":
+			return true
+		}
+	}
+	return false
 }

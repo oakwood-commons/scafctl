@@ -736,3 +736,34 @@ func TestRegisterCachedPlugin_NotCached(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found in cache")
 	assert.Nil(t, clients)
 }
+
+func TestPluginCacheKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		kind solution.PluginKind
+		want string
+	}{
+		{"github", solution.PluginKindProvider, "github"},
+		{"exec", solution.PluginKindProvider, "exec"},
+		{"github", solution.PluginKindAuthHandler, "auth-handler-github"},
+		{"entra", solution.PluginKindAuthHandler, "auth-handler-entra"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, PluginCacheKey(tc.name, tc.kind))
+		})
+	}
+}
+
+func TestPluginCacheKey_NamespaceIsolation(t *testing.T) {
+	t.Parallel()
+
+	// A provider and auth-handler with the same name must produce different cache keys.
+	providerKey := PluginCacheKey("github", solution.PluginKindProvider)
+	authKey := PluginCacheKey("github", solution.PluginKindAuthHandler)
+	assert.NotEqual(t, providerKey, authKey)
+}

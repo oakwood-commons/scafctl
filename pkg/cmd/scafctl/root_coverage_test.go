@@ -570,3 +570,73 @@ func TestRoot_PluginSignaturePolicy_NilByDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, captured, "SignaturePolicy should be nil when not configured")
 }
+
+// TestRoot_NoBuiltInHandlerWarnings verifies that no deprecation warnings
+// appear after built-in auth handlers have been removed (Stage B).
+func TestRoot_NoBuiltInHandlerWarnings(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, errOut := terminal.NewTestIOStreams()
+	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd.SetArgs([]string{"version"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), "Auth handler", "no deprecation warnings should appear on stdout after handler extraction")
+	assert.NotContains(t, errOut.String(), "Auth handler", "no deprecation warnings should appear on stderr after handler extraction")
+}
+
+func TestCommandNeedsAuthHandlers(t *testing.T) {
+	t.Parallel()
+
+	root := &cobra.Command{Use: "scafctl"}
+	authCmd := &cobra.Command{Use: "auth"}
+	loginCmd := &cobra.Command{Use: "login"}
+	authCmd.AddCommand(loginCmd)
+	serveCmd := &cobra.Command{Use: "serve"}
+	mcpCmd := &cobra.Command{Use: "mcp"}
+	mcpServeCmd := &cobra.Command{Use: "serve"}
+	mcpCmd.AddCommand(mcpServeCmd)
+	catalogCmd := &cobra.Command{Use: "catalog"}
+	catalogLoginCmd := &cobra.Command{Use: "login"}
+	catalogCmd.AddCommand(catalogLoginCmd)
+	getCmd := &cobra.Command{Use: "get"}
+	authhandlerCmd := &cobra.Command{Use: "authhandler"}
+	getCmd.AddCommand(authhandlerCmd)
+	cacheCmd := &cobra.Command{Use: "cache"}
+	clearCmd := &cobra.Command{Use: "clear"}
+	cacheCmd.AddCommand(clearCmd)
+	versionCmd := &cobra.Command{Use: "version"}
+	pluginsCmd := &cobra.Command{Use: "plugins"}
+	listCmd := &cobra.Command{Use: "list"}
+	pluginsCmd.AddCommand(listCmd)
+	root.AddCommand(authCmd, serveCmd, mcpCmd, catalogCmd, getCmd, cacheCmd, versionCmd, pluginsCmd)
+
+	tests := []struct {
+		name string
+		cmd  *cobra.Command
+		want bool
+	}{
+		{"auth login", loginCmd, true},
+		{"auth", authCmd, true},
+		{"serve", serveCmd, true},
+		{"mcp serve", mcpServeCmd, true},
+		{"mcp", mcpCmd, true},
+		{"catalog", catalogCmd, true},
+		{"catalog login", catalogLoginCmd, true},
+		{"get authhandler", authhandlerCmd, true},
+		{"get", getCmd, false},
+		{"cache clear", clearCmd, false},
+		{"version", versionCmd, false},
+		{"plugins list", listCmd, false},
+		{"root", root, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, commandNeedsAuthHandlers(tc.cmd))
+		})
+	}
+}

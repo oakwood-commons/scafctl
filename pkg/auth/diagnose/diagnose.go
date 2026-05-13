@@ -7,14 +7,11 @@
 package diagnose
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
-
-	entraauth "github.com/oakwood-commons/scafctl/pkg/auth/entra"
-	gcpauth "github.com/oakwood-commons/scafctl/pkg/auth/gcp"
-	ghauth "github.com/oakwood-commons/scafctl/pkg/auth/github"
 )
 
 // CheckStatus represents the result of a single diagnostic check.
@@ -59,7 +56,7 @@ func RunEnvVarChecks() []Check {
 			})
 		}
 	}
-	if entraauth.HasServicePrincipalCredentials() {
+	if os.Getenv("AZURE_CLIENT_ID") != "" && os.Getenv("AZURE_TENANT_ID") != "" && os.Getenv("AZURE_CLIENT_SECRET") != "" {
 		checks = append(checks, Check{
 			Category: "env",
 			Name:     "env entra: service-principal credentials",
@@ -67,7 +64,7 @@ func RunEnvVarChecks() []Check {
 			Message:  "AZURE_CLIENT_ID + AZURE_TENANT_ID + AZURE_CLIENT_SECRET are all set",
 		})
 	}
-	if entraauth.HasWorkloadIdentityCredentials() {
+	if os.Getenv("AZURE_CLIENT_ID") != "" && os.Getenv("AZURE_TENANT_ID") != "" && (os.Getenv("AZURE_FEDERATED_TOKEN_FILE") != "" || os.Getenv("AZURE_FEDERATED_TOKEN") != "") {
 		checks = append(checks, Check{
 			Category: "env",
 			Name:     "env entra: workload-identity credentials",
@@ -90,7 +87,7 @@ func RunEnvVarChecks() []Check {
 			})
 		}
 	}
-	if ghauth.HasPATCredentials() {
+	if os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("GH_TOKEN") != "" {
 		checks = append(checks, Check{
 			Category: "env",
 			Name:     "env github: PAT credentials",
@@ -114,29 +111,11 @@ func RunEnvVarChecks() []Check {
 			})
 		}
 	}
-	if gcpauth.HasServiceAccountCredentials() {
-		checks = append(checks, Check{
-			Category: "env",
-			Name:     "env gcp: service-account credentials",
-			Status:   StatusOK,
-			Message:  "GOOGLE_APPLICATION_CREDENTIALS is set and points to a service account key",
-		})
+	if credPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"); credPath != "" {
+		checks = append(checks, validateGCPCredentialsFile(credPath))
 	}
-	if gcpauth.HasWorkloadIdentityCredentials() {
-		checks = append(checks, Check{
-			Category: "env",
-			Name:     "env gcp: workload-identity credentials",
-			Status:   StatusOK,
-			Message:  "GCP workload identity environment detected",
-		})
-	}
-	if gcpauth.HasGcloudADCCredentials() {
-		checks = append(checks, Check{
-			Category: "env",
-			Name:     "env gcp: gcloud ADC",
-			Status:   StatusOK,
-			Message:  "gcloud Application Default Credentials file found",
-		})
+	if extPath := os.Getenv("GOOGLE_EXTERNAL_ACCOUNT"); extPath != "" {
+		checks = append(checks, validateGCPExternalAccountFile(extPath))
 	}
 
 	if len(checks) == 0 {
@@ -149,6 +128,96 @@ func RunEnvVarChecks() []Check {
 	}
 
 	return checks
+}
+
+// validateGCPExternalAccountFile checks whether the file pointed to by
+// GOOGLE_EXTERNAL_ACCOUNT exists, is readable, and contains an
+// external_account JSON type. Returns a diagnostic Check with the result.
+func validateGCPExternalAccountFile(extPath string) Check {
+	const checkName = "env gcp: workload-identity credentials"
+
+	data, err := os.ReadFile(extPath) //nolint:gosec // path comes from the user's own env var
+	if err != nil {
+		return Check{
+			Category: "env",
+			Name:     checkName,
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("GOOGLE_EXTERNAL_ACCOUNT is set but file is not readable: %v", err),
+		}
+	}
+
+	var creds struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return Check{
+			Category: "env",
+			Name:     checkName,
+			Status:   StatusWarn,
+			Message:  "GOOGLE_EXTERNAL_ACCOUNT is set but file is not valid JSON",
+		}
+	}
+
+	if creds.Type != "external_account" {
+		return Check{
+			Category: "env",
+			Name:     checkName,
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("GOOGLE_EXTERNAL_ACCOUNT is set but JSON type is %q, not \"external_account\"", creds.Type),
+		}
+	}
+
+	return Check{
+		Category: "env",
+		Name:     checkName,
+		Status:   StatusOK,
+		Message:  "GCP workload identity environment detected",
+	}
+}
+
+// validateGCPCredentialsFile checks whether the file pointed to by
+// GOOGLE_APPLICATION_CREDENTIALS exists, is readable, and contains a
+// service_account JSON type. Returns a diagnostic Check with the result.
+func validateGCPCredentialsFile(credPath string) Check {
+	const checkName = "env gcp: service-account credentials"
+
+	data, err := os.ReadFile(credPath) //nolint:gosec // path comes from the user's own env var
+	if err != nil {
+		return Check{
+			Category: "env",
+			Name:     checkName,
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("GOOGLE_APPLICATION_CREDENTIALS is set but file is not readable: %v", err),
+		}
+	}
+
+	var creds struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return Check{
+			Category: "env",
+			Name:     checkName,
+			Status:   StatusWarn,
+			Message:  "GOOGLE_APPLICATION_CREDENTIALS is set but file is not valid JSON",
+		}
+	}
+
+	if creds.Type != "service_account" {
+		return Check{
+			Category: "env",
+			Name:     checkName,
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("GOOGLE_APPLICATION_CREDENTIALS is set but JSON type is %q, not \"service_account\"", creds.Type),
+		}
+	}
+
+	return Check{
+		Category: "env",
+		Name:     checkName,
+		Status:   StatusOK,
+		Message:  "GOOGLE_APPLICATION_CREDENTIALS is set and contains a valid service account key",
+	}
 }
 
 // RunClockSkewCheck compares the local system clock against the Date header

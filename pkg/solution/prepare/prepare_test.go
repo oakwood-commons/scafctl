@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/adrg/xdg"
 	"github.com/go-logr/logr"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -1355,7 +1356,7 @@ func TestWithClientOptions(t *testing.T) {
 // ── ResolveOfficialAuthHandlers deeper paths ─────────────────────────────────
 
 func TestResolveOfficialAuthHandlers_NilCooldown(t *testing.T) {
-	t.Parallel()
+	// Not parallel: t.Setenv modifies process environment.
 
 	// With nil cooldown, all missing handlers are considered (no cooldown filtering).
 	authReg := auth.NewRegistry()
@@ -1365,14 +1366,22 @@ func TestResolveOfficialAuthHandlers_NilCooldown(t *testing.T) {
 	ctx := logger.WithLogger(context.Background(), &lgr)
 	ctx = authofficial.WithRegistry(ctx, officialReg)
 
-	// Without a catalog, BuildPluginFetcher will fail and return nil gracefully.
+	// Register xdg.Reload cleanup BEFORE t.Setenv so LIFO ordering
+	// restores the env var first, then reloads xdg.
+	// Use a regular file as XDG_DATA_HOME so MkdirAll fails (cross-platform).
+	invalidBase := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(invalidBase, []byte{}, 0o600))
+	t.Cleanup(func() { xdg.Reload() })
+	t.Setenv("XDG_DATA_HOME", invalidBase)
+	xdg.Reload() // pick up the new XDG_DATA_HOME value
+
 	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, clients)
 }
 
 func TestResolveOfficialAuthHandlers_FetcherUnavailable(t *testing.T) {
-	t.Parallel()
+	// Not parallel: t.Setenv modifies process environment.
 
 	// When BuildPluginFetcher fails (no catalog chain), the function returns
 	// nil gracefully without error.
@@ -1384,7 +1393,15 @@ func TestResolveOfficialAuthHandlers_FetcherUnavailable(t *testing.T) {
 	ctx = authofficial.WithRegistry(ctx, officialReg)
 	cooldown := plugin.NewFetchCooldown(t.TempDir(), plugin.DefaultFetchCooldown)
 
-	// No config in context → BuildPluginFetcher will fail to build catalog chain.
+	// Register xdg.Reload cleanup BEFORE t.Setenv so LIFO ordering
+	// restores the env var first, then reloads xdg.
+	// Use a regular file as XDG_DATA_HOME so MkdirAll fails (cross-platform).
+	invalidBase := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(invalidBase, []byte{}, 0o600))
+	t.Cleanup(func() { xdg.Reload() })
+	t.Setenv("XDG_DATA_HOME", invalidBase)
+	xdg.Reload() // pick up the new XDG_DATA_HOME value
+
 	clients, err := ResolveOfficialAuthHandlers(ctx, authReg, cooldown, nil)
 	require.NoError(t, err)
 	assert.Nil(t, clients)
