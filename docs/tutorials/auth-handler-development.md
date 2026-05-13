@@ -851,11 +851,113 @@ scafctl ships with three builtin auth handlers:
 | **GitHub** | `github` | `pkg/auth/github/` | device_code, pat | `ClientID`, `Hostname`, `DefaultScopes` |
 | **GCP** | `gcp` | `pkg/auth/gcp/` | device_code, interactive, service_principal, metadata, workload_identity, gcloud_adc | `ClientID`, `ClientSecret`, `DefaultScopes`, `ImpersonateServiceAccount` |
 
-Study these as reference implementations — they follow the same patterns described in this guide.
+Study these as reference implementations -- they follow the same patterns described in this guide.
+
+## Official Plugin Delivery
+
+Once your auth handler plugin is ready, publish it as an OCI catalog artifact so users can auto-fetch it via `bundle.plugins`.
+
+### Build and Push the OCI Artifact
+
+Use `scafctl build plugin` to package your multi-platform binaries into an OCI image index, then `scafctl catalog push` to publish it:
+
+~~~bash
+VERSION="1.0.0"
+NAME="my-handler"
+BINARY="scafctl-plugin-auth-my-handler"
+CATALOG="oci://ghcr.io/myorg"
+
+scafctl build plugin \
+  --force \
+  --name "${NAME}" \
+  --kind auth-handler \
+  --version "${VERSION}" \
+  --platform "linux/amd64=dist/${BINARY}-linux-amd64" \
+  --platform "linux/arm64=dist/${BINARY}-linux-arm64" \
+  --platform "darwin/amd64=dist/${BINARY}-darwin-amd64" \
+  --platform "darwin/arm64=dist/${BINARY}-darwin-arm64" \
+  --platform "windows/amd64=dist/${BINARY}-windows-amd64.exe"
+
+scafctl catalog push \
+  "${NAME}@${VERSION}" \
+  --catalog "${CATALOG}" \
+  --kind auth-handler \
+  --force
+~~~
+
+### Release Workflow
+
+The plugin-template solution generates a release workflow (`.github/workflows/release.yaml`) with three jobs:
+
+1. **test** -- runs `go test -race ./...`
+2. **release** -- builds multi-platform binaries via GoReleaser
+3. **publish-catalog** -- packages binaries into an OCI artifact and pushes to the catalog
+
+The `publish-catalog` job uses three key variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `NAME` | Handler name (matches `Name()` return value) | `my-handler` |
+| `CATALOG` | OCI registry URL | `oci://ghcr.io/myorg` |
+| `IMAGE` | Full image reference for signing | `ghcr.io/myorg/auth-handlers/my-handler` |
+
+### Cosign Signing
+
+To sign your OCI artifacts with Sigstore/cosign (keyless OIDC), add a `sign` job that calls the reusable `sign-plugin.yml` workflow from scafctl:
+
+~~~yaml
+jobs:
+  # ... test and release jobs ...
+
+  sign:
+    name: Sign OCI Artifact
+    needs: publish-catalog
+    permissions:
+      id-token: write   # Required for OIDC token (Fulcio certificate)
+      packages: write   # Required to push signature to registry
+    uses: oakwood-commons/scafctl/.github/workflows/sign-plugin.yml@sign-plugin/v1
+    with:
+      image-ref: ghcr.io/myorg/auth-handlers/my-handler@${{ needs.publish-catalog.outputs.digest }}
+~~~
+
+This:
+
+1. Installs cosign
+2. Signs the OCI artifact with keyless OIDC (no private keys to manage)
+3. Pushes the signature to the same registry alongside the artifact
+4. Verifies the signature immediately after signing
+
+### Host-Side Signature Verification
+
+Users enable signature verification in their scafctl config:
+
+~~~yaml
+# ~/.config/scafctl/config.yaml
+plugins:
+  signatures:
+    mode: "warn"          # or "enforce"
+    trustedIssuers:
+      - "https://token.actions.githubusercontent.com"
+    trustedIdentities:
+      - "https://github.com/myorg/*"
+~~~
+
+| Mode | Behavior |
+|------|----------|
+| `off` (default) | No signature check; digest verification only |
+| `warn` | Verify signature; log a warning on failure but continue |
+| `enforce` | Verify signature; fail with an error on missing or invalid signature |
+
+When a plugin is fetched, scafctl queries the Rekor transparency log for a cosign signature, validates the signing certificate against Fulcio CA roots, and matches the OIDC issuer and identity against the configured policy.
+
+> [!NOTE]
+> Signature verification requires scafctl to be built with the `cosign` build tag: `go build -tags cosign -o scafctl ./cmd/scafctl/scafctl.go`. Without the tag, `warn` mode logs a message and `enforce` mode returns an error.
+
+For details on verification modes and embedder policy overrides, see the [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md).
 
 ## Next Steps
 
-- [Extension Concepts](extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
-- [Authentication Tutorial](auth-tutorial.md) — User-facing guide to using auth commands
-- [Provider Development Guide](provider-development.md) — Build custom providers (builtin and plugin)
-- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) — Catalog-based distribution
+- [Extension Concepts](extension-concepts.md) -- Provider vs Auth Handler vs Plugin terminology
+- [Authentication Tutorial](auth-tutorial.md) -- User-facing guide to using auth commands
+- [Provider Development Guide](provider-development.md) -- Build custom providers (builtin and plugin)
+- [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) -- Catalog-based distribution
