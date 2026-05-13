@@ -66,9 +66,9 @@ jobs:
       - name: Verify signature
         env:
           IMAGE_REF: ${{ inputs.image-ref }}
-          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           cosign verify \
-            --certificate-identity-regexp="https://github.com/${REPO}/.*" \
+            --certificate-identity="https://github.com/${WORKFLOW_REF}" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
             "$IMAGE_REF"
