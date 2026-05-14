@@ -122,7 +122,7 @@ After updating `sign-plugin.yml` on `main`, maintainers update the tag:
 ~~~bash
 git checkout main && git pull
 git tag -f sign-plugin/v1 HEAD
-git push --force-with-lease origin refs/tags/sign-plugin/v1
+git push --force origin refs/tags/sign-plugin/v1
 ~~~
 
 All plugin and solution repos referencing `@sign-plugin/v1` automatically use the updated workflow on their next release.
