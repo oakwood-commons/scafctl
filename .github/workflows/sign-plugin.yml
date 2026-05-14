@@ -10,7 +10,7 @@ name: Sign Plugin OCI Artifact
 #   After merging changes, update the tag to the current HEAD of main:
 #     git checkout main && git pull
 #     git tag -f sign-plugin/v1 HEAD
-#     git push --force-with-lease origin refs/tags/sign-plugin/v1
+#     git push --force origin refs/tags/sign-plugin/v1
 #   This propagates the change to all plugin repos on their next workflow run.
 #
 # Usage in plugin repos:
