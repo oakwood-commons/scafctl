@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -51,6 +52,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	solprepare "github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -199,7 +201,12 @@ func NewRootOptions() *RootOptions {
 // opts may be nil, in which case production defaults are used.
 // Each invocation creates its own isolated state so multiple Root()
 // calls can execute concurrently without data races.
-func Root(opts *RootOptions) *cobra.Command {
+//
+// The returned cleanup function releases auth handler plugins and telemetry
+// resources. Callers must defer it after Execute() returns so that resources
+// are released even when RunE returns an error (cobra skips PersistentPostRun
+// in that case). The function is idempotent and safe to call multiple times.
+func Root(opts *RootOptions) (*cobra.Command, func()) {
 	if opts == nil {
 		opts = NewRootOptions()
 	}
@@ -215,6 +222,7 @@ func Root(opts *RootOptions) *cobra.Command {
 		otelInsecure      bool
 		telShutdown       func(context.Context) error
 		authPluginClients []*plugin.AuthHandlerClient
+		authClientsMu     sync.Mutex // guards authPluginClients from concurrent fallback resolvers
 	)
 
 	// Resolve binary name: use caller-provided or default to settings.CliBinaryName ("scafctl").
@@ -249,6 +257,12 @@ func Root(opts *RootOptions) *cobra.Command {
 	if opts.ExitFunc != nil {
 		writerOpts = append(writerOpts, writer.WithExitFunc(opts.ExitFunc))
 	}
+
+	// cleanup is assigned after cCmd to capture per-invocation state.
+	// PersistentPostRun calls it on success; the caller defers it for the error path.
+	// Initialised to a noop so early-exit paths can call it safely before the
+	// real implementation is wired up at the end of Root().
+	cleanup := func() {}
 
 	cCmd := &cobra.Command{
 		Use:   binaryName,
@@ -518,14 +532,13 @@ func Root(opts *RootOptions) *cobra.Command {
 				ctx = plugin.WithSignaturePolicy(ctx, opts.PluginSignaturePolicy)
 			}
 
-			// ── Auto-resolve official auth handlers for direct CLI commands ──
-			// The prepare pipeline handles solution-level auto-resolution, but
-			// direct CLI commands (auth login, auth status, auth token) bypass
-			// the prepare pipeline. This fetches any missing official auth
-			// handlers so they are available for auth/serve/mcp commands.
-			// Skipped for unrelated commands (version, cache, plugins, etc.)
-			// to avoid unnecessary network round-trips to the plugin catalog.
-			if !cfg.Settings.DisableOfficialAuthHandlers && commandNeedsAuthHandlers(cCmd) {
+			// ── Wire lazy auth handler fallback resolver ──
+			// Instead of eagerly fetching all official auth handlers at startup,
+			// we configure a fallback resolver that fires only when a handler is
+			// actually requested via authRegistry.Get(name). This avoids network
+			// I/O for commands that never use auth handlers (e.g., local catalog
+			// tag, version, help).
+			if !cfg.Settings.DisableOfficialAuthHandlers {
 				var cooldownDuration time.Duration
 				if cfg.Plugins.FetchCooldown != "" {
 					if d, parseErr := time.ParseDuration(cfg.Plugins.FetchCooldown); parseErr == nil {
@@ -545,11 +558,59 @@ func Root(opts *RootOptions) *cobra.Command {
 					hostDeps.SecretStore = sharedSecretStore
 				}
 				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
-				officialAuthClients, resolveErr := solprepare.ResolveOfficialAuthHandlers(ctx, authRegistry, cooldown, pluginCfg, clientOpts...)
-				if resolveErr != nil {
-					lgr.V(1).Info("auto-resolve official auth handlers failed", "error", resolveErr)
-				}
-				authPluginClients = append(authPluginClients, officialAuthClients...)
+
+				authRegistry.SetFallbackResolver(func(resolverCtx context.Context, name string) (auth.Handler, error) {
+					// Use cCmd.Context() to capture the fully-wired context at
+					// call time, not the stale ctx from closure capture time.
+					// Values like the official provider registry are added to
+					// ctx *after* this closure is defined.
+					liveCtx := cCmd.Context()
+					officialReg := authofficial.RegistryFromContext(liveCtx)
+					if officialReg == nil {
+						return nil, fmt.Errorf("no official auth handler registry available")
+					}
+					h, ok := officialReg.Get(name)
+					if !ok {
+						return nil, fmt.Errorf("auth handler %q is not an official handler", name)
+					}
+					if cooldown.OnCooldown(name) {
+						return nil, fmt.Errorf("auth handler %q fetch on cooldown", name)
+					}
+
+					lgr.V(0).Info("lazy-resolving official auth handler", "handler", name)
+
+					dep := h.ToPluginDependency()
+					fetcher, fetcherErr := solprepare.BuildPluginFetcher(liveCtx)
+					if fetcherErr != nil {
+						_ = cooldown.RecordFailure(name)
+						return nil, fmt.Errorf("building plugin fetcher: %w", fetcherErr)
+					}
+
+					results, fetchErr := fetcher.FetchPlugins(resolverCtx, []solution.PluginDependency{dep}, nil)
+					if fetchErr != nil {
+						_ = cooldown.RecordFailure(name)
+						return nil, fmt.Errorf("fetching auth handler plugin %q: %w", name, fetchErr)
+					}
+
+					clients, regErr := plugin.RegisterFetchedAuthHandlerPlugins(liveCtx, authRegistry, results, pluginCfg, clientOpts...)
+					if regErr != nil {
+						_ = cooldown.RecordFailure(name)
+						return nil, fmt.Errorf("registering auth handler plugin %q: %w", name, regErr)
+					}
+
+					// Track the plugin clients for cleanup in PersistentPostRun.
+					authClientsMu.Lock()
+					authPluginClients = append(authPluginClients, clients...)
+					authClientsMu.Unlock()
+
+					// The handler was registered by RegisterFetchedAuthHandlerPlugins,
+					// look it up from the registry (bypassing fallback).
+					handler, exists := authRegistry.GetRegistered(name)
+					if !exists {
+						return nil, fmt.Errorf("auth handler %q not found after registration", name)
+					}
+					return handler, nil
+				})
 			}
 
 			// ── Wire official provider registry for auto-resolution ──
@@ -576,7 +637,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			if cCmd.Use == binaryName {
 				err := output.ValidateCommands(args)
 				if err != nil {
-					plugin.KillAllAuthHandlers(authPluginClients)
+					cleanup()
 					w.ErrorWithExit(err.Error())
 					return
 				}
@@ -592,7 +653,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			// Call embedder's pre-run hook after all standard setup is complete.
 			if opts.PreRunHook != nil {
 				if hookErr := opts.PreRunHook(cCmd, args); hookErr != nil {
-					plugin.KillAllAuthHandlers(authPluginClients)
+					cleanup()
 					w.ErrorWithExit(hookErr.Error())
 					return
 				}
@@ -603,7 +664,7 @@ func Root(opts *RootOptions) *cobra.Command {
 				profilePath, _ := cCmd.Flags().GetString("pprof-output-dir")
 				p, err := profiler.GetProfiler(profileType, profilePath, lgr)
 				if err != nil {
-					plugin.KillAllAuthHandlers(authPluginClients)
+					cleanup()
 					w.ErrorWithExitf("Error starting profiler: %v", err)
 					return
 				}
@@ -619,12 +680,10 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
-			plugin.KillAllAuthHandlers(authPluginClients)
-			if telShutdown != nil {
-				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = telShutdown(shutCtx)
-			}
+			// Happy path: cleanup runs here when RunE succeeds.
+			// Error path: caller must defer the returned cleanup func
+			// because cobra skips PersistentPostRun when RunE fails.
+			cleanup()
 		},
 		Annotations: map[string]string{
 			"commandType": "main",
@@ -659,10 +718,10 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.PersistentFlags().BoolVar(&otelInsecure, "otel-insecure", false, "Disable TLS for OTLP gRPC connection (development only)")
 
 	if err := cCmd.PersistentFlags().MarkHidden("pprof"); err != nil {
-		return nil
+		return nil, func() {}
 	}
 	if err := cCmd.PersistentFlags().MarkHidden("pprof-output-dir"); err != nil {
-		return nil
+		return nil, func() {}
 	}
 	// Core Commands — primary workflows
 	cCmd.AddCommand(withGroup(groupCore, run.CommandRun(cliParams, ioStreams, binaryName)))
@@ -703,25 +762,28 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, binaryName, opts.VersionExtra))
 	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, binaryName))
 	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, binaryName))
-	return cCmd
+
+	// cleanup releases auth handler plugins and telemetry. It is safe to call
+	// multiple times (idempotent via sync.Once). PersistentPostRun calls it on
+	// success; callers must defer it to cover the error path where cobra skips
+	// PersistentPostRun.
+	var cleanupOnce sync.Once
+	cleanup = func() {
+		cleanupOnce.Do(func() {
+			plugin.KillAllAuthHandlers(authPluginClients)
+			if telShutdown != nil {
+				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = telShutdown(shutCtx)
+			}
+		})
+	}
+
+	return cCmd, cleanup
 }
 
 // withGroup sets the GroupID on a command and returns it for chaining.
 func withGroup(group string, cmd *cobra.Command) *cobra.Command {
 	cmd.GroupID = group
 	return cmd
-}
-
-// commandNeedsAuthHandlers reports whether the invoked command requires auth
-// handler plugins to be available. Commands that directly use the auth
-// registry need auto-resolution. Solution-running commands (run, render)
-// handle resolution through the prepare pipeline and are excluded.
-func commandNeedsAuthHandlers(cmd *cobra.Command) bool {
-	for c := cmd; c != nil; c = c.Parent() {
-		switch c.Name() {
-		case "auth", "serve", "mcp", "catalog", "authhandler":
-			return true
-		}
-	}
-	return false
 }

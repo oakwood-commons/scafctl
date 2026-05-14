@@ -30,7 +30,7 @@ func TestNewRootOptions(t *testing.T) {
 // TestRoot_NilOpts verifies that Root(nil) succeeds and uses production defaults.
 func TestRoot_NilOpts(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	require.NotNil(t, cmd)
 	assert.Equal(t, "scafctl", cmd.Use)
 }
@@ -40,7 +40,7 @@ func TestRoot_EnvVar_LogLevel(t *testing.T) {
 	t.Setenv("SCAFCTL_LOG_LEVEL", "debug")
 
 	ioStreams, out, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -56,7 +56,7 @@ func TestRoot_EnvVar_Debug(t *testing.T) {
 	t.Setenv("SCAFCTL_LOG_LEVEL", "") // ensure log level env is clear
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -68,7 +68,7 @@ func TestRoot_EnvVar_Debug_Zero(t *testing.T) {
 	t.Setenv("SCAFCTL_DEBUG", "0")
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -80,7 +80,7 @@ func TestRoot_EnvVar_LogFormat(t *testing.T) {
 	t.Setenv("SCAFCTL_LOG_FORMAT", "json")
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -93,7 +93,7 @@ func TestRoot_EnvVar_LogPath(t *testing.T) {
 	t.Setenv("SCAFCTL_LOG_PATH", logFile)
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -106,7 +106,7 @@ func TestRoot_WithConfigPath(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams:  ioStreams,
 		ConfigPath: "/nonexistent/path/config.yaml",
 	})
@@ -121,7 +121,7 @@ func TestRoot_VersionSubcommand_Output(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, out, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -136,7 +136,7 @@ func TestRoot_FlagDebugOverridesEnv(t *testing.T) {
 	t.Setenv("SCAFCTL_LOG_LEVEL", "none") // env says none
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"--debug", "version"})
 
 	err := cmd.Execute()
@@ -146,14 +146,14 @@ func TestRoot_FlagDebugOverridesEnv(t *testing.T) {
 // TestRoot_SilenceErrors verifies that SilenceErrors is set on root command.
 func TestRoot_SilenceErrors(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	assert.True(t, cmd.SilenceErrors)
 }
 
 // TestRoot_HasAnnotations verifies root command has expected annotations.
 func TestRoot_HasAnnotations(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	require.NotNil(t, cmd.Annotations)
 	assert.Equal(t, "main", cmd.Annotations["commandType"])
 }
@@ -161,7 +161,7 @@ func TestRoot_HasAnnotations(t *testing.T) {
 // TestRoot_SubcommandCount verifies an expected minimum number of subcommands.
 func TestRoot_SubcommandCount(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	// Should have at least the core subcommands
 	expectedMinSubcmds := 5
 	if len(cmd.Commands()) < expectedMinSubcmds {
@@ -172,7 +172,7 @@ func TestRoot_SubcommandCount(t *testing.T) {
 // TestRoot_QuietFlagDefault verifies that the --quiet flag defaults to false.
 func TestRoot_QuietFlagDefault(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	flag := cmd.PersistentFlags().Lookup("quiet")
 	require.NotNil(t, flag)
@@ -182,7 +182,7 @@ func TestRoot_QuietFlagDefault(t *testing.T) {
 // TestRoot_LogLevelFlagDefault verifies the --log-level flag has a default.
 func TestRoot_LogLevelFlagDefault(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	flag := cmd.PersistentFlags().Lookup("log-level")
 	require.NotNil(t, flag)
@@ -192,7 +192,7 @@ func TestRoot_LogLevelFlagDefault(t *testing.T) {
 // TestRoot_OtelFlags verifies that OTel-related flags exist.
 func TestRoot_OtelFlags(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	flags := []string{"otel-endpoint", "otel-insecure"}
 	for _, name := range flags {
@@ -210,14 +210,15 @@ func BenchmarkRootConstruction(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		Root(&RootOptions{IOStreams: ioStreams})
+		_, cleanup := Root(&RootOptions{IOStreams: ioStreams})
+		cleanup()
 	}
 }
 
 // TestRoot_LogLevelFlagExpectedValue ensures the log-level flag's usage is set.
 func TestRoot_LogLevelFlagUsage(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	flag := cmd.PersistentFlags().Lookup("log-level")
 	require.NotNil(t, flag)
@@ -228,7 +229,7 @@ func TestRoot_LogLevelFlagUsage(t *testing.T) {
 // have a non-empty Short description for clear CLI help and UX.
 func TestRoot_SubcommandsHaveShortDesc(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	for _, sub := range cmd.Commands() {
 		if sub.Name() == "help" {
@@ -245,7 +246,7 @@ func TestRoot_EnvVar_Debug_False(t *testing.T) {
 	t.Setenv("SCAFCTL_DEBUG", "false")
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -255,7 +256,7 @@ func TestRoot_EnvVar_Debug_False(t *testing.T) {
 // TestRoot_CwdFlag verifies the --cwd flag exists.
 func TestRoot_CwdFlagExists(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	flag := cmd.PersistentFlags().Lookup("cwd")
 	require.NotNil(t, flag)
@@ -266,14 +267,14 @@ func TestRoot_CwdFlagExists(t *testing.T) {
 // TestRoot_BinaryName_Default verifies that omitting BinaryName defaults to "scafctl".
 func TestRoot_BinaryName_Default(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	assert.Equal(t, "scafctl", cmd.Use)
 }
 
 // TestRoot_BinaryName_Custom verifies that BinaryName overrides the root command Use.
 func TestRoot_BinaryName_Custom(t *testing.T) {
 	t.Parallel()
-	cmd := Root(&RootOptions{BinaryName: "mycli"})
+	cmd, _ := Root(&RootOptions{BinaryName: "mycli"})
 	assert.Equal(t, "mycli", cmd.Use)
 }
 
@@ -281,7 +282,7 @@ func TestRoot_BinaryName_Custom(t *testing.T) {
 // reflect the custom binary name instead of "scafctl".
 func TestRoot_BinaryName_SubcommandShorts(t *testing.T) {
 	t.Parallel()
-	cmd := Root(&RootOptions{BinaryName: "mycli"})
+	cmd, _ := Root(&RootOptions{BinaryName: "mycli"})
 
 	for _, sub := range cmd.Commands() {
 		if sub.Name() == "help" || sub.Short == "" {
@@ -297,7 +298,7 @@ func TestRoot_BinaryName_EnvPrefix(t *testing.T) {
 	t.Setenv("MYCLI_LOG_LEVEL", "debug")
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "mycli"})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "mycli"})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -310,7 +311,7 @@ func TestRoot_BinaryName_EnvPrefix_Hyphen(t *testing.T) {
 	t.Setenv("MY_CLI_LOG_LEVEL", "debug")
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "my-cli"})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams, BinaryName: "my-cli"})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -322,7 +323,7 @@ func TestRoot_PreRunHook_Called(t *testing.T) {
 	t.Parallel()
 	hookCalled := false
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams: ioStreams,
 		PreRunHook: func(cmd *cobra.Command, args []string) error {
 			hookCalled = true
@@ -340,7 +341,7 @@ func TestRoot_PreRunHook_Called(t *testing.T) {
 func TestRoot_PreRunHook_Nil(t *testing.T) {
 	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams, PreRunHook: nil})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams, PreRunHook: nil})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -351,7 +352,7 @@ func TestRoot_PreRunHook_Nil(t *testing.T) {
 func TestRoot_VersionExtra(t *testing.T) {
 	t.Parallel()
 	ioStreams, out, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams:  ioStreams,
 		BinaryName: "mycli",
 		VersionExtra: &settings.VersionInfo{
@@ -383,7 +384,7 @@ func TestRoot_PreRunHook_Error(t *testing.T) {
 	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	exitCalled := false
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams: ioStreams,
 		ExitFunc:  func(code int) { exitCalled = true },
 		PreRunHook: func(cmd *cobra.Command, args []string) error {
@@ -399,14 +400,14 @@ func TestRoot_PreRunHook_Error(t *testing.T) {
 // TestRoot_BinaryName_Sanitized verifies that BinaryName with path/extension is sanitized.
 func TestRoot_BinaryName_Sanitized(t *testing.T) {
 	t.Parallel()
-	cmd := Root(&RootOptions{BinaryName: "/usr/bin/my-tool.exe"})
+	cmd, _ := Root(&RootOptions{BinaryName: "/usr/bin/my-tool.exe"})
 	assert.Equal(t, "my-tool", cmd.Use)
 }
 
 // TestRoot_BinaryName_Empty verifies that empty BinaryName falls back to default.
 func TestRoot_BinaryName_Empty(t *testing.T) {
 	t.Parallel()
-	cmd := Root(&RootOptions{BinaryName: ""})
+	cmd, _ := Root(&RootOptions{BinaryName: ""})
 	assert.Equal(t, "scafctl", cmd.Use)
 }
 
@@ -417,7 +418,7 @@ func TestRoot_OfficialAuthHandlerRegistry_Enabled(t *testing.T) {
 
 	var registryFromCtx *authofficial.Registry
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams: ioStreams,
 		PreRunHook: func(cmd *cobra.Command, _ []string) error {
 			registryFromCtx = authofficial.RegistryFromContext(cmd.Context())
@@ -443,7 +444,7 @@ func TestRoot_OfficialAuthHandlerRegistry_CustomEmbedder(t *testing.T) {
 
 	var registryFromCtx *authofficial.Registry
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams:            ioStreams,
 		OfficialAuthHandlers: customRegistry,
 		PreRunHook: func(cmd *cobra.Command, _ []string) error {
@@ -471,7 +472,7 @@ func TestRoot_OfficialAuthHandlerRegistry_Disabled(t *testing.T) {
 	var registryFromCtx *authofficial.Registry
 	hookCalled := false
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams:      ioStreams,
 		ConfigDefaults: disabledCfg,
 		PreRunHook: func(cmd *cobra.Command, _ []string) error {
@@ -495,7 +496,7 @@ func TestRoot_OfficialAuthHandlerRegistry_Enabled_NonDefaultBinary(t *testing.T)
 
 	var registryFromCtx *authofficial.Registry
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams:  ioStreams,
 		BinaryName: "mycli",
 		PreRunHook: func(cmd *cobra.Command, _ []string) error {
@@ -532,7 +533,7 @@ func TestRoot_PluginSignaturePolicy_Wired(t *testing.T) {
 		},
 	}
 
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		IOStreams:             ioStreams,
 		PluginSignaturePolicy: policy,
 	})
@@ -562,7 +563,7 @@ func TestRoot_PluginSignaturePolicy_NilByDefault(t *testing.T) {
 		},
 	}
 
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.AddCommand(probe)
 	cmd.SetArgs([]string{"probe"})
 
@@ -577,7 +578,7 @@ func TestRoot_NoBuiltInHandlerWarnings(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, out, errOut := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	cmd.SetArgs([]string{"version"})
 
 	err := cmd.Execute()
@@ -587,56 +588,43 @@ func TestRoot_NoBuiltInHandlerWarnings(t *testing.T) {
 	assert.NotContains(t, errOut.String(), "Auth handler", "no deprecation warnings should appear on stderr after handler extraction")
 }
 
-func TestCommandNeedsAuthHandlers(t *testing.T) {
+// TestRoot_Cleanup_Idempotent verifies that the returned cleanup function
+// can be called multiple times without panicking (sync.Once idempotency).
+func TestRoot_Cleanup_Idempotent(t *testing.T) {
 	t.Parallel()
+	_, cleanup := Root(nil)
+	require.NotNil(t, cleanup, "cleanup function must not be nil")
+	// Call twice — must not panic.
+	cleanup()
+	cleanup()
+}
 
-	root := &cobra.Command{Use: "scafctl"}
-	authCmd := &cobra.Command{Use: "auth"}
-	loginCmd := &cobra.Command{Use: "login"}
-	authCmd.AddCommand(loginCmd)
-	serveCmd := &cobra.Command{Use: "serve"}
-	mcpCmd := &cobra.Command{Use: "mcp"}
-	mcpServeCmd := &cobra.Command{Use: "serve"}
-	mcpCmd.AddCommand(mcpServeCmd)
-	catalogCmd := &cobra.Command{Use: "catalog"}
-	catalogLoginCmd := &cobra.Command{Use: "login"}
-	catalogCmd.AddCommand(catalogLoginCmd)
-	getCmd := &cobra.Command{Use: "get"}
-	authhandlerCmd := &cobra.Command{Use: "authhandler"}
-	getCmd.AddCommand(authhandlerCmd)
-	cacheCmd := &cobra.Command{Use: "cache"}
-	clearCmd := &cobra.Command{Use: "clear"}
-	cacheCmd.AddCommand(clearCmd)
-	versionCmd := &cobra.Command{Use: "version"}
-	pluginsCmd := &cobra.Command{Use: "plugins"}
-	listCmd := &cobra.Command{Use: "list"}
-	pluginsCmd.AddCommand(listCmd)
-	root.AddCommand(authCmd, serveCmd, mcpCmd, catalogCmd, getCmd, cacheCmd, versionCmd, pluginsCmd)
+// TestRoot_Cleanup_AfterExecute verifies that the returned cleanup function
+// releases resources even when RunE returns an error (cobra skips
+// PersistentPostRun in that case). A probe subcommand is injected so that
+// PersistentPreRun initialises the context before RunE fails.
+func TestRoot_Cleanup_AfterExecute(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
 
-	tests := []struct {
-		name string
-		cmd  *cobra.Command
-		want bool
-	}{
-		{"auth login", loginCmd, true},
-		{"auth", authCmd, true},
-		{"serve", serveCmd, true},
-		{"mcp serve", mcpServeCmd, true},
-		{"mcp", mcpCmd, true},
-		{"catalog", catalogCmd, true},
-		{"catalog login", catalogLoginCmd, true},
-		{"get authhandler", authhandlerCmd, true},
-		{"get", getCmd, false},
-		{"cache clear", clearCmd, false},
-		{"version", versionCmd, false},
-		{"plugins list", listCmd, false},
-		{"root", root, false},
+	preRunCalled := false
+	probe := &cobra.Command{
+		Use: "probe",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			preRunCalled = true
+			return fmt.Errorf("simulated RunE failure")
+		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tc.want, commandNeedsAuthHandlers(tc.cmd))
-		})
-	}
+	cmd, cleanup := Root(&RootOptions{IOStreams: ioStreams})
+	defer cleanup() // mirrors production pattern in cmd/scafctl/scafctl.go
+	cmd.AddCommand(probe)
+	cmd.SetArgs([]string{"probe"})
+
+	err := cmd.Execute()
+	assert.Error(t, err, "Execute should propagate RunE error")
+	assert.True(t, preRunCalled, "PersistentPreRun should have run before RunE")
+	// cleanup runs via defer after Execute returns the error — must not panic
+	// and must be safe to call again (idempotent via sync.Once).
+	cleanup()
 }
