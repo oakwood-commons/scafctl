@@ -52,7 +52,7 @@ type SolutionProvider struct {
 	pluginConfig      *plugin.ProviderConfig
 	clientOpts        []plugin.ClientOption
 
-	// mu protects childClients from concurrent Execute calls.
+	// mu protects mutable state from concurrent Configure/Execute/Close calls.
 	mu           sync.Mutex
 	childClients []*plugin.Client
 }
@@ -100,6 +100,17 @@ func New(opts ...Option) *SolutionProvider {
 	return p
 }
 
+// Configure applies functional options to an existing SolutionProvider.
+// This is used to inject runtime dependencies (loader, registry, etc.)
+// into a provider that was registered in DefaultRegistry without them.
+func (p *SolutionProvider) Configure(opts ...Option) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, opt := range opts {
+		opt(p)
+	}
+}
+
 // Close kills all plugin clients started by child auto-resolution.
 // Must be called when the solution provider is no longer needed.
 func (p *SolutionProvider) Close() {
@@ -115,6 +126,75 @@ func (p *SolutionProvider) Close() {
 // Descriptor returns the provider's metadata and schema.
 func (p *SolutionProvider) Descriptor() *provider.Descriptor {
 	return p.descriptor
+}
+
+// resolveRuntime resolves the provider's runtime dependencies from context
+// first (per-execution override), then falls back to struct fields. This
+// allows the singleton in DefaultRegistry to remain stateless while callers
+// inject deps via context for each execution.
+func (p *SolutionProvider) resolveRuntime(ctx context.Context) (loader Loader, reg *provider.Registry, err error) {
+	// Context takes priority — enables per-execution override without
+	// mutating the shared singleton.
+	loader = LoaderFromContext(ctx)
+	reg = ProviderRegistryFromContext(ctx)
+
+	// Fall back to struct fields for anything not provided via context.
+	if loader == nil || reg == nil {
+		p.mu.Lock()
+		if loader == nil {
+			loader = p.loader
+		}
+		if reg == nil {
+			reg = p.registry
+		}
+		p.mu.Unlock()
+	}
+
+	if loader == nil {
+		return nil, nil, fmt.Errorf("%s: no solution loader configured; "+
+			"inject a loader via context (WithLoaderCtx) or call Configure(WithLoader(...))", ProviderName)
+	}
+	if reg == nil {
+		return nil, nil, fmt.Errorf("%s: no provider registry configured; "+
+			"inject a registry via context (WithProviderRegistry) or call Configure(WithRegistry(...))", ProviderName)
+	}
+
+	return loader, reg, nil
+}
+
+// resolvePluginRuntime resolves optional plugin-related dependencies from
+// context first (per-execution override), then falls back to struct fields.
+func (p *SolutionProvider) resolvePluginRuntime(ctx context.Context) (
+	officialProviders *official.Registry,
+	pluginFetcher *plugin.Fetcher,
+	pluginConfig *plugin.ProviderConfig,
+	clientOpts []plugin.ClientOption,
+) {
+	// Context takes priority.
+	officialProviders = OfficialProvidersFromContext(ctx)
+	pluginFetcher = PluginFetcherFromContext(ctx)
+	pluginConfig = PluginConfigFromContext(ctx)
+	clientOpts = ClientOptionsFromContext(ctx)
+
+	// Fall back to struct fields for anything not provided via context.
+	if officialProviders == nil || pluginFetcher == nil || pluginConfig == nil || len(clientOpts) == 0 {
+		p.mu.Lock()
+		if officialProviders == nil {
+			officialProviders = p.officialProviders
+		}
+		if pluginFetcher == nil {
+			pluginFetcher = p.pluginFetcher
+		}
+		if pluginConfig == nil {
+			pluginConfig = p.pluginConfig
+		}
+		if len(clientOpts) == 0 {
+			clientOpts = p.clientOpts
+		}
+		p.mu.Unlock()
+	}
+
+	return officialProviders, pluginFetcher, pluginConfig, clientOpts
 }
 
 // Execute runs the sub-solution and returns its results as a structured envelope.
@@ -139,13 +219,19 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 		return nil, fmt.Errorf("%s: expected *Input or map[string]any, got %T", ProviderName, input)
 	}
 
+	// Resolve runtime dependencies (struct fields → context fallback).
+	loader, reg, err := p.resolveRuntime(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Resolve canonical name for ancestor tracking.
 	canonicalName := Canonicalize(ctx, in.Source)
 
 	// Check circular references — always a hard error regardless of propagateErrors.
-	ctx, err := PushAncestor(ctx, canonicalName)
+	ctx, err = PushAncestor(ctx, canonicalName)
 	if err != nil {
 		return nil, err
 	}
@@ -166,15 +252,15 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	}
 	lgr.V(1).Info("loading sub-solution", "source", source)
 
-	sol, err := p.loader.Get(ctx, source)
-	if err != nil {
-		return nil, fmt.Errorf("solution %q: failed to load: %w", in.Source, err)
+	sol, loadErr := loader.Get(ctx, source)
+	if loadErr != nil {
+		return nil, fmt.Errorf("solution %q: failed to load: %w", in.Source, loadErr)
 	}
 
 	// Auto-resolve official providers needed by the child solution.
 	// Clients are tracked at the struct level and cleaned up via Close()
 	// to avoid killing shared plugins while parallel Execute calls are in flight.
-	if err := p.autoResolveChildProviders(ctx, sol); err != nil {
+	if err := p.autoResolveChildProviders(ctx, sol, reg); err != nil {
 		return nil, fmt.Errorf("solution %q: %w", in.Source, err)
 	}
 
@@ -192,14 +278,14 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 	// Determine execution mode and run.
 	mode, _ := provider.ExecutionModeFromContext(ctx)
 	if mode == provider.CapabilityAction && sol.Spec.HasWorkflow() {
-		return p.executeWithWorkflow(subCtx, sol, in)
+		return p.executeWithWorkflow(subCtx, sol, in, reg)
 	}
 
-	return p.executeResolversOnly(subCtx, sol, in)
+	return p.executeResolversOnly(subCtx, sol, in, reg)
 }
 
 // executeResolversOnly executes only the resolver phase (from capability).
-func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *solution.Solution, in *Input) (*provider.Output, error) {
+func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *solution.Solution, in *Input, reg *provider.Registry) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
 	// Apply timeout if specified.
@@ -226,7 +312,7 @@ func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *soluti
 
 		lgr.V(1).Info("executing sub-solution resolvers", "count", len(resolvers), "selected", len(in.Resolvers))
 
-		adapter := &resolverRegistryAdapter{registry: p.registry}
+		adapter := &resolverRegistryAdapter{registry: reg}
 
 		// Derive child executor timeout from the context deadline so the child
 		// respects the parent's timeout budget instead of using the default 30s.
@@ -271,7 +357,7 @@ func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *soluti
 }
 
 // executeWithWorkflow executes resolvers and then the workflow (action capability).
-func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solution.Solution, in *Input) (*provider.Output, error) {
+func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solution.Solution, in *Input, reg *provider.Registry) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
 	// Apply timeout if specified.
@@ -299,7 +385,7 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 
 		lgr.V(1).Info("executing sub-solution resolvers", "count", len(resolvers), "selected", len(in.Resolvers))
 
-		adapter := &resolverRegistryAdapter{registry: p.registry}
+		adapter := &resolverRegistryAdapter{registry: reg}
 
 		// Derive child executor timeout from the context deadline so the child
 		// respects the parent's timeout budget instead of using the default 30s.
@@ -341,7 +427,7 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 	// Phase 2: Execute workflow.
 	lgr.V(1).Info("executing sub-solution workflow")
 
-	actionAdapter := &actionRegistryAdapter{registry: p.registry}
+	actionAdapter := &actionRegistryAdapter{registry: reg}
 	actionExec := action.NewExecutor(
 		action.WithRegistry(actionAdapter),
 		action.WithResolverData(resolverData),
@@ -846,8 +932,10 @@ func (r *actionRegistryAdapter) Has(name string) bool {
 // solution that are not yet in the parent registry.
 // Clients are appended to p.childClients for deferred cleanup via Close().
 // Returns an error if fetching or registering plugins fails.
-func (p *SolutionProvider) autoResolveChildProviders(ctx context.Context, sol *solution.Solution) error {
-	if p.officialProviders == nil || p.officialProviders.Len() == 0 || p.pluginFetcher == nil {
+func (p *SolutionProvider) autoResolveChildProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry) error {
+	officialProviders, pluginFetcher, pluginCfg, clientOpts := p.resolvePluginRuntime(ctx)
+
+	if officialProviders == nil || officialProviders.Len() == 0 || pluginFetcher == nil {
 		return nil
 	}
 
@@ -855,10 +943,10 @@ func (p *SolutionProvider) autoResolveChildProviders(ctx context.Context, sol *s
 	// then filter to those that are missing and official.
 	var missing []official.Provider
 	for _, name := range sol.Spec.ReferencedProviderNames() {
-		if p.registry.Has(name) {
+		if reg.Has(name) {
 			continue
 		}
-		if op, ok := p.officialProviders.Get(name); ok {
+		if op, ok := officialProviders.Get(name); ok {
 			missing = append(missing, op)
 		}
 	}
@@ -881,25 +969,31 @@ func (p *SolutionProvider) autoResolveChildProviders(ctx context.Context, sol *s
 		deps[i] = m.ToPluginDependency()
 	}
 
-	results, err := p.pluginFetcher.FetchPlugins(ctx, deps, nil)
+	results, err := pluginFetcher.FetchPlugins(ctx, deps, nil)
 	if err != nil {
 		return fmt.Errorf("auto-fetching child solution providers: %w", err)
 	}
 
-	cfg := p.pluginConfig
+	cfg := pluginCfg
 	if cfg == nil {
 		cfg = &plugin.ProviderConfig{}
 	}
 
-	pClients, err := plugin.RegisterFetchedPlugins(ctx, p.registry, results, cfg, p.clientOpts...)
+	pClients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, cfg, clientOpts...)
 	if err != nil {
 		return fmt.Errorf("registering child solution providers: %w", err)
 	}
 
 	if len(pClients) > 0 {
-		p.mu.Lock()
-		p.childClients = append(p.childClients, pClients...)
-		p.mu.Unlock()
+		// Prefer per-execution tracker from context so concurrent runs
+		// sharing the singleton don't interfere with each other's clients.
+		if tracker := ChildClientTrackerFromContext(ctx); tracker != nil {
+			tracker.Add(pClients...)
+		} else {
+			p.mu.Lock()
+			p.childClients = append(p.childClients, pClients...)
+			p.mu.Unlock()
+		}
 	}
 	return nil
 }

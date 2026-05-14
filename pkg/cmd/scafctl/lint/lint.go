@@ -21,7 +21,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
-	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
@@ -299,16 +298,6 @@ func getRegistry(ctx context.Context) *provider.Registry {
 	reg, err := builtin.DefaultRegistry(ctx)
 	if err != nil {
 		reg = provider.GetGlobalRegistry()
-	}
-	// The solution provider is not part of DefaultRegistry because it has a
-	// circular dependency on the registry itself and requires a loader. For
-	// lint purposes we only need the provider to be *registered* (so the
-	// missing-provider rule doesn't false-positive); it will never be executed.
-	if !reg.Has(solutionprovider.ProviderName) {
-		solProvider := solutionprovider.New(
-			solutionprovider.WithRegistry(reg),
-		)
-		_ = reg.Register(solProvider)
 	}
 	return reg
 }

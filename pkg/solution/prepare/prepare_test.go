@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/solutionprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -81,7 +82,71 @@ func TestSolution(t *testing.T) {
 		assert.Equal(t, "test-solution", result.Solution.Metadata.Name)
 		assert.NotNil(t, result.Registry)
 		assert.NotNil(t, result.Cleanup)
+		assert.NotNil(t, result.ProviderCtx, "ProviderCtx should be set when solution provider is in registry")
 
+		// Verify ProviderCtx enriches context with loader and registry.
+		enrichedCtx := result.ProviderCtx(context.Background())
+		assert.NotNil(t, solutionprovider.LoaderFromContext(enrichedCtx))
+		assert.NotNil(t, solutionprovider.ProviderRegistryFromContext(enrichedCtx))
+		assert.NotNil(t, solutionprovider.ChildClientTrackerFromContext(enrichedCtx))
+
+		result.Cleanup()
+	})
+
+	t.Run("ProviderCtx injects optional plugin deps", func(t *testing.T) {
+		sol := minimalSolution()
+		getter := &mockGetter{sol: sol}
+		offProviders := official.NewRegistry()
+		pluginFetcher := &plugin.Fetcher{}
+		pluginCfg := &plugin.ProviderConfig{}
+		clientOpt := plugin.WithDebugLogging()
+
+		result, err := Solution(context.Background(), "test.yaml",
+			WithGetter(getter),
+			WithOfficialProviders(offProviders),
+			WithPluginFetcher(pluginFetcher),
+			WithPluginConfig(pluginCfg),
+			WithClientOptions(clientOpt),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, result.ProviderCtx)
+
+		enrichedCtx := result.ProviderCtx(context.Background())
+		assert.NotNil(t, solutionprovider.OfficialProvidersFromContext(enrichedCtx))
+		assert.NotNil(t, solutionprovider.PluginFetcherFromContext(enrichedCtx))
+		assert.NotNil(t, solutionprovider.PluginConfigFromContext(enrichedCtx))
+		assert.NotNil(t, solutionprovider.ClientOptionsFromContext(enrichedCtx))
+
+		result.Cleanup()
+	})
+
+	t.Run("ProviderCtx nil when no solution provider in registry", func(t *testing.T) {
+		sol := minimalSolution()
+		getter := &mockGetter{sol: sol}
+		// Empty registry with no solution provider registered.
+		emptyReg := provider.NewRegistry()
+
+		result, err := Solution(context.Background(), "test.yaml",
+			WithGetter(getter),
+			WithRegistry(emptyReg),
+		)
+		require.NoError(t, err)
+		assert.Nil(t, result.ProviderCtx, "ProviderCtx should be nil when solution provider is not in registry")
+		result.Cleanup()
+	})
+
+	t.Run("loads with logger context", func(t *testing.T) {
+		sol := minimalSolution()
+		getter := &mockGetter{sol: sol}
+
+		lgr := logr.Discard()
+		ctx := logger.WithLogger(context.Background(), &lgr)
+		result, err := Solution(ctx, "test.yaml",
+			WithGetter(getter),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, "test-solution", result.Solution.Metadata.Name)
 		result.Cleanup()
 	})
 

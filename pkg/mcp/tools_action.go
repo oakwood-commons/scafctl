@@ -100,6 +100,9 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	if prepResult.Cleanup != nil {
 		defer prepResult.Cleanup()
 	}
+	if prepResult.ProviderCtx != nil {
+		ctx = prepResult.ProviderCtx(ctx)
+	}
 
 	// If bundle extraction changed the process CWD, pin the resolver context
 	// to the bundle dir so file reads resolve within the extracted bundle,

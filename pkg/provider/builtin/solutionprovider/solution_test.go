@@ -500,6 +500,163 @@ func TestBuildWorkflowResult(t *testing.T) {
 
 // --- Execute Tests ---
 
+func TestExecute_NilLoader(t *testing.T) {
+	// A bare provider (no loader, no registry) should return a clear error.
+	p := New()
+	_, err := p.Execute(context.Background(), map[string]any{
+		"source": "child-solution",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no solution loader configured")
+}
+
+func TestExecute_NilLoaderWithRegistryOnly(t *testing.T) {
+	// Provider with registry but no loader should still error about loader.
+	p := New(WithRegistry(provider.NewRegistry()))
+	_, err := p.Execute(context.Background(), map[string]any{
+		"source": "child-solution",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no solution loader configured")
+}
+
+func TestExecute_LoaderFromContext(t *testing.T) {
+	// A bare provider should resolve loader and registry from context.
+	loader := &mockLoader{
+		solutions: map[string]*solution.Solution{
+			"ctx-child": {
+				APIVersion: "scafctl.io/v1",
+				Kind:       "Solution",
+				Metadata:   solution.Metadata{Name: "ctx-child"},
+				Spec:       solution.Spec{},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	ctx := WithLoaderCtx(context.Background(), loader)
+	ctx = WithProviderRegistry(ctx, reg)
+
+	p := New() // bare — no struct-level deps
+	out, err := p.Execute(ctx, map[string]any{
+		"source": "ctx-child",
+	})
+	require.NoError(t, err)
+	data, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "success", data["status"])
+}
+
+func TestConfigure(t *testing.T) {
+	p := New()
+	assert.Nil(t, p.loader)
+	assert.Nil(t, p.registry)
+
+	loader := &mockLoader{}
+	reg := provider.NewRegistry()
+	p.Configure(WithLoader(loader), WithRegistry(reg))
+
+	assert.NotNil(t, p.loader)
+	assert.NotNil(t, p.registry)
+}
+
+func TestContextRoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("OfficialProviders", func(t *testing.T) {
+		reg := official.NewRegistry()
+		ctx := WithOfficialProvidersCtx(ctx, reg)
+		assert.Equal(t, reg, OfficialProvidersFromContext(ctx))
+	})
+
+	t.Run("PluginFetcher", func(t *testing.T) {
+		f := &plugin.Fetcher{}
+		ctx := WithPluginFetcherCtx(ctx, f)
+		assert.Equal(t, f, PluginFetcherFromContext(ctx))
+	})
+
+	t.Run("PluginConfig", func(t *testing.T) {
+		cfg := &plugin.ProviderConfig{}
+		ctx := WithPluginConfigCtx(ctx, cfg)
+		assert.Equal(t, cfg, PluginConfigFromContext(ctx))
+	})
+
+	t.Run("ClientOptions", func(t *testing.T) {
+		opts := []plugin.ClientOption{}
+		ctx := WithClientOptionsCtx(ctx, opts)
+		assert.Equal(t, opts, ClientOptionsFromContext(ctx))
+	})
+
+	t.Run("nil returns nil", func(t *testing.T) {
+		assert.Nil(t, OfficialProvidersFromContext(ctx))
+		assert.Nil(t, PluginFetcherFromContext(ctx))
+		assert.Nil(t, PluginConfigFromContext(ctx))
+		assert.Nil(t, ClientOptionsFromContext(ctx))
+	})
+
+	t.Run("ChildClientTracker", func(t *testing.T) {
+		tracker := NewChildClientTracker()
+		ctx := WithChildClientTracker(ctx, tracker)
+		assert.Equal(t, tracker, ChildClientTrackerFromContext(ctx))
+	})
+
+	t.Run("ChildClientTracker nil", func(t *testing.T) {
+		assert.Nil(t, ChildClientTrackerFromContext(ctx))
+	})
+}
+
+func TestChildClientTracker(t *testing.T) {
+	t.Run("Add and Close", func(t *testing.T) {
+		tracker := NewChildClientTracker()
+		// Close on empty tracker should not panic.
+		tracker.Close()
+
+		tracker.Add()                    // no-op, zero clients
+		assert.Empty(t, tracker.clients) //nolint:govet // test accesses unexported field
+	})
+
+	t.Run("Close clears list", func(t *testing.T) {
+		tracker := NewChildClientTracker()
+		tracker.Close()
+		// After Close, clients should be nil.
+		assert.Nil(t, tracker.clients)
+	})
+}
+
+func TestContextOverridesStructFields(t *testing.T) {
+	// When both struct fields and context are set, context should win.
+	structLoader := &mockLoader{solutions: map[string]*solution.Solution{
+		"struct-child": newTestSolution(nil, nil),
+	}}
+	ctxLoader := &mockLoader{solutions: map[string]*solution.Solution{
+		"ctx-child": newTestSolution(nil, nil),
+	}}
+	structReg := provider.NewRegistry()
+	ctxReg := provider.NewRegistry()
+
+	p := New(WithLoader(structLoader), WithRegistry(structReg))
+
+	// Put different deps in context.
+	ctx := WithLoaderCtx(context.Background(), ctxLoader)
+	ctx = WithProviderRegistry(ctx, ctxReg)
+
+	// Execute with a source that only the context loader knows about.
+	out, err := p.Execute(ctx, map[string]any{
+		"source": "ctx-child",
+	})
+	require.NoError(t, err)
+	data, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "success", data["status"])
+
+	// Verify the struct loader's solution is NOT loaded (context won).
+	_, err = p.Execute(ctx, map[string]any{
+		"source": "struct-child",
+	})
+	// struct-child is not in ctxLoader, so this should fail with a load error.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load")
+}
+
 func TestExecute_CircularDetection(t *testing.T) {
 	loader := &mockLoader{
 		solutions: map[string]*solution.Solution{
@@ -1042,7 +1199,8 @@ func TestClose_KillsClients(t *testing.T) {
 }
 
 func TestAutoResolveChildProviders_NilOfficialProviders(t *testing.T) {
-	p := New(WithRegistry(provider.NewRegistry()))
+	reg := provider.NewRegistry()
+	p := New(WithRegistry(reg))
 	sol := &solution.Solution{
 		Spec: solution.Spec{
 			Resolvers: map[string]*resolver.Resolver{
@@ -1051,15 +1209,16 @@ func TestAutoResolveChildProviders_NilOfficialProviders(t *testing.T) {
 		},
 	}
 	// Should return immediately — no panic, no error, nothing fetched.
-	err := p.autoResolveChildProviders(context.Background(), sol)
+	err := p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.NoError(t, err)
 	assert.Empty(t, p.childClients)
 }
 
 func TestAutoResolveChildProviders_NilPluginFetcher(t *testing.T) {
 	officialReg := official.NewRegistry()
+	reg := provider.NewRegistry()
 	p := New(
-		WithRegistry(provider.NewRegistry()),
+		WithRegistry(reg),
 		WithOfficialProviders(officialReg),
 		// No WithPluginFetcher — simulates missing fetcher.
 	)
@@ -1070,7 +1229,7 @@ func TestAutoResolveChildProviders_NilPluginFetcher(t *testing.T) {
 			},
 		},
 	}
-	err := p.autoResolveChildProviders(context.Background(), sol)
+	err := p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.NoError(t, err)
 	assert.Empty(t, p.childClients)
 }
@@ -1093,7 +1252,7 @@ func TestAutoResolveChildProviders_AllRegistered(t *testing.T) {
 			},
 		},
 	}
-	err := p.autoResolveChildProviders(context.Background(), sol)
+	err := p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.NoError(t, err)
 	assert.Empty(t, p.childClients)
 }
@@ -1115,7 +1274,7 @@ func TestAutoResolveChildProviders_NoMissing(t *testing.T) {
 		},
 	}
 	// "cel" is not in the official registry so nothing to resolve.
-	err := p.autoResolveChildProviders(context.Background(), sol)
+	err := p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.NoError(t, err)
 	assert.Empty(t, p.childClients)
 }
@@ -1138,7 +1297,7 @@ func TestAutoResolveChildProviders_DeduplicatesProviders(t *testing.T) {
 			},
 		},
 	}
-	err := p.autoResolveChildProviders(context.Background(), sol)
+	err := p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.NoError(t, err)
 	assert.Empty(t, p.childClients)
 }
@@ -1172,7 +1331,7 @@ func TestAutoResolveChildProviders_FetchFails(t *testing.T) {
 			},
 		},
 	}
-	err = p.autoResolveChildProviders(context.Background(), sol)
+	err = p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "auto-fetching child solution providers")
 }
@@ -1213,7 +1372,7 @@ func TestAutoResolveChildProviders_WorkflowActions(t *testing.T) {
 	}
 
 	// "git" is official but not registered and not in any catalog — errors on fetch.
-	err := p.autoResolveChildProviders(context.Background(), sol)
+	err := p.autoResolveChildProviders(context.Background(), sol, reg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "auto-fetching child solution providers")
 }
