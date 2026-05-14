@@ -75,8 +75,27 @@ jobs:
         run: |
           # Discover OCI referrers attached to this artifact and sign each one.
           # This covers SBOMs, attestations, and any other referrer artifacts.
-          TREE_OUTPUT=$(cosign tree "$IMAGE_REF")
-          REFERRERS=$(echo "$TREE_OUTPUT" | grep -oE 'sha256:[a-f0-9]{64}' || true)
+          # We exclude the primary digest and signature objects, and deduplicate.
+          PRIMARY_DIGEST=$(echo "$IMAGE_REF" | grep -oE 'sha256:[a-f0-9]{64}')
+          if ! TREE_OUTPUT=$(cosign tree "$IMAGE_REF" 2>&1); then
+            echo "::error::cosign tree failed:"
+            echo "$TREE_OUTPUT"
+            exit 1
+          fi
+
+          # Extract all non-signature referrer digests (SBOMs, attestations, etc.).
+          # cosign tree groups output under headers like "📦 Supply Chain Security Related artifacts".
+          # We use an awk flag to skip all lines between a "Signatures" header
+          # and the next section header (or EOF), so signature digests are excluded.
+          # Canonical source: .github/workflows/scripts/parse-referrers.sh
+          # (inlined here because this reusable workflow has no checkout step).
+          REFERRERS=$(echo "$TREE_OUTPUT" \
+            | awk '/^[└├]──.*Signatures/{skip=1; next} /^[└├]──/{skip=0} !skip && /sha256:[a-f0-9]{64}/{print}' \
+            | grep -oE 'sha256:[a-f0-9]{64}' || true)
+
+          # Deduplicate and exclude the primary digest.
+          REFERRERS=$(echo "$REFERRERS" | sort -u | grep -v "^${PRIMARY_DIGEST}$" || true)
+
           if [ -z "$REFERRERS" ]; then
             echo "No referrer artifacts found -- skipping."
             exit 0

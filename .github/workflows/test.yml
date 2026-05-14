@@ -102,6 +102,9 @@ jobs:
       - name: Lint solution examples and integration tests
         run: task lint:solutions
 
+      - name: Run workflow script tests
+        run: bash .github/workflows/tests/test-sign-plugin-parsing.sh
+
       - name: Upload coverage
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         if: matrix.os == 'ubuntu-latest'
