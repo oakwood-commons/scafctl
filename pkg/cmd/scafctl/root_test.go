@@ -16,7 +16,7 @@ import (
 
 func TestRoot_CommandProperties(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	require.NotNil(t, cmd)
 	if cmd.Use != "scafctl" {
 		t.Errorf("Root().Use = %q, want %q", cmd.Use, "scafctl")
@@ -31,7 +31,7 @@ func TestRoot_CommandProperties(t *testing.T) {
 
 func TestRoot_PersistentFlags(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	flags := cmd.PersistentFlags()
 	if flags.Lookup("log-level") == nil {
 		t.Error("Expected 'log-level' persistent flag to be defined")
@@ -55,7 +55,7 @@ func TestRoot_PersistentFlags(t *testing.T) {
 
 func TestRoot_HiddenFlags(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	pprofFlag := cmd.PersistentFlags().Lookup("pprof")
 	require.NotNil(t, pprofFlag, "Expected 'pprof' flag to exist")
 	if !pprofFlag.Hidden {
@@ -70,7 +70,7 @@ func TestRoot_HiddenFlags(t *testing.T) {
 
 func TestRoot_HasVersionSubcommand(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	found := false
 	for _, sub := range cmd.Commands() {
 		if sub.Name() == "version" {
@@ -85,7 +85,7 @@ func TestRoot_HasVersionSubcommand(t *testing.T) {
 
 func TestRoot_HasOptionsSubcommand(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 	found := false
 	for _, sub := range cmd.Commands() {
 		if sub.Name() == "options" {
@@ -100,7 +100,7 @@ func TestRoot_HasOptionsSubcommand(t *testing.T) {
 
 func TestRoot_CommandGroups(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	groups := cmd.Groups()
 	if len(groups) == 0 {
@@ -144,7 +144,7 @@ func TestRoot_CommandGroups(t *testing.T) {
 
 func TestRoot_UsageTemplateHidesGlobalFlags(t *testing.T) {
 	t.Parallel()
-	cmd := Root(nil)
+	cmd, _ := Root(nil)
 
 	// Verify the rendered root help omits flags and references "options".
 	var buf strings.Builder
@@ -173,7 +173,7 @@ func TestRoot_ParallelConstruction(t *testing.T) {
 	for i := range n {
 		go func(idx int) {
 			defer wg.Done()
-			cmds[idx] = Root(nil)
+			cmds[idx], _ = Root(nil)
 		}(i)
 	}
 	wg.Wait()
@@ -187,7 +187,7 @@ func TestRoot_ParallelConstruction(t *testing.T) {
 func TestRoot_WithCustomIOStreams(t *testing.T) {
 	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := Root(&RootOptions{IOStreams: ioStreams})
+	cmd, _ := Root(&RootOptions{IOStreams: ioStreams})
 	if cmd == nil {
 		t.Fatal("Root() with custom IOStreams returned nil")
 	}
@@ -202,7 +202,7 @@ func TestRoot_WithExitFunc(t *testing.T) {
 	t.Parallel()
 	var captured int
 	exitCalled := false
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		ExitFunc: func(code int) {
 			exitCalled = true
 			captured = code
@@ -224,7 +224,7 @@ func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
 		settings.SolutionFileNames = settings.SolutionFileNamesFor(settings.CliBinaryName)
 	})
 
-	cmd := Root(&RootOptions{
+	cmd, _ := Root(&RootOptions{
 		BinaryName: "cldctl",
 	})
 	require.NotNil(t, cmd)

@@ -96,14 +96,20 @@ func BuildRemoteCatalogFromConfig(catCfg config.CatalogConfig, credStore *Creden
 		Logger:            logger,
 	}
 
-	// Wire auth handler if configured
+	// Wire auth handler if configured. Use GetRegistered (no fallback) to
+	// avoid triggering lazy plugin resolution from within a builder function.
+	// This prevents a circular dependency when BuildRemoteCatalogFromConfig is
+	// called inside the auth handler fallback resolver path (fallback →
+	// BuildPluginFetcher → BuildCatalogChain → Get → fallback → deadlock).
+	// Handlers that haven't been registered yet are simply skipped — the
+	// catalog will operate without dynamic auth, which is correct because you
+	// cannot authenticate a plugin download with the handler being downloaded.
 	if catCfg.AuthProvider != "" && authRegistry != nil {
-		handler, err := authRegistry.Get(catCfg.AuthProvider)
-		if err != nil {
-			logger.V(1).Info("auth provider not found for catalog, skipping dynamic auth",
+		handler, exists := authRegistry.GetRegistered(catCfg.AuthProvider)
+		if !exists {
+			logger.V(1).Info("auth provider not yet registered for catalog, skipping dynamic auth",
 				"catalog", catCfg.Name,
-				"authProvider", catCfg.AuthProvider,
-				"error", err)
+				"authProvider", catCfg.AuthProvider)
 		} else {
 			remoteCfg.AuthHandler = handler
 			remoteCfg.AuthScope = catCfg.AuthScope
