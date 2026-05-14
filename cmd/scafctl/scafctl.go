@@ -48,7 +48,8 @@ func run() error {
 	// Register all default factories (CEL env/cache, Go template extensions).
 	scafctl.RegisterDefaults()
 
-	cli := scafctl.Root(nil)
+	cli, cleanup := scafctl.Root(nil)
+	defer cleanup()
 	defer func() {
 		// Profiler shutdown errors are logged but not treated as fatal,
 		// as they do not affect the main application flow.

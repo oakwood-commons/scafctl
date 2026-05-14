@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -199,7 +200,12 @@ func NewRootOptions() *RootOptions {
 // opts may be nil, in which case production defaults are used.
 // Each invocation creates its own isolated state so multiple Root()
 // calls can execute concurrently without data races.
-func Root(opts *RootOptions) *cobra.Command {
+//
+// The returned cleanup function releases auth handler plugins and telemetry
+// resources. Callers must defer it after Execute() returns so that resources
+// are released even when RunE returns an error (cobra skips PersistentPostRun
+// in that case). The function is idempotent and safe to call multiple times.
+func Root(opts *RootOptions) (*cobra.Command, func()) {
 	if opts == nil {
 		opts = NewRootOptions()
 	}
@@ -249,6 +255,12 @@ func Root(opts *RootOptions) *cobra.Command {
 	if opts.ExitFunc != nil {
 		writerOpts = append(writerOpts, writer.WithExitFunc(opts.ExitFunc))
 	}
+
+	// cleanup is assigned after cCmd to capture per-invocation state.
+	// PersistentPostRun calls it on success; the caller defers it for the error path.
+	// Initialised to a noop so early-exit paths can call it safely before the
+	// real implementation is wired up at the end of Root().
+	cleanup := func() {}
 
 	cCmd := &cobra.Command{
 		Use:   binaryName,
@@ -576,7 +588,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			if cCmd.Use == binaryName {
 				err := output.ValidateCommands(args)
 				if err != nil {
-					plugin.KillAllAuthHandlers(authPluginClients)
+					cleanup()
 					w.ErrorWithExit(err.Error())
 					return
 				}
@@ -592,7 +604,7 @@ func Root(opts *RootOptions) *cobra.Command {
 			// Call embedder's pre-run hook after all standard setup is complete.
 			if opts.PreRunHook != nil {
 				if hookErr := opts.PreRunHook(cCmd, args); hookErr != nil {
-					plugin.KillAllAuthHandlers(authPluginClients)
+					cleanup()
 					w.ErrorWithExit(hookErr.Error())
 					return
 				}
@@ -603,7 +615,7 @@ func Root(opts *RootOptions) *cobra.Command {
 				profilePath, _ := cCmd.Flags().GetString("pprof-output-dir")
 				p, err := profiler.GetProfiler(profileType, profilePath, lgr)
 				if err != nil {
-					plugin.KillAllAuthHandlers(authPluginClients)
+					cleanup()
 					w.ErrorWithExitf("Error starting profiler: %v", err)
 					return
 				}
@@ -619,12 +631,10 @@ func Root(opts *RootOptions) *cobra.Command {
 			}
 		},
 		PersistentPostRun: func(_ *cobra.Command, _ []string) {
-			plugin.KillAllAuthHandlers(authPluginClients)
-			if telShutdown != nil {
-				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = telShutdown(shutCtx)
-			}
+			// Happy path: cleanup runs here when RunE succeeds.
+			// Error path: caller must defer the returned cleanup func
+			// because cobra skips PersistentPostRun when RunE fails.
+			cleanup()
 		},
 		Annotations: map[string]string{
 			"commandType": "main",
@@ -659,10 +669,10 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.PersistentFlags().BoolVar(&otelInsecure, "otel-insecure", false, "Disable TLS for OTLP gRPC connection (development only)")
 
 	if err := cCmd.PersistentFlags().MarkHidden("pprof"); err != nil {
-		return nil
+		return nil, func() {}
 	}
 	if err := cCmd.PersistentFlags().MarkHidden("pprof-output-dir"); err != nil {
-		return nil
+		return nil, func() {}
 	}
 	// Core Commands — primary workflows
 	cCmd.AddCommand(withGroup(groupCore, run.CommandRun(cliParams, ioStreams, binaryName)))
@@ -703,7 +713,23 @@ func Root(opts *RootOptions) *cobra.Command {
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, binaryName, opts.VersionExtra))
 	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, binaryName))
 	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, binaryName))
-	return cCmd
+	// cleanup releases auth handler plugins and telemetry. It is safe to call
+	// multiple times (idempotent via sync.Once). PersistentPostRun calls it on
+	// success; callers must defer it to cover the error path where cobra skips
+	// PersistentPostRun.
+	var cleanupOnce sync.Once
+	cleanup = func() {
+		cleanupOnce.Do(func() {
+			plugin.KillAllAuthHandlers(authPluginClients)
+			if telShutdown != nil {
+				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = telShutdown(shutCtx)
+			}
+		})
+	}
+
+	return cCmd, cleanup
 }
 
 // withGroup sets the GroupID on a command and returns it for chaining.
