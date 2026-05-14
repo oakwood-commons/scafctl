@@ -6,6 +6,7 @@ package catalog
 import (
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -105,16 +106,76 @@ func TestCommandPush_InvalidKind(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid kind")
 }
 
-func TestCommandPush_SBOMFlag(t *testing.T) {
+func TestCommandPush_NoSBOMFlag(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cmd := CommandPush(cliParams, ioStreams, "scafctl/catalog")
 
-	f := cmd.Flags().Lookup("sbom")
-	require.NotNil(t, f, "sbom flag should exist")
-	assert.Equal(t, "false", f.DefValue)
+	// --sbom flag should no longer exist
+	assert.Nil(t, cmd.Flags().Lookup("sbom"), "sbom flag should be removed")
+
+	noSBOM := cmd.Flags().Lookup("no-sbom")
+	require.NotNil(t, noSBOM, "no-sbom flag should exist")
+	assert.Equal(t, "false", noSBOM.DefValue)
+}
+
+func TestShouldAttachSBOM(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		kind   catalog.ArtifactKind
+		noSBOM bool
+		want   bool
+	}{
+		{
+			name:   "solution kind attaches SBOM",
+			kind:   catalog.ArtifactKindSolution,
+			noSBOM: false,
+			want:   true,
+		},
+		{
+			name:   "empty kind defaults to SBOM",
+			kind:   "",
+			noSBOM: false,
+			want:   true,
+		},
+		{
+			name:   "provider kind skips SBOM",
+			kind:   catalog.ArtifactKindProvider,
+			noSBOM: false,
+			want:   false,
+		},
+		{
+			name:   "auth-handler kind skips SBOM",
+			kind:   catalog.ArtifactKindAuthHandler,
+			noSBOM: false,
+			want:   false,
+		},
+		{
+			name:   "solution with --no-sbom skips SBOM",
+			kind:   catalog.ArtifactKindSolution,
+			noSBOM: true,
+			want:   false,
+		},
+		{
+			name:   "empty kind with --no-sbom skips SBOM",
+			kind:   "",
+			noSBOM: true,
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := shouldAttachSBOM(tc.kind, tc.noSBOM)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestCommandPush_LocalRefNoCatalog(t *testing.T) {

@@ -30,6 +30,11 @@ on:
         description: 'Full OCI image reference to sign (registry/repo@digest)'
         required: true
         type: string
+      sign-referrers:
+        description: 'Also sign OCI referrer artifacts (SBOMs, attestations) attached to the image'
+        required: false
+        type: boolean
+        default: true
       cosign-version:
         description: 'Cosign version to install'
         required: false
@@ -62,6 +67,26 @@ jobs:
           IMAGE_REF: ${{ inputs.image-ref }}
         run: |
           cosign sign --yes --recursive "$IMAGE_REF"
+
+      - name: Sign referrer artifacts (SBOMs, attestations)
+        if: inputs.sign-referrers
+        env:
+          IMAGE_REF: ${{ inputs.image-ref }}
+        run: |
+          # Discover OCI referrers attached to this artifact and sign each one.
+          # This covers SBOMs, attestations, and any other referrer artifacts.
+          TREE_OUTPUT=$(cosign tree "$IMAGE_REF")
+          REFERRERS=$(echo "$TREE_OUTPUT" | grep -oE 'sha256:[a-f0-9]{64}' || true)
+          if [ -z "$REFERRERS" ]; then
+            echo "No referrer artifacts found -- skipping."
+            exit 0
+          fi
+          REGISTRY=$(echo "$IMAGE_REF" | cut -d'@' -f1)
+          for DIGEST in $REFERRERS; do
+            REFERRER_REF="${REGISTRY}@${DIGEST}"
+            echo "Signing referrer: ${REFERRER_REF}"
+            cosign sign --yes "$REFERRER_REF"
+          done
 
       - name: Verify signature
         env:
