@@ -7,8 +7,10 @@ package auth
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 )
 
 // handlerContextKey is used for test injection of handlers.
@@ -46,8 +48,9 @@ func getHandler(ctx context.Context, handlerName string) (auth.Handler, error) {
 	return registry.Get(handlerName)
 }
 
-// listHandlers returns the names of all registered handlers.
-// Falls back to the registry in context, or returns nil.
+// listHandlers returns the names of all registered and officially-known handlers.
+// It merges eagerly-registered handlers with the official handler registry so
+// that lazy-resolvable handlers are visible to the user.
 func listHandlers(ctx context.Context) []string {
 	// If a test handler is injected, we can't enumerate all handlers.
 	// Return the known built-in names for the test context.
@@ -55,25 +58,49 @@ func listHandlers(ctx context.Context) []string {
 		return []string{h.Name()}
 	}
 
-	registry := auth.RegistryFromContext(ctx)
-	if registry == nil {
+	seen := make(map[string]struct{})
+
+	if registry := auth.RegistryFromContext(ctx); registry != nil {
+		for _, name := range registry.List() {
+			seen[name] = struct{}{}
+		}
+	}
+
+	if official := authofficial.RegistryFromContext(ctx); official != nil {
+		for _, name := range official.Names() {
+			seen[name] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
 		return nil
 	}
-	return registry.List()
+
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
-// isHandlerRegistered checks if a handler name is registered.
+// isHandlerRegistered checks if a handler name is registered or known to the
+// official auth handler registry (i.e., resolvable via the lazy fallback).
 func isHandlerRegistered(ctx context.Context, name string) bool {
 	// Test-injected handlers match any name (since tests inject a single mock)
 	if h := handlerFromContext(ctx); h != nil {
 		return true // Let the test handler respond regardless of name
 	}
 
-	registry := auth.RegistryFromContext(ctx)
-	if registry == nil {
-		return false
+	if registry := auth.RegistryFromContext(ctx); registry != nil && registry.Has(name) {
+		return true
 	}
-	return registry.Has(name)
+
+	if official := authofficial.RegistryFromContext(ctx); official != nil && official.Has(name) {
+		return true
+	}
+
+	return false
 }
 
 // validateHandlerName checks if a handler name is valid and returns a formatted error if not.
