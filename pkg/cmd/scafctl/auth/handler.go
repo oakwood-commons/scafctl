@@ -48,12 +48,27 @@ func getHandler(ctx context.Context, handlerName string) (auth.Handler, error) {
 	return registry.Get(handlerName)
 }
 
-// listHandlers returns the names of all registered and officially-known handlers.
-// It merges eagerly-registered handlers with the official handler registry so
-// that lazy-resolvable handlers are visible to the user.
+// listHandlers returns the names of eagerly-registered (installed) handlers.
+// Use this for bulk operations (status, list, logout --all, diagnose) that
+// call getHandler on each name — it avoids triggering lazy plugin resolution.
 func listHandlers(ctx context.Context) []string {
-	// If a test handler is injected, we can't enumerate all handlers.
-	// Return the known built-in names for the test context.
+	if h := handlerFromContext(ctx); h != nil {
+		return []string{h.Name()}
+	}
+
+	registry := auth.RegistryFromContext(ctx)
+	if registry == nil {
+		return nil
+	}
+	return registry.List()
+}
+
+// listKnownHandlers returns the names of all registered and officially-known
+// handlers. It merges eagerly-registered handlers with the official handler
+// registry so that lazy-resolvable handlers appear in validation error messages
+// and shell completions. Do NOT iterate this set with getHandler — official
+// names that are not yet installed would trigger network I/O.
+func listKnownHandlers(ctx context.Context) []string {
 	if h := handlerFromContext(ctx); h != nil {
 		return []string{h.Name()}
 	}
@@ -108,7 +123,7 @@ func validateHandlerName(ctx context.Context, handlerName string) error {
 	if isHandlerRegistered(ctx, handlerName) {
 		return nil
 	}
-	handlers := listHandlers(ctx)
+	handlers := listKnownHandlers(ctx)
 	if len(handlers) == 0 {
 		return fmt.Errorf("unknown auth handler: %s (no handlers registered)", handlerName)
 	}

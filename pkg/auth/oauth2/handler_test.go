@@ -852,3 +852,118 @@ func TestHandler_CallbackOpts(t *testing.T) {
 		})
 	}
 }
+
+func TestWithSecretKeyPrefix(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	store := secrets.NewMockStore()
+
+	// Write metadata under the plugin-style prefix
+	pluginPrefix := "scafctl.auth."
+	meta := handlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(1 * time.Hour), Scopes: []string{"read"}}
+	metaBytes, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(context.Background(), pluginPrefix+"test-provider.metadata", metaBytes))
+
+	// Default prefix should NOT find the metadata
+	cfg := config.CustomOAuth2Config{Name: "test-provider", TokenURL: srv.URL + "/token", ClientID: "cid"}
+	hDefault, err := New(cfg, WithSecretStore(store))
+	require.NoError(t, err)
+	status, err := hDefault.Status(context.Background())
+	require.NoError(t, err)
+	assert.False(t, status.Authenticated)
+
+	// Custom prefix should find it
+	hCustom, err := New(cfg, WithSecretStore(store), WithSecretKeyPrefix(pluginPrefix))
+	require.NoError(t, err)
+	status, err = hCustom.Status(context.Background())
+	require.NoError(t, err)
+	assert.True(t, status.Authenticated)
+	assert.Equal(t, "testuser", status.Claims.Username)
+}
+
+func TestUnmarshalMetadata_PluginFormat(t *testing.T) {
+	// Plugin handler metadata uses different field names
+	pluginJSON := `{
+		"refreshTokenExpiresAt": "2026-08-13T01:13:46Z",
+		"loginFlow": "interactive",
+		"sessionId": "abc123",
+		"tenantId": "tenant1",
+		"clientId": "client1"
+	}`
+	meta, err := unmarshalMetadata([]byte(pluginJSON))
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 8, 13, 1, 13, 46, 0, time.UTC), meta.ExpiresAt)
+	assert.Equal(t, auth.FlowInteractive, meta.LastLoginFlow)
+}
+
+func TestUnmarshalMetadata_NativeFormat(t *testing.T) {
+	meta := handlerMetadata{
+		Claims:        &auth.Claims{Username: "testuser"},
+		ExpiresAt:     time.Date(2026, 8, 13, 1, 13, 46, 0, time.UTC),
+		Scopes:        []string{"read"},
+		LastLoginFlow: auth.FlowDeviceCode,
+	}
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+
+	result, err := unmarshalMetadata(data)
+	require.NoError(t, err)
+	assert.Equal(t, meta.ExpiresAt, result.ExpiresAt)
+	assert.Equal(t, auth.FlowDeviceCode, result.LastLoginFlow)
+	assert.Equal(t, "testuser", result.Claims.Username)
+}
+
+func TestUnmarshalMetadata_EmptyJSON(t *testing.T) {
+	meta, err := unmarshalMetadata([]byte("{}"))
+	require.NoError(t, err)
+	assert.True(t, meta.ExpiresAt.IsZero())
+}
+
+func TestUnmarshalMetadata_InvalidJSON(t *testing.T) {
+	_, err := unmarshalMetadata([]byte("not json"))
+	assert.Error(t, err)
+}
+
+func TestHandler_Status_Reason_NoSecretStore(t *testing.T) {
+	cfg := config.CustomOAuth2Config{Name: "test-provider", TokenURL: "http://example.com/token", ClientID: "cid"}
+	h := &Handler{cfg: cfg, secretKeyPrefix: secretKeyPrefix}
+	status, err := h.Status(context.Background())
+	require.NoError(t, err)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "secrets store unavailable", status.Reason)
+}
+
+func TestHandler_Status_Reason_NotLoggedIn(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, nil)
+	status, err := h.Status(context.Background())
+	require.NoError(t, err)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "not logged in", status.Reason)
+}
+
+func TestHandler_Status_Reason_CorruptMetadata(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, store := newTestHandler(t, srv, nil)
+	require.NoError(t, store.Set(context.Background(), secretKeyPrefix+"test-provider.metadata", []byte("not json")))
+	status, err := h.Status(context.Background())
+	require.NoError(t, err)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "metadata corrupt or unreadable", status.Reason)
+}
+
+func TestHandler_Status_Reason_Expired(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, store := newTestHandler(t, srv, nil)
+	meta := handlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(-1 * time.Hour)}
+	metaBytes, _ := json.Marshal(meta)
+	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider.metadata", metaBytes)
+	status, err := h.Status(context.Background())
+	require.NoError(t, err)
+	assert.False(t, status.Authenticated)
+	assert.Equal(t, "session expired", status.Reason)
+}

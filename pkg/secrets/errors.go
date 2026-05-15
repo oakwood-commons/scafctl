@@ -21,6 +21,10 @@ var (
 
 	// ErrKeyringAccess is returned when the OS keyring cannot be accessed.
 	ErrKeyringAccess = errors.New("cannot access keyring")
+
+	// ErrOrphanedSecrets is returned when orphaned secrets are detected and
+	// automatic cleanup is not enabled (see WithOrphanCleanup).
+	ErrOrphanedSecrets = errors.New("orphaned secrets detected")
 )
 
 // KeyringError wraps a keyring access error with additional context.

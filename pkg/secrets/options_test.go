@@ -104,6 +104,20 @@ func TestOptionChaining(t *testing.T) {
 	})
 }
 
+func TestDefaultConfig_CleanOrphans(t *testing.T) {
+	cfg := defaultConfig()
+	assert.False(t, cfg.cleanOrphans, "cleanOrphans should default to false")
+}
+
+func TestWithOrphanCleanup(t *testing.T) {
+	cfg := defaultConfig()
+	WithOrphanCleanup(false)(cfg)
+	assert.False(t, cfg.cleanOrphans)
+
+	WithOrphanCleanup(true)(cfg)
+	assert.True(t, cfg.cleanOrphans)
+}
+
 // mockKeyring is a simple mock implementation of the Keyring interface for testing.
 type mockKeyring struct {
 	data map[string]string

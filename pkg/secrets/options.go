@@ -16,6 +16,7 @@ type config struct {
 	keyring              Keyring
 	logger               logr.Logger
 	requireSecureKeyring bool
+	cleanOrphans         bool
 }
 
 // defaultConfig returns a config with default values.
@@ -25,6 +26,7 @@ func defaultConfig() *config {
 		keyring:              nil,
 		logger:               logr.Discard(),
 		requireSecureKeyring: strings.EqualFold(os.Getenv("SCAFCTL_REQUIRE_SECURE_KEYRING"), "true"),
+		cleanOrphans:         false,
 	}
 }
 
@@ -68,6 +70,16 @@ func WithLogger(logger logr.Logger) Option {
 func WithRequireSecureKeyring(require bool) Option {
 	return func(c *config) {
 		c.requireSecureKeyring = require
+	}
+}
+
+// WithOrphanCleanup controls whether orphaned secrets (encrypted with a lost
+// master key) are automatically deleted during store initialization. When false
+// (the default), initialization returns an error if orphaned secrets are detected,
+// allowing the caller to decide how to proceed.
+func WithOrphanCleanup(clean bool) Option {
+	return func(c *config) {
+		c.cleanOrphans = clean
 	}
 }
 

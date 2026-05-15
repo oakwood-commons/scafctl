@@ -146,6 +146,7 @@ func TestIsHandlerRegistered_BothRegistries(t *testing.T) {
 }
 
 func TestListHandlers_WithOfficialRegistry(t *testing.T) {
+	// listHandlers should NOT include official-only handlers (not installed).
 	official := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
 		{Name: "entra", CatalogRef: "entra", DefaultVersion: "latest"},
 		{Name: "github", CatalogRef: "github", DefaultVersion: "latest"},
@@ -153,12 +154,11 @@ func TestListHandlers_WithOfficialRegistry(t *testing.T) {
 	ctx := authofficial.WithRegistry(context.Background(), official)
 
 	handlers := listHandlers(ctx)
-	assert.Contains(t, handlers, "entra")
-	assert.Contains(t, handlers, "github")
-	assert.Len(t, handlers, 2)
+	assert.Nil(t, handlers) // no eager registry → nil
 }
 
-func TestListHandlers_MergesBothRegistries(t *testing.T) {
+func TestListHandlers_OnlyEagerRegistry(t *testing.T) {
+	// listHandlers returns only eagerly-registered handlers, ignoring official.
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(auth.NewMockHandler("custom")))
 	official := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
@@ -168,13 +168,38 @@ func TestListHandlers_MergesBothRegistries(t *testing.T) {
 	ctx = authofficial.WithRegistry(ctx, official)
 
 	handlers := listHandlers(ctx)
+	assert.Equal(t, []string{"custom"}, handlers)
+}
+
+func TestListKnownHandlers_WithOfficialRegistry(t *testing.T) {
+	official := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "entra", CatalogRef: "entra", DefaultVersion: "latest"},
+		{Name: "github", CatalogRef: "github", DefaultVersion: "latest"},
+	})
+	ctx := authofficial.WithRegistry(context.Background(), official)
+
+	handlers := listKnownHandlers(ctx)
+	assert.Contains(t, handlers, "entra")
+	assert.Contains(t, handlers, "github")
+	assert.Len(t, handlers, 2)
+}
+
+func TestListKnownHandlers_MergesBothRegistries(t *testing.T) {
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(auth.NewMockHandler("custom")))
+	official := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "entra", CatalogRef: "entra", DefaultVersion: "latest"},
+	})
+	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx = authofficial.WithRegistry(ctx, official)
+
+	handlers := listKnownHandlers(ctx)
 	assert.Contains(t, handlers, "custom")
 	assert.Contains(t, handlers, "entra")
 	assert.Len(t, handlers, 2)
 }
 
-func TestListHandlers_DeduplicatesOverlap(t *testing.T) {
-	// "entra" is in both registries — should appear only once
+func TestListKnownHandlers_DeduplicatesOverlap(t *testing.T) {
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(auth.NewMockHandler("entra")))
 	official := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
@@ -184,8 +209,21 @@ func TestListHandlers_DeduplicatesOverlap(t *testing.T) {
 	ctx := auth.WithRegistry(context.Background(), registry)
 	ctx = authofficial.WithRegistry(ctx, official)
 
-	handlers := listHandlers(ctx)
+	handlers := listKnownHandlers(ctx)
 	assert.ElementsMatch(t, []string{"entra", "github"}, handlers)
+}
+
+func TestListKnownHandlers_WithTestHandler(t *testing.T) {
+	mock := auth.NewMockHandler("test")
+	ctx := withTestHandler(context.Background(), mock)
+
+	handlers := listKnownHandlers(ctx)
+	assert.Equal(t, []string{"test"}, handlers)
+}
+
+func TestListKnownHandlers_NoContext(t *testing.T) {
+	ctx := context.Background()
+	assert.Nil(t, listKnownHandlers(ctx))
 }
 
 func TestValidateHandlerName_OfficialHandler(t *testing.T) {

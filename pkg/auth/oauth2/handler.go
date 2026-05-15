@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,12 +42,13 @@ const (
 
 // Handler implements auth.Handler for generic configurable OAuth2 services.
 type Handler struct {
-	cfg         config.CustomOAuth2Config
-	secretStore secrets.Store
-	secretErr   error
-	tokenCache  *auth.TokenCache
-	httpClient  *http.Client
-	logger      logr.Logger
+	cfg             config.CustomOAuth2Config
+	secretStore     secrets.Store
+	secretErr       error
+	tokenCache      *auth.TokenCache
+	httpClient      *http.Client
+	logger          logr.Logger
+	secretKeyPrefix string
 }
 
 // Option configures the Handler.
@@ -67,6 +69,14 @@ func WithLogger(lgr logr.Logger) Option {
 	return func(h *Handler) { h.logger = lgr }
 }
 
+// WithSecretKeyPrefix overrides the default secret key prefix used for
+// storing secrets in the keychain. This allows the generic oauth2.Handler
+// to share tokens written by plugin auth handlers that use a different
+// prefix convention.
+func WithSecretKeyPrefix(prefix string) Option {
+	return func(h *Handler) { h.secretKeyPrefix = prefix }
+}
+
 // New creates a new generic OAuth2 auth handler from a CustomOAuth2Config.
 func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 	// Implicit grant flow does not use PKCE.
@@ -75,8 +85,9 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 	}
 
 	h := &Handler{
-		cfg:    cfg,
-		logger: logr.Discard(),
+		cfg:             cfg,
+		logger:          logr.Discard(),
+		secretKeyPrefix: secretKeyPrefix,
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -94,7 +105,7 @@ func New(cfg config.CustomOAuth2Config, opts ...Option) (*Handler, error) {
 		h.httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	if h.secretStore != nil {
-		prefix := secretKeyPrefix + h.cfg.Name + "." + tokenCacheSuffix
+		prefix := h.secretKeyPrefix + h.cfg.Name + "." + tokenCacheSuffix
 		h.tokenCache = auth.NewTokenCache(h.secretStore, prefix)
 	}
 	return h, nil
@@ -245,12 +256,15 @@ func (h *Handler) Logout(ctx context.Context) error {
 // Status returns the current authentication state.
 func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 	if err := h.ensureSecrets(); err != nil {
-		return &auth.Status{Authenticated: false}, nil //nolint:nilerr // graceful degradation
+		return &auth.Status{Authenticated: false, Reason: "secrets store unavailable"}, nil //nolint:nilerr // graceful degradation
 	}
 
 	meta, err := h.loadMetadata(ctx)
-	if err != nil || meta == nil {
-		return &auth.Status{Authenticated: false}, nil //nolint:nilerr // metadata absence is not an error for status
+	if err != nil {
+		if errors.Is(err, secrets.ErrNotFound) {
+			return &auth.Status{Authenticated: false, Reason: "not logged in"}, nil
+		}
+		return &auth.Status{Authenticated: false, Reason: "metadata corrupt or unreadable"}, nil //nolint:nilerr // metadata error is not a caller error
 	}
 	if meta.ExpiresAt.Before(time.Now()) {
 		return &auth.Status{Authenticated: false, Reason: "session expired", Claims: meta.Claims}, nil
@@ -350,6 +364,34 @@ type handlerMetadata struct {
 	ExpiresAt     time.Time    `json:"expiresAt"`
 	Scopes        []string     `json:"scopes"`
 	LastLoginFlow auth.Flow    `json:"lastLoginFlow,omitempty"`
+}
+
+// unmarshalMetadata deserializes metadata JSON, handling field name differences
+// between the generic oauth2 handler and plugin auth handlers.
+// Plugin handlers use "refreshTokenExpiresAt" (vs "expiresAt") and
+// "loginFlow" (vs "lastLoginFlow").
+func unmarshalMetadata(data []byte) (*handlerMetadata, error) {
+	var meta handlerMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+
+	// If ExpiresAt is zero, try the plugin handler's field name.
+	if meta.ExpiresAt.IsZero() {
+		var compat struct {
+			RefreshTokenExpiresAt time.Time `json:"refreshTokenExpiresAt"`
+			LoginFlow             auth.Flow `json:"loginFlow"`
+		}
+		if err := json.Unmarshal(data, &compat); err == nil {
+			if !compat.RefreshTokenExpiresAt.IsZero() {
+				meta.ExpiresAt = compat.RefreshTokenExpiresAt
+			}
+			if meta.LastLoginFlow == "" && compat.LoginFlow != "" {
+				meta.LastLoginFlow = compat.LoginFlow
+			}
+		}
+	}
+	return &meta, nil
 }
 
 type exchangeResult struct {
@@ -838,11 +880,7 @@ func (h *Handler) loadMetadata(ctx context.Context) (*handlerMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	var meta handlerMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, err
-	}
-	return &meta, nil
+	return unmarshalMetadata(data)
 }
 
 // ---------- refresh ----------
@@ -901,7 +939,7 @@ func (h *Handler) postTokenEndpoint(ctx context.Context, data url.Values) (*toke
 // ---------- utilities ----------
 
 func (h *Handler) secretKey(suffix string) string {
-	return secretKeyPrefix + h.cfg.Name + "." + suffix
+	return h.secretKeyPrefix + h.cfg.Name + "." + suffix
 }
 
 func (h *Handler) ensureSecrets() error {
