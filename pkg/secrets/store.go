@@ -19,6 +19,7 @@ type store struct {
 	masterKey      []byte
 	logger         logr.Logger
 	keyringBackend string
+	cleanOrphans   bool
 	mu             sync.RWMutex
 }
 
@@ -51,9 +52,10 @@ func newStore(opts ...Option) (*store, error) {
 	}
 
 	s := &store{
-		secretsDir: secretsDir,
-		keyring:    keyring,
-		logger:     cfg.logger,
+		secretsDir:   secretsDir,
+		keyring:      keyring,
+		logger:       cfg.logger,
+		cleanOrphans: cfg.cleanOrphans,
 	}
 
 	// Initialize master key
@@ -115,6 +117,11 @@ func (s *store) initMasterKey() error {
 	}
 
 	if len(existingSecrets) > 0 {
+		if !s.cleanOrphans {
+			return fmt.Errorf("%w: %d secret(s) encrypted with a lost master key in %s; "+
+				"use WithOrphanCleanup(true) to auto-delete or manually remove the directory",
+				ErrOrphanedSecrets, len(existingSecrets), s.secretsDir)
+		}
 		s.logger.Info("WARNING: found orphaned secrets due to missing master key — these secrets "+
 			"are no longer decryptable and will be deleted. This typically happens after an OS "+
 			"keychain reset or reinstall. Use 'scafctl secrets export' before clearing the keychain "+

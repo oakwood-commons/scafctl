@@ -454,6 +454,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			sharedSecretStore, secretErr := secrets.New(
 				secrets.WithRequireSecureKeyring(cfg.Settings.RequireSecureKeyring),
 				secrets.WithLogger(*lgr),
+				secrets.WithOrphanCleanup(true),
 			)
 			if secretErr != nil {
 				lgr.V(1).Info("shared secrets store unavailable; auth handlers will create their own", "error", secretErr)

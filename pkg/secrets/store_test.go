@@ -108,6 +108,7 @@ func TestNew(t *testing.T) {
 		store, err := New(
 			WithSecretsDir(tmpDir),
 			WithKeyring(keyring),
+			WithOrphanCleanup(true),
 		)
 		require.NoError(t, err)
 		require.NotNil(t, store)
@@ -116,6 +117,27 @@ func TestNew(t *testing.T) {
 		secrets, err = listSecrets(tmpDir)
 		require.NoError(t, err)
 		assert.Empty(t, secrets)
+	})
+
+	t.Run("returns error for orphaned secrets by default", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		keyring := newTestKeyring()
+
+		fakeEncrypted := make([]byte, 50)
+		err := writeSecret(tmpDir, "orphaned-secret", fakeEncrypted)
+		require.NoError(t, err)
+
+		_, err = New(
+			WithSecretsDir(tmpDir),
+			WithKeyring(keyring),
+		)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrOrphanedSecrets)
+
+		// Verify secrets were NOT deleted
+		remaining, listErr := listSecrets(tmpDir)
+		require.NoError(t, listErr)
+		assert.Len(t, remaining, 1)
 	})
 
 	t.Run("returns error if keyring access fails", func(t *testing.T) {
