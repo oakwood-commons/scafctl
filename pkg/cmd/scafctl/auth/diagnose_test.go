@@ -12,6 +12,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/diagnose"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -633,4 +634,34 @@ func TestCommandDiagnose_StartupLatency_SlowPlugin(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "slow startup")
 	assert.Contains(t, output, "[warn]")
+}
+
+func TestCommandDiagnose_NoHandlers_ShowsOfficialAvailable(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// No auth registry → listHandlers returns nil.
+	// But add official registry so listUnconfiguredOfficialHandlers returns names.
+	officialReg := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "github", CatalogRef: "github"},
+		{Name: "entra", CatalogRef: "entra"},
+	})
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+
+	cmd := CommandDiagnose(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "no handlers installed yet")
+	assert.Contains(t, output, "github")
+	assert.Contains(t, output, "entra")
 }

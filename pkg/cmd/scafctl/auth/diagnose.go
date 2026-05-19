@@ -107,12 +107,22 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			// ── 1. Auth registry ──────────────────────────────────────────────
 			handlerNames := listHandlers(ctx)
 			if len(handlerNames) == 0 {
-				addCheck(diagnose.Check{
-					Category: "registry",
-					Name:     "auth registry",
-					Status:   diagnose.StatusFail,
-					Message:  "no auth handlers registered — registry may not be initialised",
-				})
+				unconfigured := listUnconfiguredOfficialHandlers(ctx)
+				if len(unconfigured) > 0 {
+					addCheck(diagnose.Check{
+						Category: "registry",
+						Name:     "auth registry",
+						Status:   diagnose.StatusInfo,
+						Message:  fmt.Sprintf("no handlers installed yet — available: %v", unconfigured),
+					})
+				} else {
+					addCheck(diagnose.Check{
+						Category: "registry",
+						Name:     "auth registry",
+						Status:   diagnose.StatusFail,
+						Message:  "no auth handlers registered — registry may not be initialised",
+					})
+				}
 			} else {
 				addCheck(diagnose.Check{
 					Category: "registry",

@@ -207,3 +207,85 @@ func TestConfigureAndRegisterAuthHandlers_SkipsDuplicates(t *testing.T) {
 	registered := configureAndRegisterAuthHandlers(ctx, reg, client, handlers, nil)
 	assert.Equal(t, []string{"handler-b"}, registered)
 }
+
+func TestAuthHandlerWrapper_ApplyOverrides_Empty(t *testing.T) {
+	t.Parallel()
+	mock := &MockAuthHandlerPlugin{}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "entra"})
+
+	err := wrapper.ApplyOverrides(context.Background(), map[string]string{})
+	require.NoError(t, err)
+	// No call to ConfigureAuthHandler when overrides are empty.
+	assert.Nil(t, mock.lastConfig)
+}
+
+func TestAuthHandlerWrapper_ApplyOverrides_MergesOntoBase(t *testing.T) {
+	t.Parallel()
+	mock := &MockAuthHandlerPlugin{}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "entra"})
+
+	overrides := map[string]string{
+		"clientId": "my-client",
+		"tenantId": "my-tenant",
+	}
+	err := wrapper.ApplyOverrides(context.Background(), overrides)
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastConfig)
+
+	// The settings should contain the handler name key with the merged JSON.
+	raw, ok := mock.lastConfig.Settings["entra"]
+	require.True(t, ok)
+
+	var settings map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Equal(t, "my-client", settings["clientId"])
+	assert.Equal(t, "my-tenant", settings["tenantId"])
+}
+
+func TestAuthHandlerWrapper_ApplyOverrides_SkipsEmptyValues(t *testing.T) {
+	t.Parallel()
+	mock := &MockAuthHandlerPlugin{}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "gcp"})
+
+	// Empty values are filtered out before marshaling — they should not
+	// appear in the settings sent to the plugin.
+	overrides := map[string]string{
+		"projectId": "proj-123",
+		"region":    "",
+	}
+	err := wrapper.ApplyOverrides(context.Background(), overrides)
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastConfig)
+
+	raw := mock.lastConfig.Settings["gcp"]
+	var settings map[string]interface{}
+	require.NoError(t, json.Unmarshal(raw, &settings))
+	assert.Equal(t, "proj-123", settings["projectId"])
+	// Empty string is filtered out — key should not be present.
+	assert.NotContains(t, settings, "region")
+}
+
+func TestAuthHandlerWrapper_ApplyOverrides_PreservesHostConfig(t *testing.T) {
+	t.Parallel()
+	mock := &MockAuthHandlerPlugin{}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "entra"})
+	wrapper.hostCfg = hostConfig{
+		Quiet:      true,
+		NoColor:    true,
+		BinaryName: "mycli",
+	}
+
+	overrides := map[string]string{"clientId": "abc"}
+	err := wrapper.ApplyOverrides(context.Background(), overrides)
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastConfig)
+
+	// Host-level fields must be preserved from initial config.
+	assert.True(t, mock.lastConfig.Quiet, "Quiet should be preserved")
+	assert.True(t, mock.lastConfig.NoColor, "NoColor should be preserved")
+	assert.Equal(t, "mycli", mock.lastConfig.BinaryName, "BinaryName should be preserved")
+}

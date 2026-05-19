@@ -136,3 +136,13 @@ type FlowDetector interface {
 	// based on the current environment (env vars, config files, metadata endpoints).
 	DetectAvailableFlows(ctx context.Context) ([]FlowAvailability, error)
 }
+
+// Configurer is an optional interface for auth handlers that accept runtime
+// setting overrides. The auth login command uses this to apply --client-id
+// and --tenant flags before initiating the login flow.
+type Configurer interface {
+	// ApplyOverrides sends updated key-value settings to the handler.
+	// Keys use the handler's config field names (e.g., "clientId", "tenantId").
+	// Only non-empty values are applied; empty strings are ignored.
+	ApplyOverrides(ctx context.Context, overrides map[string]string) error
+}

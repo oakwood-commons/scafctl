@@ -137,6 +137,9 @@ func TestCommandLogin_AlreadyAuthenticated(t *testing.T) {
 	// Verify warning about already authenticated
 	output := buf.String()
 	assert.Contains(t, output, "Already authenticated")
+
+	// Verify Login was NOT called (returns early without proceeding)
+	assert.Empty(t, mock.LoginCalls, "Login should not be called when already authenticated without --force")
 }
 
 func TestCommandLogin_WithTenant(t *testing.T) {
@@ -246,4 +249,105 @@ func TestCommandLogin_DeviceCodeCallback(t *testing.T) {
 
 	// Re-execute to test callback behavior (it was captured above)
 	capturedCallback("ABC123", "https://microsoft.com/devicelogin", "Test message")
+}
+
+func TestCommandLogin_ClientIDFlag_AppliesOverrides(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockConfigurerHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+	}
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{
+			Name:     "Test User",
+			Email:    "test@example.com",
+			TenantID: "custom-tenant",
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--client-id", "custom-client-id", "--tenant", "custom-tenant"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	// Verify ApplyOverrides was called with the right values
+	require.Len(t, mock.ApplyOverridesCalls, 1)
+	assert.Equal(t, "custom-client-id", mock.ApplyOverridesCalls[0]["clientId"])
+	assert.Equal(t, "custom-tenant", mock.ApplyOverridesCalls[0]["tenantId"])
+
+	// Verify login was still called
+	require.Len(t, mock.LoginCalls, 1)
+}
+
+func TestCommandLogin_ClientIDFlag_NoOverridesWhenEmpty(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockConfigurerHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapScopesOnTokenRequest,
+		auth.CapTenantID,
+	}
+	mock.SetNotAuthenticated()
+	mock.LoginResult = &auth.Result{
+		Claims: &auth.Claims{
+			Name:  "Test User",
+			Email: "test@example.com",
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	// No overrides when flags are empty
+	assert.Empty(t, mock.ApplyOverridesCalls)
+}
+
+func TestCommandLogin_ClientIDFlag_ErrorWhenNotConfigurer(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	// NewMockHandler does NOT implement auth.Configurer.
+	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{
+		auth.CapScopesOnLogin,
+		auth.CapTenantID,
+	}
+	mock.SetNotAuthenticated()
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--client-id", "custom-client-id"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--client-id is not supported")
 }

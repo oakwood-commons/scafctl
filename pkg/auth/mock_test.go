@@ -142,3 +142,27 @@ func TestMockHandler_SupportedFlows_WithValue(t *testing.T) {
 	mock.FlowsValue = customFlows
 	assert.Equal(t, customFlows, mock.SupportedFlows())
 }
+
+func TestMockConfigurerHandler_ApplyOverrides(t *testing.T) {
+	mock := NewMockConfigurerHandler("entra")
+	assert.Equal(t, "entra", mock.Name())
+
+	overrides := map[string]string{"clientId": "abc", "tenantId": "xyz"}
+	err := mock.ApplyOverrides(context.Background(), overrides)
+	require.NoError(t, err)
+	require.Len(t, mock.ApplyOverridesCalls, 1)
+	assert.Equal(t, "abc", mock.ApplyOverridesCalls[0]["clientId"])
+	assert.Equal(t, "xyz", mock.ApplyOverridesCalls[0]["tenantId"])
+
+	// Mutating the original map should not affect recorded calls.
+	overrides["clientId"] = "mutated"
+	assert.Equal(t, "abc", mock.ApplyOverridesCalls[0]["clientId"])
+}
+
+func TestMockConfigurerHandler_ApplyOverrides_Error(t *testing.T) {
+	mock := NewMockConfigurerHandler("entra")
+	mock.ApplyOverridesErr = assert.AnError
+
+	err := mock.ApplyOverrides(context.Background(), map[string]string{"key": "val"})
+	assert.ErrorIs(t, err, assert.AnError)
+}

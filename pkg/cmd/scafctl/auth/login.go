@@ -169,6 +169,12 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 		Args:         flags.RequireArg("handler", cliParams.BinaryName+" auth login gcp"),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			if len(args) > 0 {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return listKnownHandlers(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -232,6 +238,34 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				err := fmt.Errorf("--impersonate-service-account is only supported by the 'gcp' auth handler")
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Apply CLI flag overrides (--client-id, --tenant) to the handler's
+			// plugin configuration before login so the plugin uses the correct
+			// OAuth application and tenant for token requests.
+			if clientID != "" || tenantID != "" {
+				if cfgr, ok := handler.(auth.Configurer); ok {
+					overrides := make(map[string]string)
+					if clientID != "" {
+						overrides["clientId"] = clientID
+					}
+					if tenantID != "" {
+						overrides["tenantId"] = tenantID
+					}
+					if err := cfgr.ApplyOverrides(ctx, overrides); err != nil {
+						return exitcode.WithCode(
+							fmt.Errorf("applying config overrides (--client-id/--tenant): %w", err),
+							exitcode.InvalidInput,
+						)
+					}
+				} else if clientID != "" {
+					// --client-id requires Configurer support; --tenant is passed via
+					// LoginOptions so it works without Configurer.
+					return exitcode.WithCode(
+						fmt.Errorf("--client-id is not supported by the %q auth handler", handlerName),
+						exitcode.InvalidInput,
+					)
+				}
 			}
 
 			// Route to handler-specific login logic
@@ -361,7 +395,7 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 	case auth.PreLoginAlreadyAuthenticated:
 		w.Warningf("Already authenticated as %s.", preLogin.Identity)
 		w.Warningf("Use '%s auth logout %s' to sign out first, or use --force to re-authenticate.", binaryName, handlerName)
-		w.Info("")
+		return nil
 	}
 
 	return executeLogin(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes)
