@@ -30,6 +30,7 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/mark3labs/mcp-go v0.50.0
+	github.com/oakwood-commons/go-flight v1.0.0
 	github.com/oakwood-commons/httpc v0.1.0
 	github.com/oakwood-commons/kvx v0.12.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0

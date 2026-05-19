@@ -220,6 +220,9 @@ const (
 	// CEL or Go-template evaluation request. Prevents CPU exhaustion from
 	// expensive user-supplied expressions.
 	DefaultAPIEvalTimeout = 30 * time.Second
+
+	// DefaultAPIIdentityCacheSize is the default LRU cache size for delegated tokens.
+	DefaultAPIIdentityCacheSize = 1024
 )
 
 // Circuit breaker defaults

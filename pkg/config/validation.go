@@ -5,9 +5,15 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+)
+
+const (
+	DelegationFlowOBO               = "obo"
+	DelegationFlowClientCredentials = "client_credentials"
 )
 
 // Validate validates the entire configuration.
@@ -227,5 +233,94 @@ func (c *Config) CheckVersion() string {
 func (b *BuildConfig) Validate() error {
 	// CacheDir and PluginCacheDir are validated for length by struct tags;
 	// no additional semantic validation needed at this time.
+	return nil
+}
+
+// Validate validates the API identity configuration.
+func (c *APIIdentityConfig) Validate() error {
+	if c.Entra != nil {
+		if err := c.Entra.Validate(); err != nil {
+			return fmt.Errorf("entra: %w", err)
+		}
+	}
+	return nil
+}
+
+// Validate validates the Entra identity configuration.
+func (c *APIEntraIdentityConfig) Validate() error {
+	if c.TenantID == "" {
+		return fmt.Errorf("tenantId is required")
+	}
+	if c.ClientID == "" {
+		return fmt.Errorf("clientId is required")
+	}
+	if err := c.Credential.Validate(); err != nil {
+		return fmt.Errorf("credential: %w", err)
+	}
+	if err := c.AllowedFlows.Validate(); err != nil {
+		return fmt.Errorf("allowedFlows: %w", err)
+	}
+	return nil
+}
+
+// ValidDelegationFlows returns the list of valid delegation flow names.
+func ValidDelegationFlows() []string {
+	return []string{DelegationFlowOBO, DelegationFlowClientCredentials}
+}
+
+// IsFlowPermitted reports whether the given delegation flow is permitted.
+// When the receiver is nil, only OBO is permitted (the default).
+func (d *DelegationFlowsConfig) IsFlowPermitted(flow string) bool {
+	if d == nil {
+		return flow == DelegationFlowOBO
+	}
+	for _, f := range d.Flows {
+		if f == flow {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks that all listed flows are recognized values.
+func (d *DelegationFlowsConfig) Validate() error {
+	if d == nil {
+		return nil
+	}
+	valid := ValidDelegationFlows()
+	for _, f := range d.Flows {
+		found := false
+		for _, v := range valid {
+			if f == v {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("invalid flow %q, must be one of: %s", f, strings.Join(valid, ", "))
+		}
+	}
+	return nil
+}
+
+// Validate checks that the credential configuration is complete and consistent.
+func (c *ServerCredentialConfig) Validate() error {
+	switch c.Type {
+	case "secret":
+		if c.ClientSecret == "" {
+			return fmt.Errorf("clientSecret is required when type is %q", c.Type)
+		}
+		if err := c.ClientSecret.Validate(); err != nil {
+			return fmt.Errorf("clientSecret: %w", err)
+		}
+	case "wif":
+		if c.WIFTokenPath == "" {
+			return fmt.Errorf("wifTokenPath is required when type is %q", c.Type)
+		}
+	case "":
+		return fmt.Errorf("type is required")
+	default:
+		return fmt.Errorf("type: invalid value %q, must be one of: wif, secret", c.Type)
+	}
 	return nil
 }

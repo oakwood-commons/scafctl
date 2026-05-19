@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -166,6 +167,12 @@ func runServe(ctx context.Context, opts *Options) error {
 	// lifecycle (shutdown) is managed consistently.
 	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients)
 
+	// Build delegation registry for API-mode token delegation.
+	delegationReg, err := buildDelegationRegistry(ctx, cfg, lgr)
+	if err != nil {
+		return fmt.Errorf("building delegation registry: %w", err)
+	}
+
 	// Build server options
 	serverOpts := []api.ServerOption{
 		api.WithServerLogger(*lgr),
@@ -183,6 +190,9 @@ func runServe(ctx context.Context, opts *Options) error {
 	}
 	if officialReg != nil {
 		serverOpts = append(serverOpts, api.WithServerOfficialProviders(officialReg))
+	}
+	if delegationReg != nil {
+		serverOpts = append(serverOpts, api.WithServerDelegationRegistry(delegationReg))
 	}
 
 	// Create server
@@ -313,4 +323,23 @@ func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fe
 		}, providers)
 	}
 	return pool
+}
+
+// buildDelegationRegistry constructs a DelegatorRegistry from the API server
+// identity configuration. Returns nil if no delegation is configured.
+func buildDelegationRegistry(ctx context.Context, cfg *config.Config, lgr *logr.Logger) (*authdelegation.DelegatorRegistry, error) {
+	if cfg.APIServer.Identity.Entra == nil {
+		return nil, nil
+	}
+
+	lgr.V(0).Info("building token delegation registry", "provider", "entra")
+
+	delegator, err := authdelegation.NewEntraDelegatorFromConfig(ctx, cfg.APIServer.Identity.Entra)
+	if err != nil {
+		return nil, fmt.Errorf("entra delegator: %w", err)
+	}
+
+	reg := authdelegation.NewDelegatorRegistry()
+	reg.Register("entra", delegator)
+	return reg, nil
 }

@@ -66,6 +66,7 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	// ── Global middleware (all routes including health probes) ──
 	router.Use(chimiddleware.Recoverer)
 	router.Use(chimiddleware.RequestID)
+	router.Use(middleware.FlightID)
 	router.Use(chimiddleware.StripSlashes)
 	router.Use(middleware.RequestLogging(lgr))
 

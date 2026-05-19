@@ -589,6 +589,7 @@ type APIServerConfig struct {
 	CORS            APICORSConfig        `json:"cors,omitempty" yaml:"cors,omitempty" mapstructure:"cors" doc:"CORS configuration"`
 	RateLimit       APIRateLimitConfig   `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty" mapstructure:"rateLimit" doc:"Rate limiting configuration"`
 	Auth            APIAuthConfig        `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
+	Identity        APIIdentityConfig    `json:"identity,omitempty" yaml:"identity,omitempty" mapstructure:"identity" doc:"Server identity for token delegation"`
 	Compression     APICompressionConfig `json:"compression,omitempty" yaml:"compression,omitempty" mapstructure:"compression" doc:"Response compression configuration"`
 	OpenAPI         APIOpenAPIConfig     `json:"openAPI,omitempty" yaml:"openAPI,omitempty" mapstructure:"openAPI" doc:"OpenAPI specification configuration (Servers field is wired; Title, Description, and other fields are reserved for future use)"`
 	Profiler        APIProfilerConfig    `json:"profiler,omitempty" yaml:"profiler,omitempty" mapstructure:"profiler" doc:"Profiler configuration (reserved for future use — not yet wired into server setup)"`
@@ -654,6 +655,66 @@ type APIAzureOIDCConfig struct {
 	TenantID string `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Azure AD tenant ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
 	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"Azure AD client ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
 }
+
+// APIIdentityConfig holds server identity configuration for token delegation.
+type APIIdentityConfig struct {
+	Entra *APIEntraIdentityConfig `json:"entra,omitempty" yaml:"entra,omitempty" mapstructure:"entra" doc:"Azure Entra ID identity for token delegation"`
+}
+
+// APIEntraIdentityConfig holds Azure Entra ID credential configuration for OBO and client_credentials delegation.
+type APIEntraIdentityConfig struct {
+	TenantID     string                 `json:"tenantId" yaml:"tenantId" mapstructure:"tenantId" doc:"Azure AD tenant ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
+	ClientID     string                 `json:"clientId" yaml:"clientId" mapstructure:"clientId" doc:"Azure AD client ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
+	Credential   ServerCredentialConfig `json:"credential" yaml:"credential" mapstructure:"credential" doc:"Server credential configuration"`
+	TokenManager *TokenManagerConfig    `json:"tokenManager,omitempty" yaml:"tokenManager,omitempty" mapstructure:"tokenManager" doc:"Token manager configuration (nil = no caching/deduplication)"`
+	AllowedFlows *DelegationFlowsConfig `json:"allowedFlows,omitempty" yaml:"allowedFlows,omitempty" mapstructure:"allowedFlows" doc:"Permitted delegation flows (nil = OBO only, present with empty flows = deny all)"`
+}
+
+// TokenManagerConfig holds configuration for the token delegation cache manager.
+// A nil pointer on the parent disables caching entirely.
+// A non-nil struct with zero values uses sensible defaults.
+type TokenManagerConfig struct {
+	// CacheSize is the maximum number of cached tokens (0 = default 1024).
+	CacheSize int `json:"cacheSize,omitempty" yaml:"cacheSize,omitempty" mapstructure:"cacheSize" doc:"LRU cache size (0 = default 1024)" maximum:"100000" example:"1024"`
+
+	// ExpiryBuffer is the safety margin subtracted from token TTL before caching.
+	// Prevents serving tokens that are about to expire. Use Go duration syntax.
+	ExpiryBuffer string `json:"expiryBuffer,omitempty" yaml:"expiryBuffer,omitempty" mapstructure:"expiryBuffer" doc:"Safety margin before token expiry (default: 30s)" maxLength:"20" example:"30s"`
+
+	// CleanupInterval is how often the background goroutine evicts expired entries.
+	// Use Go duration syntax.
+	CleanupInterval string `json:"cleanupInterval,omitempty" yaml:"cleanupInterval,omitempty" mapstructure:"cleanupInterval" doc:"Background eviction interval (default: 5m)" maxLength:"20" example:"5m"`
+
+	// ExpiryThreshold is the minimum remaining TTL a token must have to be cached.
+	// Tokens with TTL <= this value are treated as uncacheable. Use Go duration syntax.
+	ExpiryThreshold string `json:"expiryThreshold,omitempty" yaml:"expiryThreshold,omitempty" mapstructure:"expiryThreshold" doc:"Minimum TTL to cache a token (default: 30m)" maxLength:"20" example:"30m"`
+
+	// SlowThreshold is how long a follower waits for the leader before retrying independently.
+	// Use Go duration syntax.
+	SlowThreshold string `json:"slowThreshold,omitempty" yaml:"slowThreshold,omitempty" mapstructure:"slowThreshold" doc:"Follower bail-out duration (default: 2s)" maxLength:"20" example:"2s"`
+
+	// RetryFollowerOnError controls whether followers retry independently when the leader errors.
+	RetryFollowerOnError *bool `json:"retryFollowerOnError,omitempty" yaml:"retryFollowerOnError,omitempty" mapstructure:"retryFollowerOnError" doc:"Followers retry on leader error (default: true)"`
+}
+
+// ServerCredentialConfig holds the server's authentication credential for token delegation.
+type ServerCredentialConfig struct {
+	Type         string    `json:"type" yaml:"type" mapstructure:"type" doc:"Server credential type" enum:"wif,secret" example:"secret" maxLength:"10"`
+	ClientSecret SecretRef `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"Secret reference URI (env://VAR_NAME or file:///path)" maxLength:"512" example:"env://SCAFCTL_API_ENTRA_CLIENT_SECRET"`
+	WIFTokenPath string    `json:"wifTokenPath,omitempty" yaml:"wifTokenPath,omitempty" mapstructure:"wifTokenPath" doc:"Path to federated token file (required when type is wif)" maxLength:"512" example:"/var/run/secrets/azure/tokens/federated-token"`
+}
+
+// DelegationFlowsConfig controls which delegation flows the server may use.
+// A nil pointer on the parent means "use defaults (OBO only)".
+// A non-nil struct with empty Flows means "deny all delegation".
+// A non-nil struct with populated Flows means "only permit listed flows".
+type DelegationFlowsConfig struct {
+	Flows []string `json:"flows,omitempty" yaml:"flows,omitempty" mapstructure:"flows" doc:"Permitted delegation flows (obo, client_credentials)" maxItems:"10"`
+}
+
+// SecretRef is a URI-style reference to a secret value.
+// Supported schemes: env:// (environment variable), file:// (file path).
+type SecretRef string
 
 // APICompressionConfig holds response compression configuration.
 type APICompressionConfig struct {

@@ -15,6 +15,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -506,54 +507,72 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	scope, _ := inputs["scope"].(string)
 
 	if authProvider != "" {
-		// Get auth handler from context
-		handler, err := auth.GetHandler(ctx, authProvider)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", ProviderName, err)
-		}
+		// API mode: use delegation registry if available in context.
+		if reg := authdelegation.RegistryFromContext(ctx); reg != nil {
+			if delegator, ok := reg.Get(authProvider); ok {
+				result, err := delegator.DelegateToken(ctx, scope)
+				if err != nil {
+					return nil, fmt.Errorf("%s: token delegation failed for %q: %w", ProviderName, authProvider, err)
+				}
+				headers["Authorization"] = "Bearer " + result.AccessToken
+				lgr.V(1).Info("injected delegated auth header",
+					"authProvider", authProvider,
+					"scope", scope,
+				)
+			} else {
+				return nil, fmt.Errorf("%s: auth provider %q not registered in delegation registry (available: %v)", ProviderName, authProvider, reg.Names())
+			}
+		} else {
+			// CLI mode: use auth handler registry.
+			handler, err := auth.GetHandler(ctx, authProvider)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", ProviderName, err)
+			}
 
-		// Validate scope requirement based on handler capabilities
-		requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
-		if scope == "" && requiresScope {
-			return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
-		}
-		if scope != "" && !requiresScope {
-			lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
+			// Validate scope requirement based on handler capabilities
+			requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+			if scope == "" && requiresScope {
+				return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+			}
+			if scope != "" && !requiresScope {
+				lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
+					"authProvider", authProvider,
+					"scope", scope,
+				)
+				scope = ""
+			}
+
+			// Calculate minimum token validity: request timeout + 60 second buffer
+			minValidFor := timeoutDuration + 60*time.Second
+
+			// Get token with sufficient validity
+			token, err := handler.GetToken(ctx, auth.TokenOptions{
+				Scope:       scope,
+				MinValidFor: minValidFor,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
+			}
+
+			// Inject authorization header
+			headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
+			lgr.V(1).Info("injected auth header",
 				"authProvider", authProvider,
 				"scope", scope,
+				"tokenExpiresAt", token.ExpiresAt,
+				"minValidFor", minValidFor,
 			)
-			scope = ""
 		}
-
-		// Calculate minimum token validity: request timeout + 60 second buffer
-		minValidFor := timeoutDuration + 60*time.Second
-
-		// Get token with sufficient validity
-		token, err := handler.GetToken(ctx, auth.TokenOptions{
-			Scope:       scope,
-			MinValidFor: minValidFor,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
-		}
-
-		// Inject authorization header
-		headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
-		lgr.V(1).Info("injected auth header",
-			"authProvider", authProvider,
-			"scope", scope,
-			"tokenExpiresAt", token.ExpiresAt,
-			"minValidFor", minValidFor,
-		)
 	}
 
 	// Build httpc client with timeout and user-supplied retry configuration.
 	retryCfg := parseRetryConfig(inputs)
 	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
 
-	// Wire 401 token-refresh via the httpc OnUnauthorized hook when an auth provider is configured.
-	// The initial token was already injected into headers above; this hook handles silent re-auth on 401.
-	if authProvider != "" {
+	// Wire 401 token-refresh via the httpc OnUnauthorized hook when an auth provider is configured
+	// in CLI mode. In API mode (delegation registry present), 401 propagates as an error because
+	// re-delegation with the same parameters would return the same token.
+	if authProvider != "" && authdelegation.RegistryFromContext(ctx) == nil {
 		capturedScope := scope
 		capturedTimeout := timeoutDuration
 		httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
