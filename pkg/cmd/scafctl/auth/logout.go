@@ -72,8 +72,12 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return fmt.Errorf("accepts 1 arg(s) (handler name), received %d — or use --all to log out from all handlers", len(args))
 			}
 			return nil
-		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		}, ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			if len(args) > 0 {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return listKnownHandlers(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+		}, RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
 			if w == nil {
@@ -84,6 +88,14 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			if all {
 				handlerNames = listHandlers(ctx)
 				if len(handlerNames) == 0 {
+					unconfigured := listUnconfiguredOfficialHandlers(ctx)
+					if len(unconfigured) > 0 {
+						w.Infof("No active authentication sessions.")
+						w.Infof("")
+						w.Infof("Official auth handlers: %s", strings.Join(unconfigured, ", "))
+						w.Infof("Run '%s auth login <handler>' to authenticate (downloads automatically on first use).", cliParams.BinaryName)
+						return nil
+					}
 					err := fmt.Errorf("no auth handlers registered")
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)

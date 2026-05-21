@@ -48,6 +48,12 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			values are never displayed here — use 'scafctl auth token <handler>'
 			to retrieve a token value.
 
+			Official auth handlers are downloaded automatically on first use via
+			'scafctl auth login <handler>'. To discover additional auth handlers
+			from a catalog, run:
+
+			  scafctl catalog list --kind auth-handler
+
 			Examples:
 			  # Show tokens for all handlers
 			  scafctl auth list
@@ -83,6 +89,12 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Aliases:      []string{"ls"},
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			if len(args) > 0 {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return listKnownHandlers(cmd.Context()), cobra.ShellCompDirectiveNoFileComp
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -103,13 +115,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 
 			handlerNames := listHandlers(ctx)
-			if len(handlerNames) == 0 {
-				err := fmt.Errorf("no auth handlers registered")
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.GeneralError)
-			}
 
-			// Filter to a single handler if specified
+			// When a specific handler is provided, allow lazy resolution (user
+			// explicitly asked for it). Otherwise only iterate eagerly-registered
+			// handlers to avoid surprise network I/O.
 			if len(args) > 0 {
 				handlerName := args[0]
 				if err := validateHandlerName(ctx, handlerName); err != nil {
@@ -117,6 +126,19 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				handlerNames = []string{handlerName}
+			} else if len(handlerNames) == 0 {
+				// No eagerly-registered handlers. Check if official ones exist.
+				unconfigured := listUnconfiguredOfficialHandlers(ctx)
+				if len(unconfigured) == 0 {
+					err := fmt.Errorf("no auth handlers registered")
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
+				}
+				w.Infof("No active authentication sessions.")
+				w.Infof("")
+				w.Infof("Official auth handlers: %s", strings.Join(unconfigured, ", "))
+				w.Infof("Run '%s auth login <handler>' to authenticate (downloads automatically on first use).", cliParams.BinaryName)
+				return nil
 			}
 
 			// --purge-expired: remove expired access tokens and return a summary.
@@ -183,6 +205,11 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			if len(results) == 0 {
 				w.Infof("No cached tokens found.")
+				if unconfigured := listUnconfiguredOfficialHandlers(ctx); len(unconfigured) > 0 {
+					w.Infof("")
+					w.Infof("Hint: additional official auth handlers: %s", strings.Join(unconfigured, ", "))
+					w.Infof("      Run '%s auth login <handler>' to authenticate.", cliParams.BinaryName)
+				}
 				return nil
 			}
 

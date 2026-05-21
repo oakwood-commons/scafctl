@@ -36,7 +36,7 @@ func OBOKeyGenerator(params FlowParams, hashFunc func(string) (string, bool)) (s
 }
 
 // ClientCredKeyGenerator produces a cache key for client_credentials flows: "cc|clientID|scope".
-func ClientCredKeyGenerator(params FlowParams, hashFunc func(string) (string, bool)) (string, bool) {
+func ClientCredKeyGenerator(params FlowParams, _ func(string) (string, bool)) (string, bool) {
 	if params.ClientID == "" || params.Scope == "" {
 		return "", false
 	}

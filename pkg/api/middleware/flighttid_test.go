@@ -19,12 +19,12 @@ func TestFlightID_AssignsUniqueIDs(t *testing.T) {
 		id1 = FlightIDFromContext(r.Context())
 	}))
 
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 
 	handler2 := FlightID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		id2 = FlightIDFromContext(r.Context())
 	}))
-	handler2.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	handler2.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 
 	assert.NotZero(t, id1)
 	assert.NotZero(t, id2)
@@ -41,7 +41,7 @@ func TestFlightID_Monotonic(t *testing.T) {
 		h := FlightID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			id = FlightIDFromContext(r.Context())
 		}))
-		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 		ids[i] = id
 	}
 
@@ -64,7 +64,7 @@ func TestFlightID_ConcurrentUniqueness(t *testing.T) {
 			h := FlightID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 				ids[idx] = FlightIDFromContext(r.Context())
 			}))
-			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 		}(i)
 	}
 	wg.Wait()
@@ -93,7 +93,7 @@ func TestFlightIDExtractor_ReturnsFromContext(t *testing.T) {
 	h := FlightID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		captured = extractor(r.Context())
 	}))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 
 	require.NotZero(t, captured)
 }

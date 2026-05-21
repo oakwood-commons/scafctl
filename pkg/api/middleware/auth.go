@@ -22,8 +22,10 @@ import (
 // contextKey type for storing auth claims in context.
 type contextKey string
 
-const claimsContextKey contextKey = "auth_claims"
-const accessTokenContextKey contextKey = "access_token"
+const (
+	claimsContextKey      contextKey = "auth_claims"
+	accessTokenContextKey contextKey = "access_token"
+)
 
 // AuthClaims holds the validated JWT claims extracted from an Entra OIDC token.
 type AuthClaims struct {

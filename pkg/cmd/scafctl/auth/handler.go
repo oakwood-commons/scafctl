@@ -99,6 +99,33 @@ func listKnownHandlers(ctx context.Context) []string {
 	return names
 }
 
+// listUnconfiguredOfficialHandlers returns official handler names that are NOT
+// eagerly registered. These are available via lazy resolution but the user has
+// not yet used them. Use this for hint messages in CLI output.
+func listUnconfiguredOfficialHandlers(ctx context.Context) []string {
+	official := authofficial.RegistryFromContext(ctx)
+	if official == nil {
+		return nil
+	}
+
+	var eager map[string]struct{}
+	if registry := auth.RegistryFromContext(ctx); registry != nil {
+		names := registry.List()
+		eager = make(map[string]struct{}, len(names))
+		for _, n := range names {
+			eager[n] = struct{}{}
+		}
+	}
+
+	var unconfigured []string
+	for _, name := range official.Names() {
+		if _, ok := eager[name]; !ok {
+			unconfigured = append(unconfigured, name)
+		}
+	}
+	return unconfigured
+}
+
 // isHandlerRegistered checks if a handler name is registered or known to the
 // official auth handler registry (i.e., resolvable via the lazy fallback).
 func isHandlerRegistered(ctx context.Context, name string) bool {

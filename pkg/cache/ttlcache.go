@@ -79,7 +79,13 @@ func (c *LRUWithTTL[K, V]) Get(key K) (V, bool) {
 		var zero V
 		return zero, false
 	}
-	e := elem.Value.(*entry[K, V])
+	e, ok := elem.Value.(*entry[K, V])
+	if !ok {
+		c.mu.RUnlock()
+		c.removeBadEntry(key, elem)
+		var zero V
+		return zero, false
+	}
 	if e.isExpired(c.expiryBuffer) {
 		c.mu.RUnlock()
 		c.removeEntry(key, elem)
@@ -100,10 +106,11 @@ func (c *LRUWithTTL[K, V]) Set(key K, value V, ttl time.Duration) {
 
 	if elem, exists := c.store[key]; exists && elem != nil {
 		c.order.MoveToFront(elem)
-		e := elem.Value.(*entry[K, V])
-		e.value = value
-		e.expiresAt = time.Now().Add(ttl)
-		return
+		if e, ok := elem.Value.(*entry[K, V]); ok {
+			e.value = value
+			e.expiresAt = time.Now().Add(ttl)
+			return
+		}
 	}
 
 	e := &entry[K, V]{
@@ -167,8 +174,8 @@ func (c *LRUWithTTL[K, V]) cleanup() {
 			delete(c.store, key)
 			continue
 		}
-		e := elem.Value.(*entry[K, V])
-		if e.isExpired(c.expiryBuffer) {
+		e, ok := elem.Value.(*entry[K, V])
+		if ok && e.isExpired(c.expiryBuffer) {
 			c.order.Remove(elem)
 			delete(c.store, key)
 		}
@@ -200,8 +207,9 @@ func (c *LRUWithTTL[K, V]) removeEntry(key K, elem *list.Element) {
 func (c *LRUWithTTL[K, V]) evictOldest() {
 	oldest := c.order.Back()
 	if oldest != nil {
-		e := oldest.Value.(*entry[K, V])
-		delete(c.store, e.key)
+		if e, ok := oldest.Value.(*entry[K, V]); ok {
+			delete(c.store, e.key)
+		}
 		c.order.Remove(oldest)
 	}
 }

@@ -19,7 +19,7 @@ func (c *TokenCache[K, V]) Set(_ context.Context, key K, value V, ttl time.Durat
 	c.lrucache.Set(key, value, ttl)
 }
 
-func NewTokenCache[K comparable, V any](ctx context.Context, size int, expiryBuffer time.Duration, cleanUpInterval time.Duration) *TokenCache[K, V] {
+func NewTokenCache[K comparable, V any](ctx context.Context, size int, expiryBuffer, cleanUpInterval time.Duration) *TokenCache[K, V] {
 	lruCache := cache.NewLRUWithTTL(
 		cache.WithSize[K, V](size),
 		cache.WithExpiryBuffer[K, V](expiryBuffer),

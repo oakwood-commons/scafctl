@@ -182,3 +182,31 @@ func (m *MockFlowDetectorHandler) DetectAvailableFlows(_ context.Context) ([]Flo
 }
 
 var _ FlowDetector = (*MockFlowDetectorHandler)(nil)
+
+// MockConfigurerHandler embeds MockHandler and adds Configurer support.
+type MockConfigurerHandler struct {
+	*MockHandler
+	ApplyOverridesErr   error
+	ApplyOverridesCalls []map[string]string
+}
+
+// NewMockConfigurerHandler creates a mock handler that implements Configurer.
+func NewMockConfigurerHandler(name string) *MockConfigurerHandler {
+	return &MockConfigurerHandler{
+		MockHandler: NewMockHandler(name),
+	}
+}
+
+// ApplyOverrides implements Configurer.
+func (m *MockConfigurerHandler) ApplyOverrides(_ context.Context, overrides map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make(map[string]string, len(overrides))
+	for k, v := range overrides {
+		cp[k] = v
+	}
+	m.ApplyOverridesCalls = append(m.ApplyOverridesCalls, cp)
+	return m.ApplyOverridesErr
+}
+
+var _ Configurer = (*MockConfigurerHandler)(nil)

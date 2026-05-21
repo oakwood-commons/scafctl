@@ -8,6 +8,7 @@ import (
 
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -90,6 +91,21 @@ func TestBuildHandlerInfoResult_InstalledBuiltIn(t *testing.T) {
 	assert.Equal(t, "built-in", result["source"])
 	assert.Contains(t, result["flows"], "device_code")
 	assert.Equal(t, false, result["loggedIn"])
+}
+
+func TestBuildHandlerInfoResult_LazyPluginClassifiedAsPlugin(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	registry := authpkg.NewRegistry()
+	lazy := plugin.NewLazyAuthHandlerWrapper(plugin.LazyAuthHandlerConfig{
+		Name:    "github",
+		BinPath: "/fake/path",
+	})
+	require.NoError(t, registry.Register(lazy))
+
+	result := buildHandlerInfoResult(ctx, "github", registry, nil)
+	assert.Equal(t, "installed", result["status"])
+	assert.Equal(t, "plugin", result["source"], "lazy wrappers should be classified as plugin, not built-in")
 }
 
 func TestCommandHandlers_WithRegisteredHandler(t *testing.T) {

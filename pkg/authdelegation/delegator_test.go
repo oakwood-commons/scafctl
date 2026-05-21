@@ -29,12 +29,12 @@ func TestNewEntraDelegator(t *testing.T) {
 		cfg  EntraDelegatorConfig
 		err  error
 	}{
-		{"no tenant", EntraDelegatorConfig{ClientID: "c", CredentialType: CredentialTypeWIF, FederatedTokenFile: "f"}, EntraNoTenantID},
-		{"no client", EntraDelegatorConfig{TenantID: "t", CredentialType: CredentialTypeWIF, FederatedTokenFile: "f"}, EntraNoClientID},
-		{"invalid cred type", EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: "bad"}, EntraInvalidCredentialType},
-		{"empty cred type", EntraDelegatorConfig{TenantID: "t", ClientID: "c"}, EntraInvalidCredentialType},
-		{"wif no file", EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: CredentialTypeWIF}, EntraWIFMissingTokenFile},
-		{"secret no value", EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: CredentialTypeSecret}, EntraSecretMissing},
+		{"no tenant", EntraDelegatorConfig{ClientID: "c", CredentialType: CredentialTypeWIF, FederatedTokenFile: "f"}, ErrEntraNoTenantID},
+		{"no client", EntraDelegatorConfig{TenantID: "t", CredentialType: CredentialTypeWIF, FederatedTokenFile: "f"}, ErrEntraNoClientID},
+		{"invalid cred type", EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: "bad"}, ErrEntraInvalidCredentialType},
+		{"empty cred type", EntraDelegatorConfig{TenantID: "t", ClientID: "c"}, ErrEntraInvalidCredentialType},
+		{"wif no file", EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: CredentialTypeWIF}, ErrEntraWIFMissingTokenFile},
+		{"secret no value", EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: CredentialTypeSecret}, ErrEntraSecretMissing},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestDelegateToken(t *testing.T) {
 			"access_token": "delegated-token", "token_type": "Bearer", "expires_in": 3600, "scope": "api/.default",
 		})
 
-		d := mustDelegatorWithURL(t, CredentialTypeSecret, "secret-val", srv.URL)
+		d := mustDelegatorWithURL(t, "secret-val", srv.URL)
 		ctx := authContext("caller-jwt", "user")
 
 		tok, err := d.DelegateToken(ctx, "api/.default")
@@ -116,7 +116,7 @@ func TestDelegateToken(t *testing.T) {
 			"access_token": "cc-token", "token_type": "Bearer", "expires_in": 3600, "scope": "api/.default",
 		})
 
-		d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+		d := mustDelegatorWithURL(t, "s", srv.URL)
 		ctx := authContext("app-jwt", "app")
 
 		tok, err := d.DelegateToken(ctx, "api/.default")
@@ -129,7 +129,7 @@ func TestDelegateToken(t *testing.T) {
 		t.Parallel()
 		srv := fakeTokenEndpoint(t, http.StatusBadRequest, map[string]string{"error": "invalid_grant"})
 
-		d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+		d := mustDelegatorWithURL(t, "s", srv.URL)
 		ctx := authContext("bad-jwt", "user")
 
 		_, err := d.DelegateToken(ctx, "scope/.default")
@@ -142,7 +142,7 @@ func TestDelegateToken(t *testing.T) {
 			"access_token": "tok", "token_type": "Bearer", "expires_in": 60, "scope": "s",
 		})
 
-		d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+		d := mustDelegatorWithURL(t, "s", srv.URL)
 		ctx := middleware.WithAccessToken(context.Background(), "some-jwt")
 
 		tok, err := d.DelegateToken(ctx, "s")
@@ -171,7 +171,7 @@ func TestDelegateToken_WithManager_CacheHit(t *testing.T) {
 		manager.WithStore("test", tokenCache),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	ctx := authContext("caller-jwt", "user")
@@ -208,7 +208,7 @@ func TestDelegateToken_WithManager_CacheMiss(t *testing.T) {
 		manager.WithStore("spy", store),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	ctx := authContext("caller-jwt", "user")
@@ -242,7 +242,7 @@ func TestDelegateToken_WithManager_KeyGenFails_BypassesCache(t *testing.T) {
 		manager.WithStore("spy", store),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	// Use a context with token but no claims → callerType="" → NoOpKeyGenerator → returns false
@@ -269,7 +269,7 @@ func TestDelegateToken_WithManager_FlowError_NotCached(t *testing.T) {
 		manager.WithStore("spy", store),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	ctx := authContext("caller-jwt", "user")
@@ -298,7 +298,7 @@ func TestDelegateToken_WithManager_TTLDerivedFromExpiresIn(t *testing.T) {
 		manager.WithStore("spy", store),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	ctx := authContext("caller-jwt", "user")
@@ -330,7 +330,7 @@ func TestDelegateToken_WithManager_DifferentScopes_DifferentKeys(t *testing.T) {
 		manager.WithStore("test", tokenCache),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	ctx := authContext("caller-jwt", "user")
@@ -373,7 +373,7 @@ func TestDelegateToken_WithManager_Deduplication(t *testing.T) {
 		manager.WithStore("test", tokenCache),
 	)
 
-	d := mustDelegatorWithURL(t, CredentialTypeSecret, "s", srv.URL)
+	d := mustDelegatorWithURL(t, "s", srv.URL)
 	d.manager = mgr
 
 	ctx := authContext("caller-jwt", "user")
@@ -447,14 +447,10 @@ func mustDelegator(t *testing.T, credType CredentialType, credVal string) *Entra
 	return d
 }
 
-func mustDelegatorWithURL(t *testing.T, credType CredentialType, credVal, tokenURL string) *EntraDelegator {
+func mustDelegatorWithURL(t *testing.T, credVal, tokenURL string) *EntraDelegator {
 	t.Helper()
-	cfg := EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: credType}
-	if credType == CredentialTypeSecret {
-		cfg.ClientSecret = credVal
-	} else {
-		cfg.FederatedTokenFile = credVal
-	}
+	cfg := EntraDelegatorConfig{TenantID: "t", ClientID: "c", CredentialType: CredentialTypeSecret}
+	cfg.ClientSecret = credVal
 	client := httpc.NewClient(nil)
 	registry := NewFlowRegistry()
 	registry.Register("obo", oboFlow(tokenURL, &SecretCredential{Secret: credVal}, client))
@@ -510,7 +506,6 @@ func (s *spyStore[K, V]) Set(_ context.Context, key K, value V, ttl time.Duratio
 }
 
 func TestNewEntraDelegatorFromConfig(t *testing.T) {
-
 	t.Run("nil config returns error", func(t *testing.T) {
 		_, err := NewEntraDelegatorFromConfig(context.Background(), nil)
 		require.Error(t, err)
@@ -725,7 +720,7 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 		assert.Equal(t, 10*time.Minute, s.ExpiryBuffer)
 		assert.Equal(t, 5*time.Minute, s.CleanupInterval)
 		assert.Equal(t, 30*time.Minute, s.ExpiryThreshold)
-		assert.Equal(t, 2*time.Second, s.SlowThreshold)
+		assert.Equal(t, 500*time.Millisecond, s.SlowThreshold)
 		assert.True(t, s.RetryOnError)
 	})
 
@@ -761,7 +756,7 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 		assert.Equal(t, 10*time.Minute, s.ExpiryBuffer)
 		assert.Equal(t, 5*time.Minute, s.CleanupInterval)
 		assert.Equal(t, 30*time.Minute, s.ExpiryThreshold)
-		assert.Equal(t, 2*time.Second, s.SlowThreshold)
+		assert.Equal(t, 500*time.Millisecond, s.SlowThreshold)
 		assert.True(t, s.RetryOnError)
 	})
 
@@ -776,7 +771,7 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 		assert.Equal(t, 10*time.Minute, s.ExpiryBuffer)
 		assert.Equal(t, 5*time.Minute, s.CleanupInterval)
 		assert.Equal(t, 45*time.Minute, s.ExpiryThreshold)
-		assert.Equal(t, 2*time.Second, s.SlowThreshold)
+		assert.Equal(t, 500*time.Millisecond, s.SlowThreshold)
 		assert.True(t, s.RetryOnError)
 	})
 }

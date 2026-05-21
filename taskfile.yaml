@@ -1026,10 +1026,20 @@ tasks:
   test:e2e:
     deps: [info, git-unshallow-clone, lint]
     desc: "Run end-to-end tests (lint + coverage + solutions + integration)"
+    vars:
+      START_TIME:
+        sh: date +%s
     cmds:
       - task: test-cover
       - task: lint:solutions
       - task: integration
+      - |
+        END_TIME=$(date +%s)
+        ELAPSED=$((END_TIME - {{.START_TIME}}))
+        MINS=$((ELAPSED / 60))
+        SECS=$((ELAPSED % 60))
+        echo ""
+        echo "✅ test:e2e completed in ${MINS}m${SECS}s"
 
   # ──────────────────────────────────────────────────────────────────────────────
   # Load Testing (k6)
