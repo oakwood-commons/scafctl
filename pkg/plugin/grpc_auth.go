@@ -577,32 +577,42 @@ func cachedTokenInfoToProto(t *auth.CachedTokenInfo) *proto.CachedTokenInfo {
 	if t == nil {
 		return &proto.CachedTokenInfo{}
 	}
-	return &proto.CachedTokenInfo{
-		Handler:       t.Handler,
-		TokenKind:     t.TokenKind,
-		Scope:         t.Scope,
-		TokenType:     t.TokenType,
-		Flow:          string(t.Flow),
-		ExpiresAtUnix: t.ExpiresAt.Unix(),
-		CachedAtUnix:  t.CachedAt.Unix(),
-		IsExpired:     t.IsExpired,
-		SessionId:     t.SessionID,
+	p := &proto.CachedTokenInfo{
+		Handler:   t.Handler,
+		TokenKind: t.TokenKind,
+		Scope:     t.Scope,
+		TokenType: t.TokenType,
+		Flow:      string(t.Flow),
+		IsExpired: t.IsExpired,
+		SessionId: t.SessionID,
 	}
+	if !t.ExpiresAt.IsZero() {
+		p.ExpiresAtUnix = t.ExpiresAt.Unix()
+	}
+	if !t.CachedAt.IsZero() {
+		p.CachedAtUnix = t.CachedAt.Unix()
+	}
+	return p
 }
 
 func protoToCachedTokenInfo(t *proto.CachedTokenInfo) *auth.CachedTokenInfo {
 	if t == nil {
 		return &auth.CachedTokenInfo{}
 	}
-	return &auth.CachedTokenInfo{
+	info := &auth.CachedTokenInfo{
 		Handler:   t.Handler,
 		TokenKind: t.TokenKind,
 		Scope:     t.Scope,
 		TokenType: t.TokenType,
 		Flow:      auth.Flow(t.Flow),
-		ExpiresAt: time.Unix(t.ExpiresAtUnix, 0),
-		CachedAt:  time.Unix(t.CachedAtUnix, 0),
 		IsExpired: t.IsExpired,
 		SessionID: t.SessionId,
 	}
+	if t.ExpiresAtUnix != 0 {
+		info.ExpiresAt = time.Unix(t.ExpiresAtUnix, 0)
+	}
+	if t.CachedAtUnix != 0 {
+		info.CachedAt = time.Unix(t.CachedAtUnix, 0)
+	}
+	return info
 }

@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -222,4 +224,109 @@ func TestHumanDuration(t *testing.T) {
 			assert.Equal(t, tc.expected, humanDuration(tc.d))
 		})
 	}
+}
+
+func TestCommandList_NoEagerHandlers_ShowsOfficialHint(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	// Add official registry to context (no eager handlers registered)
+	officialReg := authofficial.NewRegistry()
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+
+	// Also add an empty auth registry so the code path doesn't hit nil
+	authReg := auth.NewRegistry()
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	output := buf.String()
+	assert.Contains(t, output, "No active authentication sessions")
+	assert.Contains(t, output, "Official auth handlers")
+	assert.Contains(t, output, "entra")
+	assert.Contains(t, output, "gcp")
+	assert.Contains(t, output, "github")
+	assert.Contains(t, output, "auth login <handler>")
+	assert.Contains(t, output, "downloads automatically")
+}
+
+func TestCommandList_NoOfficialRegistry_StillErrors(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	// No official registry, no eager handlers — should still error
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no auth handlers registered")
+}
+
+func TestCommandList_WithTokens_ShowsRemainingHint(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	// Set up a handler with tokens
+	now := time.Now()
+	mock := auth.NewMockHandler("github")
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "github",
+			TokenKind: "access",
+			Scope:     "repo",
+			TokenType: "Bearer",
+			Flow:      auth.FlowDeviceCode,
+			ExpiresAt: now.Add(1 * time.Hour),
+			CachedAt:  now.Add(-5 * time.Minute),
+			IsExpired: false,
+		},
+	}
+	ctx = withTestHandler(ctx, mock)
+
+	// Add official registry so hint about remaining handlers can appear
+	officialReg := authofficial.NewRegistry()
+	ctx = authofficial.WithRegistry(ctx, officialReg)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	// Token results are shown (this test verifies no crash with official registry present)
+	output := buf.String()
+	assert.Contains(t, output, "github")
+}
+
+func TestCommandList_ValidArgsFunction(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+
+	completions, directive := cmd.ValidArgsFunction(cmd, []string{}, "")
+	assert.Contains(t, completions, "entra")
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+
+	completions, directive = cmd.ValidArgsFunction(cmd, []string{"entra"}, "")
+	assert.Empty(t, completions)
+	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
 }

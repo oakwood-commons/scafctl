@@ -406,7 +406,7 @@ func TestCommandLogin_CustomHandler_Success(t *testing.T) {
 }
 
 func TestCommandLogin_CustomHandler_AlreadyAuthenticated(t *testing.T) {
-	// loginGeneric should print a warning when already authenticated
+	// loginGeneric should print a warning and return early when already authenticated
 	ctx, buf := newTestContext(t)
 
 	mock := auth.NewMockHandler("quay")
@@ -423,8 +423,8 @@ func TestCommandLogin_CustomHandler_AlreadyAuthenticated(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	// Should still call Login (PreLoginAlreadyAuthenticated just warns)
-	require.Len(t, mock.LoginCalls, 1)
+	// Should NOT call Login (returns early with warning)
+	assert.Empty(t, mock.LoginCalls)
 	out := buf.String()
 	assert.Contains(t, out, "Already authenticated")
 }

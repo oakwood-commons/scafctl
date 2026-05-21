@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
@@ -59,12 +60,21 @@ func CommandHandlers(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			built-in or loaded via plugin). Available handlers are those in the
 			official auth handler registry that can be auto-fetched from the catalog.
 
+			Use 'scafctl auth handlers install <name>' to pre-fetch a handler.
+			Use 'scafctl auth handlers remove <name>' to delete a cached handler.
+
 			Note: 'scafctl auth list' shows cached tokens, not handlers. This
 			command shows handler discovery and installation status.
 
 			Examples:
 			  # List all auth handlers
 			  scafctl auth handlers
+
+			  # Install a handler from the catalog
+			  scafctl auth handlers install github
+
+			  # Remove a cached handler
+			  scafctl auth handlers remove github
 
 			  # Output as JSON
 			  scafctl auth handlers -o json
@@ -84,11 +94,31 @@ func CommandHandlers(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				kvx.WithOutputSchemaJSON(authHandlersSchema),
 			)
 
-			return outputOpts.Write(results)
+			if err := outputOpts.Write(results); err != nil {
+				return err
+			}
+
+			// Show hint about catalog discovery when output is human-readable (not json/yaml/csv/toml/quiet).
+			switch outputFlags.Output {
+			case "json", "yaml", "csv", "toml", "quiet":
+				// skip hint for structured/quiet output
+			default:
+				w := writer.FromContext(ctx)
+				if w != nil {
+					w.Infof("")
+					w.Infof("Tip: run '%s catalog list --kind auth-handler' to discover additional handlers from configured catalogs.", cliParams.BinaryName)
+				}
+			}
+
+			return nil
 		},
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
+
+	cmd.AddCommand(commandHandlersInstall(cliParams, ioStreams))
+	cmd.AddCommand(commandHandlersRemove(cliParams, ioStreams))
+
 	return cmd
 }
 
@@ -143,9 +173,10 @@ func buildHandlerInfoResult(ctx context.Context, name string, authReg *authpkg.R
 		if err == nil {
 			result["status"] = "installed"
 			result["displayName"] = handler.DisplayName()
-			if _, ok := handler.(*plugin.AuthHandlerWrapper); ok {
+			switch handler.(type) {
+			case *plugin.AuthHandlerWrapper, *plugin.LazyAuthHandlerWrapper:
 				result["source"] = "plugin"
-			} else {
+			default:
 				result["source"] = "built-in"
 			}
 
@@ -166,7 +197,8 @@ func buildHandlerInfoResult(ctx context.Context, name string, authReg *authpkg.R
 		// Handler is in the official registry but not installed yet.
 		result["status"] = "available"
 		result["source"] = "catalog"
-		result["flows"] = "unknown (install to inspect)"
+		binName := settings.BinaryNameFromContext(ctx)
+		result["flows"] = "run '" + binName + " auth handlers install " + name + "' to inspect"
 	}
 
 	return result

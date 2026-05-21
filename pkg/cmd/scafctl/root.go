@@ -222,6 +222,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 		otelInsecure      bool
 		telShutdown       func(context.Context) error
 		authPluginClients []*plugin.AuthHandlerClient
+		authLazyHandlers  []*plugin.LazyAuthHandlerWrapper
 		authClientsMu     sync.Mutex // guards authPluginClients from concurrent fallback resolvers
 	)
 
@@ -614,6 +615,49 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				})
 			}
 
+			// ── Register lazy wrappers for cached official auth handler plugins ──
+			// If an official auth handler has a cached binary (previously
+			// downloaded via install or login), register a lazy wrapper now.
+			// This makes it visible in registry.List() without spawning any
+			// subprocesses. The plugin is started on first actual use.
+			if officialReg := authofficial.RegistryFromContext(ctx); officialReg != nil {
+				pluginCfg := &plugin.ProviderConfig{
+					Quiet:      cliParams.IsQuiet,
+					NoColor:    cliParams.NoColor,
+					BinaryName: binaryName,
+				}
+				hostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
+				if hostDeps != nil && secretErr == nil {
+					hostDeps.SecretStore = sharedSecretStore
+				}
+				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
+				cache := plugin.NewCache(settings.PluginCacheDirFor(binaryName))
+
+				for _, name := range officialReg.Names() {
+					if authRegistry.Has(name) {
+						continue // already registered (e.g., via config or plugin dir)
+					}
+					cacheKey := plugin.PluginCacheKey(name, solution.PluginKindAuthHandler)
+					binPath, _, ok := cache.GetLatestBinary(cacheKey)
+					if !ok {
+						continue // not cached, skip (will use fallback on demand)
+					}
+					lazy := plugin.NewLazyAuthHandlerWrapper(plugin.LazyAuthHandlerConfig{
+						Name:             name,
+						BinPath:          binPath,
+						PluginCfg:        pluginCfg,
+						ClientOpts:       clientOpts,
+						OfficialRegistry: officialReg,
+					})
+					lazy.SetContext(ctx)
+					if err := authRegistry.Register(lazy); err != nil {
+						lgr.V(1).Info("failed to register lazy auth handler", "handler", name, "error", err)
+						continue
+					}
+					authLazyHandlers = append(authLazyHandlers, lazy)
+				}
+			}
+
 			// ── Wire official provider registry for auto-resolution ──
 			// When the embedder provides a custom registry, use it.
 			// Otherwise, use the default registry unless disabled in config.
@@ -772,6 +816,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cleanup = func() {
 		cleanupOnce.Do(func() {
 			plugin.KillAllAuthHandlers(authPluginClients)
+			for _, lazy := range authLazyHandlers {
+				if c := lazy.Client(); c != nil {
+					c.Kill()
+				}
+			}
 			if telShutdown != nil {
 				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()

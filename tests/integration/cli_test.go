@@ -2143,15 +2143,23 @@ func TestIntegration_AuthLoginGitHubInvalidFlow(t *testing.T) {
 
 func TestIntegration_AuthLoginGitHubAppFlow(t *testing.T) {
 	t.Parallel()
-	// github-app flow without required config should fail.
-	_, stderr, exitCode := runScafctl(t, "auth", "login", "github", "--flow", "github-app")
+	// github-app flow without required config should fail, unless already authenticated.
+	stdout, stderr, exitCode := runScafctl(t, "auth", "login", "github", "--flow", "github-app")
 
-	assert.NotEqual(t, 0, exitCode)
-	// Either config error (plugin installed) or handler not found (plugin not installed)
-	assert.True(t,
-		strings.Contains(stderr, "app ID is required") || strings.Contains(stderr, "unknown auth handler"),
-		"expected config or handler error, got: %s", stderr,
-	)
+	combined := stdout + stderr
+	if exitCode == 0 {
+		// Already authenticated — handler short-circuits with a warning.
+		assert.True(t,
+			strings.Contains(combined, "Already authenticated") || strings.Contains(combined, "already authenticated"),
+			"expected already-authenticated warning on success, got stdout=%s stderr=%s", stdout, stderr,
+		)
+	} else {
+		// Either config error (plugin installed) or handler not found (plugin not installed)
+		assert.True(t,
+			strings.Contains(stderr, "app ID is required") || strings.Contains(stderr, "unknown auth handler"),
+			"expected config or handler error, got: %s", stderr,
+		)
+	}
 }
 
 func TestIntegration_AuthStatusEntra(t *testing.T) {
@@ -2183,6 +2191,38 @@ func TestIntegration_AuthLogoutEntra(t *testing.T) {
 			"expected handler/plugin error, got: %s", stderr,
 		)
 	}
+}
+
+func TestIntegration_AuthHandlersInstallHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "handlers", "install", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Download an official auth handler plugin")
+}
+
+func TestIntegration_AuthHandlersRemoveHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "handlers", "remove", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Remove a cached auth handler plugin")
+}
+
+func TestIntegration_AuthHandlersInstallUnknown(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "handlers", "install", "nonexistent-handler-xyz")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unknown auth handler")
+}
+
+func TestIntegration_AuthHandlersRemoveNotInstalled(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "handlers", "remove", "nonexistent-handler-xyz")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "is not installed")
 }
 
 // ============================================================================
