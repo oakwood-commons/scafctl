@@ -368,6 +368,15 @@ func (s *Solution) ApplyDefaults() {
 	if s.Catalog.Visibility == "" {
 		s.Catalog.Visibility = "private"
 	}
+
+	// Default plugin kind to "provider" when omitted. This is the most common
+	// kind and prevents plugins from being silently skipped during registration
+	// (RegisterFetchedPlugins filters on Kind == PluginKindProvider).
+	for i := range s.Bundle.Plugins {
+		if s.Bundle.Plugins[i].Kind == "" {
+			s.Bundle.Plugins[i].Kind = PluginKindProvider
+		}
+	}
 }
 
 // Validate performs lightweight runtime validation on the Solution envelope.
