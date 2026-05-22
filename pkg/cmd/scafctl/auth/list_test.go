@@ -4,13 +4,18 @@
 package auth
 
 import (
+	"bytes"
+	"context"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -329,4 +334,55 @@ func TestCommandList_ValidArgsFunction(t *testing.T) {
 	completions, directive = cmd.ValidArgsFunction(cmd, []string{"entra"}, "")
 	assert.Empty(t, completions)
 	assert.Equal(t, cobra.ShellCompDirectiveNoFileComp, directive)
+}
+
+func TestCommandList_WarningsGoToStderr(t *testing.T) {
+	// Verify that when a handler doesn't support token listing,
+	// the warning goes to stderr (not stdout) so it doesn't corrupt JSON output.
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
+
+	// Register a handler that does NOT implement TokenLister.
+	// Use a minimal mock that only implements auth.Handler (not TokenLister).
+	reg := auth.NewRegistry()
+	minimalMock := &minimalHandler{name: "minimal"}
+	require.NoError(t, reg.Register(minimalMock))
+	ctx = auth.WithRegistry(ctx, reg)
+
+	cliParams := settings.NewCliParams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"-o", "json"})
+
+	err := cmd.Execute()
+	assert.NoError(t, err)
+
+	// Warning should be in stderr, not stdout
+	assert.Contains(t, stderr.String(), "does not support token listing")
+	assert.NotContains(t, stdout.String(), "does not support token listing")
+}
+
+// minimalHandler implements only auth.Handler (not TokenLister or TokenPurger).
+type minimalHandler struct {
+	name string
+}
+
+func (m *minimalHandler) Name() string                    { return m.name }
+func (m *minimalHandler) DisplayName() string             { return m.name }
+func (m *minimalHandler) SupportedFlows() []auth.Flow     { return nil }
+func (m *minimalHandler) Capabilities() []auth.Capability { return nil }
+func (m *minimalHandler) Login(_ context.Context, _ auth.LoginOptions) (*auth.Result, error) {
+	return nil, nil
+}
+func (m *minimalHandler) Logout(_ context.Context) error                 { return nil }
+func (m *minimalHandler) Status(_ context.Context) (*auth.Status, error) { return &auth.Status{}, nil }
+func (m *minimalHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
+	return nil, nil
+}
+
+func (m *minimalHandler) InjectAuth(_ context.Context, _ *http.Request, _ auth.TokenOptions) error {
+	return nil
 }

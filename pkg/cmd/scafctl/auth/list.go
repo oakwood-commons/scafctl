@@ -134,6 +134,18 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
+				if outputFlags.Output == "json" || outputFlags.Output == "yaml" || outputFlags.Output == "quiet" {
+					opts := flags.NewKvxOutputOptionsFromFlags(
+						outputFlags.Output,
+						outputFlags.Interactive,
+						outputFlags.Expression,
+						kvx.WithOutputContext(ctx),
+						kvx.WithOutputNoColor(cliParams.NoColor),
+						kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
+					)
+					opts.IOStreams = ioStreams
+					return opts.Write([]map[string]any{})
+				}
 				w.Infof("No active authentication sessions.")
 				w.Infof("")
 				w.Infof("Official auth handlers: %s", strings.Join(unconfigured, ", "))
@@ -147,17 +159,17 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				for _, name := range handlerNames {
 					handler, err := getHandler(ctx, name)
 					if err != nil {
-						w.Warningf("Failed to initialize %s: %v", name, err)
+						w.WarnStderrf("Failed to initialize %s: %v", name, err)
 						continue
 					}
 					purger, ok := handler.(auth.TokenPurger)
 					if !ok {
-						w.Warningf("%s does not support token purging", name)
+						w.WarnStderrf("%s does not support token purging", name)
 						continue
 					}
 					n, err := purger.PurgeExpiredTokens(ctx)
 					if err != nil {
-						w.Warningf("Failed to purge expired tokens for %s: %v", name, err)
+						w.WarnStderrf("Failed to purge expired tokens for %s: %v", name, err)
 						continue
 					}
 					if n > 0 {
@@ -179,22 +191,32 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			results := make([]map[string]any, 0)
 
+			outputOpts := flags.NewKvxOutputOptionsFromFlags(
+				outputFlags.Output,
+				outputFlags.Interactive,
+				outputFlags.Expression,
+				kvx.WithOutputContext(ctx),
+				kvx.WithOutputNoColor(cliParams.NoColor),
+				kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
+			)
+			outputOpts.IOStreams = ioStreams
+
 			for _, name := range handlerNames {
 				handler, err := getHandler(ctx, name)
 				if err != nil {
-					w.Warningf("Failed to initialize %s: %v", name, err)
+					w.WarnStderrf("Failed to initialize %s: %v", name, err)
 					continue
 				}
 
 				lister, ok := handler.(auth.TokenLister)
 				if !ok {
-					w.Warningf("%s does not support token listing", name)
+					w.WarnStderrf("%s does not support token listing", name)
 					continue
 				}
 
 				tokens, err := lister.ListCachedTokens(ctx)
 				if err != nil {
-					w.Warningf("Failed to list tokens for %s: %v", name, err)
+					w.WarnStderrf("Failed to list tokens for %s: %v", name, err)
 					continue
 				}
 
@@ -204,6 +226,9 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 
 			if len(results) == 0 {
+				if outputFlags.Output == "json" || outputFlags.Output == "yaml" || outputFlags.Output == "quiet" {
+					return outputOpts.Write(results)
+				}
 				w.Infof("No cached tokens found.")
 				if unconfigured := listUnconfiguredOfficialHandlers(ctx); len(unconfigured) > 0 {
 					w.Infof("")
@@ -228,6 +253,9 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 
 			if len(results) == 0 {
+				if outputFlags.Output == "json" || outputFlags.Output == "yaml" || outputFlags.Output == "quiet" {
+					return outputOpts.Write(results)
+				}
 				w.Infof("No cached tokens matched the filter.")
 				return nil
 			}
@@ -239,16 +267,6 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 			}
-
-			outputOpts := flags.NewKvxOutputOptionsFromFlags(
-				outputFlags.Output,
-				outputFlags.Interactive,
-				outputFlags.Expression,
-				kvx.WithOutputContext(ctx),
-				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
-			)
-			outputOpts.IOStreams = ioStreams
 
 			return outputOpts.Write(results)
 		},

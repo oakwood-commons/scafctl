@@ -1,0 +1,21 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: auth-provider-error-test
+  version: 1.0.0
+  description: Tests that authProvider produces a clear error when the handler is unavailable
+
+spec:
+  resolvers:
+    data:
+      description: Attempt HTTP call with unavailable auth handler
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://httpbin.org/get"
+              method: GET
+              authProvider: nonexistent-handler-xyz
+              scope: "read"

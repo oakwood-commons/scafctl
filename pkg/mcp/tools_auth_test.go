@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -261,3 +262,330 @@ func TestHandleAuthStatus(t *testing.T) {
 		assert.NotEmpty(t, parsed.Handlers[0].Capabilities)
 	})
 }
+
+func TestHandleListCachedTokens(t *testing.T) {
+	t.Run("no auth registry", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+		srv.authReg = nil
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_list_tokens"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListCachedTokens(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "No auth registry configured")
+	})
+
+	t.Run("empty registry", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_list_tokens"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListCachedTokens(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "No auth handlers registered")
+	})
+
+	t.Run("with cached tokens", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		mock := auth.NewMockHandler("gitlab")
+		mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+			{
+				Handler:   "gitlab",
+				TokenKind: "access",
+				Scope:     "read_user",
+				TokenType: "Bearer",
+				Flow:      auth.FlowInteractive,
+				ExpiresAt: time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+				CachedAt:  time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
+				IsExpired: false,
+			},
+		}
+		require.NoError(t, reg.Register(mock))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_list_tokens"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListCachedTokens(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Tokens []map[string]any `json:"tokens"`
+			Count  int              `json:"count"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 1, parsed.Count)
+		assert.Equal(t, "gitlab", parsed.Tokens[0]["handler"])
+		assert.Equal(t, "read_user", parsed.Tokens[0]["scope"])
+		assert.Equal(t, false, parsed.Tokens[0]["isExpired"])
+	})
+
+	t.Run("filter by handler", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		mock1 := auth.NewMockHandler("gitlab")
+		mock1.ListCachedTokensResult = []*auth.CachedTokenInfo{
+			{Handler: "gitlab", TokenKind: "access", Scope: "read_user"},
+		}
+		mock2 := auth.NewMockHandler("entra")
+		mock2.ListCachedTokensResult = []*auth.CachedTokenInfo{
+			{Handler: "entra", TokenKind: "access", Scope: "api://example/.default"},
+		}
+		require.NoError(t, reg.Register(mock1))
+		require.NoError(t, reg.Register(mock2))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_list_tokens"
+		request.Params.Arguments = map[string]any{"handler": "gitlab"}
+
+		result, err := srv.handleListCachedTokens(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Tokens []map[string]any `json:"tokens"`
+			Count  int              `json:"count"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 1, parsed.Count)
+		assert.Equal(t, "gitlab", parsed.Tokens[0]["handler"])
+	})
+}
+
+func TestHandlePurgeExpiredTokens(t *testing.T) {
+	t.Run("no auth registry", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+		srv.authReg = nil
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_purge_expired"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handlePurgeExpiredTokens(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "No auth registry configured")
+	})
+
+	t.Run("purges expired tokens", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		mock := auth.NewMockHandler("entra")
+		mock.PurgeExpiredResult = 3
+		require.NoError(t, reg.Register(mock))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_purge_expired"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handlePurgeExpiredTokens(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Handlers    []map[string]any `json:"handlers"`
+			TotalPurged int              `json:"totalPurged"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 3, parsed.TotalPurged)
+		assert.Equal(t, "entra", parsed.Handlers[0]["handler"])
+	})
+
+	t.Run("filter by handler", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		mock1 := auth.NewMockHandler("entra")
+		mock1.PurgeExpiredResult = 2
+		mock2 := auth.NewMockHandler("github")
+		mock2.PurgeExpiredResult = 5
+		require.NoError(t, reg.Register(mock1))
+		require.NoError(t, reg.Register(mock2))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_purge_expired"
+		request.Params.Arguments = map[string]any{"handler": "entra"}
+
+		result, err := srv.handlePurgeExpiredTokens(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Handlers    []map[string]any `json:"handlers"`
+			TotalPurged int              `json:"totalPurged"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 2, parsed.TotalPurged)
+		assert.Len(t, parsed.Handlers, 1)
+		assert.Equal(t, "entra", parsed.Handlers[0]["handler"])
+	})
+
+	t.Run("skipped handler without TokenPurger", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		minimal := &mcpMinimalHandler{name: "basic"}
+		require.NoError(t, reg.Register(minimal))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_purge_expired"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handlePurgeExpiredTokens(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Handlers    []map[string]any `json:"handlers"`
+			TotalPurged int              `json:"totalPurged"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 0, parsed.TotalPurged)
+		assert.Len(t, parsed.Handlers, 1)
+		assert.Equal(t, "basic", parsed.Handlers[0]["handler"])
+		assert.Contains(t, parsed.Handlers[0]["status"], "does not support token purging")
+	})
+}
+
+func TestHandleListCachedTokens_Warnings(t *testing.T) {
+	t.Run("handler without TokenLister", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		minimal := &mcpMinimalHandler{name: "basic"}
+		require.NoError(t, reg.Register(minimal))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_list_tokens"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListCachedTokens(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Tokens   []map[string]any `json:"tokens"`
+			Count    int              `json:"count"`
+			Warnings []string         `json:"warnings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 0, parsed.Count)
+		require.Len(t, parsed.Warnings, 1)
+		assert.Contains(t, parsed.Warnings[0], "does not support token listing")
+	})
+
+	t.Run("handler with ListCachedTokens error", func(t *testing.T) {
+		reg := auth.NewRegistry()
+		mock := auth.NewMockHandler("gitlab")
+		mock.ListCachedTokensErr = fmt.Errorf("cache corrupted")
+		require.NoError(t, reg.Register(mock))
+
+		srv, err := NewServer(
+			WithServerVersion("test"),
+			WithServerAuthRegistry(reg),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_list_tokens"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListCachedTokens(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed struct {
+			Tokens   []map[string]any `json:"tokens"`
+			Count    int              `json:"count"`
+			Warnings []string         `json:"warnings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Equal(t, 0, parsed.Count)
+		require.Len(t, parsed.Warnings, 1)
+		assert.Contains(t, parsed.Warnings[0], "cache corrupted")
+	})
+}
+
+// mcpMinimalHandler implements only auth.Handler (not TokenLister or TokenPurger).
+type mcpMinimalHandler struct {
+	name string
+}
+
+func (m *mcpMinimalHandler) Name() string        { return m.name }
+func (m *mcpMinimalHandler) DisplayName() string { return m.name }
+
+func (m *mcpMinimalHandler) SupportedFlows() []auth.Flow {
+	return []auth.Flow{auth.FlowDeviceCode}
+}
+
+func (m *mcpMinimalHandler) Capabilities() []auth.Capability { return nil }
+
+func (m *mcpMinimalHandler) Login(_ context.Context, _ auth.LoginOptions) (*auth.Result, error) {
+	return nil, nil
+}
+
+func (m *mcpMinimalHandler) Logout(_ context.Context) error { return nil }
+
+func (m *mcpMinimalHandler) Status(_ context.Context) (*auth.Status, error) {
+	return &auth.Status{}, nil
+}
+
+func (m *mcpMinimalHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
+	return nil, nil
+}
+
+func (m *mcpMinimalHandler) InjectAuth(_ context.Context, _ *http.Request, _ auth.TokenOptions) error {
+	return nil
+}
+
+var _ auth.Handler = (*mcpMinimalHandler)(nil)

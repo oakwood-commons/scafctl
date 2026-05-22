@@ -967,3 +967,108 @@ func TestHandler_Status_Reason_Expired(t *testing.T) {
 	assert.False(t, status.Authenticated)
 	assert.Equal(t, "session expired", status.Reason)
 }
+
+func TestHandler_ListCachedTokens_Empty(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, nil)
+
+	tokens, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, tokens)
+}
+
+func TestHandler_ListCachedTokens_WithTokens(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, nil)
+
+	// Store a token in the cache
+	token := &auth.Token{
+		AccessToken: "test-access-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "read",
+		Flow:        auth.FlowInteractive,
+		SessionID:   "sess-123",
+		CachedAt:    time.Now(),
+	}
+	err := h.tokenCache.Set(context.Background(), auth.FlowInteractive, "fp1", "read", token)
+	require.NoError(t, err)
+
+	tokens, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	require.Len(t, tokens, 1)
+	assert.Equal(t, "test-provider", tokens[0].Handler)
+	assert.Equal(t, "access", tokens[0].TokenKind)
+	assert.Equal(t, "read", tokens[0].Scope)
+	assert.Equal(t, "Bearer", tokens[0].TokenType)
+	assert.Equal(t, auth.FlowInteractive, tokens[0].Flow)
+	assert.False(t, tokens[0].IsExpired)
+}
+
+func TestHandler_ListCachedTokens_NilCache(t *testing.T) {
+	h := &Handler{cfg: config.CustomOAuth2Config{Name: "no-cache"}, secretErr: fmt.Errorf("no keyring"), logger: logr.Discard()}
+
+	tokens, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, tokens)
+}
+
+func TestHandler_PurgeExpiredTokens_Empty(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, nil)
+
+	n, err := h.PurgeExpiredTokens(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
+func TestHandler_PurgeExpiredTokens_RemovesExpired(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+	h, _ := newTestHandler(t, srv, nil)
+
+	// Store an expired token
+	expired := &auth.Token{
+		AccessToken: "expired-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(-time.Hour),
+		Scope:       "read",
+		Flow:        auth.FlowInteractive,
+		CachedAt:    time.Now().Add(-2 * time.Hour),
+	}
+	err := h.tokenCache.Set(context.Background(), auth.FlowInteractive, "fp1", "read", expired)
+	require.NoError(t, err)
+
+	// Store a valid token
+	valid := &auth.Token{
+		AccessToken: "valid-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "write",
+		Flow:        auth.FlowInteractive,
+		CachedAt:    time.Now(),
+	}
+	err = h.tokenCache.Set(context.Background(), auth.FlowInteractive, "fp2", "write", valid)
+	require.NoError(t, err)
+
+	n, err := h.PurgeExpiredTokens(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Verify valid token is still there
+	tokens, err := h.ListCachedTokens(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, tokens, 1)
+	assert.Equal(t, "write", tokens[0].Scope)
+}
+
+func TestHandler_PurgeExpiredTokens_NilCache(t *testing.T) {
+	h := &Handler{cfg: config.CustomOAuth2Config{Name: "no-cache"}, secretErr: fmt.Errorf("no keyring"), logger: logr.Discard()}
+
+	n, err := h.PurgeExpiredTokens(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
