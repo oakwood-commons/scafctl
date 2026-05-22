@@ -407,6 +407,21 @@ func TestSolution_LoadFromBytes(t *testing.T) {
 		err := s.LoadFromBytes([]byte("{}"))
 		require.Error(t, err)
 	})
+
+	t.Run("defaults plugin kind to provider", func(t *testing.T) {
+		data := []byte(`metadata:
+  name: plugin-test
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: oci
+      version: ">=0.5.0"
+`)
+		var s Solution
+		require.NoError(t, s.LoadFromBytes(data))
+		require.Len(t, s.Bundle.Plugins, 1)
+		assert.Equal(t, PluginKindProvider, s.Bundle.Plugins[0].Kind)
+	})
 }
 
 func TestBundle_IsEmpty(t *testing.T) {
@@ -555,4 +570,23 @@ func TestSolution_ApplyDefaults_PreservesExistingVersion(t *testing.T) {
 	}
 	s.ApplyDefaults()
 	assert.Equal(t, "1.2.3", s.Metadata.Version.String())
+}
+
+func TestSolution_ApplyDefaults_PluginKindDefaultsToProvider(t *testing.T) {
+	t.Parallel()
+
+	s := &Solution{
+		Bundle: Bundle{
+			Plugins: []PluginDependency{
+				{Name: "oci", Version: ">=0.5.0"},
+				{Name: "myauth", Kind: PluginKindAuthHandler, Version: "1.0.0"},
+				{Name: "exec", Kind: PluginKindProvider, Version: "^2.0.0"},
+			},
+		},
+	}
+	s.ApplyDefaults()
+
+	assert.Equal(t, PluginKindProvider, s.Bundle.Plugins[0].Kind, "empty kind should default to provider")
+	assert.Equal(t, PluginKindAuthHandler, s.Bundle.Plugins[1].Kind, "explicit auth-handler kind should be preserved")
+	assert.Equal(t, PluginKindProvider, s.Bundle.Plugins[2].Kind, "explicit provider kind should be preserved")
 }
