@@ -99,6 +99,9 @@ Enable file logging for troubleshooting:
 | `list_cel_functions` | List CEL functions |
 | `list_providers` | List providers with filtering |
 | `list_solutions` | List catalog solutions |
+| `list_auth_handlers` | List registered auth handlers with config status |
+| `auth_list_tokens` | List cached access tokens (metadata only, no secrets) |
+| `auth_purge_expired` | Remove expired tokens from the cache |
 | `render_solution` | Render action/resolver graphs |
 | `get_openapi_spec` | Generate full OpenAPI specification for the REST API |
 | `list_api_endpoints` | List all REST API endpoints with method, path, and summary |

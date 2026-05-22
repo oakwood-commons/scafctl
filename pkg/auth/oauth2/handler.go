@@ -51,6 +51,12 @@ type Handler struct {
 	secretKeyPrefix string
 }
 
+// Compile-time interface assertions.
+var (
+	_ auth.TokenLister = (*Handler)(nil)
+	_ auth.TokenPurger = (*Handler)(nil)
+)
+
 // Option configures the Handler.
 type Option func(*Handler)
 
@@ -251,6 +257,61 @@ func (h *Handler) Logout(ctx context.Context) error {
 		return fmt.Errorf("logout %s: %w", h.cfg.Name, errs[0])
 	}
 	return nil
+}
+
+// ListCachedTokens returns all cached tokens for this handler.
+func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo, error) {
+	if h.tokenCache == nil {
+		return nil, nil
+	}
+
+	entries, err := h.tokenCache.ListCachedEntries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list cached tokens for %s: %w", h.cfg.Name, err)
+	}
+
+	var result []*auth.CachedTokenInfo
+	var getErrors []string
+	for _, entry := range entries {
+		token, err := h.tokenCache.Get(ctx, entry.Flow, entry.Fingerprint, entry.Scope)
+		if err != nil {
+			getErrors = append(getErrors, fmt.Sprintf("flow=%s scope=%s: %v", entry.Flow, entry.Scope, err))
+			continue
+		}
+		if token == nil {
+			continue
+		}
+		result = append(result, &auth.CachedTokenInfo{
+			Handler:     h.cfg.Name,
+			TokenKind:   "access",
+			Scope:       entry.Scope,
+			TokenType:   token.TokenType,
+			Flow:        entry.Flow,
+			Fingerprint: entry.Fingerprint,
+			ExpiresAt:   token.ExpiresAt,
+			CachedAt:    token.CachedAt,
+			IsExpired:   token.IsExpired(),
+			SessionID:   token.SessionID,
+		})
+	}
+
+	var retErr error
+	if len(getErrors) > 0 {
+		retErr = fmt.Errorf("partial read failures for %s: %s", h.cfg.Name, strings.Join(getErrors, "; "))
+	}
+	return result, retErr
+}
+
+// PurgeExpiredTokens removes all expired access tokens from the cache.
+func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
+	if h.tokenCache == nil {
+		return 0, nil
+	}
+	n, err := h.tokenCache.PurgeExpired(ctx)
+	if err != nil {
+		return n, fmt.Errorf("purge expired tokens for %s: %w", h.cfg.Name, err)
+	}
+	return n, nil
 }
 
 // Status returns the current authentication state.

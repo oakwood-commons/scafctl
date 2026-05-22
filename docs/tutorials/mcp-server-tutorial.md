@@ -71,6 +71,8 @@ You should see JSON output listing all available tools:
     { "name": "inspect_solution", "description": "Get full solution metadata..." },
     { "name": "lint_solution", "description": "Validate a solution file..." },
     { "name": "list_auth_handlers", "description": "List all registered auth handlers..." },
+    { "name": "auth_list_tokens", "description": "List all cached access tokens across auth handlers..." },
+    { "name": "auth_purge_expired", "description": "Remove expired access tokens from the cache..." },
     { "name": "list_cel_functions", "description": "List all available CEL functions..." },
     { "name": "list_go_template_functions", "description": "List all available Go template extension functions..." },
     { "name": "list_examples", "description": "List available scafctl example files..." },
@@ -733,6 +735,8 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `show_snapshot` | Display the contents of a resolver execution snapshot file — resolver values, timing, status, and errors |
 | `diff_snapshots` | Compare two resolver snapshots and return structured diffs — added, removed, modified, and unchanged resolvers |
 | `list_auth_handlers` | List all registered authentication handlers with their configuration status and token expiry |
+| `auth_list_tokens` | List all cached access tokens across registered auth handlers -- shows metadata (handler, scope, flow, expiry) without revealing token values |
+| `auth_purge_expired` | Remove expired access tokens from the cache across all (or a specific) auth handler. Keeps valid tokens and refresh tokens |
 | `get_config_paths` | List all XDG-compliant paths used by scafctl — config, data, cache, state, secrets, plugins, and runtime directories |
 | `validate_expressions` | Batch-validate multiple CEL expressions or Go templates — returns validity, errors, and referenced fields for each |
 | `get_version` | Return scafctl version, commit SHA, and build timestamp |

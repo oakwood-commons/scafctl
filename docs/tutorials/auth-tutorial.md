@@ -2808,6 +2808,72 @@ verification, see [examples/auth/custom-oauth2-config.md](https://github.com/oak
 
 ---
 
+## Handler Lifecycle Management
+
+Official auth handlers (github, gcp, entra) are delivered as plugin binaries and
+downloaded automatically on first use (e.g., during `scafctl auth login github`).
+You can also manage them explicitly.
+
+### Listing Available Handlers
+
+```bash
+# Show all registered handlers with flows and capabilities
+scafctl auth handlers
+scafctl auth handlers -o json
+```
+
+### Pre-installing a Handler
+
+Download a handler plugin before first use (e.g., for air-gapped environments or
+to inspect capabilities):
+
+```bash
+# Install a specific handler
+scafctl auth handlers install github
+scafctl auth handlers install entra
+
+# Force re-download (replaces cached binary)
+scafctl auth handlers install entra --force
+```
+
+### Removing a Handler
+
+Remove cached handler plugin binaries to free disk space or force a fresh
+download on next use:
+
+```bash
+# Remove a handler's cached binary
+scafctl auth handlers remove github
+scafctl auth handlers remove entra
+```
+
+After removal, the handler will be re-downloaded automatically on next
+`scafctl auth login <handler>`.
+
+### Lazy Loading Behavior
+
+Auth handlers are loaded lazily -- plugin subprocesses are started only when an
+operation requires I/O (login, token refresh, listing cached tokens). This
+means:
+
+- `scafctl auth handlers` lists registered handler names without network I/O
+- `scafctl auth list` queries all eagerly-registered handlers (initializing
+  them as needed) but does not trigger auto-download of unconfigured handlers
+- Running `scafctl auth login <handler>` triggers auto-download if the handler
+  is not yet cached locally
+
+This design avoids surprise network I/O and plugin downloads until explicitly
+requested.
+
+### Shell Completion
+
+The `login` and `logout` commands support shell completion for handler names.
+If you have shell completions enabled for scafctl, pressing `<Tab>` after
+`scafctl auth login` or `scafctl auth logout` will suggest available handler
+names (e.g., `entra`, `github`, `gcp`, and any custom OAuth2 handlers).
+
+---
+
 ## Next Steps
 
 - [CEL Expressions Tutorial](cel-tutorial.md) -- Master CEL expressions and extension functions
