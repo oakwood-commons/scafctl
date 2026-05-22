@@ -6,6 +6,7 @@ package authdelegation
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -30,6 +31,11 @@ const (
 
 	CredentialTypeWIF    CredentialType = "wif"
 	CredentialTypeSecret CredentialType = "secret"
+)
+
+var (
+	defaultHTTPClientOnce sync.Once
+	defaultHTTPClientVal  *httpc.Client
 )
 
 // TokenDelegator is the top-level facade. One per server.
@@ -91,13 +97,18 @@ func WithLogger(log logr.Logger) EntraDelegatorOption {
 	return func(d *EntraDelegator) { d.logger = log }
 }
 
-var defaultHTTPClient = httpc.NewClient(
-	&httpc.ClientConfig{
-		Timeout:     5 * time.Second,
-		EnableCache: false,
-		RetryMax:    2,
-	},
-)
+func defaultHTTPClient() *httpc.Client {
+	defaultHTTPClientOnce.Do(func() {
+		defaultHTTPClientVal = httpc.NewClient(
+			&httpc.ClientConfig{
+				Timeout:     5 * time.Second,
+				EnableCache: false,
+				RetryMax:    2,
+			},
+		)
+	})
+	return defaultHTTPClientVal
+}
 
 // NewEntraDelegator constructs an EntraDelegator from the given config.
 // It validates all required fields and pre-wires the flow strategy selector.
@@ -134,7 +145,7 @@ func NewEntraDelegator(cfg EntraDelegatorConfig, opts ...EntraDelegatorOption) (
 		tokenURL:   tokenURL,
 		clientID:   cfg.ClientID,
 		credential: cred,
-		httpClient: defaultHTTPClient,
+		httpClient: defaultHTTPClient(),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -158,13 +169,14 @@ func (d *EntraDelegator) DelegateToken(ctx context.Context, scope string) (Token
 	log := logger.FromContext(ctx)
 
 	ctx, span := telemetry.Tracer(telemetry.TracerAuthDelegation).Start(ctx, "authdelegation.DelegateToken",
+		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attribute.String("delegation.scope", scope)),
 	)
 	defer span.End()
 
 	callerToken := middleware.AccessTokenFromContext(ctx)
 	if callerToken == "" {
-		return TokenResult{}, fmt.Errorf("no caller token in context")
+		return TokenResult{}, ErrNoCallerToken
 	}
 
 	var callerType string
@@ -177,7 +189,9 @@ func (d *EntraDelegator) DelegateToken(ctx context.Context, scope string) (Token
 		attribute.String("delegation.callerType", callerType),
 		attribute.String("delegation.flow", flowName),
 	)
-	log.V(1).Info("delegating token", "callerType", callerType, "flow", flowName, "scope", scope)
+	if log.V(1).Enabled() {
+		log.V(1).Info("delegating token", "callerType", callerType, "flow", flowName, "scope", scope)
+	}
 
 	params := FlowParams{
 		CallerToken: callerToken,
@@ -193,23 +207,31 @@ func (d *EntraDelegator) DelegateToken(ctx context.Context, scope string) (Token
 	}
 
 	if d.manager == nil {
-		log.V(2).Info("executing flow directly", "flow", flowName)
+		if log.V(2).Enabled() {
+			log.V(2).Info("executing flow directly", "flow", flowName)
+		}
 		return flow(ctx, params)
 	}
 
 	cacheKey, ok := GenerateKey(callerType, params)
 	if !ok {
-		log.V(2).Info("cache key generation failed, bypassing cache", "flow", flowName)
+		if log.V(2).Enabled() {
+			log.V(2).Info("cache key generation failed, bypassing cache", "flow", flowName)
+		}
 		return flow(ctx, params)
 	}
 	hooks := &manager.Hooks{
 		OnCacheHit: func(source string) {
 			span.AddEvent("cache.hit", trace.WithAttributes(attribute.String("cache.source", source)))
-			log.V(2).Info("cache hit", "source", source, "flow", flowName)
+			if log.V(2).Enabled() {
+				log.V(2).Info("cache hit", "source", source, "flow", flowName)
+			}
 		},
 		OnSuccess: func() {
 			span.SetAttributes(attribute.Bool("delegation.cacheHit", false))
-			log.V(2).Info("flow execution succeeded", "flow", flowName)
+			if log.V(2).Enabled() {
+				log.V(2).Info("flow execution succeeded", "flow", flowName)
+			}
 		},
 		OnFetchError: func(err error) {
 			span.RecordError(err)
@@ -218,7 +240,9 @@ func (d *EntraDelegator) DelegateToken(ctx context.Context, scope string) (Token
 		},
 	}
 	return d.manager.Do(ctx, cacheKey, func(ctx context.Context) (manager.FetchResult[TokenResult], error) {
-		log.V(2).Info("cache miss, executing flow", "flow", flowName, "cacheKey", cacheKey)
+		if log.V(2).Enabled() {
+			log.V(2).Info("cache miss, executing flow", "flow", flowName, "cacheKey", cacheKey)
+		}
 		token, err := flow(ctx, params)
 		if err != nil {
 			return manager.FetchResult[TokenResult]{}, err
@@ -273,7 +297,10 @@ func NewEntraDelegatorFromConfig(ctx context.Context, cfg *config.APIEntraIdenti
 	// Conditionally wire cache manager when TokenManager is configured.
 	var managerOpts []EntraDelegatorOption
 	if cfg.TokenManager != nil {
-		s := resolveTokenManagerDefaults(cfg.TokenManager)
+		s, err := resolveTokenManagerDefaults(cfg.TokenManager)
+		if err != nil {
+			return nil, fmt.Errorf("token manager config: %w", err)
+		}
 		log.V(1).Info("token manager configured",
 			"cacheSize", s.CacheSize,
 			"expiryBuffer", s.ExpiryBuffer,
@@ -340,7 +367,8 @@ type tokenManagerSettings struct {
 
 // resolveTokenManagerDefaults applies defaults to a TokenManagerConfig.
 // All zero values fall back to package-level constants.
-func resolveTokenManagerDefaults(tm *config.TokenManagerConfig) tokenManagerSettings {
+// Returns an error if any duration string is non-empty but unparseable.
+func resolveTokenManagerDefaults(tm *config.TokenManagerConfig) (tokenManagerSettings, error) {
 	s := tokenManagerSettings{
 		CacheSize:       defaultCacheSize,
 		ExpiryBuffer:    defaultExpiryBuffer,
@@ -354,28 +382,36 @@ func resolveTokenManagerDefaults(tm *config.TokenManagerConfig) tokenManagerSett
 		s.CacheSize = tm.CacheSize
 	}
 	if tm.ExpiryBuffer != "" {
-		if d, err := time.ParseDuration(tm.ExpiryBuffer); err == nil {
-			s.ExpiryBuffer = d
+		d, err := time.ParseDuration(tm.ExpiryBuffer)
+		if err != nil {
+			return tokenManagerSettings{}, fmt.Errorf("parsing expiryBuffer %q: %w", tm.ExpiryBuffer, err)
 		}
+		s.ExpiryBuffer = d
 	}
 	if tm.CleanupInterval != "" {
-		if d, err := time.ParseDuration(tm.CleanupInterval); err == nil {
-			s.CleanupInterval = d
+		d, err := time.ParseDuration(tm.CleanupInterval)
+		if err != nil {
+			return tokenManagerSettings{}, fmt.Errorf("parsing cleanupInterval %q: %w", tm.CleanupInterval, err)
 		}
+		s.CleanupInterval = d
 	}
 	if tm.ExpiryThreshold != "" {
-		if d, err := time.ParseDuration(tm.ExpiryThreshold); err == nil {
-			s.ExpiryThreshold = d
+		d, err := time.ParseDuration(tm.ExpiryThreshold)
+		if err != nil {
+			return tokenManagerSettings{}, fmt.Errorf("parsing expiryThreshold %q: %w", tm.ExpiryThreshold, err)
 		}
+		s.ExpiryThreshold = d
 	}
 	if tm.SlowThreshold != "" {
-		if d, err := time.ParseDuration(tm.SlowThreshold); err == nil {
-			s.SlowThreshold = d
+		d, err := time.ParseDuration(tm.SlowThreshold)
+		if err != nil {
+			return tokenManagerSettings{}, fmt.Errorf("parsing slowThreshold %q: %w", tm.SlowThreshold, err)
 		}
+		s.SlowThreshold = d
 	}
 	if tm.RetryFollowerOnError != nil {
 		s.RetryOnError = *tm.RetryFollowerOnError
 	}
 
-	return s
+	return s, nil
 }

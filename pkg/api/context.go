@@ -11,7 +11,6 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -47,11 +46,6 @@ type HandlerContext struct {
 	// initialization and idle eviction. Used by solution endpoints to
 	// ensure external plugins from bundle.plugins are available.
 	PluginPool *plugin.Pool
-
-	// DelegationRegistry holds token delegators keyed by auth provider name
-	// (e.g. "entra", "gcp"). Used by solution endpoints to delegate tokens
-	// to downstream APIs on behalf of callers. Nil when delegation is not configured.
-	DelegationRegistry *authdelegation.DelegatorRegistry
 }
 
 // NewHandlerContext creates a new HandlerContext with the given dependencies.
@@ -80,14 +74,4 @@ func (hc *HandlerContext) ShuttingDown() bool {
 		return false
 	}
 	return atomic.LoadInt32(hc.IsShuttingDown) == 1
-}
-
-// EnrichContext injects server-level dependencies into a request context so
-// they are available to providers during execution. Currently injects the
-// delegation registry. Returns ctx unchanged if nothing to inject.
-func (hc *HandlerContext) EnrichContext(ctx context.Context) context.Context {
-	if hc.DelegationRegistry != nil {
-		ctx = authdelegation.WithRegistry(ctx, hc.DelegationRegistry)
-	}
-	return ctx
 }

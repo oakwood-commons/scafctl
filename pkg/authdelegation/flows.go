@@ -94,7 +94,11 @@ func executeTokenRequest(ctx context.Context, client *httpc.Client, tokenURL str
 
 	if resp.StatusCode != http.StatusOK {
 		log.Info("token endpoint error", "status", resp.StatusCode, "elapsed", elapsed)
-		return TokenResult{}, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, body)
+		detail := string(body)
+		if len(detail) > 512 {
+			detail = detail[:512] + "...(truncated)"
+		}
+		return TokenResult{}, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, detail)
 	}
 
 	var response map[string]any
@@ -122,6 +126,9 @@ func executeTokenRequest(ctx context.Context, client *httpc.Client, tokenURL str
 
 // FlowRegistry holds the permitted delegation flows by name.
 // Only flows explicitly registered can be executed.
+//
+// FlowRegistry is NOT safe for concurrent use. All Register calls must
+// complete before any Select or Has calls (write-at-init, read-at-request).
 type FlowRegistry struct {
 	flows map[string]FlowFn
 }

@@ -23,7 +23,6 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
-	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -47,7 +46,6 @@ type Server struct {
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
 	pluginPool        *plugin.Pool
-	delegationReg     *authdelegation.DelegatorRegistry
 	version           string
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -62,7 +60,6 @@ type serverConfig struct {
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
 	pluginPool        *plugin.Pool
-	delegationReg     *authdelegation.DelegatorRegistry
 	config            *config.Config
 	version           string
 	ctx               context.Context
@@ -146,15 +143,6 @@ func WithServerPluginPool(pool *plugin.Pool) ServerOption {
 	}
 }
 
-// WithServerDelegationRegistry sets the token delegation registry for API-mode
-// auth delegation. When set, the registry is injected into the server context
-// so providers can access delegators via authdelegation.RegistryFromContext.
-func WithServerDelegationRegistry(reg *authdelegation.DelegatorRegistry) ServerOption {
-	return func(c *serverConfig) {
-		c.delegationReg = reg
-	}
-}
-
 // NewServer creates a new API server with the given options.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	sc := &serverConfig{}
@@ -197,10 +185,6 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		startTime:         time.Now(),
-	}
-
-	if sc.delegationReg != nil {
-		s.delegationReg = sc.delegationReg
 	}
 
 	return s, nil
@@ -275,7 +259,6 @@ func (s *Server) HandlerCtx() *HandlerContext {
 	hctx.OfficialProviders = s.officialProviders
 	hctx.ServerContext = s.ctx
 	hctx.PluginPool = s.pluginPool
-	hctx.DelegationRegistry = s.delegationReg
 	return hctx
 }
 

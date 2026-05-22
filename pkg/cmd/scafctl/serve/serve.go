@@ -191,9 +191,6 @@ func runServe(ctx context.Context, opts *Options) error {
 	if officialReg != nil {
 		serverOpts = append(serverOpts, api.WithServerOfficialProviders(officialReg))
 	}
-	if delegationReg != nil {
-		serverOpts = append(serverOpts, api.WithServerDelegationRegistry(delegationReg))
-	}
 
 	// Create server
 	srv, err := api.NewServer(serverOpts...)
@@ -210,6 +207,9 @@ func runServe(ctx context.Context, opts *Options) error {
 		return fmt.Errorf("setting up middleware: %w", err)
 	}
 	srv.SetAPIRouter(apiRouter)
+
+	// Inject delegation registry into request context for all API routes.
+	apiRouter.Use(authdelegation.Middleware(delegationReg))
 
 	// Initialize Huma API
 	srv.InitAPI()

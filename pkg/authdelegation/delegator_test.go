@@ -715,7 +715,8 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 	t.Run("all zeros use defaults", func(t *testing.T) {
 		t.Parallel()
 		tm := &config.TokenManagerConfig{}
-		s := resolveTokenManagerDefaults(tm)
+		s, err := resolveTokenManagerDefaults(tm)
+		require.NoError(t, err)
 		assert.Equal(t, 1024, s.CacheSize)
 		assert.Equal(t, 10*time.Minute, s.ExpiryBuffer)
 		assert.Equal(t, 5*time.Minute, s.CleanupInterval)
@@ -734,7 +735,8 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 			SlowThreshold:        "5s",
 			RetryFollowerOnError: boolPtr(false),
 		}
-		s := resolveTokenManagerDefaults(tm)
+		s, err := resolveTokenManagerDefaults(tm)
+		require.NoError(t, err)
 		assert.Equal(t, 512, s.CacheSize)
 		assert.Equal(t, 2*time.Minute, s.ExpiryBuffer)
 		assert.Equal(t, 10*time.Minute, s.CleanupInterval)
@@ -743,21 +745,23 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 		assert.False(t, s.RetryOnError)
 	})
 
-	t.Run("invalid durations fall back to defaults", func(t *testing.T) {
+	t.Run("invalid durations return error", func(t *testing.T) {
 		t.Parallel()
-		tm := &config.TokenManagerConfig{
-			ExpiryBuffer:    "not-a-duration",
-			CleanupInterval: "also-bad",
-			ExpiryThreshold: "nope",
-			SlowThreshold:   "bad",
+		cases := []struct {
+			name    string
+			cfg     *config.TokenManagerConfig
+			wantMsg string
+		}{
+			{"bad expiryBuffer", &config.TokenManagerConfig{ExpiryBuffer: "not-a-duration"}, "expiryBuffer"},
+			{"bad cleanupInterval", &config.TokenManagerConfig{CleanupInterval: "also-bad"}, "cleanupInterval"},
+			{"bad expiryThreshold", &config.TokenManagerConfig{ExpiryThreshold: "nope"}, "expiryThreshold"},
+			{"bad slowThreshold", &config.TokenManagerConfig{SlowThreshold: "bad"}, "slowThreshold"},
 		}
-		s := resolveTokenManagerDefaults(tm)
-		assert.Equal(t, 1024, s.CacheSize)
-		assert.Equal(t, 10*time.Minute, s.ExpiryBuffer)
-		assert.Equal(t, 5*time.Minute, s.CleanupInterval)
-		assert.Equal(t, 30*time.Minute, s.ExpiryThreshold)
-		assert.Equal(t, 500*time.Millisecond, s.SlowThreshold)
-		assert.True(t, s.RetryOnError)
+		for _, tc := range cases {
+			_, err := resolveTokenManagerDefaults(tc.cfg)
+			require.Error(t, err, tc.name)
+			assert.Contains(t, err.Error(), tc.wantMsg, tc.name)
+		}
 	})
 
 	t.Run("partial override keeps other defaults", func(t *testing.T) {
@@ -766,7 +770,8 @@ func TestResolveTokenManagerDefaults(t *testing.T) {
 			ExpiryThreshold:      "45m",
 			RetryFollowerOnError: boolPtr(true),
 		}
-		s := resolveTokenManagerDefaults(tm)
+		s, err := resolveTokenManagerDefaults(tm)
+		require.NoError(t, err)
 		assert.Equal(t, 1024, s.CacheSize)
 		assert.Equal(t, 10*time.Minute, s.ExpiryBuffer)
 		assert.Equal(t, 5*time.Minute, s.CleanupInterval)

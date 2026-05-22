@@ -507,61 +507,14 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	scope, _ := inputs["scope"].(string)
 
 	if authProvider != "" {
-		// API mode: use delegation registry if available in context.
 		if reg := authdelegation.RegistryFromContext(ctx); reg != nil {
-			if delegator, ok := reg.Get(authProvider); ok {
-				result, err := delegator.DelegateToken(ctx, scope)
-				if err != nil {
-					return nil, fmt.Errorf("%s: token delegation failed for %q: %w", ProviderName, authProvider, err)
-				}
-				headers["Authorization"] = "Bearer " + result.AccessToken
-				lgr.V(1).Info("injected delegated auth header",
-					"authProvider", authProvider,
-					"scope", scope,
-				)
-			} else {
-				return nil, fmt.Errorf("%s: auth provider %q not registered in delegation registry (available: %v)", ProviderName, authProvider, reg.Names())
+			if err := injectDelegatedToken(ctx, reg, authProvider, scope, headers); err != nil {
+				return nil, err
 			}
 		} else {
-			// CLI mode: use auth handler registry.
-			handler, err := auth.GetHandler(ctx, authProvider)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", ProviderName, err)
+			if err := injectCLIToken(ctx, authProvider, scope, timeoutDuration, headers); err != nil {
+				return nil, err
 			}
-
-			// Validate scope requirement based on handler capabilities
-			requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
-			if scope == "" && requiresScope {
-				return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
-			}
-			if scope != "" && !requiresScope {
-				lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
-					"authProvider", authProvider,
-					"scope", scope,
-				)
-				scope = ""
-			}
-
-			// Calculate minimum token validity: request timeout + 60 second buffer
-			minValidFor := timeoutDuration + 60*time.Second
-
-			// Get token with sufficient validity
-			token, err := handler.GetToken(ctx, auth.TokenOptions{
-				Scope:       scope,
-				MinValidFor: minValidFor,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
-			}
-
-			// Inject authorization header
-			headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
-			lgr.V(1).Info("injected auth header",
-				"authProvider", authProvider,
-				"scope", scope,
-				"tokenExpiresAt", token.ExpiresAt,
-				"minValidFor", minValidFor,
-			)
 		}
 	}
 
@@ -768,4 +721,71 @@ func isJSONContentType(contentType string) bool {
 	ct := strings.ToLower(strings.TrimSpace(contentType))
 	return strings.HasPrefix(ct, "application/json") ||
 		strings.HasSuffix(ct, "+json")
+}
+
+// injectDelegatedToken resolves a token via the delegation registry (API mode) and sets
+// the Authorization header.
+func injectDelegatedToken(ctx context.Context, reg *authdelegation.DelegatorRegistry, authProvider, scope string, headers map[string]any) error {
+	lgr := logger.FromContext(ctx)
+
+	delegator, ok := reg.Get(authProvider)
+	if !ok {
+		return fmt.Errorf("%s: auth provider %q not registered in delegation registry (available: %v)", ProviderName, authProvider, reg.Names())
+	}
+
+	result, err := delegator.DelegateToken(ctx, scope)
+	if err != nil {
+		return fmt.Errorf("%s: token delegation failed for %q: %w", ProviderName, authProvider, err)
+	}
+
+	headers["Authorization"] = "Bearer " + result.AccessToken
+	lgr.V(1).Info("injected delegated auth header",
+		"authProvider", authProvider,
+		"scope", scope,
+	)
+	return nil
+}
+
+// injectCLIToken resolves a token via the auth handler registry (CLI mode) and sets
+// the Authorization header.
+func injectCLIToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, headers map[string]any) error {
+	lgr := logger.FromContext(ctx)
+
+	handler, err := auth.GetHandler(ctx, authProvider)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	// Validate scope requirement based on handler capabilities
+	requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+	if scope == "" && requiresScope {
+		return fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+	}
+	if scope != "" && !requiresScope {
+		lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
+			"authProvider", authProvider,
+			"scope", scope,
+		)
+		scope = ""
+	}
+
+	// Calculate minimum token validity: request timeout + 60 second buffer
+	minValidFor := timeoutDuration + 60*time.Second
+
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope:       scope,
+		MinValidFor: minValidFor,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
+	}
+
+	headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
+	lgr.V(1).Info("injected auth header",
+		"authProvider", authProvider,
+		"scope", scope,
+		"tokenExpiresAt", token.ExpiresAt,
+		"minValidFor", minValidFor,
+	)
+	return nil
 }

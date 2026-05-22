@@ -12,4 +12,5 @@ var (
 	ErrEntraInvalidCredentialType = fmt.Errorf("credentialType must be %q or %q", CredentialTypeWIF, CredentialTypeSecret)
 	ErrEntraWIFMissingTokenFile   = fmt.Errorf("federatedTokenFile is required when credentialType is %q", CredentialTypeWIF)
 	ErrEntraSecretMissing         = fmt.Errorf("clientSecret is required when credentialType is %q", CredentialTypeSecret)
+	ErrNoCallerToken              = fmt.Errorf("no caller token in context")
 )
