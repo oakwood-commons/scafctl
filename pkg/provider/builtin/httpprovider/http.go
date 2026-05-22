@@ -523,8 +523,8 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
 
 	// Wire 401 token-refresh via the httpc OnUnauthorized hook when an auth provider is configured
-	// in CLI mode. In API mode (delegation registry present), 401 propagates as an error because
-	// re-delegation with the same parameters would return the same token.
+	// in CLI mode. In API mode (delegation registry present), no 401 retry is attempted because
+	// token refresh is handled by the delegation registry's layer.
 	if authProvider != "" && authdelegation.RegistryFromContext(ctx) == nil {
 		capturedScope := scope
 		capturedTimeout := timeoutDuration

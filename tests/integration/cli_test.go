@@ -2225,6 +2225,85 @@ func TestIntegration_AuthHandlersRemoveNotInstalled(t *testing.T) {
 	assert.Contains(t, stderr, "is not installed")
 }
 
+func TestIntegration_AuthListJSONNoStdoutWarnings(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "list", "-o", "json")
+
+	// When exit code is 0 and there is stdout output, it must be valid JSON
+	// (no warnings mixed into stdout). Warnings should go to stderr.
+	if exitCode == 0 && strings.TrimSpace(stdout) != "" {
+		// Stdout must not contain warning emoji characters
+		assert.NotContains(t, stdout, "\u26a0", "warnings must not appear in stdout when using -o json")
+		assert.NotContains(t, stdout, "⚠", "warnings must not appear in stdout when using -o json")
+
+		// In -o json mode, non-empty stdout must be valid JSON.
+		// If it doesn't start with [ or {, that itself is a corruption issue.
+		trimmed := strings.TrimSpace(stdout)
+		if assert.True(t, strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{"),
+			"stdout in -o json mode must be valid JSON, got: %s", trimmed[:min(len(trimmed), 80)]) {
+			var parsed json.RawMessage
+			assert.NoError(t, json.Unmarshal([]byte(trimmed), &parsed), "stdout must be valid JSON when using -o json")
+		}
+	}
+}
+
+func TestIntegration_AuthListPurgeHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "purge-expired")
+}
+
+func TestIntegration_AuthDiagnoseHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "diagnose", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Run auth diagnostics")
+	assert.Contains(t, stdout, "--live-token")
+}
+
+func TestIntegration_AuthDiagnoseRuns(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "auth", "diagnose")
+
+	// diagnose should complete (exit 0 or non-zero based on handler state)
+	// but must not panic or produce empty output
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	combined := stdout + stderr
+	assert.True(t, exitCode == 0 || exitCode == 1, "expected exit code 0 or 1, got %d", exitCode)
+	assert.Contains(t, combined, "auth registry", "expected auth registry check in output")
+}
+
+func TestIntegration_AuthDiagnoseJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "diagnose", "-o", "json")
+
+	// JSON output mode should produce valid JSON
+	if exitCode == 0 && strings.TrimSpace(stdout) != "" {
+		var result interface{}
+		assert.NoError(t, json.Unmarshal([]byte(stdout), &result), "diagnose -o json must produce valid JSON")
+	}
+}
+
+func TestIntegration_AuthDiagnoseAlias(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "doctor", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Run auth diagnostics")
+}
+
+func TestIntegration_AuthDiagnoseUnknownHandler(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "auth", "diagnose", "nonexistent-xyz")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "nonexistent-xyz")
+}
+
 // ============================================================================
 // Error Handling Tests
 // ============================================================================
@@ -2809,11 +2888,14 @@ func TestIntegration_CustomOAuth2Handler_AuthList(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
-	stdout, _, exitCode := runScafctl(t, "--config", configPath, "auth", "list")
-
+	// auth list should succeed (no tokens for custom handler, but no error)
+	_, _, exitCode := runScafctl(t, "--config", configPath, "auth", "list")
 	assert.Equal(t, 0, exitCode)
-	// The custom handler should be registered and appear in the list.
-	assert.Contains(t, stdout, "test-quay", "expected custom handler to appear in output, got: %q", stdout)
+
+	// Verify the custom handler is registered via auth handlers
+	stdout, _, exitCode := runScafctl(t, "--config", configPath, "auth", "handlers")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "test-quay", "expected custom handler to appear in handlers output, got: %q", stdout)
 }
 
 func TestIntegration_CustomOAuth2Handler_AuthStatus(t *testing.T) {
@@ -4405,6 +4487,19 @@ spec:
 	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
 	assert.Contains(t, stdout, "hello from child")
 	assert.Contains(t, stdout, "with timeout")
+}
+
+func TestIntegration_SolutionResolver_AuthProviderUnavailable(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/auth-provider/solution.yaml",
+		"-o", "json",
+	)
+	t.Logf("stderr: %s", stderr)
+	// Should fail because the auth handler doesn't exist
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "nonexistent-handler-xyz", "error should reference the missing handler name")
 }
 
 // ============================================================================
@@ -7025,6 +7120,27 @@ func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool to be registered")
+}
+
+func TestIntegration_MCPServeInfo_AuthTokenTools(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "serve", "--info")
+	assert.Equal(t, 0, exitCode)
+
+	var info struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &info))
+
+	toolNames := make(map[string]bool)
+	for _, tool := range info.Tools {
+		toolNames[tool.Name] = true
+	}
+	assert.True(t, toolNames["auth_list_tokens"], "expected auth_list_tokens tool to be registered")
+	assert.True(t, toolNames["auth_purge_expired"], "expected auth_purge_expired tool to be registered")
 }
 
 func TestIntegration_MCPListHelp(t *testing.T) {

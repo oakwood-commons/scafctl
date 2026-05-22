@@ -672,29 +672,29 @@ type APIEntraIdentityConfig struct {
 
 // TokenManagerConfig holds configuration for the token delegation cache manager.
 // A nil pointer on the parent disables caching entirely.
-// A non-nil struct with zero values uses sensible defaults.
+// A non-nil struct with zero values uses sensible defaults defined in pkg/authdelegation.
 type TokenManagerConfig struct {
-	// CacheSize is the maximum number of cached tokens (0 = default 1024).
-	CacheSize int `json:"cacheSize,omitempty" yaml:"cacheSize,omitempty" mapstructure:"cacheSize" doc:"LRU cache size (0 = default 1024)" maximum:"100000" example:"1024"`
+	// CacheSize is the maximum number of cached tokens. Zero uses the package default.
+	CacheSize int `json:"cacheSize,omitempty" yaml:"cacheSize,omitempty" mapstructure:"cacheSize" doc:"LRU cache size (0 = package default)" maximum:"100000"`
 
 	// ExpiryBuffer is the safety margin subtracted from token TTL before caching.
 	// Prevents serving tokens that are about to expire. Use Go duration syntax.
-	ExpiryBuffer string `json:"expiryBuffer,omitempty" yaml:"expiryBuffer,omitempty" mapstructure:"expiryBuffer" doc:"Safety margin before token expiry (default: 30s)" maxLength:"20" example:"30s"`
+	ExpiryBuffer string `json:"expiryBuffer,omitempty" yaml:"expiryBuffer,omitempty" mapstructure:"expiryBuffer" doc:"Safety margin before token expiry" maxLength:"20"`
 
 	// CleanupInterval is how often the background goroutine evicts expired entries.
 	// Use Go duration syntax.
-	CleanupInterval string `json:"cleanupInterval,omitempty" yaml:"cleanupInterval,omitempty" mapstructure:"cleanupInterval" doc:"Background eviction interval (default: 5m)" maxLength:"20" example:"5m"`
+	CleanupInterval string `json:"cleanupInterval,omitempty" yaml:"cleanupInterval,omitempty" mapstructure:"cleanupInterval" doc:"Background eviction interval" maxLength:"20"`
 
 	// ExpiryThreshold is the minimum remaining TTL a token must have to be cached.
 	// Tokens with TTL <= this value are treated as uncacheable. Use Go duration syntax.
-	ExpiryThreshold string `json:"expiryThreshold,omitempty" yaml:"expiryThreshold,omitempty" mapstructure:"expiryThreshold" doc:"Minimum TTL to cache a token (default: 30m)" maxLength:"20" example:"30m"`
+	ExpiryThreshold string `json:"expiryThreshold,omitempty" yaml:"expiryThreshold,omitempty" mapstructure:"expiryThreshold" doc:"Minimum TTL to cache a token" maxLength:"20"`
 
 	// SlowThreshold is how long a follower waits for the leader before retrying independently.
 	// Use Go duration syntax.
-	SlowThreshold string `json:"slowThreshold,omitempty" yaml:"slowThreshold,omitempty" mapstructure:"slowThreshold" doc:"Follower bail-out duration (default: 2s)" maxLength:"20" example:"2s"`
+	SlowThreshold string `json:"slowThreshold,omitempty" yaml:"slowThreshold,omitempty" mapstructure:"slowThreshold" doc:"Follower bail-out duration" maxLength:"20"`
 
 	// RetryFollowerOnError controls whether followers retry independently when the leader errors.
-	RetryFollowerOnError *bool `json:"retryFollowerOnError,omitempty" yaml:"retryFollowerOnError,omitempty" mapstructure:"retryFollowerOnError" doc:"Followers retry on leader error (default: true)"`
+	RetryFollowerOnError *bool `json:"retryFollowerOnError,omitempty" yaml:"retryFollowerOnError,omitempty" mapstructure:"retryFollowerOnError" doc:"Followers retry on leader error"`
 }
 
 // ServerCredentialConfig holds the server's authentication credential for token delegation.

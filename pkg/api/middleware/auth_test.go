@@ -417,6 +417,7 @@ func TestAzureOIDCAuth_StoresClaimsAndTokenInContext(t *testing.T) {
 
 	// Create a valid signed JWT.
 	now := time.Now()
+	issuer := "https://login.microsoftonline.com/" + tenant + "/v2.0"
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"sub":   "user-456",
 		"name":  "Jane Doe",
@@ -425,7 +426,7 @@ func TestAzureOIDCAuth_StoresClaimsAndTokenInContext(t *testing.T) {
 		"oid":   "obj-789",
 		"idtyp": "app",
 		"aud":   clientID,
-		"iss":   "https://login.microsoftonline.com/" + tenant + "/v2.0",
+		"iss":   issuer,
 		"exp":   float64(now.Add(time.Hour).Unix()),
 		"iat":   float64(now.Unix()),
 		"roles": []string{"admin", "reader"},
@@ -434,62 +435,25 @@ func TestAzureOIDCAuth_StoresClaimsAndTokenInContext(t *testing.T) {
 	tokenStr, err := token.SignedString(privKey)
 	require.NoError(t, err)
 
-	// Build middleware with a patched JWKS URL.
-	mw, err := NewAzureOIDCAuth(tenant, clientID, logr.Discard())
-	require.NoError(t, err)
+	// Build middleware pointing at our test JWKS server.
+	mw := newOIDCAuthMiddleware(srv.URL, issuer, clientID, logr.Discard())
 
-	// We need to override the JWKS URL in the middleware closure.
-	// Instead, directly test using the cache + handler pattern.
-	cache := &jwksCache{jwksURL: srv.URL, client: &http.Client{Timeout: 5 * time.Second}}
-	_ = cache.refresh()
-
-	// Verify that the full middleware path works by replacing the internal
-	// JWKS URL. Since we can't inject it easily, test the context helpers
-	// with a simulated successful parse.
 	var capturedClaims *AuthClaims
 	var capturedToken string
 
-	handler := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	handler := mw(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		capturedClaims = ClaimsFromContext(r.Context())
 		capturedToken = AccessTokenFromContext(r.Context())
-	})
-
-	// Simulate what the middleware does after successful validation.
-	mapClaims := jwt.MapClaims{
-		"sub":   "user-456",
-		"name":  "Jane Doe",
-		"email": "jane@example.com",
-		"tid":   tenant,
-		"oid":   "obj-789",
-		"idtyp": "app",
-		"aud":   clientID,
-		"iss":   "https://login.microsoftonline.com/" + tenant + "/v2.0",
-		"exp":   float64(now.Add(time.Hour).Unix()),
-		"roles": []any{"admin", "reader"},
-	}
-
-	claims := &AuthClaims{
-		Subject:  claimString(mapClaims, "sub"),
-		Name:     claimString(mapClaims, "name"),
-		Email:    claimString(mapClaims, "email"),
-		TenantID: claimString(mapClaims, "tid"),
-		ObjectID: claimString(mapClaims, "oid"),
-		IDType:   claimString(mapClaims, "idtyp"),
-		Audience: claimString(mapClaims, "aud"),
-		Issuer:   claimString(mapClaims, "iss"),
-		Roles:    claimStringSlice(mapClaims, "roles"),
-	}
-	if exp, ok := mapClaims["exp"].(float64); ok {
-		claims.ExpiresAt = int64(exp)
-	}
+	}))
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
-	ctx := context.WithValue(req.Context(), claimsContextKey, claims)
-	ctx = context.WithValue(ctx, accessTokenContextKey, tokenStr)
-	req = req.WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+
+	// Verify middleware passed the request through (200, not 401).
+	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Verify claims stored correctly.
 	require.NotNil(t, capturedClaims)
@@ -504,7 +468,4 @@ func TestAzureOIDCAuth_StoresClaimsAndTokenInContext(t *testing.T) {
 
 	// Verify access token stored correctly.
 	assert.Equal(t, tokenStr, capturedToken)
-
-	// Unused mw to suppress lint.
-	_ = mw
 }

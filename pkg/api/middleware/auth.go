@@ -130,6 +130,12 @@ func NewAzureOIDCAuth(tenantID, clientID string, lgr logr.Logger) (func(http.Han
 	jwksURL := fmt.Sprintf("https://login.microsoftonline.com/%s/discovery/v2.0/keys", tenantID)
 	issuer := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", tenantID)
 
+	return newOIDCAuthMiddleware(jwksURL, issuer, clientID, lgr), nil
+}
+
+// newOIDCAuthMiddleware builds the OIDC middleware with explicit JWKS URL,
+// issuer, and audience. Factored out of NewAzureOIDCAuth for testability.
+func newOIDCAuthMiddleware(jwksURL, issuer, clientID string, lgr logr.Logger) func(http.Handler) http.Handler {
 	cache := &jwksCache{
 		jwksURL: jwksURL,
 		client: &http.Client{
@@ -216,7 +222,7 @@ func NewAzureOIDCAuth(tenantID, clientID string, lgr logr.Logger) (func(http.Han
 			ctx = context.WithValue(ctx, accessTokenContextKey, tokenStr)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
-	}, nil
+	}
 }
 
 // getKey fetches the RSA public key for the given kid from JWKS.

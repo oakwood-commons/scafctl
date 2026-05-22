@@ -179,6 +179,10 @@ func (d *EntraDelegator) DelegateToken(ctx context.Context, scope string) (Token
 		return TokenResult{}, ErrNoCallerToken
 	}
 
+	if scope == "" {
+		return TokenResult{}, ErrNoScope
+	}
+
 	var callerType string
 	if claims := middleware.ClaimsFromContext(ctx); claims != nil {
 		callerType = claims.CallerType()

@@ -331,7 +331,9 @@ func buildDelegationRegistry(ctx context.Context, cfg *config.Config, lgr *logr.
 	if cfg.APIServer.Identity.Entra == nil {
 		return nil, nil
 	}
-
+	if cfg.APIServer.Identity.Entra.Validate() != nil {
+		return nil, fmt.Errorf("invalid Entra identity configuration")
+	}
 	lgr.V(0).Info("building token delegation registry", "provider", "entra")
 
 	delegator, err := authdelegation.NewEntraDelegatorFromConfig(ctx, cfg.APIServer.Identity.Entra)

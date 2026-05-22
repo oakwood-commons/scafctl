@@ -238,6 +238,30 @@ scafctl auth logout entra --force
 
 ---
 
+## Handler Lifecycle Management
+
+Official auth handler plugins are downloaded automatically on first use.
+You can also manage them explicitly:
+
+```bash
+# List registered handlers with flows and capabilities
+scafctl auth handlers
+scafctl auth handlers -o json
+
+# Pre-install a handler (useful for air-gapped environments)
+scafctl auth handlers install github
+scafctl auth handlers install entra
+
+# Force re-download
+scafctl auth handlers install entra --force
+
+# Remove cached handler binary (will be re-downloaded on next login)
+scafctl auth handlers remove github
+scafctl auth handlers remove entra
+```
+
+---
+
 ## Related
 
 - [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) — full walkthrough

@@ -95,6 +95,15 @@ func TestDelegateToken(t *testing.T) {
 		assert.ErrorContains(t, err, "no caller token in context")
 	})
 
+	t.Run("empty scope returns error", func(t *testing.T) {
+		t.Parallel()
+		d := mustDelegator(t, CredentialTypeSecret, "secret-val")
+		ctx := middleware.WithAccessToken(context.Background(), "some-jwt")
+		ctx = middleware.WithAuthClaims(ctx, &middleware.AuthClaims{IDType: "user"})
+		_, err := d.DelegateToken(ctx, "")
+		assert.ErrorIs(t, err, ErrNoScope)
+	})
+
 	t.Run("OBO success for user caller", func(t *testing.T) {
 		t.Parallel()
 		srv := fakeTokenEndpoint(t, http.StatusOK, map[string]any{
