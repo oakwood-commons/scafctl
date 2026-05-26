@@ -13,6 +13,7 @@ package examples
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,6 +23,9 @@ import (
 	"sort"
 	"strings"
 )
+
+// ErrPathTraversal is returned when a path contains ".." components.
+var ErrPathTraversal = errors.New("path must not contain '..'")
 
 //go:embed files/*
 var EmbeddedExamples embed.FS
@@ -126,7 +130,7 @@ func Read(exPath string) (string, error) {
 
 	// Security: ensure the path doesn't escape
 	if strings.Contains(cleanPath, "..") {
-		return "", fmt.Errorf("path must not contain '..'")
+		return "", ErrPathTraversal
 	}
 
 	fullPath := path.Join(root, cleanPath)

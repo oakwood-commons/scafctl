@@ -5,6 +5,7 @@ package examples
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,10 @@ func (o *Options) runGet(ctx context.Context, exPath string) error {
 
 	content, err := exampleslib.Read(exPath)
 	if err != nil {
+		if errors.Is(err, exampleslib.ErrPathTraversal) {
+			w.Errorf("Invalid example path: %s", exPath)
+			return exitcode.WithCode(fmt.Errorf("invalid example path: %w", err), exitcode.InvalidInput)
+		}
 		w.Errorf("Example not found: %s", exPath)
 		return exitcode.WithCode(fmt.Errorf("failed to read example: %w", err), exitcode.FileNotFound)
 	}
