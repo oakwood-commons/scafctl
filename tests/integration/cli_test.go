@@ -6043,7 +6043,7 @@ func TestIntegration_GetExamples_Get_NotFound(t *testing.T) {
 
 func TestIntegration_GetExamples_Get_InvalidOutputFormat(t *testing.T) {
 	t.Parallel()
-	_, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml", "-o", "/tmp/not-a-format")
+	_, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml", "-o", "invalid-format")
 	assert.NotEqual(t, 0, exitCode)
 }
 
