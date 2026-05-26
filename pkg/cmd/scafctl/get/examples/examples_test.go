@@ -5,8 +5,6 @@ package examples
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -26,7 +24,6 @@ func TestCommandExamples(t *testing.T) {
 	assert.True(t, cmd.SilenceUsage)
 	assert.NotNil(t, cmd.Flags().Lookup("category"))
 	assert.NotNil(t, cmd.Flags().Lookup("output"))
-	assert.NotNil(t, cmd.Flags().Lookup("output-file"))
 }
 
 func TestCommandExamples_List_JSON(t *testing.T) {
@@ -68,23 +65,6 @@ func TestCommandExamples_Get_JSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &item))
 	assert.Equal(t, "scafctl.io/v1", item["apiVersion"])
 	assert.Contains(t, item, "metadata")
-}
-
-func TestCommandExamples_Get_OutputFile(t *testing.T) {
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandExamples(cliParams, ioStreams, "scafctl/get")
-
-	tmpDir := t.TempDir()
-	outPath := filepath.Join(tmpDir, "example.yaml")
-	cmd.SetArgs([]string{"resolver-demo.yaml", "--output-file", outPath})
-
-	err := cmd.Execute()
-	require.NoError(t, err)
-
-	data, readErr := os.ReadFile(outPath)
-	require.NoError(t, readErr)
-	assert.NotEmpty(t, data)
 }
 
 func TestCommandExamples_Get_InvalidOutputFormat(t *testing.T) {

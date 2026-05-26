@@ -6041,19 +6041,6 @@ func TestIntegration_GetExamples_Get_NotFound(t *testing.T) {
 	assert.NotEqual(t, 0, exitCode)
 }
 
-func TestIntegration_GetExamples_Get_OutputFile(t *testing.T) {
-	t.Parallel()
-	tmpDir := t.TempDir()
-	outFile := filepath.Join(tmpDir, "output.yaml")
-
-	_, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml", "--output-file", outFile)
-	assert.Equal(t, 0, exitCode)
-
-	data, err := os.ReadFile(outFile)
-	require.NoError(t, err)
-	assert.NotEmpty(t, data)
-}
-
 func TestIntegration_GetExamples_Get_InvalidOutputFormat(t *testing.T) {
 	t.Parallel()
 	_, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml", "-o", "/tmp/not-a-format")

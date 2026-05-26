@@ -6,7 +6,6 @@ package examples
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,8 +29,7 @@ type Options struct {
 
 	flags.KvxOutputFlags
 
-	Category   string
-	OutputFile string
+	Category string
 }
 
 // CommandExamples creates the get examples command.
@@ -57,9 +55,6 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 			  # Get one example by path
 			  scafctl get examples resolver-demo.yaml
-
-			  # Save one example to a file
-			  scafctl get examples resolver-demo.yaml --output-file ./resolver-demo.yaml
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,7 +86,6 @@ func CommandExamples(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 	cmd.Flags().StringVar(&opts.Category, "category", "", "Filter by category (e.g., solutions, resolvers, actions)")
-	cmd.Flags().StringVar(&opts.OutputFile, "output-file", "", "Write example content to file in single-example mode")
 
 	return cmd
 }
@@ -100,10 +94,6 @@ func (o *Options) runList(ctx context.Context) error {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
-	}
-
-	if o.OutputFile != "" {
-		return exitcode.WithCode(fmt.Errorf("--output-file can only be used with an example path argument"), exitcode.InvalidInput)
 	}
 
 	items, err := exampleslib.Scan(o.Category)
@@ -142,14 +132,6 @@ func (o *Options) runGet(ctx context.Context, exPath string) error {
 	if err != nil {
 		w.Errorf("Example not found: %s", exPath)
 		return exitcode.WithCode(fmt.Errorf("failed to read example: %w", err), exitcode.FileNotFound)
-	}
-
-	if o.OutputFile != "" {
-		if err := os.WriteFile(o.OutputFile, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("failed to write to %q: %w", o.OutputFile, err)
-		}
-		w.Successf("Example saved to %s", o.OutputFile)
-		return nil
 	}
 
 	if o.FormatExplicit || o.Interactive {
