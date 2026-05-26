@@ -506,6 +506,18 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	scope, _ := inputs["scope"].(string)
 
 	if authProvider != "" {
+		// Parse profile from handler@profile syntax and inject into context.
+		handlerName, profile := auth.ParseProfileKey(authProvider)
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return nil, fmt.Errorf("%s: invalid profile in authProvider: %w", ProviderName, err)
+			}
+			ctx = auth.WithProfile(ctx, profile)
+		} else if resolved := auth.ResolveActiveProfile(ctx, handlerName); resolved != "" {
+			// No explicit profile in authProvider, use the active profile
+			ctx = auth.WithProfile(ctx, resolved)
+		}
+
 		// Get auth handler from context
 		handler, err := auth.GetHandler(ctx, authProvider)
 		if err != nil {
@@ -556,7 +568,14 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	if authProvider != "" {
 		capturedScope := scope
 		capturedTimeout := timeoutDuration
+		capturedHandlerName, capturedProfile := auth.ParseProfileKey(authProvider)
+		if capturedProfile == "" {
+			capturedProfile = auth.ResolveActiveProfile(ctx, capturedHandlerName)
+		}
 		httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
+			if capturedProfile != "" {
+				unauthCtx = auth.WithProfile(unauthCtx, capturedProfile)
+			}
 			handler, handlerErr := auth.GetHandler(unauthCtx, authProvider)
 			if handlerErr != nil {
 				return "", handlerErr

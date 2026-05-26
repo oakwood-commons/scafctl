@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -19,10 +20,11 @@ import (
 // CommandLogout creates the 'auth logout' command.
 func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var (
-		all    bool
-		force  bool
-		dryRun bool
-		yes    bool
+		all     bool
+		force   bool
+		dryRun  bool
+		yes     bool
+		profile string
 	)
 
 	cmd := &cobra.Command{
@@ -82,6 +84,28 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			w := writer.FromContext(ctx)
 			if w == nil {
 				return fmt.Errorf("writer not initialized in context")
+			}
+
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
+			// Track whether profile was explicitly set (even if normalized to empty/default).
+			profileExplicit := cmd.Flags().Changed("profile")
+			effectiveProfile := auth.NormalizeProfileName(profile)
+			if effectiveProfile == "" && !profileExplicit {
+				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
+			}
+			if effectiveProfile != "" {
+				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				ctx = auth.WithProfile(ctx, effectiveProfile)
+			}
+
+			// For single-handler logout, fall back to config activeProfile
+			if effectiveProfile == "" && !profileExplicit && !all && len(args) > 0 {
+				if configProfile := auth.ResolveActiveProfile(ctx, args[0]); configProfile != "" {
+					ctx = auth.WithProfile(ctx, configProfile)
+				}
 			}
 
 			var handlerNames []string
@@ -171,5 +195,6 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Clear stored credentials even if not currently authenticated")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be removed without actually removing credentials")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip the confirmation prompt when using --all")
+	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
 	return cmd
 }

@@ -24,21 +24,27 @@ func RegistryFromContext(ctx context.Context) *Registry {
 }
 
 // GetHandler gets an auth handler from the context's registry.
+// The name can include a profile suffix using "handler@profile" syntax.
+// The profile portion is stripped for registry lookup; use ParseProfileKey
+// to extract the profile for passing via context to handler methods.
 func GetHandler(ctx context.Context, name string) (Handler, error) {
 	registry := RegistryFromContext(ctx)
 	if registry == nil {
 		return nil, fmt.Errorf("%w: no auth registry in context", ErrHandlerNotFound)
 	}
-	return registry.Get(name)
+	handlerName, _ := ParseProfileKey(name)
+	return registry.Get(handlerName)
 }
 
 // HasHandler checks if an auth handler exists in the context's registry.
+// The name can include a profile suffix using "handler@profile" syntax.
 func HasHandler(ctx context.Context, name string) bool {
 	registry := RegistryFromContext(ctx)
 	if registry == nil {
 		return false
 	}
-	return registry.Has(name)
+	handlerName, _ := ParseProfileKey(name)
+	return registry.Has(handlerName)
 }
 
 // ListHandlers lists all auth handlers in the context's registry.

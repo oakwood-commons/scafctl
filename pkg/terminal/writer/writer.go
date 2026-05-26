@@ -144,6 +144,15 @@ func (w *Writer) Infof(format string, args ...any) {
 	w.Info(fmt.Sprintf(format, args...))
 }
 
+// SectionHeader writes a bold section header to stdout.
+// Respects --quiet and --no-color flags.
+func (w *Writer) SectionHeader(msg string) {
+	if w.cliParams.IsQuiet {
+		return
+	}
+	fmt.Fprintln(w.ioStreams.Out, output.SectionHeaderMessage(msg, w.cliParams.NoColor))
+}
+
 // Debug writes a debug message to stdout.
 // Respects --quiet and --no-color flags.
 // Only writes if log level indicates debug output is enabled (debug, trace, or numeric V-level).

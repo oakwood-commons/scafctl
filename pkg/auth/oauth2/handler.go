@@ -243,13 +243,14 @@ func (h *Handler) Logout(ctx context.Context) error {
 		return err
 	}
 	var errs []error
-	if h.tokenCache != nil {
-		if err := h.tokenCache.Clear(ctx); err != nil {
+	tc := h.profileTokenCache(ctx)
+	if tc != nil {
+		if err := tc.Clear(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("clear token cache: %w", err))
 		}
 	}
 	for _, suffix := range []string{secretKeyRefreshSuffix, secretKeyMetadataSuffix, derivedTokenSuffix, derivedUsernameSuffix} {
-		if err := h.secretStore.Delete(ctx, h.secretKey(suffix)); err != nil {
+		if err := h.secretStore.Delete(ctx, h.profileSecretKey(ctx, suffix)); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -261,11 +262,12 @@ func (h *Handler) Logout(ctx context.Context) error {
 
 // ListCachedTokens returns all cached tokens for this handler.
 func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo, error) {
-	if h.tokenCache == nil {
+	tc := h.profileTokenCache(ctx)
+	if tc == nil {
 		return nil, nil
 	}
 
-	entries, err := h.tokenCache.ListCachedEntries(ctx)
+	entries, err := tc.ListCachedEntries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list cached tokens for %s: %w", h.cfg.Name, err)
 	}
@@ -273,7 +275,7 @@ func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo
 	var result []*auth.CachedTokenInfo
 	var getErrors []string
 	for _, entry := range entries {
-		token, err := h.tokenCache.Get(ctx, entry.Flow, entry.Fingerprint, entry.Scope)
+		token, err := tc.Get(ctx, entry.Flow, entry.Fingerprint, entry.Scope)
 		if err != nil {
 			getErrors = append(getErrors, fmt.Sprintf("flow=%s scope=%s: %v", entry.Flow, entry.Scope, err))
 			continue
@@ -304,10 +306,11 @@ func (h *Handler) ListCachedTokens(ctx context.Context) ([]*auth.CachedTokenInfo
 
 // PurgeExpiredTokens removes all expired access tokens from the cache.
 func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
-	if h.tokenCache == nil {
+	tc := h.profileTokenCache(ctx)
+	if tc == nil {
 		return 0, nil
 	}
-	n, err := h.tokenCache.PurgeExpired(ctx)
+	n, err := tc.PurgeExpired(ctx)
 	if err != nil {
 		return n, fmt.Errorf("purge expired tokens for %s: %w", h.cfg.Name, err)
 	}
@@ -367,21 +370,22 @@ func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.T
 	}
 
 	// Try cached token
-	if !opts.ForceRefresh && h.tokenCache != nil {
-		cached, err := h.tokenCache.Get(ctx, flow, fingerprint, scope)
+	tc := h.profileTokenCache(ctx)
+	if !opts.ForceRefresh && tc != nil {
+		cached, err := tc.Get(ctx, flow, fingerprint, scope)
 		if err == nil && cached != nil && cached.IsValidFor(opts.MinValidFor) {
 			return cached, nil
 		}
 	}
 
 	// Try refresh
-	refreshData, err := h.secretStore.Get(ctx, h.secretKey(secretKeyRefreshSuffix))
+	refreshData, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix))
 	if err == nil && len(refreshData) > 0 {
 		tokenResp, refreshErr := h.refreshAccessToken(ctx, string(refreshData), scope)
 		if refreshErr == nil {
 			token := h.tokenRespToToken(tokenResp, flow, scope)
-			if h.tokenCache != nil {
-				_ = h.tokenCache.Set(ctx, flow, fingerprint, scope, token)
+			if tc != nil {
+				_ = tc.Set(ctx, flow, fingerprint, scope, token)
 			}
 			if h.cfg.TokenExchange != nil {
 				if derived, exchangeErr := h.executeTokenExchange(ctx, tokenResp.AccessToken); exchangeErr == nil {
@@ -875,7 +879,7 @@ func (h *Handler) verifyToken(ctx context.Context, accessToken string) (*auth.Cl
 
 func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *auth.Claims, expiresAt time.Time, flow auth.Flow, scopes []string) error {
 	if resp.RefreshToken != "" {
-		if err := h.secretStore.Set(ctx, h.secretKey(secretKeyRefreshSuffix), []byte(resp.RefreshToken)); err != nil {
+		if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyRefreshSuffix), []byte(resp.RefreshToken)); err != nil {
 			return fmt.Errorf("store refresh token: %w", err)
 		}
 	}
@@ -884,13 +888,14 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
-	if err := h.secretStore.Set(ctx, h.secretKey(secretKeyMetadataSuffix), metaBytes); err != nil {
+	if err := h.secretStore.Set(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix), metaBytes); err != nil {
 		return fmt.Errorf("store metadata: %w", err)
 	}
-	if h.tokenCache != nil {
+	tc := h.profileTokenCache(ctx)
+	if tc != nil {
 		fingerprint := auth.FingerprintHash(h.cfg.ClientID)
 		scope := strings.Join(scopes, " ")
-		return h.tokenCache.Set(ctx, flow, fingerprint, scope, h.tokenRespToToken(resp, flow, scope))
+		return tc.Set(ctx, flow, fingerprint, scope, h.tokenRespToToken(resp, flow, scope))
 	}
 	return nil
 }
@@ -907,12 +912,12 @@ func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult,
 	if err != nil {
 		return fmt.Errorf("marshal derived token: %w", err)
 	}
-	if setErr := h.secretStore.Set(ctx, h.secretKey(derivedTokenSuffix), data); setErr != nil {
+	if setErr := h.secretStore.Set(ctx, h.profileSecretKey(ctx, derivedTokenSuffix), data); setErr != nil {
 		return setErr
 	}
 	// Persist the extracted username so it survives process restarts.
 	if result.Username != "" {
-		if setErr := h.secretStore.Set(ctx, h.secretKey(derivedUsernameSuffix), []byte(result.Username)); setErr != nil {
+		if setErr := h.secretStore.Set(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix), []byte(result.Username)); setErr != nil {
 			h.logger.V(1).Info("failed to persist derived username", "error", setErr)
 		}
 	}
@@ -920,7 +925,7 @@ func (h *Handler) storeDerivedToken(ctx context.Context, result *exchangeResult,
 }
 
 func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
-	data, err := h.secretStore.Get(ctx, h.secretKey(derivedTokenSuffix))
+	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, derivedTokenSuffix))
 	if err != nil {
 		return nil, err
 	}
@@ -930,14 +935,14 @@ func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
 	}
 	// Restore the derived username so BridgeAuthToRegistry uses the correct
 	// username even when the token was loaded from cache across process restarts.
-	if usernameData, usernameErr := h.secretStore.Get(ctx, h.secretKey(derivedUsernameSuffix)); usernameErr == nil && len(usernameData) > 0 {
+	if usernameData, usernameErr := h.secretStore.Get(ctx, h.profileSecretKey(ctx, derivedUsernameSuffix)); usernameErr == nil && len(usernameData) > 0 {
 		h.cfg.RegistryUsername = string(usernameData)
 	}
 	return &token, nil
 }
 
 func (h *Handler) loadMetadata(ctx context.Context) (*handlerMetadata, error) {
-	data, err := h.secretStore.Get(ctx, h.secretKey(secretKeyMetadataSuffix))
+	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix))
 	if err != nil {
 		return nil, err
 	}
@@ -1001,6 +1006,44 @@ func (h *Handler) postTokenEndpoint(ctx context.Context, data url.Values) (*toke
 
 func (h *Handler) secretKey(suffix string) string {
 	return h.secretKeyPrefix + h.cfg.Name + "." + suffix
+}
+
+// secretKeyWithProfile returns a secret key that incorporates the profile.
+// If profile is empty, falls back to the default (no profile) key.
+// Pattern: scafctl.auth.oauth2.<handler>.<profile>.<suffix>
+func (h *Handler) secretKeyWithProfile(profile, suffix string) string {
+	if profile == "" {
+		return h.secretKey(suffix)
+	}
+	return h.secretKeyPrefix + h.cfg.Name + "." + profile + "." + suffix
+}
+
+// profileSecretKey returns the secret key for the given suffix, incorporating
+// any profile found in the context.
+func (h *Handler) profileSecretKey(ctx context.Context, suffix string) string {
+	return h.secretKeyWithProfile(auth.ProfileFromContext(ctx), suffix)
+}
+
+// tokenCacheForProfile returns the token cache prefix for the given profile.
+func (h *Handler) tokenCacheForProfile(profile string) string {
+	if profile == "" {
+		return h.secretKeyPrefix + h.cfg.Name + "." + tokenCacheSuffix
+	}
+	return h.secretKeyPrefix + h.cfg.Name + "." + profile + "." + tokenCacheSuffix
+}
+
+// profileTokenCache returns a TokenCache for the active profile in context.
+// If no profile is set, returns the default token cache.
+func (h *Handler) profileTokenCache(ctx context.Context) *auth.TokenCache {
+	profile := auth.ProfileFromContext(ctx)
+	if profile == "" {
+		return h.tokenCache
+	}
+	if h.secretStore == nil {
+		return nil
+	}
+	prefix := h.tokenCacheForProfile(profile)
+	return auth.NewTokenCache(h.secretStore, prefix)
 }
 
 func (h *Handler) ensureSecrets() error {

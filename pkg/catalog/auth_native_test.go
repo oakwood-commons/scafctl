@@ -556,3 +556,73 @@ func BenchmarkNativeCredentialStore_ListEntries(b *testing.B) {
 		_, _ = store.ListCredentialEntries()
 	}
 }
+
+func TestNativeCredentialStore_SetCredentialWithSource(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+
+	err := store.SetCredentialWithSource("ghcr.io", "user1", "pass1", "", "github", "work")
+	require.NoError(t, err)
+
+	cred, err := store.GetCredential("ghcr.io")
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+	assert.Equal(t, "user1", cred.Username)
+	assert.Equal(t, "pass1", cred.Password)
+	assert.Equal(t, "github", cred.Handler)
+	assert.Equal(t, "work", cred.Profile)
+}
+
+func TestNativeCredentialStore_SetCredentialWithSource_OverridesMetadata(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+
+	require.NoError(t, store.SetCredentialWithSource("ghcr.io", "user1", "pass1", "", "github", "work"))
+	require.NoError(t, store.SetCredentialWithSource("ghcr.io", "user2", "pass2", "", "github", "personal"))
+
+	cred, err := store.GetCredential("ghcr.io")
+	require.NoError(t, err)
+	require.NotNil(t, cred)
+	assert.Equal(t, "user2", cred.Username)
+	assert.Equal(t, "github", cred.Handler)
+	assert.Equal(t, "personal", cred.Profile)
+}
+
+func TestNativeCredentialStore_SetCredentialWithSource_ListEntries(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+
+	require.NoError(t, store.SetCredentialWithSource("ghcr.io", "user1", "pass1", "", "github", "work"))
+	require.NoError(t, store.SetCredential("quay.io", "user2", "pass2", ""))
+
+	entries, err := store.ListCredentialEntries()
+	require.NoError(t, err)
+	assert.Len(t, entries, 2)
+
+	ghcr := entries["ghcr.io"]
+	assert.Equal(t, "github", ghcr.Handler)
+	assert.Equal(t, "work", ghcr.Profile)
+
+	quay := entries["quay.io"]
+	assert.Empty(t, quay.Handler)
+	assert.Empty(t, quay.Profile)
+}
+
+func TestNativeCredentialStore_GetPreviousUsername(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+
+	// No previous credential.
+	assert.Empty(t, store.GetPreviousUsername("ghcr.io"))
+
+	// After storing a credential, GetPreviousUsername returns the stored username.
+	require.NoError(t, store.SetCredential("ghcr.io", "user1", "pass1", ""))
+	assert.Equal(t, "user1", store.GetPreviousUsername("ghcr.io"))
+
+	// After updating, GetPreviousUsername returns the new username.
+	require.NoError(t, store.SetCredential("ghcr.io", "user2", "pass2", ""))
+	assert.Equal(t, "user2", store.GetPreviousUsername("ghcr.io"))
+}
+
+func TestNativeCredentialStore_GetPreviousUsername_NormalizesHost(t *testing.T) {
+	store := NewNativeCredentialStoreWithPath(filepath.Join(t.TempDir(), "registries.json"))
+
+	require.NoError(t, store.SetCredential("ghcr.io", "user1", "pass1", ""))
+	assert.Equal(t, "user1", store.GetPreviousUsername("https://ghcr.io"))
+}

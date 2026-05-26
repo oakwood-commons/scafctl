@@ -308,6 +308,7 @@ func TestAuthHandlerStatusConversion(t *testing.T) {
 		ClientID:     "client-xyz",
 		TokenFile:    "/tmp/token",
 		Scopes:       []string{"read", "write", "admin"},
+		Flow:         auth.FlowServicePrincipal,
 	}
 
 	protoStatus := statusToProto(original)
@@ -322,6 +323,7 @@ func TestAuthHandlerStatusConversion(t *testing.T) {
 	assert.Equal(t, original.ClientID, converted.ClientID)
 	assert.Equal(t, original.TokenFile, converted.TokenFile)
 	assert.Equal(t, original.Scopes, converted.Scopes)
+	assert.Equal(t, original.Flow, converted.Flow)
 }
 
 // TestAuthHandlerTokenConversion tests TokenResponse roundtrip through proto conversion.

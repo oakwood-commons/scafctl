@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Auth Status",
+  "description": "Authentication status for handlers, catalogs, and registry credentials",
+  "type": "array",
+
+  "x-kvx-icon": "🔐",
+  "x-kvx-collectionTitle": "Auth Status",
+
+  "x-kvx-list": {
+    "titleField": "handler",
+    "subtitleField": "status",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["kind", "profile"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "handler",
+    "hiddenFields": ["type", "authenticated"],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["handler", "kind", "profile"],
+        "layout": "inline"
+      },
+      {
+        "title": "Status",
+        "fields": ["status", "flow", "user", "expiresIn"],
+        "layout": "table"
+      },
+      {
+        "title": "Identity",
+        "fields": ["displayName", "email", "username", "identityType", "clientId", "tenantId"],
+        "layout": "table"
+      },
+      {
+        "title": "Token Details",
+        "fields": ["expiresAt", "lastRefresh", "cachedTokens", "tokenFile"],
+        "layout": "table"
+      },
+      {
+        "title": "Scopes",
+        "fields": ["scopes"],
+        "layout": "tags"
+      },
+      {
+        "title": "Hint",
+        "fields": ["hint"],
+        "layout": "paragraph"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["handler", "status"],
+    "properties": {
+      "handler":        { "type": "string", "title": "Handler", "maxLength": 16 },
+      "kind":           { "type": "string", "title": "Kind", "maxLength": 10 },
+      "status":         { "type": "string", "title": "Status", "maxLength": 22 },
+      "flow":           { "type": "string", "title": "Flow" },
+      "user":           { "type": "string", "title": "User", "maxLength": 30 },
+      "expiresIn":      { "type": "string", "title": "Expires", "maxLength": 10 },
+      "profile":        { "type": "string", "title": "Profile", "maxLength": 20 },
+      "displayName":    { "type": "string", "title": "Display Name" },
+      "email":          { "type": "string", "title": "Email" },
+      "username":       { "type": "string", "title": "Username" },
+      "authenticated":  { "type": "boolean", "title": "Authenticated" },
+      "identityType":   { "type": "string", "title": "Identity Type" },
+      "clientId":       { "type": "string", "title": "Client ID" },
+      "tokenFile":      { "type": "string", "title": "Token File" },
+      "name":           { "type": "string", "title": "Name" },
+      "tenantId":       { "type": "string", "title": "Tenant ID" },
+      "expiresAt":      { "type": "string", "title": "Expires At" },
+      "lastRefresh":    { "type": "string", "title": "Last Refresh" },
+      "scopes":         { "type": "array", "items": { "type": "string" }, "title": "Scopes" },
+      "cachedTokens":   { "type": "integer", "title": "Cached Tokens" },
+      "hint":           { "type": "string", "title": "Hint" }
+    }
+  }
+}

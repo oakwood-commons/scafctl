@@ -97,9 +97,7 @@ func TestCommandLogin_Success(t *testing.T) {
 
 	// Verify output
 	output := buf.String()
-	assert.Contains(t, output, "Authentication successful")
-	assert.Contains(t, output, "Test User")
-	assert.Contains(t, output, "test@example.com")
+	assert.Contains(t, output, "Logged in to Microsoft Entra ID as test@example.com")
 }
 
 func TestCommandLogin_AlreadyAuthenticated(t *testing.T) {

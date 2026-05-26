@@ -43,4 +43,8 @@ var (
 			Foreground(lipgloss.Color("#808080")). // Gray
 			PaddingLeft(1).
 			PaddingRight(1)
+
+	SectionHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				PaddingLeft(1)
 )

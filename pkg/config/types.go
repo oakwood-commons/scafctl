@@ -447,6 +447,53 @@ type EntraAuthConfig struct {
 	// Embedders can override this via WithBaseConfig to change the default
 	// for their CLI.
 	DefaultFlow string `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow" enum:"interactive,device_code" maxLength:"32" example:"interactive"`
+
+	// FederatedTokenFile is the path to the projected service account token file
+	// for workload identity federation. Provides a config-based alternative to
+	// the AZURE_FEDERATED_TOKEN_FILE environment variable.
+	FederatedTokenFile string `json:"federatedTokenFile,omitempty" yaml:"federatedTokenFile,omitempty" mapstructure:"federatedTokenFile" doc:"Path to workload identity federation token file" maxLength:"1024"` //nolint:gosec // G101: config field, not a credential
+
+	// FederatedToken is a raw federated token for workload identity federation.
+	// Primarily for testing. Provides a config-based alternative to the
+	// AZURE_FEDERATED_TOKEN environment variable.
+	FederatedToken string `json:"federatedToken,omitempty" yaml:"federatedToken,omitempty" mapstructure:"federatedToken" doc:"Raw federated token for workload identity (testing)" maxLength:"8192"` //nolint:gosec // G101: config field, not a credential
+
+	// ClientSecret is the client secret for service principal authentication.
+	// Provides a config-based alternative to the AZURE_CLIENT_SECRET environment variable.
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"Client secret for service principal auth" maxLength:"128"` //nolint:gosec // G101: config field, not a credential
+
+	// ActiveProfile is the default profile for this handler.
+	// When set, this profile's credentials are used unless overridden.
+	ActiveProfile string `json:"activeProfile,omitempty" yaml:"activeProfile,omitempty" mapstructure:"activeProfile" doc:"Default auth profile" maxLength:"64"`
+
+	// Profiles maps profile names to per-profile config overrides.
+	// Profile configs inherit from the top-level handler config and override specific fields.
+	Profiles map[string]*EntraProfileConfig `json:"profiles,omitempty" yaml:"profiles,omitempty" mapstructure:"profiles" doc:"Named auth profiles"`
+}
+
+// EntraProfileConfig is a non-recursive profile entry for Entra auth.
+// It contains the same fields as EntraAuthConfig minus ActiveProfile and Profiles.
+type EntraProfileConfig struct {
+	HTTPClient    *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for Entra"`
+	ClientID      string            `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"Azure application ID" maxLength:"36"`
+	TenantID      string            `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Default Azure tenant ID" maxLength:"36"`
+	Authority     string            `json:"authority,omitempty" yaml:"authority,omitempty" mapstructure:"authority" doc:"Azure AD authority URL" maxLength:"256"`
+	DefaultScopes []string          `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+	DefaultFlow   string            `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" mapstructure:"defaultFlow" doc:"Default interactive auth flow" enum:"interactive,device_code" maxLength:"32"`
+
+	// FederatedTokenFile is the path to the projected service account token file
+	// for workload identity federation. When set in a profile, overrides the
+	// AZURE_FEDERATED_TOKEN_FILE environment variable.
+	FederatedTokenFile string `json:"federatedTokenFile,omitempty" yaml:"federatedTokenFile,omitempty" mapstructure:"federatedTokenFile" doc:"Path to workload identity federation token file" maxLength:"1024"` //nolint:gosec // G101: config field, not a credential
+
+	// FederatedToken is a raw federated token for workload identity federation.
+	// Primarily for testing. When set in a profile, overrides the AZURE_FEDERATED_TOKEN
+	// environment variable.
+	FederatedToken string `json:"federatedToken,omitempty" yaml:"federatedToken,omitempty" mapstructure:"federatedToken" doc:"Raw federated token for workload identity (testing)" maxLength:"8192"` //nolint:gosec // G101: config field, not a credential
+
+	// ClientSecret is the client secret for service principal authentication.
+	// When set in a profile, overrides the AZURE_CLIENT_SECRET environment variable.
+	ClientSecret string `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"Client secret for service principal auth" maxLength:"128"` //nolint:gosec // G101: config field, not a credential
 }
 
 // GitHubAuthConfig contains GitHub-specific configuration.
@@ -485,6 +532,28 @@ type GitHubAuthConfig struct {
 
 	// PrivateKeySecretName is the name of the secret store entry containing the private key.
 	PrivateKeySecretName string `json:"privateKeySecretName,omitempty" yaml:"privateKeySecretName,omitempty" mapstructure:"privateKeySecretName" doc:"Secret store key for the GitHub App private key" maxLength:"255" example:"github-app-key"`
+
+	// ActiveProfile is the default profile for this handler.
+	// When set, this profile's credentials are used unless overridden.
+	ActiveProfile string `json:"activeProfile,omitempty" yaml:"activeProfile,omitempty" mapstructure:"activeProfile" doc:"Default auth profile" maxLength:"64"`
+
+	// Profiles maps profile names to per-profile config overrides.
+	// Profile configs inherit from the top-level handler config and override specific fields.
+	Profiles map[string]*GitHubProfileConfig `json:"profiles,omitempty" yaml:"profiles,omitempty" mapstructure:"profiles" doc:"Named auth profiles"`
+}
+
+// GitHubProfileConfig is a non-recursive profile entry for GitHub auth.
+type GitHubProfileConfig struct {
+	HTTPClient           *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for GitHub"`
+	ClientID             string            `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"GitHub OAuth App client ID" maxLength:"40"`
+	ClientSecret         string            `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"GitHub OAuth App client secret" maxLength:"64"` //nolint:gosec
+	Hostname             string            `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"GitHub hostname" maxLength:"253"`
+	DefaultScopes        []string          `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+	AppID                int64             `json:"appId,omitempty" yaml:"appId,omitempty" mapstructure:"appId" doc:"GitHub App ID"`
+	InstallationID       int64             `json:"installationId,omitempty" yaml:"installationId,omitempty" mapstructure:"installationId" doc:"GitHub App installation ID"`
+	PrivateKeyPath       string            `json:"privateKeyPath,omitempty" yaml:"privateKeyPath,omitempty" mapstructure:"privateKeyPath" doc:"File path to PEM-encoded private key" maxLength:"1024"`
+	PrivateKey           string            `json:"privateKey,omitempty" yaml:"privateKey,omitempty" mapstructure:"privateKey" doc:"Inline PEM-encoded private key" maxLength:"8192"` //nolint:gosec
+	PrivateKeySecretName string            `json:"privateKeySecretName,omitempty" yaml:"privateKeySecretName,omitempty" mapstructure:"privateKeySecretName" doc:"Secret store key for the GitHub App private key" maxLength:"255"`
 }
 
 // GCPAuthConfig contains GCP-specific configuration.
@@ -506,6 +575,42 @@ type GCPAuthConfig struct {
 
 	// Project is the default GCP project ID.
 	Project string `json:"project,omitempty" yaml:"project,omitempty" mapstructure:"project" doc:"Default GCP project ID" example:"my-project-123" maxLength:"64"`
+
+	// ServiceAccountKeyFile is the path to a GCP service account key JSON file.
+	// Provides a config-based alternative to the GOOGLE_APPLICATION_CREDENTIALS
+	// environment variable.
+	ServiceAccountKeyFile string `json:"serviceAccountKeyFile,omitempty" yaml:"serviceAccountKeyFile,omitempty" mapstructure:"serviceAccountKeyFile" doc:"Path to GCP service account key JSON file" maxLength:"1024"`
+
+	// ExternalAccountFile is the path to a workload identity federation config file.
+	// Provides a config-based alternative to the GOOGLE_EXTERNAL_ACCOUNT
+	// environment variable.
+	ExternalAccountFile string `json:"externalAccountFile,omitempty" yaml:"externalAccountFile,omitempty" mapstructure:"externalAccountFile" doc:"Path to GCP workload identity federation config file" maxLength:"1024"`
+
+	// ActiveProfile is the default profile for this handler.
+	// When set, this profile's credentials are used unless overridden.
+	ActiveProfile string `json:"activeProfile,omitempty" yaml:"activeProfile,omitempty" mapstructure:"activeProfile" doc:"Default auth profile" maxLength:"64"`
+
+	// Profiles maps profile names to per-profile config overrides.
+	// Profile configs inherit from the top-level handler config and override specific fields.
+	Profiles map[string]*GCPProfileConfig `json:"profiles,omitempty" yaml:"profiles,omitempty" mapstructure:"profiles" doc:"Named auth profiles"`
+}
+
+// GCPProfileConfig is a non-recursive profile entry for GCP auth.
+type GCPProfileConfig struct {
+	HTTPClient                *HTTPClientConfig `json:"httpClient,omitempty" yaml:"httpClient,omitempty" mapstructure:"httpClient" doc:"HTTP client overrides for GCP"`
+	ClientID                  string            `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"OAuth 2.0 client ID" maxLength:"255"`
+	ClientSecret              string            `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"OAuth 2.0 client secret" maxLength:"255"` //nolint:gosec
+	DefaultScopes             []string          `json:"defaultScopes,omitempty" yaml:"defaultScopes,omitempty" mapstructure:"defaultScopes" doc:"Default OAuth scopes" maxItems:"20"`
+	ImpersonateServiceAccount string            `json:"impersonateServiceAccount,omitempty" yaml:"impersonateServiceAccount,omitempty" mapstructure:"impersonateServiceAccount" doc:"Service account email to impersonate" maxLength:"255"`
+	Project                   string            `json:"project,omitempty" yaml:"project,omitempty" mapstructure:"project" doc:"Default GCP project ID" maxLength:"64"`
+
+	// ServiceAccountKeyFile is the path to a GCP service account key JSON file.
+	// When set in a profile, overrides the GOOGLE_APPLICATION_CREDENTIALS environment variable.
+	ServiceAccountKeyFile string `json:"serviceAccountKeyFile,omitempty" yaml:"serviceAccountKeyFile,omitempty" mapstructure:"serviceAccountKeyFile" doc:"Path to GCP service account key JSON file" maxLength:"1024"`
+
+	// ExternalAccountFile is the path to a workload identity federation config file.
+	// When set in a profile, overrides the GOOGLE_EXTERNAL_ACCOUNT environment variable.
+	ExternalAccountFile string `json:"externalAccountFile,omitempty" yaml:"externalAccountFile,omitempty" mapstructure:"externalAccountFile" doc:"Path to GCP workload identity federation config file" maxLength:"1024"`
 }
 
 // BuildConfig holds build command configuration.

@@ -43,6 +43,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 		registry                  string
 		registryScope             string
 		writeRegistryAuth         bool
+		profile                   string
 	)
 
 	cmd := &cobra.Command{
@@ -183,6 +184,24 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			}
 			handlerName := args[0]
 
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
+			// Track whether profile was explicitly set (even if normalized to empty/default).
+			profileExplicit := cmd.Flags().Changed("profile")
+			effectiveProfile := auth.NormalizeProfileName(profile)
+			if effectiveProfile == "" && !profileExplicit {
+				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
+			}
+			if effectiveProfile == "" && !profileExplicit {
+				effectiveProfile = auth.ResolveActiveProfile(ctx, handlerName)
+			}
+			if effectiveProfile != "" {
+				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				ctx = auth.WithProfile(ctx, effectiveProfile)
+			}
+
 			// Validate handler name against registry
 			if err := validateHandlerName(ctx, handlerName); err != nil {
 				w.Errorf("%v", err)
@@ -293,6 +312,23 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				return loginErr
 			}
 
+			// Auto-register the profile in config so it's discoverable by
+			// auth status, auth switch, and ListConfiguredProfiles.
+			if effectiveProfile != "" {
+				var configPathOpt string
+				if configFlag := cmd.Root().Flag("config"); configFlag != nil && configFlag.Value.String() != "" {
+					configPathOpt = configFlag.Value.String()
+				}
+				mgr := config.NewManager(configPathOpt)
+				cfg, loadErr := mgr.Load()
+				if loadErr == nil {
+					auth.EnsureProfileRegistered(cfg, handlerName, effectiveProfile)
+					if saveErr := mgr.Save(); saveErr != nil {
+						w.Warningf("Profile registered but failed to save config: %v", saveErr)
+					}
+				}
+			}
+
 			// Post-login registry bridge.
 			// Re-create the handler with the same overrides used during login so that
 			// token retrieval uses the correct clientID fingerprint and refresh token.
@@ -348,6 +384,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 	cmd.Flags().StringVar(&registry, "registry", "", "OCI registry to bridge auth credentials to after login (e.g. ghcr.io)")
 	cmd.Flags().StringVar(&registryScope, "registry-scope", "", "OAuth scope for registry credential bridging")
 	cmd.Flags().BoolVar(&writeRegistryAuth, "write-registry-auth", false, "Also write bridged credentials to container auth file (Docker/Podman interop)")
+	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
 
 	return cmd
 }
@@ -366,7 +403,7 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 					if fa.Available {
 						flow = auth.Flow(fa.Flow)
 						if fa.Reason != "" {
-							w.Info(fa.Reason)
+							w.Verbosef("Flow detection: %s", fa.Reason)
 						}
 						break
 					}
@@ -460,7 +497,7 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 	}
 
 	w.Info("")
-	return displayLoginResult(w, result, flow)
+	return displayLoginResult(w, result, flow, handler.DisplayName(), auth.ProfileFromContext(ctx))
 }
 
 // executeLoginWithStatusTUI runs the device-code login flow using the kvx status
@@ -515,7 +552,7 @@ func executeLoginWithStatusTUI(
 	}()
 
 	// Wait for the device code, an early completion, or cancellation.
-	w.Infof("Initiating authentication with %s...", handler.DisplayName())
+	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
 	var dci deviceCodeData
 	select {
 	case dci = <-deviceCodeChan:
@@ -531,7 +568,7 @@ func executeLoginWithStatusTUI(
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 		w.Info("")
-		return displayLoginResult(w, outcome.result, flow)
+		return displayLoginResult(w, outcome.result, flow, handler.DisplayName(), auth.ProfileFromContext(ctx))
 	case <-ctx.Done():
 		return exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 	}
@@ -623,7 +660,7 @@ func executeLoginWithStatusTUI(
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	return displayLoginResult(w, capturedOutcome.result, flow)
+	return displayLoginResult(w, capturedOutcome.result, flow, handler.DisplayName(), auth.ProfileFromContext(ctx))
 }
 
 // executeLoginWithBrowserTUI runs the auth code (browser) login flow using the
@@ -677,7 +714,7 @@ func executeLoginWithBrowserTUI(
 	// Wait briefly for a device code callback. If the handler internally
 	// uses device code (e.g., GitHub FlowInteractive without client_secret),
 	// we want to show the device-code TUI instead of the browser TUI.
-	w.Infof("Initiating authentication with %s...", handler.DisplayName())
+	w.Verbosef("Initiating authentication with %s...", handler.DisplayName())
 
 	var useDeviceCodeTUI bool
 	var dci deviceCodeData
@@ -695,7 +732,7 @@ func executeLoginWithBrowserTUI(
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
 		w.Info("")
-		return displayLoginResult(w, outcome.result, flow)
+		return displayLoginResult(w, outcome.result, flow, handler.DisplayName(), auth.ProfileFromContext(ctx))
 	case <-time.After(500 * time.Millisecond):
 		// No device code within 500ms — assume browser flow.
 		useDeviceCodeTUI = false
@@ -834,41 +871,54 @@ func executeLoginWithBrowserTUI(
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	return displayLoginResult(w, capturedOutcome.result, flow)
+	return displayLoginResult(w, capturedOutcome.result, flow, handler.DisplayName(), auth.ProfileFromContext(ctx))
 }
 
-// displayLoginResult prints the authentication success header and claim details.
-func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow) error {
-	w.Success("Authentication successful!")
+// displayLoginResult prints a consolidated authentication success message.
+// Detailed claim and flow information is shown only with --verbose.
+func displayLoginResult(w *writer.Writer, result *auth.Result, flow auth.Flow, handlerDisplayName, profile string) error {
+	// Build consolidated one-liner: "Logged in to <handler> as <identity> [profile: <p>]"
+	identity := result.Claims.DisplayIdentity()
+	if identity == "" {
+		identity = "unknown user"
+	}
+	msg := fmt.Sprintf("Logged in to %s as %s", handlerDisplayName, identity)
+	if profile != "" {
+		msg += fmt.Sprintf(" [profile: %s]", profile)
+	}
+	w.Success(msg)
+
+	// Verbose: detailed claim and flow info
 	if result.Claims.Name != "" {
-		w.Infof("  Name:     %s", result.Claims.Name)
+		w.Verbosef("  Name:     %s", result.Claims.Name)
 	}
 	if result.Claims.Username != "" && result.Claims.Username != result.Claims.Name {
-		w.Infof("  Username: %s", result.Claims.Username)
+		w.Verbosef("  Username: %s", result.Claims.Username)
 	}
 	if result.Claims.Email != "" {
-		w.Infof("  Email:    %s", result.Claims.Email)
+		w.Verbosef("  Email:    %s", result.Claims.Email)
 	}
 	if result.Claims.TenantID != "" {
-		w.Infof("  Tenant:   %s", result.Claims.TenantID)
+		w.Verbosef("  Tenant:   %s", result.Claims.TenantID)
 	}
-	if flow == auth.FlowServicePrincipal {
-		w.Info("  Flow:     Service Principal")
+
+	var flowLabel string
+	switch flow {
+	case auth.FlowServicePrincipal:
+		flowLabel = "Service Principal"
+	case auth.FlowWorkloadIdentity:
+		flowLabel = "Workload Identity"
+	case auth.FlowPAT:
+		flowLabel = "Personal Access Token"
+	case auth.FlowMetadata:
+		flowLabel = "Metadata Server"
+	case auth.FlowInteractive:
+		flowLabel = "Interactive (Browser OAuth)"
+	case auth.FlowDeviceCode:
+		flowLabel = "Device Code"
 	}
-	if flow == auth.FlowWorkloadIdentity {
-		w.Info("  Flow:     Workload Identity")
-	}
-	if flow == auth.FlowPAT {
-		w.Info("  Flow:     Personal Access Token")
-	}
-	if flow == auth.FlowMetadata {
-		w.Info("  Flow:     Metadata Server")
-	}
-	if flow == auth.FlowInteractive {
-		w.Info("  Flow:     Interactive (Browser OAuth)")
-	}
-	if flow == auth.FlowDeviceCode {
-		w.Info("  Flow:     Device Code")
+	if flowLabel != "" {
+		w.Verbosef("  Flow:     %s", flowLabel)
 	}
 	return nil
 }
@@ -908,13 +958,20 @@ func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handle
 		}
 	}
 
-	if err := nativeStore.SetCredential(registry, username, password, containerAuthFile); err != nil {
+	// Warn when replacing credentials for a different user.
+	if prev := nativeStore.GetPreviousUsername(registry); prev != "" && prev != username {
+		w.Warningf("Replacing %s credentials (was: %s, now: %s)", registry, prev, username)
+	}
+
+	// Store with handler/profile metadata so auth status can show the source.
+	profile := auth.ProfileFromContext(ctx)
+	if err := nativeStore.SetCredentialWithSource(registry, username, password, containerAuthFile, handlerName, profile); err != nil {
 		err = fmt.Errorf("failed to store registry credentials: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	w.Infof("Registry credentials stored for %s (via %s handler)", registry, handlerName)
+	w.Verbosef("Registry credentials stored for %s (via %s handler)", registry, handlerName)
 	return nil
 }
 

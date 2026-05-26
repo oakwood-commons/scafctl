@@ -44,6 +44,8 @@ type NativeCredential struct {
 	Username          string `json:"username"`
 	Password          string `json:"password,omitempty"`          //nolint:gosec // stored encrypted via secretsStore when available; JSON field retained for legacy migration
 	ContainerAuthFile string `json:"containerAuthFile,omitempty"` // path to the container auth file written on login
+	Handler           string `json:"handler,omitempty"`           // auth handler that bridged this credential (e.g. "github")
+	Profile           string `json:"profile,omitempty"`           // auth profile used when bridging (e.g. "work")
 }
 
 // nativeCredentialFile represents the on-disk format of the credential store.
@@ -141,6 +143,13 @@ func (s *NativeCredentialStore) getCredentialLocked(host string) (*NativeCredent
 // When a secrets store is available the password is stored encrypted; only
 // the username and metadata are written to the JSON file.
 func (s *NativeCredentialStore) SetCredential(host, username, password, containerAuthFile string) error {
+	return s.SetCredentialWithSource(host, username, password, containerAuthFile, "", "")
+}
+
+// SetCredentialWithSource stores a credential with handler and profile metadata.
+// This records which auth handler and profile bridged the credential, enabling
+// auth status to display the source of registry credentials.
+func (s *NativeCredentialStore) SetCredentialWithSource(host, username, password, containerAuthFile, handler, profile string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -151,25 +160,42 @@ func (s *NativeCredentialStore) SetCredential(host, username, password, containe
 
 	normalized := normalizeRegistryHost(host)
 
+	cred := NativeCredential{
+		Username:          username,
+		ContainerAuthFile: containerAuthFile,
+		Handler:           handler,
+		Profile:           profile,
+	}
+
 	if s.secretsStore != nil {
 		if err := s.secretsStore.Set(context.Background(), nativeRegPasswordKeyPrefix+normalized, []byte(password)); err != nil {
 			return fmt.Errorf("store encrypted password for %s: %w", host, err)
 		}
-		// Do not write plaintext password to JSON when encryption is available.
-		creds.Registries[normalized] = NativeCredential{
-			Username:          username,
-			ContainerAuthFile: containerAuthFile,
-		}
 	} else {
-		// Fallback: plaintext JSON (secrets store unavailable in this environment).
-		creds.Registries[normalized] = NativeCredential{
-			Username:          username,
-			Password:          password,
-			ContainerAuthFile: containerAuthFile,
-		}
+		cred.Password = password
 	}
 
+	creds.Registries[normalized] = cred
 	return s.save(creds)
+}
+
+// GetPreviousUsername returns the username of the currently stored credential
+// for the given host, or empty string if none exists. Used to detect credential
+// replacement during bridging.
+func (s *NativeCredentialStore) GetPreviousUsername(host string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	creds, err := s.load()
+	if err != nil {
+		return ""
+	}
+
+	normalized := normalizeRegistryHost(host)
+	if cred, ok := creds.Registries[normalized]; ok {
+		return cred.Username
+	}
+	return ""
 }
 
 // DeleteCredential removes the credential for the given registry host.

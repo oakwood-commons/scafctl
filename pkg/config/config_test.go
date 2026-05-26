@@ -741,3 +741,91 @@ func TestManager_WithEnvPrefix(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
 }
+
+func TestRestoreAuthProfileEntries_EmptyProfiles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		yaml    string
+		handler string
+		profile string
+	}{
+		{
+			name:    "github empty profile roundtrips",
+			yaml:    "auth:\n  github:\n    profiles:\n      work: {}\n",
+			handler: "github",
+			profile: "work",
+		},
+		{
+			name:    "entra empty profile roundtrips",
+			yaml:    "auth:\n  entra:\n    profiles:\n      personal: {}\n",
+			handler: "entra",
+			profile: "personal",
+		},
+		{
+			name:    "gcp empty profile roundtrips",
+			yaml:    "auth:\n  gcp:\n    profiles:\n      staging: {}\n",
+			handler: "gcp",
+			profile: "staging",
+		},
+		{
+			name:    "github multiple empty profiles",
+			yaml:    "auth:\n  github:\n    profiles:\n      work: {}\n      personal: {}\n",
+			handler: "github",
+			profile: "work",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			require.NoError(t, os.WriteFile(configPath, []byte(tt.yaml), 0o600))
+
+			mgr := NewManager(configPath)
+			cfg, err := mgr.Load()
+			require.NoError(t, err)
+
+			switch tt.handler {
+			case "github":
+				require.NotNil(t, cfg.Auth.GitHub, "Auth.GitHub should not be nil")
+				assert.Contains(t, cfg.Auth.GitHub.Profiles, tt.profile)
+			case "entra":
+				require.NotNil(t, cfg.Auth.Entra, "Auth.Entra should not be nil")
+				assert.Contains(t, cfg.Auth.Entra.Profiles, tt.profile)
+			case "gcp":
+				require.NotNil(t, cfg.Auth.GCP, "Auth.GCP should not be nil")
+				assert.Contains(t, cfg.Auth.GCP.Profiles, tt.profile)
+			}
+		})
+	}
+}
+
+func TestRestoreAuthProfileEntries_PreservesNonEmpty(t *testing.T) {
+	t.Parallel()
+
+	yaml := `auth:
+  github:
+    clientId: "my-app"
+    profiles:
+      work:
+        clientId: "work-app"
+      empty: {}
+`
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(yaml), 0o600))
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+
+	require.NotNil(t, cfg.Auth.GitHub)
+	assert.Equal(t, "my-app", cfg.Auth.GitHub.ClientID)
+	assert.Len(t, cfg.Auth.GitHub.Profiles, 2)
+	assert.Equal(t, "work-app", cfg.Auth.GitHub.Profiles["work"].ClientID)
+	assert.NotNil(t, cfg.Auth.GitHub.Profiles["empty"])
+}

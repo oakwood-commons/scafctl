@@ -130,6 +130,12 @@ func (m *Manager) Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Viper/mapstructure drops struct pointers when all fields are zero-valued.
+	// This means `auth.github: { profiles: { work: {} } }` round-trips as
+	// Auth.GitHub == nil. Fix up by checking the raw viper data for auth
+	// handler entries and profile keys that were lost during unmarshal.
+	restoreAuthProfileEntries(m.v, &cfg)
+
 	// Viper replaces arrays entirely when merging config files, so default
 	// catalog entries may be lost when a base config or user config supplies
 	// its own catalogs list. Re-add any missing default catalogs by name.
@@ -299,6 +305,117 @@ func mergeDefaultCatalogEntries(cfg *Config) {
 			continue
 		}
 		cfg.Catalogs = append(cfg.Catalogs, dc)
+	}
+}
+
+// restoreAuthProfileEntries fixes up auth handler configs and profile entries
+// that viper/mapstructure dropped during Unmarshal. When all fields in a struct
+// pointer are zero-valued, mapstructure sets the pointer to nil. This means
+// `auth.github: { profiles: { work: {} } }` round-trips as Auth.GitHub == nil.
+// We check the raw viper data and restore the empty entries.
+func restoreAuthProfileEntries(v *viper.Viper, cfg *Config) {
+	type handlerProfiles struct {
+		viperKey string
+		initFn   func()
+		profiles func() map[string]bool
+		addFn    func(string)
+	}
+
+	handlers := []handlerProfiles{
+		{
+			viperKey: "auth.entra.profiles",
+			initFn: func() {
+				if cfg.Auth.Entra == nil {
+					cfg.Auth.Entra = &EntraAuthConfig{}
+				}
+			},
+			profiles: func() map[string]bool {
+				if cfg.Auth.Entra == nil {
+					return nil
+				}
+				m := make(map[string]bool, len(cfg.Auth.Entra.Profiles))
+				for k := range cfg.Auth.Entra.Profiles {
+					m[k] = true
+				}
+				return m
+			},
+			addFn: func(name string) {
+				if cfg.Auth.Entra.Profiles == nil {
+					cfg.Auth.Entra.Profiles = make(map[string]*EntraProfileConfig)
+				}
+				if _, ok := cfg.Auth.Entra.Profiles[name]; !ok {
+					cfg.Auth.Entra.Profiles[name] = &EntraProfileConfig{}
+				}
+			},
+		},
+		{
+			viperKey: "auth.github.profiles",
+			initFn: func() {
+				if cfg.Auth.GitHub == nil {
+					cfg.Auth.GitHub = &GitHubAuthConfig{}
+				}
+			},
+			profiles: func() map[string]bool {
+				if cfg.Auth.GitHub == nil {
+					return nil
+				}
+				m := make(map[string]bool, len(cfg.Auth.GitHub.Profiles))
+				for k := range cfg.Auth.GitHub.Profiles {
+					m[k] = true
+				}
+				return m
+			},
+			addFn: func(name string) {
+				if cfg.Auth.GitHub.Profiles == nil {
+					cfg.Auth.GitHub.Profiles = make(map[string]*GitHubProfileConfig)
+				}
+				if _, ok := cfg.Auth.GitHub.Profiles[name]; !ok {
+					cfg.Auth.GitHub.Profiles[name] = &GitHubProfileConfig{}
+				}
+			},
+		},
+		{
+			viperKey: "auth.gcp.profiles",
+			initFn: func() {
+				if cfg.Auth.GCP == nil {
+					cfg.Auth.GCP = &GCPAuthConfig{}
+				}
+			},
+			profiles: func() map[string]bool {
+				if cfg.Auth.GCP == nil {
+					return nil
+				}
+				m := make(map[string]bool, len(cfg.Auth.GCP.Profiles))
+				for k := range cfg.Auth.GCP.Profiles {
+					m[k] = true
+				}
+				return m
+			},
+			addFn: func(name string) {
+				if cfg.Auth.GCP.Profiles == nil {
+					cfg.Auth.GCP.Profiles = make(map[string]*GCPProfileConfig)
+				}
+				if _, ok := cfg.Auth.GCP.Profiles[name]; !ok {
+					cfg.Auth.GCP.Profiles[name] = &GCPProfileConfig{}
+				}
+			},
+		},
+	}
+
+	for _, h := range handlers {
+		raw := v.Get(h.viperKey)
+		rawMap, ok := raw.(map[string]any)
+		if !ok || len(rawMap) == 0 {
+			continue
+		}
+		// Raw data has profile keys — ensure the struct exists.
+		h.initFn()
+		existing := h.profiles()
+		for name := range rawMap {
+			if !existing[name] {
+				h.addFn(name)
+			}
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1917,6 +1918,63 @@ func TestHostServiceServer_GetAuthToken_EmptyHandlerAllowedWithoutAllowlist(t *t
 	require.NoError(t, err)
 	assert.Empty(t, resp.Error)
 	assert.Equal(t, "default-tok", resp.AccessToken)
+}
+
+func TestHostServiceServer_GetAuthToken_ProfileResolverUsedWhenNoExplicitProfile(t *testing.T) {
+	var capturedCtx context.Context
+	deps := HostServiceDeps{
+		AuthTokenFunc: func(ctx context.Context, handler, scope string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			capturedCtx = ctx
+			return &proto.GetAuthTokenResponse{
+				AccessToken: "work-tok",
+				TokenType:   "Bearer",
+			}, nil
+		},
+		ProfileResolverFunc: func(handlerName string) string {
+			if handlerName == "github" {
+				return "work"
+			}
+			return ""
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "github",
+		Scope:       "repo",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "work-tok", resp.AccessToken)
+	assert.Empty(t, resp.Error)
+	// Verify the profile was injected into the context passed to AuthTokenFunc.
+	assert.Equal(t, "work", auth.ProfileFromContext(capturedCtx))
+}
+
+func TestHostServiceServer_GetAuthToken_ExplicitProfileOverridesResolver(t *testing.T) {
+	var capturedCtx context.Context
+	deps := HostServiceDeps{
+		AuthTokenFunc: func(ctx context.Context, handler, scope string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			capturedCtx = ctx
+			return &proto.GetAuthTokenResponse{
+				AccessToken: "personal-tok",
+				TokenType:   "Bearer",
+			}, nil
+		},
+		ProfileResolverFunc: func(handlerName string) string {
+			return "work" // should be overridden by explicit profile
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "github",
+		Scope:       "repo",
+		Profile:     "personal",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "personal-tok", resp.AccessToken)
+	// Explicit profile wins over resolver.
+	assert.Equal(t, "personal", auth.ProfileFromContext(capturedCtx))
 }
 
 func TestHostServiceClient_GetAuthToken_Success(t *testing.T) {
