@@ -15,7 +15,7 @@ This document is the implementation plan for the next phase of MCP server improv
   - [Phase 1A: `scafctl eval` Command Group](#phase-1a-scafctl-eval-command-group)
   - [Phase 1B: `scafctl new` Command](#phase-1b-scafctl-new-command)
   - [Phase 1C: `scafctl lint` Subcommands](#phase-1c-scafctl-lint-subcommands)
-  - [Phase 1E: `scafctl examples` Command Group](#phase-1e-scafctl-examples-command-group)
+  - [Phase 1E: `scafctl get examples` Command](#phase-1e-scafctl-get-examples-command)
   - [Phase 1F: Enhanced `--dry-run` Output](#phase-1f-enhanced---dry-run-output)
 - [Part 2: New MCP Tools](#part-2-new-mcp-tools)
   - [Phase 2A: `extract_resolver_refs`](#phase-2a-extract_resolver_refs)
@@ -269,26 +269,25 @@ scafctl lint explain unknown-provider-input  # detailed fix guidance
 
 ---
 
-### Phase 1E: `scafctl examples` Command Group
+### Phase 1E: `scafctl get examples` Command
 
-**New commands:** `scafctl examples list` and `scafctl examples get`
+**Unified command:** `scafctl get examples [example-path]`
 
 ```
-scafctl examples list                        # list all examples
-scafctl examples list --category solutions   # filter by category
-scafctl examples list -o json                # JSON output
+scafctl get examples                         # list all examples
+scafctl get examples --category solutions    # filter by category
+scafctl get examples -o json                 # JSON output
 
-scafctl examples get solutions/email-notifier/solution.yaml   # print example
-scafctl examples get providers/http-resolver.yaml > my.yaml   # save to file
+scafctl get examples solutions/email-notifier/solution.yaml   # print example
+scafctl get examples providers/http-resolver.yaml > my.yaml   # save to file
 ```
 
 **Files:**
-- `pkg/cmd/scafctl/examples/list.go`
-- `pkg/cmd/scafctl/examples/get.go`
+- `pkg/cmd/scafctl/get/examples/examples.go`
 
 **Prerequisite — Extract shared library with `go:embed`:**
 
-The current MCP implementation in `pkg/mcp/tools_examples.go` uses `runtime.Caller(0)` and directory-walking heuristics to locate the `examples/` directory at runtime. This is fragile — it only works when running from a repo checkout or development build. For `scafctl examples` to work as a distributed CLI command (installed binary, containers, CI), the examples must be embedded into the binary.
+The current MCP implementation in `pkg/mcp/tools_examples.go` uses `runtime.Caller(0)` and directory-walking heuristics to locate the `examples/` directory at runtime. This is fragile — it only works when running from a repo checkout or development build. For `scafctl get examples` to work as a distributed CLI command (installed binary, containers, CI), the examples must be embedded into the binary.
 
 **Approach:** Use Go's `go:embed` directive, which is already an established pattern in this codebase (see `pkg/cmd/scafctl/config/init.go` for config templates). The `examples/` directory is 520KB / 87 files — trivially small for embedding.
 
@@ -1105,7 +1104,7 @@ Recommended execution order balancing impact, dependencies, and effort:
 13. **Phase 3A:** `analyze_execution` prompt
 
 ### Sprint 5: CLI Parity — Additional Commands
-14. **Phase 1E:** `scafctl examples list`, `scafctl examples get`
+14. **Phase 1E:** `scafctl get examples`
 15. **Phase 1F:** Enhanced `--dry-run` output (full rich report replaces lightweight summary)
 
 ### Sprint 6: Supplementary MCP Enhancements

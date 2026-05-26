@@ -263,8 +263,8 @@ scafctl render solution -f solution.yaml -o json
 scafctl new solution --name my-app --description "My application scaffold" --output my-app.yaml
 
 # Browse and download examples
-scafctl examples list
-scafctl examples get resolvers/hello-world.yaml -o hello.yaml
+scafctl get examples
+scafctl get examples resolvers/hello-world.yaml > hello.yaml
 
 # Evaluate a CEL expression
 scafctl eval cel --expression '"hello".upperAscii()'
@@ -321,8 +321,8 @@ scafctl render solution -f solution.yaml -o json
 scafctl new solution --name my-app --description "My application scaffold" --output my-app.yaml
 
 # Browse and download examples
-scafctl examples list
-scafctl examples get resolvers/hello-world.yaml -o hello.yaml
+scafctl get examples
+scafctl get examples resolvers/hello-world.yaml > hello.yaml
 
 # Evaluate a CEL expression
 scafctl eval cel --expression '"hello".upperAscii()'

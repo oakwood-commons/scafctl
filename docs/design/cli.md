@@ -988,31 +988,29 @@ Discover and download built-in example configurations:
 
 ~~~bash
 # List all examples
-scafctl examples list
+scafctl get examples
 
 # Filter by category
-scafctl examples list --category solutions
-scafctl examples list --category resolvers
-scafctl examples list --category actions
+scafctl get examples --category solutions
+scafctl get examples --category resolvers
+scafctl get examples --category actions
 
 # Output as JSON
-scafctl examples list -o json
+scafctl get examples -o json
 
 # Output as YAML
-scafctl examples list -o yaml
+scafctl get examples -o yaml
 ~~~
 
 ### Get an Example
 
 ~~~bash
 # Print example to stdout
-scafctl examples get resolvers/hello-world.yaml
+scafctl get examples resolvers/hello-world.yaml
 
 # Save to file
-scafctl examples get resolvers/hello-world.yaml -o output.yaml
+scafctl get examples resolvers/hello-world.yaml > output.yaml
 ~~~
-
-Aliases: `ls` for list
 
 ---
 
@@ -1060,8 +1058,7 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl lint explain` | lint | explain |
 | `scafctl eval cel` | eval | cel |
 | `scafctl eval template` | eval | template |
-| `scafctl examples list` | examples | list |
-| `scafctl examples get` | examples | get |
+| `scafctl get examples` | get | examples |
 | `scafctl cache clean` | cache | clean |
 | `scafctl plugins list` | plugins | list |
 | `scafctl bundle create` | bundle | create |
