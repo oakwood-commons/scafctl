@@ -94,6 +94,16 @@ func InfoMessage(msg string, noColor bool) string {
 	return styles.InfoStyle.Render("💡") + msg
 }
 
+// SectionHeaderMessage formats a section header for terminal output.
+// If noColor is true, the message is returned without styling.
+// Otherwise, it applies bold styling.
+func SectionHeaderMessage(msg string, noColor bool) string {
+	if noColor {
+		return msg
+	}
+	return styles.SectionHeaderStyle.Render(msg)
+}
+
 // DebugMessage formats a debug message for terminal output.
 // If noColor is true, the message is returned without styling.
 // Otherwise, it prepends a debug icon and applies magenta bold styling.

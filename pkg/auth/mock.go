@@ -37,6 +37,10 @@ type MockHandler struct {
 	GetTokenCalls     []TokenOptions
 	InjectAuthCalls   []TokenOptions
 	PurgeExpiredCalls int
+
+	// LastContextProfile captures the profile from context on the most recent call.
+	// This enables tests to verify that profile propagation reaches the handler.
+	LastContextProfile string
 }
 
 // NewMockHandler creates a new mock auth handler with default values.
@@ -62,37 +66,42 @@ func (m *MockHandler) Capabilities() []Capability {
 	return m.CapabilitiesValue
 }
 
-func (m *MockHandler) Login(_ context.Context, opts LoginOptions) (*Result, error) {
+func (m *MockHandler) Login(ctx context.Context, opts LoginOptions) (*Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	m.LoginCalls = append(m.LoginCalls, opts)
 	return m.LoginResult, m.LoginErr
 }
 
-func (m *MockHandler) Logout(_ context.Context) error {
+func (m *MockHandler) Logout(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	m.LogoutCalls++
 	return m.LogoutErr
 }
 
-func (m *MockHandler) Status(_ context.Context) (*Status, error) {
+func (m *MockHandler) Status(ctx context.Context) (*Status, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	m.StatusCalls++
 	return m.StatusResult, m.StatusErr
 }
 
-func (m *MockHandler) GetToken(_ context.Context, opts TokenOptions) (*Token, error) {
+func (m *MockHandler) GetToken(ctx context.Context, opts TokenOptions) (*Token, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	m.GetTokenCalls = append(m.GetTokenCalls, opts)
 	return m.GetTokenResult, m.GetTokenErr
 }
 
-func (m *MockHandler) InjectAuth(_ context.Context, req *http.Request, opts TokenOptions) error {
+func (m *MockHandler) InjectAuth(ctx context.Context, req *http.Request, opts TokenOptions) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	m.InjectAuthCalls = append(m.InjectAuthCalls, opts)
 	if m.InjectAuthErr != nil {
 		return m.InjectAuthErr
@@ -115,6 +124,7 @@ func (m *MockHandler) Reset() {
 	m.GetTokenCalls = nil
 	m.InjectAuthCalls = nil
 	m.PurgeExpiredCalls = 0
+	m.LastContextProfile = ""
 }
 
 func (m *MockHandler) SetAuthenticated(claims *Claims) {
@@ -143,15 +153,17 @@ func (m *MockHandler) SetTokenError(err error) {
 	m.GetTokenErr = err
 }
 
-func (m *MockHandler) ListCachedTokens(_ context.Context) ([]*CachedTokenInfo, error) {
+func (m *MockHandler) ListCachedTokens(ctx context.Context) ([]*CachedTokenInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	return m.ListCachedTokensResult, m.ListCachedTokensErr
 }
 
-func (m *MockHandler) PurgeExpiredTokens(_ context.Context) (int, error) {
+func (m *MockHandler) PurgeExpiredTokens(ctx context.Context) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.LastContextProfile = ProfileFromContext(ctx)
 	m.PurgeExpiredCalls++
 	return m.PurgeExpiredResult, m.PurgeExpiredErr
 }

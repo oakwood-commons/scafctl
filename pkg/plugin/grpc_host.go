@@ -72,6 +72,12 @@ type HostServiceDeps struct {
 	// TODO: Wire this callback in production code (e.g. via RootOptions or plugin SDK)
 	// once an auth handler with group query support is available.
 	AuthGroupsFunc func(ctx context.Context, handler string) ([]string, error) `json:"-" yaml:"-" doc:"Auth groups callback (not serialized)."`
+	// ProfileResolverFunc resolves the active auth profile for a handler when
+	// the plugin request does not specify one explicitly. This bridges the gap
+	// between the host's --auth-profile flag / config activeProfile and plugin
+	// providers that call back for auth tokens.
+	// May be nil — in which case no profile resolution is performed.
+	ProfileResolverFunc func(handlerName string) string `json:"-" yaml:"-" doc:"Profile resolver callback (not serialized)."`
 }
 
 // isSecretAllowed checks whether the given secret name is within the allowed
@@ -330,6 +336,24 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 		}, nil
 	}
 
+	// Inject profile into context so downstream token acquisition uses the
+	// correct profile-scoped credentials.
+	profile := req.Profile
+	if profile == "" && h.Deps.ProfileResolverFunc != nil {
+		profile = h.Deps.ProfileResolverFunc(req.HandlerName)
+	}
+	if profile != "" {
+		profile = auth.NormalizeProfileName(profile)
+		if profile != "" {
+			if err := auth.ValidateProfileName(profile); err != nil {
+				return &proto.GetAuthTokenResponse{
+					Error: fmt.Sprintf("invalid profile from plugin: %v", err),
+				}, nil
+			}
+		}
+		ctx = auth.WithProfile(ctx, profile)
+	}
+
 	resp, err := h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)
 	if err != nil {
 		return &proto.GetAuthTokenResponse{
@@ -456,6 +480,7 @@ func (c *HostServiceClient) GetAuthToken(ctx context.Context, handler, scope str
 		Scope:              scope,
 		MinValidForSeconds: minValidFor,
 		ForceRefresh:       forceRefresh,
+		Profile:            auth.ProfileFromContext(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("host GetAuthToken: %w", err)
@@ -550,6 +575,11 @@ func AuthClientOptsFromContext(ctx context.Context) []ClientOption {
 	deps := HostDepsFromAuthRegistry(authReg)
 	if deps == nil {
 		return nil
+	}
+	// Wire profile resolution so plugin providers inherit the host's active
+	// auth profile (from --auth-profile flag or config activeProfile).
+	deps.ProfileResolverFunc = func(handlerName string) string {
+		return auth.ResolveActiveProfile(ctx, handlerName)
 	}
 	return []ClientOption{WithHostDeps(deps)}
 }

@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"sort"
 	"strings"
@@ -29,6 +30,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+//go:embed auth_status_schema.json
+var authStatusDisplaySchema []byte
+
 // authStatusSchema controls table column display. Columns in the "required"
 // array resist truncation in table view. Fields marked "deprecated" are hidden
 // in table output but still included in json/yaml. Property declaration order
@@ -40,10 +44,12 @@ var authStatusSchema = []byte(`{
 		"required": ["handler", "status"],
 		"properties": {
 			"handler":        { "type": "string", "title": "Handler", "maxLength": 16 },
+			"kind":           { "type": "string", "title": "Kind", "maxLength": 10 },
 			"status":         { "type": "string", "title": "Status", "maxLength": 22 },
 			"flow":           { "type": "string", "title": "Flow", "enum": ["device_code", "interactive", "service_principal", "workload_identity", "pat", "gcloud_adc", "github_app", "client_credentials", "token"] },
 			"user":           { "type": "string", "title": "User", "maxLength": 30 },
 			"expiresIn":      { "type": "string", "title": "Expires", "maxLength": 10 },
+			"profile":        { "type": "string", "title": "Profile", "maxLength": 20 },
 			"type":           { "type": "string", "deprecated": true },
 			"displayName":    { "type": "string", "deprecated": true },
 			"email":          { "type": "string", "deprecated": true },
@@ -69,6 +75,8 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	outputFlags.AppName = cliParams.BinaryName
 	var exitCodeFlag bool
 	var warnWithin time.Duration
+	var profile string
+	var showAll bool
 
 	cmd := &cobra.Command{
 		Use:   "status [handler]",
@@ -77,13 +85,24 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			Show the current authentication status for auth handlers.
 
 			If no handler is specified, shows status for all registered handlers.
+			Use --all to also include catalog and registry credential rows.
+
+			Interactive mode (-i) launches a TUI for exploring auth status and
+			automatically includes all sections (handlers, catalogs, registry
+			credentials) without requiring --all.
 
 			Use --exit-code to make the command exit non-zero when any handler
 			is not authenticated — useful for scripting and health checks.
 
 			Examples:
-			  # Show all auth status
+			  # Show all auth handler status
 			  scafctl auth status
+
+			  # Include catalog and registry credentials
+			  scafctl auth status --all
+
+			  # Interactive TUI with all sections
+			  scafctl auth status -i
 
 			  # Show Entra auth status
 			  scafctl auth status entra
@@ -112,7 +131,25 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return fmt.Errorf("writer not initialized in context")
 			}
 
+			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
+			// Track whether profile was explicitly set (even if normalized to empty/default).
+			profileExplicit := cmd.Flags().Changed("profile")
+			effectiveProfile := auth.NormalizeProfileName(profile)
+			if effectiveProfile == "" && !profileExplicit {
+				effectiveProfile = auth.NormalizeProfileName(auth.GlobalProfileFromContext(ctx))
+			}
+			if effectiveProfile != "" {
+				if err := auth.ValidateProfileName(effectiveProfile); err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				ctx = auth.WithProfile(ctx, effectiveProfile)
+			}
+
 			handlers := listHandlers(ctx)
+			var results []map[string]any
+			var warnings []string
+
 			if len(args) > 0 {
 				handlerName := args[0]
 				if err := validateHandlerName(ctx, handlerName); err != nil {
@@ -122,7 +159,12 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				handlers = []string{handlerName}
 			}
 
-			results, warnings := queryHandlerStatuses(ctx, cliParams, handlers)
+			if effectiveProfile == "" && !profileExplicit {
+				// No explicit profile — expand all known profiles per handler.
+				results, warnings = expandProfileStatuses(ctx, cliParams, handlers)
+			} else {
+				results, warnings = queryHandlerStatuses(ctx, cliParams, handlers, profileExplicit)
+			}
 
 			for _, warn := range warnings {
 				w.Warningf("%s", warn)
@@ -134,20 +176,94 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
-			// Append catalog rows for remote catalogs from config.
+			// Collect catalog and registry data (always, for structured output).
+			var catalogResults, registryResults []map[string]any
 			if len(args) == 0 {
-				results = appendCatalogStatus(ctx, cliParams, results)
-				results = appendRegistryCredentials(results)
+				catalogResults = appendCatalogStatus(ctx, cliParams, nil)
+				registryResults = appendRegistryCredentials(nil)
 			}
 
-			outputOpts := flags.ToKvxOutputOptions(&outputFlags,
-				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputColumnOrder([]string{"handler", "status", "flow", "user", "expiresIn"}),
-				kvx.WithOutputSchemaJSON(authStatusSchema),
-			)
+			// In interactive mode, show all sections by default — the TUI lets
+			// users filter/explore freely so there is no reason to hide data.
+			effectiveShowAll := showAll || outputFlags.Interactive
 
-			if err := outputOpts.Write(results); err != nil {
-				return err
+			// Filter unauthenticated profiles unless --all / interactive is set.
+			handlerResults := results
+			if !effectiveShowAll {
+				var filtered []map[string]any
+				for _, r := range handlerResults {
+					if authenticated, _ := r["authenticated"].(bool); authenticated {
+						filtered = append(filtered, r)
+					} else if len(args) > 0 {
+						// Always show unauthenticated when querying a specific handler.
+						filtered = append(filtered, r)
+					}
+				}
+				if len(filtered) > 0 {
+					handlerResults = filtered
+				}
+				// Keep the full set if filtering would remove everything.
+			}
+
+			// Structured and interactive output: combine all groups into one dataset.
+			format := outputFlags.Output
+			isStructured := format == "json" || format == "yaml" || format == "toml" || format == "csv"
+			if isStructured || outputFlags.Interactive {
+				all := make([]map[string]any, 0, len(handlerResults)+len(catalogResults)+len(registryResults))
+				all = append(all, handlerResults...)
+				if effectiveShowAll {
+					all = append(all, catalogResults...)
+					all = append(all, registryResults...)
+				}
+				outputOpts := flags.ToKvxOutputOptions(&outputFlags,
+					kvx.WithIOStreams(ioStreams),
+					kvx.WithOutputColumnOrder([]string{"handler", "kind", "status", "flow", "user", "expiresIn", "profile"}),
+					kvx.WithOutputSchemaJSON(authStatusSchema),
+					kvx.WithOutputDisplaySchemaJSON(authStatusDisplaySchema),
+				)
+				if err := outputOpts.Write(all); err != nil {
+					return err
+				}
+			} else {
+				// Table/list output: render sections with headers.
+				handlerOpts := flags.ToKvxOutputOptions(&outputFlags,
+					kvx.WithIOStreams(ioStreams),
+					kvx.WithOutputColumnOrder([]string{"handler", "profile", "status", "user", "flow", "expiresIn"}),
+					kvx.WithOutputSchemaJSON(authStatusSchema),
+				)
+
+				if len(handlerResults) > 0 {
+					w.SectionHeader("Auth Handlers")
+					if err := handlerOpts.Write(handlerResults); err != nil {
+						return err
+					}
+				}
+
+				if effectiveShowAll && len(catalogResults) > 0 {
+					w.Plainln("")
+					w.SectionHeader("Catalogs")
+					catalogOpts := flags.ToKvxOutputOptions(&outputFlags,
+						kvx.WithIOStreams(ioStreams),
+						kvx.WithOutputColumnOrder([]string{"handler", "status"}),
+						kvx.WithOutputSchemaJSON(authStatusSchema),
+					)
+					if err := catalogOpts.Write(catalogResults); err != nil {
+						return err
+					}
+				}
+
+				if effectiveShowAll && len(registryResults) > 0 {
+					w.Plainln("")
+					w.SectionHeader("Registry Credentials")
+					registryOpts := flags.ToKvxOutputOptions(&outputFlags,
+						kvx.WithIOStreams(ioStreams),
+						kvx.WithOutputColumnOrder([]string{"handler", "user", "profile"}),
+						kvx.WithOutputSchemaJSON(authStatusSchema),
+					)
+					if err := registryOpts.Write(registryResults); err != nil {
+						return err
+					}
+				}
 			}
 
 			// If --exit-code is set, return non-zero when any handler is not authenticated.
@@ -168,7 +284,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					if !authenticated {
 						continue
 					}
-					if expiresAt, ok := r["expiresAt"].(time.Time); ok {
+					if expiresAt, ok := r["_expiresAtTime"].(time.Time); ok && isValidExpiryTime(expiresAt) {
 						if time.Until(expiresAt) < warnWithin {
 							err := fmt.Errorf("one or more tokens expire within %s", warnWithin)
 							w.Warningf("%v", err)
@@ -184,14 +300,47 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 	cmd.Flags().BoolVar(&exitCodeFlag, "exit-code", false, "Exit non-zero if any handler is not authenticated (useful for scripting)")
 	cmd.Flags().DurationVar(&warnWithin, "warn-within", 0, "Exit non-zero if any authenticated handler's token expires within this duration (e.g. 10m, 1h)")
+	cmd.Flags().StringVar(&profile, "profile", "", "Show status for a specific named profile")
+	cmd.Flags().BoolVar(&showAll, "all", false, "Include catalog and registry credential rows")
 	return cmd
+}
+
+// expandProfileStatuses queries all configured profiles (built-in + named) for
+// each handler. When a handler has no named profiles, it is queried once with
+// the default (built-in) profile.
+func expandProfileStatuses(ctx context.Context, cliParams *settings.Run, handlers []string) ([]map[string]any, []string) {
+	var allResults []map[string]any
+	var allWarnings []string
+
+	for _, h := range handlers {
+		profiles := auth.ListConfiguredProfiles(ctx, h)
+		if len(profiles) == 0 {
+			r, w := queryHandlerStatuses(ctx, cliParams, []string{h}, false)
+			allResults = append(allResults, r...)
+			allWarnings = append(allWarnings, w...)
+			continue
+		}
+		// Query built-in first, then named profiles (already sorted by ListConfiguredProfiles).
+		allProfiles := append([]string{""}, profiles...)
+		for _, p := range allProfiles {
+			pCtx := ctx
+			if p != "" {
+				pCtx = auth.WithProfile(pCtx, p)
+			}
+			r, w := queryHandlerStatuses(pCtx, cliParams, []string{h}, true)
+			allResults = append(allResults, r...)
+			allWarnings = append(allWarnings, w...)
+		}
+	}
+
+	return allResults, allWarnings
 }
 
 // queryHandlerStatuses queries all handlers for their authentication status
 // concurrently using errgroup. Results are returned in the same order as the
 // input handlers slice for deterministic output regardless of which handler
 // responds first.
-func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers []string) ([]map[string]any, []string) {
+func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers []string, profileExplicit bool) ([]map[string]any, []string) {
 	tracer := otel.Tracer("scafctl/auth")
 	ctx, span := tracer.Start(ctx, "auth.status.query_all",
 		trace.WithAttributes(attribute.Int("auth.handler_count", len(handlers))))
@@ -214,26 +363,34 @@ func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers
 		g.Go(func() error {
 			statusStart := time.Now()
 
-			handler, err := getHandler(gCtx, handlerName)
+			// Resolve per-handler config profile when no explicit profile was set.
+			handlerCtx := gCtx
+			if auth.ProfileFromContext(handlerCtx) == "" && !profileExplicit {
+				if configProfile := auth.ResolveActiveProfile(handlerCtx, handlerName); configProfile != "" {
+					handlerCtx = auth.WithProfile(handlerCtx, configProfile)
+				}
+			}
+
+			handler, err := getHandler(handlerCtx, handlerName)
 			if err != nil {
-				metrics.RecordAuthStatus(gCtx, handlerName, time.Since(statusStart).Seconds(), false)
+				metrics.RecordAuthStatus(handlerCtx, handlerName, time.Since(statusStart).Seconds(), false)
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("Failed to initialize %s: %v", handlerName, err))
 				mu.Unlock()
 				return nil
 			}
 
-			st, err := handler.Status(gCtx)
+			st, err := handler.Status(handlerCtx)
 			if err != nil {
-				metrics.RecordAuthStatus(gCtx, handlerName, time.Since(statusStart).Seconds(), false)
+				metrics.RecordAuthStatus(handlerCtx, handlerName, time.Since(statusStart).Seconds(), false)
 				mu.Lock()
 				warnings = append(warnings, fmt.Sprintf("Failed to check %s status: %v", handlerName, err))
 				mu.Unlock()
 				return nil
 			}
 
-			metrics.RecordAuthStatus(gCtx, handlerName, time.Since(statusStart).Seconds(), true)
-			result := buildStatusResult(gCtx, cliParams, handlerName, handler, st)
+			metrics.RecordAuthStatus(handlerCtx, handlerName, time.Since(statusStart).Seconds(), true)
+			result := buildStatusResult(handlerCtx, cliParams, handlerName, handler, st)
 
 			mu.Lock()
 			indexed = append(indexed, indexedResult{index: i, result: result})
@@ -260,25 +417,44 @@ func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers
 
 // buildStatusResult constructs the result map for a single handler status query.
 func buildStatusResult(ctx context.Context, cliParams *settings.Run, handlerName string, handler auth.Handler, status *auth.Status) map[string]any {
-	statusStr := "valid"
+	statusStr := "authenticated"
 	if !status.Authenticated {
 		if status.Reason != "" {
 			statusStr = status.Reason
 		} else {
-			statusStr = "not logged in"
+			statusStr = "not authenticated"
 		}
 	}
 
 	var flowStr string
-	if reporter, ok := handler.(auth.FlowReporter); ok && status.Authenticated {
-		if f := reporter.ActiveFlow(ctx); f != "" {
-			flowStr = string(f)
+	// PRIMARY: Use the Flow field from Status (SDK v0.7.0+).
+	if status.Authenticated && status.Flow != "" {
+		flowStr = string(status.Flow)
+	}
+	// FALLBACK 1: Try FlowReporter interface (built-in handlers).
+	if flowStr == "" {
+		if reporter, ok := handler.(auth.FlowReporter); ok && status.Authenticated {
+			if f := reporter.ActiveFlow(ctx); f != "" {
+				flowStr = string(f)
+			}
+		}
+	}
+	// FALLBACK 2: Use the most recent cached token's flow when neither
+	// Status.Flow nor FlowReporter is available (older plugins).
+	if flowStr == "" && status.Authenticated {
+		if lister, ok := handler.(auth.TokenLister); ok {
+			if tokens, err := lister.ListCachedTokens(ctx); err == nil && len(tokens) > 0 {
+				if f := tokens[0].Flow; f != "" {
+					flowStr = string(f)
+				}
+			}
 		}
 	}
 
 	result := map[string]any{
 		"handler":       handlerName,
 		"displayName":   handler.DisplayName(),
+		"kind":          "auth",
 		"type":          "handler",
 		"status":        statusStr,
 		"authenticated": status.Authenticated,
@@ -297,6 +473,16 @@ func buildStatusResult(ctx context.Context, cliParams *settings.Run, handlerName
 		"lastRefresh":   "",
 		"scopes":        []string{},
 		"cachedTokens":  0,
+		"profile":       auth.DisplayProfileName(auth.ProfileFromContext(ctx)),
+	}
+
+	// Mark the active profile so users know which one commands will use.
+	currentProfile := auth.ProfileFromContext(ctx)
+	activeProfile := auth.ConfigActiveProfile(ctx, handlerName)
+	if currentProfile == activeProfile {
+		if p, ok := result["profile"].(string); ok {
+			result["profile"] = p + " (active)"
+		}
 	}
 
 	if !status.Authenticated {
@@ -330,18 +516,21 @@ func buildStatusResult(ctx context.Context, cliParams *settings.Run, handlerName
 			result["user"] = status.Claims.Email
 		case status.Claims.Username != "":
 			result["user"] = status.Claims.Username
+		case status.Claims.Name != "":
+			result["user"] = status.Claims.Name
 		}
 		if status.TenantID != "" {
 			result["tenantId"] = status.TenantID
 		}
-		if !status.ExpiresAt.IsZero() {
-			result["expiresAt"] = status.ExpiresAt
+		if isValidExpiryTime(status.ExpiresAt) {
+			result["expiresAt"] = status.ExpiresAt.Format(time.RFC3339)
+			result["_expiresAtTime"] = status.ExpiresAt // internal: for --warn-within check
 			if timeUntil := time.Until(status.ExpiresAt); timeUntil > 0 {
 				result["expiresIn"] = humanDuration(timeUntil)
 			}
 		}
-		if !status.LastRefresh.IsZero() {
-			result["lastRefresh"] = status.LastRefresh
+		if isValidExpiryTime(status.LastRefresh) {
+			result["lastRefresh"] = status.LastRefresh.Format(time.RFC3339)
 		}
 	}
 
@@ -402,23 +591,24 @@ func appendCatalogStatus(ctx context.Context, cliParams *settings.Run, results [
 			authenticated = status.Authenticated
 			switch {
 			case status.Authenticated:
-				statusStr = "valid"
+				statusStr = "authenticated"
 			case status.Reason != "":
 				statusStr = status.Reason
 			default:
-				statusStr = "not logged in"
+				statusStr = "not authenticated"
 			}
 		}
 
 		result := map[string]any{
-			"handler":       handlerName,
+			"handler":       fmt.Sprintf("%s (%s)", handlerName, displayName),
 			"displayName":   displayName,
+			"kind":          "catalog",
 			"type":          "catalog",
 			"status":        statusStr,
 			"authenticated": authenticated,
 			"email":         "",
 			"username":      "",
-			"user":          displayName,
+			"user":          "",
 			"expiresIn":     "",
 			"flow":          "",
 			"hint":          "",
@@ -431,6 +621,7 @@ func appendCatalogStatus(ctx context.Context, cliParams *settings.Run, results [
 			"lastRefresh":   "",
 			"scopes":        []string{},
 			"cachedTokens":  0,
+			"profile":       "",
 		}
 
 		if !authenticated {
@@ -444,27 +635,32 @@ func appendCatalogStatus(ctx context.Context, cliParams *settings.Run, results [
 }
 
 // appendRegistryCredentials adds rows for stored OCI registry credentials
-// (from `catalog login`). These are shown so users can see all credential
-// sources in one place. Registries already represented by a catalog row are
-// skipped to avoid duplicates.
+// (from `catalog login` or auth bridge). These are shown so users can see all
+// credential sources in one place. Registries already represented by a catalog
+// row are skipped to avoid duplicates.
 func appendRegistryCredentials(results []map[string]any) []map[string]any {
 	nativeStore := catalog.NewNativeCredentialStore()
-	creds, err := nativeStore.ListCredentials()
-	if err != nil || len(creds) == 0 {
+	entries, err := nativeStore.ListCredentialEntries()
+	if err != nil || len(entries) == 0 {
 		return results
 	}
 
 	// Build set of hosts already represented by a catalog/handler row.
+	// Check both handler names and any registry hosts that might be listed.
 	existingHosts := make(map[string]struct{}, len(results))
 	for _, r := range results {
 		if h, ok := r["handler"].(string); ok {
 			existingHosts[h] = struct{}{}
 		}
+		// Also track registry hosts from the registryHost field if present
+		if rh, ok := r["registryHost"].(string); ok && rh != "" {
+			existingHosts[rh] = struct{}{}
+		}
 	}
 
 	// Sort hosts for deterministic output.
-	hosts := make([]string, 0, len(creds))
-	for host := range creds {
+	hosts := make([]string, 0, len(entries))
+	for host := range entries {
 		hosts = append(hosts, host)
 	}
 	sort.Strings(hosts)
@@ -473,16 +669,27 @@ func appendRegistryCredentials(results []map[string]any) []map[string]any {
 		if _, exists := existingHosts[host]; exists {
 			continue
 		}
-		username := creds[host]
+		cred := entries[host]
+
+		// Build source string from handler/profile metadata.
+		source := ""
+		if cred.Handler != "" {
+			source = cred.Handler
+			if cred.Profile != "" {
+				source += " / " + cred.Profile
+			}
+		}
+
 		result := map[string]any{
 			"handler":       host,
 			"displayName":   host,
+			"kind":          "registry",
 			"type":          "registry",
-			"status":        "stored",
+			"status":        "credential stored",
 			"authenticated": true,
 			"email":         "",
-			"username":      username,
-			"user":          username,
+			"username":      cred.Username,
+			"user":          cred.Username,
 			"expiresIn":     "",
 			"flow":          "token",
 			"hint":          "",
@@ -495,9 +702,22 @@ func appendRegistryCredentials(results []map[string]any) []map[string]any {
 			"lastRefresh":   "",
 			"scopes":        []string{},
 			"cachedTokens":  0,
+			"profile":       source,
 		}
 		results = append(results, result)
 	}
 
 	return results
+}
+
+// isValidExpiryTime returns true if the time is a valid expiration/refresh time.
+// Returns false for zero time (year 1), Unix epoch zero (1970-01-01), or any
+// time before 2000 (clearly invalid for OAuth tokens).
+func isValidExpiryTime(t time.Time) bool {
+	if t.IsZero() {
+		return false
+	}
+	// Filter out Unix epoch zero (1970-01-01) and any time before 2000.
+	// OAuth tokens didn't exist before 2000, so any earlier time is invalid.
+	return t.Year() >= 2000
 }

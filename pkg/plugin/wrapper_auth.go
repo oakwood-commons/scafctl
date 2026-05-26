@@ -417,13 +417,16 @@ func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry,
 }
 
 // injectAuthHandlerSettings reads per-handler auth configuration from the app
-// config and serializes it into cfg.Settings[handlerName] so the plugin can
-// apply host-side overrides (clientId, hostname, scopes, etc.).
+// config, resolves the active profile (merging profile overrides on top of
+// top-level config), and serializes the result into cfg.Settings[handlerName]
+// so the plugin can apply host-side overrides (clientId, hostname, scopes, etc.).
 func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *ProviderConfig) {
 	appCfg := config.FromContext(ctx)
 	if appCfg == nil {
 		return
 	}
+
+	profile := auth.ResolveActiveProfile(ctx, handlerName)
 
 	var raw json.RawMessage
 	var err error
@@ -433,17 +436,20 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 		if appCfg.Auth.GitHub == nil {
 			return
 		}
-		raw, err = json.Marshal(appCfg.Auth.GitHub) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+		resolved := auth.ResolveGitHubConfig(appCfg.Auth.GitHub, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
 	case "entra":
 		if appCfg.Auth.Entra == nil {
 			return
 		}
-		raw, err = json.Marshal(appCfg.Auth.Entra)
+		resolved := auth.ResolveEntraConfig(appCfg.Auth.Entra, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
 	case "gcp":
 		if appCfg.Auth.GCP == nil {
 			return
 		}
-		raw, err = json.Marshal(appCfg.Auth.GCP) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
+		resolved := auth.ResolveGCPConfig(appCfg.Auth.GCP, profile)
+		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
 	default:
 		return
 	}

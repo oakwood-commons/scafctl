@@ -8,6 +8,7 @@ auth:
     clientId: Ov23li6xn492GhPmt4YG
     hostname: github.com
     defaultScopes:
+      - repo
       - read:org
       - read:packages
   entra:

@@ -96,6 +96,7 @@ func TestStatusRoundTrip(t *testing.T) {
 		ClientID:     "client-id",
 		TokenFile:    "/tmp/token",
 		Scopes:       []string{"openid", "profile"},
+		Flow:         auth.FlowDeviceCode,
 	}
 
 	protoStatus := statusToProto(original)
@@ -113,6 +114,7 @@ func TestStatusRoundTrip(t *testing.T) {
 	assert.Equal(t, original.IdentityType, roundTripped.IdentityType)
 	assert.Equal(t, original.ExpiresAt.Unix(), roundTripped.ExpiresAt.Unix())
 	assert.Equal(t, original.LastRefresh.Unix(), roundTripped.LastRefresh.Unix())
+	assert.Equal(t, original.Flow, roundTripped.Flow)
 }
 
 // ── tokenResponseToProto / protoToTokenResponse round-trip tests ──────────────

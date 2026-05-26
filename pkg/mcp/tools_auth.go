@@ -24,6 +24,9 @@ func (s *Server) registerAuthTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithRawOutputSchema(outputSchemaAuthStatus),
+		mcp.WithString("profile",
+			mcp.Description("Optional auth profile name to check status for (e.g., 'work', 'personal'). If omitted, checks the default profile."),
+		),
 	)
 	s.addTool(authStatusTool, s.handleAuthStatus)
 
@@ -49,6 +52,9 @@ func (s *Server) registerAuthTools() {
 		mcp.WithString("handler",
 			mcp.Description("Optional handler name to filter tokens (e.g., 'entra', 'github'). If omitted, tokens from all handlers are returned."),
 		),
+		mcp.WithString("profile",
+			mcp.Description("Optional auth profile name (e.g., 'work', 'personal'). If omitted, uses the default profile."),
+		),
 	)
 	s.addTool(listCachedTokensTool, s.handleListCachedTokens)
 
@@ -62,6 +68,9 @@ func (s *Server) registerAuthTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("handler",
 			mcp.Description("Optional handler name to scope the purge (e.g., 'entra', 'github'). If omitted, all handlers are purged."),
+		),
+		mcp.WithString("profile",
+			mcp.Description("Optional auth profile name (e.g., 'work', 'personal'). If omitted, uses the default profile."),
 		),
 	)
 	s.addTool(purgeExpiredTool, s.handlePurgeExpiredTokens)
@@ -82,12 +91,23 @@ type authHandlerStatus struct {
 }
 
 // handleAuthStatus reports auth provider status.
-func (s *Server) handleAuthStatus(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAuthStatus(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.authReg == nil {
 		return mcp.NewToolResultJSON(map[string]any{
 			"handlers": []any{},
 			"message":  "No auth registry configured",
 		})
+	}
+
+	// Extract optional profile parameter
+	ctx := s.ctx
+	if profileVal, ok := req.GetArguments()["profile"].(string); ok && profileVal != "" {
+		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
+			if err := auth.ValidateProfileName(normalized); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
+			}
+			ctx = auth.WithProfile(ctx, normalized)
+		}
 	}
 
 	handlers := s.authReg.All()
@@ -124,7 +144,7 @@ func (s *Server) handleAuthStatus(_ context.Context, _ mcp.CallToolRequest) (*mc
 		}
 
 		// Check status
-		authStatus, err := handler.Status(s.ctx)
+		authStatus, err := handler.Status(ctx)
 		if err != nil {
 			status.Error = fmt.Sprintf("failed to get status: %v", err)
 			statuses = append(statuses, status)
@@ -216,6 +236,15 @@ func (s *Server) handleListCachedTokens(ctx context.Context, req mcp.CallToolReq
 
 	args := req.GetArguments()
 	handlerFilter, _ := args["handler"].(string)
+
+	if profileVal, ok := args["profile"].(string); ok && profileVal != "" {
+		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
+			if err := auth.ValidateProfileName(normalized); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
+			}
+			ctx = auth.WithProfile(ctx, normalized)
+		}
+	}
 
 	names := s.authReg.List()
 	if len(names) == 0 {
@@ -311,6 +340,15 @@ func (s *Server) handlePurgeExpiredTokens(ctx context.Context, req mcp.CallToolR
 
 	args := req.GetArguments()
 	handlerFilter, _ := args["handler"].(string)
+
+	if profileVal, ok := args["profile"].(string); ok && profileVal != "" {
+		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
+			if err := auth.ValidateProfileName(normalized); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
+			}
+			ctx = auth.WithProfile(ctx, normalized)
+		}
+	}
 
 	names := s.authReg.List()
 	if len(names) == 0 {

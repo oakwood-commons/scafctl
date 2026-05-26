@@ -27,10 +27,13 @@ func TestDisplayLoginResult(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		result   *auth.Result
-		flow     auth.Flow
-		expected []string
+		name               string
+		result             *auth.Result
+		flow               auth.Flow
+		handlerDisplayName string
+		profile            string
+		expected           []string
+		notExpected        []string
 	}{
 		{
 			name: "full claims interactive",
@@ -43,8 +46,11 @@ func TestDisplayLoginResult(t *testing.T) {
 				},
 				ExpiresAt: time.Now().Add(time.Hour),
 			},
-			flow:     auth.FlowInteractive,
-			expected: []string{"Authentication successful", "Test User", "testuser", "test@example.com", "tenant-123", "Interactive"},
+			flow:               auth.FlowInteractive,
+			handlerDisplayName: "Entra ID",
+			profile:            "work",
+			expected:           []string{"Logged in to Entra ID as test@example.com", "profile: work"},
+			notExpected:        []string{"Test User", "testuser", "tenant-123", "Interactive"},
 		},
 		{
 			name: "service principal flow",
@@ -53,8 +59,10 @@ func TestDisplayLoginResult(t *testing.T) {
 					Email: "sp@example.com",
 				},
 			},
-			flow:     auth.FlowServicePrincipal,
-			expected: []string{"Authentication successful", "sp@example.com", "Service Principal"},
+			flow:               auth.FlowServicePrincipal,
+			handlerDisplayName: "Entra ID",
+			expected:           []string{"Logged in to Entra ID as sp@example.com"},
+			notExpected:        []string{"Service Principal"},
 		},
 		{
 			name: "workload identity flow",
@@ -63,8 +71,9 @@ func TestDisplayLoginResult(t *testing.T) {
 					Email: "wi@example.com",
 				},
 			},
-			flow:     auth.FlowWorkloadIdentity,
-			expected: []string{"Authentication successful", "Workload Identity"},
+			flow:               auth.FlowWorkloadIdentity,
+			handlerDisplayName: "Entra ID",
+			expected:           []string{"Logged in to Entra ID as wi@example.com"},
 		},
 		{
 			name: "PAT flow",
@@ -73,8 +82,9 @@ func TestDisplayLoginResult(t *testing.T) {
 					Username: "ghuser",
 				},
 			},
-			flow:     auth.FlowPAT,
-			expected: []string{"Authentication successful", "ghuser", "Personal Access Token"},
+			flow:               auth.FlowPAT,
+			handlerDisplayName: "GitHub",
+			expected:           []string{"Logged in to GitHub as ghuser"},
 		},
 		{
 			name: "metadata flow",
@@ -83,8 +93,9 @@ func TestDisplayLoginResult(t *testing.T) {
 					Email: "svc@project.iam.gserviceaccount.com",
 				},
 			},
-			flow:     auth.FlowMetadata,
-			expected: []string{"Authentication successful", "Metadata Server"},
+			flow:               auth.FlowMetadata,
+			handlerDisplayName: "GCP",
+			expected:           []string{"Logged in to GCP as svc@project.iam.gserviceaccount.com"},
 		},
 		{
 			name: "name equals username should not duplicate",
@@ -94,16 +105,18 @@ func TestDisplayLoginResult(t *testing.T) {
 					Username: "sameuser",
 				},
 			},
-			flow:     auth.FlowInteractive,
-			expected: []string{"Authentication successful", "sameuser"},
+			flow:               auth.FlowInteractive,
+			handlerDisplayName: "GitHub",
+			expected:           []string{"Logged in to GitHub as sameuser"},
 		},
 		{
 			name: "minimal claims with device code flow",
 			result: &auth.Result{
 				Claims: &auth.Claims{},
 			},
-			flow:     auth.FlowDeviceCode,
-			expected: []string{"Authentication successful", "Device Code"},
+			flow:               auth.FlowDeviceCode,
+			handlerDisplayName: "Entra ID",
+			expected:           []string{"Logged in to Entra ID as unknown user"},
 		},
 	}
 
@@ -114,12 +127,15 @@ func TestDisplayLoginResult(t *testing.T) {
 			streams := terminal.NewIOStreams(nil, &buf, &buf, false)
 			w := writer.New(streams, settings.NewCliParams())
 
-			err := displayLoginResult(w, tc.result, tc.flow)
+			err := displayLoginResult(w, tc.result, tc.flow, tc.handlerDisplayName, tc.profile)
 			require.NoError(t, err)
 
 			output := buf.String()
 			for _, exp := range tc.expected {
 				assert.Contains(t, output, exp)
+			}
+			for _, nexp := range tc.notExpected {
+				assert.NotContains(t, output, nexp, "verbose detail should not appear without --verbose")
 			}
 		})
 	}
@@ -376,7 +392,7 @@ func BenchmarkDisplayLoginResult(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
-		_ = displayLoginResult(w, result, auth.FlowInteractive)
+		_ = displayLoginResult(w, result, auth.FlowInteractive, "Entra ID", "")
 	}
 }
 
@@ -402,7 +418,7 @@ func TestCommandLogin_CustomHandler_Success(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.Len(t, mock.LoginCalls, 1)
-	assert.Contains(t, buf.String(), "Authentication successful")
+	assert.Contains(t, buf.String(), "Logged in to quay as robot@quay.io")
 }
 
 func TestCommandLogin_CustomHandler_AlreadyAuthenticated(t *testing.T) {
@@ -490,7 +506,6 @@ func TestBridgeAuthToRegistryPostLogin_Success(t *testing.T) {
 
 	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "quay", "quay.io", "", false)
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
 
 	// Verify the credential is written to the isolated native store.
 	// Use the same secrets backend to retrieve the encrypted password.
@@ -547,7 +562,6 @@ func TestCommandLogin_WithRegistryBridge(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
 }
 
 // TestDiscoverRegistriesForHandler_CustomOAuth2 verifies that the handler's
@@ -698,7 +712,6 @@ func TestCommandLogin_AutoBridgeFromConfig(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Registry credentials stored for quay.io")
 
 	// Verify credential was stored.
 	ss, err := secrets.New()
@@ -730,7 +743,6 @@ func TestBridgeAuthToRegistryPostLogin_WithScope(t *testing.T) {
 
 	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "gcp", "us-central1-docker.pkg.dev", "https://www.googleapis.com/auth/cloud-platform", false)
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Registry credentials stored for us-central1-docker.pkg.dev")
 
 	// Verify GetToken was called with the scope.
 	require.NotEmpty(t, mock.GetTokenCalls)
@@ -787,7 +799,6 @@ func TestCommandLogin_AutoBridgeWithScope(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Registry credentials stored for us-central1-docker.pkg.dev")
 
 	// Verify GetToken was called with the discovered scope.
 	require.NotEmpty(t, mock.GetTokenCalls)

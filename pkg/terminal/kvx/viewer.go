@@ -302,6 +302,7 @@ func renderTable(root any, options *ViewerOptions) error {
 		NoColor:     options.NoColor,
 		ColumnOrder: options.ColumnOrder,
 		ColumnHints: hints,
+		Schema:      resolveDisplaySchema(options.DisplaySchemaJSON),
 	})
 	fmt.Fprint(options.Out, output)
 	return nil
@@ -340,6 +341,20 @@ func renderList(root any, options *ViewerOptions) error {
 	output := tui.RenderList(root, options.NoColor)
 	fmt.Fprint(options.Out, output)
 	return nil
+}
+
+// resolveDisplaySchema parses a DisplaySchemaJSON document and returns the
+// display schema, or nil if the input is empty or invalid. Used to pass
+// schema-derived column ordering to non-interactive renderers.
+func resolveDisplaySchema(displaySchemaJSON []byte) *tui.DisplaySchema {
+	if len(displaySchemaJSON) == 0 {
+		return nil
+	}
+	_, ds, err := tui.ParseSchemaWithDisplay(displaySchemaJSON)
+	if err != nil {
+		return nil
+	}
+	return ds
 }
 
 // renderTree outputs data as an ASCII tree structure.

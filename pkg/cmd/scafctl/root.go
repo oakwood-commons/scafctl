@@ -216,6 +216,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	var (
 		configPath        = opts.ConfigPath
 		cwdFlag           string
+		authProfileFlag   string
 		debugFlag         bool
 		logFormat         = "console"
 		logFile           string
@@ -421,6 +422,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				ctx = config.WithBaseDefaults(ctx, opts.ConfigDefaults)
 			}
 
+			// Validate auth profile names in config
+			if profileErr := auth.ValidateAuthProfiles(cfg); profileErr != nil {
+				w.Warningf("config: %v", profileErr)
+			}
+
 			// ── Resolve --cwd flag and inject into context ──
 			// This must happen before any path resolution so that downstream
 			// commands see the correct logical working directory.
@@ -527,6 +533,27 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
+			// ── Resolve global auth profile ──
+			// Precedence: --auth-profile flag > env var > (per-handler config is resolved later)
+			rawAuthProfile := authProfileFlag
+			if !cCmd.Flags().Changed("auth-profile") {
+				if envProfile := os.Getenv(envPrefix + "_AUTH_PROFILE"); envProfile != "" {
+					rawAuthProfile = envProfile
+				}
+			}
+			if rawAuthProfile != "" {
+				normalized := auth.NormalizeProfileName(rawAuthProfile)
+				if normalized != "" {
+					if profileErr := auth.ValidateProfileName(normalized); profileErr != nil {
+						w.ErrorWithExit(fmt.Sprintf("invalid --auth-profile value: %v", profileErr))
+						return
+					}
+				}
+				// Store the raw value so ResolveActiveProfile can detect explicit
+				// built-in/default overrides and skip config fallback.
+				ctx = auth.WithGlobalProfile(ctx, rawAuthProfile)
+			}
+
 			// Wire plugin signature policy unconditionally so all downstream
 			// plugin operations (auth handlers, providers, solution prepare)
 			// respect the embedder's policy regardless of feature flags.
@@ -558,6 +585,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				hostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
 				if hostDeps != nil && secretErr == nil {
 					hostDeps.SecretStore = sharedSecretStore
+				}
+				if hostDeps != nil {
+					hostDeps.ProfileResolverFunc = func(handlerName string) string {
+						return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
+					}
 				}
 				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 
@@ -629,6 +661,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				hostDeps := plugin.HostDepsFromAuthRegistry(authRegistry)
 				if hostDeps != nil && secretErr == nil {
 					hostDeps.SecretStore = sharedSecretStore
+				}
+				if hostDeps != nil {
+					hostDeps.ProfileResolverFunc = func(handlerName string) string {
+						return auth.ResolveActiveProfile(cCmd.Context(), handlerName)
+					}
 				}
 				clientOpts := []plugin.ClientOption{plugin.WithHostDeps(hostDeps)}
 				cache := plugin.NewCache(settings.PluginCacheDirFor(binaryName))
@@ -761,6 +798,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.PersistentFlags().String("pprof-output-dir", "./", "directory path to save the profiler.prof file (default: current working directory)")
 	cCmd.PersistentFlags().String("otel-endpoint", "", "OpenTelemetry OTLP exporter endpoint (e.g. localhost:4317). Overrides OTEL_EXPORTER_OTLP_ENDPOINT")
 	cCmd.PersistentFlags().BoolVar(&otelInsecure, "otel-insecure", false, "Disable TLS for OTLP gRPC connection (development only)")
+	cCmd.PersistentFlags().StringVar(&authProfileFlag, "auth-profile", "", "Override the auth profile for all auth operations (e.g. work, personal)")
 
 	if err := cCmd.PersistentFlags().MarkHidden("pprof"); err != nil {
 		return nil, func() {}

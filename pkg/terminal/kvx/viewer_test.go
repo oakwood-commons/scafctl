@@ -265,3 +265,48 @@ func TestApplyWhereFilter_InvalidExpr(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "where filter failed")
 }
+
+func TestResolveDisplaySchema_Valid(t *testing.T) {
+	schema := []byte(`{
+		"type": "array",
+		"x-kvx-list": {
+			"titleField": "handler",
+			"badgeFields": ["status"],
+			"secondaryFields": ["profile"]
+		},
+		"x-kvx-detail": {
+			"hiddenFields": ["clientId", "tenantId"]
+		},
+		"items": {
+			"type": "object",
+			"properties": {
+				"handler": {"type": "string"},
+				"status": {"type": "string"},
+				"profile": {"type": "string"}
+			}
+		}
+	}`)
+
+	ds := resolveDisplaySchema(schema)
+	require.NotNil(t, ds)
+	require.NotNil(t, ds.List)
+	assert.Equal(t, "handler", ds.List.TitleField)
+
+	order, hidden := tui.DeriveTableOptionsFromSchema(ds)
+	assert.Equal(t, []string{"handler", "status", "profile"}, order)
+	assert.Equal(t, []string{"clientId", "tenantId"}, hidden)
+}
+
+func TestResolveDisplaySchema_Empty(t *testing.T) {
+	assert.Nil(t, resolveDisplaySchema(nil))
+	assert.Nil(t, resolveDisplaySchema([]byte{}))
+}
+
+func TestResolveDisplaySchema_Invalid(t *testing.T) {
+	assert.Nil(t, resolveDisplaySchema([]byte("not json")))
+}
+
+func TestResolveDisplaySchema_NoExtensions(t *testing.T) {
+	schema := []byte(`{"type": "array", "items": {"type": "object"}}`)
+	assert.Nil(t, resolveDisplaySchema(schema))
+}

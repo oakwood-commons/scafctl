@@ -166,7 +166,7 @@ func TestQueryHandlerStatuses_DeterministicOrder(t *testing.T) {
 	cliParams := settings.NewCliParams()
 
 	// Request in a specific order; results should preserve that order.
-	results, warnings := queryHandlerStatuses(ctx, cliParams, []string{"zulu", "alpha", "mike"})
+	results, warnings := queryHandlerStatuses(ctx, cliParams, []string{"zulu", "alpha", "mike"}, false)
 	assert.Empty(t, warnings)
 	require.Len(t, results, 3)
 
@@ -181,8 +181,205 @@ func TestQueryHandlerStatuses_WarningOnFailure(t *testing.T) {
 	// No registry means handler lookup will fail.
 	cliParams := settings.NewCliParams()
 
-	results, warnings := queryHandlerStatuses(ctx, cliParams, []string{"missing"})
+	results, warnings := queryHandlerStatuses(ctx, cliParams, []string{"missing"}, false)
 	assert.Empty(t, results)
 	assert.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "Failed to initialize missing")
+}
+
+func TestBuildStatusResult_Authenticated(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{Flow: auth.FlowDeviceCode},
+	}
+
+	now := time.Now()
+	status := &auth.Status{
+		Authenticated: true,
+		Claims: &auth.Claims{
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Username: "testuser",
+			TenantID: "test-tenant",
+		},
+		TenantID:     "test-tenant",
+		IdentityType: auth.IdentityTypeUser,
+		ClientID:     "client-123",
+		ExpiresAt:    now.Add(2 * time.Hour),
+		LastRefresh:  now.Add(-10 * time.Minute),
+		Scopes:       []string{"openid", "profile"},
+	}
+
+	cliParams := settings.NewCliParams()
+	result := buildStatusResult(ctx, cliParams, "entra", mock, status)
+
+	assert.Equal(t, "authenticated", result["status"])
+	assert.Equal(t, true, result["authenticated"])
+	assert.Equal(t, "test@example.com", result["email"])
+	assert.Equal(t, "Test User", result["name"])
+	assert.Equal(t, "testuser", result["username"])
+	assert.Equal(t, "test@example.com", result["user"])
+	assert.Equal(t, "test-tenant", result["tenantId"])
+	assert.Equal(t, string(auth.IdentityTypeUser), result["identityType"])
+	assert.Equal(t, "client-123", result["clientId"])
+	assert.NotEmpty(t, result["expiresAt"])
+	assert.NotEmpty(t, result["lastRefresh"])
+	assert.NotEmpty(t, result["expiresIn"])
+	assert.Equal(t, []string{"openid", "profile"}, result["scopes"])
+	assert.Equal(t, 1, result["cachedTokens"])
+	// Flow should come from cached token fallback since mock doesn't implement FlowReporter
+	assert.Equal(t, string(auth.FlowDeviceCode), result["flow"])
+}
+
+func TestBuildStatusResult_NotAuthenticated(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("github")
+	mock.DisplayNameValue = "GitHub"
+
+	status := &auth.Status{
+		Authenticated: false,
+		Reason:        "token expired",
+	}
+
+	cliParams := &settings.Run{BinaryName: "mycli"}
+	result := buildStatusResult(ctx, cliParams, "github", mock, status)
+
+	assert.Equal(t, "token expired", result["status"])
+	assert.Equal(t, false, result["authenticated"])
+	assert.Contains(t, result["hint"], "mycli auth login github")
+}
+
+func TestBuildStatusResult_WorkloadIdentity(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+
+	status := &auth.Status{
+		Authenticated: true,
+		Flow:          auth.FlowWorkloadIdentity,
+		IdentityType:  auth.IdentityTypeWorkloadIdentity,
+		TokenFile:     "/var/run/secrets/token",
+		ClientID:      "wif-client",
+		Claims: &auth.Claims{
+			Email: "wif@example.com",
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	cliParams := settings.NewCliParams()
+	result := buildStatusResult(ctx, cliParams, "entra", mock, status)
+
+	assert.Equal(t, string(auth.FlowWorkloadIdentity), result["flow"])
+	assert.Equal(t, "/var/run/secrets/token", result["tokenFile"])
+	assert.Equal(t, string(auth.IdentityTypeWorkloadIdentity), result["identityType"])
+}
+
+func TestBuildStatusResult_UsernameOnlyUser(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("github")
+
+	status := &auth.Status{
+		Authenticated: true,
+		Flow:          "pat",
+		Claims: &auth.Claims{
+			Username: "octocat",
+		},
+	}
+
+	cliParams := settings.NewCliParams()
+	result := buildStatusResult(ctx, cliParams, "github", mock, status)
+
+	assert.Equal(t, "octocat", result["user"])
+	assert.Equal(t, "octocat", result["username"])
+	assert.Empty(t, result["email"])
+}
+
+func TestBuildStatusResult_NameOnlyUser(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("gcp")
+
+	status := &auth.Status{
+		Authenticated: true,
+		Claims: &auth.Claims{
+			Name: "Service Account",
+		},
+	}
+
+	cliParams := settings.NewCliParams()
+	result := buildStatusResult(ctx, cliParams, "gcp", mock, status)
+
+	assert.Equal(t, "Service Account", result["user"])
+	assert.Equal(t, "Service Account", result["name"])
+}
+
+func TestBuildStatusResult_InvalidExpiryTime(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	mock := auth.NewMockHandler("gcp")
+
+	// Unix epoch zero - should be filtered out
+	status := &auth.Status{
+		Authenticated: true,
+		Claims: &auth.Claims{
+			Email: "test@example.com",
+		},
+		ExpiresAt:   time.Unix(0, 0),
+		LastRefresh: time.Unix(0, 0),
+	}
+
+	cliParams := settings.NewCliParams()
+	result := buildStatusResult(ctx, cliParams, "gcp", mock, status)
+
+	assert.Equal(t, "", result["expiresAt"])
+	assert.Equal(t, "", result["lastRefresh"])
+	assert.Equal(t, "", result["expiresIn"])
+}
+
+func TestExpandProfileStatuses(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	// Register a handler with profiles configured.
+	registry := auth.NewRegistry()
+	mock := auth.NewMockHandler("github")
+	mock.StatusResult = &auth.Status{Authenticated: false}
+	require.NoError(t, registry.Register(mock))
+	ctx = auth.WithRegistry(ctx, registry)
+
+	cliParams := settings.NewCliParams()
+
+	// Without profiles configured, should query once per handler.
+	results, warnings := expandProfileStatuses(ctx, cliParams, []string{"github"})
+	assert.Empty(t, warnings)
+	assert.Len(t, results, 1)
+}
+
+func TestIsValidExpiryTime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		t    time.Time
+		want bool
+	}{
+		{name: "zero time", t: time.Time{}, want: false},
+		{name: "unix epoch zero", t: time.Unix(0, 0), want: false},
+		{name: "year 1999", t: time.Date(1999, 12, 31, 23, 59, 59, 0, time.UTC), want: false},
+		{name: "year 2000", t: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), want: true},
+		{name: "current time", t: time.Now(), want: true},
+		{name: "future time", t: time.Now().Add(24 * time.Hour), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, isValidExpiryTime(tt.t))
+		})
+	}
 }

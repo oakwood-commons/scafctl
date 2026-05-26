@@ -179,3 +179,29 @@ func TestAuthClientOptsFromContext_WithRegistry(t *testing.T) {
 	opts := AuthClientOptsFromContext(ctx)
 	assert.Len(t, opts, 1)
 }
+
+func TestAuthClientOptsFromContext_SetsProfileResolver(t *testing.T) {
+	reg := auth.NewRegistry()
+	mock := auth.NewMockHandler("github")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "work-tok",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	require.NoError(t, reg.Register(mock))
+
+	ctx := auth.WithRegistry(context.Background(), reg)
+	ctx = auth.WithGlobalProfile(ctx, "work")
+
+	opts := AuthClientOptsFromContext(ctx)
+	require.Len(t, opts, 1)
+
+	// Apply options to a clientOptions and verify ProfileResolverFunc is set.
+	cfg := &clientOptions{}
+	for _, o := range opts {
+		o(cfg)
+	}
+	require.NotNil(t, cfg.hostDeps)
+	require.NotNil(t, cfg.hostDeps.ProfileResolverFunc)
+	assert.Equal(t, "work", cfg.hostDeps.ProfileResolverFunc("github"))
+}
