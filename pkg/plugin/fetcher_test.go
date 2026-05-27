@@ -767,3 +767,167 @@ func TestPluginCacheKey_NamespaceIsolation(t *testing.T) {
 	authKey := PluginCacheKey("github", solution.PluginKindAuthHandler)
 	assert.NotEqual(t, providerKey, authKey)
 }
+
+func TestFetcher_FetchPlugins_CatalogFallback_RejectsConstraintMismatch(t *testing.T) {
+	t.Parallel()
+
+	// Catalog is empty — resolution will fail.
+	cat := newMockCatalog()
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache with version 0.5.0
+	_, err := cache.Put("my-plugin", "0.5.0", "linux/amd64", []byte("old-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	// Request version 0.6.0 — catalog fails, cache has 0.5.0 which doesn't match.
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "0.6.0"},
+	}
+
+	_, err = f.FetchPlugins(context.Background(), deps, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not satisfy")
+	assert.Contains(t, err.Error(), "0.5.0")
+	assert.Contains(t, err.Error(), "0.6.0")
+}
+
+func TestFetcher_FetchPlugins_CacheHit_RangeConstraintSatisfied(t *testing.T) {
+	t.Parallel()
+
+	// Catalog is empty — resolution will fail if attempted.
+	cat := newMockCatalog()
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache with version 0.5.2
+	_, err := cache.Put("my-plugin", "0.5.2", "linux/amd64", []byte("cached-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	// Request ^0.5.0 — cache has 0.5.2 which satisfies ^0.5.0.
+	// The first cache check should match and return without hitting catalog.
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "^0.5.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "0.5.2", results[0].Version)
+	assert.True(t, results[0].FromCache)
+}
+
+func TestFetcher_FetchPlugins_CacheHit_LatestUsesAnyVersion(t *testing.T) {
+	t.Parallel()
+
+	// Catalog is empty — resolution will fail if attempted.
+	cat := newMockCatalog()
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache with version 0.5.0
+	_, err := cache.Put("my-plugin", "0.5.0", "linux/amd64", []byte("cached-binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	// Request "latest" — cache has 0.5.0 which matches any version.
+	// The first cache check should match and return without hitting catalog.
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "latest"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "0.5.0", results[0].Version)
+	assert.True(t, results[0].FromCache)
+}
+
+func TestFetcher_FetchPlugins_CatalogFallback_InvalidConstraintReportsParseError(t *testing.T) {
+	t.Parallel()
+
+	// Catalog is empty — resolution will fail.
+	cat := newMockCatalog()
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+
+	// Pre-populate cache with a valid version
+	_, err := cache.Put("my-plugin", "1.0.0", "linux/amd64", []byte("binary"))
+	require.NoError(t, err)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    cache,
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	// Use an unparseable constraint — the fallback should surface the parse
+	// error separately from a "does not satisfy" message.
+	deps := []solution.PluginDependency{
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: ">>>invalid<<<"},
+	}
+
+	_, err = f.FetchPlugins(context.Background(), deps, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "constraint check failed")
+}
+
+func TestCachedVersionSatisfies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		constraint string
+		cached     string
+		want       bool
+		wantErr    bool
+	}{
+		{"empty constraint", "", "1.0.0", true, false},
+		{"latest", "latest", "0.5.0", true, false},
+		{"LATEST case insensitive", "LATEST", "0.5.0", true, false},
+		{"exact match", "1.0.0", "1.0.0", true, false},
+		{"exact mismatch", "2.0.0", "1.0.0", false, false},
+		{"range satisfied", "^1.0.0", "1.2.3", true, false},
+		{"range not satisfied", "^2.0.0", "1.2.3", false, false},
+		{"invalid constraint", ">>>bad<<<", "1.0.0", false, true},
+		{"invalid cached version", "^1.0.0", "not-semver", false, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := cachedVersionSatisfies(tc.constraint, tc.cached)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
