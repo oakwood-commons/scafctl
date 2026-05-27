@@ -24,8 +24,7 @@ env:
 jobs:
   lint:
     name: Lint
-    # Only run on PRs from the same repo (not forks)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -59,8 +58,6 @@ jobs:
 
   test:
     name: Test
-    # Run on PRs from the same repo and on push to main
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -96,6 +93,11 @@ jobs:
       - name: Run tests with coverage
         run: task test-cover
 
+      - name: Pre-warm plugin cache
+        run: |
+          task build
+          ./dist/scafctl plugins install sleep directory env exec git hcl metadata
+
       - name: Run functional integration tests
         run: task integration
 
@@ -115,7 +117,6 @@ jobs:
 
   plugin-sdk-compat:
     name: Plugin SDK Compatibility
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

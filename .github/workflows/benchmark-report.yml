@@ -1,0 +1,177 @@
+name: Benchmark Report
+
+# This workflow runs after the Benchmark workflow completes.
+# It downloads benchmark artifacts and posts comparison results as a PR comment.
+# Using workflow_run allows this to have write access without exposing secrets
+# to untrusted fork code.
+
+on:
+  workflow_run:
+    workflows: ["Benchmark"]
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  report:
+    name: Post Benchmark Comment
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Download benchmark artifacts
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: ${{ github.event.workflow_run.id }},
+            });
+
+            const benchArtifact = artifacts.data.artifacts.find(a => a.name === 'benchmark-results');
+            if (!benchArtifact) {
+              console.log('No benchmark-results artifact found, skipping.');
+              return;
+            }
+
+            const download = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: benchArtifact.id,
+              archive_format: 'zip',
+            });
+
+            fs.writeFileSync('${{ github.workspace }}/benchmark-results.zip', Buffer.from(download.data));
+
+      - name: Determine PR number from workflow_run payload
+        id: pr-info
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Derive PR number from the trusted workflow_run event payload
+            const prs = context.payload.workflow_run.pull_requests;
+            if (!prs || prs.length === 0) {
+              console.log('No pull_requests in workflow_run payload, skipping.');
+              core.setOutput('pr_number', '');
+              return;
+            }
+            core.setOutput('pr_number', String(prs[0].number));
+
+      - name: Extract artifacts safely
+        if: steps.pr-info.outputs.pr_number != ''
+        run: |
+          if [ ! -f benchmark-results.zip ]; then
+            echo "No artifact to process, exiting."
+            exit 0
+          fi
+          # Extract only expected files into a dedicated directory to prevent
+          # zip-slip / path-traversal attacks from untrusted artifact content.
+          mkdir -p bench-artifacts
+          unzip -j -o benchmark-results.zip \
+            benchstat-result.txt pr-number.txt bench-metadata.json \
+            -d bench-artifacts/
+
+      - name: Post benchmark comparison
+        if: steps.pr-info.outputs.pr_number != '' && hashFiles('bench-artifacts/benchstat-result.txt') != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- benchmark-comparison -->';
+
+            // Use the trusted PR number from the workflow_run payload
+            const trustedPrNumber = parseInt('${{ steps.pr-info.outputs.pr_number }}', 10);
+
+            // Cross-check against artifact value to detect tampering
+            let artifactPrNumber;
+            try {
+              artifactPrNumber = parseInt(fs.readFileSync('bench-artifacts/pr-number.txt', 'utf8').trim(), 10);
+            } catch (e) {
+              console.log('Could not read pr-number.txt from artifact:', e.message);
+              return;
+            }
+
+            if (artifactPrNumber !== trustedPrNumber) {
+              core.setFailed(`PR number mismatch: artifact says ${artifactPrNumber}, workflow_run says ${trustedPrNumber}. Aborting to prevent comment injection.`);
+              return;
+            }
+
+            const prNumber = trustedPrNumber;
+
+            // Read benchmark results
+            let result = 'No results available';
+            try {
+              result = fs.readFileSync('bench-artifacts/benchstat-result.txt', 'utf8').trim();
+            } catch (e) {
+              console.log('Could not read benchstat-result.txt:', e.message);
+              return;
+            }
+
+            // Sanitize: compute a fence delimiter longer than any backtick run in the content.
+            // This guarantees the content cannot break out of the code block.
+            const maxRun = (result.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
+            const fence = '`'.repeat(Math.max(maxRun + 1, 4));
+
+            // Read metadata
+            let benchCount = '6';
+            let benchTime = '1s';
+            try {
+              const meta = JSON.parse(fs.readFileSync('bench-artifacts/bench-metadata.json', 'utf8'));
+              benchCount = meta.count || benchCount;
+              benchTime = meta.time || benchTime;
+            } catch (e) {
+              console.log('Could not read bench-metadata.json, using defaults.');
+            }
+
+            const body = [
+              marker,
+              '## Benchmark Comparison',
+              '',
+              '<details>',
+              '<summary>Click to expand benchmark results</summary>',
+              '',
+              fence,
+              result,
+              fence,
+              '',
+              '</details>',
+              '',
+              '> **How to read**: `~` means no significant change, `+` means regression, `-` means improvement. `p`-value >= 0.05 means the difference is not statistically significant.',
+              '>',
+              `> Benchmarks ran with \`-count=${benchCount}\` and \`-benchtime=${benchTime}\`.`,
+            ].join('\n');
+
+            // Find and update existing comment, or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }

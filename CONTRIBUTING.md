@@ -167,6 +167,25 @@ git push origin feat/my-feature
 
 Then create a Pull Request on GitHub.
 
+### Contributing from a Fork
+
+External contributors are welcome to fork the repository and submit pull requests.
+CI runs automatically on code-affecting PRs (including those from forks) with the
+following security model. Note that docs-only changes may not trigger all workflows
+due to path filters:
+
+- **Lint, Test, and Plugin SDK Compatibility** run automatically on fork PRs in
+  an unprivileged sandbox (read-only token, no access to repository secrets).
+- **Benchmarks** run in the same unprivileged context. Results are uploaded as
+  artifacts and a separate privileged workflow posts the comparison comment on the
+  PR.
+- **First-time contributors** may require a maintainer to approve the workflow run
+  via the GitHub repository setting "Require approval for first-time contributors."
+
+This means your PR will get full CI feedback without needing maintainer
+intervention (after your first contribution is approved). No secrets are ever
+exposed to fork code.
+
 ## Coding Standards
 
 ### Error Handling
