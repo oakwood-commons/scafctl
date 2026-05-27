@@ -223,14 +223,8 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		if !f.noCache {
 			if cachedPath, cachedVer, ok := f.cache.GetLatestCached(cacheKey, f.platform); ok {
 				// If a version constraint is specified, verify the cached version satisfies it.
-				useCached := true
-				if dep.Version != "" && !strings.EqualFold(dep.Version, "latest") {
-					satisfies, err := bundler.CheckVersionConstraint(dep.Version, cachedVer)
-					if err != nil || !satisfies {
-						useCached = false
-					}
-				}
-				if useCached {
+				satisfies, _ := cachedVersionSatisfies(dep.Version, cachedVer)
+				if satisfies {
 					// Security: reject cached plugins when an allowlist is configured
 					// but cache lacks catalog origin metadata.
 					if err := f.checkCatalogAllowed(""); err != nil {
@@ -259,9 +253,21 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 
 		info, err := f.catalogFetcher.ResolvePlugin(ctx, dep.Name, kind, dep.Version)
 		if err != nil {
-			// Fallback: if catalog resolution fails, check if a cached version exists.
+			// Fallback: if catalog resolution fails, check if a cached version
+			// satisfies the requested constraint. If the cached version does not
+			// match, fail with the original error so users are never silently
+			// given a different version than they requested.
 			if !f.noCache {
 				if cachedPath, cachedVer, ok := f.cache.GetLatestCached(cacheKey, f.platform); ok {
+					// Verify cached version satisfies the requested constraint.
+					satisfies, constraintErr := cachedVersionSatisfies(dep.Version, cachedVer)
+					if constraintErr != nil {
+						return FetchResult{}, fmt.Errorf("resolving version: %w (constraint check failed: %w)", err, constraintErr)
+					}
+					if !satisfies {
+						return FetchResult{}, fmt.Errorf("resolving version: %w (cached version %s does not satisfy %q)", err, cachedVer, dep.Version)
+					}
+
 					// Security: reject cached plugins when an allowlist is configured
 					// but cache lacks catalog origin metadata.
 					if allowErr := f.checkCatalogAllowed(""); allowErr != nil {
@@ -628,4 +634,16 @@ func findLockPlugin(plugins []bundler.LockPlugin, name, kind string) *bundler.Lo
 		}
 	}
 	return nil
+}
+
+// cachedVersionSatisfies checks whether a cached version satisfies a version
+// constraint. Returns true when no constraint is specified or the constraint is
+// "latest". Returns false with a nil error when the constraint is simply not
+// satisfied. Returns false with a non-nil error when the constraint or cached
+// version string cannot be parsed.
+func cachedVersionSatisfies(constraint, cachedVer string) (bool, error) {
+	if constraint == "" || strings.EqualFold(constraint, "latest") {
+		return true, nil
+	}
+	return bundler.CheckVersionConstraint(constraint, cachedVer)
 }
