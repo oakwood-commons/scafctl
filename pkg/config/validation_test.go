@@ -4,8 +4,10 @@
 package config
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -229,6 +231,86 @@ func TestConfig_Validate_InvalidCatalogType(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "catalogs[0]")
 	assert.Contains(t, err.Error(), "type")
+}
+
+func TestConfig_Validate_InvalidTokenPassThrough(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		APIServer: APIServerConfig{
+			TokenPassThrough: &TokenPassThroughConfig{
+				AllowedHeaders: []string{"Bad Header"},
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "apiServer")
+	assert.Contains(t, err.Error(), "tokenPassThrough")
+	assert.Contains(t, err.Error(), "invalid HTTP header suffix")
+}
+
+func TestTokenPassThroughConfig_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cfg     *TokenPassThroughConfig
+		wantErr string
+	}{
+		{
+			name: "nil",
+			cfg:  nil,
+		},
+		{
+			name: "valid",
+			cfg: &TokenPassThroughConfig{
+				AllowedHeaders: []string{"Github", "Azure-Ad"},
+			},
+		},
+		{
+			name: "explicit empty list",
+			cfg: &TokenPassThroughConfig{
+				AllowedHeaders: []string{},
+			},
+		},
+		{
+			name: "empty suffix",
+			cfg: &TokenPassThroughConfig{
+				AllowedHeaders: []string{""},
+			},
+			wantErr: "allowedHeaders[0]: must not be empty",
+		},
+		{
+			name: "prefixed suffix",
+			cfg: &TokenPassThroughConfig{
+				AllowedHeaders: []string{fmt.Sprintf("%s%s", middleware.TokenHeaderPrefix, "Github")},
+			},
+			wantErr: fmt.Sprintf("allowedHeaders[0]: must not include %s prefix", middleware.TokenHeaderPrefix),
+		},
+		{
+			name: "invalid suffix",
+			cfg: &TokenPassThroughConfig{
+				AllowedHeaders: []string{"Bad Header"},
+			},
+			wantErr: `allowedHeaders[0]: invalid HTTP header suffix "Bad Header"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestConfig_CheckVersion_Current(t *testing.T) {

@@ -22,7 +22,10 @@ import (
 // contextKey type for storing auth claims in context.
 type contextKey string
 
-const claimsContextKey contextKey = "auth_claims"
+const (
+	claimsContextKey      contextKey = "auth_claims"
+	accessTokenContextKey contextKey = "access_token"
+)
 
 // AuthClaims holds the validated JWT claims extracted from an Entra OIDC token.
 type AuthClaims struct {
@@ -31,6 +34,7 @@ type AuthClaims struct {
 	Email     string   `json:"email"`
 	TenantID  string   `json:"tid"`
 	ObjectID  string   `json:"oid"`
+	IDType    string   `json:"idtyp"`
 	Groups    []string `json:"groups"`
 	Roles     []string `json:"roles"`
 	Audience  string   `json:"aud"`
@@ -38,10 +42,36 @@ type AuthClaims struct {
 	ExpiresAt int64    `json:"exp"`
 }
 
+// CallerType returns "app" for service principal tokens (idtyp=app) and
+// "user" for all other callers. Per Entra spec, the idtyp claim is absent
+// for user tokens and set to "app" for application/service principal tokens.
+func (c *AuthClaims) CallerType() string {
+	if c.IDType == "app" {
+		return "app"
+	}
+	return "user"
+}
+
 // ClaimsFromContext extracts auth claims from the request context.
 func ClaimsFromContext(ctx context.Context) *AuthClaims {
 	claims, _ := ctx.Value(claimsContextKey).(*AuthClaims)
 	return claims
+}
+
+// AccessTokenFromContext extracts the raw bearer token from the request context.
+func AccessTokenFromContext(ctx context.Context) string {
+	token, _ := ctx.Value(accessTokenContextKey).(string)
+	return token
+}
+
+// WithAuthClaims stores AuthClaims in the context.
+func WithAuthClaims(ctx context.Context, claims *AuthClaims) context.Context {
+	return context.WithValue(ctx, claimsContextKey, claims)
+}
+
+// WithAccessToken stores the raw bearer token in the context.
+func WithAccessToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, accessTokenContextKey, token)
 }
 
 // jwksCache caches the JWKS endpoint response.
@@ -100,6 +130,12 @@ func NewAzureOIDCAuth(tenantID, clientID string, lgr logr.Logger) (func(http.Han
 	jwksURL := fmt.Sprintf("https://login.microsoftonline.com/%s/discovery/v2.0/keys", tenantID)
 	issuer := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", tenantID)
 
+	return newOIDCAuthMiddleware(jwksURL, issuer, clientID, lgr), nil
+}
+
+// newOIDCAuthMiddleware builds the OIDC middleware with explicit JWKS URL,
+// issuer, and audience. Factored out of NewAzureOIDCAuth for testability.
+func newOIDCAuthMiddleware(jwksURL, issuer, clientID string, lgr logr.Logger) func(http.Handler) http.Handler {
 	cache := &jwksCache{
 		jwksURL: jwksURL,
 		client: &http.Client{
@@ -172,6 +208,7 @@ func NewAzureOIDCAuth(tenantID, clientID string, lgr logr.Logger) (func(http.Han
 				Email:    claimString(mapClaims, "email"),
 				TenantID: claimString(mapClaims, "tid"),
 				ObjectID: claimString(mapClaims, "oid"),
+				IDType:   claimString(mapClaims, "idtyp"),
 				Audience: claimString(mapClaims, "aud"),
 				Issuer:   claimString(mapClaims, "iss"),
 				Groups:   claimStringSlice(mapClaims, "groups"),
@@ -182,9 +219,10 @@ func NewAzureOIDCAuth(tenantID, clientID string, lgr logr.Logger) (func(http.Han
 			}
 
 			ctx := context.WithValue(r.Context(), claimsContextKey, claims)
+			ctx = context.WithValue(ctx, accessTokenContextKey, tokenStr)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
-	}, nil
+	}
 }
 
 // getKey fetches the RSA public key for the given kid from JWKS.

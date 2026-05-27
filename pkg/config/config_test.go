@@ -4,10 +4,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +37,107 @@ func TestManager_Load_NoFile(t *testing.T) {
 	assert.Equal(t, "official", cfg.Settings.DefaultCatalog)
 	assert.False(t, cfg.Settings.NoColor)
 	assert.False(t, cfg.Settings.Quiet)
+	assert.Nil(t, cfg.APIServer.TokenPassThrough)
+	assert.Equal(t, []string{"Github"}, cfg.APIServer.TokenPassThroughAllowedHeaders())
+}
+
+func TestManager_Load_TokenPassThroughAllowedHeaders(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+apiServer:
+  tokenPassThrough:
+    allowedHeaders:
+      - " azure-ad "
+      - github-enterprise
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg.APIServer.TokenPassThrough)
+	assert.Equal(t, []string{" azure-ad ", "github-enterprise"}, cfg.APIServer.TokenPassThrough.AllowedHeaders)
+	assert.Equal(t, []string{"Azure-Ad", "Github-Enterprise"}, cfg.APIServer.TokenPassThroughAllowedHeaders())
+}
+
+func TestManager_Load_TokenPassThroughExplicitEmptyAllowedHeaders(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+apiServer:
+  tokenPassThrough:
+    allowedHeaders: []
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg.APIServer.TokenPassThrough)
+	assert.Empty(t, cfg.APIServer.TokenPassThrough.AllowedHeaders)
+	assert.Empty(t, cfg.APIServer.TokenPassThroughAllowedHeaders())
+}
+
+func TestManager_Load_TokenPassThroughInvalidAllowedHeaders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		header  string
+		wantErr string
+	}{
+		{
+			name:    "empty",
+			header:  `""`,
+			wantErr: "allowedHeaders[0]: must not be empty",
+		},
+		{
+			name:    "prefixed",
+			header:  fmt.Sprintf("%s%s", middleware.TokenHeaderPrefix, "Github"),
+			wantErr: fmt.Sprintf("allowedHeaders[0]: must not include %s prefix", middleware.TokenHeaderPrefix),
+		},
+		{
+			name:    "invalid header field name",
+			header:  `"Bad Header"`,
+			wantErr: `allowedHeaders[0]: invalid HTTP header suffix "Bad Header"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+
+			configContent := `
+apiServer:
+  tokenPassThrough:
+    allowedHeaders:
+      - ` + tt.header + `
+`
+			err := os.WriteFile(configPath, []byte(configContent), 0o600)
+			require.NoError(t, err)
+
+			mgr := NewManager(configPath)
+			_, err = mgr.Load()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid config: apiServer: tokenPassThrough")
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestManager_Load_WithFile(t *testing.T) {

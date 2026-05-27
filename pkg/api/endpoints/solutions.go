@@ -239,6 +239,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		if err := requireRemotePath(input.Body.Path, "solution-dryrun"); err != nil {
 			return nil, err
 		}
+
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-dryrun", http.StatusBadRequest, "failed to load solution")
@@ -283,6 +284,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 				return nil, err
 			}
 		}
+
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-run", http.StatusBadRequest, "failed to load solution")
@@ -342,6 +344,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		if err := requireRemotePath(input.Body.Path, "solution-render"); err != nil {
 			return nil, err
 		}
+
 		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-render", http.StatusBadRequest, "failed to load solution")

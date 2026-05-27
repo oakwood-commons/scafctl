@@ -5,6 +5,7 @@ package httpprovider
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
@@ -1222,4 +1224,198 @@ func TestIsJSONContentType(t *testing.T) {
 			assert.Equal(t, tt.expected, isJSONContentType(tt.contentType))
 		})
 	}
+}
+
+// ── Delegation registry tests ──
+
+// testDelegator implements authdelegation.TokenDelegator for testing.
+type testDelegator struct {
+	token string
+	name  string
+	err   error
+	calls int
+}
+
+func (d *testDelegator) DelegateToken(_ context.Context, _ string) (authdelegation.TokenResult, error) {
+	d.calls++
+	if d.err != nil {
+		return authdelegation.TokenResult{}, d.err
+	}
+	return authdelegation.TokenResult{AccessToken: d.token, ExpiresIn: 3600}, nil
+}
+
+func (d *testDelegator) Name() string {
+	return d.name
+}
+
+func TestHTTPProvider_Execute_DelegationRegistry_Success(t *testing.T) {
+	t.Parallel()
+	var receivedAuthHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthHeader = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"delegated": true}`))
+	}))
+	defer server.Close()
+
+	delegator := &testDelegator{token: "delegated-token-abc"}
+	reg := authdelegation.NewDelegatorRegistry()
+	reg.Register("entra", delegator)
+
+	ctx := authdelegation.WithRegistry(testContext(t), reg)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "Bearer delegated-token-abc", receivedAuthHeader)
+	assert.Equal(t, 1, delegator.calls)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 200, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_DelegationRegistry_ProviderNotRegistered(t *testing.T) {
+	t.Parallel()
+	reg := authdelegation.NewDelegatorRegistry()
+	// Registry exists but "gcp" is not registered.
+
+	ctx := authdelegation.WithRegistry(testContext(t), reg)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          "https://example.com/api",
+		"method":       "GET",
+		"authProvider": "gcp",
+		"scope":        "https://www.googleapis.com/auth/cloud-platform",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gcp")
+}
+
+func TestHTTPProvider_Execute_DelegationRegistry_DelegationError(t *testing.T) {
+	t.Parallel()
+	delegator := &testDelegator{err: fmt.Errorf("token endpoint returned 400")}
+	reg := authdelegation.NewDelegatorRegistry()
+	reg.Register("entra", delegator)
+
+	ctx := authdelegation.WithRegistry(testContext(t), reg)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          "https://example.com/api",
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+}
+
+func TestHTTPProvider_Execute_DelegationRegistry_No401Retry(t *testing.T) {
+	t.Parallel()
+	attemptCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attemptCount++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer server.Close()
+
+	delegator := &testDelegator{token: "delegated-token"}
+	reg := authdelegation.NewDelegatorRegistry()
+	reg.Register("entra", delegator)
+
+	ctx := authdelegation.WithRegistry(testContext(t), reg)
+
+	p := NewHTTPProvider()
+	inputs := map[string]any{
+		"url":          server.URL,
+		"method":       "GET",
+		"authProvider": "entra",
+		"scope":        "https://graph.microsoft.com/.default",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	// Should NOT retry on 401 in API mode — only one request made.
+	assert.Equal(t, 1, attemptCount)
+	// DelegateToken called once for the initial token, NOT again for retry.
+	assert.Equal(t, 1, delegator.calls)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, 401, data["statusCode"])
+}
+
+func TestResolveDelegator(t *testing.T) {
+	t.Parallel()
+
+	t.Run("if delegator has a normal and pass-through variants , return the non-pass-through delegator", func(t *testing.T) {
+		t.Parallel()
+		normal := &testDelegator{token: "token", name: "entra"}
+		reg := authdelegation.NewDelegatorRegistry()
+		passThroughProvider := authdelegation.PassThroughDelegatorName("entra")
+		reg.Register("entra", normal)
+		reg.Register(passThroughProvider, &testDelegator{token: "passthrough-token", name: passThroughProvider})
+
+		resolved, err := resolveDelegator(reg, "entra")
+		require.NoError(t, err)
+		assert.Equal(t, normal, resolved)
+	})
+	t.Run("if delegator has only pass-through variant, return it", func(t *testing.T) {
+		t.Parallel()
+		reg := authdelegation.NewDelegatorRegistry()
+		passThroughProvider := authdelegation.PassThroughDelegatorName("entra")
+		reg.Register(passThroughProvider, &testDelegator{token: "passthrough-token", name: passThroughProvider})
+		resolved, err := resolveDelegator(reg, "entra")
+		require.NoError(t, err)
+		assert.Equal(t, passThroughProvider, resolved.Name())
+	})
+	t.Run("canonicalizes pass-through delegator lookup", func(t *testing.T) {
+		t.Parallel()
+		reg := authdelegation.NewDelegatorRegistry()
+		passThroughProvider := authdelegation.PassThroughDelegatorName("Github")
+		reg.Register(passThroughProvider, &testDelegator{token: "passthrough-token", name: passThroughProvider})
+
+		resolved, err := resolveDelegator(reg, "Github")
+		require.NoError(t, err)
+		assert.Equal(t, passThroughProvider, resolved.Name())
+	})
+	t.Run("preserves exact direct lookup precedence", func(t *testing.T) {
+		t.Parallel()
+		exact := &testDelegator{token: "token", name: "Github"}
+		reg := authdelegation.NewDelegatorRegistry()
+		reg.Register("Github", exact)
+		passThroughProvider := authdelegation.PassThroughDelegatorName("Github")
+		reg.Register(passThroughProvider, &testDelegator{token: "passthrough-token", name: passThroughProvider})
+
+		resolved, err := resolveDelegator(reg, "Github")
+		require.NoError(t, err)
+		assert.Equal(t, exact, resolved)
+	})
+
+	t.Run("if delegator is not found, return error", func(t *testing.T) {
+		t.Parallel()
+		reg := authdelegation.NewDelegatorRegistry()
+
+		_, err := resolveDelegator(reg, "entra")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in delegation registry")
+	})
 }

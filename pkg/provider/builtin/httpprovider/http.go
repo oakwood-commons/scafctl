@@ -15,6 +15,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -506,66 +507,25 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	scope, _ := inputs["scope"].(string)
 
 	if authProvider != "" {
-		// Parse profile from handler@profile syntax and inject into context.
-		handlerName, profile := auth.ParseProfileKey(authProvider)
-		if profile != "" {
-			if err := auth.ValidateProfileName(profile); err != nil {
-				return nil, fmt.Errorf("%s: invalid profile in authProvider: %w", ProviderName, err)
+		if reg := authdelegation.RegistryFromContext(ctx); reg != nil {
+			if err := injectDelegatedToken(ctx, reg, authProvider, scope, headers); err != nil {
+				return nil, err
 			}
-			ctx = auth.WithProfile(ctx, profile)
-		} else if resolved := auth.ResolveActiveProfile(ctx, handlerName); resolved != "" {
-			// No explicit profile in authProvider, use the active profile
-			ctx = auth.WithProfile(ctx, resolved)
+		} else {
+			if err := injectCLIToken(ctx, authProvider, scope, timeoutDuration, headers); err != nil {
+				return nil, err
+			}
 		}
-
-		// Get auth handler from context
-		handler, err := auth.GetHandler(ctx, authProvider)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", ProviderName, err)
-		}
-
-		// Validate scope requirement based on handler capabilities
-		requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
-		if scope == "" && requiresScope {
-			return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
-		}
-		if scope != "" && !requiresScope {
-			lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
-				"authProvider", authProvider,
-				"scope", scope,
-			)
-			scope = ""
-		}
-
-		// Calculate minimum token validity: request timeout + 60 second buffer
-		minValidFor := timeoutDuration + 60*time.Second
-
-		// Get token with sufficient validity
-		token, err := handler.GetToken(ctx, auth.TokenOptions{
-			Scope:       scope,
-			MinValidFor: minValidFor,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
-		}
-
-		// Inject authorization header
-		headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
-		lgr.V(1).Info("injected auth header",
-			"authProvider", authProvider,
-			"scope", scope,
-			"tokenExpiresAt", token.ExpiresAt,
-			"minValidFor", minValidFor,
-		)
 	}
 
 	// Build httpc client with timeout and user-supplied retry configuration.
 	retryCfg := parseRetryConfig(inputs)
 	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
 
-	// Wire 401 token-refresh via the httpc OnUnauthorized hook when an auth provider is configured.
-	// The initial token was already injected into headers above; this hook handles silent re-auth on 401.
-	if authProvider != "" {
+	// Wire 401 token-refresh via the httpc OnUnauthorized hook when an auth provider is configured
+	// in CLI mode. In API mode (delegation registry present), no 401 retry is attempted because
+	// token refresh is handled by the delegation registry's layer.
+	if authProvider != "" && authdelegation.RegistryFromContext(ctx) == nil {
 		capturedScope := scope
 		capturedTimeout := timeoutDuration
 		capturedHandlerName, capturedProfile := auth.ParseProfileKey(authProvider)
@@ -768,4 +728,94 @@ func isJSONContentType(contentType string) bool {
 	ct := strings.ToLower(strings.TrimSpace(contentType))
 	return strings.HasPrefix(ct, "application/json") ||
 		strings.HasSuffix(ct, "+json")
+}
+
+// injectDelegatedToken resolves a token via the delegation registry (API mode) and sets
+// the Authorization header.
+func injectDelegatedToken(ctx context.Context, reg *authdelegation.DelegatorRegistry, authProvider, scope string, headers map[string]any) error {
+	lgr := logger.FromContext(ctx)
+
+	delegator, err := resolveDelegator(reg, authProvider)
+	if err != nil {
+		return err
+	}
+
+	result, err := delegator.DelegateToken(ctx, scope)
+	if err != nil {
+		return fmt.Errorf("%s: token delegation failed for %q: %w", ProviderName, authProvider, err)
+	}
+
+	headers["Authorization"] = "Bearer " + result.AccessToken
+	lgr.V(1).Info("injected delegated auth header",
+		"authProvider", authProvider,
+		"scope", scope,
+	)
+	return nil
+}
+
+// injectCLIToken resolves a token via the auth handler registry (CLI mode) and sets
+// the Authorization header.
+func injectCLIToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, headers map[string]any) error {
+	lgr := logger.FromContext(ctx)
+	// Parse profile from handler@profile syntax and inject into context.
+	handlerName, profile := auth.ParseProfileKey(authProvider)
+	if profile != "" {
+		if err := auth.ValidateProfileName(profile); err != nil {
+			return fmt.Errorf("%s: invalid profile in authProvider: %w", ProviderName, err)
+		}
+		ctx = auth.WithProfile(ctx, profile)
+	} else if resolved := auth.ResolveActiveProfile(ctx, handlerName); resolved != "" {
+		// No explicit profile in authProvider, use the active profile
+		ctx = auth.WithProfile(ctx, resolved)
+	}
+	handler, err := auth.GetHandler(ctx, authProvider)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
+	// Validate scope requirement based on handler capabilities
+	requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+	if scope == "" && requiresScope {
+		return fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+	}
+	if scope != "" && !requiresScope {
+		lgr.V(1).Info("ignoring scope for auth provider that does not support per-request scopes",
+			"authProvider", authProvider,
+			"scope", scope,
+		)
+		scope = ""
+	}
+
+	// Calculate minimum token validity: request timeout + 60 second buffer
+	minValidFor := timeoutDuration + 60*time.Second
+
+	token, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope:       scope,
+		MinValidFor: minValidFor,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: failed to get auth token: %w", ProviderName, err)
+	}
+
+	headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
+	lgr.V(1).Info("injected auth header",
+		"authProvider", authProvider,
+		"scope", scope,
+		"tokenExpiresAt", token.ExpiresAt,
+		"minValidFor", minValidFor,
+	)
+	return nil
+}
+
+func resolveDelegator(reg *authdelegation.DelegatorRegistry, authProvider string) (authdelegation.TokenDelegator, error) {
+	if delegator, ok := reg.Get(authProvider); ok {
+		return delegator, nil
+	}
+	// passthrough providers are registered under a different name, so check for that as well as a fallback to allow using the auth provider name directly in the http provider's authProvider field.
+	passThroughProvider := authdelegation.PassThroughDelegatorName(authProvider)
+	if delegator, ok := reg.Get(passThroughProvider); ok {
+		return delegator, nil
+	}
+
+	return nil, fmt.Errorf("%s: auth provider %q not found in delegation registry (available: %v)", ProviderName, authProvider, reg.Names())
 }
