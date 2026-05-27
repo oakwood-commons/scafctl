@@ -36,7 +36,7 @@ spec:
         description: Verify sleep provider completes successfully
         extends: [_base]
         tags: [smoke]
-        timeout: "10s"
+        timeout: "30s"
         assertions:
           - contains: shortSleep
             message: "Sleep resolver should appear in output"

@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,8 +20,6 @@ concurrency:
 jobs:
   benchmark:
     name: Benchmark Comparison
-    # Only run on PRs from the same repo (not forks)
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     env:
       SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' }}
@@ -116,69 +113,19 @@ jobs:
           echo "$RESULT" > benchstat-result.txt
           set -e
 
-      - name: Post benchmark comparison
+      - name: Save PR number and metadata
         if: steps.find-bench.outputs.packages != '' && steps.benchstat.outputs.empty != 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        run: |
+          echo "${{ github.event.pull_request.number }}" > pr-number.txt
+          echo '{"count":"'"${BENCH_COUNT}"'","time":"'"${BENCH_TIME}"'"}' > bench-metadata.json
+
+      - name: Upload benchmark results
+        if: steps.find-bench.outputs.packages != '' && steps.benchstat.outputs.empty != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- benchmark-comparison -->';
-            let result = 'No results available';
-            try {
-              result = fs.readFileSync('benchstat-result.txt', 'utf8').trim();
-            } catch (e) {
-              console.log('Could not read benchstat-result.txt:', e.message);
-            }
-            const count = process.env.BENCH_COUNT || '5';
-            const benchTime = process.env.BENCH_TIME || '1s';
-            const body = [
-              marker,
-              '## Benchmark Comparison',
-              '',
-              '<details>',
-              '<summary>Click to expand benchmark results</summary>',
-              '',
-              '```',
-              result,
-              '```',
-              '',
-              '</details>',
-              '',
-              '> **How to read**: `~` means no significant change, `+` means regression, `-` means improvement. `p`-value >= 0.05 means the difference is not statistically significant.',
-              '>',
-              `> Benchmarks ran with \`-count=${count}\` and \`-benchtime=${benchTime}\`.`,
-            ].join('\n');
-
-            const prNumber = context.payload.pull_request?.number;
-            if (!prNumber) {
-              console.log('No PR number found, skipping comment.');
-              return;
-            }
-
-            // Find and update existing comment, or create new one
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-            });
-
-            const existing = comments.find(c => c.body.includes(marker));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
-            }
-        env:
-          BENCH_COUNT: ${{ env.BENCH_COUNT }}
-          BENCH_TIME: ${{ env.BENCH_TIME }}
+          name: benchmark-results
+          path: |
+            benchstat-result.txt
+            pr-number.txt
+            bench-metadata.json
+          retention-days: 5
