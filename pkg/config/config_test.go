@@ -829,3 +829,165 @@ func TestRestoreAuthProfileEntries_PreservesNonEmpty(t *testing.T) {
 	assert.Equal(t, "work-app", cfg.Auth.GitHub.Profiles["work"].ClientID)
 	assert.NotNil(t, cfg.Auth.GitHub.Profiles["empty"])
 }
+
+func TestManager_Delete_SimpleKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	initial := `logging:
+  level: "2"
+  format: json
+settings:
+  noColor: true
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o600))
+
+	mgr := NewManager(configPath)
+	_, err := mgr.Load()
+	require.NoError(t, err)
+
+	removed, err := mgr.Delete("logging.level")
+	require.NoError(t, err)
+	assert.True(t, removed)
+
+	// Verify the key is removed from file.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "level")
+	// Other keys remain.
+	assert.Contains(t, string(data), "format")
+	assert.Contains(t, string(data), "noColor")
+}
+
+func TestManager_Delete_NestedArraySection(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	initial := `auth:
+  customOAuth2:
+    - name: my-handler
+      clientId: abc123
+      scopes:
+        - read
+        - write
+  github:
+    clientId: test-id
+settings:
+  defaultCatalog: official
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o600))
+
+	mgr := NewManager(configPath)
+	_, err := mgr.Load()
+	require.NoError(t, err)
+
+	removed, err := mgr.Delete("auth.customOAuth2")
+	require.NoError(t, err)
+	assert.True(t, removed)
+
+	// Verify customOAuth2 is removed but other auth keys remain.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "customOAuth2")
+	assert.NotContains(t, string(data), "my-handler")
+	assert.Contains(t, string(data), "github")
+	assert.Contains(t, string(data), "test-id")
+}
+
+func TestManager_Delete_TopLevelKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	initial := `logging:
+  level: "2"
+settings:
+  noColor: true
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o600))
+
+	mgr := NewManager(configPath)
+	_, err := mgr.Load()
+	require.NoError(t, err)
+
+	removed, err := mgr.Delete("logging")
+	require.NoError(t, err)
+	assert.True(t, removed)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "logging")
+	assert.NotContains(t, string(data), "level")
+	assert.Contains(t, string(data), "settings")
+}
+
+func TestManager_Delete_NonexistentKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	initial := `logging:
+  level: "2"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o600))
+
+	mgr := NewManager(configPath)
+	_, err := mgr.Load()
+	require.NoError(t, err)
+
+	// Should not error on non-existent key.
+	removed, err := mgr.Delete("nonexistent.key")
+	require.NoError(t, err)
+	assert.False(t, removed)
+
+	// File unchanged.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "level")
+}
+
+func TestManager_Delete_CleansEmptyParents(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	initial := `auth:
+  github:
+    clientId: test-id
+settings:
+  defaultCatalog: official
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o600))
+
+	mgr := NewManager(configPath)
+	_, err := mgr.Load()
+	require.NoError(t, err)
+
+	removed, err := mgr.Delete("auth.github.clientId")
+	require.NoError(t, err)
+	assert.True(t, removed)
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	// github section had only clientId, so it should be cleaned up.
+	assert.NotContains(t, string(data), "clientId")
+	assert.NotContains(t, string(data), "github")
+	// auth is now empty, so it should be removed too.
+	assert.NotContains(t, string(data), "auth")
+	assert.Contains(t, string(data), "settings")
+}
+
+func TestManager_Delete_MissingFileIsNoOp(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "nonexistent", "config.yaml")
+
+	mgr := NewManager(configPath)
+	// Don't call Load -- simulate fresh install with no config file.
+
+	removed, err := mgr.Delete("logging.level")
+	require.NoError(t, err)
+	assert.False(t, removed)
+}

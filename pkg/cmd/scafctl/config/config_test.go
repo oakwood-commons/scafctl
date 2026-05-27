@@ -249,3 +249,131 @@ settings:
 	require.NoError(t, err)
 	assert.Equal(t, "none", cfg.Logging.Level)
 }
+
+func TestUnsetOptions_Run_NestedArrayKey(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `auth:
+  customOAuth2:
+    - name: my-handler
+      clientId: abc123
+      scopes:
+        - repo:read
+        - repo:write
+  github:
+    clientId: test-id
+settings:
+  defaultCatalog: official
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &UnsetOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		Key:        "auth.customOAuth2",
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	// Verify the key was removed from file entirely.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "customOAuth2")
+	assert.NotContains(t, string(data), "my-handler")
+	// Other keys remain.
+	assert.Contains(t, string(data), "github")
+}
+
+func TestUnsetOptions_Run_KeyNotInFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Config file exists but doesn't have the key we're unsetting.
+	configContent := `settings:
+  defaultCatalog: official
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &UnsetOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		Key:        "logging.level",
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// Should succeed (idempotent) and report that key was not present.
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "not present")
+}
+
+func TestUnsetOptions_Run_BrokenConfig(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Config file has valid YAML but would fail validation during Load()
+	// (e.g., invalid catalog type). Unset should still work because it
+	// operates directly on the YAML without requiring Load().
+	configContent := `catalogs:
+  - name: bad
+    type: invalid-type-that-fails-validation
+    url: something
+auth:
+  customOAuth2:
+    - name: stale-handler
+      clientId: old-value
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &UnsetOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		Key:        "auth.customOAuth2",
+	}
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	// Should succeed even though the config would fail Load() validation.
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	// Verify the key was removed.
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "customOAuth2")
+	assert.NotContains(t, string(data), "stale-handler")
+	// Other content remains.
+	assert.Contains(t, string(data), "bad")
+}

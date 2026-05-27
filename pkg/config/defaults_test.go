@@ -462,3 +462,250 @@ func TestMergeDefaultCatalogEntries_ReservedOverwrite(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeAuthDefaults_AddsNewScopes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Existing config with old scopes (missing "read:packages").
+	existing := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    hostname: github.com
+    defaultScopes:
+      - repo
+      - read:org
+catalogs:
+  - name: local
+    type: filesystem
+  - name: official
+    type: oci
+    url: oci://ghcr.io/oakwood-commons
+    authProvider: github
+settings:
+  defaultCatalog: official
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	// Defaults with new scope "read:packages".
+	defaults := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    hostname: github.com
+    defaultScopes:
+      - repo
+      - read:org
+      - read:packages
+catalogs:
+  - name: local
+    type: filesystem
+settings:
+  defaultCatalog: official
+`
+	err := EnsureDefaultsWith(path, []byte(defaults))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	auth, _ := cfg["auth"].(map[string]any)
+	require.NotNil(t, auth)
+	github, _ := auth["github"].(map[string]any)
+	require.NotNil(t, github)
+
+	scopes := toStringSlice(github["defaultScopes"])
+	assert.Contains(t, scopes, "repo")
+	assert.Contains(t, scopes, "read:org")
+	assert.Contains(t, scopes, "read:packages")
+}
+
+func TestMergeAuthDefaults_DoesNotDuplicateExistingScopes(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	existing := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    defaultScopes:
+      - repo
+      - read:org
+      - read:packages
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	defaults := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    defaultScopes:
+      - repo
+      - read:org
+      - read:packages
+`
+	err := EnsureDefaultsWith(path, []byte(defaults))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	auth, _ := cfg["auth"].(map[string]any)
+	github, _ := auth["github"].(map[string]any)
+	scopes := toStringSlice(github["defaultScopes"])
+	assert.Len(t, scopes, 3, "should not duplicate existing scopes")
+}
+
+func TestMergeAuthDefaults_BackfillsMissingHandler(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Existing config has no auth section at all.
+	existing := `settings:
+  defaultCatalog: official
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	defaults := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    hostname: github.com
+    defaultScopes:
+      - repo
+settings:
+  defaultCatalog: official
+`
+	err := EnsureDefaultsWith(path, []byte(defaults))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	auth, _ := cfg["auth"].(map[string]any)
+	require.NotNil(t, auth)
+	github, _ := auth["github"].(map[string]any)
+	require.NotNil(t, github)
+	assert.Equal(t, "Ov23li6xn492GhPmt4YG", github["clientId"])
+	assert.Equal(t, "github.com", github["hostname"])
+}
+
+func TestMergeAuthDefaults_BackfillsNewField(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Existing has github but no hostname field.
+	existing := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    defaultScopes:
+      - repo
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	defaults := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    hostname: github.com
+    defaultScopes:
+      - repo
+`
+	err := EnsureDefaultsWith(path, []byte(defaults))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	auth, _ := cfg["auth"].(map[string]any)
+	github, _ := auth["github"].(map[string]any)
+	assert.Equal(t, "github.com", github["hostname"])
+	// clientId must not be overwritten.
+	assert.Equal(t, "Ov23li6xn492GhPmt4YG", github["clientId"])
+}
+
+func TestMergeAuthDefaults_PreservesUserClientID(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// User has a custom clientId.
+	existing := `auth:
+  github:
+    clientId: user-custom-id
+    defaultScopes:
+      - repo
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	defaults := `auth:
+  github:
+    clientId: Ov23li6xn492GhPmt4YG
+    defaultScopes:
+      - repo
+      - read:org
+`
+	err := EnsureDefaultsWith(path, []byte(defaults))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	auth, _ := cfg["auth"].(map[string]any)
+	github, _ := auth["github"].(map[string]any)
+	// User's custom clientId must not be overwritten.
+	assert.Equal(t, "user-custom-id", github["clientId"])
+	// But new scope should be added.
+	scopes := toStringSlice(github["defaultScopes"])
+	assert.Contains(t, scopes, "read:org")
+}
+
+func TestMergeAuthDefaults_CustomOAuth2_AddsNew(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	existing := `auth:
+  customOAuth2:
+    - name: existing-handler
+      clientId: abc
+`
+	require.NoError(t, os.WriteFile(path, []byte(existing), 0o600))
+
+	defaults := `auth:
+  customOAuth2:
+    - name: existing-handler
+      clientId: xyz
+    - name: new-handler
+      clientId: def
+`
+	err := EnsureDefaultsWith(path, []byte(defaults))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var cfg map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &cfg))
+	auth, _ := cfg["auth"].(map[string]any)
+	customOAuth2 := toSlice(auth["customOAuth2"])
+	assert.Len(t, customOAuth2, 2)
+
+	// Existing handler should not be modified.
+	first, _ := customOAuth2[0].(map[string]any)
+	assert.Equal(t, "existing-handler", first["name"])
+	assert.Equal(t, "abc", first["clientId"], "existing entry must not be modified")
+
+	// New handler should be added.
+	second, _ := customOAuth2[1].(map[string]any)
+	assert.Equal(t, "new-handler", second["name"])
+}
