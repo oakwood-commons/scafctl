@@ -23,7 +23,6 @@ import (
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
 	credhelpercmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
-	examplescmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
 	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
@@ -843,7 +842,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 	// Other Commands (no group — shown under "Additional Commands:")
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, binaryName, opts.VersionExtra))
-	cCmd.AddCommand(examplescmd.CommandExamples(cliParams, ioStreams, binaryName))
 	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, binaryName))
 
 	// cleanup releases auth handler plugins and telemetry. It is safe to call

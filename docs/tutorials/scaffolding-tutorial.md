@@ -146,10 +146,10 @@ Instead of scaffolding from scratch, you can also start from an existing example
 {{% tab "Bash" %}}
 ```bash
 # Browse available solution examples
-scafctl examples list --category solutions
+scafctl get examples --category solutions
 
 # Download one as a starting point
-scafctl examples get solutions/email-notifier/solution.yaml -o my-solution.yaml
+scafctl get examples solutions/email-notifier/solution.yaml > my-solution.yaml
 
 # Modify and validate
 scafctl lint -f my-solution.yaml
@@ -157,8 +157,8 @@ scafctl lint -f my-solution.yaml
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl examples list --category solutions
-scafctl examples get solutions/email-notifier/solution.yaml -o my-solution.yaml
+scafctl get examples --category solutions
+scafctl get examples solutions/email-notifier/solution.yaml > my-solution.yaml
 scafctl lint -f my-solution.yaml
 ```
 {{% /tab %}}

@@ -6089,68 +6089,57 @@ func TestIntegration_LintExplain_JSON(t *testing.T) {
 // Examples Command Tests (Sprint 5)
 // ============================================================================
 
-func TestIntegration_Examples_Help(t *testing.T) {
+func TestIntegration_Examples_RootCommandRemoved(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "examples", "--help")
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "list")
-	assert.Contains(t, stdout, "get")
+	_, stderr, exitCode := runScafctl(t, "examples", "--help")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "unknown command")
 }
 
-func TestIntegration_Examples_List(t *testing.T) {
+func TestIntegration_GetExamples_List(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "examples", "list", "-o", "yaml")
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "-o", "yaml")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "path:")
 	assert.Contains(t, stdout, "category:")
 	assert.Contains(t, stdout, "description:")
 }
 
-func TestIntegration_Examples_List_JSON(t *testing.T) {
+func TestIntegration_GetExamples_List_FilterCategory(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "examples", "list", "-o", "json")
-	assert.Equal(t, 0, exitCode)
-
-	var examples []map[string]any
-	require.NoError(t, json.Unmarshal([]byte(stdout), &examples))
-	assert.Greater(t, len(examples), 0)
-	assert.Contains(t, examples[0], "path")
-	assert.Contains(t, examples[0], "category")
-}
-
-func TestIntegration_Examples_List_FilterCategory(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "examples", "list", "--category", "solutions")
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "--category", "solutions")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "solutions")
 }
 
-func TestIntegration_Examples_Get(t *testing.T) {
+func TestIntegration_GetExamples_Get(t *testing.T) {
 	t.Parallel()
-	// Get a known example — resolver-demo.yaml is a top-level example
-	stdout, _, exitCode := runScafctl(t, "examples", "get", "resolver-demo.yaml")
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml")
 	assert.Equal(t, 0, exitCode)
 	assert.NotEmpty(t, stdout)
 }
 
-func TestIntegration_Examples_Get_NotFound(t *testing.T) {
+func TestIntegration_GetExamples_Get_JSON(t *testing.T) {
 	t.Parallel()
-	_, _, exitCode := runScafctl(t, "examples", "get", "nonexistent-example.yaml")
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var example map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &example))
+	assert.Equal(t, "scafctl.io/v1", example["apiVersion"])
+	assert.Contains(t, example, "metadata")
+}
+
+func TestIntegration_GetExamples_Get_NotFound(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "get", "examples", "nonexistent-example.yaml")
 	assert.NotEqual(t, 0, exitCode)
 }
 
-func TestIntegration_Examples_Get_OutputFile(t *testing.T) {
+func TestIntegration_GetExamples_Get_InvalidOutputFormat(t *testing.T) {
 	t.Parallel()
-	tmpDir := t.TempDir()
-	outFile := filepath.Join(tmpDir, "output.yaml")
-
-	_, _, exitCode := runScafctl(t, "examples", "get", "resolver-demo.yaml", "-o", outFile)
-	assert.Equal(t, 0, exitCode)
-
-	// Verify the file was written
-	data, err := os.ReadFile(outFile)
-	require.NoError(t, err)
-	assert.NotEmpty(t, data)
+	_, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml", "-o", "invalid-format")
+	assert.NotEqual(t, 0, exitCode)
 }
 
 // ============================================================================

@@ -4,6 +4,7 @@
 package examples
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -126,7 +127,7 @@ func TestRead_PathTraversalBlocked(t *testing.T) {
 	t.Parallel()
 	_, err := Read("../../../etc/passwd")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "..")
+	assert.ErrorIs(t, err, ErrPathTraversal)
 }
 
 func TestRead_PathTraversalVariants(t *testing.T) {
@@ -142,6 +143,7 @@ func TestRead_PathTraversalVariants(t *testing.T) {
 			t.Parallel()
 			_, err := Read(path)
 			require.Error(t, err, "path traversal should be rejected: %s", path)
+			assert.True(t, errors.Is(err, ErrPathTraversal), "expected ErrPathTraversal for path %q", path)
 		})
 	}
 }

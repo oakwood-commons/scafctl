@@ -26,22 +26,22 @@ scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log
 
 ### Browse Examples from the CLI
 
-You can also discover and download examples using the built-in `examples` command:
+You can also discover and download examples using the built-in `get examples` command:
 
 ```bash
 # List all available examples
-scafctl examples list
+scafctl get examples
 
 # Filter by category
-scafctl examples list --category resolvers
-scafctl examples list --category actions
-scafctl examples list --category solutions
+scafctl get examples --category resolvers
+scafctl get examples --category actions
+scafctl get examples --category solutions
 
 # Download an example
-scafctl examples get resolvers/hello-world.yaml -o hello.yaml
+scafctl get examples resolvers/hello-world.yaml > hello.yaml
 
 # List in JSON format
-scafctl examples list -o json
+scafctl get examples -o json
 ```
 
 ---

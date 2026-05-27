@@ -60,6 +60,6 @@ Runnable examples are located in the [`/examples`](https://github.com/oakwood-co
 Browse examples from the CLI:
 
 ```bash
-scafctl examples list
-scafctl examples get resolvers/hello-world.yaml
+scafctl get examples
+scafctl get examples resolvers/hello-world.yaml
 ```
