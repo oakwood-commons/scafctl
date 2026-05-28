@@ -186,7 +186,6 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cancel:            cancel,
 		startTime:         time.Now(),
 	}
-
 	return s, nil
 }
 

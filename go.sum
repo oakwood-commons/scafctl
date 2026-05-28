@@ -622,6 +622,8 @@ github.com/nxadm/tail v1.4.4/go.mod h1:kenIhsEOeOJmVchQTgglprH7qJGnHDVpk1VPCcaMI
 github.com/nxadm/tail v1.4.8/go.mod h1:+ncqLTQzXmGhMZNUePPaPqPvBxHAIsmXswZKocGu+AU=
 github.com/nxadm/tail v1.4.11 h1:8feyoE3OzPrcshW5/MJ4sGESc5cqmGkGCWlco4l0bqY=
 github.com/nxadm/tail v1.4.11/go.mod h1:OTaG3NK980DZzxbRq6lEuzgU+mug70nY11sMd4JXXHc=
+github.com/oakwood-commons/go-flight v1.0.0 h1:OCtDeGW0sh5do7qP1QbB7kLPIzyfecsaxOLtuRmY9p0=
+github.com/oakwood-commons/go-flight v1.0.0/go.mod h1:91490vC4QgOP+3T7ZFtjbNOJF9o8K5pxDnfNhptvE5g=
 github.com/oakwood-commons/httpc v0.1.0 h1:syQbjqerxGEVngGWOtyGhkwFFUnJekm+amnuKTO4vJQ=
 github.com/oakwood-commons/httpc v0.1.0/go.mod h1:vQ7KZ7NK7tF9Inqzikuo1HKozTw2Y0tHMp316PqwkEA=
 github.com/oakwood-commons/kvx v0.12.1-0.20260526145940-98d391c60b9b h1:0hECYesHiHOqp+TBLHziM1xMgr9F1SiKaRIZSRY2aBQ=

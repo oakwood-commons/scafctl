@@ -166,6 +166,11 @@ func runServe(ctx context.Context, opts *Options) error {
 	// lifecycle (shutdown) is managed consistently.
 	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients)
 
+	// // Build delegation registry for API-mode token delegation.
+	// delegationReg, err := buildDelegationRegistry(ctx, &cfg.APIServer, lgr)
+	// if err != nil {
+	// 	return fmt.Errorf("building delegation registry: %w", err)
+	// }
 	// Build server options
 	serverOpts := []api.ServerOption{
 		api.WithServerLogger(*lgr),

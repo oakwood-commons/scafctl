@@ -117,6 +117,32 @@ func TestClaimsFromContext_Present(t *testing.T) {
 	assert.Equal(t, "tenant-abc", claims.TenantID)
 }
 
+func TestAccessTokenFromContext_Nil(t *testing.T) {
+	token := AccessTokenFromContext(context.Background())
+	assert.Empty(t, token)
+}
+
+func TestAccessTokenFromContext_Present(t *testing.T) {
+	ctx := context.WithValue(context.Background(), accessTokenContextKey, "eyJ0eXAi.test.token")
+	token := AccessTokenFromContext(ctx)
+	assert.Equal(t, "eyJ0eXAi.test.token", token)
+}
+
+func TestAuthClaims_CallerType_User(t *testing.T) {
+	claims := &AuthClaims{IDType: ""}
+	assert.Equal(t, "user", claims.CallerType())
+}
+
+func TestAuthClaims_CallerType_App(t *testing.T) {
+	claims := &AuthClaims{IDType: "app"}
+	assert.Equal(t, "app", claims.CallerType())
+}
+
+func TestAuthClaims_CallerType_UnknownDefaultsToUser(t *testing.T) {
+	claims := &AuthClaims{IDType: "something"}
+	assert.Equal(t, "user", claims.CallerType())
+}
+
 func BenchmarkAzureOIDCAuth_MissingHeader(b *testing.B) {
 	mw, err := NewAzureOIDCAuth("tenant-id", "client-id", logr.Discard())
 	require.NoError(b, err)
@@ -371,4 +397,75 @@ func TestJWKSCache_Refresh_NetworkError(t *testing.T) {
 func encodeJSON(w http.ResponseWriter, v any) error {
 	w.Header().Set("Content-Type", "application/json")
 	return json.NewEncoder(w).Encode(v)
+}
+
+func TestAzureOIDCAuth_StoresClaimsAndTokenInContext(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	const (
+		kid      = "e2e-kid"
+		tenant   = "test-tenant"
+		clientID = "test-client"
+	)
+
+	// Spin up a JWKS endpoint.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = encodeJSON(w, jwksFromKey(privKey, kid))
+	}))
+	defer srv.Close()
+
+	// Create a valid signed JWT.
+	now := time.Now()
+	issuer := "https://login.microsoftonline.com/" + tenant + "/v2.0"
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"sub":   "user-456",
+		"name":  "Jane Doe",
+		"email": "jane@example.com",
+		"tid":   tenant,
+		"oid":   "obj-789",
+		"idtyp": "app",
+		"aud":   clientID,
+		"iss":   issuer,
+		"exp":   float64(now.Add(time.Hour).Unix()),
+		"iat":   float64(now.Unix()),
+		"roles": []string{"admin", "reader"},
+	})
+	token.Header["kid"] = kid
+	tokenStr, err := token.SignedString(privKey)
+	require.NoError(t, err)
+
+	// Build middleware pointing at our test JWKS server.
+	mw := newOIDCAuthMiddleware(srv.URL, issuer, clientID, logr.Discard())
+
+	var capturedClaims *AuthClaims
+	var capturedToken string
+
+	handler := mw(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		capturedClaims = ClaimsFromContext(r.Context())
+		capturedToken = AccessTokenFromContext(r.Context())
+	}))
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Verify middleware passed the request through (200, not 401).
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Verify claims stored correctly.
+	require.NotNil(t, capturedClaims)
+	assert.Equal(t, "user-456", capturedClaims.Subject)
+	assert.Equal(t, "Jane Doe", capturedClaims.Name)
+	assert.Equal(t, "jane@example.com", capturedClaims.Email)
+	assert.Equal(t, tenant, capturedClaims.TenantID)
+	assert.Equal(t, "obj-789", capturedClaims.ObjectID)
+	assert.Equal(t, "app", capturedClaims.IDType)
+	assert.Equal(t, "app", capturedClaims.CallerType())
+	assert.Equal(t, []string{"admin", "reader"}, capturedClaims.Roles)
+
+	// Verify access token stored correctly.
+	assert.Equal(t, tokenStr, capturedToken)
 }
