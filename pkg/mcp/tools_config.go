@@ -30,7 +30,7 @@ func (s *Server) registerConfigTools() {
 	s.addTool(getConfigTool, s.handleGetConfig)
 
 	getConfigPathsTool := mcp.NewTool("get_config_paths",
-		mcp.WithDescription(fmt.Sprintf("Return all XDG-compliant filesystem paths used by %s. Shows config, data, cache, state, catalog, secrets, plugins, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout.", s.name)),
+		mcp.WithDescription(fmt.Sprintf("Return all XDG-compliant filesystem paths used by %s. Shows config, data, cache, state, catalog, secrets, plugins, provider-schemas, runtime, and build-cache directories. Useful for debugging path issues, finding where configuration or cached data is stored, and understanding the filesystem layout.", s.name)),
 		mcp.WithTitleAnnotation("Get Config Paths"),
 		mcp.WithToolIcons(toolIcons["config"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -110,6 +110,7 @@ func (s *Server) handleGetConfigPaths(_ context.Context, _ mcp.CallToolRequest) 
 		{Name: "httpCache", Path: paths.HTTPCacheDir(), Description: "HTTP response cache", XDGVariable: "XDG_CACHE_HOME"},
 		{Name: "buildCache", Path: paths.BuildCacheDir(), Description: "Build cache for solutions", XDGVariable: "XDG_CACHE_HOME"},
 		{Name: "plugins", Path: paths.PluginCacheDir(), Description: "Plugin cache", XDGVariable: "XDG_CACHE_HOME"},
+		{Name: "providerSchemas", Path: paths.ProviderSchemaCacheDir(), Description: "Cached provider descriptor schemas for offline access", XDGVariable: "XDG_CACHE_HOME"},
 		{Name: "runtime", Path: paths.RuntimeDir(), Description: "Runtime sockets and pipes", XDGVariable: "XDG_RUNTIME_DIR"},
 	}
 

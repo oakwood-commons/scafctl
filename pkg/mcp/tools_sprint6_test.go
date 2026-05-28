@@ -103,6 +103,7 @@ func TestHandleGetConfigPaths(t *testing.T) {
 		assert.True(t, names["cache"])
 		assert.True(t, names["catalog"])
 		assert.True(t, names["secrets"])
+		assert.True(t, names["providerSchemas"])
 	})
 }
 

@@ -1,0 +1,66 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: schema-cache-test
+  version: 1.0.0
+  description: Solution for testing provider schema caching and offline access
+
+spec:
+  resolvers:
+    greeting:
+      description: Static resolver for baseline test
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: schema-cache-test-ok
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      get-provider-cel-schema:
+        description: Builtin provider schema is always available
+        command: [get, provider, cel, -o, json]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "\"name\""
+          - contains: "\"cel\""
+          - contains: expression
+
+      get-provider-static-schema:
+        description: Static provider schema is always available
+        command: [get, provider, static, -o, json]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "\"name\""
+          - contains: "\"static\""
+
+      get-provider-unknown-fails:
+        description: Unknown provider returns error gracefully
+        command: [get, provider, nonexistent-provider-xyz, -o, json]
+        injectFile: false
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+
+      get-provider-official-metadata:
+        description: Official plugin providers return metadata even without binary
+        command: [get, provider, exec, -o, json]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: exec
+          - contains: "\"name\""
+
+      resolver-renders:
+        description: Verify base resolver still works
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: schema-cache-test-ok

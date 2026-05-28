@@ -1,0 +1,69 @@
+# Example: Solution Using Token Delegation
+#
+# This solution demonstrates HTTP provider requests that use delegated
+# authentication. The authProvider input tells the HTTP provider to
+# automatically acquire and inject a bearer token.
+#
+# In API mode: tokens are delegated via the DelegatorRegistry
+# In CLI mode: tokens are acquired via auth handlers (interactive login)
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: token-delegation-demo
+  version: 1.0.0
+  description: |
+    Demonstrates token delegation with the HTTP provider.
+    Shows OBO, client credentials, and pass-through patterns.
+
+spec:
+  resolvers:
+    # OBO/Client Credentials: Exchange caller token for a Graph API token
+    userProfile:
+      description: Fetch the caller's profile from Microsoft Graph (OBO flow)
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://graph.microsoft.com/v1.0/me"
+              method: GET
+              authProvider: entra
+              authScope: "https://graph.microsoft.com/.default"
+
+    # OBO/Client Credentials: Access Key Vault with a different scope
+    keyVaultSecret:
+      description: Read a secret from Azure Key Vault
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://my-vault.vault.azure.net/secrets/my-secret?api-version=7.4"
+              method: GET
+              authProvider: entra
+              authScope: "https://vault.azure.net/.default"
+
+    # Pass-through: Use the caller's GitHub token directly
+    githubRepo:
+      description: Fetch repository info using the caller's GitHub token
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://api.github.com/repos/oakwood-commons/scafctl"
+              method: GET
+              authProvider: Github
+              headers:
+                Accept: "application/vnd.github+json"
+                X-GitHub-Api-Version: "2022-11-28"
+
+    # Pass-through: Use the caller's Artifactory token
+    artifactoryInfo:
+      description: Check Artifactory system health
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: "https://artifactory.example.com/api/system/ping"
+              method: GET
+              authProvider: Artifactory

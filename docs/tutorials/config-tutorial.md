@@ -498,8 +498,83 @@ scafctl config unset logging.level
 {{% /tab %}}
 {{< /tabs >}}
 
+## API Server: Token Delegation
+
+The `apiServer` section includes configuration for token delegation when running in API mode (`scafctl serve`). These settings control how the server exchanges or forwards tokens to downstream providers.
+
+### Server Identity (Entra ID)
+
+Configure the server's identity for OBO and client credentials flows:
+
+{{< tabs "config-tutorial-cmd-16" >}}
+{{% tab "Bash" %}}
+```bash
+# Set up Entra identity for token delegation
+scafctl config set apiServer.identity.entra.tenantId "your-tenant-id"
+scafctl config set apiServer.identity.entra.clientId "your-client-id"
+scafctl config set apiServer.identity.entra.credential.type "secret"
+scafctl config set apiServer.identity.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+
+# Configure allowed delegation flows
+scafctl config set apiServer.identity.entra.allowedFlows.flows '["obo", "client_credentials"]'
+
+# View the identity config
+scafctl config get apiServer.identity
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Set up Entra identity for token delegation
+scafctl config set apiServer.identity.entra.tenantId "your-tenant-id"
+scafctl config set apiServer.identity.entra.clientId "your-client-id"
+scafctl config set apiServer.identity.entra.credential.type "secret"
+scafctl config set apiServer.identity.entra.credential.clientSecret "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+
+# Configure allowed delegation flows
+scafctl config set apiServer.identity.entra.allowedFlows.flows '["obo", "client_credentials"]'
+
+# View the identity config
+scafctl config get apiServer.identity
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+The credential `clientSecret` field uses `SecretRef` URI format:
+- `env://VAR_NAME` -- reads from an environment variable
+- `file:///path/to/secret` -- reads from a file
+
+### Token Pass-Through
+
+Configure which provider-specific tokens can be forwarded from API request headers:
+
+{{< tabs "config-tutorial-cmd-17" >}}
+{{% tab "Bash" %}}
+```bash
+# Allow GitHub and Artifactory tokens to be passed through
+scafctl config set apiServer.tokenPassThrough.allowedHeaders '["Github", "Artifactory"]'
+
+# View the token pass-through config
+scafctl config get apiServer.tokenPassThrough
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Allow GitHub and Artifactory tokens to be passed through
+scafctl config set apiServer.tokenPassThrough.allowedHeaders '["Github", "Artifactory"]'
+
+# View the token pass-through config
+scafctl config get apiServer.tokenPassThrough
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+When configured, callers send tokens via `X-Authorization-<Suffix>` headers (e.g., `X-Authorization-Github`). The server makes these available to providers via the `authProvider` input field. When `tokenPassThrough` is omitted entirely, only `Github` is allowed by default.
+
+For a complete guide, see the [Token Delegation Tutorial](token-delegation-tutorial.md).
+
 ## Next Steps
 
+- [Token Delegation Tutorial](token-delegation-tutorial.md) -- Configure OBO, client credentials, and pass-through delegation
 - [Authentication Tutorial](auth-tutorial.md) — Set up GitHub and Entra authentication
 - [Exec Provider Tutorial](exec-provider-tutorial.md) — Cross-platform shell execution
 - [Logging & Debugging Tutorial](logging-tutorial.md) — Control log verbosity, format, and output

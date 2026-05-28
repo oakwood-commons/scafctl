@@ -1,0 +1,63 @@
+# Schema Cache Demo
+#
+# Demonstrates how scafctl caches provider descriptor schemas locally so that
+# schema lookups (get_provider_schema, get_provider_output_shape) work even when
+# the plugin binary is unavailable or the network is offline.
+#
+# How it works:
+#   1. On first successful schema lookup, the full provider descriptor is saved
+#      to: $XDG_CACHE_HOME/scafctl/provider-schemas/<name>.json
+#   2. Subsequent lookups serve the cached descriptor when the plugin process
+#      cannot be started (offline, binary removed, etc.).
+#   3. Cache entries expire after 24 hours by default and are refreshed on
+#      next access.
+#   4. Running `scafctl plugins install` invalidates cached descriptors for
+#      the installed plugins so the next request returns fresh data.
+#
+# Try it:
+#   # First, fetch the exec provider schema via the MCP server:
+#   # (use get_provider_schema tool in MCP, or run the MCP server and call it)
+#   # This is the only way to populate the schema cache.
+#
+#   # Now the schema is cached -- works offline:
+#   ls ~/.cache/scafctl/provider-schemas/
+#
+#   # Clear the cache for a single provider:
+#   rm ~/.cache/scafctl/provider-schemas/exec.json
+#
+#   # Clear the entire schema cache:
+#   rm -rf ~/.cache/scafctl/provider-schemas/
+#
+# In the MCP server:
+#   - get_provider_schema returns `"source": "cached"` when served from cache
+#   - get_provider_output_shape also falls back to cached descriptors
+#   - get_config_paths shows the providerSchemas cache directory
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: schema-cache-demo
+  displayName: Schema Cache Demo
+  category: developer-tools
+  tags:
+    - plugin
+    - cache
+  description: |
+    Demonstrates provider schema caching for offline access. Once a plugin
+    provider's schema has been fetched, it is persisted locally and available
+    without network connectivity or a running plugin process.
+
+spec:
+  resolvers:
+    cache-info:
+      description: Static resolver showing cache location info
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                cacheDir: "$XDG_CACHE_HOME/scafctl/provider-schemas/"
+                ttl: "24h"
+                invalidation: "Automatic on `scafctl plugins install`"
+                manualClear: "rm -rf ~/.cache/scafctl/provider-schemas/"
