@@ -116,6 +116,7 @@ func mergeDefaults(configPath string, defsYAML []byte) error {
 	changed := false
 	changed = mergeCatalogDefaults(existing, defs) || changed
 	changed = mergeDefaultCatalogSetting(existing, defs) || changed
+	changed = mergeAuthDefaults(existing, defs) || changed
 
 	if !changed {
 		return nil
@@ -215,6 +216,167 @@ func mergeDefaultCatalogSetting(existing, defs map[string]any) bool {
 	}
 	existingSettings["defaultCatalog"] = defaultCatalog
 	return true
+}
+
+// mergeAuthDefaults merges auth handler defaults from the provided defaults
+// into the existing config. For each known auth handler (github, entra, gcp),
+// it backfills missing fields (of any type except defaultScopes, which is
+// merged additively) and appends new scope entries from defaults that are not
+// already present. This ensures updated embedded defaults (e.g., new OAuth
+// scopes or new configuration keys) propagate to existing user config files.
+func mergeAuthDefaults(existing, defs map[string]any) bool {
+	defaultAuth, _ := defs["auth"].(map[string]any)
+	if defaultAuth == nil {
+		return false
+	}
+
+	if existing["auth"] == nil {
+		existing["auth"] = make(map[string]any)
+	}
+	existingAuth, _ := existing["auth"].(map[string]any)
+	if existingAuth == nil {
+		return false
+	}
+
+	changed := false
+	// Merge each known auth handler section.
+	for _, handler := range []string{"github", "entra", "gcp"} {
+		defHandler, _ := defaultAuth[handler].(map[string]any)
+		if defHandler == nil {
+			continue
+		}
+
+		if existingAuth[handler] == nil {
+			// Handler not in user config — add entire section from defaults.
+			existingAuth[handler] = defHandler
+			changed = true
+			continue
+		}
+
+		existingHandler, _ := existingAuth[handler].(map[string]any)
+		if existingHandler == nil {
+			continue
+		}
+
+		// Backfill missing scalar fields.
+		for k, v := range defHandler {
+			if k == "defaultScopes" {
+				continue // handled separately below
+			}
+			if _, has := existingHandler[k]; !has {
+				existingHandler[k] = v
+				changed = true
+			}
+		}
+
+		// Additively merge defaultScopes.
+		if mergeDefaultScopes(existingHandler, defHandler) {
+			changed = true
+		}
+	}
+
+	// Merge customOAuth2 entries by name (backfill missing entries only).
+	if mergeCustomOAuth2Defaults(existingAuth, defaultAuth) {
+		changed = true
+	}
+
+	return changed
+}
+
+// mergeDefaultScopes additively merges defaultScopes from defHandler into
+// existingHandler. New scope entries from defaults that are not already
+// present in the existing list are appended.
+func mergeDefaultScopes(existingHandler, defHandler map[string]any) bool {
+	defScopes := toStringSlice(defHandler["defaultScopes"])
+	if len(defScopes) == 0 {
+		return false
+	}
+
+	existingScopes := toStringSlice(existingHandler["defaultScopes"])
+	scopeSet := make(map[string]struct{}, len(existingScopes))
+	for _, s := range existingScopes {
+		scopeSet[s] = struct{}{}
+	}
+
+	changed := false
+	for _, s := range defScopes {
+		if _, has := scopeSet[s]; !has {
+			existingScopes = append(existingScopes, s)
+			scopeSet[s] = struct{}{}
+			changed = true
+		}
+	}
+
+	if changed {
+		// Store as []any to match YAML unmarshal format.
+		result := make([]any, len(existingScopes))
+		for i, s := range existingScopes {
+			result[i] = s
+		}
+		existingHandler["defaultScopes"] = result
+	}
+	return changed
+}
+
+// mergeCustomOAuth2Defaults adds any customOAuth2 entries from defaults that
+// are not already present (matched by name) in the existing auth config.
+// Existing entries are intentionally never modified -- customOAuth2 handlers
+// are user-defined configurations and their fields should not be overwritten
+// by defaults. Only entirely new entries (by name) are appended.
+func mergeCustomOAuth2Defaults(existingAuth, defaultAuth map[string]any) bool {
+	defaultCustom := toSlice(defaultAuth["customOAuth2"])
+	if len(defaultCustom) == 0 {
+		return false
+	}
+
+	existingCustom := toSlice(existingAuth["customOAuth2"])
+	nameSet := make(map[string]struct{}, len(existingCustom))
+	for _, c := range existingCustom {
+		if m, ok := c.(map[string]any); ok {
+			if name, ok := m["name"].(string); ok {
+				nameSet[name] = struct{}{}
+			}
+		}
+	}
+
+	changed := false
+	for _, c := range defaultCustom {
+		dm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := dm["name"].(string)
+		if name == "" {
+			continue
+		}
+		if _, exists := nameSet[name]; !exists {
+			existingCustom = append(existingCustom, c)
+			changed = true
+		}
+	}
+
+	if changed {
+		existingAuth["customOAuth2"] = existingCustom
+	}
+	return changed
+}
+
+// toStringSlice converts an any that is expected to be []any of strings (from
+// YAML unmarshalling) into a []string. Returns nil if the underlying value is
+// not a slice (via toSlice). Non-string items within the slice are silently
+// skipped, so the result may be shorter than the input.
+func toStringSlice(v any) []string {
+	items := toSlice(v)
+	if items == nil {
+		return nil
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // toSlice converts an any that is expected to be []any (from YAML

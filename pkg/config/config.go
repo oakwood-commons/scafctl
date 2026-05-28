@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -538,6 +539,76 @@ func (m *Manager) Set(key string, value any) {
 	}
 }
 
+// Delete removes a configuration key from the user's config file on disk.
+// Unlike Set(key, nil), this physically removes the key from the YAML so that
+// embedded defaults or Viper defaults take effect on next Load().
+// It operates directly on the YAML file to avoid Viper's inability to truly
+// delete keys.
+//
+// Returns true if the key was found and removed, false if it was not present.
+// A missing config file is treated as a no-op (returns false, nil).
+func (m *Manager) Delete(key string) (bool, error) {
+	configPath, err := m.configPathOrError()
+	if err != nil {
+		return false, err
+	}
+
+	data, err := os.ReadFile(configPath) //nolint:gosec // config path from trusted source
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil // no config file means nothing to delete
+		}
+		return false, fmt.Errorf("reading config file: %w", err)
+	}
+
+	var rawCfg map[string]any
+	if err := yaml.Unmarshal(data, &rawCfg); err != nil {
+		return false, fmt.Errorf("parsing config file: %w", err)
+	}
+	if rawCfg == nil {
+		return false, nil // nothing to delete
+	}
+
+	if !deleteNestedKey(rawCfg, strings.Split(key, ".")) {
+		return false, nil // key not present, nothing to do
+	}
+
+	out, err := yaml.Marshal(rawCfg)
+	if err != nil {
+		return false, fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.WriteFile(configPath, out, 0o600); err != nil { //nolint:gosec // config file permissions
+		return false, fmt.Errorf("writing config file: %w", err)
+	}
+	return true, nil
+}
+
+// deleteNestedKey removes a key from a nested map structure given a path of
+// dot-separated segments. Returns true if the key was found and removed.
+func deleteNestedKey(m map[string]any, parts []string) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	if len(parts) == 1 {
+		if _, exists := m[parts[0]]; exists {
+			delete(m, parts[0])
+			return true
+		}
+		return false
+	}
+	// Traverse into the next level.
+	next, ok := m[parts[0]].(map[string]any)
+	if !ok {
+		return false
+	}
+	deleted := deleteNestedKey(next, parts[1:])
+	// Clean up empty parent maps.
+	if deleted && len(next) == 0 {
+		delete(m, parts[0])
+	}
+	return deleted
+}
+
 // Config returns the loaded configuration.
 func (m *Manager) Config() *Config {
 	return m.config
@@ -545,21 +616,30 @@ func (m *Manager) Config() *Config {
 
 // ConfigPath returns the path to the config file.
 func (m *Manager) ConfigPath() string {
+	p, _ := m.configPathOrError()
+	return p
+}
+
+// configPathOrError resolves the config file path, returning an error with the
+// root cause when the path cannot be determined.
+func (m *Manager) configPathOrError() (string, error) {
 	used := m.v.ConfigFileUsed()
 	if used != "" {
-		return used
+		return used, nil
 	}
 	// Return the configured path if no file has been loaded yet
 	if m.configPath != "" {
-		return m.configPath
+		return m.configPath, nil
 	}
 	// Return default XDG path
 	defaultPath, err := paths.ConfigFile()
 	if err != nil {
-		// Fallback should not happen in practice
-		return ""
+		return "", fmt.Errorf("failed to determine config path: %w", err)
 	}
-	return defaultPath
+	if defaultPath == "" {
+		return "", fmt.Errorf("failed to determine config path: resolved to empty string")
+	}
+	return defaultPath, nil
 }
 
 // IsSet checks if a configuration key is set.

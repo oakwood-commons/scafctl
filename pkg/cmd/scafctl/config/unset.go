@@ -87,46 +87,20 @@ func (o *UnsetOptions) Run(ctx context.Context) error {
 	}
 
 	mgr := appconfig.NewManager(o.ConfigPath)
-	_, err := mgr.Load()
+
+	// Delete operates directly on the YAML file and does not require a
+	// successful Load(). This allows unset to repair broken config files
+	// that would fail validation during Load().
+	removed, err := mgr.Delete(o.Key)
 	if err != nil {
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
-	// Check if key exists
-	if !mgr.IsSet(o.Key) {
-		err := fmt.Errorf("key %q is not set in configuration", o.Key)
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
-	}
-
-	// Get default value based on key
-	defaultValue := o.getDefaultValue(o.Key)
-	mgr.Set(o.Key, defaultValue)
-
-	if err := mgr.Save(); err != nil {
-		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.ConfigError)
-	}
-
-	w.Successf("Unset %s (reset to default: %v)", o.Key, defaultValue)
-	return nil
-}
-
-// getDefaultValue returns the default value for a configuration key.
-func (o *UnsetOptions) getDefaultValue(key string) any {
-	defaults := map[string]any{
-		"settings.defaultCatalog": "official",
-		"settings.noColor":        false,
-		"settings.quiet":          false,
-		"logging.level":           "none",
-		"logging.format":          "console",
-		"logging.timestamps":      true,
-		"logging.enableProfiling": false,
-	}
-
-	if v, ok := defaults[key]; ok {
-		return v
+	if removed {
+		w.Successf("Unset %s (removed from config file; defaults will apply)", o.Key)
+	} else {
+		w.Successf("Key %s was not present in user config (defaults already apply)", o.Key)
 	}
 	return nil
 }
