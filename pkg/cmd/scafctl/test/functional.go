@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -170,14 +171,19 @@ func runFunctional(ctx context.Context, opts *FunctionalOptions) error {
 		testsPath = opts.File
 	}
 	if testsPath == "" {
-		testsPath = get.NewGetterFromContext(ctx).FindSolution()
-	}
-	if testsPath == "" {
-		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path")
-		if w != nil {
-			w.Errorf("%s", err)
+		getter := get.NewGetterFromContext(ctx)
+		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
+			Risk: get.DiscoveryRiskLow,
+		})
+		if resolveErr != nil {
+			searchedPaths := getter.SearchedPaths()
+			err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path\n  searched: %s", strings.Join(searchedPaths, ", "))
+			if w != nil {
+				w.Errorf("%s", err)
+			}
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		testsPath = resolvedPath
 	}
 
 	// If the path is a catalog/remote reference (and not a local file/directory),

@@ -117,14 +117,17 @@ func runList(ctx context.Context, opts *ListOptions) error {
 		testsPath = opts.File
 	}
 	if testsPath == "" {
-		testsPath = get.NewGetterFromContext(ctx).FindSolution()
-	}
-	if testsPath == "" {
-		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f) or --tests-path")
-		if w != nil {
-			w.Errorf("%s", err)
+		getter := get.NewGetterFromContext(ctx)
+		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
+			Risk: get.DiscoveryRiskLow,
+		})
+		if resolveErr != nil {
+			if w != nil {
+				w.Errorf("%s", resolveErr)
+			}
+			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
 		}
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		testsPath = resolvedPath
 	}
 
 	solutions, err := soltesting.DiscoverSolutions(testsPath)

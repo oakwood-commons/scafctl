@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(cli)* [**breaking**] Unified solution auto-discovery and resolution chain across all commands (#260)
+  - Add `taskfile.yaml` and `taskfile.yml` to default discovery search order (after solution/binary files, before actions)
+  - All commands now use the same resolution chain: `-f` flag → positional catalog ref → auto-discovery
+  - Multi-match ambiguity handling: low-risk commands (run, lint, test) warn and use first match; high-risk commands (build) error and require `-f`
+  - Auto-discovery now prints "Using {path}" when a solution is found
+  - Fix lint auto-discovery bug where discovered path was not passed to the linter
+  - Fix test functional error message to include searched paths
+  - `taskfile.yaml` is NOT searched in action discovery mode
 - *(dryrun)* [**breaking**] Replace static `MockBehavior` string with dynamic `WhatIf` function on provider `Descriptor` for context-aware dry-run messages
 - *(dryrun)* [**breaking**] Remove resolver-level dry-run (`run resolver --dry-run` removed); use `run solution --dry-run` or `run resolver --graph` instead
 - *(dryrun)* [**breaking**] Resolvers now execute normally during dry-run (side-effect-free) instead of being mocked, providing real data for WhatIf messages

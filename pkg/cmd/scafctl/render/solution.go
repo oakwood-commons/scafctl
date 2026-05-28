@@ -563,20 +563,24 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 			lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 		}
 
-		getter = get.NewGetterFromContext(ctx, getterOpts...)
+		concreteGetter := get.NewGetterFromContext(ctx, getterOpts...)
+		getter = concreteGetter
+
+		// Unified resolution chain: -f > positional arg > auto-discover
+		if o.File != "-" {
+			resolvedPath, resolveErr := get.Resolve(ctx, concreteGetter, o.File, "", get.ResolveOptions{
+				Risk: get.DiscoveryRiskLow,
+			})
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			o.File = resolvedPath
+		}
 	}
 
 	// Emit verbose discovery information
 	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
 		switch o.File {
-		case "":
-			binaryName := settings.CliBinaryName
-			if o.CliParams != nil && o.CliParams.BinaryName != "" {
-				binaryName = o.CliParams.BinaryName
-			}
-			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
-			w.Verbosef("  Search folders: %v", settings.SolutionFoldersFor(binaryName))
-			w.Verbosef("  Search filenames: %v", settings.SolutionFileNamesFor(binaryName))
 		case "-":
 			// stdin handled below
 		default:

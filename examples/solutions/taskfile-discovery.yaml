@@ -1,0 +1,51 @@
+# Auto-Discovery: taskfile.yaml
+#
+# scafctl auto-discovers solution files by name. When a file is named
+# "taskfile.yaml" or "taskfile.yml", it can be found without -f:
+#
+#   cp examples/solutions/taskfile-discovery.yaml ./taskfile.yaml
+#   scafctl run resolver          # auto-discovers taskfile.yaml
+#   scafctl lint                  # auto-discovers taskfile.yaml
+#
+# Discovery priority (per folder): solution.yaml > solution.yml >
+# scafctl.yaml > scafctl.yml > solution.json > scafctl.json >
+# taskfile.yaml > taskfile.yml > actions.yaml > actions.yml
+#
+# Multi-match behavior:
+#   - Low-risk commands (run, lint, test): use first match, warn about others
+#   - High-risk commands (build): error when ambiguous, require -f
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: taskfile-discovery
+  version: "1.0.0"
+  displayName: Taskfile Auto-Discovery Example
+  category: examples
+  tags:
+    - example
+    - discovery
+    - taskfile
+  description: |
+    Demonstrates that solutions named taskfile.yaml are auto-discovered
+    by scafctl without needing the -f flag.
+
+spec:
+  resolvers:
+    greeting:
+      description: A greeting resolved from a taskfile-named solution
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Hello from taskfile.yaml!"
+
+    discovery_note:
+      description: Explains how this file was discovered
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "This solution was auto-discovered because it is named taskfile.yaml"

@@ -166,6 +166,7 @@ Complete solutions demonstrating real-world use cases.
 | [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` -- generates starter test suites |
 | [github-auth/](solutions/github-auth/) | GitHub authentication -- identity, API calls, and status checks |
 | [message-demo/](solutions/message-demo/) | Message provider -- styled terminal output with templates |
+| [taskfile-discovery.yaml](solutions/taskfile-discovery.yaml) | Auto-discovery of `taskfile.yaml` named solutions without `-f` |
 
 ---
 

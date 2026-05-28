@@ -188,17 +188,20 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	getter := get.NewGetterFromContext(ctx, getterOpts...)
 
+	// Unified resolution chain: -f > positional arg > auto-discover
+	resolvedPath, resolveErr := get.Resolve(ctx, getter, opts.File, "", get.ResolveOptions{
+		Risk: get.DiscoveryRiskLow,
+	})
+	if resolveErr != nil {
+		writeError(opts, fmt.Sprintf("failed to load solution: %v", resolveErr))
+		return exitcode.WithCode(resolveErr, exitcode.FileNotFound)
+	}
+	// Update opts.File so downstream linting reports the correct path.
+	opts.File = resolvedPath
+
 	// Emit verbose discovery information
 	if w := writer.FromContext(ctx); w != nil && w.VerboseEnabled() {
 		switch opts.File {
-		case "":
-			binaryName := settings.CliBinaryName
-			if opts.CliParams != nil && opts.CliParams.BinaryName != "" {
-				binaryName = opts.CliParams.BinaryName
-			}
-			w.Verbosef("Auto-discovering solution (binary=%s)", binaryName)
-			w.Verbosef("  Search folders: %v", settings.SolutionFoldersFor(binaryName))
-			w.Verbosef("  Search filenames: %v", settings.SolutionFileNamesFor(binaryName))
 		case "-":
 			w.Verbose("Loading solution from stdin")
 		default:

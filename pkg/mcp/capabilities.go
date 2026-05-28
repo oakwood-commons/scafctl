@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	pathlib "path/filepath"
 	"sort"
 	"strings"
 
@@ -37,22 +38,22 @@ func (s *Server) discoverWorkspaceRoots(ctx context.Context) []string {
 	return paths
 }
 
-// discoverSolutionFiles searches for solution files using the same conventions
-// as the CLI (settings.RootSolutionFolders + settings.SolutionFileNames). It also
-// searches MCP workspace roots if provided by the client. Returns all discovered
-// file paths, or nil if none found.
+// discoverSolutionFiles searches for solution files using the unified resolution
+// chain (FindAllSolutions) which respects taskfile.yaml/yml and returns matches
+// in priority order. It also searches MCP workspace roots if provided by the
+// client. Returns all discovered file paths, or nil if none found.
 func (s *Server) discoverSolutionFiles(ctx context.Context) []string {
 	var files []string
 
-	// 1. Use the canonical CLI discovery logic (searches CWD-relative paths)
+	// 1. Use the unified discovery logic (searches CWD-relative paths)
 	solutionFolders := settings.SolutionFoldersFor(s.name)
 	solutionFileNames := settings.SolutionFileNamesFor(s.name)
 	getter := solutionget.NewGetter(
 		solutionget.WithLogger(s.logger),
 		solutionget.WithSolutionDiscovery(solutionFolders, solutionFileNames),
 	)
-	if found := getter.FindSolution(); found != "" {
-		files = append(files, found)
+	for _, result := range getter.FindAllSolutions() {
+		files = append(files, result.Path)
 	}
 
 	// 2. Also search MCP workspace roots using the same file name patterns
@@ -77,10 +78,20 @@ func (s *Server) discoverSolutionFiles(ctx context.Context) []string {
 	return files
 }
 
-// containsPath checks if a path is already in the slice.
+// containsPath checks if a path is already in the slice using absolute path
+// comparison to handle cases where CWD-relative and workspace-root-relative
+// paths resolve to the same file.
 func containsPath(paths []string, target string) bool {
+	absTarget := target
+	if abs, err := pathlib.Abs(target); err == nil {
+		absTarget = abs
+	}
 	for _, p := range paths {
-		if p == target {
+		absP := p
+		if abs, err := pathlib.Abs(p); err == nil {
+			absP = abs
+		}
+		if absP == absTarget {
 			return true
 		}
 	}

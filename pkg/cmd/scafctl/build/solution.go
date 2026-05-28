@@ -203,14 +203,16 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 
 			if options.File == "" {
 				getter := get.NewGetterFromContext(cmd.Context())
-				options.File = getter.FindSolution()
-				if options.File == "" {
-					err := fmt.Errorf("no -f/--file specified and no solution file found in default locations")
+				resolvedPath, resolveErr := get.Resolve(cmd.Context(), getter, "", "", get.ResolveOptions{
+					Risk: get.DiscoveryRiskHigh,
+				})
+				if resolveErr != nil {
 					if w := writer.FromContext(cmd.Context()); w != nil {
-						w.Errorf("%v", err)
+						w.Errorf("%v", resolveErr)
 					}
-					return exitcode.WithCode(err, exitcode.InvalidInput)
+					return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
 				}
+				options.File = resolvedPath
 			}
 
 			// Stdin requires --no-bundle: there is no local directory to discover files from.

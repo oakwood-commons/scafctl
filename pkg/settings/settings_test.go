@@ -96,14 +96,14 @@ func TestSolutionFileNamesFor(t *testing.T) {
 		{
 			name:        "default binary name",
 			binaryName:  "scafctl",
-			wantLen:     8,
-			mustContain: []string{"solution.yaml", "scafctl.yaml", "scafctl.json", "actions.yaml", "actions.yml"},
+			wantLen:     10,
+			mustContain: []string{"solution.yaml", "scafctl.yaml", "scafctl.json", "taskfile.yaml", "taskfile.yml", "actions.yaml", "actions.yml"},
 		},
 		{
 			name:        "custom binary name",
 			binaryName:  "mycli",
-			wantLen:     8,
-			mustContain: []string{"solution.yaml", "mycli.yaml", "mycli.json", "actions.yaml", "actions.yml"},
+			wantLen:     10,
+			mustContain: []string{"solution.yaml", "mycli.yaml", "mycli.json", "taskfile.yaml", "taskfile.yml", "actions.yaml", "actions.yml"},
 		},
 	}
 	for _, tt := range tests {
@@ -188,6 +188,50 @@ func TestSanitizeBinaryName(t *testing.T) {
 			assert.Equal(t, tt.want, SanitizeBinaryName(tt.raw))
 		})
 	}
+}
+
+func TestIsTaskFile(t *testing.T) {
+	t.Parallel()
+	assert.True(t, IsTaskFile("taskfile.yaml"))
+	assert.True(t, IsTaskFile("taskfile.yml"))
+	assert.False(t, IsTaskFile("solution.yaml"))
+	assert.False(t, IsTaskFile("actions.yaml"))
+	assert.False(t, IsTaskFile("taskfile.json"))
+}
+
+func TestTaskfileNotInActionMode(t *testing.T) {
+	t.Parallel()
+	actionFiles := ActionFileNamesFor("scafctl")
+	assert.NotContains(t, actionFiles, "taskfile.yaml")
+	assert.NotContains(t, actionFiles, "taskfile.yml")
+}
+
+func TestTaskfileInSolutionOnlyMode(t *testing.T) {
+	t.Parallel()
+	solFiles := SolutionOnlyFileNamesFor("scafctl")
+	assert.Contains(t, solFiles, "taskfile.yaml")
+	assert.Contains(t, solFiles, "taskfile.yml")
+}
+
+func TestTaskfilePriority(t *testing.T) {
+	t.Parallel()
+	files := SolutionFileNamesFor("scafctl")
+	taskIdx := -1
+	actionIdx := -1
+	solutionIdx := -1
+	for i, f := range files {
+		switch f {
+		case "taskfile.yaml":
+			taskIdx = i
+		case "actions.yaml":
+			actionIdx = i
+		case "solution.yaml":
+			solutionIdx = i
+		}
+	}
+	// taskfile.yaml should come after solution.yaml but before actions.yaml
+	assert.Greater(t, taskIdx, solutionIdx, "taskfile.yaml should come after solution.yaml")
+	assert.Less(t, taskIdx, actionIdx, "taskfile.yaml should come before actions.yaml")
 }
 
 func TestSafeEnvPrefix(t *testing.T) {
