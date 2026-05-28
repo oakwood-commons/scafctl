@@ -61,3 +61,17 @@ gosec ./...
 ## Additional Conventions
 
 Go coding conventions (struct tags, error handling, design patterns), testing rules, integration test scoping, and documentation requirements are in `.github/instructions/*.instructions.md` files -- they load automatically when editing relevant files.
+
+## Auto-Discovery and Resolution
+
+When no `-f` flag is provided, all CLI commands use the unified `Resolve()` function from `pkg/solution/get` which:
+
+1. Returns the explicit `-f` path if provided.
+2. Returns the positional argument if provided (catalog reference).
+3. Auto-discovers solution files by searching folder prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`, `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`, `actions.yaml`, `actions.yml`).
+
+**Multi-match ambiguity handling** uses risk levels:
+- **Low-risk** (`DiscoveryRiskLow`): uses first match, emits a warning about other matches. Used by `run`, `lint`, `test`.
+- **High-risk** (`DiscoveryRiskHigh`): returns an error requiring `-f`. Used by `build`.
+
+The MCP server's `list_solutions` tool also uses `FindAllSolutions()` and returns all discovered paths.

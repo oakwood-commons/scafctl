@@ -8573,3 +8573,181 @@ func TestIntegration_InspectSolution_Alias(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "\"name\"")
 }
+
+// ============================================================================
+// Auto-Discovery: Taskfile and Multi-Match Tests
+// ============================================================================
+
+func TestIntegration_Lint_AutoDiscovery_TaskfileYaml(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Only a taskfile.yaml exists — should be auto-discovered
+	taskfile := filepath.Join(tmpDir, "taskfile.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: taskfile-discovery
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from taskfile
+`
+	require.NoError(t, os.WriteFile(taskfile, []byte(content), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "lint", "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
+	assert.Contains(t, stdout, "findings")
+	assert.Contains(t, stderr, "Using taskfile.yaml")
+}
+
+func TestIntegration_Lint_AutoDiscovery_MultiMatch_Warning(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Place two solution files — low-risk command should warn
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-match
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "taskfile.yaml"), []byte(solutionYAML), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "lint", "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	// Should succeed (low risk) but warn about multiple matches
+	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
+	assert.Contains(t, stderr, "Multiple solution files found")
+	assert.Contains(t, stderr, "Using solution.yaml")
+}
+
+func TestIntegration_BuildSolution_AutoDiscovery_MultiMatch_Error(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Place two solution files — high-risk command should error
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-match-build
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "taskfile.yaml"), []byte(solutionYAML), 0o644))
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "build", "solution")
+	t.Logf("stderr: %s", stderr)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "multiple solution files found")
+	assert.Contains(t, stderr, "use -f/--file")
+}
+
+func TestIntegration_RunResolver_AutoDiscovery_TaskfileYaml(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Only a taskfile.yaml exists — run resolver should auto-discover it
+	taskfile := filepath.Join(tmpDir, "taskfile.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: taskfile-run-resolver
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello from taskfile resolver
+`
+	require.NoError(t, os.WriteFile(taskfile, []byte(content), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Hello from taskfile resolver")
+	assert.Contains(t, stderr, "Using taskfile.yaml")
+}
+
+func TestIntegration_RunResolver_AutoDiscovery_MultiMatch_Warning(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Place solution.yaml and taskfile.yaml — run resolver (low-risk) should
+	// use solution.yaml (higher priority) and warn about the other.
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-match-resolver
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from solution.yaml
+`
+	taskfileYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-match-taskfile
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: from taskfile.yaml
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "taskfile.yaml"), []byte(taskfileYAML), 0o644))
+
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "from solution.yaml")
+	assert.Contains(t, stderr, "Multiple solution files found")
+	assert.Contains(t, stderr, "Using solution.yaml")
+}

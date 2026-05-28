@@ -55,16 +55,16 @@ scafctl run solution
 
 ## How Auto-Discovery Works
 
-When no `-f` flag is provided, scafctl calls `FindSolution()`, which iterates over a set of **folder prefixes** and **file names** in order, returning the first match.
+When no `-f` flag is provided, scafctl searches for solution files using the unified resolution chain, which iterates over a set of **folder prefixes** and **file names** in order, returning the first match.
 
 ### Search Order
 
 The search combines these folder prefixes with these file names:
 
 **Folder prefixes** (checked in order):
-1. `scafctl/` — conventional project subfolder
-2. `.scafctl/` — hidden project subfolder
-3. *(current directory)* — no subfolder prefix
+1. `scafctl/` -- conventional project subfolder
+2. `.scafctl/` -- hidden project subfolder
+3. *(current directory)* -- no subfolder prefix
 
 **File names** (checked in order for each folder):
 1. `solution.yaml`
@@ -73,8 +73,12 @@ The search combines these folder prefixes with these file names:
 4. `scafctl.yml`
 5. `solution.json`
 6. `scafctl.json`
+7. `taskfile.yaml`
+8. `taskfile.yml`
+9. `actions.yaml`
+10. `actions.yml`
 
-This produces 18 candidate paths checked in this exact order:
+This produces 30 candidate paths checked in this exact order:
 
 | Priority | Path |
 |----------|------|
@@ -84,20 +88,62 @@ This produces 18 candidate paths checked in this exact order:
 | 4 | `scafctl/scafctl.yml` |
 | 5 | `scafctl/solution.json` |
 | 6 | `scafctl/scafctl.json` |
-| 7 | `.scafctl/solution.yaml` |
-| 8 | `.scafctl/solution.yml` |
-| 9 | `.scafctl/scafctl.yaml` |
-| 10 | `.scafctl/scafctl.yml` |
-| 11 | `.scafctl/solution.json` |
-| 12 | `.scafctl/scafctl.json` |
-| 13 | `solution.yaml` |
-| 14 | `solution.yml` |
-| 15 | `scafctl.yaml` |
-| 16 | `scafctl.yml` |
-| 17 | `solution.json` |
-| 18 | `scafctl.json` |
+| 7 | `scafctl/taskfile.yaml` |
+| 8 | `scafctl/taskfile.yml` |
+| 9 | `scafctl/actions.yaml` |
+| 10 | `scafctl/actions.yml` |
+| 11 | `.scafctl/solution.yaml` |
+| 12 | `.scafctl/solution.yml` |
+| 13 | `.scafctl/scafctl.yaml` |
+| 14 | `.scafctl/scafctl.yml` |
+| 15 | `.scafctl/solution.json` |
+| 16 | `.scafctl/scafctl.json` |
+| 17 | `.scafctl/taskfile.yaml` |
+| 18 | `.scafctl/taskfile.yml` |
+| 19 | `.scafctl/actions.yaml` |
+| 20 | `.scafctl/actions.yml` |
+| 21 | `solution.yaml` |
+| 22 | `solution.yml` |
+| 23 | `scafctl.yaml` |
+| 24 | `scafctl.yml` |
+| 25 | `solution.json` |
+| 26 | `scafctl.json` |
+| 27 | `taskfile.yaml` |
+| 28 | `taskfile.yml` |
+| 29 | `actions.yaml` |
+| 30 | `actions.yml` |
 
 The first file that exists on disk is used.
+
+> **Note:** `taskfile.yaml` is NOT searched in action discovery mode (`scafctl run action`). It is only searched in default and solution discovery modes.
+
+### Multi-Match Ambiguity Handling
+
+When multiple solution files exist in a project, scafctl handles them based on command risk level:
+
+| Risk Level | Commands | Behavior |
+|------------|----------|----------|
+| Low | `run solution`, `run resolver`, `lint`, `test`, `render` | Uses first match, prints a warning about other files found |
+| High | `build solution`, `catalog push` | Returns an error, requires `-f` to disambiguate |
+
+When auto-discovery succeeds, scafctl always prints which file was selected:
+
+```
+Using scafctl/solution.yaml
+```
+
+When multiple files are found with a low-risk command:
+
+```
+Using scafctl/solution.yaml
+WARNING: Multiple solution files found (also: solution.yaml); using first match
+```
+
+When multiple files are found with a high-risk command:
+
+```
+Error: multiple solution files found: scafctl/solution.yaml, solution.yaml; use -f/--file to specify which one
+```
 
 ## Supported Commands
 
@@ -271,7 +317,7 @@ cd /path/to/project; scafctl run solution
 {{% /tab %}}
 {{< /tabs >}}
 
-All 18 candidate paths are resolved against the `--cwd` target.
+All 30 candidate paths are resolved against the `--cwd` target.
 
 ## When Auto-Discovery Fails
 
@@ -303,12 +349,16 @@ scafctl config paths
 
 ## Best Practices
 
-1. **Use `solution.yaml` at the project root** — this is the most common convention and is discovered without any subfolder prefix.
+1. **Use `solution.yaml` at the project root** -- this is the most common convention and is discovered without any subfolder prefix.
 
-2. **Use `scafctl/` subfolder for multi-tool repos** — keeps scafctl configuration separate from other tools.
+2. **Use `scafctl/` subfolder for multi-tool repos** -- keeps scafctl configuration separate from other tools.
 
-3. **Use `.scafctl/` for hidden configuration** — useful when the solution is infrastructure that shouldn't be front-and-center.
+3. **Use `.scafctl/` for hidden configuration** -- useful when the solution is infrastructure that shouldn't be front-and-center.
 
-4. **Always use `-f` in CI/CD** — explicit paths prevent surprises when the working directory changes.
+4. **Use `taskfile.yaml` for task runner workflows** -- similar to how `make` uses `Makefile` or `task` uses `Taskfile.yaml`, scafctl discovers `taskfile.yaml` for task-oriented solutions.
 
-5. **Combine with `--cwd` for monorepos** — target a specific project without changing directories.
+5. **Always use `-f` in CI/CD** -- explicit paths prevent surprises when the working directory changes.
+
+6. **Combine with `--cwd` for monorepos** -- target a specific project without changing directories.
+
+7. **Avoid multiple solution files** -- if you must have them (e.g., both `solution.yaml` and `taskfile.yaml`), use `-f` with high-risk commands like `build solution` to avoid errors.

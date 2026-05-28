@@ -86,7 +86,7 @@ func TestCommandBuildSolution_RequiresArgs(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no -f/--file specified")
+	assert.Contains(t, err.Error(), "no solution path provided")
 }
 
 func TestCommandBuildSolution_TagConflictsWithName(t *testing.T) {

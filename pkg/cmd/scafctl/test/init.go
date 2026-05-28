@@ -92,12 +92,15 @@ func runInit(ctx context.Context, opts *InitOptions) error {
 	// Auto-discover solution file if not provided
 	filePath := opts.File
 	if filePath == "" {
-		filePath = get.NewGetterFromContext(ctx).FindSolution()
-	}
-	if filePath == "" {
-		err := fmt.Errorf("no solution path provided and no solution file found in default locations; use --file (-f)")
-		w.Errorf("%s", err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		getter := get.NewGetterFromContext(ctx)
+		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
+			Risk: get.DiscoveryRiskLow,
+		})
+		if resolveErr != nil {
+			w.Errorf("%s", resolveErr)
+			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
+		}
+		filePath = resolvedPath
 	}
 
 	// Read and parse the solution

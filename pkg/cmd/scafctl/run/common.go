@@ -645,19 +645,25 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 		binaryName = o.CliParams.BinaryName
 	}
 
+	// Unified resolution chain for auto-discovery with ambiguity handling.
+	// Only applies when -f is not specified and no positional arg was given.
+	if o.File == "" {
+		getter := get.NewGetterFromContext(ctx)
+		if o.discoveryMode != settings.DiscoveryModeDefault {
+			getter.SetDiscoveryMode(o.discoveryMode)
+		}
+		resolvedPath, resolveErr := get.Resolve(ctx, getter, "", "", get.ResolveOptions{
+			Risk: get.DiscoveryRiskLow,
+		})
+		if resolveErr != nil {
+			return nil, nil, "", func() {}, nil, resolveErr
+		}
+		o.File = resolvedPath
+	}
+
 	// Emit verbose discovery information before loading
 	if w != nil && w.VerboseEnabled() {
 		switch o.File {
-		case "":
-			var customActionFiles []string
-			if o.CliParams != nil {
-				customActionFiles = o.CliParams.ActionDiscoveryFileNames
-			}
-			folders := settings.SolutionFoldersFor(binaryName)
-			fileNames := settings.FileNamesForMode(o.discoveryMode, binaryName, customActionFiles)
-			w.Verbosef("Auto-discovering solution (binary=%s, mode=%s)", binaryName, o.discoveryMode)
-			w.Verbosef("  Search folders: %v", folders)
-			w.Verbosef("  Search filenames: %v", fileNames)
 		case "-":
 			w.Verbose("Loading solution from stdin")
 		default:

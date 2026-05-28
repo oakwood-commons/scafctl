@@ -313,6 +313,8 @@ func SolutionFileNamesFor(binaryName string) []string {
 		fmt.Sprintf("%s.yml", binaryName),
 		"solution.json",
 		fmt.Sprintf("%s.json", binaryName),
+		"taskfile.yaml",
+		"taskfile.yml",
 		"actions.yaml",
 		"actions.yml",
 	}
@@ -342,6 +344,8 @@ func SolutionOnlyFileNamesFor(binaryName string) []string {
 		fmt.Sprintf("%s.yml", binaryName),
 		"solution.json",
 		fmt.Sprintf("%s.json", binaryName),
+		"taskfile.yaml",
+		"taskfile.yml",
 	}
 }
 
@@ -369,6 +373,12 @@ func FileNamesForMode(mode DiscoveryMode, binaryName string, customActionFiles [
 // (actions.yaml or actions.yml).
 func IsActionFile(name string) bool {
 	return name == "actions.yaml" || name == "actions.yml"
+}
+
+// IsTaskFile returns true when the given filename is a task file
+// (taskfile.yaml or taskfile.yml).
+func IsTaskFile(name string) bool {
+	return name == "taskfile.yaml" || name == "taskfile.yml"
 }
 
 // HTTPCacheKeyPrefixFor returns the HTTP cache key prefix for the given binary name.
