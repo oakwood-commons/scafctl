@@ -23,7 +23,7 @@ import (
 // registry by looking it up in the official provider registry and loading
 // it via the plugin pool. On success, returns a non-nil release function
 // that the caller must defer. Returns an error if the provider cannot be resolved.
-func (s *Server) ensureProvider(ctx context.Context, name string) (release func(), err error) {
+func (s *Server) ensureProvider(ctx context.Context, name string, version ...string) (release func(), err error) {
 	if s.pluginPool == nil {
 		return nil, fmt.Errorf("provider %q not found and plugin pool not configured", name)
 	}
@@ -36,6 +36,9 @@ func (s *Server) ensureProvider(ctx context.Context, name string) (release func(
 		return nil, fmt.Errorf("provider %q is not a known official provider", name)
 	}
 	dep := op.ToPluginDependency()
+	if len(version) > 0 && version[0] != "" {
+		dep.Version = version[0]
+	}
 	rel, err := s.pluginPool.EnsureAndAcquire(ctx, []solution.PluginDependency{dep})
 	if err != nil {
 		return nil, fmt.Errorf("loading plugin for provider %q: %w", name, err)
@@ -144,6 +147,12 @@ func (s *Server) registerProviderTools() {
 			mcp.Description("Optional CEL expression to filter/transform the provider output before returning. "+
 				"The result object is bound to '_' (e.g., '_.data', 'size(_.data)', '_.data.filter(x, x.status == \"open\")'). "+
 				"Use this to reduce large outputs to only the fields you need."),
+		),
+		mcp.WithString("plugin_version",
+			mcp.Description("Pin to a specific plugin version (e.g., \"0.5.0\"). "+
+				"Only applies to official/plugin providers. When set, that exact version is loaded "+
+				"(fetching from the catalog if not already cached). Without this, the version is "+
+				"resolved automatically from the catalog."),
 		),
 	)
 	s.addTool(runProviderTool, s.handleRunProvider)
@@ -433,6 +442,7 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 
 	capability := request.GetString("capability", "")
 	dryRun := request.GetBool("dry_run", false)
+	pluginVersion := request.GetString("plugin_version", "")
 
 	if s.registry == nil {
 		return newStructuredError(ErrCodeConfigError, "provider registry not available",
@@ -441,9 +451,27 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 	}
 
 	prov, ok := s.registry.Get(name)
+	if ok && pluginVersion != "" {
+		// Provider is already loaded -- verify version matches the requested pin.
+		desc := prov.Descriptor()
+		if desc.Version == nil {
+			return newStructuredError(ErrCodeVersionMismatch,
+				fmt.Sprintf("provider %q is a builtin and does not support version pinning", name),
+				WithField("plugin_version"),
+				WithSuggestion("Omit plugin_version for builtin providers, or use a plugin provider instead"),
+			), nil
+		}
+		if desc.Version.String() != pluginVersion {
+			return newStructuredError(ErrCodeVersionMismatch,
+				fmt.Sprintf("provider %q is loaded at version %s but version %s was requested", name, desc.Version, pluginVersion),
+				WithField("plugin_version"),
+				WithSuggestion("Restart the MCP session to load a different provider version"),
+			), nil
+		}
+	}
 	if !ok {
 		// Try auto-resolving via the plugin pool
-		release, resolveErr := s.ensureProvider(ctx, name)
+		release, resolveErr := s.ensureProvider(ctx, name, pluginVersion)
 		if resolveErr != nil {
 			return newStructuredError(ErrCodeLoadFailed,
 				fmt.Sprintf("failed to load provider %q: %v", name, resolveErr),

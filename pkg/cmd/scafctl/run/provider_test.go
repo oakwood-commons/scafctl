@@ -134,3 +134,42 @@ func BenchmarkExtractProviderNameFromOSArgs(b *testing.B) {
 		extractProviderNameFromOSArgs()
 	}
 }
+
+func TestCommandProvider_PluginVersionFlag(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandProvider(cliParams, streams, "")
+
+	f := cmd.Flags().Lookup("plugin-version")
+	assert.NotNil(t, f, "--plugin-version flag should exist")
+	assert.Empty(t, f.DefValue)
+}
+
+func TestParseProviderAtVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       string
+		wantName    string
+		wantVersion string
+	}{
+		{"plain name", "exec", "exec", ""},
+		{"name@version", "exec@0.5.0", "exec", "0.5.0"},
+		{"name@prerelease", "exec@1.0.0-beta.1", "exec", "1.0.0-beta.1"},
+		{"@ at start ignored", "@exec", "@exec", ""},
+		{"name with hyphen@version", "my-provider@2.1.0", "my-provider", "2.1.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			name, version := parseProviderNameVersion(tt.input)
+			assert.Equal(t, tt.wantName, name)
+			assert.Equal(t, tt.wantVersion, version)
+		})
+	}
+}

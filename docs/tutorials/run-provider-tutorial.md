@@ -539,6 +539,34 @@ scafctl run provider my-plugin key=value --plugin-dir ./plugins --plugin-dir /op
 {{% /tab %}}
 {{< /tabs >}}
 
+### Version Pinning
+
+When multiple versions of a plugin provider are cached locally, you can pin a
+specific version using `name@version` syntax or the `--plugin-version` flag:
+
+{{< tabs "run-provider-tutorial-cmd-14b" >}}
+{{% tab "Bash" %}}
+```bash
+# Pin via @version syntax (recommended)
+scafctl run provider exec@0.5.0 command="echo hello"
+
+# Pin via --plugin-version flag
+scafctl run provider exec --plugin-version 0.5.0 command="echo hello"
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Pin via @version syntax (recommended)
+scafctl run provider exec@0.5.0 command="echo hello"
+
+# Pin via --plugin-version flag
+scafctl run provider exec --plugin-version 0.5.0 command="echo hello"
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Without version pinning, the latest cached version is used automatically.
+
 See the [Provider Development Guide](provider-development.md) for creating custom providers (including [plugin delivery](provider-development.md#delivering-as-a-plugin)).
 
 ---
@@ -560,7 +588,7 @@ scafctl get providers
 {{% /tab %}}
 {{< /tabs >}}
 
-This lists all available providers with their source (`builtin` or `official`), category, and capabilities. Official providers are auto-fetched from the OCI catalog on first use -- no manual installation required.
+This lists all available providers with their source (`builtin` or `official`), category, capabilities, and version. Official providers are auto-fetched from the OCI catalog on first use -- no manual installation required.
 
 > **Note:** When `--capability` or `--category` filters are active, only built-in providers are shown since official providers do not expose this metadata.
 

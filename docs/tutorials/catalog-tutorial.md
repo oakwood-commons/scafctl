@@ -253,6 +253,11 @@ scafctl catalog list -o yaml
 {{% /tab %}}
 {{< /tabs >}}
 
+> **Note:** Pre-release versions (e.g., `1.0.0-rc.1`) are hidden by default.
+> When artifacts are hidden, a warning shows how many were filtered. Use
+> `--pre-release` to include them, or `--pre-release --all-versions` to see
+> every version.
+
 Expected output:
 
 ```yaml

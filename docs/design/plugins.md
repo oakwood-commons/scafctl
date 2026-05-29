@@ -754,6 +754,63 @@ this priority chain.
 
 ---
 
+## Version Pinning
+
+When multiple versions of a plugin provider are cached locally, users can pin
+execution to a specific version. This is essential during plugin development
+and testing workflows where different versions must be compared.
+
+### Pinning Mechanisms
+
+| Mechanism | Scope | Example |
+|-----------|-------|---------|
+| `name@version` positional syntax | Single `run provider` invocation | `scafctl run provider exec@0.5.0 command="echo hi"` |
+| `--plugin-version` flag | Single `run provider` invocation | `scafctl run provider exec --plugin-version 0.5.0 command="echo hi"` |
+| `bundle.plugins[].version` | Solution-level constraint | `version: "0.5.0"` or `version: "^1.0.0"` |
+| MCP `plugin_version` parameter | Single `run_provider` tool call | `"plugin_version": "0.5.0"` |
+
+### Resolution Strategy
+
+1. Parse `name@version` from the positional argument (splits on last `@`)
+2. If `--plugin-version` flag is also set, the flag takes precedence
+3. Look up the exact version in the local plugin cache (`pkg/plugin/cache.go`)
+4. If the version is not cached, return an error -- no fallback to latest
+
+The `@` syntax is parsed by `parseProviderNameVersion()` in the CLI layer.
+A bare `@` at position 0 (e.g., `@latest`) is treated as a name with no version.
+
+### Implementation
+
+| Component | Package | Role |
+|-----------|---------|------|
+| `parseProviderNameVersion` | `pkg/cmd/scafctl/run/provider.go` | Splits `name@version` |
+| `RegisterCachedPluginVersion` | `pkg/plugin/fetcher.go` | Loads exact version from cache |
+| `PluginVersion` field on `ProviderOptions` | `pkg/cmd/scafctl/run/provider.go` | Carries version through CLI |
+| `ensureProvider(ctx, name, version...)` | `pkg/mcp/tools_provider.go` | MCP version-aware resolution |
+
+### Visibility
+
+Plugin versions are visible through:
+
+- `scafctl plugins list` -- shows version column for cached plugins
+- `scafctl get provider -o json` -- includes version for all providers
+- `scafctl catalog list --kind provider --all-versions` -- shows all available versions
+- MCP `list_providers` tool -- returns version field per provider
+
+Pre-release versions are hidden by default in `catalog list`. A warning indicates
+how many were filtered and suggests `--pre-release` to reveal them.
+
+### Behavior Without Pinning
+
+When no version is specified, the latest cached version is used. The resolution
+order is:
+
+1. Exact version match (when pinned)
+2. Latest cached version matching platform (default)
+3. Auto-fetch from catalog chain if not cached
+
+---
+
 ## Summary
 
 Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.

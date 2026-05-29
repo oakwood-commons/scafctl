@@ -627,6 +627,27 @@ func RegisterCachedPlugin(ctx context.Context, name string, registry *provider.R
 	return RegisterFetchedPlugins(ctx, registry, results, cfg, clientOpts...)
 }
 
+// RegisterCachedPluginVersion loads a specific version of a cached plugin into
+// the registry. Returns an error if that exact version is not cached.
+func RegisterCachedPluginVersion(ctx context.Context, name, version string, registry *provider.Registry, cfg *ProviderConfig, cacheDir string, clientOpts ...ClientOption) ([]*Client, error) {
+	cache := NewCache(cacheDir)
+	platform := CurrentPlatform()
+	path, ok := cache.Get(name, version, platform, "")
+	if !ok {
+		return nil, fmt.Errorf("plugin %q version %q not found in cache (platform: %s)", name, version, platform)
+	}
+
+	results := []FetchResult{{
+		Name:      name,
+		Kind:      solution.PluginKindProvider,
+		Version:   version,
+		Path:      path,
+		FromCache: true,
+	}}
+
+	return RegisterFetchedPlugins(ctx, registry, results, cfg, clientOpts...)
+}
+
 func findLockPlugin(plugins []bundler.LockPlugin, name, kind string) *bundler.LockPlugin {
 	for i := range plugins {
 		if plugins[i].Name == name && plugins[i].Kind == kind {

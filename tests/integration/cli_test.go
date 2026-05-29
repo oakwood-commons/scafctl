@@ -6708,9 +6708,9 @@ func TestIntegration_Plugins_List_EmptyCache(t *testing.T) {
 		"XDG_CACHE_HOME": tmpDir,
 	}
 
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "plugins", "list")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "plugins", "list")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "No plugins cached")
+	assert.Contains(t, stderr, "No plugins cached")
 }
 
 // TestIntegration_Plugins_List_JSON verifies plugins list supports JSON output.
@@ -8701,6 +8701,85 @@ func TestIntegration_PluginsList_RunsSuccessfully(t *testing.T) {
 	_, _, exitCode := runScafctl(t, "plugins", "list")
 
 	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_PluginsList_PathNotInTable(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	// Seed a fake plugin binary so the table is actually rendered.
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	pluginDir := filepath.Join(cacheDir, "scafctl", "plugins", "fake-plugin", "1.0.0", platform)
+	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+	binName := "fake-plugin"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, binName), []byte("#!/bin/sh\nexit 0"), 0o755))
+
+	stdout, _, exitCode := runScafctlWithEnv(t, map[string]string{"XDG_CACHE_HOME": cacheDir}, "plugins", "list")
+
+	assert.Equal(t, 0, exitCode)
+	// Table should render with the version column visible
+	assert.Contains(t, stdout, "version")
+	// Path column should be hidden via column hints
+	assert.NotContains(t, stdout, "path")
+}
+
+func TestIntegration_RunProvider_VersionPinFlag(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+	// Using a non-existent version should fail gracefully with a clear error
+	_, stderr, exitCode := runScafctlWithEnv(t, map[string]string{"XDG_CACHE_HOME": cacheDir}, "run", "provider", "exec", "--plugin-version", "99.99.99", "command=echo hi")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "99.99.99")
+}
+
+func TestIntegration_RunProvider_AtVersionSyntax(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+	// Using name@version with a non-existent version should fail gracefully
+	_, stderr, exitCode := runScafctlWithEnv(t, map[string]string{"XDG_CACHE_HOME": cacheDir}, "run", "provider", "exec@99.99.99", "command=echo hi")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "99.99.99")
+}
+
+func TestIntegration_RunProvider_HelpShowsVersionPinning(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--plugin-version")
+}
+
+func TestIntegration_RunProvider_BuiltinVersionPinWarning(t *testing.T) {
+	t.Parallel()
+	// Builtin provider with version 1.0.0 -- pinning to a different version should error.
+	_, stderr, exitCode := runScafctl(t, "run", "provider", "static", "--plugin-version", "2.0.0", "value=hello")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "version")
+	assert.Contains(t, stderr, "2.0.0")
+}
+
+func TestIntegration_RunProvider_BuiltinVersionPinMatch(t *testing.T) {
+	t.Parallel()
+	// Builtin provider with version 1.0.0 -- pinning to 1.0.0 should succeed.
+	stdout, _, exitCode := runScafctl(t, "run", "provider", "static", "--plugin-version", "1.0.0", "value=hello")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "hello")
+}
+
+func TestIntegration_GetProvider_VersionColumn(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "provider", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	// JSON output should include version field for providers
+	assert.Contains(t, stdout, "\"version\"")
 }
 
 // ============================================================================
