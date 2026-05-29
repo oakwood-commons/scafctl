@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -47,7 +49,10 @@ func TestHandleListProviders(t *testing.T) {
 		// Verify required fields are populated
 		for _, item := range items {
 			assert.NotEmpty(t, item.Name, "provider name should not be empty")
-			assert.NotEmpty(t, item.Capabilities, "provider should have capabilities")
+			// Official providers may not expose capabilities metadata
+			if item.Source != "official" {
+				assert.NotEmpty(t, item.Capabilities, "builtin provider should have capabilities")
+			}
 		}
 	})
 
@@ -274,6 +279,10 @@ func TestHandleGetProviderSchema(t *testing.T) {
 		)
 		require.NoError(t, err)
 
+		// Use an empty temp dir for the descriptor cache so no prior cached
+		// entries interfere with the official registry fallback path.
+		srv.descriptorCache = plugin.NewDescriptorCache(t.TempDir(), 24*time.Hour)
+
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "get_provider_schema"
 		request.Params.Arguments = map[string]any{
@@ -342,7 +351,7 @@ func TestHandleRunProvider(t *testing.T) {
 		assert.True(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		assert.Contains(t, text, "not found")
+		assert.Contains(t, text, "plugin pool not configured")
 	})
 
 	t.Run("returns error when provider name missing", func(t *testing.T) {
@@ -628,7 +637,9 @@ func TestEnsureProvider(t *testing.T) {
 		assert.Contains(t, err.Error(), "plugin pool not configured")
 	})
 
-	t.Run("returns error when official registry not in context", func(t *testing.T) {
+	t.Run("returns error when official registry auto-injected but no fetcher", func(t *testing.T) {
+		// The official registry is always auto-injected; known providers
+		// proceed to the pool load stage which fails without a fetcher.
 		reg := provider.NewRegistry()
 		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 		defer pool.Shutdown()
@@ -643,7 +654,7 @@ func TestEnsureProvider(t *testing.T) {
 		release, err := srv.ensureProvider(context.Background(), "exec")
 		assert.Error(t, err)
 		assert.Nil(t, release)
-		assert.Contains(t, err.Error(), "official registry not available")
+		assert.Contains(t, err.Error(), "loading plugin")
 	})
 
 	t.Run("returns error for unknown provider", func(t *testing.T) {
@@ -690,7 +701,7 @@ func TestEnsureProvider(t *testing.T) {
 }
 
 func TestHandleRunProvider_AutoResolve_NoPool(t *testing.T) {
-	// When no pool is configured, unknown providers should return LOAD_FAILED
+	// Without a plugin pool, unknown providers should return LOAD_FAILED.
 	reg, err := builtin.DefaultRegistry(context.Background())
 	require.NoError(t, err)
 	srv, err := NewServer(
@@ -983,6 +994,10 @@ func TestHandleGetProviderOutputShape_AutoResolve_RegistryMiss(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// Use an empty temp dir for the descriptor cache so no prior cached
+	// entries interfere with this test.
+	srv.descriptorCache = plugin.NewDescriptorCache(t.TempDir(), 24*time.Hour)
+
 	request := mcp.CallToolRequest{}
 	request.Params.Name = "get_provider_output_shape"
 	request.Params.Arguments = map[string]any{
@@ -997,10 +1012,12 @@ func TestHandleGetProviderOutputShape_AutoResolve_RegistryMiss(t *testing.T) {
 }
 
 func TestProviderSource(t *testing.T) {
-	t.Run("returns builtin when no official registry", func(t *testing.T) {
+	t.Run("returns official when auto-injected registry has provider", func(t *testing.T) {
+		// Official registry is always auto-injected; known providers
+		// are recognized even without an explicit WithServerContext.
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
-		assert.Equal(t, "builtin", srv.providerSource("exec"))
+		assert.Equal(t, "official", srv.providerSource("exec"))
 	})
 
 	t.Run("returns official for known official provider", func(t *testing.T) {
@@ -1027,4 +1044,128 @@ func TestProviderSource(t *testing.T) {
 
 		assert.Equal(t, "builtin", srv.providerSource("custom-provider"))
 	})
+}
+
+func TestHandleGetProviderSchema_DescriptorCacheFallback(t *testing.T) {
+	// When plugin fetch fails but descriptor is cached, return cached schema.
+	dir := t.TempDir()
+	reg := provider.NewRegistry()
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+	)
+	require.NoError(t, err)
+
+	// Replace the descriptor cache with one pointing at temp dir
+	srv.descriptorCache = plugin.NewDescriptorCache(dir, 24*time.Hour)
+
+	// Pre-populate cache with a descriptor (must include Version to avoid nil panic)
+	ver, _ := semver.NewVersion("1.0.0")
+	desc := provider.Descriptor{
+		Name:         "cached-provider",
+		DisplayName:  "Cached Provider",
+		Description:  "Previously cached",
+		Version:      ver,
+		Capabilities: []provider.Capability{provider.CapabilityFrom},
+	}
+	err = srv.descriptorCache.Put("cached-provider", desc)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "get_provider_schema"
+	request.Params.Arguments = map[string]any{
+		"name": "cached-provider",
+	}
+
+	result, err := srv.handleGetProviderSchema(context.Background(), request)
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	text := result.Content[0].(mcp.TextContent).Text
+	var detail map[string]any
+	require.NoError(t, json.Unmarshal([]byte(text), &detail))
+	assert.Equal(t, "cached-provider", detail["name"])
+	assert.Equal(t, "cached", detail["source"])
+}
+
+func TestHandleGetProviderSchema_CachesOnSuccess(t *testing.T) {
+	// When schema lookup succeeds, it should be cached for future offline use.
+	dir := t.TempDir()
+	reg, err := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, err)
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+	)
+	require.NoError(t, err)
+	srv.descriptorCache = plugin.NewDescriptorCache(dir, 24*time.Hour)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "get_provider_schema"
+	request.Params.Arguments = map[string]any{
+		"name": "cel",
+	}
+
+	result, err := srv.handleGetProviderSchema(context.Background(), request)
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// Verify it was cached
+	cached := srv.descriptorCache.Get("cel")
+	require.NotNil(t, cached)
+	assert.Equal(t, "cel", cached.Name)
+}
+
+func TestServerClose_IsNoOp(t *testing.T) {
+	reg := provider.NewRegistry()
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+	)
+	require.NoError(t, err)
+
+	// Close should not panic even without an owned pool
+	srv.Close()
+}
+
+func TestServerClose_WithExternalPool(t *testing.T) {
+	reg := provider.NewRegistry()
+	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+		WithServerPluginPool(pool),
+	)
+	require.NoError(t, err)
+
+	// Close should not shut down the external pool
+	srv.Close()
+
+	// Pool should still be functional
+	stats := pool.Stats()
+	assert.Equal(t, 0, stats.Total)
+	pool.Shutdown()
+}
+
+func TestNewServer_DefaultOfficialRegistry(t *testing.T) {
+	// Even without an explicit official registry in WithServerContext,
+	// the server should inject one so ensureProvider can resolve official
+	// plugin names (it should NOT fail with "official registry not available").
+	reg := provider.NewRegistry()
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+	)
+	require.NoError(t, err)
+
+	// Verify ensureProvider doesn't fail with "official registry not available"
+	// (it will fail with "plugin pool not configured" because no pool is
+	// provided, but that's past the official registry check).
+	_, err = srv.ensureProvider(context.Background(), "exec")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "official registry not available",
+		"expected official registry to be auto-injected")
+	assert.Contains(t, err.Error(), "plugin pool not configured",
+		"expected failure because no pool was provided")
 }

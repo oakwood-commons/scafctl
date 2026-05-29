@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
@@ -22,6 +23,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
@@ -55,6 +57,10 @@ type Server struct {
 	// initialization and idle eviction. When set, provider tool handlers
 	// auto-resolve official plugins on demand.
 	pluginPool *plugin.Pool
+
+	// descriptorCache persists provider descriptors to disk so schemas
+	// are available without spawning plugin processes.
+	descriptorCache *plugin.DescriptorCache
 
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
@@ -530,6 +536,24 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		coreTools:   make(map[string]struct{}, 64),
 		corePrompts: make(map[string]struct{}, 16),
 	}
+
+	// Ensure the official provider registry is available in the server
+	// context so ensureProvider can resolve official plugin names --
+	// but only when official providers are not explicitly disabled.
+	// Check both the server config field and the config from context
+	// (embedders may supply config via WithServerContext).
+	officialDisabled := s.config != nil && s.config.Settings.DisableOfficialProviders
+	if !officialDisabled {
+		if ctxCfg := config.FromContext(s.ctx); ctxCfg != nil {
+			officialDisabled = ctxCfg.Settings.DisableOfficialProviders
+		}
+	}
+	if !officialDisabled && official.RegistryFromContext(s.ctx) == nil {
+		s.ctx = official.WithRegistry(s.ctx, official.NewRegistry())
+	}
+
+	// Always initialize a descriptor cache for offline schema access.
+	s.descriptorCache = plugin.NewDescriptorCache("", 24*time.Hour)
 	if cfg.logger != nil {
 		s.logger = *cfg.logger
 	} else {
@@ -587,6 +611,11 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	s.registerAllPrompts()
 
 	return s, nil
+}
+
+// Close releases resources owned by the server. Safe to call multiple times.
+func (s *Server) Close() {
+	// No-op currently; kept for future resource cleanup and API stability.
 }
 
 // Serve starts the MCP server on stdio transport (blocking).

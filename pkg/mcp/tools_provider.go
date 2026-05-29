@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -76,7 +77,7 @@ func (s *Server) registerProviderTools() {
 
 	// get_provider_schema
 	getProviderSchemaTool := mcp.NewTool("get_provider_schema",
-		mcp.WithDescription("Get comprehensive information about a provider: input schema (properties with types, required/optional, defaults, validation), output schemas per capability, YAML usage examples, CLI usage examples, capabilities, and version info. ALWAYS call this before writing action or resolver YAML to verify exact field names, types, and which fields are required."),
+		mcp.WithDescription("Get comprehensive information about a provider: input schema (properties with types, required/optional, defaults, validation), output schemas per capability, YAML usage examples, CLI usage examples, capabilities, and version info. Works for both builtin providers and official plugin providers (directory, env, exec, git, github, hcl, identity, metadata, secret, sleep) — plugin providers are auto-resolved from the catalog on first request and their schemas are cached locally for offline access. ALWAYS call this before writing action or resolver YAML to verify exact field names, types, and which fields are required."),
 		mcp.WithTitleAnnotation("Get Provider Schema"),
 		mcp.WithToolIcons(toolIcons["provider"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -246,20 +247,42 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 
 	desc, err := inspect.LookupProvider(s.ctx, name, s.registry)
 	if err != nil {
-		// Try auto-resolving via the plugin pool before falling back
-		release, resolveErr := s.ensureProvider(ctx, name)
+		// Try auto-resolving via the plugin pool with a timeout
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		release, resolveErr := s.ensureProvider(fetchCtx, name)
 		if resolveErr == nil {
 			defer release()
 			desc, err = inspect.LookupProvider(s.ctx, name, s.registry)
 		}
 	}
+
+	// On success, cache the descriptor for offline access
+	if err == nil && desc != nil && s.descriptorCache != nil {
+		_ = s.descriptorCache.Put(name, *desc)
+	}
+
 	if err != nil {
+		// Try the descriptor cache before falling back to metadata-only
+		if s.descriptorCache != nil {
+			if cached := s.descriptorCache.Get(name); cached != nil {
+				detail := provdetail.BuildProviderDetail(*cached)
+				detail["source"] = "cached"
+				return mcp.NewToolResultJSON(detail)
+			}
+		}
+
 		// Check official provider registry before returning error
 		if officialReg := official.RegistryFromContext(s.ctx); officialReg != nil {
 			if op, found := officialReg.Get(name); found {
 				detail := official.Detail(op)
 				detail["schemaAvailable"] = false
-				detail["hint"] = "Full schema, examples, and capabilities are unavailable until the plugin is fetched. Run 'plugins install " + op.CatalogRef + "' to fetch it."
+				detail["hint"] = fmt.Sprintf(
+					"Full schema, examples, and capabilities are unavailable. "+
+						"The plugin could not be auto-fetched (check network/catalog config). "+
+						"Run '%s plugins install %s' to fetch it manually.",
+					s.name, op.CatalogRef,
+				)
 				return mcp.NewToolResultJSON(detail)
 			}
 		}
@@ -306,13 +329,31 @@ func (s *Server) handleGetProviderOutputShape(ctx context.Context, request mcp.C
 
 	desc, err := inspect.LookupProvider(s.ctx, name, s.registry)
 	if err != nil {
-		// Try auto-resolving via the plugin pool
-		release, resolveErr := s.ensureProvider(ctx, name)
+		// Try auto-resolving via the plugin pool with a timeout
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		release, resolveErr := s.ensureProvider(fetchCtx, name)
 		if resolveErr == nil {
 			defer release()
 			desc, err = inspect.LookupProvider(s.ctx, name, s.registry)
 		}
 	}
+	// Track whether the descriptor came from cache to avoid resetting cachedAt.
+	fromCache := false
+	if err != nil && s.descriptorCache != nil {
+		if cached := s.descriptorCache.Get(name); cached != nil {
+			desc = cached
+			err = nil
+			fromCache = true
+		}
+	}
+
+	// On success, cache the descriptor for offline access -- but only when
+	// freshly fetched from a live registry/plugin, not from the cache itself.
+	if err == nil && desc != nil && s.descriptorCache != nil && !fromCache {
+		_ = s.descriptorCache.Put(name, *desc)
+	}
+
 	if err != nil {
 		availableNames := ""
 		if s.registry != nil {

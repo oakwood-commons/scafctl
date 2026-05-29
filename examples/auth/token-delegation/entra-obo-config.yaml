@@ -1,0 +1,48 @@
+# Example: Entra ID Token Delegation Config
+#
+# Configures the scafctl API server for OBO and client credentials
+# delegation using Azure Entra ID. The server exchanges incoming caller
+# tokens for downstream tokens scoped to specific resources.
+#
+# Usage:
+#   SCAFCTL_API_ENTRA_CLIENT_SECRET="your-secret" scafctl serve --config ./entra-obo-config.yaml
+#
+# Prerequisites:
+#   - Azure Entra ID app registration with:
+#     - API permissions for the downstream resource
+#     - A client secret or workload identity federation
+#   - The app must be configured to support OBO (expose an API scope)
+
+apiServer:
+  host: 127.0.0.1
+  port: 8080
+
+  # Validate incoming caller tokens via Entra OIDC
+  auth:
+    azureOIDC:
+      enabled: true
+      tenantId: "00000000-0000-0000-0000-000000000000"
+      clientId: "11111111-1111-1111-1111-111111111111"
+
+  # Server identity used for token delegation
+  identity:
+    entra:
+      tenantId: "00000000-0000-0000-0000-000000000000"
+      clientId: "11111111-1111-1111-1111-111111111111"
+      credential:
+        # Use env:// to read the secret from an environment variable
+        type: secret
+        clientSecret: "env://SCAFCTL_API_ENTRA_CLIENT_SECRET"
+      # Security boundary: only permit these delegation flows
+      allowedFlows:
+        flows:
+          - obo
+          - client_credentials
+      # Token caching and deduplication settings
+      tokenManager:
+        cacheSize: 1024
+        expiryBuffer: "10m"
+        cleanupInterval: "5m"
+        expiryThreshold: "30m"
+        slowThreshold: "500ms"
+        retryFollowerOnError: true

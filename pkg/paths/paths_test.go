@@ -412,3 +412,9 @@ func TestArtifactCacheDir(t *testing.T) {
 	assert.NotEmpty(t, dir)
 	assert.Contains(t, dir, ArtifactCacheDirName)
 }
+
+func TestProviderSchemaCacheDir(t *testing.T) {
+	dir := ProviderSchemaCacheDir()
+	assert.NotEmpty(t, dir)
+	assert.Contains(t, dir, ProviderSchemaCacheDirName)
+}

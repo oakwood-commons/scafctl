@@ -1,0 +1,129 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-token-delegation
+  version: 1.0.0
+  description: |
+    Functional tests for token delegation in the HTTP provider.
+    Verifies authProvider error handling, pass-through delegation behavior,
+    and the interaction between authProvider/authScope fields.
+
+spec:
+  resolvers:
+    # This resolver uses authProvider with a nonexistent handler.
+    # In CLI mode without a delegation registry, it falls back to auth handler
+    # lookup which should produce a clear "not found" error.
+    missingHandler:
+      description: HTTP call with unavailable auth handler produces clear error
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/data'"
+              method: GET
+              authProvider: nonexistent-handler-for-test
+
+    # This resolver verifies that an HTTP call without authProvider works normally.
+    noAuth:
+      description: HTTP call without authProvider succeeds normally
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/data'"
+              method: GET
+
+    # This resolver uses the mock to echo back headers so we can verify
+    # that no Authorization header is injected when authProvider is empty.
+    echoNoAuth:
+      description: Echo request to verify no auth header is injected without authProvider
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/echo'"
+              method: POST
+              body: '{"test":"delegation"}'
+
+    mockBaseUrl:
+      description: Mock server base URL from environment
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: mock-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /api/data
+              method: GET
+              status: 200
+              body: '{"status":"ok","items":["a","b","c"]}'
+              headers:
+                Content-Type: application/json
+            - path: /api/echo
+              method: POST
+              status: 200
+              echo: true
+
+    cases:
+      _base:
+        description: Base template for delegation tests
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml"]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+        assertions:
+          - expression: __exitCode == 0
+
+      no-auth-success:
+        description: HTTP call without authProvider succeeds
+        extends: [_base]
+        args: ["-o", "json", "--config", "config.yaml", "noAuth"]
+        tags: [delegation, smoke]
+        assertions:
+          - expression: __output.noAuth.statusCode == 200
+            message: "Request without authProvider should return 200"
+          - expression: '__output.noAuth.body.contains("ok")'
+            message: "Response body should contain status ok"
+          - expression: '__output.noAuth.body.contains("items")'
+            message: "Response body should contain items"
+
+      echo-no-auth-header:
+        description: No Authorization header when authProvider is not set
+        extends: [_base]
+        args: ["-o", "json", "--config", "config.yaml", "echoNoAuth"]
+        tags: [delegation]
+        assertions:
+          - expression: '!__output.echoNoAuth.body.contains("Authorization")'
+            message: "Authorization header should not be present without authProvider"
+
+      missing-handler-error:
+        description: Clear error when authProvider references unavailable handler
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml", "missingHandler"]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+        tags: [delegation, error-handling]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Should fail when auth handler is unavailable"
+          - expression: __stderr.contains("nonexistent-handler-for-test")
+            message: "Error should mention the missing handler name"

@@ -202,6 +202,22 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 		w.Successf("  %s@%s (%s) → %s", r.Name, r.Version, src, r.Path)
 	}
 
+	// Invalidate all cached provider descriptors when plugins are freshly installed.
+	// We invalidate everything because plugin names (used in catalog/solution) may
+	// differ from provider names (used as cache keys by MCP handlers), making
+	// targeted invalidation unreliable. The cache self-heals on next MCP access.
+	descCache := plugin.NewDescriptorCache("", 0)
+	hasNew := false
+	for _, r := range results {
+		if !r.FromCache {
+			hasNew = true
+			break
+		}
+	}
+	if hasNew {
+		descCache.InvalidateAll()
+	}
+
 	w.Successf("Installed %d plugin(s).", len(results))
 	return nil
 }

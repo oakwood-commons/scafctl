@@ -57,6 +57,9 @@ const (
 
 	// ArtifactCacheDirName is the name of the artifact cache subdirectory.
 	ArtifactCacheDirName = "artifact"
+
+	// ProviderSchemaCacheDirName is the name of the provider schema cache subdirectory.
+	ProviderSchemaCacheDirName = "provider-schemas"
 )
 
 // ConfigFile returns the path to the config file.
@@ -206,6 +209,20 @@ func PluginCacheDir() string {
 //   - Windows: %LOCALAPPDATA%\cache\scafctl\artifact\
 func ArtifactCacheDir() string {
 	return filepath.Join(xdg.CacheHome, appName, ArtifactCacheDirName)
+}
+
+// ProviderSchemaCacheDir returns the path to the provider schema cache directory.
+// Used for caching provider descriptor JSON so schemas are available without
+// spawning plugin processes.
+//
+// Returns: $XDG_CACHE_HOME/scafctl/provider-schemas/
+//
+// Platform defaults:
+//   - Linux: ~/.cache/scafctl/provider-schemas/
+//   - macOS: ~/.cache/scafctl/provider-schemas/
+//   - Windows: %LOCALAPPDATA%\cache\scafctl\provider-schemas\
+func ProviderSchemaCacheDir() string {
+	return filepath.Join(xdg.CacheHome, appName, ProviderSchemaCacheDirName)
 }
 
 // RuntimeDir returns the path to the runtime directory.

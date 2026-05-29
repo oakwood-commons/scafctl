@@ -2965,23 +2965,13 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 
 func TestIntegration_CatalogList_Empty(t *testing.T) {
 	t.Parallel()
-	// Create a temp directory for the catalog — no local artifacts.
-	// XDG_CONFIG_HOME is also isolated to prevent the binary from reading
-	// the real config, which may reference remote catalogs that require
-	// auth or are unreachable in CI.
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":   tmpDir,
-		"XDG_CACHE_HOME":  tmpDir,
-		"XDG_CONFIG_HOME": tmpDir,
-	}
+	// Use isolated env that disables the official remote catalog to avoid
+	// network dependencies. This test verifies local-only behavior.
+	env := isolatedCatalogEnv(t)
 
 	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "-o", "json")
 
 	assert.Equal(t, 0, exitCode)
-	// With no local artifacts, the output depends on whether the default
-	// remote catalog is reachable. Either an empty list or remote results
-	// are both valid outcomes.
 	trimmed := strings.TrimSpace(stdout)
 	assert.True(t, json.Valid([]byte(trimmed)),
 		"expected valid JSON output, got: %q", stdout)
@@ -3388,12 +3378,9 @@ func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
 
 func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
 	t.Parallel()
-	// Create a temp directory for the catalog
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":  tmpDir,
-		"XDG_CACHE_HOME": tmpDir,
-	}
+	// Use isolated env that disables the official remote catalog to avoid
+	// network dependencies. This test only exercises local catalog lookup.
+	env := isolatedCatalogEnv(t)
 
 	// Build a solution into the catalog
 	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
@@ -3404,6 +3391,58 @@ func TestIntegration_Lint_FromCatalog_ByName(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	// Should have lint output
 	assert.Contains(t, stdout, "findings")
+}
+
+// =============================================================================
+// Remote Catalog Integration Tests (local OCI registry)
+// =============================================================================
+
+func TestIntegration_CatalogList_RemoteRegistry(t *testing.T) {
+	t.Parallel()
+	// Start a local OCI registry and list from it directly using --catalog.
+	// This exercises remote catalog enumeration and tag fetching without
+	// any network dependency on external registries.
+	registryAddr, reg := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	// Pre-populate the registry with fake artifacts to verify enumeration.
+	reg.mu.Lock()
+	reg.repos["scafctl/solutions/demo-app"] = map[string]string{
+		"1.0.0": "sha256:aaaa",
+		"2.0.0": "sha256:bbbb",
+	}
+	reg.mu.Unlock()
+
+	// List from the local registry by URL (--catalog <url> --insecure)
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list",
+		"--catalog", registryAddr+"/scafctl",
+		"--insecure", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	trimmed := strings.TrimSpace(stdout)
+	assert.True(t, json.Valid([]byte(trimmed)),
+		"expected valid JSON output, got: %q", stdout)
+	// The remote registry has an artifact — should appear in results
+	assert.Contains(t, stdout, "demo-app")
+}
+
+func TestIntegration_CatalogPush_LocalRegistry(t *testing.T) {
+	t.Parallel()
+	// Build a solution locally, then push to the local OCI registry.
+	// This exercises the full push flow against a real OCI-compatible server.
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	// Build solution artifact
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	// Push to the local registry by URL
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "push",
+		"resolver-demo@1.0.0",
+		"--catalog", registryAddr+"/scafctl",
+		"--insecure")
+	assert.Equal(t, 0, exitCode, "push failed: %s", stderr)
 }
 
 // Get Solution from Catalog Tests
@@ -8491,6 +8530,170 @@ func TestIntegration_PluginExecution_GetProviderSchema(t *testing.T) {
 
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_GetProvider_OfficialMetadata(t *testing.T) {
+	t.Parallel()
+	// Official plugin providers (exec, git, etc.) should return metadata
+	// even when the plugin binary cannot be fetched.
+	stdout, _, exitCode := runScafctl(t, "get", "provider", "exec", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, `"name"`)
+	assert.Contains(t, stdout, `"exec"`)
+	assert.Contains(t, stdout, `"source"`)
+	assert.Contains(t, stdout, `"official"`)
+}
+
+func TestIntegration_MCPServe_GetProviderSchema_Builtin(t *testing.T) {
+	t.Parallel()
+	// Verify the MCP get_provider_schema tool returns full schema for
+	// builtin providers via JSON-RPC protocol.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
+	cmd.Dir = findProjectRoot()
+
+	messages := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"cel"}}}`,
+	}, "\n")
+	cmd.Stdin = strings.NewReader(messages + "\n")
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	_ = cmd.Run()
+
+	output := outBuf.String()
+	// Find the tools/call response (id:2)
+	var schemaResp string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, `"id":2`) {
+			schemaResp = line
+			break
+		}
+	}
+	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	assert.Contains(t, schemaResp, "cel")
+	assert.Contains(t, schemaResp, "expression")
+	assert.NotContains(t, schemaResp, "NOT_FOUND")
+}
+
+func TestIntegration_MCPServe_GetProviderSchema_OfficialFallback(t *testing.T) {
+	t.Parallel()
+	// When an official plugin provider can't be fetched (no fetcher in test
+	// env), get_provider_schema should return a helpful NOT_FOUND response
+	// with guidance rather than crashing.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
+	cmd.Dir = findProjectRoot()
+
+	messages := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"exec"}}}`,
+	}, "\n")
+	cmd.Stdin = strings.NewReader(messages + "\n")
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	_ = cmd.Run()
+
+	output := outBuf.String()
+	var schemaResp string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, `"id":2`) {
+			schemaResp = line
+			break
+		}
+	}
+	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	// Should mention exec and provide useful context (either schema if cached,
+	// or NOT_FOUND with guidance about the plugin).
+	assert.Contains(t, schemaResp, "exec")
+}
+
+func TestIntegration_MCPServe_GetProviderSchema_CachedDescriptor(t *testing.T) {
+	t.Parallel()
+	// Pre-populate the provider schema cache with a fake descriptor.
+	// When the plugin binary is unavailable, get_provider_schema should
+	// return the cached descriptor with "source": "cached".
+	cacheDir := t.TempDir()
+
+	// Write a minimal cached descriptor entry (use current time so TTL check passes).
+	// Note: the Descriptor struct tags the input schema as "schema" (not "inputSchema").
+	cacheEntry := fmt.Sprintf(`{
+		"cachedAt": %q,
+		"descriptor": {
+			"name": "fake-cached-provider",
+			"apiVersion": "v1",
+			"version": "1.0.0",
+			"description": "A test cached provider",
+			"capabilities": ["from"],
+			"schema": {
+				"type": "object",
+				"properties": {
+					"input1": {"type": "string", "description": "Test input"}
+				}
+			}
+		}
+	}`, time.Now().UTC().Format(time.RFC3339))
+	err := os.MkdirAll(cacheDir, 0o755)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(cacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "mcp", "serve")
+	cmd.Dir = findProjectRoot()
+	cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+filepath.Dir(cacheDir))
+
+	// The cache expects the path: $XDG_CACHE_HOME/scafctl/provider-schemas/
+	// So we need to create the proper directory structure
+	properCacheDir := filepath.Join(t.TempDir(), "scafctl", "provider-schemas")
+	err = os.MkdirAll(properCacheDir, 0o755)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(properCacheDir, "fake-cached-provider.json"), []byte(cacheEntry), 0o600)
+	require.NoError(t, err)
+
+	xdgCacheHome := filepath.Dir(filepath.Dir(properCacheDir)) // parent of scafctl/
+	cmd.Env = append(os.Environ(), "XDG_CACHE_HOME="+xdgCacheHome)
+
+	messages := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_provider_schema","arguments":{"name":"fake-cached-provider"}}}`,
+	}, "\n")
+	cmd.Stdin = strings.NewReader(messages + "\n")
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	_ = cmd.Run()
+
+	output := outBuf.String()
+	var schemaResp string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, `"id":2`) {
+			schemaResp = line
+			break
+		}
+	}
+	require.NotEmpty(t, schemaResp, "expected tools/call response for id 2")
+	assert.Contains(t, schemaResp, "fake-cached-provider")
+	assert.Contains(t, schemaResp, "cached")
+	assert.Contains(t, schemaResp, "input1")
 }
 
 func TestIntegration_PluginsList_RunsSuccessfully(t *testing.T) {

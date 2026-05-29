@@ -297,6 +297,65 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scafctl\plugins\"
 {{% /tab %}}
 {{< /tabs >}}
 
+## Schema Caching (Offline Access)
+
+In addition to caching plugin binaries, scafctl caches **provider descriptor schemas** locally. This means that once a plugin provider's schema has been fetched via `get_provider_schema` or `get_provider_output_shape` in the MCP server, subsequent schema lookups can be served from disk without spawning the plugin process or requiring network access.
+
+### How It Works
+
+1. When `get_provider_schema` or `get_provider_output_shape` successfully resolves a plugin provider, the full descriptor (input schema, output schemas, capabilities, examples) is persisted to disk.
+2. On subsequent requests, if the plugin binary is unavailable (offline, not yet installed, network error), the cached descriptor is returned with `"source": "cached"` in the response.
+3. Cache entries expire after 24 hours by default. After expiry, scafctl attempts a fresh fetch and updates the cache.
+4. Running `scafctl plugins install` automatically invalidates cached descriptors for the installed plugins so the next schema request returns up-to-date data.
+
+### Cache Location
+
+```
+$XDG_CACHE_HOME/scafctl/provider-schemas/
+|-- exec.json
+|-- git.json
+|-- github.json
+|-- directory.json
+|-- ...
+```
+
+| Platform | Default Path |
+|----------|-------------|
+| Linux    | `~/.cache/scafctl/provider-schemas/` |
+| macOS    | `~/.cache/scafctl/provider-schemas/` |
+| Windows  | `%LOCALAPPDATA%\cache\scafctl\provider-schemas\` |
+
+### Managing the Schema Cache
+
+{{< tabs "plugin-auto-fetch-tutorial-cmd-4" >}}
+{{% tab "Bash" %}}
+```bash
+# Schema cache is at $XDG_CACHE_HOME/scafctl/provider-schemas/
+# To clear all cached schemas (forces re-fetch on next access):
+rm -rf ~/.cache/scafctl/provider-schemas/
+
+# To invalidate a single provider:
+rm ~/.cache/scafctl/provider-schemas/exec.json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Schema cache is at $env:LOCALAPPDATA\cache\scafctl\provider-schemas\
+# To clear all cached schemas:
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\cache\scafctl\provider-schemas\"
+
+# To invalidate a single provider:
+Remove-Item "$env:LOCALAPPDATA\cache\scafctl\provider-schemas\exec.json"
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+### Use Cases
+
+- **CI/CD**: Pre-fetch plugin schemas in a warm-up step, then run MCP sessions offline
+- **Air-gapped environments**: Copy the `provider-schemas/` directory to disconnected machines
+- **Faster MCP startup**: Cached schemas avoid spawning plugin processes for schema-only queries
+
 ## Multi-Platform Support
 
 Plugin artifacts can include platform-specific binaries. The `AnnotationPlatform` annotation on catalog artifacts identifies the target platform:
