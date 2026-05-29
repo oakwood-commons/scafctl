@@ -498,6 +498,14 @@ func TestWithOutputDisplaySchemaJSON(t *testing.T) {
 	assert.Equal(t, schema, opts.DisplaySchemaJSON)
 }
 
+func TestWithOutputColumnarMode(t *testing.T) {
+	out := &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{Out: out}
+	opts := NewOutputOptions(ioStreams)
+	WithOutputColumnarMode("always")(opts)
+	assert.Equal(t, "always", opts.ColumnarMode)
+}
+
 func TestWithIOStreams(t *testing.T) {
 	out := &bytes.Buffer{}
 	ioStreams := &terminal.IOStreams{Out: out}

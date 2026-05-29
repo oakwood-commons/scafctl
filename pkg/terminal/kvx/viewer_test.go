@@ -4,6 +4,7 @@
 package kvx
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -309,4 +310,34 @@ func TestResolveDisplaySchema_Invalid(t *testing.T) {
 func TestResolveDisplaySchema_NoExtensions(t *testing.T) {
 	schema := []byte(`{"type": "array", "items": {"type": "object"}}`)
 	assert.Nil(t, resolveDisplaySchema(schema))
+}
+
+func TestWithColumnarMode(t *testing.T) {
+	opts := DefaultViewerOptions()
+	WithColumnarMode("always")(opts)
+	assert.Equal(t, "always", opts.ColumnarMode)
+}
+
+func TestRenderTable_ColumnarModeAlways_ForcesColumnar(t *testing.T) {
+	// Regression test for #440: auth status maps are normalized to have identical
+	// key sets (homogeneous) so kvx can render them as multi-column tables.
+	// ColumnarModeAlways is used as belt-and-suspenders; in kvx v0.12 it still
+	// requires ExtractColumnarData to succeed (homogeneous keys), but it bypasses
+	// the type-assertion gate so future kvx versions can relax that constraint.
+	data := []map[string]any{
+		{"handler": "entra", "status": "authenticated", "expiresIn": "2h"},
+		{"handler": "github", "status": "authenticated", "expiresIn": ""},
+	}
+
+	out := &bytes.Buffer{}
+
+	err := View(data, WithIO(nil, out), WithNoColor(true), WithColumnarMode("always"), WithColumnOrder([]string{"handler", "status", "expiresIn"}), WithDimensions(100, 24))
+	assert.NoError(t, err)
+
+	output := out.String()
+	// Should contain column headers, not KEY/VALUE fallback
+	assert.Contains(t, output, "handler")
+	assert.Contains(t, output, "status")
+	assert.NotContains(t, output, "[0]")
+	assert.NotContains(t, output, "[1]")
 }

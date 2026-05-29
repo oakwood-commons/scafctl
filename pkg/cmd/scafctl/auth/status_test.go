@@ -342,6 +342,41 @@ func TestBuildStatusResult_InvalidExpiryTime(t *testing.T) {
 	assert.Equal(t, "", result["expiresIn"])
 }
 
+func TestBuildStatusResult_ExpiresAtTimeAlwaysPresent(t *testing.T) {
+	ctx, _ := newTestContext(t)
+
+	t.Run("nil when expiry is invalid", func(t *testing.T) {
+		mock := auth.NewMockHandler("entra")
+		status := &auth.Status{
+			Authenticated: true,
+			Claims:        &auth.Claims{Email: "a@b.com"},
+			ExpiresAt:     time.Time{}, // zero time - invalid
+		}
+
+		result := buildStatusResult(ctx, settings.NewCliParams(), "entra", mock, status)
+
+		_, exists := result["_expiresAtTime"]
+		assert.True(t, exists, "_expiresAtTime must always be present to keep maps homogeneous")
+		assert.Nil(t, result["_expiresAtTime"])
+	})
+
+	t.Run("time.Time when expiry is valid", func(t *testing.T) {
+		mock := auth.NewMockHandler("entra")
+		future := time.Now().Add(2 * time.Hour)
+		status := &auth.Status{
+			Authenticated: true,
+			Claims:        &auth.Claims{Email: "a@b.com"},
+			ExpiresAt:     future,
+		}
+
+		result := buildStatusResult(ctx, settings.NewCliParams(), "entra", mock, status)
+
+		_, exists := result["_expiresAtTime"]
+		assert.True(t, exists, "_expiresAtTime must always be present to keep maps homogeneous")
+		assert.Equal(t, future, result["_expiresAtTime"])
+	})
+}
+
 func TestExpandProfileStatuses(t *testing.T) {
 	ctx, _ := newTestContext(t)
 

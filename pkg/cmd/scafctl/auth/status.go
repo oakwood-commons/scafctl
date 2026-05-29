@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -64,7 +65,8 @@ var authStatusSchema = []byte(`{
 			"lastRefresh":    { "type": "string", "deprecated": true },
 			"scopes":         { "type": "array", "deprecated": true },
 			"cachedTokens":   { "type": "integer", "deprecated": true },
-			"hint":           { "type": "string", "deprecated": true }
+			"hint":           { "type": "string", "deprecated": true },
+			"_expiresAtTime": { "type": "string", "deprecated": true }
 		}
 	}
 }`)
@@ -218,6 +220,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				outputOpts := flags.ToKvxOutputOptions(&outputFlags,
 					kvx.WithIOStreams(ioStreams),
 					kvx.WithOutputColumnOrder([]string{"handler", "kind", "status", "flow", "user", "expiresIn", "profile"}),
+					kvx.WithOutputColumnarMode(tui.ColumnarModeAlways),
 					kvx.WithOutputSchemaJSON(authStatusSchema),
 					kvx.WithOutputDisplaySchemaJSON(authStatusDisplaySchema),
 				)
@@ -229,6 +232,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				handlerOpts := flags.ToKvxOutputOptions(&outputFlags,
 					kvx.WithIOStreams(ioStreams),
 					kvx.WithOutputColumnOrder([]string{"handler", "profile", "status", "user", "flow", "expiresIn"}),
+					kvx.WithOutputColumnarMode(tui.ColumnarModeAlways),
 					kvx.WithOutputSchemaJSON(authStatusSchema),
 				)
 
@@ -245,6 +249,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					catalogOpts := flags.ToKvxOutputOptions(&outputFlags,
 						kvx.WithIOStreams(ioStreams),
 						kvx.WithOutputColumnOrder([]string{"handler", "status"}),
+						kvx.WithOutputColumnarMode(tui.ColumnarModeAlways),
 						kvx.WithOutputSchemaJSON(authStatusSchema),
 					)
 					if err := catalogOpts.Write(catalogResults); err != nil {
@@ -258,6 +263,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 					registryOpts := flags.ToKvxOutputOptions(&outputFlags,
 						kvx.WithIOStreams(ioStreams),
 						kvx.WithOutputColumnOrder([]string{"handler", "user", "profile"}),
+						kvx.WithOutputColumnarMode(tui.ColumnarModeAlways),
 						kvx.WithOutputSchemaJSON(authStatusSchema),
 					)
 					if err := registryOpts.Write(registryResults); err != nil {
@@ -452,28 +458,29 @@ func buildStatusResult(ctx context.Context, cliParams *settings.Run, handlerName
 	}
 
 	result := map[string]any{
-		"handler":       handlerName,
-		"displayName":   handler.DisplayName(),
-		"kind":          "auth",
-		"type":          "handler",
-		"status":        statusStr,
-		"authenticated": status.Authenticated,
-		"email":         "",
-		"username":      "",
-		"user":          "",
-		"expiresIn":     "",
-		"flow":          flowStr,
-		"hint":          "",
-		"identityType":  "",
-		"clientId":      "",
-		"tokenFile":     "",
-		"name":          "",
-		"tenantId":      "",
-		"expiresAt":     "",
-		"lastRefresh":   "",
-		"scopes":        []string{},
-		"cachedTokens":  0,
-		"profile":       auth.DisplayProfileName(auth.ProfileFromContext(ctx)),
+		"handler":        handlerName,
+		"displayName":    handler.DisplayName(),
+		"kind":           "auth",
+		"type":           "handler",
+		"status":         statusStr,
+		"authenticated":  status.Authenticated,
+		"email":          "",
+		"username":       "",
+		"user":           "",
+		"expiresIn":      "",
+		"flow":           flowStr,
+		"hint":           "",
+		"identityType":   "",
+		"clientId":       "",
+		"tokenFile":      "",
+		"name":           "",
+		"tenantId":       "",
+		"expiresAt":      "",
+		"lastRefresh":    "",
+		"scopes":         []string{},
+		"cachedTokens":   0,
+		"_expiresAtTime": nil,
+		"profile":        auth.DisplayProfileName(auth.ProfileFromContext(ctx)),
 	}
 
 	// Mark the active profile so users know which one commands will use.
