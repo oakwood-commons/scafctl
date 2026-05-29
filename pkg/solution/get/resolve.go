@@ -80,7 +80,7 @@ func Resolve(ctx context.Context, getter *Getter, file, positionalArg string, op
 		switch opts.Risk {
 		case DiscoveryRiskLow:
 			if w := writer.FromContext(ctx); w != nil {
-				w.WarnStderrf("Multiple solution files found (also: %s); using first match", strings.Join(others, ", "))
+				w.Verbosef("Multiple solution files found (also: %s); using first match", strings.Join(others, ", "))
 			}
 		case DiscoveryRiskHigh:
 			return "", fmt.Errorf(
@@ -90,10 +90,10 @@ func Resolve(ctx context.Context, getter *Getter, file, positionalArg string, op
 		}
 	}
 
-	// Emit "Using <path>" to stderr after confirming we will return it.
+	// Emit "Using <path>" to stderr in verbose mode only.
 	// Written to stderr so it doesn't corrupt structured stdout (-o json).
 	if w := writer.FromContext(ctx); w != nil {
-		w.PlainStderrf("Using %s", resolved)
+		w.Verbosef("Using %s", resolved)
 	}
 
 	return resolved, nil

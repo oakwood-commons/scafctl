@@ -307,6 +307,9 @@ func View(data any, opts ...Option) error {
 // renderTable outputs data as a bordered table (non-interactive).
 func renderTable(root any, options *ViewerOptions) error {
 	hints := resolveColumnHints(options.SchemaJSON, options.ColumnHints)
+	if options.ColumnarMode == tui.ColumnarModeAlways {
+		root = normalizeSliceKeys(root)
+	}
 	output := tui.RenderTable(root, tui.TableOptions{
 		AppName:      options.AppName,
 		Path:         "_",
@@ -428,6 +431,10 @@ func RenderTable(data any, opts tui.TableOptions) (string, error) {
 	root, err := core.LoadObject(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to load data: %w", err)
+	}
+
+	if opts.ColumnarMode == tui.ColumnarModeAlways {
+		root = normalizeSliceKeys(root)
 	}
 
 	return tui.RenderTable(root, opts), nil

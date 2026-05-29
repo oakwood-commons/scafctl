@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -417,4 +418,102 @@ func TestIsValidExpiryTime(t *testing.T) {
 			assert.Equal(t, tt.want, isValidExpiryTime(tt.t))
 		})
 	}
+}
+
+func TestCommandStatus_ExitCode_Unauthenticated(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.SetNotAuthenticated()
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandStatus(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--exit-code"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+
+	var exitErr *exitcode.ExitError
+	require.True(t, errors.As(err, &exitErr))
+	assert.Equal(t, exitcode.GeneralError, exitErr.Code)
+	assert.Contains(t, err.Error(), "not authenticated")
+}
+
+func TestCommandStatus_ExitCode_AllAuthenticated(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.SetAuthenticated(&auth.Claims{Email: "test@example.com"})
+	mock.StatusResult.ExpiresAt = time.Now().Add(24 * time.Hour)
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandStatus(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--exit-code"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestCommandStatus_WarnWithin_Expiring(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.SetAuthenticated(&auth.Claims{Email: "test@example.com"})
+	// Token expires in 5 minutes, but --warn-within is 1 hour.
+	mock.StatusResult.ExpiresAt = time.Now().Add(5 * time.Minute)
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandStatus(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--warn-within", "1h"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+
+	var exitErr *exitcode.ExitError
+	require.True(t, errors.As(err, &exitErr))
+	assert.Equal(t, exitcode.GeneralError, exitErr.Code)
+	assert.Contains(t, err.Error(), "expire within")
+}
+
+func TestCommandStatus_JSONOutput_NoInternalFields(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.DisplayNameValue = "Microsoft Entra ID"
+	mock.SetAuthenticated(&auth.Claims{Email: "test@example.com"})
+	mock.StatusResult.ExpiresAt = time.Now().Add(2 * time.Hour)
+
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandStatus(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "-o", "json"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.NotContains(t, output, "_expiresAtTime")
+	assert.Contains(t, output, "authenticated")
 }

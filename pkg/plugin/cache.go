@@ -243,11 +243,19 @@ func (c *Cache) Remove(name, version, platform string) error {
 func (c *Cache) List() ([]CachedPlugin, error) {
 	var results []CachedPlugin
 
-	names, err := os.ReadDir(c.dir)
-	if err != nil {
-		if os.IsNotExist(err) {
+	info, statErr := os.Stat(c.dir)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
 			return nil, nil
 		}
+		return nil, fmt.Errorf("reading plugin cache: %w", statErr)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("reading plugin cache: not a directory: %s", c.dir)
+	}
+
+	names, err := os.ReadDir(c.dir)
+	if err != nil {
 		return nil, fmt.Errorf("reading plugin cache: %w", err)
 	}
 

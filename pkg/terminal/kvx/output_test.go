@@ -272,6 +272,7 @@ func TestOutputOptions_Functional_Options(t *testing.T) {
 	WithOutputHelp("Test Help", []string{"Line 1", "Line 2"})(opts)
 	WithOutputTheme("dark")(opts)
 	WithOutputPrettyPrint(false)(opts)
+	WithOutputColumnarMode("always")(opts)
 
 	assert.Equal(t, OutputFormatJSON, opts.Format)
 	assert.True(t, opts.Interactive)
@@ -282,6 +283,7 @@ func TestOutputOptions_Functional_Options(t *testing.T) {
 	assert.Equal(t, []string{"Line 1", "Line 2"}, opts.HelpLines)
 	assert.Equal(t, "dark", opts.Theme)
 	assert.False(t, opts.PrettyPrint)
+	assert.Equal(t, "always", opts.ColumnarMode)
 }
 
 func TestOutputOptions_WithOutputFormatString(t *testing.T) {
@@ -1559,4 +1561,81 @@ func TestWriteText_FallsBackToListForNestedValuesWhenPiped(t *testing.T) {
 	assert.NotContains(t, output, "...", "nested values should not be truncated")
 	assert.Contains(t, output, "name")
 	assert.Contains(t, output, "myapp")
+}
+
+func TestNormalizeSliceKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    any
+		expected any
+	}{
+		{
+			name:     "non-slice passthrough",
+			input:    map[string]any{"a": 1},
+			expected: map[string]any{"a": 1},
+		},
+		{
+			name:     "single element passthrough",
+			input:    []any{map[string]any{"a": 1}},
+			expected: []any{map[string]any{"a": 1}},
+		},
+		{
+			name: "pads missing keys with empty string",
+			input: []any{
+				map[string]any{"a": 1, "b": 2},
+				map[string]any{"a": 3, "c": 4},
+			},
+			expected: []any{
+				map[string]any{"a": 1, "b": 2, "c": ""},
+				map[string]any{"a": 3, "b": "", "c": 4},
+			},
+		},
+		{
+			name: "already homogeneous unchanged",
+			input: []any{
+				map[string]any{"x": 1, "y": 2},
+				map[string]any{"x": 3, "y": 4},
+			},
+			expected: []any{
+				map[string]any{"x": 1, "y": 2},
+				map[string]any{"x": 3, "y": 4},
+			},
+		},
+		{
+			name:     "mixed types passthrough",
+			input:    []any{"str", 42},
+			expected: []any{"str", 42},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := normalizeSliceKeys(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestNormalizeSliceKeys_DoesNotMutateInput(t *testing.T) {
+	t.Parallel()
+
+	original := []any{
+		map[string]any{"a": 1, "b": 2},
+		map[string]any{"a": 3, "c": 4},
+	}
+
+	result := normalizeSliceKeys(original)
+
+	// Original maps must be unmodified.
+	assert.Equal(t, map[string]any{"a": 1, "b": 2}, original[0])
+	assert.Equal(t, map[string]any{"a": 3, "c": 4}, original[1])
+
+	// Result should have padded copies.
+	resultSlice, ok := result.([]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"a": 1, "b": 2, "c": ""}, resultSlice[0])
+	assert.Equal(t, map[string]any{"a": 3, "b": "", "c": 4}, resultSlice[1])
 }

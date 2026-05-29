@@ -43,6 +43,7 @@ spec:
       skipBuiltins: [resolve-defaults, render-defaults]
       env:
         SCAFCTL_FUNC_TEST_VAR: "global-test-value"
+        HOME: "/tmp/test-home"
 
     cases:
       _base:

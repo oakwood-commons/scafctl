@@ -8888,7 +8888,6 @@ spec:
 
 	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
 	assert.Contains(t, stdout, "findings")
-	assert.Contains(t, stderr, "Using taskfile.yaml")
 }
 
 func TestIntegration_Lint_AutoDiscovery_MultiMatch_Warning(t *testing.T) {
@@ -8917,10 +8916,14 @@ spec:
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
-	// Should succeed (low risk) but warn about multiple matches
+	// Should succeed (low risk); multi-match message is verbose-only now
 	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
-	assert.Contains(t, stderr, "Multiple solution files found")
-	assert.Contains(t, stderr, "Using solution.yaml")
+	assert.NotContains(t, stderr, "Multiple solution files found")
+
+	// With --verbose the message appears
+	_, stderrV, exitCodeV := runScafctlInDir(t, tmpDir, "lint", "-o", "json", "--verbose")
+	assert.True(t, exitCodeV == 0 || exitCodeV == 2, "lint --verbose should exit 0 or 2, got %d", exitCodeV)
+	assert.Contains(t, stderrV, "Multiple solution files found")
 }
 
 func TestIntegration_BuildSolution_AutoDiscovery_MultiMatch_Error(t *testing.T) {
@@ -8982,7 +8985,6 @@ spec:
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Hello from taskfile resolver")
-	assert.Contains(t, stderr, "Using taskfile.yaml")
 }
 
 func TestIntegration_RunResolver_AutoDiscovery_MultiMatch_Warning(t *testing.T) {
@@ -9030,6 +9032,6 @@ spec:
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "from solution.yaml")
-	assert.Contains(t, stderr, "Multiple solution files found")
-	assert.Contains(t, stderr, "Using solution.yaml")
+	// Multi-match message is verbose-only; should not appear by default
+	assert.NotContains(t, stderr, "Multiple solution files found")
 }

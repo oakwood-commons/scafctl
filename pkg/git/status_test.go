@@ -35,6 +35,7 @@ func initTestRepo(t *testing.T) string {
 	run("init", "-b", "main")
 	run("config", "user.email", "test@test.com")
 	run("config", "user.name", "test")
+	run("config", "commit.gpgsign", "false")
 
 	// Create initial commit.
 	f := filepath.Join(dir, "README.md")
