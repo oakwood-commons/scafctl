@@ -58,6 +58,55 @@ func ExtractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 	return extractDependencies(r, lookup)
 }
 
+// ExtractInferredDependencies extracts only auto-inferred dependencies from value
+// references (expr:, rslvr:, tmpl:) and when clauses, excluding explicit DependsOn entries.
+// This is useful for detecting redundant dependsOn declarations.
+func ExtractInferredDependencies(r *Resolver, lookup DescriptorLookup) []string {
+	return extractInferredDependencies(r, lookup)
+}
+
+func extractInferredDependencies(r *Resolver, lookup DescriptorLookup) []string {
+	deps := make(map[string]bool)
+
+	// Extract from when condition
+	if r.When != nil && r.When.Expr != nil {
+		extractDepsFromExpression(string(*r.When.Expr), deps)
+	}
+
+	// Extract from resolve phase
+	if r.Resolve != nil {
+		extractDepsFromResolvePhase(r.Resolve, deps, lookup)
+	}
+
+	// Extract from transform phase (excluding self-refs)
+	if r.Transform != nil {
+		transformDeps := make(map[string]bool)
+		extractDepsFromTransformPhase(r.Transform, transformDeps, lookup)
+		for dep := range transformDeps {
+			if dep != r.Name {
+				deps[dep] = true
+			}
+		}
+	}
+
+	// Extract from validate phase (excluding self-refs)
+	if r.Validate != nil {
+		validateDeps := make(map[string]bool)
+		extractDepsFromValidatePhase(r.Validate, validateDeps, lookup)
+		for dep := range validateDeps {
+			if dep != r.Name {
+				deps[dep] = true
+			}
+		}
+	}
+
+	result := make([]string, 0, len(deps))
+	for dep := range deps {
+		result = append(result, dep)
+	}
+	return result
+}
+
 func extractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 	deps := make(map[string]bool) // Use map to deduplicate
 

@@ -357,6 +357,17 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "Finally actions execute unconditionally after all regular actions complete. Setting explicit: true is misleading because the action cannot be excluded from execution.",
 		Fix:         "Remove explicit: true from the finally action, or move the action to workflow.actions if it should be opt-in.",
 	},
+	"redundant-depends-on": {
+		Rule:        "redundant-depends-on",
+		Severity:    string(SeverityInfo),
+		Category:    "dependency",
+		Description: "A resolver's dependsOn entries are already inferred from value references (expr:, rslvr:, tmpl:).",
+		Why:         "dependsOn is automatically inferred from value references in resolver inputs, when clauses, and expressions. Explicit entries that duplicate inferred dependencies add noise without changing behavior.",
+		Fix:         "Remove redundant dependsOn entries. Only use explicit dependsOn when a resolver must run after another without referencing its value.",
+		Examples: []string{
+			"# Redundant (inferred from expr):\nimageRef:\n  dependsOn: [registry, namespace]\n  resolve:\n    with:\n      - provider: cel\n        inputs:\n          expression:\n            expr: _.registry + \"/\" + _.namespace\n\n# Correct (no explicit dependsOn needed):\nimageRef:\n  resolve:\n    with:\n      - provider: cel\n        inputs:\n          expression:\n            expr: _.registry + \"/\" + _.namespace",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

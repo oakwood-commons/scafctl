@@ -429,7 +429,63 @@ spec:
 
 This is an **info**-level finding (not an error) because hyphenated names are valid — they just require bracket notation in CEL expressions.
 
-## 7. Using Lint with the MCP Server
+## 7. Redundant dependsOn
+
+The `redundant-depends-on` rule detects when a resolver's `dependsOn` entries are already auto-inferred from value references. scafctl automatically infers dependencies from `expr:`, `rslvr:`, and `tmpl:` references -- explicit `dependsOn` is only needed for pure ordering dependencies (where a resolver must wait for another without referencing its value).
+
+```yaml
+# ℹ️ INFO: dependsOn is redundant — all listed dependencies are already inferred
+spec:
+  resolvers:
+    registry:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: docker.io
+
+    namespace:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: myteam
+
+    imageRef:
+      dependsOn: [registry, namespace]  # Redundant! Inferred from expr below
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.registry + "/" + _.namespace + "/app"'
+```
+
+**Fix**: Remove the `dependsOn` field -- the dependencies are already inferred from the `expr:` reference to `_.registry` and `_.namespace`:
+
+```yaml
+    imageRef:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.registry + "/" + _.namespace + "/app"'
+```
+
+Only keep explicit `dependsOn` for ordering without a data dependency:
+
+```yaml
+    deploy:
+      dependsOn: [setup]  # Must wait for setup, but doesn't read its value
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: deploy.sh
+```
+
+## 8. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 

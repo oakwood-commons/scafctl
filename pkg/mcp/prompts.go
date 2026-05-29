@@ -305,6 +305,8 @@ Follow these rules when creating the solution:
 - Use ValueRef format for inputs: literal (raw value), rslvr (resolver reference), expr (CEL expression), or tmpl (Go template)
 - Always validate user inputs using the validate phase with the validation provider
 - Use dependsOn for ordering (both resolvers and actions)
+- Resolver dependsOn is AUTO-INFERRED from value references (expr:, rslvr:, tmpl:) — only add explicit dependsOn when a resolver must run after another without referencing its value
+- Action dependsOn within the same section is auto-inferred from __actions references
 - Use when clauses (CEL expressions) for conditional execution
 - CEL context variables available in resolver when/inputs: _ (resolved values), __plan (pre-execution topology)
   - __plan["resolverName"].phase, __plan["resolverName"].dependsOn, __plan["resolverName"].dependencyCount
@@ -388,7 +390,7 @@ Check for common issues:
 - Circular dependencies in resolvers or actions
 - Invalid CEL expressions in when/expr fields
 - Type mismatches (resolver type vs actual value)
-- Missing dependsOn when referencing other resolvers (same-section action dependencies are auto-inferred from __actions references)
+- Redundant dependsOn on resolvers (resolver dependencies are auto-inferred from expr:, rslvr:, tmpl: references — only add explicit dependsOn for ordering without a data reference)
 - Using dependsOn in workflow.finally to reference a workflow.actions action — this is a validation error; use __actions.<name> in inputs or when instead (the ref appears in crossSectionRefs on the rendered graph)
 
 7. Call preview_resolvers with path %q to check if resolvers execute successfully and produce expected values
