@@ -285,6 +285,9 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 		// Using _.resolverName in these phases creates a circular dependency;
 		// the correct idiom is __self.
 		lintResolverSelfReferences(name, res, location, result)
+
+		// Check for redundant dependsOn entries that are already inferred.
+		lintRedundantDependsOn(res, location, result, registry)
 	}
 }
 
@@ -343,6 +346,48 @@ func lintResolverSelfReferences(name string, res *resolver.Resolver, location st
 				}
 			}
 		}
+	}
+}
+
+// lintRedundantDependsOn checks if a resolver's explicit dependsOn entries are
+// already covered by auto-inferred dependencies from value references.
+func lintRedundantDependsOn(res *resolver.Resolver, location string, result *Result, registry *provider.Registry) {
+	if len(res.DependsOn) == 0 {
+		return
+	}
+
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
+	}
+
+	inferred := resolver.ExtractInferredDependencies(res, lookup)
+	inferredSet := make(map[string]bool, len(inferred))
+	for _, dep := range inferred {
+		inferredSet[dep] = true
+	}
+
+	var redundant []string
+	for _, dep := range res.DependsOn {
+		if inferredSet[dep] {
+			redundant = append(redundant, dep)
+		}
+	}
+
+	if len(redundant) == 0 {
+		return
+	}
+
+	if len(redundant) == len(res.DependsOn) {
+		result.addFinding(SeverityInfo, "dependency", location+".dependsOn",
+			"dependsOn is redundant — all listed dependencies are already inferred from value references",
+			"Remove the dependsOn field; dependencies are auto-inferred from expr:, rslvr:, and tmpl: references",
+			"redundant-depends-on")
+	} else {
+		result.addFinding(SeverityInfo, "dependency", location+".dependsOn",
+			fmt.Sprintf("dependsOn contains redundant entries already inferred from value references: %s", strings.Join(redundant, ", ")),
+			"Remove the redundant entries; only keep dependsOn for ordering dependencies not referenced by value",
+			"redundant-depends-on")
 	}
 }
 

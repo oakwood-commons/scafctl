@@ -555,6 +555,87 @@ func TestExtractDependencies(t *testing.T) {
 	}
 }
 
+func TestExtractInferredDependencies(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver *Resolver
+		want     []string
+	}{
+		{
+			name: "explicit dependsOn excluded from inferred",
+			resolver: &Resolver{
+				Name:      "target",
+				DependsOn: []string{"config", "credentials"},
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs: map[string]*ValueRef{
+								"value": {Literal: "test"},
+							},
+						},
+					},
+				},
+			},
+			want: []string{},
+		},
+		{
+			name: "inferred from expr without explicit dependsOn",
+			resolver: &Resolver{
+				Name:      "target",
+				DependsOn: []string{"explicit"},
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "cel",
+							Inputs: map[string]*ValueRef{
+								"expression": {Expr: celExpPtr("_.registry + '/' + _.namespace")},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"registry", "namespace"},
+		},
+		{
+			name: "inferred from rslvr reference",
+			resolver: &Resolver{
+				Name:      "target",
+				DependsOn: []string{"other"},
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs: map[string]*ValueRef{
+								"value": {Resolver: stringPtr("env")},
+							},
+						},
+					},
+				},
+			},
+			want: []string{"env"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExtractInferredDependencies(tt.resolver, nil)
+
+			gotMap := make(map[string]bool)
+			for _, dep := range got {
+				gotMap[dep] = true
+			}
+
+			wantMap := make(map[string]bool)
+			for _, dep := range tt.want {
+				wantMap[dep] = true
+			}
+
+			assert.Equal(t, wantMap, gotMap, "inferred dependencies should match")
+		})
+	}
+}
+
 func TestExtractDepsFromExpression(t *testing.T) {
 	tests := []struct {
 		name string

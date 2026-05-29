@@ -1303,3 +1303,138 @@ func TestLintResolveForEach(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "forEach on resolve step")
 	assert.Equal(t, SeverityWarning, findings[0].Severity)
 }
+
+func TestLintRedundantDependsOn(t *testing.T) {
+	celProv := newFakeProvider("cel", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(celProv))
+	require.NoError(t, reg.Register(staticProv))
+
+	tests := []struct {
+		name          string
+		resolvers     map[string]*resolver.Resolver
+		expectFinding bool
+		msgContains   string
+	}{
+		{
+			name: "all dependsOn entries are redundant (inferred from expr)",
+			resolvers: map[string]*resolver.Resolver{
+				"registry":  {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "docker.io"}}}}}},
+				"namespace": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "myns"}}}}}},
+				"imageRef": {
+					Type:      "string",
+					DependsOn: []string{"registry", "namespace"},
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs:   map[string]*spec.ValueRef{"expression": {Expr: exprPtr("_.registry + '/' + _.namespace")}},
+						}},
+					},
+				},
+			},
+			expectFinding: true,
+			msgContains:   "all listed dependencies are already inferred",
+		},
+		{
+			name: "partial redundancy (some dependsOn are not inferred)",
+			resolvers: map[string]*resolver.Resolver{
+				"registry":  {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "docker.io"}}}}}},
+				"namespace": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "myns"}}}}}},
+				"setup":     {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "done"}}}}}},
+				"imageRef": {
+					Type:      "string",
+					DependsOn: []string{"registry", "setup"},
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs:   map[string]*spec.ValueRef{"expression": {Expr: exprPtr("_.registry + '/image'")}},
+						}},
+					},
+				},
+			},
+			expectFinding: true,
+			msgContains:   "redundant entries",
+		},
+		{
+			name: "no redundancy (dependsOn not inferred)",
+			resolvers: map[string]*resolver.Resolver{
+				"setup": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "done"}}}}}},
+				"imageRef": {
+					Type:      "string",
+					DependsOn: []string{"setup"},
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "myimage"}},
+						}},
+					},
+				},
+			},
+			expectFinding: false,
+		},
+		{
+			name: "no dependsOn field at all",
+			resolvers: map[string]*resolver.Resolver{
+				"registry": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "docker.io"}}}}}},
+				"imageRef": {
+					Type: "string",
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs:   map[string]*spec.ValueRef{"expression": {Expr: exprPtr("_.registry + '/image'")}},
+						}},
+					},
+				},
+			},
+			expectFinding: false,
+		},
+		{
+			name: "dependsOn inferred from rslvr reference",
+			resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "prod"}}}}}},
+				"config": {
+					Type:      "string",
+					DependsOn: []string{"env"},
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Resolver: strPtr("env")}},
+						}},
+					},
+				},
+			},
+			expectFinding: true,
+			msgContains:   "all listed dependencies are already inferred",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sol := &solution.Solution{
+				Spec: solution.Spec{
+					Resolvers: tt.resolvers,
+				},
+			}
+
+			result := Solution(sol, "test.yaml", reg)
+
+			findings := filterFindingsByRule(result, "redundant-depends-on")
+			if tt.expectFinding {
+				require.NotEmpty(t, findings, "expected redundant-depends-on finding")
+				assert.Contains(t, findings[0].Message, tt.msgContains)
+				assert.Equal(t, SeverityInfo, findings[0].Severity)
+			} else {
+				assert.Empty(t, findings, "expected no redundant-depends-on finding")
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string {
+	return &s
+}

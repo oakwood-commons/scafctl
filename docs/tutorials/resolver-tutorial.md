@@ -354,9 +354,11 @@ Phase numbers in brackets show concurrent execution groups. Resolvers in the sam
 
 ### Dependency Rules
 
+- Dependencies are **auto-inferred** from value references (`expr:`, `rslvr:`, `tmpl:`) -- you do NOT need to declare `dependsOn` when a resolver references another by value
 - Resolvers in the same phase run concurrently
 - A resolver waits for all its dependencies to complete
 - Circular dependencies cause an error
+- Only add explicit `dependsOn` when a resolver must wait for another without referencing its value (pure ordering dependency)
 
 ---
 

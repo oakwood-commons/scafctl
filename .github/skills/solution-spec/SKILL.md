@@ -47,7 +47,7 @@ spec:
       type: string           # string|int|float|bool|array|object|time|duration|any
       sensitive: false       # Redact from logs/output
       when: "_.some_flag"    # CEL condition -- skip if false
-      dependsOn: [other]     # Explicit deps (auto-extracted from expressions too)
+      dependsOn: [other]     # Explicit deps (rarely needed — auto-inferred from expr/rslvr/tmpl refs)
       timeout: 30s
       example: "sample"
 
@@ -127,9 +127,12 @@ transform:
 ### Dependency Resolution (DAG)
 
 Dependencies are extracted automatically from:
-- CEL expressions: `_.resolverName` references
+- CEL expressions: `_.resolverName` and `_["resolverName"]` references
+- Resolver references: `rslvr: resolverName` in ValueRef inputs
 - Go templates: `{{.resolverName}}` references
-- Explicit `dependsOn` list
+- Explicit `dependsOn` list (merged with auto-inferred deps)
+
+**Important**: `dependsOn` is usually unnecessary because dependencies are auto-inferred from value references. Only add explicit `dependsOn` when a resolver must run after another but does NOT reference its value (pure ordering dependency).
 
 The executor builds a DAG, topologically sorts into phases, then executes phases sequentially with concurrent execution within each phase.
 
