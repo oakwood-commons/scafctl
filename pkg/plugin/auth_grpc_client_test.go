@@ -32,6 +32,7 @@ type mockAuthHandlerServiceClient struct {
 	getAuthHandlersErr       error
 	configureAuthHandlerResp *proto.ConfigureAuthHandlerResponse
 	configureAuthHandlerErr  error
+	lastConfigureReq         *proto.ConfigureAuthHandlerRequest
 	loginFunc                func(ctx context.Context, req *proto.LoginRequest) (grpc.ServerStreamingClient[proto.LoginStreamMessage], error)
 	logoutResp               *proto.LogoutResponse
 	logoutErr                error
@@ -54,6 +55,7 @@ func (m *mockAuthHandlerServiceClient) GetAuthHandlers(_ context.Context, _ *pro
 }
 
 func (m *mockAuthHandlerServiceClient) ConfigureAuthHandler(_ context.Context, req *proto.ConfigureAuthHandlerRequest, _ ...grpc.CallOption) (*proto.ConfigureAuthHandlerResponse, error) {
+	m.lastConfigureReq = req
 	return m.configureAuthHandlerResp, m.configureAuthHandlerErr
 }
 
@@ -588,6 +590,26 @@ func TestAuthHandlerGRPCClient_ConfigureAuthHandler_WithSettings(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+}
+
+func TestAuthHandlerGRPCClient_ConfigureAuthHandler_SendsProfile(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		configureAuthHandlerResp: &proto.ConfigureAuthHandlerResponse{
+			ProtocolVersion: PluginProtocolVersion,
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock, hostServiceID: 42}
+
+	err := client.ConfigureAuthHandler(context.Background(), "github", ProviderConfig{
+		BinaryName: "mycli",
+		Profile:    "work",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastConfigureReq)
+	assert.Equal(t, "work", mock.lastConfigureReq.Profile)
+	assert.Equal(t, "github", mock.lastConfigureReq.HandlerName)
 }
 
 func TestAuthHandlerGRPCClient_StopAuthHandler_Success(t *testing.T) {

@@ -156,12 +156,12 @@ func TestPluginCacheDirFor(t *testing.T) {
 
 func TestRootSolutionFolders_MatchesDefault(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, SolutionFoldersFor(CliBinaryName), RootSolutionFolders)
+	assert.Equal(t, SolutionFoldersFor(CliBinaryName), GetRootSolutionFolders())
 }
 
 func TestSolutionFileNames_MatchesDefault(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, SolutionFileNamesFor(CliBinaryName), SolutionFileNames)
+	assert.Equal(t, SolutionFileNamesFor(CliBinaryName), GetSolutionFileNames())
 }
 
 func TestSanitizeBinaryName(t *testing.T) {

@@ -401,6 +401,7 @@ func TestAuthHandlerWrapper_ApplyOverrides_PreservesHostConfig(t *testing.T) {
 		Quiet:      true,
 		NoColor:    true,
 		BinaryName: "mycli",
+		Profile:    "work",
 	}
 
 	overrides := map[string]string{"clientId": "abc"}
@@ -412,4 +413,5 @@ func TestAuthHandlerWrapper_ApplyOverrides_PreservesHostConfig(t *testing.T) {
 	assert.True(t, mock.lastConfig.Quiet, "Quiet should be preserved")
 	assert.True(t, mock.lastConfig.NoColor, "NoColor should be preserved")
 	assert.Equal(t, "mycli", mock.lastConfig.BinaryName, "BinaryName should be preserved")
+	assert.Equal(t, "work", mock.lastConfig.Profile, "Profile should be preserved")
 }

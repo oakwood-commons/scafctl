@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adrg/xdg"
@@ -386,10 +387,44 @@ func HTTPCacheKeyPrefixFor(binaryName string) string {
 	return binaryName + ":"
 }
 
-var (
-	RootSolutionFolders = SolutionFoldersFor(CliBinaryName)
-	SolutionFileNames   = SolutionFileNamesFor(CliBinaryName)
-)
+// solutionDiscoveryState guards the process-wide solution discovery lists that
+// are written once by Root() and read by solution/get and MCP capabilities.
+var solutionDiscoveryState = newSolutionDiscovery()
+
+type solutionDiscovery struct {
+	mu              sync.RWMutex
+	solutionFolders []string
+	solutionFiles   []string
+}
+
+func newSolutionDiscovery() *solutionDiscovery {
+	return &solutionDiscovery{
+		solutionFolders: SolutionFoldersFor(CliBinaryName),
+		solutionFiles:   SolutionFileNamesFor(CliBinaryName),
+	}
+}
+
+// GetRootSolutionFolders returns the current solution folder search paths.
+func GetRootSolutionFolders() []string {
+	solutionDiscoveryState.mu.RLock()
+	defer solutionDiscoveryState.mu.RUnlock()
+	return solutionDiscoveryState.solutionFolders
+}
+
+// GetSolutionFileNames returns the current solution file names.
+func GetSolutionFileNames() []string {
+	solutionDiscoveryState.mu.RLock()
+	defer solutionDiscoveryState.mu.RUnlock()
+	return solutionDiscoveryState.solutionFiles
+}
+
+// SetSolutionDiscovery atomically updates both solution folder and file name lists.
+func SetSolutionDiscovery(folders, fileNames []string) {
+	solutionDiscoveryState.mu.Lock()
+	defer solutionDiscoveryState.mu.Unlock()
+	solutionDiscoveryState.solutionFolders = folders
+	solutionDiscoveryState.solutionFiles = fileNames
+}
 
 var VersionInformation = VersionInfo{
 	Commit:       "unknown",

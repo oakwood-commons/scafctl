@@ -283,6 +283,7 @@ func (s *AuthHandlerGRPCServer) ConfigureAuthHandler(ctx context.Context, req *p
 		Quiet:      req.Quiet,
 		NoColor:    req.NoColor,
 		BinaryName: req.BinaryName,
+		Profile:    req.Profile,
 		Settings:   settings,
 	}
 	if req.HostServiceId != 0 && s.broker != nil {
@@ -450,6 +451,7 @@ func (c *AuthHandlerGRPCClient) ConfigureAuthHandler(ctx context.Context, handle
 		Quiet:           cfg.Quiet,
 		NoColor:         cfg.NoColor,
 		BinaryName:      cfg.BinaryName,
+		Profile:         cfg.Profile,
 		HostServiceId:   c.hostServiceID,
 		Settings:        protoSettings,
 		ProtocolVersion: PluginProtocolVersion,
