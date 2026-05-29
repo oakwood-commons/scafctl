@@ -4,13 +4,18 @@
 package scafctl
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,8 +225,7 @@ func TestRoot_WithExitFunc(t *testing.T) {
 func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
 	// Restore package-level state regardless of test outcome.
 	t.Cleanup(func() {
-		settings.RootSolutionFolders = settings.SolutionFoldersFor(settings.CliBinaryName)
-		settings.SolutionFileNames = settings.SolutionFileNamesFor(settings.CliBinaryName)
+		settings.SetSolutionDiscovery(settings.SolutionFoldersFor(settings.CliBinaryName), settings.SolutionFileNamesFor(settings.CliBinaryName))
 	})
 
 	cmd, _ := Root(&RootOptions{
@@ -233,21 +237,77 @@ func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
 	}
 	// Verify package-level solution discovery vars were updated
 	expectedFolders := settings.SolutionFoldersFor("cldctl")
-	if len(settings.RootSolutionFolders) != len(expectedFolders) {
-		t.Errorf("RootSolutionFolders length = %d, want %d", len(settings.RootSolutionFolders), len(expectedFolders))
-	}
-	for i, f := range settings.RootSolutionFolders {
-		if f != expectedFolders[i] {
-			t.Errorf("RootSolutionFolders[%d] = %q, want %q", i, f, expectedFolders[i])
-		}
-	}
+	assert.Equal(t, expectedFolders, settings.GetRootSolutionFolders())
 	expectedNames := settings.SolutionFileNamesFor("cldctl")
-	if len(settings.SolutionFileNames) != len(expectedNames) {
-		t.Errorf("SolutionFileNames length = %d, want %d", len(settings.SolutionFileNames), len(expectedNames))
-	}
-	for i, n := range settings.SolutionFileNames {
-		if n != expectedNames[i] {
-			t.Errorf("SolutionFileNames[%d] = %q, want %q", i, n, expectedNames[i])
+	assert.Equal(t, expectedNames, settings.GetSolutionFileNames())
+}
+
+// stubAuthHandler is a minimal auth.Handler for testing BuiltinAuthHandlers.
+type stubAuthHandler struct {
+	name        string
+	displayName string
+}
+
+func (s *stubAuthHandler) Name() string                    { return s.name }
+func (s *stubAuthHandler) DisplayName() string             { return s.displayName }
+func (s *stubAuthHandler) SupportedFlows() []auth.Flow     { return []auth.Flow{auth.FlowDeviceCode} }
+func (s *stubAuthHandler) Capabilities() []auth.Capability { return nil }
+func (s *stubAuthHandler) Login(_ context.Context, _ auth.LoginOptions) (*auth.Result, error) {
+	return nil, nil
+}
+func (s *stubAuthHandler) Logout(_ context.Context) error                 { return nil }
+func (s *stubAuthHandler) Status(_ context.Context) (*auth.Status, error) { return &auth.Status{}, nil }
+func (s *stubAuthHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
+	return nil, nil
+}
+
+func (s *stubAuthHandler) InjectAuth(_ context.Context, _ *http.Request, _ auth.TokenOptions) error {
+	return nil
+}
+
+func TestRoot_WithBuiltinAuthHandlers(t *testing.T) {
+	t.Parallel()
+	handler := &stubAuthHandler{name: "internal-idp", displayName: "Internal IdP"}
+	cmd, cleanup := Root(&RootOptions{
+		BinaryName:          "mycli",
+		BuiltinAuthHandlers: []auth.Handler{handler},
+	})
+	defer cleanup()
+	require.NotNil(t, cmd)
+
+	// Verify the command tree was constructed with the option accepted.
+	assert.Equal(t, "mycli", cmd.Use)
+}
+
+func TestRoot_WithBuiltinAuthHandlers_Execution(t *testing.T) {
+	t.Parallel()
+	handler := &stubAuthHandler{name: "internal-idp", displayName: "Internal IdP"}
+	ioStreams, stdout, _ := terminal.NewTestIOStreams()
+
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams:           ioStreams,
+		BinaryName:          "mycli",
+		BuiltinAuthHandlers: []auth.Handler{handler},
+	})
+	defer cleanup()
+	cmd.SetArgs([]string{"auth", "handlers", "-o", "json"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := stdout.String()
+
+	// Parse the JSON output and verify our builtin handler appears.
+	var handlers []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(output), &handlers))
+
+	var found bool
+	for _, h := range handlers {
+		if h["name"] == "internal-idp" {
+			found = true
+			assert.Equal(t, "Internal IdP", h["displayName"])
+			assert.Equal(t, "built-in", h["source"])
+			break
 		}
 	}
+	assert.True(t, found, "builtin handler 'internal-idp' should appear in auth handlers output")
 }

@@ -578,6 +578,7 @@ func TestAuthHandlerGRPCServer_ConfigureAuthHandler(t *testing.T) {
 				Quiet:           true,
 				NoColor:         true,
 				BinaryName:      "mycli",
+				Profile:         "work",
 				ProtocolVersion: PluginProtocolVersion,
 				Settings: map[string][]byte{
 					"timeout": []byte(`30`),
@@ -596,6 +597,7 @@ func TestAuthHandlerGRPCServer_ConfigureAuthHandler(t *testing.T) {
 			assert.True(t, mock.lastConfig.Quiet)
 			assert.True(t, mock.lastConfig.NoColor)
 			assert.Equal(t, "mycli", mock.lastConfig.BinaryName)
+			assert.Equal(t, "work", mock.lastConfig.Profile)
 			assert.Contains(t, mock.lastConfig.Settings, "timeout")
 		})
 	}

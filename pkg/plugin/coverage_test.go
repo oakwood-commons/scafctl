@@ -2043,6 +2043,21 @@ func TestGRPCClient_ConfigureProvider_SendsProtocolVersion(t *testing.T) {
 	assert.Equal(t, PluginProtocolVersion, mock.lastConfigureReq.ProtocolVersion)
 }
 
+func TestGRPCClient_ConfigureProvider_SendsProfile(t *testing.T) {
+	mock := &mockPluginServiceClient{
+		configureProviderResp: &proto.ConfigureProviderResponse{},
+	}
+	client := &GRPCClient{client: mock}
+
+	err := client.ConfigureProvider(context.Background(), "test", ProviderConfig{
+		BinaryName: "scafctl",
+		Profile:    "work",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, mock.lastConfigureReq)
+	assert.Equal(t, "work", mock.lastConfigureReq.Profile)
+}
+
 // --- WrapperOption tests ---
 
 func TestNewProviderWrapper_WithContext(t *testing.T) {

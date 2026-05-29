@@ -1125,8 +1125,8 @@ func TestNewGetterFromContext_NilContext(t *testing.T) {
 	//nolint:staticcheck // SA1012: intentionally testing nil context handling
 	g := NewGetterFromContext(nil)
 	// Should fall back to defaults
-	assert.Equal(t, settings.RootSolutionFolders, g.solutionFolders)
-	assert.Equal(t, settings.SolutionFileNames, g.solutionFileNames)
+	assert.Equal(t, settings.GetRootSolutionFolders(), g.solutionFolders)
+	assert.Equal(t, settings.GetSolutionFileNames(), g.solutionFileNames)
 }
 
 func TestNewGetterFromContext_NoSettings(t *testing.T) {
@@ -1134,8 +1134,8 @@ func TestNewGetterFromContext_NoSettings(t *testing.T) {
 	ctx := context.Background()
 	g := NewGetterFromContext(ctx)
 	// No settings in context — should use defaults
-	assert.Equal(t, settings.RootSolutionFolders, g.solutionFolders)
-	assert.Equal(t, settings.SolutionFileNames, g.solutionFileNames)
+	assert.Equal(t, settings.GetRootSolutionFolders(), g.solutionFolders)
+	assert.Equal(t, settings.GetSolutionFileNames(), g.solutionFileNames)
 }
 
 func TestNewGetterFromContext_DefaultBinaryName(t *testing.T) {
@@ -1144,8 +1144,8 @@ func TestNewGetterFromContext_DefaultBinaryName(t *testing.T) {
 	ctx := settings.IntoContext(context.Background(), run)
 	g := NewGetterFromContext(ctx)
 	// BinaryName matches default — should not override
-	assert.Equal(t, settings.RootSolutionFolders, g.solutionFolders)
-	assert.Equal(t, settings.SolutionFileNames, g.solutionFileNames)
+	assert.Equal(t, settings.GetRootSolutionFolders(), g.solutionFolders)
+	assert.Equal(t, settings.GetSolutionFileNames(), g.solutionFileNames)
 }
 
 func TestNewGetterFromContext_CustomBinaryName(t *testing.T) {

@@ -197,8 +197,8 @@ func NewGetter(opts ...Option) *Getter {
 		statFunc:          os.Stat,
 		httpClient:        httpc.NewClient(nil), // Use default HTTP client
 		logger:            logr.Discard(),       // Use discard logger by default
-		solutionFolders:   settings.RootSolutionFolders,
-		solutionFileNames: settings.SolutionFileNames,
+		solutionFolders:   settings.GetRootSolutionFolders(),
+		solutionFileNames: settings.GetSolutionFileNames(),
 	}
 
 	// Apply all options
@@ -933,10 +933,12 @@ func (o *Getter) SetDiscoveryMode(mode settings.DiscoveryMode) {
 // each root solution folder with each solution file name defined in the settings.
 // It constructs the full path for each combination and aggregates them into a list.
 func PossibleSolutionPaths() []string {
-	paths := make([]string, 0, len(settings.RootSolutionFolders)*len(settings.SolutionFileNames))
+	folders := settings.GetRootSolutionFolders()
+	fileNames := settings.GetSolutionFileNames()
+	paths := make([]string, 0, len(folders)*len(fileNames))
 
-	for _, folder := range settings.RootSolutionFolders {
-		for _, filename := range settings.SolutionFileNames {
+	for _, folder := range folders {
+		for _, filename := range fileNames {
 			fullPath := filepath.NormalizeFilePath(pathlib.Join(folder, filename))
 			paths = append(paths, fullPath)
 		}

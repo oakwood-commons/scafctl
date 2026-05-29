@@ -166,6 +166,7 @@ func (s *GRPCServer) ConfigureProvider(ctx context.Context, req *proto.Configure
 		NoColor:       req.NoColor,
 		BinaryName:    req.BinaryName,
 		HostServiceID: req.HostServiceId,
+		Profile:       req.Profile,
 		Settings:      settings,
 	}
 
@@ -589,6 +590,7 @@ func (c *GRPCClient) ConfigureProvider(ctx context.Context, providerName string,
 		Quiet:           cfg.Quiet,
 		NoColor:         cfg.NoColor,
 		BinaryName:      cfg.BinaryName,
+		Profile:         cfg.Profile,
 		Settings:        protoSettings,
 		ProtocolVersion: PluginProtocolVersion,
 	})

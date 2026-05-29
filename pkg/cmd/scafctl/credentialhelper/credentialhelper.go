@@ -7,6 +7,7 @@
 package credentialhelper
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -48,7 +51,7 @@ Or add manually to ~/.docker/config.json:
 	return cmd
 }
 
-func newHelper() (*credentialhelper.Helper, error) {
+func newHelper(opts ...credentialhelper.Option) (*credentialhelper.Helper, error) {
 	store, err := secrets.New()
 	if err != nil {
 		return nil, fmt.Errorf("initialize secrets store: %w", err)
@@ -56,7 +59,25 @@ func newHelper() (*credentialhelper.Helper, error) {
 	// Inject the already-initialised secrets store so the native credential store
 	// uses the same backend as the credential helper, avoiding a second keyring init.
 	nativeStore := catalog.NewNativeCredentialStoreWithSecretsStore(store)
-	return credentialhelper.New(store, credentialhelper.WithNativeStore(nativeStore)), nil
+	allOpts := make([]credentialhelper.Option, 0, 1+len(opts))
+	allOpts = append(allOpts, credentialhelper.WithNativeStore(nativeStore))
+	allOpts = append(allOpts, opts...)
+	return credentialhelper.New(store, allOpts...), nil
+}
+
+// buildTokenResolver creates a token resolver from the command context
+// if an auth registry is available. Returns nil if no registry is present
+// (e.g., when PersistentPreRun was not executed).
+func buildTokenResolver(ctx context.Context) credentialhelper.TokenResolver {
+	registry := auth.RegistryFromContext(ctx)
+	if registry == nil {
+		return nil
+	}
+	var resolverOpts []credentialhelper.ResolverOption
+	if cfg := config.FromContext(ctx); cfg != nil {
+		resolverOpts = append(resolverOpts, credentialhelper.WithCustomHandlers(cfg.Auth.CustomOAuth2))
+	}
+	return credentialhelper.NewAuthTokenResolver(registry, resolverOpts...)
 }
 
 func commandGet() *cobra.Command {
@@ -73,7 +94,11 @@ func commandGet() *cobra.Command {
 			if err != nil {
 				return writeError(os.Stdout, "failed to read input")
 			}
-			helper, err := newHelper()
+			var helperOpts []credentialhelper.Option
+			if resolver := buildTokenResolver(cmd.Context()); resolver != nil {
+				helperOpts = append(helperOpts, credentialhelper.WithTokenResolver(resolver))
+			}
+			helper, err := newHelper(helperOpts...)
 			if err != nil {
 				return writeError(os.Stdout, err.Error())
 			}

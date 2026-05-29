@@ -50,6 +50,7 @@ func TestGRPCServer_ConfigureProvider(t *testing.T) {
 				NoColor:       true,
 				BinaryName:    "mycli",
 				HostServiceId: 99,
+				Profile:       "work",
 				Settings: map[string][]byte{
 					"maxBodySize": []byte(`1048576`),
 				},
@@ -67,6 +68,7 @@ func TestGRPCServer_ConfigureProvider(t *testing.T) {
 			assert.True(t, mock.lastConfig.NoColor)
 			assert.Equal(t, "mycli", mock.lastConfig.BinaryName)
 			assert.Equal(t, uint32(99), mock.lastConfig.HostServiceID)
+			assert.Equal(t, "work", mock.lastConfig.Profile)
 			assert.Contains(t, mock.lastConfig.Settings, "maxBodySize")
 		})
 	}

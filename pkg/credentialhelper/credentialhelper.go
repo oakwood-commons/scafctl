@@ -40,8 +40,17 @@ type ErrorResponse struct {
 
 // Helper implements the Docker credential helper protocol operations.
 type Helper struct {
-	store       secrets.Store
-	nativeStore *catalog.NativeCredentialStore
+	store         secrets.Store
+	nativeStore   *catalog.NativeCredentialStore
+	tokenResolver TokenResolver
+}
+
+// TokenResolver dynamically resolves fresh credentials for a registry
+// server URL by calling the appropriate auth handler. Implementations
+// should infer the handler, resolve the active profile, acquire a fresh
+// token, and return the registry credential.
+type TokenResolver interface {
+	Resolve(ctx context.Context, serverURL string) (*Credential, error)
 }
 
 // Option configures the Helper.
@@ -50,6 +59,13 @@ type Option func(*Helper)
 // WithNativeStore sets the native credential store for fallback lookups on Get.
 func WithNativeStore(ns *catalog.NativeCredentialStore) Option {
 	return func(h *Helper) { h.nativeStore = ns }
+}
+
+// WithTokenResolver sets a dynamic token resolver that acquires fresh
+// credentials from auth handlers. When set, Get() tries dynamic
+// resolution before falling back to stored credentials.
+func WithTokenResolver(r TokenResolver) Option {
+	return func(h *Helper) { h.tokenResolver = r }
 }
 
 // New creates a new credential helper with the given secrets store.
@@ -62,15 +78,27 @@ func New(store secrets.Store, opts ...Option) *Helper {
 }
 
 // Get retrieves credentials for a registry server URL.
-// It first checks the credhelper: namespace, then falls back to the native
-// credential store if configured.
+// Lookup precedence:
+//  1. Dynamic token resolution via auth handler (fresh token)
+//  2. Secrets store (credhelper: namespace)
+//  3. Native credential store (registries.json)
 func (h *Helper) Get(ctx context.Context, serverURL string) (*Credential, error) {
 	serverURL = strings.TrimSpace(serverURL)
 	if serverURL == "" {
 		return nil, fmt.Errorf("credentials not found")
 	}
 
-	// Check credhelper: namespace first
+	// Try dynamic resolution first — this returns a fresh token from the
+	// auth handler, avoiding stale bridged credentials.
+	if h.tokenResolver != nil {
+		cred, err := h.tokenResolver.Resolve(ctx, serverURL)
+		if err == nil && cred != nil {
+			return cred, nil
+		}
+		// Fall through to stored credentials on any error.
+	}
+
+	// Check credhelper: namespace next
 	data, err := h.store.Get(ctx, keyPrefix+serverURL)
 	if err == nil && len(data) > 0 {
 		var cred Credential

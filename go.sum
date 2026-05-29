@@ -630,8 +630,8 @@ github.com/oakwood-commons/kvx v0.12.1-0.20260526145940-98d391c60b9b h1:0hECYesH
 github.com/oakwood-commons/kvx v0.12.1-0.20260526145940-98d391c60b9b/go.mod h1:PJktDsEq9PS88UDCkoIT+fgiSXs7dXWcq76Lhk5BmZY=
 github.com/oakwood-commons/oauth-helpers v0.2.0 h1:IIu8AitRWCNp51oRvfBU0D7JGM3Tt3QXUejLwEFZk+Q=
 github.com/oakwood-commons/oauth-helpers v0.2.0/go.mod h1:+VhuszKORoPc9H0HwvS92I/U0828up8XejsUpXS7FvE=
-github.com/oakwood-commons/scafctl-plugin-sdk v0.7.0 h1:irpsqXy5xB93gb2jW8/2hLfBgn5kNuaSPYK9eSd4MvQ=
-github.com/oakwood-commons/scafctl-plugin-sdk v0.7.0/go.mod h1:+Qo2BXZ7Dhj8RoOwvueYFvhJsllyy1wPEJV71W1PoF0=
+github.com/oakwood-commons/scafctl-plugin-sdk v0.8.0 h1:EE4FnUT+RjyUsAYDZ8C6YKK7fPjpckTA/6otlQz5nzk=
+github.com/oakwood-commons/scafctl-plugin-sdk v0.8.0/go.mod h1:FiF5Nx8FqKxsfYqr93NnHVVVQLUaV6rPOY7Nu6dOIsg=
 github.com/oklog/run v1.2.0 h1:O8x3yXwah4A73hJdlrwo/2X6J62gE5qTMusH0dvz60E=
 github.com/oklog/run v1.2.0/go.mod h1:mgDbKRSwPhJfesJ4PntqFUbKQRZ50NgmZTSPlFA0YFk=
 github.com/oklog/ulid/v2 v2.1.1 h1:suPZ4ARWLOJLegGFiZZ1dFAkqzhMjL3J1TzI+5wHz8s=

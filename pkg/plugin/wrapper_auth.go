@@ -52,6 +52,7 @@ type hostConfig struct {
 	Quiet      bool
 	NoColor    bool
 	BinaryName string
+	Profile    string
 }
 
 // NewAuthHandlerWrapper creates a new wrapper for a plugin auth handler.
@@ -274,6 +275,7 @@ func (w *AuthHandlerWrapper) ApplyOverrides(ctx context.Context, overrides map[s
 		Quiet:         w.hostCfg.Quiet,
 		NoColor:       w.hostCfg.NoColor,
 		BinaryName:    w.hostCfg.BinaryName,
+		Profile:       w.hostCfg.Profile,
 		Settings:      map[string]json.RawMessage{w.handlerName: settingsJSON},
 		HostServiceID: w.client.HostServiceID(),
 	}
@@ -376,6 +378,7 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 				Quiet:      cfg.Quiet,
 				NoColor:    cfg.NoColor,
 				BinaryName: cfg.BinaryName,
+				Profile:    cfg.Profile,
 			}
 		}
 	}
@@ -427,6 +430,7 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 	}
 
 	profile := auth.ResolveActiveProfile(ctx, handlerName)
+	cfg.Profile = profile
 
 	var raw json.RawMessage
 	var err error

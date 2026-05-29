@@ -160,6 +160,12 @@ type RootOptions struct {
 	// alongside built-in handlers during PersistentPreRunE.
 	AuthPluginDirs []string
 
+	// BuiltinAuthHandlers are pre-built auth handler instances that the
+	// embedder compiles into the binary. They are registered eagerly at
+	// startup before config-based or plugin handlers, and appear in
+	// 'auth list' immediately.
+	BuiltinAuthHandlers []auth.Handler
+
 	// ActionDiscoveryFileNames overrides the file names used by "run action"
 	// auto-discovery. When empty, the defaults from
 	// settings.ActionFileNamesFor are used.
@@ -238,8 +244,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	// Update package-level solution discovery lists so any code reading them
 	// directly (e.g., PossibleSolutionPaths, MCP capabilities) reflects the
 	// embedder's binary name rather than the hardcoded default.
-	settings.RootSolutionFolders = settings.SolutionFoldersFor(binaryName)
-	settings.SolutionFileNames = settings.SolutionFileNamesFor(binaryName)
+	settings.SetSolutionDiscovery(settings.SolutionFoldersFor(binaryName), settings.SolutionFileNamesFor(binaryName))
 
 	// Wire embedder-supplied action discovery file names into cliParams
 	// so they are available via settings.FromContext during command execution.
@@ -468,6 +473,13 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 			// Initialize auth registry
 			authRegistry := auth.NewRegistry()
+
+			// Register embedder-provided builtin auth handlers first
+			for _, h := range opts.BuiltinAuthHandlers {
+				if regErr := authRegistry.Register(h); regErr != nil {
+					lgr.V(1).Info("failed to register builtin auth handler", "name", h.Name(), "error", regErr)
+				}
+			}
 
 			// Register custom OAuth2 handlers from config
 			for _, customCfg := range cfg.Auth.CustomOAuth2 {
