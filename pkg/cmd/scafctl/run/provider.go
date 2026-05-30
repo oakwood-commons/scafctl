@@ -41,6 +41,10 @@ type ProviderOptions struct {
 	// ProviderName is the name of the provider to execute (positional arg).
 	ProviderName string
 
+	// PluginVersion is the version to pin the plugin provider to.
+	// Set via --plugin-version flag or name@version positional syntax.
+	PluginVersion string
+
 	// InputParams are the provider input parameters (--input key=value or --input @file.yaml).
 	InputParams []string
 
@@ -130,6 +134,11 @@ PLUGIN PROVIDERS:
   Use --plugin-dir to load plugin providers from a directory.
   Multiple --plugin-dir flags can be specified.
 
+VERSION PINNING:
+  Pin a specific plugin version using name@version syntax or --plugin-version:
+    scafctl run provider exec@0.5.0 command="echo hello"
+    scafctl run provider exec --plugin-version 0.5.0 command="echo hello"
+
 OUTPUT FORMATS:
   json     JSON output (default)
   yaml     YAML output
@@ -167,6 +176,10 @@ Examples:
   # Load plugin providers from a directory
   scafctl run provider echo message=hello --plugin-dir ./plugins
 
+  # Pin a specific plugin version
+  scafctl run provider exec@0.5.0 command="echo hello"
+  scafctl run provider exec --plugin-version 0.5.0 command="echo hello"
+
   # Show execution metrics
   scafctl run provider http url=https://example.com --show-metrics
 
@@ -174,7 +187,11 @@ Examples:
   scafctl run provider http url=https://api.example.com -i`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MinimumNArgs(1),
 		PreRun: func(_ *cobra.Command, args []string) {
-			options.ProviderName = args[0]
+			name, version := parseProviderNameVersion(args[0])
+			options.ProviderName = name
+			if version != "" && options.PluginVersion == "" {
+				options.PluginVersion = version
+			}
 			options.DynamicArgs = args[1:]
 		},
 		RunE:         makeRunEFunc(cfg, "provider"),
@@ -186,6 +203,7 @@ Examples:
 	cCmd.Flags().StringVar(&options.Capability, "capability", "", "Capability to execute (default: first declared capability)")
 	cCmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be executed without running the provider")
 	cCmd.Flags().StringArrayVar(&options.PluginDirs, "plugin-dir", nil, "Directory to scan for plugin providers")
+	cCmd.Flags().StringVar(&options.PluginVersion, "plugin-version", "", "Pin plugin provider to a specific cached version (e.g. 0.5.0)")
 	cCmd.Flags().BoolVar(&options.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive fields in output")
 	cCmd.Flags().StringVar(&options.OutputDir, "output-dir", "", "Target directory for action file operations (applies when capability=action)")
@@ -362,8 +380,19 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 
 	// Look up the provider
 	prov, ok := reg.Get(o.ProviderName)
-	if !ok {
-		// Auto-resolve official providers on miss.
+	if ok && o.PluginVersion != "" {
+		// Provider is already loaded -- verify the version matches the requested pin.
+		desc := prov.Descriptor()
+		if desc.Version == nil {
+			w.WarnStderrf("--plugin-version does not apply to builtin provider %q (ignoring)", o.ProviderName)
+		} else if desc.Version.String() != o.PluginVersion {
+			err := fmt.Errorf("provider %q is loaded at version %s but version %s was requested", o.ProviderName, desc.Version, o.PluginVersion)
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		}
+	}
+	if !ok && o.PluginVersion == "" {
+		// Auto-resolve official providers on miss (only when no version pin is active).
 		if clients, resolveErr := autoResolveProviderByName(ctx, o.ProviderName, reg); resolveErr == nil {
 			defer plugin.KillAll(clients)
 			prov, ok = reg.Get(o.ProviderName)
@@ -374,12 +403,24 @@ func (o *ProviderOptions) Run(ctx context.Context) error {
 	}
 	if !ok {
 		// Fallback: try loading from the local plugin cache.
-		if clients, cacheErr := plugin.RegisterCachedPlugin(ctx, o.ProviderName, reg, pluginCfg, settings.PluginCacheDirFor(o.BinaryName), clientOpts...); cacheErr == nil {
+		// When --plugin-version or @version is specified, pin to that exact version.
+		var clients []*plugin.Client
+		var cacheErr error
+		if o.PluginVersion != "" {
+			clients, cacheErr = plugin.RegisterCachedPluginVersion(ctx, o.ProviderName, o.PluginVersion, reg, pluginCfg, settings.PluginCacheDirFor(o.BinaryName), clientOpts...)
+		} else {
+			clients, cacheErr = plugin.RegisterCachedPlugin(ctx, o.ProviderName, reg, pluginCfg, settings.PluginCacheDirFor(o.BinaryName), clientOpts...)
+		}
+		if cacheErr == nil {
 			defer plugin.KillAll(clients)
 			prov, ok = reg.Get(o.ProviderName)
 			if ok && w != nil {
 				w.Verbosef("Resolved provider %q from local plugin cache", o.ProviderName)
 			}
+		} else if o.PluginVersion != "" {
+			// Version-pinned lookups should surface the version-specific error.
+			w.Errorf("%v", cacheErr)
+			return exitcode.WithCode(cacheErr, exitcode.FileNotFound)
 		}
 	}
 	if !ok {
@@ -682,4 +723,14 @@ func (o *ProviderOptions) writeOutput(ctx context.Context, output map[string]any
 	kvxOpts.IOStreams = o.IOStreams
 
 	return kvxOpts.Write(output)
+}
+
+// parseProviderNameVersion splits a provider argument into name and version
+// components using the name@version syntax. If no @ separator is present (or @
+// is at position 0), the full input is returned as the name with an empty version.
+func parseProviderNameVersion(arg string) (name, version string) {
+	if idx := strings.LastIndex(arg, "@"); idx > 0 {
+		return arg[:idx], arg[idx+1:]
+	}
+	return arg, ""
 }

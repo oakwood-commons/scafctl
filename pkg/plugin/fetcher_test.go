@@ -737,6 +737,34 @@ func TestRegisterCachedPlugin_NotCached(t *testing.T) {
 	assert.Nil(t, clients)
 }
 
+func TestRegisterCachedPluginVersion_NotCached(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	clients, err := RegisterCachedPluginVersion(ctx, "nonexistent-plugin-for-test-"+t.Name(), "1.0.0", reg, nil, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in cache")
+	assert.Nil(t, clients)
+}
+
+func TestRegisterCachedPluginVersion_WrongVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	// Create a cache with version 1.0.0 but request 2.0.0
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+	_, err := cache.Put("test-plugin", "1.0.0", CurrentPlatform(), []byte("#!/bin/sh\nexit 0"))
+	require.NoError(t, err)
+
+	clients, err := RegisterCachedPluginVersion(ctx, "test-plugin", "2.0.0", reg, nil, cacheDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in cache")
+	assert.Nil(t, clients)
+}
+
 func TestPluginCacheKey(t *testing.T) {
 	t.Parallel()
 

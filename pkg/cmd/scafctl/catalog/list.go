@@ -292,7 +292,12 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 
 	// Filter pre-release versions unless --pre-release flag is set.
 	if !opts.PreRelease {
+		before := len(artifacts)
 		artifacts = filterPreReleaseArtifacts(artifacts)
+		if hidden := before - len(artifacts); hidden > 0 {
+			bin := settings.BinaryNameFromContext(ctx)
+			w.WarnStderrf("%d artifact(s) hidden (pre-release) -- use --pre-release to show them, or: %s catalog list --pre-release --all-versions", hidden, bin)
+		}
 	}
 
 	// Apply version constraint filter if set.
@@ -385,7 +390,12 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 
 	// Filter pre-release versions unless --pre-release flag is set.
 	if !opts.PreRelease {
+		before := len(artifacts)
 		artifacts = filterPreReleaseArtifacts(artifacts)
+		if hidden := before - len(artifacts); hidden > 0 {
+			bin := settings.BinaryNameFromContext(ctx)
+			w.WarnStderrf("%d artifact(s) hidden (pre-release) -- use --pre-release to show them, or: %s catalog list --pre-release --all-versions", hidden, bin)
+		}
 	}
 
 	if opts.VersionConstraint != "" {
@@ -440,7 +450,12 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 
 	// Filter pre-release versions unless --pre-release flag is set.
 	if !opts.PreRelease {
+		before := len(artifacts)
 		artifacts = filterPreReleaseArtifacts(artifacts)
+		if hidden := before - len(artifacts); hidden > 0 {
+			bin := settings.BinaryNameFromContext(ctx)
+			w.WarnStderrf("%d artifact(s) hidden (pre-release) -- use --pre-release to show them, or: %s catalog list --pre-release --all-versions", hidden, bin)
+		}
 	}
 
 	if opts.VersionConstraint != "" {

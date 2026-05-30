@@ -1,0 +1,55 @@
+# Version Pinning Demo
+#
+# Demonstrates how to pin a specific plugin provider version at runtime using
+# the name@version syntax or --plugin-version flag.
+#
+# Prerequisites:
+#   A plugin provider (e.g., exec) must be cached locally at the pinned version.
+#   Install it from a catalog first:
+#     scafctl plugins install exec@0.5.0
+#
+# Run with @version syntax (recommended):
+#   scafctl run provider exec@0.5.0 command="echo pinned"
+#
+# Run with --plugin-version flag:
+#   scafctl run provider exec --plugin-version 0.5.0 command="echo pinned"
+#
+# Run the solution (uses bundle.plugins version constraint):
+#   scafctl run solution -f examples/plugins/version-pinning-solution.yaml
+#
+# Verify which version is loaded:
+#   scafctl get provider -o json | jq '.[] | select(.name == "exec")'
+#   scafctl plugins list
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: version-pinning-demo
+  displayName: Version Pinning Demo
+  category: developer-tools
+  tags:
+    - plugin
+    - versioning
+  description: |
+    Demonstrates plugin version pinning. When multiple versions of a plugin
+    provider are cached locally, you can pin to a specific version using:
+      - name@version positional syntax: scafctl run provider exec@0.5.0
+      - --plugin-version flag: scafctl run provider exec --plugin-version 0.5.0
+      - bundle.plugins version constraint in solution YAML
+
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: "0.5.0"
+
+spec:
+  resolvers:
+    pinned-result:
+      description: Run a command using the pinned plugin version
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: echo "Running with pinned version"

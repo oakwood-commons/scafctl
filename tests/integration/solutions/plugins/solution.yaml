@@ -81,3 +81,41 @@ spec:
         assertions:
           - expression: __exitCode == 0
           - contains: greeting
+
+      run-provider-version-pin-invalid:
+        description: Version pin with non-existent version fails gracefully
+        command: [run, provider, "exec@99.99.99"]
+        args: ["command=echo hi"]
+        injectFile: false
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - contains: "99.99.99"
+            target: stderr
+
+      run-provider-version-flag-invalid:
+        description: --plugin-version with non-existent version fails gracefully
+        command: [run, provider, exec, "--plugin-version", "99.99.99"]
+        args: ["command=echo hi"]
+        injectFile: false
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - contains: "99.99.99"
+            target: stderr
+
+      plugins-list-version-column:
+        description: Plugins list shows version in output
+        command: [plugins, list]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: version
+
+      get-provider-version-column:
+        description: Get provider includes version field in JSON
+        command: [get, provider, "-o", "json"]
+        injectFile: false
+        assertions:
+          - expression: __exitCode == 0
+          - contains: version

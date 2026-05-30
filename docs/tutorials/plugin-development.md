@@ -78,7 +78,7 @@ scafctl resolves plugins through two mechanisms:
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
 
-# List cached plugin binaries
+# List cached plugin binaries (remote download cache only)
 scafctl plugins list
 
 # Push to a remote registry
@@ -90,7 +90,7 @@ scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
 
-# List cached plugin binaries
+# List cached plugin binaries (remote download cache only)
 scafctl plugins list
 
 # Push to a remote registry
@@ -98,6 +98,11 @@ scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
 {{% /tab %}}
 {{< /tabs >}}
+
+> **Note:** `plugins list` shows only plugins fetched from the remote catalog
+> cache. Local builds loaded via `--plugin-dir` are not listed. To see all
+> available versions (including pre-release), use:
+> `scafctl catalog list --kind provider --pre-release --all-versions`
 
 ## Next Steps
 

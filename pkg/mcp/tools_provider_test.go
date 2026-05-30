@@ -11,6 +11,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -1168,4 +1169,101 @@ func TestNewServer_DefaultOfficialRegistry(t *testing.T) {
 		"expected official registry to be auto-injected")
 	assert.Contains(t, err.Error(), "plugin pool not configured",
 		"expected failure because no pool was provided")
+}
+
+// versionMismatchProvider is a minimal Provider implementation for testing
+// version mismatch paths.
+type versionMismatchProvider struct {
+	desc *provider.Descriptor
+}
+
+func (p *versionMismatchProvider) Descriptor() *provider.Descriptor { return p.desc }
+func (p *versionMismatchProvider) Execute(_ context.Context, _ any) (*provider.Output, error) {
+	return &provider.Output{Data: "mock"}, nil
+}
+
+func TestHandleRunProvider_VersionMismatch_WrongVersion(t *testing.T) {
+	t.Parallel()
+
+	// Register a provider with a specific version, then request a different one.
+	reg := provider.NewRegistry()
+	err := reg.Register(&versionMismatchProvider{
+		desc: &provider.Descriptor{
+			Name:         "versioned-provider",
+			DisplayName:  "Versioned Provider",
+			Description:  "A test provider with a specific version",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("2.0.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: {Type: "object"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "run_provider"
+	request.Params.Arguments = map[string]any{
+		"provider":       "versioned-provider",
+		"plugin_version": "3.0.0",
+		"inputs":         map[string]any{"value": "hello"},
+	}
+
+	result, err := srv.handleRunProvider(context.Background(), request)
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	text := result.Content[0].(mcp.TextContent).Text
+	assert.Contains(t, text, "VERSION_MISMATCH")
+	assert.Contains(t, text, "2.0.0")
+	assert.Contains(t, text, "3.0.0")
+}
+
+func TestHandleRunProvider_VersionMatch_Proceeds(t *testing.T) {
+	t.Parallel()
+
+	// Register a provider with version 2.0.0, request 2.0.0 -- should proceed.
+	reg := provider.NewRegistry()
+	err := reg.Register(&versionMismatchProvider{
+		desc: &provider.Descriptor{
+			Name:         "matching-provider",
+			DisplayName:  "Matching Provider",
+			Description:  "A test provider that matches the requested version",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("2.0.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: {Type: "object"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	srv, err := NewServer(
+		WithServerRegistry(reg),
+		WithServerVersion("test"),
+	)
+	require.NoError(t, err)
+
+	request := mcp.CallToolRequest{}
+	request.Params.Name = "run_provider"
+	request.Params.Arguments = map[string]any{
+		"provider":       "matching-provider",
+		"plugin_version": "2.0.0",
+		"inputs":         map[string]any{"value": "hello"},
+	}
+
+	result, err := srv.handleRunProvider(context.Background(), request)
+	require.NoError(t, err)
+	// Should NOT be a VERSION_MISMATCH error -- version matches, so execution proceeds.
+	if result.IsError {
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.NotContains(t, text, "VERSION_MISMATCH")
+	}
 }

@@ -87,4 +87,5 @@ const (
 	ErrCodeExecFailed      = "EXECUTION_FAILED"
 	ErrCodeAuthRequired    = "AUTH_REQUIRED"
 	ErrCodeConfigError     = "CONFIG_ERROR"
+	ErrCodeVersionMismatch = "VERSION_MISMATCH"
 )
