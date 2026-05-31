@@ -33,6 +33,7 @@ func CleanFunc() celexp.ExtFunction {
 	funcName := "strings.clean"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "strings.clean(string) -> string",
 		Description:   "Cleans a string by converting it to lowercase and removing hyphens, underscores, and spaces",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -68,6 +69,7 @@ func TitleFunc() celexp.ExtFunction {
 	funcName := "strings.title"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "strings.title(string) -> string",
 		Description:   "Converts a string to title case using English language rules",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -107,6 +109,7 @@ func RepeatFunc() celexp.ExtFunction {
 	funcName := "strings.repeat"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "strings.repeat(string, int) -> string",
 		Description:   "Repeats a string a given number of times",
 		FunctionNames: []string{funcName},
 		Custom:        true,

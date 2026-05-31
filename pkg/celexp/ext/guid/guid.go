@@ -18,6 +18,7 @@ func NewFunc() celexp.ExtFunction {
 	funcName := "guid.new"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "guid.new() -> string",
 		Description:   "Generates a new random UUID (GUID) in standard format. Use guid.new() to create a universally unique identifier",
 		FunctionNames: []string{funcName},
 		Custom:        true,

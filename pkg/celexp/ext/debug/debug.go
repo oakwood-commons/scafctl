@@ -20,6 +20,7 @@ func DebugOutFunc(w *writer.Writer) celexp.ExtFunction {
 
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "debug.out(dyn) -> null | debug.out(dyn, dyn) -> dyn",
 		Description:   "Outputs a debug message to the console. Use debug.out(message) to print a message (returns null), or debug.out(message, value) to print a message and return a value for inline debugging",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -74,6 +75,7 @@ func DebugThrowFunc() celexp.ExtFunction {
 
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "debug.throw(dyn) -> dyn",
 		Description:   "Throws an error with the provided message, immediately halting CEL expression evaluation. Use debug.throw(message) to stop execution and return an error with the specified message",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -108,6 +110,7 @@ func DebugSleepFunc() celexp.ExtFunction {
 
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "debug.sleep(int) -> int | debug.sleep(int, dyn) -> dyn",
 		Description:   "Pauses execution for the specified duration in milliseconds and returns the value for inline debugging. Use debug.sleep(duration) to sleep and return the duration value, or debug.sleep(duration, value) to sleep and return a different value",
 		FunctionNames: []string{funcName},
 		Custom:        true,

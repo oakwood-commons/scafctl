@@ -25,6 +25,9 @@ func BuildFunctionDetail(fn *celexp.ExtFunction) map[string]any {
 		"custom": fn.Custom,
 	}
 
+	if fn.Signature != "" {
+		m["signature"] = fn.Signature
+	}
 	if fn.Description != "" {
 		m["description"] = fn.Description
 	}

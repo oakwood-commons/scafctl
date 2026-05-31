@@ -66,6 +66,7 @@ func ObjectsFunc() celexp.ExtFunction {
 	funcName := "sort.objects"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "sort.objects(list<map<string,dyn>>, string) -> list<map<string,dyn>>",
 		Description:   "Sorts an array of objects by a specified property in ascending order",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -114,6 +115,7 @@ func ObjectsDescendingFunc() celexp.ExtFunction {
 	funcName := "sort.objectsDescending"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "sort.objectsDescending(list<map<string,dyn>>, string) -> list<map<string,dyn>>",
 		Description:   "Sorts an array of objects by a specified property in descending order",
 		FunctionNames: []string{funcName},
 		Custom:        true,

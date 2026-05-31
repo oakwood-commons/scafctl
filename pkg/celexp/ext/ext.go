@@ -733,6 +733,7 @@ func Custom() celexp.ExtFunctionList {
 		celmap.OmitFunc(),
 		celmap.MergeFunc(),
 		celmap.RecurseFunc(),
+		celmap.FromEntriesFunc(),
 
 		// Marshalling functions
 		marshalling.JSONMarshalFunc(),

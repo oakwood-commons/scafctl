@@ -20,6 +20,7 @@ func DirFunc() celexp.ExtFunction {
 	funcName := "filepath.dir"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "filepath.dir(string) -> string",
 		Description:   "Returns the directory component of a path, removing the final element. Use filepath.dir(path) to get the parent directory of a file or directory path",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -56,6 +57,7 @@ func NormalizeFunc() celexp.ExtFunction {
 	funcName := "filepath.normalize"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "filepath.normalize(string) -> string",
 		Description:   "Normalizes a path by cleaning redundant separators and resolving . and .. elements. Use filepath.normalize(path) to convert a path to its shortest equivalent form with clean separators",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -93,6 +95,7 @@ func ExistsFunc() celexp.ExtFunction {
 	funcName := "filepath.exists"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "filepath.exists(string) -> bool",
 		Description:   "Checks if a file or directory exists at the specified path. Use filepath.exists(path) to return true if the path exists, false otherwise",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -144,6 +147,7 @@ func JoinFunc() celexp.ExtFunction {
 
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "filepath.join(string, string, ...) -> string",
 		Description:   "Joins any number of path elements into a single path, separating them with the OS-specific path separator. Use filepath.join(path1, path2, ...) to combine path segments",
 		FunctionNames: []string{funcName},
 		Custom:        true,

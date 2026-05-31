@@ -140,6 +140,7 @@ type VarInfo struct {
 // with the CEL environment to extend the expression language capabilities.
 type ExtFunction struct {
 	Name          string          `json:"name,omitempty" yaml:"name,omitempty" doc:"Function name" maxLength:"128" example:"size"`
+	Signature     string          `json:"signature,omitempty" yaml:"signature,omitempty" doc:"Type signature" maxLength:"256" example:"map.add(map<string,dyn>, string, dyn) -> map<string,dyn>"`
 	Category      string          `json:"category,omitempty" yaml:"category,omitempty" doc:"Function category" maxLength:"64" example:"collections"`
 	Links         []string        `json:"links,omitempty" yaml:"links,omitempty" doc:"Reference URLs" maxItems:"10"`
 	Examples      []Example       `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Usage examples" maxItems:"20"`

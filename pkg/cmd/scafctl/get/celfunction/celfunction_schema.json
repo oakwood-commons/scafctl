@@ -24,6 +24,11 @@
         "layout": "inline"
       },
       {
+        "title": "Signature",
+        "fields": ["signature"],
+        "layout": "paragraph"
+      },
+      {
         "title": "Description",
         "fields": ["description"],
         "layout": "paragraph"
@@ -59,6 +64,11 @@
         "type": "boolean",
         "title": "Custom",
         "description": "Whether this is a custom scafctl extension"
+      },
+      "signature": {
+        "type": "string",
+        "title": "Signature",
+        "description": "Type signature of the function"
       },
       "description": {
         "type": "string",

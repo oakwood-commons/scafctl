@@ -25,6 +25,7 @@ func MatchFunc() celexp.ExtFunction {
 	funcName := "regex.match"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "regex.match(string, string) -> bool",
 		Description:   "Tests if a string matches a regular expression pattern (RE2 syntax). Returns true if the pattern matches anywhere in the input string",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -79,6 +80,7 @@ func ReplaceFunc() celexp.ExtFunction {
 	funcName := "regex.replace"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "regex.replace(string, string, string) -> string",
 		Description:   "Replaces all occurrences of a regular expression pattern (RE2 syntax) in a string with a replacement string",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -140,6 +142,7 @@ func FindAllFunc() celexp.ExtFunction {
 	funcName := "regex.findAll"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "regex.findAll(string, string) -> list<string>",
 		Description:   "Finds all matches of a regular expression pattern (RE2 syntax) in a string and returns them as a list of strings",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -202,6 +205,7 @@ func SplitFunc() celexp.ExtFunction {
 	funcName := "regex.split"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "regex.split(string, string) -> list<string>",
 		Description:   "Splits a string by a regular expression pattern (RE2 syntax) and returns a list of strings",
 		FunctionNames: []string{funcName},
 		Custom:        true,
