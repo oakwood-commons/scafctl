@@ -18,16 +18,34 @@ import (
 	"github.com/hashicorp/go-plugin"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"google.golang.org/grpc"
 )
 
 // pluginConfig holds the parameters needed to create a plugin client.
 type pluginConfig struct {
-	handshake    *HandshakeConfigData
-	pluginName   string
-	grpcPlugin   plugin.Plugin
-	cmdFn        func(string) *exec.Cmd // builds the exec.Cmd for the plugin binary
-	logger       hclog.Logger           // if nil, a null logger is used
-	startTimeout time.Duration          // if >0, bounds plugin startup/handshake
+	handshake          *HandshakeConfigData
+	pluginName         string
+	grpcPlugin         plugin.Plugin
+	cmdFn              func(string) *exec.Cmd // builds the exec.Cmd for the plugin binary
+	logger             hclog.Logger           // if nil, a null logger is used
+	startTimeout       time.Duration          // if >0, bounds plugin startup/handshake
+	grpcMaxMessageSize int                    // if >0, overrides default gRPC max message size
+}
+
+// resolveGRPCMaxMessageSize returns the effective gRPC max message size.
+// A zero or negative value (unset) falls back to DefaultGRPCMaxMessageSize.
+// A positive value below MinGRPCMaxMessageSize is clamped to MinGRPCMaxMessageSize,
+// matching the minimum:"1048576" validation tag on the config struct and
+// ensuring a misconfigured value is never more permissive than the minimum.
+func resolveGRPCMaxMessageSize(size int) int {
+	if size <= 0 {
+		return settings.DefaultGRPCMaxMessageSize
+	}
+	if size < settings.MinGRPCMaxMessageSize {
+		return settings.MinGRPCMaxMessageSize
+	}
+	return size
 }
 
 // connectPlugin creates a go-plugin client, connects, and dispenses the named plugin.
@@ -39,6 +57,8 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 	if cmdFn == nil {
 		cmdFn = pluginCmd
 	}
+
+	maxMsgSize := resolveGRPCMaxMessageSize(cfg.grpcMaxMessageSize)
 
 	//nolint:noctx // Context not available at plugin initialization time
 	clientConfig := &plugin.ClientConfig{
@@ -56,6 +76,14 @@ func connectPlugin(pluginPath string, cfg pluginConfig) (any, *plugin.Client, er
 		// output during normal command invocations. When debug mode is active
 		// the caller provides a real logger via pluginConfig.logger.
 		Logger: pluginLogger(cfg.logger),
+		// Override the default 4MB gRPC max message size to handle
+		// legitimately large provider inputs and outputs.
+		GRPCDialOptions: []grpc.DialOption{
+			grpc.WithDefaultCallOptions(
+				grpc.MaxCallRecvMsgSize(maxMsgSize),
+				grpc.MaxCallSendMsgSize(maxMsgSize),
+			),
+		},
 	}
 	if cfg.startTimeout > 0 {
 		clientConfig.StartTimeout = cfg.startTimeout
@@ -216,10 +244,11 @@ type Client struct {
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
-	hostDeps     *HostServiceDeps
-	sanitizeEnv  bool          // strip sensitive env vars from plugin process
-	debugLog     bool          // emit plugin startup/lifecycle debug traces
-	startTimeout time.Duration // bounds plugin startup/handshake
+	hostDeps           *HostServiceDeps
+	sanitizeEnv        bool          // strip sensitive env vars from plugin process
+	debugLog           bool          // emit plugin startup/lifecycle debug traces
+	startTimeout       time.Duration // bounds plugin startup/handshake
+	grpcMaxMessageSize int           // overrides default gRPC max message size
 }
 
 // WithHostDeps provides host-side dependencies (secrets, auth) that are
@@ -255,6 +284,15 @@ func WithDebugLogging() ClientOption {
 func WithStartTimeout(d time.Duration) ClientOption {
 	return func(o *clientOptions) {
 		o.startTimeout = d
+	}
+}
+
+// WithGRPCMaxMessageSize sets the maximum gRPC message size in bytes for
+// plugin communication. This applies to both send and receive directions.
+// If not set, defaults to settings.DefaultGRPCMaxMessageSize (64 MB).
+func WithGRPCMaxMessageSize(size int) ClientOption {
+	return func(o *clientOptions) {
+		o.grpcMaxMessageSize = size
 	}
 }
 
@@ -320,12 +358,13 @@ func newClientWithConnector(
 		connectFn,
 		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
 			return pluginConfig{
-				handshake:    HandshakeConfig,
-				pluginName:   PluginName,
-				grpcPlugin:   &GRPCPlugin{HostDeps: o.hostDeps},
-				cmdFn:        cmdFn,
-				logger:       logger,
-				startTimeout: o.startTimeout,
+				handshake:          HandshakeConfig,
+				pluginName:         PluginName,
+				grpcPlugin:         &GRPCPlugin{HostDeps: o.hostDeps},
+				cmdFn:              cmdFn,
+				logger:             logger,
+				startTimeout:       o.startTimeout,
+				grpcMaxMessageSize: o.grpcMaxMessageSize,
 			}
 		},
 		func(raw any) (ProviderPlugin, error) {
@@ -463,12 +502,13 @@ func newAuthHandlerClientWithConnector(
 		connectFn,
 		func(o clientOptions, logger hclog.Logger, cmdFn func(string) *exec.Cmd) pluginConfig {
 			return pluginConfig{
-				handshake:    AuthHandlerHandshakeConfig,
-				pluginName:   AuthHandlerPluginName,
-				grpcPlugin:   &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
-				cmdFn:        cmdFn,
-				logger:       logger,
-				startTimeout: o.startTimeout,
+				handshake:          AuthHandlerHandshakeConfig,
+				pluginName:         AuthHandlerPluginName,
+				grpcPlugin:         &AuthHandlerGRPCPlugin{HostDeps: o.hostDeps},
+				cmdFn:              cmdFn,
+				logger:             logger,
+				startTimeout:       o.startTimeout,
+				grpcMaxMessageSize: o.grpcMaxMessageSize,
 			}
 		},
 		func(raw any) (AuthHandlerPlugin, error) {

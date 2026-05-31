@@ -598,7 +598,7 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	if o.ShowMetrics && o.IOStreams != nil {
 		opts = append(opts, prepare.WithMetrics(o.IOStreams.ErrOut))
 	}
-	opts = o.appendClientPluginOptions(opts)
+	opts = o.appendClientPluginOptions(ctx, opts)
 
 	// Wire auth host deps so that plugin providers can request auth tokens
 	// from the host process via gRPC HostService.
@@ -718,7 +718,7 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, result.ProviderCtx, nil
 }
 
-func (o *sharedResolverOptions) appendClientPluginOptions(opts []prepare.Option) []prepare.Option {
+func (o *sharedResolverOptions) appendClientPluginOptions(ctx context.Context, opts []prepare.Option) []prepare.Option {
 	if o.CliParams == nil {
 		return opts
 	}
@@ -730,6 +730,9 @@ func (o *sharedResolverOptions) appendClientPluginOptions(opts []prepare.Option)
 	}))
 	if logger.IsDebugLevel(o.CliParams.MinLogLevel) {
 		opts = append(opts, prepare.WithClientOptions(plugin.WithDebugLogging()))
+	}
+	if cfg := config.FromContext(ctx); cfg != nil && cfg.Plugins.GRPCMaxMessageSize > 0 {
+		opts = append(opts, prepare.WithClientOptions(plugin.WithGRPCMaxMessageSize(cfg.Plugins.GRPCMaxMessageSize)))
 	}
 
 	return opts

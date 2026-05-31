@@ -168,4 +168,30 @@ func TestBuildMCPPluginPool(t *testing.T) {
 		assert.Nil(t, opts, "no auth client opts when no auth registry")
 		assert.Equal(t, 0, pool.ClientOptsLen(), "pool should have no client opts without auth registry")
 	})
+
+	t.Run("wires gRPC max message size from config", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		cfg := &config.Config{
+			Plugins: config.PluginsConfig{
+				GRPCMaxMessageSize: 128 * 1024 * 1024, // 128 MB
+			},
+		}
+		pool, _ := buildMCPPluginPool(context.Background(), cfg, reg, &lgr)
+		defer pool.Shutdown()
+
+		// Exactly one client option should be added for the gRPC max message size.
+		assert.Equal(t, 1, pool.ClientOptsLen(), "pool should have exactly one client opt for gRPC max message size")
+	})
+
+	t.Run("zero GRPCMaxMessageSize is noop", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		cfg := &config.Config{} // GRPCMaxMessageSize defaults to 0
+		pool, _ := buildMCPPluginPool(context.Background(), cfg, reg, &lgr)
+		defer pool.Shutdown()
+
+		// No extra client opts should be added when size is zero.
+		assert.Equal(t, 0, pool.ClientOptsLen(), "zero GRPCMaxMessageSize should not add a client opt")
+	})
 }

@@ -384,6 +384,8 @@ Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.
 | `resolver.concurrency` | int | `4` | Max parallel resolver execution |
 | `action.timeout` | duration | `10m` | Overall action timeout |
 | `action.concurrency` | int | `4` | Max parallel action execution |
+| `plugins.grpcMaxMessageSize` | int | `67108864` | Max gRPC message size in bytes for plugin communication (64 MB default). Increase for very large provider inputs/outputs |
+| `plugins.fetchCooldown` | duration | `5m` | Cooldown between failed plugin auto-fetch retries |
 | `auth.entra.*` | object | — | Entra (Azure AD) auth handler config |
 | `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
 | `auth.github.clientId` | string | built-in | OAuth App client ID |

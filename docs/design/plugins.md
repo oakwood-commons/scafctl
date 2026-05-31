@@ -289,6 +289,37 @@ This is separate from the hashicorp/go-plugin handshake `ProtocolVersion`, which
 
 The plugin client caches provider descriptors after the first `GetProviderDescriptor` call to avoid repeated gRPC round-trips. The cache is protected by a `sync.RWMutex` for safe concurrent access. Descriptors are immutable once loaded.
 
+### gRPC Message Size
+
+scafctl configures both `MaxCallRecvMsgSize` and `MaxCallSendMsgSize` on the gRPC dial options. The default is **64 MB** (`67108864` bytes). This replaces the gRPC library default of 4 MB and accommodates legitimately large provider inputs (e.g., a large HCL file) or large outputs.
+
+Adjust via config when needed:
+
+```yaml
+plugins:
+  grpcMaxMessageSize: 134217728  # 128 MB
+```
+
+Or with the CLI:
+
+```bash
+scafctl config set plugins.grpcMaxMessageSize 134217728
+```
+
+> **Note**: This limit applies only to the host side (the client's dial options). The plugin server side has a separate default from the gRPC library. For very large messages, both the host config and the plugin SDK's server options must be tuned. See [Plugin Protocol Efficiency](plugin-protocol-efficiency.md) for background.
+
+### Resolver Context and the gRPC Boundary
+
+scafctl resolves all `expr:`, `rslvr:`, and `tmpl:` ValueRefs in the solution **before** making any gRPC call. Plugins receive fully resolved, concrete input values. The resolver context (`_` map) is **not** sent to plugins.
+
+This is intentional and correct:
+
+- **Providers declare an input schema via `Descriptor()`.** That schema is the API contract. Inputs validated against the schema are the only data providers should need.
+- **The engine does the resolution work.** By the time a plugin is called, all dependencies are resolved. Passing `_` would be redundant data that bypasses the schema.
+- **Keeping `_` off the wire eliminates a class of gRPC `ResourceExhausted` errors** for solutions with large accumulated resolver data (see [issue #451](https://github.com/oakwood-commons/scafctl/issues/451)).
+
+Built-in providers (CEL, go-template, validation, static, parameter) run in-process and can access the resolver context directly via `ResolverContextFromContext(ctx)`. Plugin providers must declare all their dependencies as explicit inputs.
+
 ### Schema Round-Trip
 
 Provider descriptors carry both structured `Schema`/`OutputSchemas` fields and raw JSON bytes (`raw_schema`, `raw_output_schemas`). The raw bytes are preferred for lossless round-tripping of `jsonschema.Schema`; the structured fields serve as a backward-compatible fallback for older plugins.

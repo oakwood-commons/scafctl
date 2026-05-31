@@ -185,3 +185,43 @@ func TestBuildPluginPool_AllowedPlugins(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, plugin.ErrPluginNotAllowed)
 }
+
+func TestBuildPluginPool_GRPCMaxMessageSize(t *testing.T) {
+	// When cfg.Plugins.GRPCMaxMessageSize is non-zero, buildPluginPool should
+	// wire it as a client option so plugin processes use the configured limit.
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{AllowExternal: true},
+		},
+		Plugins: config.PluginsConfig{
+			GRPCMaxMessageSize: 128 * 1024 * 1024, // 128 MB
+		},
+	}
+
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	defer pool.Shutdown()
+
+	// Exactly one client option should have been added (the gRPC max message size).
+	assert.Equal(t, 1, pool.ClientOptsLen(), "pool should have exactly one client opt for gRPC max message size")
+}
+
+func TestBuildPluginPool_GRPCMaxMessageSizeZeroIsNoop(t *testing.T) {
+	// When cfg.Plugins.GRPCMaxMessageSize is zero (default), no extra client
+	// option should be added -- connectPlugin will use the default internally.
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{AllowExternal: true},
+		},
+	}
+
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	defer pool.Shutdown()
+
+	assert.Equal(t, 0, pool.ClientOptsLen(), "zero GRPCMaxMessageSize should not add a client opt")
+}
