@@ -1119,3 +1119,136 @@ func BenchmarkRecurseFunc_CEL_Complex(b *testing.B) {
 		prog.Eval(map[string]any{})
 	}
 }
+
+// FromEntriesFunc Tests
+
+func TestFromEntriesFunc_Metadata(t *testing.T) {
+	fn := FromEntriesFunc()
+
+	assert.Equal(t, "map.fromEntries", fn.Name)
+	assert.Equal(t, "map.fromEntries(list<map<string,dyn>>, string) -> map<string,dyn>", fn.Signature)
+	assert.NotEmpty(t, fn.Description)
+	assert.NotEmpty(t, fn.EnvOptions)
+	assert.NotEmpty(t, fn.Examples)
+	assert.Len(t, fn.Examples, 3)
+	assert.True(t, fn.Custom)
+}
+
+func TestFromEntriesFunc_CELIntegration(t *testing.T) {
+	fn := FromEntriesFunc()
+
+	env, err := cel.NewEnv(fn.EnvOptions...)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		expression string
+		wantErr    bool
+		validate   func(t *testing.T, result any)
+	}{
+		{
+			name:       "basic keying by name field",
+			expression: `map.fromEntries([{"name": "alice", "age": 30}, {"name": "bob", "age": 25}], "name")`,
+			validate: func(t *testing.T, result any) {
+				m, ok := result.(map[string]any)
+				require.True(t, ok, "result should be a map")
+				assert.Len(t, m, 2)
+
+				alice, ok := m["alice"].(map[string]any)
+				require.True(t, ok, "alice entry should be a map")
+				assert.Equal(t, "alice", alice["name"])
+				assert.Equal(t, int64(30), alice["age"])
+
+				bob, ok := m["bob"].(map[string]any)
+				require.True(t, ok, "bob entry should be a map")
+				assert.Equal(t, "bob", bob["name"])
+				assert.Equal(t, int64(25), bob["age"])
+			},
+		},
+		{
+			name:       "empty list returns empty map",
+			expression: `map.fromEntries([], "id")`,
+			validate: func(t *testing.T, result any) {
+				m, ok := result.(map[string]any)
+				require.True(t, ok, "result should be a map")
+				assert.Empty(t, m)
+			},
+		},
+		{
+			name:       "single element list",
+			expression: `map.fromEntries([{"id": "only"}], "id")`,
+			validate: func(t *testing.T, result any) {
+				m, ok := result.(map[string]any)
+				require.True(t, ok, "result should be a map")
+				assert.Len(t, m, 1)
+				entry, ok := m["only"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "only", entry["id"])
+			},
+		},
+		{
+			name:       "duplicate keys use last-write-wins",
+			expression: `map.fromEntries([{"env": "dev", "url": "old.example.com"}, {"env": "dev", "url": "new.example.com"}], "env")`,
+			validate: func(t *testing.T, result any) {
+				m, ok := result.(map[string]any)
+				require.True(t, ok, "result should be a map")
+				assert.Len(t, m, 1)
+				entry, ok := m["dev"].(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, "new.example.com", entry["url"])
+			},
+		},
+		{
+			name:       "nested objects preserved",
+			expression: `map.fromEntries([{"id": "a", "meta": {"nested": true}}], "id")`,
+			validate: func(t *testing.T, result any) {
+				m, ok := result.(map[string]any)
+				require.True(t, ok, "result should be a map")
+				entry, ok := m["a"].(map[string]any)
+				require.True(t, ok, "entry should be a map")
+				assert.Contains(t, entry, "meta", "entry should have meta field")
+				assert.Equal(t, "a", entry["id"])
+			},
+		},
+		{
+			name:       "missing key field returns error",
+			expression: `map.fromEntries([{"name": "alice"}, {"age": 25}], "id")`,
+			wantErr:    true,
+		},
+		{
+			name:       "non-string key field returns error",
+			expression: `map.fromEntries([{"id": 123}], "id")`,
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, issues := env.Compile(tt.expression)
+			require.Nil(t, issues, "compile issues: %v", issues)
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err)
+
+			result, _, err := prog.Eval(map[string]any{})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			tt.validate(t, result.Value())
+		})
+	}
+}
+
+func BenchmarkFromEntriesFunc_CEL(b *testing.B) {
+	fn := FromEntriesFunc()
+	env, _ := cel.NewEnv(fn.EnvOptions...)
+	ast, _ := env.Compile(`map.fromEntries([{"name": "alice", "age": 30}, {"name": "bob", "age": 25}, {"name": "charlie", "age": 35}], "name")`)
+	prog, _ := env.Program(ast)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prog.Eval(map[string]any{})
+	}
+}

@@ -18,6 +18,7 @@ func NowFunc() celexp.ExtFunction {
 	funcName := "time.now"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "time.now() -> timestamp",
 		Description:   "Returns the current time as a CEL timestamp",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -51,6 +52,7 @@ func NowFmtFunc() celexp.ExtFunction {
 	funcName := "time.nowFmt"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "time.nowFmt(string) -> string",
 		Description:   "Returns the current time formatted according to the provided layout string. Uses Go's time.Format layout conventions (e.g., '2006-01-02 15:04:05' for 'YYYY-MM-DD HH:MM:SS')",
 		FunctionNames: []string{funcName},
 		Custom:        true,

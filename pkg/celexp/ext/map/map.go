@@ -19,6 +19,7 @@ func AddFunc() celexp.ExtFunction {
 	funcName := "map.add"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.add(map<string,dyn>, string, dyn) -> map<string,dyn>",
 		Description:   "Adds a key-value pair to a map and returns a new map with the added entry. The original map is not modified. Use map.add(map, key, value) to add an entry to a map",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -80,6 +81,7 @@ func AddFailIfExistsFunc() celexp.ExtFunction {
 	funcName := "map.addFailIfExists"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.addFailIfExists(map<string,dyn>, string, dyn) -> map<string,dyn>",
 		Description:   "Adds a key-value pair to a map and returns a new map with the added entry. Throws an error if the key already exists. Use map.addFailIfExists(map, key, value) to safely add entries without overwriting",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -134,6 +136,7 @@ func AddIfMissingFunc() celexp.ExtFunction {
 	funcName := "map.addIfMissing"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.addIfMissing(map<string,dyn>, string, dyn) -> map<string,dyn>",
 		Description:   "Adds a key-value pair to a map only if the key doesn't already exist. Returns a new map. Use map.addIfMissing(map, key, value) to add entries without overwriting existing values",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -191,6 +194,7 @@ func SelectFunc() celexp.ExtFunction {
 	funcName := "map.select"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.select(map<string,dyn>, list<string>) -> map<string,dyn>",
 		Description:   "Returns a new map containing only the specified keys from the input map. Keys that don't exist in the input map are ignored. Use map.select(map, keys) to filter a map to specific keys",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -247,6 +251,7 @@ func OmitFunc() celexp.ExtFunction {
 	funcName := "map.omit"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.omit(map<string,dyn>, list<string>) -> map<string,dyn>",
 		Description:   "Returns a new map with the specified keys removed from the input map. Keys that don't exist in the input map are ignored. Use map.omit(map, keys) to exclude specific keys from a map",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -309,6 +314,7 @@ func MergeFunc() celexp.ExtFunction {
 	funcName := "map.merge"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.merge(map<string,dyn>, map<string,dyn>) -> map<string,dyn>",
 		Description:   "Merges two maps together and returns a new map. If keys conflict, the second map's values take precedence. Use map.merge(map1, map2) to combine maps",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -362,6 +368,7 @@ func RecurseFunc() celexp.ExtFunction {
 	funcName := "map.recurse"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "map.recurse(list<map<string,dyn>>, list<string>, string, string) -> list<map<string,dyn>>",
 		Description:   "Recursively resolves dependencies between objects in a list. Returns a unique list of objects with all transitive dependencies included. Use map.recurse(allObjects, startIds, idProperty, depsProperty) to compute recursive dependencies",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -494,6 +501,71 @@ func RecurseFunc() celexp.ExtFunction {
 						}
 
 						// Convert back to CEL value
+						return types.DefaultTypeAdapter.NativeToValue(result)
+					}),
+				),
+			),
+		},
+	}
+}
+
+// FromEntriesFunc converts a list of maps into a single map keyed by a specified field.
+func FromEntriesFunc() celexp.ExtFunction {
+	funcName := "map.fromEntries"
+	return celexp.ExtFunction{
+		Name:          funcName,
+		Signature:     "map.fromEntries(list<map<string,dyn>>, string) -> map<string,dyn>",
+		Description:   "Converts a list of maps into a single map keyed by the specified field. Each entry's value is the full object. Duplicate keys use last-write-wins. Use map.fromEntries(list, keyField) to index a list of objects by a string field",
+		FunctionNames: []string{funcName},
+		Custom:        true,
+		Examples: []celexp.Example{
+			{
+				Description: "Index a list of users by name",
+				Expression:  `map.fromEntries([{"name": "alice", "age": 30}, {"name": "bob", "age": 25}], "name")`,
+			},
+			{
+				Description: "Index environments by env field",
+				Expression:  `map.fromEntries([{"env": "dev", "url": "dev.example.com"}, {"env": "prod", "url": "example.com"}], "env")`,
+			},
+			{
+				Description: "Empty list returns empty map",
+				Expression:  `map.fromEntries([], "id")`,
+			},
+		},
+		EnvOptions: []cel.EnvOption{
+			cel.Function(funcName,
+				cel.Overload(strings.ReplaceAll(funcName, ".", "_"),
+					[]*cel.Type{cel.ListType(cel.MapType(cel.StringType, cel.DynType)), cel.StringType},
+					cel.MapType(cel.StringType, cel.DynType),
+					cel.FunctionBinding(func(args ...ref.Val) ref.Val {
+						listVal := args[0]
+						keyFieldVal := args[1]
+
+						keyField, ok := keyFieldVal.Value().(string)
+						if !ok {
+							return types.NewErr("map.fromEntries: expected string keyField, got %s", keyFieldVal.Type())
+						}
+
+						items, err := conversion.ListToObjectSlice(listVal)
+						if err != nil {
+							return types.NewErr("map.fromEntries: %s", err.Error())
+						}
+
+						result := make(map[string]any, len(items))
+						for _, item := range items {
+							keyVal, exists := item[keyField]
+							if !exists {
+								return types.NewErr("map.fromEntries: object missing key field '%s'", keyField)
+							}
+
+							key, ok := keyVal.(string)
+							if !ok {
+								return types.NewErr("map.fromEntries: key field '%s' must be a string, got %T", keyField, keyVal)
+							}
+
+							result[key] = item
+						}
+
 						return types.DefaultTypeAdapter.NativeToValue(result)
 					}),
 				),

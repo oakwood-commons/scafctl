@@ -24,6 +24,7 @@ func JSONMarshalFunc() celexp.ExtFunction {
 	funcName := "json.marshal"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "json.marshal(dyn) -> string",
 		Description:   "Marshals a value to a compact JSON string",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -70,6 +71,7 @@ func JSONMarshalPrettyFunc() celexp.ExtFunction {
 	funcName := "json.marshalPretty"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "json.marshalPretty(dyn) -> string",
 		Description:   "Marshals a value to a pretty-printed JSON string with indentation",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -116,6 +118,7 @@ func JSONUnmarshalFunc() celexp.ExtFunction {
 	funcName := "json.unmarshal"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "json.unmarshal(string) -> dyn",
 		Description:   "Unmarshals a JSON string to a value",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -167,6 +170,7 @@ func YamlMarshalFunc() celexp.ExtFunction {
 	funcName := "yaml.marshal"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "yaml.marshal(dyn) -> string",
 		Description:   "Marshals a value to a YAML string",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -217,6 +221,7 @@ func YamlUnmarshalFunc() celexp.ExtFunction {
 	funcName := "yaml.unmarshal"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "yaml.unmarshal(string) -> dyn",
 		Description:   "Unmarshals a YAML string to a value",
 		FunctionNames: []string{funcName},
 		Custom:        true,

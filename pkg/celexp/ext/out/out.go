@@ -20,6 +20,7 @@ func NilFunc() celexp.ExtFunction {
 	funcName := "out.nil"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "out.nil(dyn) -> null",
 		Description:   "Takes any value and returns nil",
 		FunctionNames: []string{funcName},
 		Custom:        true,

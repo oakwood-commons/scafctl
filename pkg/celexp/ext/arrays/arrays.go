@@ -18,6 +18,7 @@ func StringAddFunc() celexp.ExtFunction {
 	funcName := "arrays.strings.add"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "arrays.strings.add(list<string>, string) -> list<string>",
 		Description:   "Appends a string to a list of strings and returns the new list. Use arrays.strings.add(list, 'value') to add a single string to the end of the list",
 		FunctionNames: []string{funcName},
 		Custom:        true,
@@ -65,6 +66,7 @@ func StringsUniqueFunc() celexp.ExtFunction {
 	funcName := "arrays.strings.unique"
 	return celexp.ExtFunction{
 		Name:          funcName,
+		Signature:     "arrays.strings.unique(list<string>) -> list<string>",
 		Description:   "Returns a new list containing only unique strings from the input list, removing all duplicates while preserving the original order of first occurrence. Use arrays.strings.unique(list) to deduplicate a list of strings",
 		FunctionNames: []string{funcName},
 		Custom:        true,

@@ -15,6 +15,7 @@ func TestBuildFunctionDetail(t *testing.T) {
 	t.Parallel()
 	fn := &celexp.ExtFunction{
 		Name:          "test",
+		Signature:     "test() -> string",
 		Description:   "test desc",
 		Custom:        true,
 		FunctionNames: []string{"fn1", "fn2"},
@@ -27,6 +28,7 @@ func TestBuildFunctionDetail(t *testing.T) {
 	result := BuildFunctionDetail(fn)
 	assert.Equal(t, "test", result["name"])
 	assert.Equal(t, true, result["custom"])
+	assert.Equal(t, "test() -> string", result["signature"])
 	assert.Equal(t, "test desc", result["description"])
 	assert.Equal(t, []string{"fn1", "fn2"}, result["functionNames"])
 	assert.Equal(t, []string{"https://example.com"}, result["links"])
@@ -48,6 +50,7 @@ func TestBuildFunctionDetail_Minimal(t *testing.T) {
 	result := BuildFunctionDetail(fn)
 	assert.Equal(t, "minimal", result["name"])
 	assert.Equal(t, false, result["custom"])
+	assert.Nil(t, result["signature"])
 	assert.Nil(t, result["description"])
 	assert.Nil(t, result["functionNames"])
 	assert.Nil(t, result["links"])
