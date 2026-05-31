@@ -97,9 +97,16 @@ func AbsFromContext(ctx context.Context, path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-// validatePathContainment verifies that resolved is inside or equal to baseDir.
+// ValidatePathContainment verifies that resolved is inside or equal to baseDir.
 // Both paths must already be cleaned/absolute. Symlinks in the resolved path are
 // evaluated to prevent escaping the base directory via symlink indirection.
+// Callers that need to validate paths outside this package (e.g. providers with
+// explicit relativeTo overrides) should use this function.
+func ValidatePathContainment(baseDir, resolved string) error {
+	return validatePathContainment(baseDir, resolved)
+}
+
+// validatePathContainment is the internal implementation.
 func validatePathContainment(baseDir, resolved string) error {
 	// Resolve symlinks on the base directory so comparisons are consistent.
 	realBase, err := evalSymlinksExisting(baseDir)
