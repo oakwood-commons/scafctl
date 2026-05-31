@@ -248,6 +248,12 @@ func TestApplyWhereFilter_Empty(t *testing.T) {
 	assert.Equal(t, data, result)
 }
 
+func TestWithColumnarMode(t *testing.T) {
+	opts := DefaultViewerOptions()
+	WithColumnarMode(tui.ColumnarModeAlways)(opts)
+	assert.Equal(t, tui.ColumnarModeAlways, opts.ColumnarMode)
+}
+
 func TestApplyWhereFilter_Filters(t *testing.T) {
 	data := []map[string]any{
 		{"name": "keep", "ok": true},
@@ -312,12 +318,6 @@ func TestResolveDisplaySchema_NoExtensions(t *testing.T) {
 	assert.Nil(t, resolveDisplaySchema(schema))
 }
 
-func TestWithColumnarMode(t *testing.T) {
-	opts := DefaultViewerOptions()
-	WithColumnarMode("always")(opts)
-	assert.Equal(t, "always", opts.ColumnarMode)
-}
-
 func TestRenderTable_ColumnarModeAlways_ForcesColumnar(t *testing.T) {
 	// Regression test for #440: auth status maps are normalized to have identical
 	// key sets (homogeneous) so kvx can render them as multi-column tables.
@@ -340,4 +340,24 @@ func TestRenderTable_ColumnarModeAlways_ForcesColumnar(t *testing.T) {
 	assert.Contains(t, output, "status")
 	assert.NotContains(t, output, "[0]")
 	assert.NotContains(t, output, "[1]")
+}
+
+func TestRenderTable_ColumnarModeAlways_TypedSlice(t *testing.T) {
+	// Regression: RenderTable must normalize after LoadObject so
+	// []map[string]any input (not []any) is handled correctly.
+	data := []map[string]any{
+		{"handler": "entra", "status": "authenticated"},
+		{"handler": "github", "expiresIn": "1h"},
+	}
+
+	out, err := RenderTable(data, tui.TableOptions{
+		ColumnarMode: tui.ColumnarModeAlways,
+		NoColor:      true,
+		Width:        100,
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "handler")
+	assert.Contains(t, out, "status")
+	assert.Contains(t, out, "expiresIn")
 }

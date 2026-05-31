@@ -101,6 +101,18 @@ func TestCache_ListEmptyDir(t *testing.T) {
 	assert.Empty(t, items)
 }
 
+func TestCache_List_NotADirectory(t *testing.T) {
+	// A file (not a directory) as the cache path should return an error.
+	tmpFile := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o644))
+
+	cache := NewCache(tmpFile)
+	items, err := cache.List()
+	require.Error(t, err)
+	assert.Nil(t, items)
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
 func TestCache_BinaryPath_WindowsExeExtension(t *testing.T) {
 	cache := NewCache("/tmp/plugins")
 

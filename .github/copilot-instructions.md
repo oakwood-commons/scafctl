@@ -19,6 +19,7 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 - **Errors**: Return errors with `fmt.Errorf("context: %w", err)`, don't panic
 - **Breaking changes**: Allowed -- this app is not in production. Note when doing so.
 - **Backward compatibility**: Do not do it, see Breaking changes above.
+- **Scratch files**: Use `temp/` for throwaway files (experiments, debug output, drafts). This directory is gitignored and must never be committed.
 
 ## Build & Test Commands
 

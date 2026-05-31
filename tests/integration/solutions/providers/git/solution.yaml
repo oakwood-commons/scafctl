@@ -87,6 +87,7 @@ spec:
               cd "$WORK"
               git config user.email "test@scafctl.io"
               git config user.name "Test"
+              git config commit.gpgsign false
               echo "hello" > README.md
               git add README.md
               git commit -m "Initial commit"

@@ -300,6 +300,10 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		o.ShowExecution = true
 	}
 
+	// Prefer solution files during auto-discovery; actions.yaml is irrelevant
+	// for resolver execution and should not trigger ambiguity warnings.
+	o.discoveryMode = settings.DiscoveryModeSolution
+
 	lgr.V(1).Info("running resolver",
 		"file", o.File,
 		"output", o.Output,

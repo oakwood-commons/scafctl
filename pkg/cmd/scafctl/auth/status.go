@@ -207,6 +207,43 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				// Keep the full set if filtering would remove everything.
 			}
 
+			// If --exit-code is set, return non-zero when any handler is not authenticated.
+			if exitCodeFlag {
+				for _, r := range results {
+					if authenticated, ok := r["authenticated"].(bool); ok && !authenticated {
+						err := fmt.Errorf("one or more auth handlers are not authenticated")
+						return exitcode.WithCode(err, exitcode.GeneralError)
+					}
+				}
+			}
+
+			// If --warn-within is set, return non-zero when any authenticated handler's
+			// token expires within the given window.
+			if warnWithin > 0 {
+				for _, r := range results {
+					authenticated, _ := r["authenticated"].(bool)
+					if !authenticated {
+						continue
+					}
+					if expiresAt, ok := r["_expiresAtTime"].(time.Time); ok && isValidExpiryTime(expiresAt) {
+						if time.Until(expiresAt) < warnWithin {
+							err := fmt.Errorf("one or more tokens expire within %s", warnWithin)
+							w.WarnStderrf("%v", err)
+							return exitcode.WithCode(err, exitcode.GeneralError)
+						}
+					}
+				}
+			}
+
+			// Remove internal fields (prefixed with _) before output rendering.
+			for _, r := range results {
+				for k := range r {
+					if strings.HasPrefix(k, "_") {
+						delete(r, k)
+					}
+				}
+			}
+
 			// Structured and interactive output: combine all groups into one dataset.
 			format := outputFlags.Output
 			isStructured := format == "json" || format == "yaml" || format == "toml" || format == "csv"
@@ -272,33 +309,6 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				}
 			}
 
-			// If --exit-code is set, return non-zero when any handler is not authenticated.
-			if exitCodeFlag {
-				for _, r := range results {
-					if authenticated, ok := r["authenticated"].(bool); ok && !authenticated {
-						err := fmt.Errorf("one or more auth handlers are not authenticated")
-						return exitcode.WithCode(err, exitcode.GeneralError)
-					}
-				}
-			}
-
-			// If --warn-within is set, return non-zero when any authenticated handler's
-			// token expires within the given window.
-			if warnWithin > 0 {
-				for _, r := range results {
-					authenticated, _ := r["authenticated"].(bool)
-					if !authenticated {
-						continue
-					}
-					if expiresAt, ok := r["_expiresAtTime"].(time.Time); ok && isValidExpiryTime(expiresAt) {
-						if time.Until(expiresAt) < warnWithin {
-							err := fmt.Errorf("one or more tokens expire within %s", warnWithin)
-							w.Warningf("%v", err)
-							return exitcode.WithCode(err, exitcode.GeneralError)
-						}
-					}
-				}
-			}
 			return nil
 		},
 	}

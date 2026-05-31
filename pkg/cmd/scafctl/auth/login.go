@@ -459,11 +459,13 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 	ioStreams := w.IOStreams()
 
 	// Use kvx status TUI for interactive flows when running in a terminal.
+	// Non-interactive flows (SP, WI, PAT, metadata, client-credentials) fall
+	// through to the plain-text login path below.
 	if skvx.IsTerminal(ioStreams.Out) {
 		switch flow {
 		case auth.FlowDeviceCode:
 			return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
-		case auth.FlowInteractive:
+		case auth.FlowInteractive, auth.FlowGcloudADC, auth.FlowGitHubApp, "":
 			return executeLoginWithBrowserTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
 		}
 	}
