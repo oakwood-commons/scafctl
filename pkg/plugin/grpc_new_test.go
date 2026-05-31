@@ -257,6 +257,31 @@ func TestBuildExecuteProviderRequest_RoundTrip(t *testing.T) {
 	var params map[string]any
 	require.NoError(t, json.Unmarshal(req.Parameters, &params))
 	assert.Equal(t, "us-east-1", params["region"])
+
+	// Resolver context must NOT be serialized into the request (issue #451).
+	// The engine resolves all ValueRefs before the gRPC call, so plugins
+	// only need concrete input values.
+	assert.Empty(t, req.Context, "resolver context should not be sent to plugins")
+}
+
+func TestBuildExecuteProviderRequest_ResolverContextPruned(t *testing.T) {
+	// Even with a large resolver context on the Go context, the gRPC request
+	// should not contain it. This prevents ResourceExhausted errors when the
+	// resolver context exceeds the gRPC max message size.
+	largeCtx := make(map[string]any, 100)
+	for i := range 100 {
+		largeCtx[fmt.Sprintf("resolver_%d", i)] = map[string]any{
+			"data": strings.Repeat("x", 10000),
+		}
+	}
+	ctx := provider.WithResolverContext(context.Background(), largeCtx)
+
+	req, err := buildExecuteProviderRequest(ctx, "test-provider", []byte(`{"key":"value"}`))
+	require.NoError(t, err)
+
+	assert.Empty(t, req.Context, "resolver context must not be serialized into plugin requests")
+	assert.Equal(t, "test-provider", req.ProviderName)
+	assert.JSONEq(t, `{"key":"value"}`, string(req.Input))
 }
 
 func TestHostServiceServer_SecretStore_Nil(t *testing.T) {
@@ -1002,6 +1027,8 @@ func BenchmarkBuildExecuteProviderRequest(b *testing.B) {
 	ctx = provider.WithWorkingDirectory(ctx, "/work")
 	ctx = provider.WithOutputDirectory(ctx, "/out")
 	ctx = provider.WithParameters(ctx, map[string]any{"region": "us-east-1"})
+	// Resolver context is set on the Go context but should NOT be serialized
+	// into the gRPC request (pruned per issue #451).
 	ctx = provider.WithResolverContext(ctx, map[string]any{"r1": map[string]any{"v": 1}})
 
 	inputBytes, _ := json.Marshal(map[string]any{"key": "value"})

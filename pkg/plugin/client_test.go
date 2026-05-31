@@ -13,6 +13,8 @@ import (
 	hplugin "github.com/hashicorp/go-plugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 func TestWithDebugLogging_SetsClientOption(t *testing.T) {
@@ -25,6 +27,40 @@ func TestWithStartTimeout_SetsClientOption(t *testing.T) {
 	var o clientOptions
 	WithStartTimeout(5 * time.Second)(&o)
 	assert.Equal(t, 5*time.Second, o.startTimeout)
+}
+
+func TestWithGRPCMaxMessageSize_SetsClientOption(t *testing.T) {
+	var o clientOptions
+	WithGRPCMaxMessageSize(128 * 1024 * 1024)(&o)
+	assert.Equal(t, 128*1024*1024, o.grpcMaxMessageSize)
+}
+
+func TestWithGRPCMaxMessageSize_ZeroValueIsInitialState(t *testing.T) {
+	var o clientOptions
+	// An unmodified clientOptions must start at zero; connectPlugin applies
+	// the default via resolveGRPCMaxMessageSize when the value is zero.
+	assert.Equal(t, 0, o.grpcMaxMessageSize)
+}
+
+func TestResolveGRPCMaxMessageSize(t *testing.T) {
+	defaultSize := settings.DefaultGRPCMaxMessageSize
+
+	tests := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{name: "zero uses default", input: 0, want: defaultSize},
+		{name: "negative uses default", input: -1, want: defaultSize},
+		{name: "below minimum clamps to minimum", input: settings.MinGRPCMaxMessageSize - 1, want: settings.MinGRPCMaxMessageSize},
+		{name: "exactly minimum is accepted", input: settings.MinGRPCMaxMessageSize, want: settings.MinGRPCMaxMessageSize},
+		{name: "large value is accepted", input: 128 * 1024 * 1024, want: 128 * 1024 * 1024},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, resolveGRPCMaxMessageSize(tc.input))
+		})
+	}
 }
 
 func TestPluginLogger_DefaultsToNullWhenNil(t *testing.T) {

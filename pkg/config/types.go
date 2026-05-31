@@ -655,6 +655,11 @@ type PluginsConfig struct {
 	// auto-fetch failure. Prevents repeated timeout penalties during network
 	// outages. Use Go duration syntax (e.g., "5m", "30s"). Default: 5m.
 	FetchCooldown string `json:"fetchCooldown,omitempty" yaml:"fetchCooldown,omitempty" mapstructure:"fetchCooldown" doc:"Cooldown between failed auto-fetch retries" maxLength:"20" example:"5m"`
+
+	// GRPCMaxMessageSize is the maximum gRPC message size in bytes for plugin
+	// communication. Applies to both send and receive directions. Default: 64MB.
+	// Increase this if plugin providers handle very large inputs or outputs.
+	GRPCMaxMessageSize int `json:"grpcMaxMessageSize,omitempty" yaml:"grpcMaxMessageSize,omitempty" mapstructure:"grpcMaxMessageSize" doc:"Maximum gRPC message size in bytes for plugin communication" minimum:"1048576" example:"67108864"`
 }
 
 // PluginSignaturesConfig holds Sigstore/cosign verification settings for plugins.

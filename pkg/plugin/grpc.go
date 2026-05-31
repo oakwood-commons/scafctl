@@ -715,21 +715,17 @@ func marshalSolutionMeta(ctx context.Context) *proto.SolutionMeta {
 // buildExecuteProviderRequest constructs an ExecuteProviderRequest with all
 // context values serialized from the Go context. Returns an error if any
 // required serialization fails.
+//
+// NOTE: Resolver context (_) is intentionally NOT sent to plugins. The engine
+// resolves all ValueRefs (expr:, rslvr:, tmpl:) before the gRPC call, so
+// plugins only need the concrete input values. Sending the full _ map would
+// bloat every request (often exceeding the gRPC 4MB default) and create an
+// implicit side-channel that bypasses the provider's declared input schema.
+// See: https://github.com/oakwood-commons/scafctl/issues/451
 func buildExecuteProviderRequest(ctx context.Context, providerName string, inputBytes []byte) (*proto.ExecuteProviderRequest, error) {
-	// Encode resolver context
-	contextData := make(map[string]any)
-	if resolverCtx, ok := provider.ResolverContextFromContext(ctx); ok {
-		contextData["resolverContext"] = resolverCtx
-	}
-	contextBytes, err := json.Marshal(contextData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode context: %w", err)
-	}
-
 	req := &proto.ExecuteProviderRequest{
 		ProviderName: providerName,
 		Input:        inputBytes,
-		Context:      contextBytes,
 		DryRun:       provider.DryRunFromContext(ctx),
 	}
 

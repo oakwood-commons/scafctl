@@ -357,6 +357,12 @@ plugins:
   # Default: "5m"
   # fetchCooldown: "5m"
 
+  # Maximum gRPC message size in bytes for plugin communication.
+  # Applies to both send and receive directions (host side).
+  # Increase if plugin providers handle very large inputs or outputs.
+  # Minimum: 1048576 (1 MB). Default: 67108864 (64 MB).
+  # grpcMaxMessageSize: 67108864
+
 # =============================================================================
 # Catalogs - Registered solution catalogs
 # =============================================================================

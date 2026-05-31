@@ -161,6 +161,22 @@ const (
 	DefaultGoTemplateCacheSize = 10000
 )
 
+// Plugin defaults
+const (
+	// DefaultGRPCMaxMessageSize is the default maximum gRPC message size for
+	// plugin communication (64 MB). The Go gRPC library default is 4 MB, which
+	// is too small for solutions with legitimately large provider inputs or
+	// outputs (e.g., large HCL files, API responses). This applies to both
+	// send and receive directions.
+	DefaultGRPCMaxMessageSize = 64 * 1024 * 1024
+
+	// MinGRPCMaxMessageSize is the minimum accepted gRPC message size (1 MB).
+	// Values below this floor are treated as misconfiguration and the default
+	// is used instead. Matches the minimum:"1048576" validation tag on the
+	// config struct.
+	MinGRPCMaxMessageSize = 1024 * 1024
+)
+
 // API server defaults
 const (
 	// DefaultAPIPort is the default port for the API server.
