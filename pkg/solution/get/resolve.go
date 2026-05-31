@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	pathlib "path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/filepath"
@@ -150,6 +151,16 @@ func (o *Getter) FindAllSolutions() []DiscoveryResult {
 				})
 			}
 		}
+	}
+
+	// When in action mode, ensure action files sort before solution files
+	// regardless of folder priority. Without this, a solution.yaml in a
+	// higher-priority folder (e.g. scafctl/) would beat an actions.yaml
+	// in the root directory.
+	if o.discoveryMode == settings.DiscoveryModeAction && len(results) > 1 {
+		sort.SliceStable(results, func(i, j int) bool {
+			return results[i].IsActionFile && !results[j].IsActionFile
+		})
 	}
 
 	// Update lastDiscovery with first result for backward compatibility.

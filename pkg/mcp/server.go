@@ -27,6 +27,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
+// configReloaderTTL is how long the MCP server caches config before
+// re-reading from disk. Keeps long-lived sessions responsive to config
+// changes (e.g. auth profile switches) without hitting disk every request.
+const configReloaderTTL = 2 * time.Second
+
 // Server wraps the mcp-go MCPServer and holds shared dependencies
 // that tool handlers need.
 type Server struct {
@@ -57,6 +62,10 @@ type Server struct {
 	// initialization and idle eviction. When set, provider tool handlers
 	// auto-resolve official plugins on demand.
 	pluginPool *plugin.Pool
+
+	// cfgReloader provides TTL-based config reloading so long-lived MCP
+	// sessions pick up config changes (e.g. auth profile switches).
+	cfgReloader *configReloader
 
 	// descriptorCache persists provider descriptors to disk so schemas
 	// are available without spawning plugin processes.
@@ -451,15 +460,19 @@ func buildInstructions(name, supplemental string) string {
 	return base + "\n\n" + supplemental
 }
 
-// resolveConfig returns the effective configuration by checking, in order:
+// resolveConfig returns the effective configuration. When a config reloader
+// is present (normal operation), it delegates to the reloader which applies
+// TTL-based caching and re-reads from disk as needed. This ensures long-lived
+// MCP sessions pick up config changes (e.g. auth profile switches).
+//
+// Fallback order when no reloader is set (e.g. tests):
 //  1. s.config (set during NewServer via WithServerConfig)
 //  2. config.FromContext(s.ctx) (set during PersistentPreRun)
 //  3. config.Global() (loads from disk)
-//
-// This ensures catalog-related handlers see the same config as get_config,
-// even when the MCP server was created without an explicit config reference
-// (e.g. config file doesn't exist at startup but is created later).
 func (s *Server) resolveConfig() *config.Config {
+	if s.cfgReloader != nil {
+		return s.cfgReloader.Config()
+	}
 	if s.config != nil {
 		return s.config
 	}
@@ -560,6 +573,15 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		s.logger = logr.Discard()
 	}
 
+	// Initialize the config reloader so long-lived MCP sessions pick up
+	// config changes from disk (e.g. auth profile switches via CLI).
+	// Seed with the best available initial config: explicit → context → nil.
+	initialCfg := cfg.config
+	if initialCfg == nil {
+		initialCfg = config.FromContext(s.ctx)
+	}
+	s.cfgReloader = newConfigReloader(initialCfg, configReloaderTTL, s.logger)
+
 	// Build server options for mcp-go
 	serverOpts := []server.ServerOption{
 		server.WithToolCapabilities(true),
@@ -618,6 +640,19 @@ func (s *Server) Close() {
 	// No-op currently; kept for future resource cleanup and API stability.
 }
 
+// freshConfigContext returns a context with the latest config overlaid.
+// Called per-request by each transport's context func so that tool handlers
+// always see up-to-date configuration (e.g. after an auth profile switch).
+func (s *Server) freshConfigContext(ctx context.Context) context.Context {
+	merged := mergeContext(ctx, s.ctx)
+	if s.cfgReloader != nil {
+		if cfg := s.cfgReloader.Config(); cfg != nil {
+			return config.WithConfig(merged, cfg)
+		}
+	}
+	return merged
+}
+
 // Serve starts the MCP server on stdio transport (blocking).
 // Server context values (auth registry, config, settings, logger) are
 // automatically injected into the transport's request context so that
@@ -625,7 +660,7 @@ func (s *Server) Close() {
 // MCPServer().AddTool() -- can access them.
 func (s *Server) Serve(opts ...server.StdioOption) error {
 	contextOpt := server.WithStdioContextFunc(func(ctx context.Context) context.Context {
-		return mergeContext(ctx, s.ctx)
+		return s.freshConfigContext(ctx)
 	})
 	allOpts := make([]server.StdioOption, len(opts)+1)
 	copy(allOpts, opts)
@@ -637,7 +672,7 @@ func (s *Server) Serve(opts ...server.StdioOption) error {
 // Server context values are injected into every request context (see Serve).
 func (s *Server) ServeSSE(addr string, opts ...server.SSEOption) error {
 	contextOpt := server.WithSSEContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
-		return mergeContext(ctx, s.ctx)
+		return s.freshConfigContext(ctx)
 	})
 	allOpts := make([]server.SSEOption, len(opts)+1)
 	copy(allOpts, opts)
@@ -651,7 +686,7 @@ func (s *Server) ServeSSE(addr string, opts ...server.SSEOption) error {
 // Server context values are injected into every request context (see Serve).
 func (s *Server) ServeHTTP(addr string, opts ...server.StreamableHTTPOption) error {
 	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
-		return mergeContext(ctx, s.ctx)
+		return s.freshConfigContext(ctx)
 	})
 	allOpts := make([]server.StreamableHTTPOption, len(opts)+1)
 	copy(allOpts, opts)
@@ -670,7 +705,7 @@ func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
 		return s.httpServer
 	}
 	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
-		return mergeContext(ctx, s.ctx)
+		return s.freshConfigContext(ctx)
 	})
 	allOpts := make([]server.StreamableHTTPOption, len(opts)+1)
 	copy(allOpts, opts)

@@ -34,6 +34,18 @@ go test -race ./...
 go test -cover ./...
 ```
 
+### Coverage Profile Output
+
+When generating coverage profiles (`-coverprofile`), always write to `temp/` (gitignored scratch directory). Never write coverage files to the repo root.
+
+```bash
+# Correct
+go test -coverprofile temp/cover.out ./pkg/some/package/...
+
+# Wrong -- pollutes repo root
+go test -coverprofile cover.out ./pkg/some/package/...
+```
+
 ### Coverage Targets
 
 | Code Type | Package Target | Patch Target |
