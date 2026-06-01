@@ -201,6 +201,18 @@ func TestResolvePath_TraversalAttack(t *testing.T) {
 	}
 }
 
+func TestValidatePathContainment_ExportedWrapper(t *testing.T) {
+	baseDir := t.TempDir()
+
+	// Path inside baseDir must succeed.
+	inside := filepath.Join(baseDir, "sub", "file.txt")
+	require.NoError(t, ValidatePathContainment(baseDir, inside))
+
+	// Lexical traversal escaping baseDir must fail.
+	outside := filepath.Join(baseDir, "..", "escaped.txt")
+	assert.Error(t, ValidatePathContainment(baseDir, outside))
+}
+
 func TestValidatePathContainment_SymlinkEscape(t *testing.T) {
 	// Create a temp dir structure: baseDir/link -> /tmp (or another outside dir)
 	baseDir := t.TempDir()

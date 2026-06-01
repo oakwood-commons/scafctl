@@ -2396,3 +2396,237 @@ func TestFileProvider_WhatIf_Operations(t *testing.T) {
 		})
 	}
 }
+
+// --- relativeTo tests ---
+
+func TestResolvePathRel_Auto_UsesResolvePath(t *testing.T) {
+	// "auto" (empty) should behave identically to provider.ResolvePath.
+	// When no WorkingDirectory or SolutionDirectory is in context, both
+	// resolve via os.Getwd().
+	ctx := context.Background()
+
+	got, err := resolvePathRel(ctx, "foo.txt", "auto")
+	require.NoError(t, err)
+
+	cwd, _ := os.Getwd()
+	assert.Equal(t, filepath.Join(cwd, "foo.txt"), got)
+}
+
+func TestResolvePathRel_Solution_UsesSolutionDir(t *testing.T) {
+	solDir := t.TempDir()
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	// Also set a WorkingDirectory to confirm it is ignored for "solution".
+	ctx = provider.WithWorkingDirectory(ctx, t.TempDir())
+
+	got, err := resolvePathRel(ctx, "output/result.yaml", "solution")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(solDir, "output/result.yaml"), got)
+}
+
+func TestResolvePathRel_Solution_FallsBackToCwd_WhenNoSolutionDir(t *testing.T) {
+	ctx := context.Background()
+
+	got, err := resolvePathRel(ctx, "output/result.yaml", "solution")
+	require.NoError(t, err)
+
+	cwd, _ := os.Getwd()
+	assert.Equal(t, filepath.Join(cwd, "output/result.yaml"), got)
+}
+
+func TestResolvePathRel_Cwd_UsesWorkingDirectory(t *testing.T) {
+	cwdDir := t.TempDir()
+	ctx := provider.WithWorkingDirectory(context.Background(), cwdDir)
+	// Also set a SolutionDirectory to confirm it is ignored for "cwd".
+	ctx = provider.WithSolutionDirectory(ctx, t.TempDir())
+
+	got, err := resolvePathRel(ctx, "out/file.txt", "cwd")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwdDir, "out/file.txt"), got)
+}
+
+func TestResolvePathRel_Cwd_FallsBackToOsGetwd_WhenNoContextCwd(t *testing.T) {
+	ctx := context.Background()
+
+	got, err := resolvePathRel(ctx, "out/file.txt", "cwd")
+	require.NoError(t, err)
+
+	cwd, _ := os.Getwd()
+	assert.Equal(t, filepath.Join(cwd, "out/file.txt"), got)
+}
+
+func TestResolvePathRel_AbsPath_ReturnedUnchanged(t *testing.T) {
+	solDir := t.TempDir()
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+
+	absPath := filepath.FromSlash("/absolute/path/to/file.txt")
+	for _, rel := range []string{"solution", "cwd", "auto", ""} {
+		got, err := resolvePathRel(ctx, absPath, rel)
+		require.NoError(t, err, "relativeTo=%q", rel)
+		assert.Equal(t, absPath, got, "relativeTo=%q", rel)
+	}
+}
+
+func TestFileProvider_Execute_Read_RelativeTo_Solution(t *testing.T) {
+	// Create a "solution directory" with a file inside it.
+	solDir := t.TempDir()
+	err := os.WriteFile(filepath.Join(solDir, "data.txt"), []byte("from-solution-dir"), 0o600)
+	require.NoError(t, err)
+
+	// Simulate action context: WorkingDirectory points elsewhere.
+	otherDir := t.TempDir()
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	ctx = provider.WithWorkingDirectory(ctx, otherDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	p := NewFileProvider()
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":  "read",
+		"path":       "data.txt", // relative — without relativeTo this would look in otherDir
+		"relativeTo": "solution",
+	})
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, "from-solution-dir", data["content"])
+}
+
+func TestFileProvider_Execute_Read_RelativeTo_Auto_InActionContext_UsesCwd(t *testing.T) {
+	// Default (auto) in action context without --output-dir: WorkingDirectory wins.
+	solDir := t.TempDir()
+	cwdDir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(cwdDir, "data.txt"), []byte("from-cwd"), 0o600)
+	require.NoError(t, err)
+
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	ctx = provider.WithWorkingDirectory(ctx, cwdDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	p := NewFileProvider()
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "read",
+		"path":      "data.txt",
+		// relativeTo not set → "auto" behaviour
+	})
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, "from-cwd", data["content"])
+}
+
+func TestFileProvider_WriteTree_RelativeTo_Solution(t *testing.T) {
+	// basePath is relative — with relativeTo:solution it should anchor to solDir.
+	solDir := t.TempDir()
+	cwdDir := t.TempDir()
+
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	ctx = provider.WithWorkingDirectory(ctx, cwdDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	p := NewFileProvider()
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":  "write-tree",
+		"basePath":   "generated",
+		"relativeTo": "solution",
+		"entries": []any{
+			map[string]any{"path": "hello.txt", "content": "world"},
+		},
+	})
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, filepath.Join(solDir, "generated"), data["basePath"])
+
+	content, err := os.ReadFile(filepath.Join(solDir, "generated", "hello.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "world", string(content))
+}
+
+func TestFileProvider_Execute_Write_RelativeTo_Solution(t *testing.T) {
+	// The primary motivating use case from issue 448:
+	// an action write with relativeTo:solution anchors to the solution directory,
+	// not the CWD, even in action context where WorkingDirectory is set.
+	solDir := t.TempDir()
+	cwdDir := t.TempDir()
+
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	ctx = provider.WithWorkingDirectory(ctx, cwdDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	p := NewFileProvider()
+	result, err := p.Execute(ctx, map[string]any{
+		"operation":  "write",
+		"path":       "output/result.txt",
+		"content":    "from-solution-anchor",
+		"createDirs": true,
+		"relativeTo": "solution",
+	})
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	expectedPath := filepath.Join(solDir, "output/result.txt")
+	assert.Equal(t, expectedPath, data["path"])
+
+	// Verify the file landed in solDir, not cwdDir.
+	content, err := os.ReadFile(expectedPath)
+	require.NoError(t, err)
+	assert.Equal(t, "from-solution-anchor", string(content))
+
+	// Verify file was NOT written to cwdDir.
+	_, statErr := os.Stat(filepath.Join(cwdDir, "output/result.txt"))
+	assert.True(t, os.IsNotExist(statErr), "file should not exist under cwdDir")
+}
+
+func TestResolvePathRel_OutputDir_ContainmentEnforced_Solution(t *testing.T) {
+	// When --output-dir is set and relativeTo is "solution", paths that
+	// escape the output-dir must be rejected.
+	solDir := t.TempDir()
+	outputDir := t.TempDir() // separate directory
+
+	// Anchoring to solDir with a traversal that would escape outputDir.
+	ctx := provider.WithSolutionDirectory(context.Background(), solDir)
+	ctx = provider.WithOutputDirectory(ctx, outputDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	// A plain relative path that resolves inside solDir (which is outside outputDir)
+	// should be rejected.
+	_, err := resolvePathRel(ctx, "output.txt", "solution")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "outside output directory")
+}
+
+func TestResolvePathRel_OutputDir_ContainmentEnforced_Cwd(t *testing.T) {
+	cwdDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	ctx := provider.WithWorkingDirectory(context.Background(), cwdDir)
+	ctx = provider.WithOutputDirectory(ctx, outputDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	_, err := resolvePathRel(ctx, "output.txt", "cwd")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "outside output directory")
+}
+
+func TestResolvePathRel_OutputDir_ContainmentAllowed_WhenInsideOutputDir(t *testing.T) {
+	// When the solution dir IS the output dir, resolution should succeed.
+	outputDir := t.TempDir()
+
+	ctx := provider.WithSolutionDirectory(context.Background(), outputDir)
+	ctx = provider.WithOutputDirectory(ctx, outputDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	got, err := resolvePathRel(ctx, "result.txt", "solution")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(outputDir, "result.txt"), got)
+}
+
+func TestResolvePathRel_Auto_NoOutputDirContainmentCheck(t *testing.T) {
+	// "auto" behaviour is unchanged: when output-dir is set it becomes the anchor
+	// and containment is checked by provider.ResolvePath, not by resolvePathRel.
+	outputDir := t.TempDir()
+	ctx := provider.WithOutputDirectory(context.Background(), outputDir)
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+
+	// provider.ResolvePath will anchor to outputDir and validate containment;
+	// traversal should be rejected.
+	_, err := resolvePathRel(ctx, "../../escape.txt", "auto")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "output directory")
+}

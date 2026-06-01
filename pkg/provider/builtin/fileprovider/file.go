@@ -18,6 +18,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+
+	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 )
 
 // ProviderName is the name of this provider.
@@ -139,6 +141,19 @@ func NewFileProvider() *FileProvider {
 						"For example, with stripSuffix '.tmpl', 'main.go.tmpl' becomes 'main.go'. "+
 						"Applied before outputPath template if both are set.",
 					schemahelper.WithExample(".tmpl")),
+				"relativeTo": schemahelper.StringProp(
+					"Base directory anchor for relative path resolution. "+
+						"solution: resolve relative to the solution file's directory, bypassing the "+
+						"WorkingDirectory override set in action contexts -- useful for consistent reads and writes "+
+						"near the solution file regardless of where the CLI is invoked from. "+
+						"cwd: resolve relative to the process working directory. "+
+						"auto (default): uses --output-dir as anchor in action mode when set (with containment "+
+						"validation); otherwise WorkingDirectory takes precedence over SolutionDirectory. "+
+						"Note: solution and cwd anchors enforce --output-dir containment when --output-dir is set, "+
+						"returning an error if the resolved path would escape that directory.",
+					schemahelper.WithEnum("auto", "solution", "cwd"),
+					schemahelper.WithExample("solution"),
+					schemahelper.WithDefault("auto")),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -250,6 +265,71 @@ func (p *FileProvider) Descriptor() *provider.Descriptor {
 	return p.descriptor
 }
 
+// resolvePathRel resolves a file path according to the relativeTo input.
+//
+//   - "solution": resolves relative to the solution file's directory,
+//     bypassing the WorkingDirectory override that is set in action contexts.
+//     Falls back to os.Getwd() when no solution directory is available (e.g.
+//     stdin / catalog runs without a bundle).
+//   - "cwd": resolves relative to the process working directory
+//     (WorkingDirectory from context, then os.Getwd()).
+//   - "auto" or "": delegates to provider.ResolvePath, which uses output-dir
+//     as the anchor in action mode when set, otherwise WorkingDirectory takes
+//     precedence over SolutionDirectory.
+//
+// For "solution" and "cwd", when the caller is in action mode with an
+// output-dir set, the resolved path is validated to ensure it does not escape
+// that output directory. This preserves the containment guarantee that
+// provider.ResolvePath provides for the "auto" path.
+func resolvePathRel(ctx context.Context, path, relativeTo string) (string, error) {
+	if filepath.IsAbs(path) || scafpath.HasWindowsDrivePrefix(path) ||
+		strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\") {
+		return filepath.Clean(path), nil
+	}
+
+	var resolved string
+	switch relativeTo {
+	case "solution":
+		if solDir, ok := provider.SolutionDirectoryFromContext(ctx); ok && solDir != "" {
+			resolved = filepath.Join(solDir, path)
+		} else {
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return "", err
+			}
+			resolved = abs
+		}
+	case "cwd":
+		if cwd, ok := provider.WorkingDirectoryFromContext(ctx); ok && cwd != "" {
+			resolved = filepath.Join(cwd, path)
+		} else {
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return "", err
+			}
+			resolved = abs
+		}
+	default: // "auto" or ""
+		return provider.ResolvePath(ctx, path)
+	}
+
+	// When output-dir is active in action mode, validate that the explicitly
+	// anchored path does not escape it. Mirrors the containment check that
+	// provider.ResolvePath performs for the "auto" path; gated on CapabilityAction
+	// to avoid spurious resolver failures when an output-dir happens to be set.
+	if mode, modeOK := provider.ExecutionModeFromContext(ctx); modeOK && mode == provider.CapabilityAction {
+		if outputDir, ok := provider.OutputDirectoryFromContext(ctx); ok && outputDir != "" {
+			resolved = filepath.Clean(resolved)
+			if err := provider.ValidatePathContainment(outputDir, resolved); err != nil {
+				return "", fmt.Errorf("path %q resolves to %q which is outside output directory %q: %w",
+					path, resolved, outputDir, err)
+			}
+		}
+	}
+
+	return filepath.Clean(resolved), nil
+}
+
 // Execute performs the filesystem operation.
 func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
@@ -265,9 +345,11 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 
 	lgr.V(1).Info("executing provider", "provider", ProviderName, "operation", operation)
 
+	relativeTo, _ := inputs["relativeTo"].(string)
+
 	// write-tree uses basePath instead of path
 	if operation == "write-tree" {
-		return p.executeWriteTreeDispatch(ctx, inputs)
+		return p.executeWriteTreeDispatch(ctx, inputs, relativeTo)
 	}
 
 	path, ok := inputs["path"].(string)
@@ -277,8 +359,8 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 
 	lgr.V(1).Info("executing file operation", "provider", ProviderName, "operation", operation, "path", path)
 
-	// Resolve path: in action mode with output-dir, resolves against output-dir; otherwise CWD
-	absPath, err := provider.ResolvePath(ctx, path)
+	// Resolve path honoring the relativeTo input.
+	absPath, err := resolvePathRel(ctx, path, relativeTo)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid path: %w", ProviderName, err)
 	}
@@ -529,7 +611,7 @@ func (p *FileProvider) executeDelete(absPath string) (*provider.Output, error) {
 }
 
 // executeWriteTreeDispatch handles the write-tree operation routing (dry-run vs live).
-func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[string]any, relativeTo string) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
 	basePath, ok := inputs["basePath"].(string)
@@ -537,7 +619,7 @@ func (p *FileProvider) executeWriteTreeDispatch(ctx context.Context, inputs map[
 		return nil, fmt.Errorf("%s: basePath is required for write-tree operation", ProviderName)
 	}
 
-	absBasePath, err := provider.ResolvePath(ctx, basePath)
+	absBasePath, err := resolvePathRel(ctx, basePath, relativeTo)
 	if err != nil {
 		return nil, fmt.Errorf("%s: invalid basePath: %w", ProviderName, err)
 	}
