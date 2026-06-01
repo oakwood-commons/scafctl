@@ -711,6 +711,7 @@ func Custom() celexp.ExtFunctionList {
 		// Arrays functions
 		arrays.StringAddFunc(),
 		arrays.StringsUniqueFunc(),
+		arrays.GroupByFunc(),
 
 		// Debug functions (debug.DebugOutFunc excluded - requires Writer, add separately)
 		debug.DebugThrowFunc(),

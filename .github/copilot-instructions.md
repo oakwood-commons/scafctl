@@ -25,7 +25,7 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 
 ```bash
 # Build
-go build -ldflags "-s -w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildVersion=dev -X main.Commit=$(git rev-parse HEAD)" -o dist/scafctl ./cmd/scafctl/scafctl.go
+go build -ldflags "-w -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.BuildVersion=dev -X main.Commit=$(git rev-parse HEAD)" -o dist/scafctl ./cmd/scafctl/scafctl.go
 
 # Test
 go test ./...                    # Run all tests

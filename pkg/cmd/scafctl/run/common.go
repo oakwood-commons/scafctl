@@ -511,6 +511,9 @@ func (o *sharedResolverOptions) executeResolvers(
 
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
 
+	// Apply solution-level CEL cost limit if configured
+	ctx = execute.ApplySolutionCELCostLimit(ctx, sol)
+
 	// Attach solution metadata to the context so providers (e.g., metadata) can access it.
 	ctx = provider.WithSolutionMetadata(ctx, solutionMetaFromSolution(sol))
 

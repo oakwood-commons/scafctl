@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -160,6 +161,9 @@ func Resolvers(
 		executorOpts = append(executorOpts, resolver.WithSkipTransform(true))
 	}
 	executor := resolver.NewExecutor(adapter, executorOpts...)
+
+	// Apply solution-level CEL cost limit if configured
+	ctx = ApplySolutionCELCostLimit(ctx, sol)
 
 	// Execute resolvers
 	resultCtx, err := executor.Execute(ctx, resolvers, params)
@@ -318,6 +322,9 @@ func Actions(
 	// Attach solution metadata to the context.
 	ctx = provider.WithSolutionMetadata(ctx, toSolutionMeta(sol))
 
+	// Apply solution-level CEL cost limit if configured
+	ctx = ApplySolutionCELCostLimit(ctx, sol)
+
 	// When OutputDir is set, resolve to an absolute path and inject it into
 	// the context for action-mode providers.
 	if cfg.OutputDir != "" {
@@ -460,4 +467,39 @@ func toSolutionMeta(sol *solution.Solution) *provider.SolutionMeta {
 		meta.Version = sol.Metadata.Version.String()
 	}
 	return meta
+}
+
+// ApplySolutionCELCostLimit injects the solution's CEL cost limit into the context
+// if the solution defines one. The effective limit is min(solutionLimit, globalLimit)
+// so that solutions cannot raise the limit above the operator-configured global default.
+// When global limiting is disabled (globalLimit == 0), solution overrides are ignored.
+func ApplySolutionCELCostLimit(ctx context.Context, sol *solution.Solution) context.Context {
+	if sol.Spec.Options == nil || sol.Spec.Options.CEL == nil || sol.Spec.Options.CEL.CostLimit == nil {
+		return ctx
+	}
+
+	solutionLimit := *sol.Spec.Options.CEL.CostLimit
+	if solutionLimit == 0 {
+		return ctx
+	}
+
+	globalLimit := celexp.GetDefaultCostLimit()
+	if globalLimit == 0 {
+		// Global limiting is disabled; don't let a solution impose one.
+		return ctx
+	}
+
+	effectiveLimit := solutionLimit
+	if solutionLimit > globalLimit {
+		effectiveLimit = globalLimit
+	}
+
+	lgr := logger.FromContext(ctx)
+	lgr.V(1).Info("applying solution-level CEL cost limit",
+		"solutionLimit", solutionLimit,
+		"globalLimit", globalLimit,
+		"effectiveLimit", effectiveLimit,
+	)
+
+	return celexp.ContextWithCostLimit(ctx, effectiveLimit)
 }

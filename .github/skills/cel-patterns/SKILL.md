@@ -100,60 +100,103 @@ cel.bind(x, _.long_expression, x + "_suffix")  // Bind intermediate values
 
 ## Custom scafctl Functions
 
-Registered via `ext.Custom()` in `pkg/celexp/ext/`:
+Registered via `ext.Custom()` in `pkg/celexp/ext/`. Only functions listed here
+are implemented. Check `ext.Custom()` for the authoritative list.
 
-### Regex
+### Arrays (`pkg/celexp/ext/arrays/`)
 
 ```cel
-regex.match("^[a-z]+$", _.name)           // Boolean match
-regex.replace("[0-9]+", _.input, "X")     // Replace matches
-regex.findAll("[a-z]+", _.input)          // List of matches
-regex.split("[,;]", _.input)              // Split by pattern
+arrays.strings.add(["a", "b"], "c")       // Append string -> ["a","b","c"]
+arrays.strings.unique(["a", "b", "a"])     // Deduplicate -> ["a","b"]
+arrays.groupBy([{"k":"a","v":1},{"k":"b","v":2},{"k":"a","v":3}], "k")
+// -> {"a": [{"k":"a","v":1},{"k":"a","v":3}], "b": [{"k":"b","v":2}]}
+// O(n) single-pass grouping -- avoids quadratic CEL comprehension cost
 ```
 
-### Arrays
+### Debug (`pkg/celexp/ext/debug/`)
 
 ```cel
-arrays.groupBy(_.items, "category")       // Group by field -> map
-arrays.from(5, i, i * 2)                 // Generate: [0,2,4,6,8]
-arrays.partition(_.items, 3)              // Chunk into groups of 3
-arrays.window(_.items, 2)                 // Sliding window of size 2
+debug.out(_.value)                         // Print value to writer (requires Writer)
+debug.throw("something went wrong")       // Throw error for debugging
+debug.sleep(1000)                          // Sleep N milliseconds (testing only)
 ```
 
-### Map
+Note: `debug.out` is NOT included in `ext.Custom()` / `ext.All()` because it
+requires a Writer parameter. It is added separately via `debug.DebugOutFunc(w)`.
+
+### Filepath (`pkg/celexp/ext/filepath/`)
 
 ```cel
-map.toMap(_.pairs, "key", "value")        // List of objects -> map
-map.keys(_.config)                        // List of keys
-map.values(_.config)                      // List of values
+filepath.dir("/path/to/file.txt")          // Directory: "/path/to"
+filepath.normalize("path//to/../file")     // Clean path
+filepath.exists("/path/to/file")           // File exists check
+filepath.join("path", "to", "file")        // Join segments
 ```
 
-### GUID
+### GUID (`pkg/celexp/ext/guid/`)
 
 ```cel
-guid.new()                                // UUID v4
+guid.new()                                 // UUID v4
 ```
 
-### Time
+### Map (`pkg/celexp/ext/map/`)
 
 ```cel
-time.now()                                // Current timestamp
-time.toDate("2024-01-15T00:00:00Z")      // Parse ISO date
-time.formatDate(_.timestamp, "2006-01-02") // Format date
-time.parseDate("2024-01-15", "2006-01-02") // Parse with layout
+map.add(_.config, "key", "value")          // Add key-value pair
+map.addFailIfExists(_.m, "k", "v")         // Add, error if key exists
+map.addIfMissing(_.m, "k", "v")            // Add only if key missing
+map.select(_.config, ["key1", "key2"])     // Pick keys
+map.omit(_.config, ["secret"])             // Remove keys
+map.merge(_.base, _.overrides)             // Merge maps (right wins)
+map.recurse(_.nested, "children", expr)    // Recursive tree operation
+map.fromEntries(_.list, "name")            // List of objects -> map keyed by field
 ```
 
-### Sort
+### Marshalling (`pkg/celexp/ext/marshalling/`)
 
 ```cel
-sort.sortBy(_.items, "name")              // Sort objects by field
+json.marshal(_.data)                       // Compact JSON string
+json.marshalPretty(_.data)                 // Pretty-printed JSON
+json.unmarshal(_.jsonString)               // Parse JSON string
+yaml.marshal(_.data)                       // YAML string
+yaml.unmarshal(_.yamlString)               // Parse YAML string
 ```
 
-### Output
+### Output (`pkg/celexp/ext/out/`)
 
 ```cel
-out.print("Processing: " + _.name)        // Print to terminal
-debug.debug("Debug value: " + string(_.x)) // Debug output
+out.nil()                                  // Returns null value
+```
+
+### Regex (`pkg/celexp/ext/regex/`)
+
+```cel
+regex.match("^[a-z]+$", _.name)            // Boolean match
+regex.replace("[0-9]+", _.input, "X")      // Replace matches
+regex.findAll("[a-z]+", _.input)           // List of matches
+regex.split("[,;]", _.input)               // Split by pattern
+```
+
+### Sort (`pkg/celexp/ext/sort/`)
+
+```cel
+sort.objects(_.items, "name")              // Sort objects by field (ascending)
+sort.objectsDescending(_.items, "score")   // Sort objects by field (descending)
+```
+
+### Strings (`pkg/celexp/ext/strings/`)
+
+```cel
+strings.clean(_.messy)                     // Normalize whitespace
+strings.title(_.name)                      // Title Case
+strings.repeat(_.char, 5)                  // Repeat string N times
+```
+
+### Time (`pkg/celexp/ext/time/`)
+
+```cel
+time.now()                                 // Current UTC timestamp (RFC3339)
+time.nowFmt("2006-01-02")                  // Current time with Go layout format
 ```
 
 ## Common Patterns
@@ -220,3 +263,39 @@ has(_.config) && has(_.config.database) && has(_.config.database.host)
 - `pkg/celexp/env/`: CEL environment setup, extension loading, caching
 - `pkg/celexp/ext/`: Custom function registration (regex, arrays, map, guid, time, sort, out)
 - `pkg/provider/builtin/celprovider/`: CEL provider for transform phase
+
+## Cost Limits
+
+CEL expressions have a runtime cost limit (default: 1,000,000) to prevent
+runaway computations. The limit is enforced by cel-go's cost tracker.
+
+### Error Diagnostics
+
+When a cost limit is exceeded, the error includes actual cost, limit, and expression:
+
+```
+CEL expression cost limit exceeded (actual cost: 1500000, limit: 1000000)
+for expression "[large].map(x, x.filter(...))": runtime cost limit exceeded
+```
+
+### Per-Solution Override
+
+Solutions can lower the cost limit via `spec.options.cel.costLimit`:
+
+```yaml
+spec:
+  options:
+    cel:
+      costLimit: 500000  # Tighter limit for this solution
+```
+
+The effective limit is `min(solutionLimit, globalLimit)` -- solutions cannot
+raise the limit above the operator-configured global default.
+
+### Avoiding High-Cost Patterns
+
+| Pattern | Cost | Alternative |
+|---------|------|-------------|
+| `list.filter(x, list2.exists(y, ...))` | O(n*m) | Use `arrays.groupBy` + lookup |
+| `list.map(x, list.filter(...))` | O(n^2) | Pre-group with `arrays.groupBy` |
+| Nested `map` + `filter` | Multiplicative | Single-pass with custom extension |

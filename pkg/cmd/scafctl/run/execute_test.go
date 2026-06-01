@@ -8,7 +8,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestValidateSolution(t *testing.T) {
@@ -51,18 +50,5 @@ func TestResolverExecutionConfig(t *testing.T) {
 		cfg := ResolverExecutionConfigFromContext(context.Background())
 		assert.NotZero(t, cfg.Timeout)
 		assert.NotZero(t, cfg.PhaseTimeout)
-	})
-}
-
-func TestExecuteResolvers(t *testing.T) {
-	t.Run("empty resolvers returns empty data", func(t *testing.T) {
-		sol := &solution.Solution{}
-		sol.Metadata.Name = "test"
-		reg := provider.NewRegistry()
-
-		result, err := ExecuteResolvers(context.Background(), sol, nil, reg, ResolverExecutionConfig{})
-		require.NoError(t, err)
-		assert.Empty(t, result.Data)
-		assert.NotNil(t, result.Context)
 	})
 }

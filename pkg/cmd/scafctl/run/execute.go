@@ -27,17 +27,6 @@ func ValidateSolution(ctx context.Context, sol *solution.Solution, reg *provider
 	return execute.ValidateSolution(ctx, sol, reg)
 }
 
-// ExecuteResolvers delegates to pkg/solution/execute.Resolvers.
-func ExecuteResolvers(
-	ctx context.Context,
-	sol *solution.Solution,
-	params map[string]any,
-	reg *provider.Registry,
-	cfg ResolverExecutionConfig,
-) (*ResolverExecutionResult, error) {
-	return execute.Resolvers(ctx, sol, params, reg, cfg)
-}
-
 // ResolverExecutionConfigFromContext delegates to pkg/solution/execute.ResolverExecutionConfigFromContext.
 func ResolverExecutionConfigFromContext(ctx context.Context) ResolverExecutionConfig {
 	return execute.ResolverExecutionConfigFromContext(ctx)

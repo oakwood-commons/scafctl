@@ -26,6 +26,24 @@ type Spec struct {
 
 	// Testing groups all test-related configuration (test cases and config) under one property.
 	Testing *soltesting.TestSuite `json:"testing,omitempty" yaml:"testing,omitempty" doc:"Test suite configuration"`
+
+	// Options holds optional tuning parameters for the solution.
+	Options *SpecOptions `json:"options,omitempty" yaml:"options,omitempty" doc:"Optional solution-level configuration"`
+}
+
+// SpecOptions holds optional tuning parameters for a solution.
+type SpecOptions struct {
+	// CEL configures CEL expression evaluation for this solution.
+	CEL *CELOptions `json:"cel,omitempty" yaml:"cel,omitempty" doc:"CEL expression evaluation options"`
+}
+
+// CELOptions configures CEL expression evaluation at the solution level.
+type CELOptions struct {
+	// CostLimit overrides the global CEL cost limit for this solution.
+	// The effective limit is min(solutionLimit, globalLimit) — a solution
+	// cannot raise the limit above the operator-configured global default.
+	// Set to 0 to use the global default.
+	CostLimit *uint64 `json:"costLimit,omitempty" yaml:"costLimit,omitempty" doc:"CEL cost limit override (0 = use global default)" example:"2000000"`
 }
 
 // ResolversToSlice converts the Resolvers map to a slice for execution.
