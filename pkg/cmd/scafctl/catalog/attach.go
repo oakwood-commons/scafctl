@@ -124,8 +124,8 @@ func runAttach(ctx context.Context, opts *AttachOptions) error {
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	// Resolve auth handler for automatic token bridging
-	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	// Resolve auth provider for automatic token bridging
+	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
 	// Create remote catalog
@@ -134,7 +134,7 @@ func runAttach(ctx context.Context, opts *AttachOptions) error {
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,

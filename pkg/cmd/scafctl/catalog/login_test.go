@@ -4,6 +4,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -15,9 +16,25 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// configureAuthAndTokenRegistry registers the given mock handler in both an
+// auth.Registry and a tokenprovider.Registry, then attaches both to ctx.
+// Use this when tests call code paths that invoke BridgeAuthToRegistry
+// (which needs both registries to resolve tokens and usernames in CLI mode).
+func configureAuthAndTokenRegistry(ctx context.Context, t *testing.T, mock *auth.MockHandler) context.Context {
+	t.Helper()
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(mock))
+	ctx = auth.WithRegistry(ctx, registry)
+	tsReg := tokenprovider.NewRegistry()
+	require.NoError(t, tsReg.Register(tokenprovider.NewAuthHandlerAdapter(mock)))
+	ctx = tokenprovider.WithRegistry(ctx, tsReg)
+	return ctx
+}
 
 func TestCommandLogin(t *testing.T) {
 	t.Parallel()
@@ -275,9 +292,7 @@ func TestRunAuthHandlerLogin_WithMockHandler(t *testing.T) {
 		TokenType:   "Bearer",
 	}
 
-	registry := auth.NewRegistry()
-	require.NoError(t, registry.Register(mock))
-	ctx = auth.WithRegistry(ctx, registry)
+	ctx = configureAuthAndTokenRegistry(ctx, t, mock)
 
 	w := writerFromCtx(ctx)
 
@@ -342,10 +357,9 @@ func TestRunAuthHandlerLogin_ScopeAutoDetectedFromConfig(t *testing.T) {
 		AccessToken: "fake-gcp-token",
 		TokenType:   "Bearer",
 	}
+	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 
-	registry := auth.NewRegistry()
-	require.NoError(t, registry.Register(mock))
-	ctx = auth.WithRegistry(ctx, registry)
+	ctx = configureAuthAndTokenRegistry(ctx, t, mock)
 
 	w := writerFromCtx(ctx)
 
@@ -385,11 +399,8 @@ func TestRunAuthHandlerLogin_ExplicitScopeOverridesConfig(t *testing.T) {
 		AccessToken: "fake-gcp-token",
 		TokenType:   "Bearer",
 	}
-
-	registry := auth.NewRegistry()
-	require.NoError(t, registry.Register(mock))
-	ctx = auth.WithRegistry(ctx, registry)
-
+	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
+	ctx = configureAuthAndTokenRegistry(ctx, t, mock)
 	w := writerFromCtx(ctx)
 
 	opts := &LoginOptions{

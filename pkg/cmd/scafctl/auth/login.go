@@ -344,10 +344,6 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				return nil
 			}
 
-			// Use the handler already resolved from the registry; plugin
-			// handlers are already configured via ConfigureAuthHandler RPC.
-			bridgeHandler := handler
-
 			var lastBridgeErr error
 			for _, reg := range discovered {
 				// CLI --registry-scope overrides the config-discovered scope.
@@ -355,7 +351,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				if scope == "" {
 					scope = reg.Scope
 				}
-				if err := bridgeAuthToRegistryPostLogin(ctx, w, bridgeHandler, handlerName, reg.Host, scope, writeRegistryAuth); err != nil {
+				if err := bridgeAuthToRegistryPostLogin(ctx, w, handlerName, reg.Host, scope, writeRegistryAuth); err != nil {
 					w.Warningf("Failed to bridge credentials to %s: %v", reg.Host, err)
 					lastBridgeErr = err
 				}
@@ -933,8 +929,8 @@ func parseFlow(flowStr, handlerName string) (auth.Flow, error) {
 
 // bridgeAuthToRegistryPostLogin bridges the authenticated handler's token
 // to OCI registry credentials and stores them in the native credential store.
-func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, handlerName, registry, scope string, writeRegistryAuth bool) error {
-	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, registry, scope)
+func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handlerName, registry, scope string, writeRegistryAuth bool) error {
+	username, password, err := catalog.BridgeAuthToRegistry(ctx, handlerName, registry, scope)
 	if err != nil {
 		err = fmt.Errorf("failed to bridge %s auth to registry %s: %w", handlerName, registry, err)
 		w.Errorf("%v", err)

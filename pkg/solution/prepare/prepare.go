@@ -519,7 +519,7 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 		}
 		remoteResolver := catalog.NewRemoteSolutionResolver(catalog.RemoteSolutionResolverConfig{
 			CredentialStore: credStore,
-			AuthHandlerFunc: func(registry string) auth.Handler {
+			AuthProviderFunc: func(registry string) string {
 				cfg := config.FromContext(ctx)
 
 				// Check catalog config for an explicit authProvider matching this registry.
@@ -530,9 +530,7 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 						}
 						host, _ := catalog.ParseCatalogURL(cat.URL)
 						if host == registry {
-							if h, err := auth.GetHandler(ctx, cat.AuthProvider); err == nil {
-								return h
-							}
+							return cat.AuthProvider
 						}
 					}
 				}
@@ -542,15 +540,7 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 				if cfg != nil {
 					customHandlers = cfg.Auth.CustomOAuth2
 				}
-				handlerName := catalog.InferAuthHandler(registry, customHandlers)
-				if handlerName == "" {
-					return nil
-				}
-				h, err := auth.GetHandler(ctx, handlerName)
-				if err != nil {
-					return nil
-				}
-				return h
+				return catalog.InferAuthHandler(registry, customHandlers)
 			},
 			AuthScopeFunc: func(registry string) string {
 				cfg := config.FromContext(ctx)

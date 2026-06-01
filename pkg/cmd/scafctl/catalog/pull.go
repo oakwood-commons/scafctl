@@ -190,11 +190,11 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	// Resolve auth handler for automatic token bridging
-	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	// Resolve auth provider for automatic token bridging
+	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
@@ -202,7 +202,7 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,

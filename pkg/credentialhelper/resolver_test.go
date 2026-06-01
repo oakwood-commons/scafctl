@@ -13,11 +13,26 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // --- mock TokenResolver for Helper.Get tests ---
+// configureAuthAndTokenRegistry registers the given mock handler in both an
+// auth.Registry and a tokenprovider.Registry, then attaches both to ctx.
+// Use this when tests call code paths that invoke BridgeAuthToRegistry
+// (which needs both registries to resolve tokens and usernames in CLI mode).
+func configureAuthAndTokenRegistry(t *testing.T, ctx context.Context, mock *mockAuthHandler) (context.Context, *auth.Registry) {
+	t.Helper()
+	authRegistry := auth.NewRegistry()
+	_ = authRegistry.Register(mock)
+	tsReg := tokenprovider.NewRegistry()
+	require.NoError(t, tsReg.Register(tokenprovider.NewAuthHandlerAdapter(mock)))
+	ctx = tokenprovider.WithRegistry(ctx, tsReg)
+	ctx = auth.WithRegistry(ctx, authRegistry)
+	return ctx, authRegistry
+}
 
 type mockResolver struct {
 	cred *Credential
@@ -142,8 +157,10 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 		registry := auth.NewRegistry()
 		require.NoError(t, registry.Register(handler))
 
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
+
 		resolver := NewAuthTokenResolver(registry)
-		cred, err := resolver.Resolve(context.Background(), "ghcr.io")
+		cred, err := resolver.Resolve(ctx, "ghcr.io")
 		require.NoError(t, err)
 		assert.Equal(t, "ghcr.io", cred.ServerURL)
 		assert.Equal(t, "octocat", cred.Username)
@@ -156,11 +173,10 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 			name:   "github",
 			claims: &auth.Claims{Username: "octocat"},
 		}
-		registry := auth.NewRegistry()
-		require.NoError(t, registry.Register(handler))
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
 
 		resolver := NewAuthTokenResolver(registry)
-		cred, err := resolver.Resolve(context.Background(), "https://ghcr.io")
+		cred, err := resolver.Resolve(ctx, "https://ghcr.io")
 		require.NoError(t, err)
 		assert.Equal(t, "https://ghcr.io", cred.ServerURL, "ServerURL should preserve the original input")
 		assert.Equal(t, "octocat", cred.Username)
@@ -173,11 +189,9 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 			name:   "github",
 			claims: &auth.Claims{Username: "octocat"},
 		}
-		registry := auth.NewRegistry()
-		require.NoError(t, registry.Register(handler))
-
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
 		resolver := NewAuthTokenResolver(registry)
-		cred, err := resolver.Resolve(context.Background(), "https://ghcr.io/v2/")
+		cred, err := resolver.Resolve(ctx, "https://ghcr.io/v2/")
 		require.NoError(t, err)
 		assert.Equal(t, "https://ghcr.io/v2/", cred.ServerURL)
 		assert.Equal(t, "octocat", cred.Username)
@@ -186,11 +200,10 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 	t.Run("azurecr.io infers entra handler", func(t *testing.T) {
 		t.Parallel()
 		handler := &mockAuthHandler{name: "entra"}
-		registry := auth.NewRegistry()
-		require.NoError(t, registry.Register(handler))
 
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
 		resolver := NewAuthTokenResolver(registry)
-		cred, err := resolver.Resolve(context.Background(), "myregistry.azurecr.io")
+		cred, err := resolver.Resolve(ctx, "myregistry.azurecr.io")
 		require.NoError(t, err)
 		assert.Equal(t, "00000000-0000-0000-0000-000000000000", cred.Username)
 		assert.Equal(t, "fresh-access-token", cred.Secret)
@@ -202,8 +215,10 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 		registry := auth.NewRegistry()
 		require.NoError(t, registry.Register(handler))
 
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
+
 		resolver := NewAuthTokenResolver(registry)
-		cred, err := resolver.Resolve(context.Background(), "us-docker.pkg.dev")
+		cred, err := resolver.Resolve(ctx, "us-docker.pkg.dev")
 		require.NoError(t, err)
 		assert.Equal(t, "oauth2accesstoken", cred.Username)
 		assert.Equal(t, "fresh-access-token", cred.Secret)
@@ -236,11 +251,10 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 			tokenErr: fmt.Errorf("refresh token expired"),
 			claims:   &auth.Claims{Username: "octocat"},
 		}
-		registry := auth.NewRegistry()
-		require.NoError(t, registry.Register(handler))
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
 
 		resolver := NewAuthTokenResolver(registry)
-		_, err := resolver.Resolve(context.Background(), "ghcr.io")
+		_, err := resolver.Resolve(ctx, "ghcr.io")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "bridge auth")
 	})
@@ -248,15 +262,14 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 	t.Run("custom handler via config", func(t *testing.T) {
 		t.Parallel()
 		handler := &mockAuthHandler{name: "custom-idp"}
-		registry := auth.NewRegistry()
-		require.NoError(t, registry.Register(handler))
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
 
 		customHandlers := []config.CustomOAuth2Config{
 			{Name: "custom-idp", Registry: "registry.example.com"},
 		}
 		resolver := NewAuthTokenResolver(registry, WithCustomHandlers(customHandlers))
 
-		cred, err := resolver.Resolve(context.Background(), "registry.example.com")
+		cred, err := resolver.Resolve(ctx, "registry.example.com")
 		require.NoError(t, err)
 		assert.Equal(t, "oauth2accesstoken", cred.Username)
 		assert.Equal(t, "fresh-access-token", cred.Secret)
@@ -265,13 +278,10 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 	t.Run("profile is resolved from context", func(t *testing.T) {
 		t.Parallel()
 		handler := &mockAuthHandler{name: "github", claims: &auth.Claims{Username: "work-user"}}
-		registry := auth.NewRegistry()
-		require.NoError(t, registry.Register(handler))
-
+		ctx, registry := configureAuthAndTokenRegistry(t, context.Background(), handler)
 		resolver := NewAuthTokenResolver(registry)
-
 		// Set a global profile in context
-		ctx := auth.WithGlobalProfile(context.Background(), "work")
+		ctx = auth.WithGlobalProfile(ctx, "work")
 		cred, err := resolver.Resolve(ctx, "ghcr.io")
 		require.NoError(t, err)
 		assert.Equal(t, "work-user", cred.Username)

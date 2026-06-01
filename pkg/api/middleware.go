@@ -15,7 +15,6 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
-	"github.com/oakwood-commons/scafctl/pkg/authdelegation"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
@@ -38,12 +37,6 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	if cfg.Auth.AzureOIDC.Enabled {
 		if cfg.Auth.AzureOIDC.TenantID == "" || cfg.Auth.AzureOIDC.ClientID == "" {
 			return nil, fmt.Errorf("entra OIDC is enabled but tenantId or clientId is empty")
-		}
-	}
-	if cfg.TokenPassThrough != nil {
-		err := cfg.TokenPassThrough.Validate()
-		if err != nil {
-			return nil, fmt.Errorf("invalid token pass-through configuration: %w", err)
 		}
 	}
 
@@ -76,14 +69,12 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	router.Use(middleware.FlightID)
 	router.Use(chimiddleware.StripSlashes)
 	router.Use(middleware.RequestLogging(lgr))
-	router.Use(middleware.TokenPassthrough(cfg.TokenPassThroughAllowedHeaders()))
-
-	delegationReg, err := authdelegation.BuildDelegationRegistry(ctx, cfg, &lgr)
-	if err != nil {
-		return nil, fmt.Errorf("building delegation registry: %w", err)
+	if cfg.TokenPassThrough != nil {
+		if err := cfg.TokenPassThrough.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid token pass-through configuration: %w", err)
+		}
 	}
-
-	router.Use(authdelegation.Middleware(delegationReg))
+	router.Use(middleware.TokenPassthrough(cfg.TokenPassThroughAllowedHeaders()))
 
 	// ── API middleware (versioned paths only) ──
 

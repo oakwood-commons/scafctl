@@ -769,7 +769,8 @@ type APIAzureOIDCConfig struct {
 
 // APIIdentityConfig holds server identity configuration for token delegation.
 type APIIdentityConfig struct {
-	Entra *APIEntraIdentityConfig `json:"entra,omitempty" yaml:"entra,omitempty" mapstructure:"entra" doc:"Azure Entra ID identity for token delegation"`
+	Entra  *APIEntraIdentityConfig  `json:"entra,omitempty" yaml:"entra,omitempty" mapstructure:"entra" doc:"Azure Entra ID identity for token delegation"`
+	GitHub *APIGitHubIdentityConfig `json:"github,omitempty" yaml:"github,omitempty" mapstructure:"github" doc:"GitHub identity for token delegation"`
 }
 
 // APIEntraIdentityConfig holds Azure Entra ID credential configuration for OBO and client_credentials delegation.
@@ -779,6 +780,40 @@ type APIEntraIdentityConfig struct {
 	Credential   ServerCredentialConfig `json:"credential" yaml:"credential" mapstructure:"credential" doc:"Server credential configuration"`
 	TokenManager *TokenManagerConfig    `json:"tokenManager,omitempty" yaml:"tokenManager,omitempty" mapstructure:"tokenManager" doc:"Token manager configuration (nil = no caching/deduplication)"`
 	AllowedFlows *DelegationFlowsConfig `json:"allowedFlows,omitempty" yaml:"allowedFlows,omitempty" mapstructure:"allowedFlows" doc:"Permitted delegation flows (nil = OBO only, present with empty flows = deny all)"`
+}
+
+// APIGitHubIdentityConfig holds GitHub identity configuration for token delegation.
+type APIGitHubIdentityConfig struct {
+	Credential   GitHubCredentialConfig `json:"credential" yaml:"credential" mapstructure:"credential" doc:"GitHub credential configuration"`
+	Hostname     string                 `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"GitHub hostname (default: github.com, set for GHES)" maxLength:"253" example:"github.com"`
+	TokenManager *TokenManagerConfig    `json:"tokenManager,omitempty" yaml:"tokenManager,omitempty" mapstructure:"tokenManager" doc:"Token manager configuration (nil = no caching/deduplication)"`
+}
+
+// EffectiveHostname returns the configured hostname or the default "github.com".
+func (c *APIGitHubIdentityConfig) EffectiveHostname() string {
+	if c.Hostname != "" {
+		return c.Hostname
+	}
+	return "github.com"
+}
+
+// GitHubCredentialConfig holds the credential source for GitHub identity.
+type GitHubCredentialConfig struct {
+	Type string                     `json:"type" yaml:"type" mapstructure:"type" doc:"GitHub credential type" enum:"app,pat" example:"app" maxLength:"10"`
+	App  *GitHubAppCredentialConfig `json:"app,omitempty" yaml:"app,omitempty" mapstructure:"app" doc:"GitHub App credentials (required when type is app)"`
+	PAT  *GitHubPATCredentialConfig `json:"pat,omitempty" yaml:"pat,omitempty" mapstructure:"pat" doc:"Personal Access Token credentials (required when type is pat)"`
+}
+
+// GitHubPATCredentialConfig holds a GitHub Personal Access Token reference.
+type GitHubPATCredentialConfig struct {
+	Token SecretRef `json:"token" yaml:"token" mapstructure:"token" doc:"Personal Access Token reference (env://VAR or file:///path)" maxLength:"512" example:"env://GITHUB_TOKEN"`
+}
+
+// GitHubAppCredentialConfig holds GitHub App credentials for installation token exchange.
+type GitHubAppCredentialConfig struct {
+	ClientID       string    `json:"clientId" yaml:"clientId" mapstructure:"clientId" doc:"GitHub App Client ID (used as JWT issuer)" maxLength:"50" example:"Iv23li8abc123"`
+	InstallationID int64     `json:"installationId" yaml:"installationId" mapstructure:"installationId" doc:"GitHub App installation ID" maximum:"1000000000" example:"78901234"`
+	PrivateKey     SecretRef `json:"privateKey" yaml:"privateKey" mapstructure:"privateKey" doc:"PEM-encoded RSA private key reference (env://VAR or file:///path)" maxLength:"512" example:"env://GITHUB_APP_PRIVATE_KEY"`
 }
 
 // TokenManagerConfig holds configuration for the token delegation cache manager.

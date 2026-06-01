@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,21 @@ func newTestContext(t *testing.T) (context.Context, *bytes.Buffer) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
 	return ctx, &buf
+}
+
+// configureAuthAndTokenRegistry registers the given mock handler in both an
+// auth.Registry and a tokenprovider.Registry, then attaches both to ctx.
+// Use this when tests call code paths that invoke BridgeAuthToRegistry
+// (which needs both registries to resolve tokens and usernames in CLI mode).
+func configureAuthAndTokenRegistry(t *testing.T, ctx context.Context, mock *auth.MockHandler) context.Context {
+	t.Helper()
+	authRegistry := auth.NewRegistry()
+	require.NoError(t, authRegistry.Register(mock))
+	tsReg := tokenprovider.NewRegistry()
+	require.NoError(t, tsReg.Register(tokenprovider.NewAuthHandlerAdapter(mock)))
+	ctx = tokenprovider.WithRegistry(ctx, tsReg)
+	ctx = auth.WithRegistry(ctx, authRegistry)
+	return ctx
 }
 
 func TestCommandLogin_UnknownHandler(t *testing.T) {
