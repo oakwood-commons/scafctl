@@ -50,6 +50,23 @@ const (
 	VarPlan = "__plan"
 )
 
+type costLimitContextKey struct{}
+
+// ContextWithCostLimit returns a new context with a solution-level CEL cost limit.
+// This allows solutions to override the global default cost limit for all CEL
+// evaluations within their scope. The caller is responsible for clamping to the
+// global limit before calling this function (see execute.ApplySolutionCELCostLimit).
+func ContextWithCostLimit(ctx context.Context, limit uint64) context.Context {
+	return context.WithValue(ctx, costLimitContextKey{}, limit)
+}
+
+// CostLimitFromContext returns the solution-level cost limit from context, if set.
+// Returns 0, false if no solution-level override is present.
+func CostLimitFromContext(ctx context.Context) (uint64, bool) {
+	v, ok := ctx.Value(costLimitContextKey{}).(uint64)
+	return v, ok
+}
+
 // BuildCELContext creates CEL environment options and variables for evaluation.
 // This is a common pattern used throughout scafctl for setting up CEL execution contexts.
 //
@@ -153,17 +170,20 @@ func EvaluateExpression(
 	// and additional variables at top level
 	envOpts, celVars := BuildCELContext(rootData, additionalVars)
 
-	// Create expression and add WithContext to the compile options
+	// Create expression and add WithContext to the compile options.
+	// WithContext propagates context-level cost limits automatically;
+	// explicit caller opts are appended last so they can override.
 	expr := Expression(exprStr)
 	compileOpts := append([]Option{WithContext(ctx)}, opts...)
+
 	compiled, err := expr.Compile(envOpts, compileOpts...)
 	if err != nil {
 		availableVars := describeAvailableVars(rootData, additionalVars)
 		return nil, fmt.Errorf("failed to compile expression %q: %w\nAvailable variables: %s", exprStr, err, availableVars)
 	}
 
-	// Evaluate the expression
-	result, err := compiled.Eval(celVars)
+	// Evaluate the expression with context for cost tracking and cancellation
+	result, err := compiled.EvalWithContext(ctx, celVars)
 	if err != nil {
 		availableVars := describeAvailableVars(rootData, additionalVars)
 		dataShape := describeDataShape(rootData)
@@ -304,4 +324,14 @@ func describeElementTypes(v reflect.Value) string {
 		return typeNames[0]
 	}
 	return strings.Join(typeNames, "|")
+}
+
+// truncateExpr truncates an expression string for log output.
+// Uses rune count to avoid splitting multi-byte UTF-8 characters.
+func truncateExpr(expr string, maxLen int) string {
+	runes := []rune(expr)
+	if len(runes) <= maxLen {
+		return expr
+	}
+	return string(runes[:maxLen]) + "..."
 }

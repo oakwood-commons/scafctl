@@ -682,3 +682,61 @@ func TestDescribeType_Struct(t *testing.T) {
 	result := describeType(myStruct{X: 1})
 	assert.Contains(t, result, "myStruct")
 }
+
+func TestContextWithCostLimit(t *testing.T) {
+	ctx := context.Background()
+
+	// No limit set
+	limit, ok := CostLimitFromContext(ctx)
+	assert.False(t, ok)
+	assert.Equal(t, uint64(0), limit)
+
+	// Set a limit
+	ctx = ContextWithCostLimit(ctx, 500000)
+	limit, ok = CostLimitFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, uint64(500000), limit)
+}
+
+func TestEvaluateExpression_ContextCostLimit(t *testing.T) {
+	ctx := context.Background()
+
+	// Set a very low cost limit via context — should cause cost limit error
+	ctx = ContextWithCostLimit(ctx, 1)
+
+	_, err := EvaluateExpression(ctx, "[1,2,3,4,5].map(x, x * 2)", nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cost limit")
+}
+
+func TestEvaluateExpression_ContextCostLimitAllowsNormal(t *testing.T) {
+	ctx := context.Background()
+
+	// Set a reasonable cost limit via context — should allow normal expressions
+	ctx = ContextWithCostLimit(ctx, 1000000)
+
+	result, err := EvaluateExpression(ctx, "1 + 2", nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), result)
+}
+
+func TestTruncateExpr(t *testing.T) {
+	t.Run("short expression unchanged", func(t *testing.T) {
+		assert.Equal(t, "1 + 2", truncateExpr("1 + 2", 10))
+	})
+
+	t.Run("exact length unchanged", func(t *testing.T) {
+		assert.Equal(t, "12345", truncateExpr("12345", 5))
+	})
+
+	t.Run("long expression truncated", func(t *testing.T) {
+		got := truncateExpr("abcdefghij", 5)
+		assert.Equal(t, "abcde...", got)
+	})
+
+	t.Run("multi-byte runes not split", func(t *testing.T) {
+		// 5 runes of 3 bytes each = 15 bytes; truncate at 3 runes
+		got := truncateExpr("日本語漢字", 3)
+		assert.Equal(t, "日本語...", got)
+	})
+}

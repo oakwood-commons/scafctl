@@ -207,7 +207,7 @@ func TestTypeConversionHelpers(t *testing.T) {
 
 // TestCostLimitProtection tests that cost limits prevent expensive expressions
 func TestCostLimitProtection(t *testing.T) {
-	t.Run("very low cost limit triggers error", func(t *testing.T) {
+	t.Run("very low cost limit triggers error with diagnostics", func(t *testing.T) {
 		// Create an expression that will exceed a very low cost limit
 		expr := Expression("[1,2,3,4,5].map(x, x * 2)")
 		lowCost := uint64(1) // Extremely low limit
@@ -221,8 +221,11 @@ func TestCostLimitProtection(t *testing.T) {
 		// Evaluation should fail due to cost limit
 		_, err = result.Eval(nil)
 		assert.Error(t, err)
-		// The error contains "operation cancelled" when cost limit exceeded
-		assert.Contains(t, err.Error(), "cost limit")
+		// The enriched error should contain actual cost, limit, and the expression
+		assert.Contains(t, err.Error(), "cost limit exceeded")
+		assert.Contains(t, err.Error(), "actual cost:")
+		assert.Contains(t, err.Error(), "limit: 1")
+		assert.Contains(t, err.Error(), "[1,2,3,4,5].map(x, x * 2)")
 	})
 
 	t.Run("reasonable cost limit allows normal expressions", func(t *testing.T) {

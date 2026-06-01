@@ -32,23 +32,25 @@ import (
 var binaryPath string
 
 func TestMain(m *testing.M) {
-	// Build the binary once for all tests
-	tmpDir, err := os.MkdirTemp("", "scafctl-integration-*")
-	if err != nil {
+	// Build the binary once for all tests.
+	// Use a project-local directory instead of os.TempDir() to avoid
+	// Windows Defender false positives on freshly-built Go binaries in temp.
+	projectRoot := findProjectRoot()
+	distDir := filepath.Join(projectRoot, "dist")
+	if err := os.MkdirAll(distDir, 0o755); err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(tmpDir)
 
-	binaryPath = filepath.Join(tmpDir, "scafctl")
+	binaryPath = filepath.Join(distDir, "scafctl-integration-test")
 	if runtime.GOOS == "windows" {
 		binaryPath += ".exe"
 	}
 
-	// Build from project root
-	projectRoot := findProjectRoot()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", binaryPath, "./cmd/scafctl/scafctl.go")
+	cmd := exec.CommandContext(ctx, "go", "build",
+		"-ldflags", "-w",
+		"-o", binaryPath, "./cmd/scafctl/scafctl.go")
 	cmd.Dir = projectRoot
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 
@@ -57,7 +59,9 @@ func TestMain(m *testing.M) {
 		panic("failed to build scafctl: " + err.Error() + "\n" + string(output))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = os.Remove(binaryPath) // best-effort cleanup
+	os.Exit(code)
 }
 
 func findProjectRoot() string {

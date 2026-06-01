@@ -231,3 +231,43 @@ func BenchmarkCompile_WithContext(b *testing.B) {
 		_, _ = expr.Compile(envOpts, WithContext(ctx))
 	}
 }
+
+func TestWithContext_PropagatesCostLimit(t *testing.T) {
+	t.Run("context cost limit applied via WithContext", func(t *testing.T) {
+		ctx := ContextWithCostLimit(context.Background(), 1)
+		expr := Expression("[1,2,3,4,5].map(x, x * 2)")
+
+		result, err := expr.Compile(nil, WithContext(ctx))
+		require.NoError(t, err)
+
+		_, err = result.EvalWithContext(ctx, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "cost limit")
+	})
+
+	t.Run("explicit WithCostLimit overrides context limit", func(t *testing.T) {
+		// Context has a very low limit that would fail
+		ctx := ContextWithCostLimit(context.Background(), 1)
+		expr := Expression("[1,2,3,4,5].map(x, x * 2)")
+
+		// Explicit WithCostLimit with a high limit should succeed
+		result, err := expr.Compile(nil, WithContext(ctx), WithCostLimit(1000000))
+		require.NoError(t, err)
+
+		val, err := result.EvalWithContext(ctx, nil)
+		require.NoError(t, err)
+		assert.NotNil(t, val)
+	})
+
+	t.Run("no context limit uses global default", func(t *testing.T) {
+		ctx := context.Background()
+		expr := Expression("1 + 2")
+
+		result, err := expr.Compile(nil, WithContext(ctx))
+		require.NoError(t, err)
+
+		val, err := result.Eval(nil)
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), val)
+	})
+}

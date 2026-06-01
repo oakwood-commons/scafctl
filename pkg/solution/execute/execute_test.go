@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -224,4 +225,67 @@ func TestResolversForPreview_NoResolvers(t *testing.T) {
 	result, err := ResolversForPreview(ctx, sol, nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, result)
+}
+
+func TestApplySolutionCELCostLimit(t *testing.T) {
+	t.Run("no options returns same context", func(t *testing.T) {
+		ctx := context.Background()
+		sol := &solution.Solution{}
+
+		got := ApplySolutionCELCostLimit(ctx, sol)
+		_, ok := celexp.CostLimitFromContext(got)
+		assert.False(t, ok)
+	})
+
+	t.Run("cost limit zero returns same context", func(t *testing.T) {
+		ctx := context.Background()
+		sol := &solution.Solution{}
+		zero := uint64(0)
+		sol.Spec.Options = &solution.SpecOptions{
+			CEL: &solution.CELOptions{CostLimit: &zero},
+		}
+
+		got := ApplySolutionCELCostLimit(ctx, sol)
+		_, ok := celexp.CostLimitFromContext(got)
+		assert.False(t, ok)
+	})
+
+	t.Run("solution limit applied when below global", func(t *testing.T) {
+		globalLimit := celexp.GetDefaultCostLimit()
+		if globalLimit == 0 {
+			t.Skip("global limit is disabled; solution overrides are ignored")
+		}
+
+		ctx := context.Background()
+		sol := &solution.Solution{}
+		limit := uint64(100)
+		sol.Spec.Options = &solution.SpecOptions{
+			CEL: &solution.CELOptions{CostLimit: &limit},
+		}
+
+		got := ApplySolutionCELCostLimit(ctx, sol)
+		effective, ok := celexp.CostLimitFromContext(got)
+		assert.True(t, ok)
+		assert.Equal(t, uint64(100), effective)
+	})
+
+	t.Run("solution limit capped at global limit", func(t *testing.T) {
+		ctx := context.Background()
+		sol := &solution.Solution{}
+		limit := uint64(99999999) // way above default
+		sol.Spec.Options = &solution.SpecOptions{
+			CEL: &solution.CELOptions{CostLimit: &limit},
+		}
+
+		globalLimit := celexp.GetDefaultCostLimit()
+		got := ApplySolutionCELCostLimit(ctx, sol)
+		effective, ok := celexp.CostLimitFromContext(got)
+		if globalLimit > 0 {
+			assert.True(t, ok)
+			assert.Equal(t, globalLimit, effective)
+		} else {
+			// When global limit is disabled (0), solution overrides are ignored
+			assert.False(t, ok)
+		}
+	})
 }

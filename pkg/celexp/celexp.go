@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/google/cel-go/cel"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
+	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
@@ -196,6 +198,12 @@ type compileConfig struct {
 func WithContext(ctx context.Context) Option {
 	return func(c *compileConfig) {
 		c.ctx = ctx
+		// Propagate context-level cost limit so that callers using
+		// WithContext alone (e.g. provider input resolution) honour
+		// the solution-level limit without an explicit WithCostLimit.
+		if limit, ok := CostLimitFromContext(ctx); ok && limit > 0 {
+			c.costLimit = &limit
+		}
 	}
 }
 
@@ -315,6 +323,10 @@ type CompileResult struct {
 	// Expression is the original expression that was compiled
 	Expression Expression
 
+	// costLimit is the cost limit applied during compilation.
+	// Used to enrich error messages when cost is exceeded.
+	costLimit uint64
+
 	// declaredVars maps variable names to their declared CEL types.
 	// This is populated during compilation and used for runtime type validation.
 	// Use ValidateVars() to check if evaluation variables match these declarations.
@@ -405,6 +417,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 		return &CompileResult{
 			Program:      prog,
 			Expression:   e,
+			costLimit:    *config.costLimit,
 			declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 			envOpts:      envOpts,
 		}, nil
@@ -460,6 +473,7 @@ func (e Expression) Compile(envOpts []cel.EnvOption, opts ...Option) (*CompileRe
 	return &CompileResult{
 		Program:      prog,
 		Expression:   e,
+		costLimit:    *config.costLimit,
 		declaredVars: nil, // Use CompileWithVarDecls() for variable type tracking
 		envOpts:      envOpts,
 	}, nil
@@ -508,8 +522,22 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 		return nil, err
 	}
 
-	out, _, err := r.Program.ContextEval(ctx, vars)
+	out, details, err := r.Program.ContextEval(ctx, vars)
 	if err != nil {
+		// Enrich cost-limit errors with actual cost vs limit
+		if r.costLimit > 0 && isCostLimitError(err) {
+			actualCost := uint64(0)
+			if details != nil {
+				if ac := details.ActualCost(); ac != nil {
+					actualCost = *ac
+				}
+			}
+			return nil, fmt.Errorf(
+				"CEL expression cost limit exceeded (actual cost: %d, limit: %d) for expression %q: %w",
+				actualCost, r.costLimit, r.Expression, err,
+			)
+		}
+
 		// Enhanced error with variable type information
 		varTypes := make(map[string]string)
 		for k, v := range vars {
@@ -535,7 +563,27 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 		)
 	}
 
+	// Log actual cost at debug level for proactive optimization
+	if r.costLimit > 0 && details != nil {
+		if ac := details.ActualCost(); ac != nil {
+			lgr := logger.FromContext(ctx)
+			lgr.V(2).Info("CEL expression evaluated",
+				"expression", truncateExpr(string(r.Expression), 120),
+				"actualCost", *ac,
+				"costLimit", r.costLimit,
+			)
+		}
+	}
+
 	return out.Value(), nil
+}
+
+// isCostLimitError checks if an evaluation error is a cost limit exceeded error.
+// NOTE: cel-go does not export a structured error type for cost limit violations,
+// so we rely on matching the error message string. If cel-go changes the wording
+// of "cost limit" in its error, this function will need updating.
+func isCostLimitError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "cost limit")
 }
 
 // EvalAs evaluates the compiled CEL program and converts the result to the specified type T.

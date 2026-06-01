@@ -13,7 +13,6 @@ builds:
       - arm64
     ldflags:
           - -w
-          - -s
           - -X main.Commit={{.Commit}}
           - -X main.BuildVersion={{.Version}}
           - -X main.BuildTime={{.Date}}

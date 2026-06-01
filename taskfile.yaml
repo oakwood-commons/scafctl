@@ -618,7 +618,7 @@ tasks:
       - mkdir -p {{.DIST}}
       - >
         GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build
-        -ldflags '-s -w {{.LDFLAGS}}'
+        -ldflags '-w {{.LDFLAGS}}'
         -trimpath
         -o {{.DIST}}/{{.OUTPUT_FILE}} {{.MAIN_PACKAGE}}
       - cmd: '{{ if eq .GOOS "darwin" }}codesign --force --sign - {{.DIST}}/{{.OUTPUT_FILE}}{{ end }}'
@@ -643,7 +643,7 @@ tasks:
       - mkdir -p {{.DIST}}/home/default
       - >
         GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build
-        -ldflags '-s -w {{.LDFLAGS}}' -trimpath
+        -ldflags '-w {{.LDFLAGS}}' -trimpath
         -o {{.DIST}}/home/default/{{.OUTPUT_FILE}} {{.MAIN_PACKAGE}}
       - cd {{.DIST}}
       - |
