@@ -18,6 +18,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -482,6 +484,91 @@ func TestSolutionOptions_autoResolveOfficialProviders_EmptySolution(t *testing.T
 
 	clients := opts.autoResolveOfficialProviders(ctx, sol, reg)
 	assert.Nil(t, clients)
+}
+
+// ── loadStateIntoContext tests ───────────────────────────────────────────────
+
+func TestSolutionOptions_loadStateIntoContext_NilState(t *testing.T) {
+	t.Parallel()
+
+	opts := &SolutionOptions{}
+	sol := &solution.Solution{} // no State field set
+	reg := provider.NewRegistry()
+
+	ctx := context.Background()
+	result, params, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, ctx, result, "context should be unchanged when state is nil")
+	assert.Nil(t, params, "params should be unchanged when state is nil")
+}
+
+func TestSolutionOptions_loadStateIntoContext_DisabledState(t *testing.T) {
+	t.Parallel()
+
+	opts := &SolutionOptions{}
+	sol := &solution.Solution{
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: false},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Literal: "test.json"},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+
+	ctx := setupWriterContext()
+	result, _, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
+
+	require.NoError(t, err)
+	// When state is disabled, context should not contain state data
+	data, ok := state.FromContext(result)
+	assert.False(t, ok)
+	assert.Nil(t, data)
+}
+
+// ── formatParams tests ──────────────────────────────────────────────────────
+
+func TestFormatParams(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		params map[string]any
+		want   map[string]string
+	}{
+		{
+			name:   "nil_params",
+			params: nil,
+			want:   map[string]string{},
+		},
+		{
+			name:   "empty_params",
+			params: map[string]any{},
+			want:   map[string]string{},
+		},
+		{
+			name:   "string_values",
+			params: map[string]any{"env": "prod", "region": "us-east-1"},
+			want:   map[string]string{"env": "prod", "region": "us-east-1"},
+		},
+		{
+			name:   "mixed_types",
+			params: map[string]any{"name": "app", "count": 3, "enabled": true},
+			want:   map[string]string{"name": "app", "count": "3", "enabled": "true"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := formatParams(tc.params)
+			assert.Equal(t, tc.want, result)
+		})
+	}
 }
 
 // ── helper ───────────────────────────────────────────────────────────────────

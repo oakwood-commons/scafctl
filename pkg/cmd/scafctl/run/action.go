@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	pkgfilepath "github.com/oakwood-commons/scafctl/pkg/filepath"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -23,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -50,6 +52,9 @@ type ActionOptions struct {
 	OnConflict string
 	Force      bool
 	Backup     bool
+
+	// SkipFingerprint disables fingerprint-based up-to-date checks.
+	SkipFingerprint bool
 
 	// DynamicArgs are resolver parameters from positional key=value syntax.
 	DynamicArgs []string
@@ -156,6 +161,9 @@ Examples:
 	cCmd.Flags().StringVar(&options.OnConflict, "on-conflict", "", "Conflict strategy for file writes (error|overwrite|skip|skip-unchanged|append) (default: error)")
 	cCmd.Flags().BoolVar(&options.Force, "force", false, "Skip unchanged files and write only new or modified content (shorthand for --on-conflict skip-unchanged)")
 	cCmd.Flags().BoolVar(&options.Backup, "backup", false, "Create .bak backups before mutating existing files")
+
+	// Fingerprint flags
+	cCmd.Flags().BoolVar(&options.SkipFingerprint, "skip-fingerprint", false, "Disable fingerprint-based up-to-date checks (re-run all actions)")
 
 	return cCmd
 }
@@ -368,6 +376,25 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// Ensure actions resolve output paths against the caller's original CWD.
 	actionCtx = provider.WithWorkingDirectory(actionCtx, originalCwd)
 
+	// State lifecycle: load persisted state before resolver execution so that
+	// the state provider can serve previously saved values.
+	var stateMgr *state.Manager
+	var stateData *state.Data
+	if sol.State != nil {
+		stateMgr = state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
+		cmdInfo := buildCommandInfo("run action", params)
+		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
+		if loadErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
+		}
+		if !loadResult.Skipped {
+			ctx = loadResult.Ctx
+			actionCtx = state.WithState(actionCtx, loadResult.Data)
+			stateData = loadResult.Data
+			params = loadResult.MergedParams
+		}
+	}
+
 	// Dry run — execute resolvers with ctx (solution-dir aware, no working-dir
 	// override) so resolver paths resolve relative to the solution file.
 	// Pass actionCtx so WhatIf generation sees CLI overrides (output-dir, etc.).
@@ -413,11 +440,22 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		action.WithMaxConcurrency(actionCfg.MaxConcurrency),
 		action.WithIOStreams(o.getActionIOStreams()),
 		action.WithCwd(originalCwd),
+		action.WithFingerprintChecker(fingerprint.NewChecker(stateData)),
+		action.WithNoCache(o.SkipFingerprint),
 	)
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+	}
+
+	// State lifecycle: save merged parameters and check immutable values
+	// after successful action execution.
+	if stateMgr != nil && stateData != nil {
+		solMeta := buildStateSolutionMeta(sol)
+		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
+		}
 	}
 
 	var executionData map[string]any

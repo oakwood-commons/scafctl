@@ -397,3 +397,73 @@ when: "_.env == 'prod'"
 	require.NotNil(t, r.When.Expr)
 	assert.Equal(t, "_.env == 'prod'", string(*r.When.Expr))
 }
+
+func TestResolver_ImmutableField_YAML(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmarshal immutable true", func(t *testing.T) {
+		t.Parallel()
+		input := `
+name: cluster_id
+type: string
+immutable: true
+`
+		var r Resolver
+		err := yaml.Unmarshal([]byte(input), &r)
+		require.NoError(t, err)
+		assert.True(t, r.Immutable)
+	})
+
+	t.Run("unmarshal immutable defaults to false", func(t *testing.T) {
+		t.Parallel()
+		input := `
+name: regular
+type: string
+`
+		var r Resolver
+		err := yaml.Unmarshal([]byte(input), &r)
+		require.NoError(t, err)
+		assert.False(t, r.Immutable)
+	})
+
+	t.Run("marshal omits immutable when false", func(t *testing.T) {
+		t.Parallel()
+		r := Resolver{Name: "test"}
+		data, err := yaml.Marshal(&r)
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "immutable")
+	})
+
+	t.Run("marshal includes immutable when true", func(t *testing.T) {
+		t.Parallel()
+		r := Resolver{Name: "test", Immutable: true}
+		data, err := yaml.Marshal(&r)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "immutable: true")
+	})
+}
+
+func TestResolver_ImmutableField_JSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("roundtrip", func(t *testing.T) {
+		t.Parallel()
+		r := Resolver{Name: "cluster_id", Immutable: true, Type: "string"}
+		data, err := json.Marshal(&r)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"immutable":true`)
+
+		var decoded Resolver
+		err = json.Unmarshal(data, &decoded)
+		require.NoError(t, err)
+		assert.True(t, decoded.Immutable)
+	})
+
+	t.Run("omits immutable when false", func(t *testing.T) {
+		t.Parallel()
+		r := Resolver{Name: "test"}
+		data, err := json.Marshal(&r)
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "immutable")
+	})
+}

@@ -1,0 +1,165 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-run-action
+  version: 1.0.0
+  description: |
+    Functional tests for state persistence with 'run action' command.
+    Verifies that state is loaded before resolvers, saved parameters are
+    merged with CLI parameters, and state is saved after the filtered
+    action(s) execute successfully. Tests selective action execution with
+    state integration.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: run-action-state.json
+
+spec:
+  resolvers:
+    environment:
+      description: Deployment environment from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "env"
+          - provider: static
+            inputs:
+              value: "dev"
+
+    version:
+      description: Application version
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "version"
+          - provider: static
+            inputs:
+              value: "1.0.0"
+
+  workflow:
+    actions:
+      lint:
+        description: Lint check
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo lint passed env=' + _.environment"
+
+      build:
+        description: Build artifact
+        provider: exec
+        dependsOn: [lint]
+        inputs:
+          command:
+            expr: "'echo build v' + _.version + ' for ' + _.environment"
+
+      deploy:
+        description: Deploy artifact
+        provider: exec
+        dependsOn: [build]
+        inputs:
+          command:
+            expr: "'echo deploy v' + _.version + ' to ' + _.environment"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      # =====================================================================
+      # Run specific action with state (first run, no state file)
+      # =====================================================================
+      action-first-run:
+        description: Running a specific action with empty state uses defaults
+        command: [run, action]
+        args: ["lint", "-o", "json"]
+        tags: [state, run-action, smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-first
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-first && mkdir -p /tmp/scafctl-it-state-runact-first/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-first"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["lint"].results.stdout.contains("lint passed env=dev")
+            message: "Should use default env=dev"
+
+      # =====================================================================
+      # Run action with pre-seeded state parameters
+      # =====================================================================
+      action-reads-state:
+        description: Running action reads resolver values from pre-seeded state parameters
+        command: [run, action]
+        args: ["build", "-o", "json"]
+        tags: [state, run-action]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-reads
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-reads && mkdir -p /tmp/scafctl-it-state-runact-reads/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production","version":"2.5.0"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-runact-reads/scafctl/run-action-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-reads"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          # build depends on lint, so lint runs first
+          - expression: __output.actions["lint"].status == "succeeded"
+            message: "Lint (dependency) should also run"
+          - expression: __output.actions["build"].results.stdout.contains("build v2.5.0 for production")
+            message: "Should use values from saved state parameters"
+
+      # =====================================================================
+      # Run action with parameter overriding state
+      # =====================================================================
+      action-param-overrides-state:
+        description: CLI parameter overrides state parameter when running action
+        command: [run, action]
+        args: ["deploy", "-o", "json", "-r", "env=canary"]
+        tags: [state, run-action]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-override
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-override && mkdir -p /tmp/scafctl-it-state-runact-override/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-runact-override/scafctl/run-action-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-override"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["deploy"].results.stdout.contains("deploy v1.0.0 to canary")
+            message: "Parameter should override state (env=canary instead of production)"
+
+      # =====================================================================
+      # Transitive dependencies run when targeting a downstream action
+      # =====================================================================
+      action-transitive-deps:
+        description: Targeting deploy runs all transitive deps (lint -> build -> deploy)
+        command: [run, action]
+        args: ["deploy", "-o", "json"]
+        tags: [state, run-action]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-deps
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-deps && mkdir -p /tmp/scafctl-it-state-runact-deps/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runact-deps"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["lint"].status == "succeeded"
+          - expression: __output.actions["build"].status == "succeeded"
+          - expression: __output.actions["deploy"].status == "succeeded"

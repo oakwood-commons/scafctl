@@ -1,0 +1,115 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-dynamic-path
+  version: 1.0.0
+  description: |
+    Functional tests for dynamic state backend path.
+    Verifies that backend inputs support Go template ValueRefs using __params,
+    enabling per-project state files resolved at runtime from CLI parameters.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path:
+        tmpl: "dynamic/{{ .__params.project }}.json"
+
+spec:
+  resolvers:
+    project:
+      description: Project name used for dynamic state path isolation
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "project"
+          - provider: static
+            inputs:
+              value: "default-project"
+
+    config_value:
+      description: A value resolved from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "config_value"
+          - provider: static
+            inputs:
+              value: "default-config"
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      # resolve-defaults: dynamic state path requires __params.project
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      # =====================================================================
+      # Template resolves correctly with params
+      # =====================================================================
+      dynamic-path-first-run:
+        description: First run creates state at dynamic path derived from params
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "project=alpha"]
+        tags: [state, dynamic-path, smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynpath-first
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynpath-first && mkdir -p /tmp/scafctl-it-state-dynpath-first/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynpath-first"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.config_value == "default-config"
+            message: "First run should fall through to static default"
+
+      # =====================================================================
+      # Pre-seeded state at correct dynamic path is found
+      # =====================================================================
+      dynamic-path-preseeded:
+        description: Pre-seeded state at template-derived path is loaded
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "project=beta"]
+        tags: [state, dynamic-path]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynpath-preseeded
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynpath-preseeded && mkdir -p /tmp/scafctl-it-state-dynpath-preseeded/scafctl/dynamic"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-config"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-dynpath-preseeded/scafctl/dynamic/beta.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynpath-preseeded"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.config_value == "beta-config"
+            message: "Parameter provider should read from template-derived state path"
+
+      # =====================================================================
+      # Different project param uses different state file (isolation)
+      # =====================================================================
+      dynamic-path-isolation:
+        description: Different project params use isolated state files
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "project=gamma"]
+        tags: [state, dynamic-path]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynpath-iso
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynpath-iso && mkdir -p /tmp/scafctl-it-state-dynpath-iso/scafctl/dynamic"
+          # Pre-seed for project "beta" only
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-only"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-dynpath-iso/scafctl/dynamic/beta.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynpath-iso"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.config_value == "default-config"
+            message: "Gamma project should not see beta's state file"

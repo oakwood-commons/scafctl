@@ -1,0 +1,84 @@
+# =============================================================================
+# State Persistence Example
+# =============================================================================
+# Demonstrates state persistence across solution executions using the
+# parameter-replay pattern. On first run, CLI parameters (-r flags) are
+# collected and automatically saved to state. On subsequent runs, saved
+# parameters are replayed via the parameter provider without needing -r flags.
+#
+# Usage:
+#   First run:  scafctl run resolver -f solution.yaml -r username=alice -r env=prod
+#   Later runs: scafctl run resolver -f solution.yaml
+#   Inspect:    scafctl state list --path state-example.json
+#   Clear:      scafctl state clear --path state-example.json
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-example
+  version: 1.0.0
+  description: Demonstrates state persistence across runs via parameter replay
+
+# State configuration -- persists CLI parameters to a local JSON file.
+# On subsequent runs, saved parameters are merged with any new -r flags
+# and replayed via the parameter provider.
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "state-example.json"
+
+spec:
+  resolvers:
+    # =========================================================================
+    # Resolver with parameter replay -- prompts on first run, replayed thereafter
+    # =========================================================================
+    username:
+      description: Username for the deployment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "username"
+
+    # =========================================================================
+    # Resolver with default value -- parameter replay provides cached value
+    # =========================================================================
+    env:
+      description: Target environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "env"
+          - provider: static
+            inputs:
+              value: "dev"
+
+    # =========================================================================
+    # Computed value using replayed parameters in expressions
+    # =========================================================================
+    greeting:
+      description: Greeting message using saved username
+      type: string
+      dependsOn: [username, env]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'Hello ' + _.username + ' (env: ' + _.env + ')'"
+
+  # Display the greeting to verify state-backed values
+  workflow:
+    actions:
+      show-greeting:
+        description: Display the greeting built from stateful resolvers
+        provider: message
+        inputs:
+          message:
+            expr: "_.greeting"
+          type: success

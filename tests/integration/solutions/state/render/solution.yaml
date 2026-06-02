@@ -1,0 +1,115 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-render
+  version: 1.0.0
+  description: |
+    Functional tests for state loading in render mode.
+    Verifies that saved parameters from state are merged and available
+    to the parameter provider during resolver execution. State is
+    read-only in render mode (never saved).
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+
+spec:
+  resolvers:
+    # Reads from parameter with fallback to static default
+    cached_name:
+      description: Value loaded from saved parameters if available
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "cached_name"
+          - provider: static
+            inputs:
+              value: "fallback-default"
+
+    # Always resolves from static (no parameter dependency)
+    static_label:
+      description: Static label for display
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-label"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      # =====================================================================
+      # Render with empty state uses fallback
+      # =====================================================================
+      render-empty-state:
+        description: Render with empty state falls through to static default
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, render]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-render-empty
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-render-empty && mkdir -p /tmp/scafctl-it-state-render-empty/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-render-empty"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.cached_name == "fallback-default"
+            message: "Missing state should fall through to static"
+          - expression: __output.static_label == "my-label"
+            message: "Static resolver should work normally"
+
+      # =====================================================================
+      # Render with pre-seeded state returns cached value via parameters
+      # =====================================================================
+      render-preseeded-state:
+        description: Render with pre-seeded state returns cached value
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, render]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-render-preseeded
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-render-preseeded && mkdir -p /tmp/scafctl-it-state-render-preseeded/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"cached_name":"cached-from-state"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-render-preseeded/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-render-preseeded"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.cached_name == "cached-from-state"
+            message: "Parameter provider should return pre-seeded value from state"
+          - expression: __output.static_label == "my-label"
+            message: "Static resolver should work normally"
+
+      # =====================================================================
+      # Pre-seeded immutable value is accessible in render mode
+      # =====================================================================
+      render-immutable-accessible:
+        description: Immutable state entry is verifiable in render mode
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, render, immutable]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-render-immutable
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-render-immutable && mkdir -p /tmp/scafctl-it-state-render-immutable/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"cached_name":"immutable-cached"},"immutables":{"cached_name":{"value":"immutable-cached","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-render-immutable/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-render-immutable"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.cached_name == "immutable-cached"
+            message: "Immutable state entry should be accessible via saved parameters"

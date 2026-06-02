@@ -170,6 +170,13 @@ type Resolver struct {
 	// Timeout
 	Timeout *time.Duration `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum execution time (default: 30s)" example:"30s"`
 
+	// Immutable locks the resolver's value in state after first execution. On subsequent
+	// runs, the resolver still executes but its value is compared against the stored value.
+	// If the values differ, execution fails with an error. Use this for non-deterministic
+	// values (e.g., UUIDs) that must remain stable across runs. Requires the solution to
+	// have a state block configured and enabled.
+	Immutable bool `json:"immutable,omitempty" yaml:"immutable,omitempty" doc:"Lock resolver value in state after first execution" example:"true"`
+
 	// Phases
 	Resolve   *ResolvePhase   `json:"resolve" yaml:"resolve" doc:"Value resolution phase"`
 	Transform *TransformPhase `json:"transform,omitempty" yaml:"transform,omitempty" doc:"Value transformation phase"`

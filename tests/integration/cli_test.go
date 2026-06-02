@@ -9039,3 +9039,220 @@ spec:
 	// Multi-match message is verbose-only; should not appear by default
 	assert.NotContains(t, stderr, "Multiple solution files found")
 }
+
+// ============================================================================
+// State Command Tests
+// ============================================================================
+
+func TestIntegration_StateHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "state", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "state")
+	assert.Contains(t, stdout, "list")
+	assert.Contains(t, stdout, "get")
+	assert.Contains(t, stdout, "set")
+	assert.Contains(t, stdout, "delete")
+	assert.Contains(t, stdout, "clear")
+}
+
+func TestIntegration_StateSetAndGet(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Set a key
+	_, _, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "region", "--value", "us-east-1")
+	assert.Equal(t, 0, exitCode)
+
+	// Get the key
+	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "region")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "us-east-1")
+}
+
+func TestIntegration_StateList(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Set keys
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k1", "--value", "v1")
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k2", "--value", "v2")
+
+	// List
+	stdout, _, exitCode := runScafctl(t, "state", "list", "--path", stateFile)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "k1")
+	assert.Contains(t, stdout, "k2")
+}
+
+func TestIntegration_StateDelete(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Set then delete
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "ephemeral", "--value", "temp")
+	_, _, exitCode := runScafctl(t, "state", "delete", "--path", stateFile, "--key", "ephemeral")
+	assert.Equal(t, 0, exitCode)
+
+	// Verify deleted
+	_, _, exitCode = runScafctl(t, "state", "get", "--path", stateFile, "--key", "ephemeral")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_StateSetTypedInt(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	_, _, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "port", "--value", "8080", "--type", "int")
+	assert.Equal(t, 0, exitCode)
+
+	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "port", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "8080")
+}
+
+func TestIntegration_StateSetTypedInt_Invalid(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	_, stderr, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "port", "--value", "abc", "--type", "int")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "cannot parse")
+}
+
+func TestIntegration_StateClear(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed state with entries
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k1", "--value", "v1")
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k2", "--value", "v2")
+
+	// Clear
+	stdout, _, exitCode := runScafctl(t, "state", "clear", "--path", stateFile)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Cleared 2 entries")
+
+	// Verify entries are gone
+	_, _, exitCode = runScafctl(t, "state", "get", "--path", stateFile, "--key", "k1")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_StateSetImmutableRejectsOverwrite(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed state with an immutable entry using the new schema
+	content := `{"schemaVersion":1,"metadata":{},"command":{"subcommand":"","parameters":{}},"parameters":{},"immutables":{"locked":{"value":"original","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	// Attempt to overwrite the immutable key
+	_, stderr, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "locked", "--value", "new-value")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "immutable")
+
+	// Verify the original value is preserved
+	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "locked")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "original")
+}
+
+func TestIntegration_StateGetJSON(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed state with an immutable entry using the new schema
+	content := `{"schemaVersion":1,"metadata":{},"command":{"subcommand":"","parameters":{}},"parameters":{},"immutables":{"api_key":{"value":"sk-123","type":"string","createdAt":"2025-04-01T10:00:00Z"}},"fingerprints":{}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "api_key", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "sk-123")
+	assert.Contains(t, stdout, "immutables")
+	assert.Contains(t, stdout, "string")
+}
+
+func TestIntegration_StateListJSON(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed with multiple keys
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "alpha", "--value", "a")
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "beta", "--value", "b")
+
+	stdout, _, exitCode := runScafctl(t, "state", "list", "--path", stateFile, "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "alpha")
+	assert.Contains(t, stdout, "beta")
+	// JSON output should be parseable
+	assert.Contains(t, stdout, "{")
+}
+
+func TestIntegration_StateDeleteNonexistentKey(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed with one key
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "exists", "--value", "val")
+
+	// Delete a key that doesn't exist
+	_, stderr, exitCode := runScafctl(t, "state", "delete", "--path", stateFile, "--key", "ghost")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "not found")
+}
+
+func TestIntegration_StateSetTypedBool(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	_, _, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "debug", "--value", "true", "--type", "bool")
+	assert.Equal(t, 0, exitCode)
+
+	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "debug", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "true")
+}
+
+func TestIntegration_StateSetTypedFloat(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	_, _, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "ratio", "--value", "3.14", "--type", "float")
+	assert.Equal(t, 0, exitCode)
+
+	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "ratio", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "3.14")
+}
+
+func TestIntegration_StateSetTypedBool_Invalid(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	_, stderr, exitCode := runScafctl(t, "state", "set", "--path", stateFile, "--key", "debug", "--value", "maybe", "--type", "bool")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "cannot parse")
+}
+
+func TestIntegration_StateClearPreservesMetadata(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed state with metadata and parameters
+	content := `{"schemaVersion":1,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","scafctlVersion":"1.0.0"},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"immutables":{},"fingerprints":{}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	// Clear
+	stdout, _, exitCode := runScafctl(t, "state", "clear", "--path", stateFile)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Cleared 2 entries")
+
+	// Read the file directly and verify metadata is preserved
+	data, err := os.ReadFile(stateFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "my-sol")
+	assert.Contains(t, string(data), "2.0.0")
+	// But parameters should be empty
+	assert.NotContains(t, string(data), "k1")
+	assert.NotContains(t, string(data), "k2")
+}

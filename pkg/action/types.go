@@ -83,6 +83,18 @@ type Action struct {
 	// Referenced actions must exist in the same section (actions or finally).
 	Exclusive []string `json:"exclusive,omitempty" yaml:"exclusive,omitempty" doc:"Actions that cannot run in parallel with this action" maxItems:"100"`
 
+	// Sources declares glob patterns for input files this action depends on.
+	// When provided (and state is enabled), the action is skipped if source
+	// files haven't changed and generated files haven't been externally modified
+	// since the last successful run. Supported by 'run solution' and 'run action'.
+	Sources []string `json:"sources,omitempty" yaml:"sources,omitempty" doc:"Glob patterns for input file dependencies" maxItems:"100"`
+
+	// Generates declares glob patterns for output files this action produces.
+	// If all generated files exist and their checksums match the stored hashes
+	// from the last successful run, the action is skipped. Manual edits to
+	// generated files will trigger re-execution.
+	Generates []string `json:"generates,omitempty" yaml:"generates,omitempty" doc:"Glob patterns for output files" maxItems:"100"`
+
 	// When is a condition that must evaluate to true for the action to execute.
 	// If false, the action is skipped with SkipReasonCondition.
 	When *spec.Condition `json:"when,omitempty" yaml:"when,omitempty" doc:"Condition for execution (skipped if false)"`
@@ -264,6 +276,10 @@ const (
 
 	// SkipReasonDependencyFailed indicates a required dependency failed.
 	SkipReasonDependencyFailed SkipReason = "dependency-failed"
+
+	// SkipReasonUpToDate indicates the action was skipped because its source
+	// and generates fingerprints match stored state (no changes since last run).
+	SkipReasonUpToDate SkipReason = "up-to-date"
 )
 
 // ActionResult represents the result of an action execution.

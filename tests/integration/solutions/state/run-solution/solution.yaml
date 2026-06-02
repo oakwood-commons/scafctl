@@ -1,0 +1,147 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-run-solution
+  version: 1.0.0
+  description: |
+    Functional tests for state persistence with 'run solution' (actions).
+    Verifies that state is loaded before resolvers, saved parameters are
+    merged with CLI parameters, and state is saved AFTER successful action
+    execution (not after resolvers alone).
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: run-solution-state.json
+
+spec:
+  resolvers:
+    deploy_target:
+      description: Deployment target with parameter override and static default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "target"
+          - provider: static
+            inputs:
+              value: "staging"
+
+    build_id:
+      description: Build identifier from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "build_id"
+          - provider: static
+            inputs:
+              value: "build-001"
+
+  workflow:
+    actions:
+      deploy:
+        description: Deploy to target
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo deployed to ' + _.deploy_target + ' build=' + _.build_id"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      # =====================================================================
+      # First run: state empty, resolvers use defaults, actions run, state saved
+      # =====================================================================
+      first-run-saves-state:
+        description: First run resolves defaults and saves state after actions succeed
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [state, run-solution, smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-first
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-first && mkdir -p /tmp/scafctl-it-state-runsol-first/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-first"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+            message: "Actions should succeed"
+          - expression: __output.actions["deploy"].status == "succeeded"
+            message: "Deploy action should succeed"
+          - expression: __output.actions["deploy"].results.stdout.contains("deployed to staging")
+            message: "Should deploy to default target staging"
+
+      # =====================================================================
+      # Second run: state pre-seeded with parameters, resolvers read from them
+      # =====================================================================
+      reads-from-preseeded-state:
+        description: Saved parameters are replayed on subsequent runs
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [state, run-solution]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-preseeded
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-preseeded && mkdir -p /tmp/scafctl-it-state-runsol-preseeded/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production","build_id":"build-042"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-runsol-preseeded/scafctl/run-solution-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-preseeded"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["deploy"].results.stdout.contains("deployed to production")
+            message: "Should deploy to production (from saved params)"
+          - expression: __output.actions["deploy"].results.stdout.contains("build=build-042")
+            message: "Should use build-042 from saved params"
+
+      # =====================================================================
+      # Parameter overrides state value
+      # =====================================================================
+      param-overrides-state:
+        description: CLI parameter overrides saved state parameter
+        command: [run, solution]
+        args: ["-o", "json", "-r", "target=canary"]
+        tags: [state, run-solution]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-override
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-override && mkdir -p /tmp/scafctl-it-state-runsol-override/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-runsol-override/scafctl/run-solution-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-override"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["deploy"].results.stdout.contains("deployed to canary")
+            message: "Parameter should override state value"
+
+      # =====================================================================
+      # Command info captured in state
+      # =====================================================================
+      command-info-captured:
+        description: State records 'run solution' as the subcommand
+        command: [run, solution]
+        args: ["-o", "json", "-r", "target=dev"]
+        tags: [state, run-solution, command-info]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-cmdinfo
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-cmdinfo && mkdir -p /tmp/scafctl-it-state-runsol-cmdinfo/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-runsol-cmdinfo"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.status == "succeeded"

@@ -31,6 +31,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -324,6 +325,13 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
 
+		// State lifecycle: load persisted state before resolver execution so
+		// the state provider can serve previously saved values (read-only).
+		ctx, params, err = o.loadStateIntoContext(ctx, sol, reg, params)
+		if err != nil {
+			return o.exitWithCode(err, exitcode.GeneralError)
+		}
+
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
 		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr)
 		if err != nil {
@@ -411,6 +419,13 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 			return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
 		}
 
+		// State lifecycle: load persisted state before resolver execution so
+		// the state provider can serve previously saved values (read-only).
+		ctx, params, err = o.loadStateIntoContext(ctx, sol, reg, params)
+		if err != nil {
+			return o.exitWithCode(err, exitcode.GeneralError)
+		}
+
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
 		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr)
 		if err != nil {
@@ -459,6 +474,13 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	params, err := flags.ParseResolverFlagsWithStdin(o.ResolverParams, stdinReader)
 	if err != nil {
 		return o.exitWithCode(fmt.Errorf("failed to parse resolver parameters: %w", err), exitcode.ValidationFailed)
+	}
+
+	// State lifecycle: load persisted state before resolver execution so
+	// the state provider can serve previously saved values (read-only).
+	ctx, params, err = o.loadStateIntoContext(ctx, sol, o.getRegistry(ctx), params)
+	if err != nil {
+		return o.exitWithCode(err, exitcode.GeneralError)
 	}
 
 	resolvers := sol.Spec.ResolversToSlice()
@@ -736,6 +758,40 @@ type solutionRegistryAdapter = solrender.RegistryAdapter
 
 // solutionResolverRegistryAdapter is a type alias for the domain ResolverRegistryAdapter.
 type solutionResolverRegistryAdapter = solrender.ResolverRegistryAdapter
+
+// loadStateIntoContext loads persisted state into the context for read-only
+// access by the state provider during resolver execution. State is never saved
+// in render mode. Returns the updated context and merged parameters (saved + CLI)
+// so the parameter provider can replay previously saved values.
+func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) (context.Context, map[string]any, error) {
+	if sol.State == nil {
+		return ctx, params, nil
+	}
+
+	stateMgr := state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
+	cmdInfo := state.CommandInfo{
+		Subcommand: "render solution",
+		Parameters: formatParams(params),
+	}
+	loadResult, err := stateMgr.Load(ctx, params, cmdInfo)
+	if err != nil {
+		return ctx, params, fmt.Errorf("state load: %w", err)
+	}
+	if !loadResult.Skipped {
+		ctx = loadResult.Ctx
+		params = loadResult.MergedParams
+	}
+	return ctx, params, nil
+}
+
+// formatParams converts resolver parameters to string map for state command info.
+func formatParams(params map[string]any) map[string]string {
+	result := make(map[string]string, len(params))
+	for k, v := range params {
+		result[k] = fmt.Sprintf("%v", v)
+	}
+	return result
+}
 
 // renderGraph renders a graph in the specified format using the common interface.
 func (o *SolutionOptions) renderGraph(graph graphRenderer, data any) error {

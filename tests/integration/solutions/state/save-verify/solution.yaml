@@ -1,0 +1,153 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-save-verify
+  version: 1.0.0
+  description: |
+    Functional tests for verifying state is actually persisted to disk.
+    Uses pre-seeded state files to simulate second runs. Tests that saved
+    parameters are replayed via the parameter provider, and that CLI
+    parameters override saved values.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+
+spec:
+  resolvers:
+    name:
+      description: String value resolved from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "name"
+          - provider: static
+            inputs:
+              value: "default-name"
+
+    count:
+      description: Integer value resolved from parameter or default
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "count"
+          - provider: static
+            inputs:
+              value: 99
+
+    enabled_flag:
+      description: Boolean value resolved from parameter or default
+      type: bool
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "enabled_flag"
+          - provider: static
+            inputs:
+              value: true
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for save verification tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, save-verify]
+        assertions:
+          - expression: __exitCode == 0
+
+      # =====================================================================
+      # First run: empty state, values resolved from defaults
+      # =====================================================================
+      first-run-defaults:
+        description: First run resolves from defaults and persists to state
+        extends: [_base]
+        tags: [smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-save-first
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-save-first && mkdir -p /tmp/scafctl-it-state-save-first/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-save-first"
+        assertions:
+          - expression: __output.name == "default-name"
+            message: "First run should use static default"
+          - expression: __output.count == 99
+            message: "First run should use static default int"
+          - expression: __output.enabled_flag == true
+            message: "First run should use static default bool"
+
+      # =====================================================================
+      # Verify state was persisted: pre-seeded state file simulates second run
+      # =====================================================================
+      second-run-from-state:
+        description: Second run reads values from state parameters (simulated via pre-seed)
+        extends: [_base]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-save-second
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-save-second && mkdir -p /tmp/scafctl-it-state-save-second/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-verify","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"name":"saved-name","count":"42","enabled_flag":"false"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-save-second/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-save-second"
+        assertions:
+          - expression: __output.name == "saved-name"
+            message: "Parameter provider should return persisted string value"
+          - expression: __output.count == 42
+            message: "Parameter provider should return persisted int value"
+          - expression: __output.enabled_flag == false
+            message: "Parameter provider should return persisted bool value"
+
+      # =====================================================================
+      # Parameter override is persisted (not the static default)
+      # =====================================================================
+      param-override-persisted:
+        description: Parameter value overrides static and is what gets saved
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=custom-name"]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-save-param
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-save-param && mkdir -p /tmp/scafctl-it-state-save-param/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-save-param"
+        assertions:
+          - expression: __output.name == "custom-name"
+            message: "Parameter should override static default"
+          - expression: __output.count == 99
+            message: "Count should use static default (no param)"
+
+      # =====================================================================
+      # State value is overwritten by newer run (parameter wins over old state)
+      # =====================================================================
+      state-overwritten-by-param:
+        description: Parameter overrides existing state value on next run
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=new-name"]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-save-overwrite
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-save-overwrite && mkdir -p /tmp/scafctl-it-state-save-overwrite/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-verify","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"name":"old-name"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-save-overwrite/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-save-overwrite"
+        assertions:
+          - expression: __output.name == "new-name"
+            message: "Parameter should win over stale state value"

@@ -1,0 +1,242 @@
+# =============================================================================
+# State + Fingerprinting Showcase: Code Generation Pipeline
+# =============================================================================
+# Demonstrates state capabilities alongside fingerprinting (up-to-date
+# checks). This solution simulates a code generation pipeline that:
+#
+#   1. Reads template files (sources)
+#   2. Generates output files (generates)
+#   3. Persists CLI parameters to state between runs (parameter replay)
+#   4. Skips actions when source files haven't changed (fingerprinting)
+#   5. Re-executes when templates are modified or output is tampered with
+#
+# State features demonstrated:
+#   - state.enabled / state.backend configuration
+#   - Automatic parameter replay (CLI -r values saved and restored)
+#   - Immutable resolver values locked after first execution
+#   - computed resolvers using state-replayed values
+#
+# Fingerprinting features demonstrated:
+#   - sources: glob patterns tracking input files
+#   - generates: glob patterns tracking output files
+#   - skip on unchanged sources (up-to-date)
+#   - re-execute on modified generates (tamper detection)
+#   - --skip-fingerprint flag to force re-execution
+#
+# Setup:
+#   cd examples/solutions/state-fingerprint
+#   # Templates are provided in the templates/ directory
+#
+# First run (all actions execute, state + fingerprints stored):
+#   scafctl run solution -f solution.yaml -r project_name=myservice -r author=alice
+#
+# Second run (actions skipped -- sources unchanged):
+#   scafctl run solution -f solution.yaml
+#
+# Modify a template, then re-run (fingerprint detects change):
+#   echo '// updated' >> templates/model.go.tpl
+#   scafctl run solution -f solution.yaml
+#
+# Force re-execution bypassing fingerprints:
+#   scafctl run solution -f solution.yaml --skip-fingerprint
+#
+# Inspect state:
+#   scafctl state list --path state-fingerprint-demo.json
+#
+# Clear state (resets everything including fingerprints):
+#   scafctl state clear --path state-fingerprint-demo.json
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-fingerprint-showcase
+  version: 1.0.0
+  displayName: State + Fingerprinting Showcase
+  category: solutions
+  tags:
+    - state
+    - fingerprint
+    - code-generation
+    - workflow
+  description: |
+    Comprehensive demonstration of state persistence and file fingerprinting.
+    Simulates a code generation pipeline that only re-generates when templates
+    change, while persisting configuration between runs.
+
+# =============================================================================
+# STATE CONFIGURATION
+# =============================================================================
+# State persists resolver values and fingerprint hashes between executions.
+# The file backend stores a JSON file under $XDG_STATE_HOME/scafctl/.
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "state-fingerprint-demo.json"
+
+spec:
+  resolvers:
+    # =========================================================================
+    # PARAMETER REPLAY: CLI -r values saved to state and replayed
+    # =========================================================================
+    # On first run: parameter provider reads from -r flag.
+    # On subsequent runs: saved parameters are replayed via parameter provider
+    # automatically (no -r flags needed).
+    project_name:
+      description: Name of the project being generated
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "project_name"
+
+    # =========================================================================
+    # PARAMETER REPLAY: With static default fallback
+    # =========================================================================
+    # Demonstrates the fallback chain: parameter (replayed or CLI) -> static default
+    author:
+      description: Author name for generated file headers
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "author"
+          - provider: static
+            inputs:
+              value: "anonymous"
+
+    # =========================================================================
+    # COMPUTED RESOLVER: Uses replayed parameters in expressions
+    # =========================================================================
+    # Demonstrates that state-replayed values flow into downstream resolvers
+    # via normal CEL expressions -- state is transparent to the DAG.
+    output_dir:
+      description: Output directory for generated files
+      type: string
+      dependsOn: [project_name]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'output/' + _.project_name"
+
+    # =========================================================================
+    # COMPUTED RESOLVER: Build generation header from replayed values
+    # =========================================================================
+    file_header:
+      description: Header comment injected into every generated file
+      type: string
+      dependsOn: [project_name, author]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: >
+                  '// Code generated by scafctl. DO NOT EDIT.\n' +
+                  '// Project: ' + _.project_name + '\n' +
+                  '// Author: ' + _.author
+
+    # =========================================================================
+    # TEMPLATE DATA: Variables passed to Go templates during rendering
+    # =========================================================================
+    template_vars:
+      description: Variables available inside Go templates
+      type: any
+      dependsOn: [project_name, author, file_header]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                projectName:
+                  rslvr: project_name
+                author:
+                  rslvr: author
+                header:
+                  rslvr: file_header
+
+    # =========================================================================
+    # READ TEMPLATES: Load .tpl files for rendering
+    # =========================================================================
+    template_files:
+      description: Read all template files from the templates directory
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    # =========================================================================
+    # RENDER TEMPLATES: Batch-render with template variables
+    # =========================================================================
+    rendered_files:
+      description: Rendered template output ready to write
+      type: any
+      dependsOn: [template_files, template_vars]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: "_.template_files.entries"
+              data:
+                rslvr: template_vars
+
+  # ===========================================================================
+  # WORKFLOW: Actions with fingerprinting
+  # ===========================================================================
+  workflow:
+    actions:
+      # -----------------------------------------------------------------------
+      # FINGERPRINT FEATURE: sources + generates on an action
+      # -----------------------------------------------------------------------
+      # This action is skipped when:
+      #   - All template files (sources) have the same SHA-256 as last run
+      #   - All output files (generates) exist and match their stored hashes
+      # It re-executes when:
+      #   - A template file is added, removed, or modified
+      #   - An output file is deleted or manually edited (tamper detection)
+      generate-code:
+        description: Render templates into output directory
+        displayName: Generate Code
+        provider: file
+        sources:
+          - "templates/**/*.tpl"
+        generates:
+          - "output/**/*.go"
+        inputs:
+          operation: write-tree
+          basePath:
+            rslvr: output_dir
+          entries:
+            rslvr: rendered_files
+          outputPath: '{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}'
+
+      # -----------------------------------------------------------------------
+      # DISPLAY: Show summary using replayed values
+      # -----------------------------------------------------------------------
+      show-summary:
+        description: Display generation summary
+        displayName: Generation Summary
+        provider: message
+        dependsOn: [generate-code]
+        inputs:
+          message:
+            expr: >
+              '--- Code Generation Complete ---\n' +
+              'Project: ' + _.project_name + '\n' +
+              'Author: ' + _.author + '\n' +
+              'Output: ' + _.output_dir + '\n' +
+              '--------------------------------'
+          type: success

@@ -1,0 +1,92 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-persistence
+  version: 1.0.0
+  description: |
+    Functional tests for state persistence.
+    Verifies that CLI parameters are automatically persisted to state and
+    replayed on subsequent runs via the parameter provider. Tests round-trip
+    persistence via pre-seeded state files with the new parameters schema.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+
+spec:
+  resolvers:
+    greeting:
+      description: A greeting resolved from parameter or static default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "greeting"
+          - provider: static
+            inputs:
+              value: hello-world
+
+    counter:
+      description: A numeric value resolved from parameter or static default
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "counter"
+          - provider: static
+            inputs:
+              value: 42
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for state tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state]
+        assertions:
+          - expression: __exitCode == 0
+
+      first-run-static:
+        description: Verify resolvers work on first run (empty state) using static defaults
+        extends: [_base]
+        tags: [smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-first-run
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-first-run && mkdir -p /tmp/scafctl-it-state-first-run/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-first-run"
+        assertions:
+          - expression: __output.greeting == "hello-world"
+            message: "First run should fall through to static default"
+          - expression: __output.counter == 42
+            message: "First run should fall through to static default int"
+
+      state-preseeded:
+        description: Verify parameter provider reads from pre-seeded state parameters
+        extends: [_base]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-preseeded
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-preseeded && mkdir -p /tmp/scafctl-it-state-preseeded/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-persistence","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"hello-from-state","counter":"99"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-preseeded/scafctl/state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-preseeded"
+        assertions:
+          - expression: __output.greeting == "hello-from-state"
+            message: "Parameter provider should read pre-seeded value from state"
+          - expression: __output.counter == 99
+            message: "Parameter provider should read pre-seeded int from state"

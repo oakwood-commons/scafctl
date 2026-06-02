@@ -1,0 +1,143 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-render-solution
+  version: 1.0.0
+  description: |
+    Functional tests for state loading in 'render solution' command.
+    Verifies that render loads persisted parameters from state into the
+    resolver context so the parameter provider can serve previously saved
+    values. State is read-only in render mode -- never saved. The action
+    graph is rendered using resolver values derived from saved parameters.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: render-state.json
+
+spec:
+  resolvers:
+    deploy_target:
+      description: Deployment target read from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "target"
+          - provider: static
+            inputs:
+              value: "default-target"
+
+    app_version:
+      description: Application version
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_version"
+          - provider: static
+            inputs:
+              value: "0.0.1"
+
+  workflow:
+    actions:
+      deploy:
+        description: Deploy action
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo deploy ' + _.app_version + ' to ' + _.deploy_target"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      # =====================================================================
+      # Render with empty state uses resolver defaults
+      # =====================================================================
+      render-empty-state:
+        description: Render with no state file uses static fallback values
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [state, render, smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-empty
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-empty && mkdir -p /tmp/scafctl-it-state-rendersol-empty/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-empty"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["deploy"].inputs["command"].contains("default-target")
+            message: "Render should use static fallback when state is empty"
+          - expression: __output.actions["deploy"].inputs["command"].contains("0.0.1")
+            message: "Render should use static fallback version"
+
+      # =====================================================================
+      # Render loads saved state parameters (read-only replay)
+      # =====================================================================
+      render-replays-state:
+        description: Render loads saved parameters so parameter provider serves persisted values
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [state, render]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-preseeded
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-preseeded && mkdir -p /tmp/scafctl-it-state-rendersol-preseeded/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"prod-cluster","app_version":"3.2.1"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-rendersol-preseeded/scafctl/render-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-preseeded"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["deploy"].inputs["command"].contains("prod-cluster")
+            message: "Render should use persisted target from state"
+          - expression: __output.actions["deploy"].inputs["command"].contains("3.2.1")
+            message: "Render should use persisted version from state"
+
+      # =====================================================================
+      # Render does NOT write state (read-only)
+      # =====================================================================
+      render-no-state-write:
+        description: Render does not create a state file (read-only mode)
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [state, render, readonly]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-nowrite
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-nowrite && mkdir -p /tmp/scafctl-it-state-rendersol-nowrite/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-nowrite"
+        assertions:
+          - expression: __exitCode == 0
+
+      # =====================================================================
+      # Render with CLI parameter overrides saved state param
+      # =====================================================================
+      render-param-with-state:
+        description: CLI parameter overrides saved state parameter in render mode
+        command: [render, solution]
+        args: ["-o", "json", "-r", "target=edge"]
+        tags: [state, render]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-param
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-param && mkdir -p /tmp/scafctl-it-state-rendersol-param/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"cached-target"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-rendersol-param/scafctl/render-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-rendersol-param"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["deploy"].inputs["command"].contains("edge")
+            message: "CLI parameter should override saved state parameter"

@@ -27,6 +27,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
@@ -457,6 +458,24 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.showResolverSnapshot(ctx, sol, resolvers, params, reg)
 	}
 
+	// State lifecycle: load persisted state before resolver execution so that
+	// the state provider can serve previously saved values.
+	var stateMgr *state.Manager
+	var stateData *state.Data
+	if sol.State != nil {
+		stateMgr = state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
+		cmdInfo := buildCommandInfo("run resolver", params)
+		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
+		if loadErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
+		}
+		if !loadResult.Skipped {
+			ctx = loadResult.Ctx
+			stateData = loadResult.Data
+			params = loadResult.MergedParams
+		}
+	}
+
 	// Wire skip-transform flag into shared options for executeResolvers
 	if o.SkipTransform {
 		o.sharedResolverOptions.SkipTransform = true
@@ -472,6 +491,15 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	}
 
 	elapsed := time.Since(start)
+
+	// State lifecycle: save merged parameters and check immutable values
+	// after successful resolver execution.
+	if stateMgr != nil && stateData != nil {
+		solMeta := buildStateSolutionMeta(sol)
+		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
+		}
+	}
 
 	// Build output and write
 	results := o.buildResolverOutputMap(resolverData, sol)

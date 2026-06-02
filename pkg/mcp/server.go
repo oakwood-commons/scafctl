@@ -911,6 +911,9 @@ func (s *Server) registerTools() {
 	// REST API tools
 	s.registerAPITools()
 
+	// State inspection tools
+	s.registerStateTools()
+
 	// CLI introspection tools
 	s.registerCLITools()
 }

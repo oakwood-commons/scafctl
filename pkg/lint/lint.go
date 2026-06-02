@@ -99,6 +99,8 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintWorkflow(sol, result, registry)
+	lintState(sol, result, registry)
+	lintImmutableResolvers(sol, result)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 
@@ -1088,4 +1090,96 @@ func FilterBySeverity(result *Result, minSeverity string) *Result {
 	}
 
 	return filtered
+}
+
+// lintState validates the solution's state configuration.
+func lintState(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	if sol.State == nil {
+		return
+	}
+
+	if !lintStateBackend(sol, result, registry) {
+		return
+	}
+	lintStateResolverRefs(sol, result)
+}
+
+// lintStateBackend validates the backend provider configuration.
+// Returns false if further state linting should be skipped (e.g., backend is missing).
+func lintStateBackend(sol *solution.Solution, result *Result, registry *provider.Registry) bool {
+	location := "state"
+
+	backendName := sol.State.Backend.Provider
+	if backendName == "" {
+		result.addFinding(SeverityError, "state", location+".backend.provider",
+			"state backend provider is not specified",
+			"Set backend.provider to a registered provider with CapabilityState (e.g., 'file')",
+			"missing-state-backend")
+		return false
+	}
+
+	prov, found := registry.Get(backendName)
+	if !found {
+		result.addFinding(SeverityError, "state", location+".backend.provider",
+			fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
+			"Use a registered provider with CapabilityState such as 'file' or 'http'. External providers like 'github' require an installed plugin",
+			"invalid-state-backend")
+	} else {
+		desc := prov.Descriptor()
+		hasState := false
+		for _, cap := range desc.Capabilities {
+			if cap == provider.CapabilityState {
+				hasState = true
+				break
+			}
+		}
+		if !hasState {
+			result.addFinding(SeverityError, "state", location+".backend.provider",
+				fmt.Sprintf("provider '%s' does not have CapabilityState", backendName),
+				"Use a provider that implements CapabilityState",
+				"invalid-state-backend")
+		}
+	}
+
+	lintNilInputs(sol.State.Backend.Inputs, location+".backend", result)
+	return true
+}
+
+// lintStateResolverRefs checks for direct rslvr: references in state config.
+// These won't work because state loads before resolvers run.
+func lintStateResolverRefs(sol *solution.Solution, result *Result) {
+	location := "state"
+
+	if sol.State.Enabled != nil && sol.State.Enabled.Resolver != nil {
+		result.addFinding(SeverityError, "state", location+".enabled",
+			fmt.Sprintf("state.enabled uses rslvr: %q — resolver results are not available at state load time", *sol.State.Enabled.Resolver),
+			"Use a literal value or CEL expression referencing CLI params instead (e.g. expr: \"__params.enable_state == true\")",
+			"state-resolver-ref")
+	}
+	for inputKey, input := range sol.State.Backend.Inputs {
+		if input != nil && input.Resolver != nil {
+			result.addFinding(SeverityError, "state", fmt.Sprintf("%s.backend.inputs.%s", location, inputKey),
+				fmt.Sprintf("state backend input %q uses rslvr: %q — resolver results are not available at state load time", inputKey, *input.Resolver),
+				"Use a CEL expression referencing a CLI parameter instead (e.g. expr: \"__params.appName + '-state.json'\")",
+				"state-resolver-ref")
+		}
+	}
+}
+
+// lintImmutableResolvers checks that resolvers with immutable: true have a
+// state block configured on the solution. Without state, immutable values
+// cannot be persisted or verified across runs.
+func lintImmutableResolvers(sol *solution.Solution, result *Result) {
+	for name, res := range sol.Spec.Resolvers {
+		if res == nil || !res.Immutable {
+			continue
+		}
+		if sol.State == nil {
+			location := fmt.Sprintf("resolvers.%s", name)
+			result.addFinding(SeverityError, "state", location,
+				fmt.Sprintf("resolver %q has immutable: true but no state block is configured on the solution", name),
+				"Add a state block with a backend provider to the solution so that the resolver value can be persisted.",
+				"immutable-requires-state")
+		}
+	}
 }

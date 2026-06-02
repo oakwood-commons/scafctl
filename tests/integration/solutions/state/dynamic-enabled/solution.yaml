@@ -1,0 +1,159 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-dynamic-enabled
+  version: 1.0.0
+  description: |
+    Functional tests for CEL-based dynamic state.enabled.
+    Verifies that state can be conditionally enabled using a CEL expression
+    on the enabled field. When disabled, parameters are NOT loaded from the
+    state file. When enabled, saved parameters ARE loaded and served to the
+    parameter provider.
+
+state:
+  enabled:
+    expr: "has(__params.use_state) && __params.use_state == 'true'"
+  backend:
+    provider: file
+    inputs:
+      path: dynamic-enabled-state.json
+
+spec:
+  resolvers:
+    use_state:
+      description: Controls whether state is enabled (used in state.enabled CEL)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "use_state"
+          - provider: static
+            inputs:
+              value: "false"
+
+    greeting:
+      description: A simple greeting resolved from parameter or static default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "greeting"
+          - provider: static
+            inputs:
+              value: "hello-default"
+
+  testing:
+    config:
+      skipBuiltins: [render-defaults]
+
+    cases:
+      # =====================================================================
+      # State disabled: saved parameters NOT loaded
+      # =====================================================================
+      disabled-no-state-loaded:
+        description: When state is disabled, saved parameters are not loaded
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, dynamic-enabled, smoke]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-disabled
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-disabled && mkdir -p /tmp/scafctl-it-state-dynen-disabled/scafctl"
+          # Pre-seed state with greeting = from-state
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-dynen-disabled/scafctl/dynamic-enabled-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-disabled"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "hello-default"
+            message: "With state disabled, should use static default (not saved params)"
+
+      # =====================================================================
+      # State disabled with use_state=false: same behavior
+      # =====================================================================
+      disabled-explicit-false:
+        description: Explicitly setting use_state=false keeps state disabled
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "use_state=false"]
+        tags: [state, dynamic-enabled]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-false
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-false && mkdir -p /tmp/scafctl-it-state-dynen-false/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-dynen-false/scafctl/dynamic-enabled-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-false"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "hello-default"
+            message: "use_state=false means state is disabled, should not read saved params"
+
+      # =====================================================================
+      # State enabled with use_state=true: saved parameters ARE loaded
+      # =====================================================================
+      enabled-reads-state:
+        description: When state is enabled (use_state=true), saved parameters are loaded
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "use_state=true"]
+        tags: [state, dynamic-enabled]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-enabled
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-enabled && mkdir -p /tmp/scafctl-it-state-dynen-enabled/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"saved-hello"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-dynen-enabled/scafctl/dynamic-enabled-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-enabled"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "saved-hello"
+            message: "With state enabled, should read greeting from saved parameters"
+
+      # =====================================================================
+      # State enabled but no state file: uses defaults
+      # =====================================================================
+      enabled-no-state-file:
+        description: State enabled with no state file falls through to defaults
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "use_state=true"]
+        tags: [state, dynamic-enabled]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-nofile
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-nofile && mkdir -p /tmp/scafctl-it-state-dynen-nofile/scafctl"
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-nofile"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "hello-default"
+            message: "With state enabled but no file, should fall through to static default"
+
+      # =====================================================================
+      # CLI parameter overrides saved state param (when state enabled)
+      # =====================================================================
+      enabled-param-overrides-state:
+        description: CLI parameter overrides saved state param when state is enabled
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "use_state=true", "-r", "greeting=cli-hello"]
+        tags: [state, dynamic-enabled]
+        env:
+          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-override
+        init:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-override && mkdir -p /tmp/scafctl-it-state-dynen-override/scafctl"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
+              > /tmp/scafctl-it-state-dynen-override/scafctl/dynamic-enabled-state.json
+        cleanup:
+          - command: "rm -rf /tmp/scafctl-it-state-dynen-override"
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.greeting == "cli-hello"
+            message: "CLI parameter should override saved state parameter"

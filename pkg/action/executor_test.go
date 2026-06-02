@@ -14,9 +14,11 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1159,4 +1161,244 @@ func TestBuildAdditionalVars_ExecutionDoesNotOverrideActions(t *testing.T) {
 	_, hasExecution := vars["__execution"]
 	assert.True(t, hasActions)
 	assert.True(t, hasExecution)
+}
+
+func TestExecutor_Execute_FingerprintSkip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/main.go", []byte("package main"), 0o644))
+
+	executed := false
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			executed = true
+			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+		},
+	})
+
+	// nil state = first run, always stale → action should execute
+	fpChecker := fingerprint.NewChecker(nil)
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "test-provider",
+				Sources:  []string{"*.go"},
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.True(t, executed)
+	assert.Equal(t, StatusSucceeded, result.Actions["build"].Status)
+}
+
+func TestExecutor_Execute_FingerprintUpToDate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/main.go", []byte("package main"), 0o644))
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// First execution: should run (first run)
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "test-provider",
+				Sources:  []string{"*.go"},
+			},
+		},
+	}
+
+	_, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second execution: should skip (up-to-date)
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	result, err := executor2.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount) // NOT incremented
+	assert.Equal(t, StatusSkipped, result.Actions["build"].Status)
+	assert.Equal(t, SkipReasonUpToDate, result.Actions["build"].SkipReason)
+}
+
+func TestExecutor_Execute_FingerprintNoCache(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/main.go", []byte("package main"), 0o644))
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// First run to populate state
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "test-provider",
+				Sources:  []string{"*.go"},
+			},
+		},
+	}
+
+	_, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second run with --no-cache: should execute even though up-to-date
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithNoCache(true),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err = executor2.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount) // Incremented despite up-to-date
+}
+
+func TestExecutor_Execute_FingerprintInputsChanged(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/template.tpl", []byte("hello {{ .env }}"), 0o644))
+
+	execCount := 0
+	var lastInputs any
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, inputs any) (*provider.Output, error) {
+			execCount++
+			lastInputs = inputs
+			return &provider.Output{Data: map[string]any{"result": "generated"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// First run with name=staging
+	workflow1 := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "staging"},
+				},
+			},
+		},
+	}
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err := executor.Execute(context.Background(), workflow1)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second run: same sources, but different input value (name=production)
+	// This simulates a resolver change -- the template file hasn't changed
+	// but the data feeding into it has.
+	workflow2 := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "production"},
+				},
+			},
+		},
+	}
+
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err = executor2.Execute(context.Background(), workflow2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount) // Should re-execute due to input change
+
+	// Verify the provider received the new inputs
+	inputMap, ok := lastInputs.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "production", inputMap["name"])
+
+	// Third run: same inputs as second run -- should skip
+	executor3 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	result, err := executor3.Execute(context.Background(), workflow2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount) // NOT incremented
+	assert.Equal(t, StatusSkipped, result.Actions["generate"].Status)
+	assert.Equal(t, SkipReasonUpToDate, result.Actions["generate"].SkipReason)
 }

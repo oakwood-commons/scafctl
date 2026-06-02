@@ -1117,3 +1117,57 @@ func TestExtractRefsFromExpression_WithActions(t *testing.T) {
 	extractRefsFromExpression(&expr, refs)
 	assert.Contains(t, refs, "build")
 }
+
+func TestValidateGlobSafety(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		wantErr string
+	}{
+		{name: "valid relative pattern", pattern: "src/**/*.go", wantErr: ""},
+		{name: "valid nested pattern", pattern: "templates/*.tpl", wantErr: ""},
+		{name: "absolute pattern unix", pattern: "/etc/passwd", wantErr: "absolute patterns not allowed"},
+		{name: "traversal with dotdot", pattern: "../outside/file.go", wantErr: "path traversal not allowed"},
+		{name: "embedded traversal", pattern: "src/../../etc/passwd", wantErr: "path traversal not allowed"},
+		{name: "dotdot only", pattern: "..", wantErr: "path traversal not allowed"},
+		{name: "filename starting with dots allowed", pattern: "src/..config", wantErr: ""},
+		{name: "current dir pattern", pattern: "./src/*.go", wantErr: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateGlobSafety(tt.pattern)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateSources_RejectsAbsoluteAndTraversal(t *testing.T) {
+	action := &Action{
+		Name:    "build",
+		Sources: []string{"/etc/passwd", "../outside"},
+	}
+	errs := &AggregatedValidationError{}
+	validateSources(action, "workflow.actions", errs)
+	require.Len(t, errs.Errors, 2)
+	assert.Contains(t, errs.Errors[0].Message, "absolute patterns not allowed")
+	assert.Contains(t, errs.Errors[1].Message, "path traversal not allowed")
+}
+
+func TestValidateSources_RejectsTraversalInGenerates(t *testing.T) {
+	action := &Action{
+		Name:      "build",
+		Sources:   []string{"src/**/*.go"},
+		Generates: []string{"../../output/bin"},
+	}
+	errs := &AggregatedValidationError{}
+	validateSources(action, "workflow.actions", errs)
+	require.Len(t, errs.Errors, 1)
+	assert.Contains(t, errs.Errors[0].Message, "path traversal not allowed")
+	assert.Equal(t, "generates", errs.Errors[0].Field)
+}

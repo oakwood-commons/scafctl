@@ -17,7 +17,7 @@ You are a PR review comment handler for the **scafctl** project. You fetch revie
 1. Get the current branch: `git branch --show-current`
 2. Fetch the PR and its review comments:
    ```bash
-   gh pr view --json number,title,url,reviews,reviewDecision,headRefName
+   gh pr view --json number,title,url,reviews,reviewDecision,headRefName | cat
    ```
 3. Fetch review threads (pending and resolved) via GraphQL:
    ```bash

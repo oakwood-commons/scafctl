@@ -6,11 +6,13 @@ package action
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -388,6 +390,9 @@ func validateAction(
 			Message:    fmt.Sprintf("resultSchemaMode must be 'error', 'warn', or 'ignore', got %q", action.ResultSchemaMode),
 		})
 	}
+
+	// Validate sources/generates glob patterns
+	validateSources(action, section, errs)
 }
 
 // validateExclusive validates exclusive action references.
@@ -823,6 +828,69 @@ func validateRetry(action *Action, section string, errs *AggregatedValidationErr
 			Message:    fmt.Sprintf("retry.backoff must be 'fixed', 'linear', or 'exponential', got %q", retry.Backoff),
 		})
 	}
+}
+
+// validateSources validates glob patterns in sources and generates fields.
+func validateSources(action *Action, section string, errs *AggregatedValidationError) {
+	for _, pattern := range action.Sources {
+		if !doublestar.ValidatePattern(pattern) {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "sources",
+				Message:    fmt.Sprintf("invalid glob pattern: %q", pattern),
+			})
+		}
+		if err := validateGlobSafety(pattern); err != nil {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "sources",
+				Message:    err.Error(),
+			})
+		}
+	}
+	for _, pattern := range action.Generates {
+		if !doublestar.ValidatePattern(pattern) {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "generates",
+				Message:    fmt.Sprintf("invalid glob pattern: %q", pattern),
+			})
+		}
+		if err := validateGlobSafety(pattern); err != nil {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "generates",
+				Message:    err.Error(),
+			})
+		}
+	}
+	// generates without sources is not useful
+	if len(action.Generates) > 0 && len(action.Sources) == 0 {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "generates",
+			Message:    "generates requires sources to be set",
+		})
+	}
+}
+
+// validateGlobSafety rejects absolute patterns and path traversal segments
+// to prevent fingerprinting files outside the solution tree.
+func validateGlobSafety(pattern string) error {
+	if filepath.IsAbs(pattern) {
+		return fmt.Errorf("absolute patterns not allowed: %q", pattern)
+	}
+	for _, seg := range strings.Split(filepath.Clean(pattern), string(filepath.Separator)) {
+		if seg == ".." {
+			return fmt.Errorf("path traversal not allowed: %q", pattern)
+		}
+	}
+	return nil
 }
 
 // validateNoCycles checks for dependency cycles within a section.

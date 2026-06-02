@@ -21,6 +21,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1267,6 +1268,193 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 	}
 }
 
+//nolint:unparam // capability is parameterized for test flexibility
+func newStateProvider(name string, capability provider.Capability) *fakeProvider {
+	outputSchema := &jsonschema.Schema{Type: "object"}
+	if capability == provider.CapabilityState {
+		outputSchema = &jsonschema.Schema{
+			Type: "object",
+			Properties: map[string]*jsonschema.Schema{
+				"success": {Type: "boolean"},
+			},
+		}
+	}
+	return &fakeProvider{
+		desc: &provider.Descriptor{
+			Name:        name,
+			APIVersion:  "v1",
+			Version:     semver.MustParse("1.0.0"),
+			Description: "State provider",
+			Capabilities: []provider.Capability{
+				capability,
+			},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				capability: outputSchema,
+			},
+		},
+	}
+}
+
+func TestLintState_MissingBackendProvider(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{Provider: ""},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "missing-state-backend")
+	assert.Len(t, findings, 1)
+}
+
+func TestLintState_InvalidBackendProvider(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{Provider: "nonexistent"},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "invalid-state-backend")
+	assert.Len(t, findings, 1)
+}
+
+func TestLintState_ProviderWithoutCapabilityState(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{Provider: "static"},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "invalid-state-backend")
+	assert.Len(t, findings, 1)
+}
+
+func TestLintState_ValidConfig(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"greeting": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	stateFindings := []*Finding{}
+	for _, f := range result.Findings {
+		if f.Category == "state" {
+			stateFindings = append(stateFindings, f)
+		}
+	}
+	assert.Empty(t, stateFindings)
+}
+
+func TestLintState_ResolverRefInEnabled(t *testing.T) {
+	rslvrName := "my_flag"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"my_flag": {
+					Type:    "bool",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Resolver: &rslvrName},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-resolver-ref")
+	assert.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "state.enabled")
+	assert.Contains(t, findings[0].Message, "my_flag")
+}
+
+func TestLintState_ResolverRefInBackendInputs(t *testing.T) {
+	rslvrName := "app_name"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"app_name": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Resolver: &rslvrName},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-resolver-ref")
+	assert.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "path")
+	assert.Contains(t, findings[0].Message, "app_name")
+}
+
 func TestLintResolveForEach(t *testing.T) {
 	prov := newFakeProvider("http", map[string]*jsonschema.Schema{
 		"url": {Type: "string"},
@@ -1437,4 +1625,100 @@ func TestLintRedundantDependsOn(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func TestLintImmutableResolvers_NoStateBlock(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: true,
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{Provider: "exec"},
+						},
+					},
+				},
+			},
+		},
+		// No State block
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("exec", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "immutable-requires-state")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "cluster_id")
+	assert.Contains(t, findings[0].Message, "no state block")
+	assert.Equal(t, SeverityError, findings[0].Severity)
+}
+
+func TestLintImmutableResolvers_WithStateBlock(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: true,
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{Provider: "parameter"},
+							{Provider: "exec"},
+						},
+					},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("exec", nil))
+	_ = reg.Register(newFakeProvider("parameter", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "immutable-requires-state")
+	assert.Empty(t, findings)
+}
+
+func TestLintImmutableResolvers_NotImmutable(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: false,
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{
+							{Provider: "exec"},
+						},
+					},
+				},
+			},
+		},
+		// No State block, but resolver is not immutable so no finding expected
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("exec", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "immutable-requires-state")
+	assert.Empty(t, findings)
 }

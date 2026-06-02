@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -60,6 +61,13 @@ type Executor struct {
 	// cwd is the original working directory captured at executor creation time.
 	// Exposed as __cwd in action expressions for referencing the original CWD.
 	cwd string
+
+	// fingerprintChecker evaluates source/generates file hashes for up-to-date checks.
+	// When nil, fingerprint-based skipping is disabled.
+	fingerprintChecker *fingerprint.Checker
+
+	// noCache disables fingerprint-based up-to-date checks when true.
+	noCache bool
 }
 
 // ExecutorOption configures the executor.
@@ -132,6 +140,22 @@ func WithIOStreams(streams *provider.IOStreams) ExecutorOption {
 func WithCwd(cwd string) ExecutorOption {
 	return func(e *Executor) {
 		e.cwd = cwd
+	}
+}
+
+// WithFingerprintChecker sets the fingerprint checker for up-to-date detection.
+// When set, actions with sources/generates fields are checked for staleness.
+func WithFingerprintChecker(checker *fingerprint.Checker) ExecutorOption {
+	return func(e *Executor) {
+		e.fingerprintChecker = checker
+	}
+}
+
+// WithNoCache disables fingerprint-based up-to-date checks.
+// All actions will execute regardless of fingerprint state.
+func WithNoCache(noCache bool) ExecutorOption {
+	return func(e *Executor) {
+		e.noCache = noCache
 	}
 }
 
@@ -526,6 +550,20 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
+	// Phase 1: File-based fingerprint check (cheap, before input resolution).
+	// If files changed, we know we need to re-execute -- skip Phase 2.
+	var filesFresh bool
+	if e.fingerprintChecker != nil && !e.noCache && len(action.Sources) > 0 {
+		fpResult, fpErr := e.fingerprintChecker.CheckFiles(ctx, actionName, action.Sources, action.Generates, e.cwd)
+		if fpErr != nil {
+			// Log warning and continue execution (fail-open)
+			logger.FromContext(ctx).V(0).Info("fingerprint file check failed, executing action",
+				"action", actionName, "error", fpErr.Error())
+		} else if !fpResult.Stale {
+			filesFresh = true
+		}
+	}
+
 	// Resolve inputs (including deferred values)
 	resolvedInputs, err := e.resolveInputs(ctx, action, graph.AliasMap)
 	if err != nil {
@@ -536,6 +574,22 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return err
+	}
+
+	// Phase 2: Input-based fingerprint check (only when files were fresh).
+	// Compares resolved inputs hash against stored state to detect resolver changes.
+	if filesFresh {
+		fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, resolvedInputs)
+		if fpErr != nil {
+			logger.FromContext(ctx).V(0).Info("fingerprint inputs check failed, executing action",
+				"action", actionName, "error", fpErr.Error())
+		} else if !fpResult.Stale {
+			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
+			if e.progressCallback != nil {
+				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+			}
+			return nil
+		}
 	}
 
 	// Mark as running
@@ -636,6 +690,14 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	e.actionContext.MarkSucceeded(actionName, results)
+
+	// Record fingerprint after successful execution
+	if e.fingerprintChecker != nil && len(action.Sources) > 0 {
+		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd, resolvedInputs); recordErr != nil {
+			logger.FromContext(ctx).V(0).Info("fingerprint record failed",
+				"action", actionName, "error", recordErr.Error())
+		}
+	}
 
 	// Track whether the provider streamed output to the terminal
 	if output != nil && output.Streamed {
