@@ -14,4 +14,8 @@ var (
 
 	// ErrImmutableEntry indicates an attempt to overwrite an immutable state entry.
 	ErrImmutableEntry = errors.New("cannot overwrite immutable state entry")
+
+	// ErrUnsupportedSchemaVersion indicates the state file was written by a
+	// newer version of scafctl and cannot be read by this version.
+	ErrUnsupportedSchemaVersion = errors.New("unsupported state schema version")
 )

@@ -188,45 +188,6 @@ type SolutionMeta struct {
 	Version string
 }
 
-// RequiredResolvers returns the resolver names that must be resolved before
-// state loading (referenced by enabled and backend inputs ValueRefs).
-func (m *Manager) RequiredResolvers() []string {
-	if m.config == nil {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	var names []string
-
-	collect := func(vr *spec.ValueRef) {
-		if vr == nil {
-			return
-		}
-		// Direct resolver reference
-		if vr.Resolver != nil {
-			name := *vr.Resolver
-			if _, ok := seen[name]; !ok {
-				seen[name] = struct{}{}
-				names = append(names, name)
-			}
-		}
-		// CEL or template references
-		for name := range vr.ReferencedVariables() {
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
-			names = append(names, name)
-		}
-	}
-
-	collect(m.config.Enabled)
-	for _, input := range m.config.Backend.Inputs {
-		collect(input)
-	}
-
-	return names
-}
 
 // evaluateEnabled resolves the enabled ValueRef and coerces to bool.
 // CLI params are available as __params in CEL expressions.

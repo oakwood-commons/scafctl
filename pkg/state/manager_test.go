@@ -393,51 +393,6 @@ func TestManagerSave(t *testing.T) {
 	}
 }
 
-func TestManagerRequiredResolvers(t *testing.T) {
-	tests := []struct {
-		name   string
-		config *Config
-		want   []string
-	}{
-		{
-			name:   "nil config",
-			config: nil,
-			want:   nil,
-		},
-		{
-			name: "literal values no resolvers",
-			config: &Config{
-				Enabled: literalValueRef(true),
-				Backend: Backend{
-					Inputs: map[string]*spec.ValueRef{"path": literalValueRef("test.json")},
-				},
-			},
-			want: nil,
-		},
-		{
-			name: "resolver reference in enabled",
-			config: &Config{
-				Enabled: &spec.ValueRef{Resolver: strPtr("use_state")},
-				Backend: Backend{
-					Inputs: map[string]*spec.ValueRef{},
-				},
-			},
-			want: []string{"use_state"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mgr := NewManager(tt.config, nil, "v")
-			got := mgr.RequiredResolvers()
-			if tt.want == nil {
-				assert.Empty(t, got)
-			} else {
-				assert.Equal(t, tt.want, got)
-			}
-		})
-	}
-}
 
 func TestIsTruthy(t *testing.T) {
 	tests := []struct {
@@ -467,9 +422,6 @@ func TestIsTruthy(t *testing.T) {
 	}
 }
 
-func strPtr(s string) *string {
-	return &s
-}
 
 func TestStructToMap(t *testing.T) {
 	t.Run("converts struct to map", func(t *testing.T) {

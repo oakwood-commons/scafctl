@@ -321,21 +321,13 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "State backends must implement CapabilityState. Using an unregistered or incompatible provider will fail at runtime.",
 		Fix:         "Use a registered provider with CapabilityState such as 'file' or 'github'.",
 	},
-	"state-circular-dependency": {
-		Rule:        "state-circular-dependency",
+	"immutable-requires-state": {
+		Rule:        "immutable-requires-state",
 		Severity:    string(SeverityError),
 		Category:    "state",
-		Description: "A resolver referenced by state.enabled or state.backend.inputs has saveToState or uses the state-reading provider.",
-		Why:         "State loading depends on these resolvers, but they would also read/write state, creating a circular dependency.",
-		Fix:         "Ensure resolvers referenced by state config do not have saveToState: true and do not use state backend providers.",
-	},
-	"sensitive-state": {
-		Rule:        "sensitive-state",
-		Severity:    string(SeverityWarning),
-		Category:    "security",
-		Description: "A resolver marked sensitive: true also has saveToState: true. The sensitive value will be stored in plaintext in the state file.",
-		Why:         "Sensitive values (API keys, tokens) saved to state are persisted unencrypted. This is intentional for validation replay but should be an explicit, informed decision.",
-		Fix:         "Acknowledge the risk or remove saveToState from sensitive resolvers. Consider using the secret provider for sensitive values that do not need state persistence.",
+		Description: "A resolver has saveToState: true but no state block is configured on the solution.",
+		Why:         "Without a state backend, there is nowhere to persist the resolver value between runs, so saveToState has no effect.",
+		Fix:         "Add a state block with a backend provider, or remove saveToState: true from the resolver.",
 	},
 	"state-resolver-ref": {
 		Rule:        "state-resolver-ref",

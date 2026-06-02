@@ -56,6 +56,17 @@ func TestLoadFromFile_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "unmarshal")
 }
 
+func TestLoadFromFile_UnsupportedSchemaVersion(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "future.json")
+	data := []byte(`{"schemaVersion":999,"metadata":{},"values":{}}`)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	_, err := LoadFromFile(path)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnsupportedSchemaVersion)
+}
+
 func TestSaveToFile_CreatesDirectory(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "subdir", "nested", "state.json")

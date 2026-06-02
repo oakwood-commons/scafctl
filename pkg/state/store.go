@@ -36,6 +36,11 @@ func LoadFromFile(path string) (*Data, error) {
 		return nil, fmt.Errorf("unmarshal state file: %w", err)
 	}
 
+	if sd.SchemaVersion > SchemaVersionCurrent {
+		return nil, fmt.Errorf("%w: file version %d is newer than supported version %d; upgrade scafctl",
+			ErrUnsupportedSchemaVersion, sd.SchemaVersion, SchemaVersionCurrent)
+	}
+
 	return &sd, nil
 }
 

@@ -92,6 +92,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintWorkflow(sol, result, registry)
 	lintState(sol, result, registry)
+	lintImmutableResolvers(sol, result)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 
@@ -950,12 +951,6 @@ func FilterBySeverity(result *Result, minSeverity string) *Result {
 	return filtered
 }
 
-// stateReadProviders are providers that read from loaded state and cannot
-// be used by resolvers referenced in state config (circular dependency).
-var stateReadProviders = map[string]bool{
-	"state": true,
-}
-
 // lintState validates the solution's state configuration.
 func lintState(sol *solution.Solution, result *Result, registry *provider.Registry) {
 	if sol.State == nil {
@@ -966,8 +961,6 @@ func lintState(sol *solution.Solution, result *Result, registry *provider.Regist
 		return
 	}
 	lintStateResolverRefs(sol, result)
-	lintStateSensitive(sol, result)
-	lintStateCircularDeps(sol, result)
 }
 
 // lintStateBackend validates the backend provider configuration.
@@ -1032,87 +1025,20 @@ func lintStateResolverRefs(sol *solution.Solution, result *Result) {
 	}
 }
 
-// lintStateSensitive warns about resolvers that are both sensitive and saveToState.
-func lintStateSensitive(sol *solution.Solution, result *Result) {
+
+// lintImmutableResolvers checks that resolvers with saveToState: true are
+// backed by a state block on the solution. Without a state block, there is
+// nowhere to persist the value, so saveToState has no effect.
+func lintImmutableResolvers(sol *solution.Solution, result *Result) {
 	for name, res := range sol.Spec.Resolvers {
-		if res != nil && res.Sensitive && res.SaveToState {
-			result.addFinding(SeverityWarning, "security",
-				fmt.Sprintf("resolvers.%s", name),
-				fmt.Sprintf("resolver '%s' is sensitive and has saveToState: true — value will be stored in plaintext", name),
-				"Acknowledge the risk or remove saveToState for sensitive resolvers",
-				"sensitive-state")
-		}
-	}
-}
-
-// lintStateCircularDeps checks for circular dependencies between state config
-// and resolvers that use saveToState or the state-reading provider.
-func lintStateCircularDeps(sol *solution.Solution, result *Result) {
-	stateResolverRefs := collectStateResolverRefs(sol)
-
-	if sol.Spec.Resolvers == nil || len(stateResolverRefs) == 0 {
-		return
-	}
-
-	for refName := range stateResolverRefs {
-		res, exists := sol.Spec.Resolvers[refName]
-		if !exists {
+		if res == nil || !res.SaveToState {
 			continue
 		}
-
-		refLocation := fmt.Sprintf("resolvers.%s", refName)
-
-		if res.SaveToState {
-			result.addFinding(SeverityError, "state", refLocation,
-				fmt.Sprintf("resolver '%s' is referenced by state config and has saveToState: true (circular dependency)", refName),
-				"Remove saveToState from resolvers referenced by state.enabled or state.backend.inputs",
-				"state-circular-dependency")
-		}
-
-		if res.Resolve != nil {
-			for _, step := range res.Resolve.With {
-				if stateReadProviders[step.Provider] {
-					result.addFinding(SeverityError, "state", refLocation,
-						fmt.Sprintf("resolver '%s' is referenced by state config and uses '%s' provider (circular dependency)", refName, step.Provider),
-						"State-referenced resolvers cannot use state-reading providers",
-						"state-circular-dependency")
-				}
-			}
+		if sol.State == nil {
+			result.addFinding(SeverityError, "state", fmt.Sprintf("resolvers.%s", name),
+				fmt.Sprintf("resolver %q has saveToState: true but no state block is configured on the solution", name),
+				"Add a state block with a backend provider to the solution so that the resolver value can be persisted.",
+				"immutable-requires-state")
 		}
 	}
-}
-
-// collectStateResolverRefs returns the resolver names referenced by state.enabled
-// and state.backend.inputs.
-func collectStateResolverRefs(sol *solution.Solution) map[string]bool {
-	refs := make(map[string]bool)
-	if sol.State == nil {
-		return refs
-	}
-
-	collectFromValueRef := func(vr interface{ ReferencedVariables() map[string]struct{} }) {
-		if vr == nil {
-			return
-		}
-		for name := range vr.ReferencedVariables() {
-			refs[name] = true
-		}
-	}
-
-	if sol.State.Enabled != nil {
-		collectFromValueRef(sol.State.Enabled)
-		if sol.State.Enabled.Resolver != nil {
-			refs[*sol.State.Enabled.Resolver] = true
-		}
-	}
-	for _, input := range sol.State.Backend.Inputs {
-		if input != nil {
-			collectFromValueRef(input)
-			if input.Resolver != nil {
-				refs[*input.Resolver] = true
-			}
-		}
-	}
-
-	return refs
 }
