@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -539,10 +540,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		"mainPhases", len(graph.ExecutionOrder),
 		"finallyPhases", len(graph.FinallyOrder))
 
-	// Set up action progress callback if enabled
+	// Action banners are always enabled (default-on like go-task/make); suppressed by --quiet.
+	// writer.FromContext returns nil when no writer is in context (e.g. direct Run calls in tests);
+	// in that case we skip the callback so the executor's nil-guard suppresses output safely.
 	var actionProgressCallback action.ProgressCallback
-	if o.Progress {
-		actionProgressCallback = NewActionProgressCallback(writer.FromContext(ctx))
+	if w := writer.FromContext(ctx); w != nil {
+		actionProgressCallback = NewActionProgressCallback(w)
 	}
 
 	// Get effective action config (CLI flags override app config)
@@ -945,60 +948,80 @@ func (r *actionRegistryAdapter) Has(name string) bool {
 	return ok
 }
 
-// ActionProgressCallback implements action.ProgressCallback for CLI output
+// ActionProgressCallback implements action.ProgressCallback for CLI output.
+// Action banners are written to stderr by default (like go-task/make) and are
+// suppressed only by --quiet. Use --verbose for additional debug detail.
 type ActionProgressCallback struct {
-	w *writer.Writer
+	w      *writer.Writer
+	starts sync.Map // actionName -> time.Time
 }
 
-// NewActionProgressCallback creates a new action progress callback
+// NewActionProgressCallback creates a new action progress callback.
 func NewActionProgressCallback(w *writer.Writer) *ActionProgressCallback {
 	return &ActionProgressCallback{w: w}
 }
 
-func (a *ActionProgressCallback) OnActionStart(actionName string) {
-	a.w.Verbosef("[ACTION] Starting: %s", actionName)
+func (a *ActionProgressCallback) OnActionStart(actionName, description string) {
+	a.starts.Store(actionName, time.Now())
+	if description != "" {
+		a.w.PlainStderrf("==> %s: %s", actionName, description)
+	} else {
+		a.w.PlainStderrf("==> %s", actionName)
+	}
 }
 
 func (a *ActionProgressCallback) OnActionComplete(actionName string, _ any) {
-	a.w.Verbosef("[ACTION] Completed: %s ✓", actionName)
+	elapsed := a.elapsed(actionName)
+	a.w.PlainStderrf("    done: %s (%s)", actionName, formatElapsed(elapsed))
 }
 
 func (a *ActionProgressCallback) OnActionFailed(actionName string, err error) {
-	a.w.Errorf("[ACTION] Failed: %s ✗ (%v)", actionName, err)
+	elapsed := a.elapsed(actionName)
+	a.w.Errorf("    failed: %s (%s): %v", actionName, formatElapsed(elapsed), err)
 }
 
 func (a *ActionProgressCallback) OnActionSkipped(actionName, reason string) {
-	a.w.Warningf("[ACTION] Skipped: %s (%s)", actionName, reason)
+	a.w.PlainStderrf("    skipped: %s (%s)", actionName, reason)
 }
 
-func (a *ActionProgressCallback) OnActionTimeout(actionName string, timeout time.Duration) {
-	a.w.Errorf("[ACTION] Timeout: %s (after %v)", actionName, timeout)
+func (a *ActionProgressCallback) OnActionTimeout(actionName string, _ time.Duration) {
+	elapsed := a.elapsed(actionName)
+	a.w.PlainStderrf("    timeout: %s (after %s)", actionName, formatElapsed(elapsed))
 }
 
 func (a *ActionProgressCallback) OnActionCancelled(actionName string) {
-	a.w.Warningf("[ACTION] Cancelled: %s", actionName)
+	elapsed := a.elapsed(actionName)
+	a.w.PlainStderrf("    cancelled: %s (%s)", actionName, formatElapsed(elapsed))
 }
 
 func (a *ActionProgressCallback) OnRetryAttempt(actionName string, attempt, maxAttempts int, err error) {
-	a.w.Warningf("[ACTION] Retry %d/%d for %s: %v", attempt, maxAttempts, actionName, err)
+	a.w.PlainStderrf("    retry %d/%d: %s: %v", attempt, maxAttempts, actionName, err)
 }
 
 func (a *ActionProgressCallback) OnForEachProgress(actionName string, completed, total int) {
 	a.w.Verbosef("[ACTION] %s: %d/%d iterations complete", actionName, completed, total)
 }
 
-func (a *ActionProgressCallback) OnPhaseStart(phase int, actionNames []string) {
-	a.w.Verbosef("[PHASE] Starting phase %d: %s", phase, strings.Join(actionNames, ", "))
+func (a *ActionProgressCallback) OnPhaseStart(_ int, _ []string) {}
+func (a *ActionProgressCallback) OnPhaseComplete(_ int)          {}
+func (a *ActionProgressCallback) OnFinallyStart()                {}
+func (a *ActionProgressCallback) OnFinallyComplete()             {}
+
+// elapsed returns the duration since the action started, or 0 if not found.
+// The entry is deleted from starts after reading to avoid stale entries on retries.
+func (a *ActionProgressCallback) elapsed(actionName string) time.Duration {
+	if v, ok := a.starts.LoadAndDelete(actionName); ok {
+		if t, ok := v.(time.Time); ok {
+			return time.Since(t)
+		}
+	}
+	return 0
 }
 
-func (a *ActionProgressCallback) OnPhaseComplete(phase int) {
-	a.w.Verbosef("[PHASE] Completed phase %d", phase)
-}
-
-func (a *ActionProgressCallback) OnFinallyStart() {
-	a.w.Verbosef("[FINALLY] Starting finally section")
-}
-
-func (a *ActionProgressCallback) OnFinallyComplete() {
-	a.w.Verbosef("[FINALLY] Completed finally section")
+// formatElapsed formats a duration as a compact human-readable string.
+func formatElapsed(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }

@@ -10,7 +10,8 @@ import "time"
 // (start, complete, fail, skip, timeout, cancel).
 type Observer interface {
 	// OnActionStart is called when an action begins execution.
-	OnActionStart(actionName string)
+	// description is the human-readable description from the action spec (may be empty).
+	OnActionStart(actionName, description string)
 
 	// OnActionComplete is called when an action completes successfully.
 	OnActionComplete(actionName string, results any)

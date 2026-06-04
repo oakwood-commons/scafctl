@@ -774,7 +774,7 @@ func TestNoOpProgressCallback(t *testing.T) {
 	callback := NoOpProgressCallback{}
 
 	// All methods should be callable without panic
-	callback.OnActionStart("test")
+	callback.OnActionStart("test", "")
 	callback.OnActionComplete("test", nil)
 	callback.OnActionFailed("test", nil)
 	callback.OnActionSkipped("test", "reason")
@@ -856,7 +856,7 @@ type recordingProgressCallback struct {
 	events []string
 }
 
-func (c *recordingProgressCallback) OnActionStart(name string) {
+func (c *recordingProgressCallback) OnActionStart(name, _ string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.events = append(c.events, "action_start:"+name)

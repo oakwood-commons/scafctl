@@ -106,7 +106,7 @@ func newProgressRecorder() *progressRecorder {
 	return &progressRecorder{events: make([]string, 0)}
 }
 
-func (r *progressRecorder) OnActionStart(name string) {
+func (r *progressRecorder) OnActionStart(name, _ string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, fmt.Sprintf("start:%s", name))
@@ -205,7 +205,7 @@ type phaseTrackingProgressRecorder struct {
 	onPhaseStartCallback func(phase int)
 }
 
-func (r *phaseTrackingProgressRecorder) OnActionStart(name string) {
+func (r *phaseTrackingProgressRecorder) OnActionStart(name, _ string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, fmt.Sprintf("start:%s", name))
