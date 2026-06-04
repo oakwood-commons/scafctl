@@ -595,7 +595,7 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		if pagCfg.BodyTemplate != "" && !methodSupportsBody(method) {
 			return nil, fmt.Errorf("%s: pagination bodyTemplate requires method POST, PUT, or PATCH (got %q)", ProviderName, method)
 		}
-		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg)
+		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg, autoParseJSON)
 	}
 
 	// Build the execute function for potential polling
