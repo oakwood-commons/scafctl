@@ -1947,3 +1947,91 @@ func TestHTTPProvider_Pagination_BodyTemplate_ShortPage_StopSignal(t *testing.T)
 	// Should stop at page 3 because page 3 has fewer items than pageSize.
 	assert.Equal(t, 3, data["pages"])
 }
+
+// --- autoParseJson + pagination tests ---
+
+func TestHTTPProvider_Paginated_AutoParseJson_Body_IsSlice(t *testing.T) {
+	t.Parallel()
+
+	// Two-page server: each page returns a JSON array fragment.
+	page := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		page++
+		switch page {
+		case 1:
+			_, _ = w.Write([]byte(`{"items":[{"id":1},{"id":2}],"next":"` + r.Host + `/page2"}`))
+		default:
+			_, _ = w.Write([]byte(`{"items":[{"id":3}]}`))
+		}
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":           server.URL,
+		"method":        "GET",
+		"autoParseJson": true,
+		"pagination": map[string]any{
+			"strategy":       "cursor",
+			"maxPages":       5,
+			"nextTokenPath":  "body.next",
+			"nextTokenParam": "cursor",
+			"collectPath":    "body.items",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+
+	// With autoParseJson: true the body must be a []any, not a string.
+	body, ok := data["body"].([]any)
+	require.True(t, ok, "body should be []any when autoParseJson is true with collectPath pagination")
+	assert.Len(t, body, 3)
+
+	first, ok := body[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(1), first["id"])
+}
+
+func TestHTTPProvider_Paginated_AutoParseJson_False_Body_IsString(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"items":[{"id":1}]}`))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	inputs := map[string]any{
+		"url":    server.URL,
+		"method": "GET",
+		// autoParseJson NOT set
+		"pagination": map[string]any{
+			"strategy":    "cursor",
+			"maxPages":    2,
+			"nextURLPath": "body.next", // empty on only page -> stops
+			"collectPath": "body.items",
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data := output.Data.(map[string]any)
+
+	// Without autoParseJson the body must remain a JSON string.
+	_, ok := data["body"].(string)
+	assert.True(t, ok, "body should be a JSON string when autoParseJson is false")
+}

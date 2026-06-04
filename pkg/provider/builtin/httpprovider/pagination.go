@@ -280,6 +280,7 @@ func (p *HTTPProvider) executePaginated(
 	method, urlStr, bodyContent string,
 	headers map[string]any,
 	pagCfg *paginationConfig,
+	autoParseJSON bool,
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
@@ -460,7 +461,7 @@ func (p *HTTPProvider) executePaginated(
 	lgr.V(1).Info("pagination finished", "totalPages", pageCount, "totalItems", len(allItems))
 
 	// Build output
-	return p.buildPaginatedOutput(lastResponse, allItems, pageCount)
+	return p.buildPaginatedOutput(lastResponse, allItems, pageCount, autoParseJSON)
 }
 
 // doRequest performs a single HTTP request and returns the parsed response.
@@ -928,17 +929,33 @@ func (p *HTTPProvider) evaluateBodyTemplate(
 }
 
 // buildPaginatedOutput constructs the provider output for paginated requests.
-func (p *HTTPProvider) buildPaginatedOutput(lastResponse *paginatedResponse, items []any, pageCount int) (*provider.Output, error) {
-	// Marshal collected items to JSON for the body field
-	var bodyStr string
-	if len(items) > 0 {
-		bodyBytes, err := json.Marshal(items)
-		if err != nil {
-			return nil, fmt.Errorf("%s: failed to marshal collected items: %w", ProviderName, err)
+// When autoParseJSON is true the body field contains the collected items as a
+// structured []any value, matching the behaviour of non-paginated requests with
+// autoParseJson: true. When false (the default) the body is serialized to a
+// JSON string for backward compatibility.
+func (p *HTTPProvider) buildPaginatedOutput(lastResponse *paginatedResponse, items []any, pageCount int, autoParseJSON bool) (*provider.Output, error) {
+	var bodyValue any
+	if autoParseJSON {
+		// Return the items as a structured value so downstream CEL expressions
+		// can access fields directly (e.g. _.myResolver.body[0].id).
+		if items == nil {
+			bodyValue = []any{}
+		} else {
+			bodyValue = items
 		}
-		bodyStr = string(bodyBytes)
 	} else {
-		bodyStr = "[]"
+		// Serialize to JSON string for backward compatibility.
+		var bodyStr string
+		if len(items) > 0 {
+			bodyBytes, err := json.Marshal(items)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to marshal collected items: %w", ProviderName, err)
+			}
+			bodyStr = string(bodyBytes)
+		} else {
+			bodyStr = "[]"
+		}
+		bodyValue = bodyStr
 	}
 
 	var lastStatusCode int
@@ -951,7 +968,7 @@ func (p *HTTPProvider) buildPaginatedOutput(lastResponse *paginatedResponse, ite
 	return &provider.Output{
 		Data: map[string]any{
 			"statusCode": lastStatusCode,
-			"body":       bodyStr,
+			"body":       bodyValue,
 			"headers":    lastHeaders,
 			"pages":      pageCount,
 			"totalItems": len(items),
