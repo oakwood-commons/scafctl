@@ -102,11 +102,13 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
 					schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_.\-]*$`),
 					schemahelper.WithExample("env")),
+				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
+					schemahelper.WithExample("fallback")),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"value":  schemahelper.AnyProp("The parameter value (typed based on parsing rules)", schemahelper.WithExample("prod")),
-					"exists": schemahelper.BoolProp("Whether the parameter was provided via CLI", schemahelper.WithExample(true)),
+					"exists": schemahelper.BoolProp("Whether the value came from a CLI-provided parameter (false when using the default value)", schemahelper.WithExample(true)),
 					"type":   schemahelper.StringProp("Detected type of the value", schemahelper.WithExample("string")),
 				}),
 			},
@@ -117,6 +119,14 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					YAML: `provider: parameter
 inputs:
   key: env`,
+				},
+				{
+					Name:        "Get parameter with default",
+					Description: "Retrieve a parameter, falling back to a default when not provided",
+					YAML: `provider: parameter
+inputs:
+  key: env
+  default: development`,
 				},
 				{
 					Name:        "Get array parameter",
@@ -188,6 +198,20 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 	// Look up the parameter
 	rawValue, exists := params[key]
 	if !exists {
+		if def, hasDefault := inputs["default"]; hasDefault {
+			parsedDefault, err := p.parseValue(ctx, def)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to parse default for parameter %q: %w", ProviderName, key, err)
+			}
+			lgr.V(1).Info("provider completed", "provider", ProviderName)
+			return &provider.Output{
+				Data: parsedDefault,
+				Metadata: map[string]any{
+					"exists": false,
+					"type":   detectType(parsedDefault),
+				},
+			}, nil
+		}
 		return nil, fmt.Errorf("%s: parameter %q not provided", ProviderName, key)
 	}
 

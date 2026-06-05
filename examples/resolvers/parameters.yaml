@@ -20,47 +20,56 @@ metadata:
 
 spec:
   resolvers:
-    # String parameter with default (using fallback chain)
+    # String parameter with inline default
+    # When "name" is not passed via -r, the default value "World" is used.
+    # The "default" input must be a literal value (not a ValueRef).
     name:
       description: User name from CLI or default
       type: string
       resolve:
         with:
           - provider: parameter
-            onError: continue
             inputs:
               key: name
-          - provider: static
-            inputs:
-              value: "World"
-    
-    # Integer parameter with default
+              default: "World"
+
+    # Integer parameter with inline default
     count:
       description: Repetition count
       type: int
       resolve:
         with:
           - provider: parameter
-            onError: continue
             inputs:
               key: count
-          - provider: static
-            inputs:
-              value: 3
-    
-    # Boolean parameter
+              default: 3
+
+    # Boolean parameter with inline default
     uppercase:
       description: Whether to uppercase the output
       type: bool
       resolve:
         with:
           - provider: parameter
-            onError: continue
             inputs:
               key: uppercase
+              default: false
+
+    # String parameter using fallback chain (alternative pattern)
+    # Use onError: continue + static provider when you need a dynamic
+    # fallback (e.g. a ValueRef or expression) instead of a literal default.
+    region:
+      description: Deployment region from CLI or fallback chain
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: region
           - provider: static
             inputs:
-              value: false
+              value: "us-east-1"
     
     # Computed greeting using parameters
     greeting:
