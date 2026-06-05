@@ -422,9 +422,12 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		"mainPhases", len(graph.ExecutionOrder),
 		"finallyPhases", len(graph.FinallyOrder))
 
+	// Action banners are always enabled (default-on like go-task/make); suppressed by --quiet.
+	// writer.FromContext returns nil when no writer is in context (e.g. direct Run calls in tests);
+	// in that case we skip the callback so the executor's nil-guard suppresses output safely.
 	var actionProgressCallback action.ProgressCallback
-	if o.Progress {
-		actionProgressCallback = NewActionProgressCallback(writer.FromContext(ctx))
+	if w := writer.FromContext(ctx); w != nil {
+		actionProgressCallback = NewActionProgressCallback(w)
 	}
 
 	actionCfg := o.getEffectiveActionConfig(ctx)

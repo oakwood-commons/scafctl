@@ -595,7 +595,7 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	// Mark as running
 	e.actionContext.MarkRunning(actionName, resolvedInputs)
 	if e.progressCallback != nil {
-		e.progressCallback.OnActionStart(actionName)
+		e.progressCallback.OnActionStart(actionName, action.Description)
 	}
 
 	// Set up timeout
@@ -852,7 +852,7 @@ func (a *progressRetryAdapter) OnRetryAttempt(actionName string, attempt, maxAtt
 // Useful for testing or when progress tracking is not needed.
 type NoOpProgressCallback struct{}
 
-func (NoOpProgressCallback) OnActionStart(_ string)                     {}
+func (NoOpProgressCallback) OnActionStart(_, _ string)                  {}
 func (NoOpProgressCallback) OnActionComplete(_ string, _ any)           {}
 func (NoOpProgressCallback) OnActionFailed(_ string, _ error)           {}
 func (NoOpProgressCallback) OnActionSkipped(_, _ string)                {}

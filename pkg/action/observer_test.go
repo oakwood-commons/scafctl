@@ -35,7 +35,7 @@ type testActionObserver struct {
 	cancelled []string
 }
 
-func (o *testActionObserver) OnActionStart(name string) { o.started = append(o.started, name) }
+func (o *testActionObserver) OnActionStart(name, _ string) { o.started = append(o.started, name) }
 func (o *testActionObserver) OnActionComplete(name string, _ any) {
 	o.completed = append(o.completed, name)
 }
@@ -76,7 +76,7 @@ func TestActionObserverInterface(t *testing.T) {
 	obs := &testActionObserver{}
 	var iface Observer = obs // compile-time check
 
-	iface.OnActionStart("deploy")
+	iface.OnActionStart("deploy", "Deploy service")
 	iface.OnActionComplete("deploy", nil)
 	iface.OnActionFailed("build", nil)
 	iface.OnActionSkipped("optional", "condition")
@@ -128,7 +128,7 @@ func TestProgressCallbackSatisfiesAllObservers(t *testing.T) {
 	var _ RetryObserver = noop
 
 	// Call all methods without panic
-	noop.OnActionStart("a")
+	noop.OnActionStart("a", "")
 	noop.OnActionComplete("a", nil)
 	noop.OnActionFailed("a", nil)
 	noop.OnActionSkipped("a", "reason")
