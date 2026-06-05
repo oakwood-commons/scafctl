@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -21,6 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/mcp/upstream"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
@@ -71,6 +73,18 @@ type Server struct {
 	// are available without spawning plugin processes.
 	descriptorCache *plugin.DescriptorCache
 
+	// upstreamProxies tracks upstream MCP server proxies keyed by server name.
+	upstreamProxies map[string]*upstream.Proxy
+
+	// upstreamTools tracks tool names that are proxied from upstream servers.
+	// Maps tool name -> upstream server name.
+	upstreamTools map[string]string
+
+	// upstreamMu guards upstream registration state. Unlike sync.Once,
+	// this allows retrying after transient failures.
+	upstreamMu         sync.Mutex
+	upstreamRegistered bool
+
 	// sseServer is the SSE transport server (nil for stdio).
 	sseServer *server.SSEServer
 	// httpServer is the Streamable HTTP transport server (nil for stdio).
@@ -95,6 +109,7 @@ type serverConfig struct {
 	supplementalInstructions string
 	rootCmd                  *cobra.Command
 	pluginPool               *plugin.Pool
+	upstreamServers          map[string]config.MCPServerConfig
 }
 
 // WithRootCommand sets the cobra root command for CLI introspection tools.
@@ -214,6 +229,20 @@ func WithErrorLog(lgr *log.Logger) ServerOption {
 func WithSupplementalInstructions(instructions string) ServerOption {
 	return func(c *serverConfig) {
 		c.supplementalInstructions = instructions
+	}
+}
+
+// WithUpstreamServer adds an upstream MCP server whose tools are
+// auto-discovered and proxied through the local server. Auth tokens are
+// injected automatically using the configured auth handler.
+//
+// Multiple upstream servers can be added by calling this option multiple times.
+func WithUpstreamServer(name string, cfg config.MCPServerConfig) ServerOption {
+	return func(c *serverConfig) {
+		if c.upstreamServers == nil {
+			c.upstreamServers = make(map[string]config.MCPServerConfig)
+		}
+		c.upstreamServers[name] = cfg
 	}
 }
 
@@ -538,16 +567,18 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 
 	s := &Server{
-		ctx:         mcpCtx,
-		version:     cfg.version,
-		name:        cfg.name,
-		registry:    cfg.registry,
-		authReg:     cfg.authReg,
-		config:      cfg.config,
-		rootCmd:     cfg.rootCmd,
-		pluginPool:  cfg.pluginPool,
-		coreTools:   make(map[string]struct{}, 64),
-		corePrompts: make(map[string]struct{}, 16),
+		ctx:             mcpCtx,
+		version:         cfg.version,
+		name:            cfg.name,
+		registry:        cfg.registry,
+		authReg:         cfg.authReg,
+		config:          cfg.config,
+		rootCmd:         cfg.rootCmd,
+		pluginPool:      cfg.pluginPool,
+		coreTools:       make(map[string]struct{}, 64),
+		corePrompts:     make(map[string]struct{}, 16),
+		upstreamTools:   make(map[string]string),
+		upstreamProxies: make(map[string]*upstream.Proxy),
 	}
 
 	// Ensure the official provider registry is available in the server
@@ -632,12 +663,144 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	// Register all prompts
 	s.registerAllPrompts()
 
+	// Merge upstream servers from config and explicit options.
+	// Check both WithServerConfig and config from context (WithServerContext)
+	// so embedders who supply config via either path get upstream proxies.
+	upstreamConfigs := make(map[string]config.MCPServerConfig)
+	if cfg.config != nil {
+		for name, serverCfg := range cfg.config.MCP.Servers {
+			upstreamConfigs[name] = serverCfg
+		}
+	} else if ctxCfg := config.FromContext(mcpCtx); ctxCfg != nil {
+		for name, serverCfg := range ctxCfg.MCP.Servers {
+			upstreamConfigs[name] = serverCfg
+		}
+	}
+	// Explicit WithUpstreamServer options override config entries.
+	for name, serverCfg := range cfg.upstreamServers {
+		upstreamConfigs[name] = serverCfg
+	}
+
+	// Create upstream proxies (actual connection is lazy).
+	for name, serverCfg := range upstreamConfigs {
+		if !serverCfg.IsEnabled() {
+			s.logger.V(1).Info("upstream server disabled, skipping", "upstream", name)
+			continue
+		}
+		if serverCfg.URL == "" {
+			s.logger.Error(nil, "upstream server has no URL, skipping", "upstream", name)
+			continue
+		}
+		proxy := upstream.NewProxy(name, serverCfg, s.authReg, s.logger, s.name)
+		s.upstreamProxies[name] = proxy
+	}
+
 	return s, nil
 }
 
-// Close releases resources owned by the server. Safe to call multiple times.
+// Close releases resources owned by the server. Safe to call multiple times
+// and concurrently with Serve*/Handler/Info.
 func (s *Server) Close() {
-	// No-op currently; kept for future resource cleanup and API stability.
+	s.upstreamMu.Lock()
+	proxies := s.upstreamProxies
+	s.upstreamProxies = make(map[string]*upstream.Proxy)
+	s.upstreamRegistered = false
+	s.upstreamMu.Unlock()
+
+	for name, proxy := range proxies {
+		if err := proxy.Close(); err != nil {
+			s.logger.Error(err, "failed to close upstream proxy", "upstream", name)
+		}
+	}
+}
+
+// registerUpstreamTools connects to each upstream proxy, discovers its tools,
+// and registers proxy handlers on the local server. Safe to call from
+// multiple Serve*/Handler/Info methods. On full success the registration is
+// sealed; on partial or total failure it can be retried on the next call so
+// that transient startup/auth errors are not permanent.
+func (s *Server) registerUpstreamTools(ctx context.Context) error {
+	s.upstreamMu.Lock()
+	defer s.upstreamMu.Unlock()
+
+	if s.upstreamRegistered {
+		return nil
+	}
+
+	err := s.doRegisterUpstreamTools(ctx)
+	if err == nil {
+		s.upstreamRegistered = true
+	}
+	return err
+}
+
+// doRegisterUpstreamTools performs upstream tool discovery and registration.
+// Called via registerUpstreamTools with mutex guard; retryable on failure.
+func (s *Server) doRegisterUpstreamTools(ctx context.Context) error {
+	if len(s.upstreamProxies) == 0 {
+		return nil
+	}
+
+	// Sort upstream names for deterministic registration order.
+	names := make([]string, 0, len(s.upstreamProxies))
+	for name := range s.upstreamProxies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// Build a set of all currently registered tool names so we can detect
+	// collisions with core, embedder/plugin, and other upstream tools.
+	registeredTools := make(map[string]struct{}, len(s.coreTools))
+	for _, st := range s.mcpServer.ListTools() {
+		registeredTools[st.Tool.Name] = struct{}{}
+	}
+
+	var errs []error
+	for _, name := range names {
+		proxy := s.upstreamProxies[name]
+		tools, err := proxy.ListTools(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("upstream %q: %w", name, err))
+			continue
+		}
+
+		for _, tool := range tools {
+			toolName := tool.Name
+
+			// Detect collisions with any already-registered tool (core,
+			// embedder/plugin, or previously registered upstream).
+			if _, exists := registeredTools[toolName]; exists {
+				if existingUpstream, isDup := s.upstreamTools[toolName]; isDup && existingUpstream == name {
+					// Already registered by this upstream in a prior attempt -- skip silently.
+					continue
+				} else if _, isCoreConflict := s.coreTools[toolName]; isCoreConflict {
+					s.logger.Error(nil, "upstream tool conflicts with core tool, skipping",
+						"tool", toolName, "upstream", name)
+				} else if isDup {
+					s.logger.Error(nil, "upstream tool name collision, skipping duplicate",
+						"tool", toolName, "upstream", name, "existing_upstream", existingUpstream)
+				} else {
+					s.logger.Error(nil, "upstream tool conflicts with existing tool, skipping",
+						"tool", toolName, "upstream", name)
+				}
+				continue
+			}
+
+			// Capture proxy for the closure.
+			p := proxy
+			s.mcpServer.AddTool(tool, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return p.CallTool(ctx, request.Params.Name, request.GetArguments())
+			})
+			s.upstreamTools[toolName] = name
+			registeredTools[toolName] = struct{}{}
+			s.logger.V(1).Info("registered upstream tool", "tool", toolName, "upstream", name)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
 }
 
 // freshConfigContext returns a context with the latest config overlaid.
@@ -659,6 +822,11 @@ func (s *Server) freshConfigContext(ctx context.Context) context.Context {
 // all tool handlers -- including those registered by embedders via
 // MCPServer().AddTool() -- can access them.
 func (s *Server) Serve(opts ...server.StdioOption) error {
+	// Discover and register upstream tools before serving.
+	if err := s.registerUpstreamTools(s.ctx); err != nil {
+		s.logger.Error(err, "failed to register upstream tools")
+	}
+
 	contextOpt := server.WithStdioContextFunc(func(ctx context.Context) context.Context {
 		return s.freshConfigContext(ctx)
 	})
@@ -671,6 +839,11 @@ func (s *Server) Serve(opts ...server.StdioOption) error {
 // ServeSSE starts the MCP server on SSE transport at the given address.
 // Server context values are injected into every request context (see Serve).
 func (s *Server) ServeSSE(addr string, opts ...server.SSEOption) error {
+	// Discover and register upstream tools before serving.
+	if err := s.registerUpstreamTools(s.ctx); err != nil {
+		s.logger.Error(err, "failed to register upstream tools")
+	}
+
 	contextOpt := server.WithSSEContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
 		return s.freshConfigContext(ctx)
 	})
@@ -685,6 +858,11 @@ func (s *Server) ServeSSE(addr string, opts ...server.SSEOption) error {
 // ServeHTTP starts the MCP server on Streamable HTTP transport at the given address.
 // Server context values are injected into every request context (see Serve).
 func (s *Server) ServeHTTP(addr string, opts ...server.StreamableHTTPOption) error {
+	// Discover and register upstream tools before serving.
+	if err := s.registerUpstreamTools(s.ctx); err != nil {
+		s.logger.Error(err, "failed to register upstream tools")
+	}
+
 	contextOpt := server.WithHTTPContextFunc(func(ctx context.Context, _ *http.Request) context.Context {
 		return s.freshConfigContext(ctx)
 	})
@@ -701,6 +879,11 @@ func (s *Server) ServeHTTP(addr string, opts ...server.StreamableHTTPOption) err
 // If the HTTP server was already created (by a prior call to Handler or ServeHTTP),
 // the existing instance is returned and opts are ignored.
 func (s *Server) Handler(opts ...server.StreamableHTTPOption) http.Handler {
+	// Discover and register upstream tools before returning the handler.
+	if err := s.registerUpstreamTools(s.ctx); err != nil {
+		s.logger.Error(err, "failed to register upstream tools")
+	}
+
 	if s.httpServer != nil {
 		return s.httpServer
 	}
@@ -794,6 +977,10 @@ func (s *Server) NotifyToolsChanged(ctx context.Context) error {
 // Info returns the server's tool and resource information as JSON.
 // Used by `scafctl mcp serve --info`.
 func (s *Server) Info() ([]byte, error) {
+	// Ensure upstream tools are registered so info output matches runtime.
+	if err := s.registerUpstreamTools(s.ctx); err != nil {
+		s.logger.Error(err, "failed to register upstream tools for info")
+	}
 	type toolInfo struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`

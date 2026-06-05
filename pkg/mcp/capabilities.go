@@ -171,6 +171,8 @@ const (
 	SourceCore CapabilitySource = "core"
 	// SourcePlugin marks capabilities registered by plugins or embedders.
 	SourcePlugin CapabilitySource = "plugin"
+	// SourceUpstream marks capabilities proxied from an upstream MCP server.
+	SourceUpstream CapabilitySource = "upstream"
 )
 
 // Capability describes a single MCP tool or prompt.
@@ -208,6 +210,8 @@ func (s *Server) ListCapabilities() []Capability {
 		source := SourcePlugin
 		if _, ok := s.coreTools[t.Name]; ok {
 			source = SourceCore
+		} else if _, ok := s.upstreamTools[t.Name]; ok {
+			source = SourceUpstream
 		}
 		c := Capability{
 			Kind:        CapabilityTool,
