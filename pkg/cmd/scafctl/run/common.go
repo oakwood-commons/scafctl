@@ -815,7 +815,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	flags.AddKvxOutputFlagsToStruct(cCmd, &o.KvxOutputFlags)
 
 	cCmd.Flags().BoolVar(&o.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")
-	cCmd.Flags().BoolVar(&o.Progress, "progress", false, "Show execution progress (output to stderr)")
+	cCmd.Flags().BoolVar(&o.Progress, "progress", false, "Show resolver phase progress bars (requires TTY)")
 	cCmd.Flags().BoolVar(&o.ValidateAll, "validate-all", false, "Continue execution and show all validation/resolver errors")
 	cCmd.Flags().BoolVar(&o.SkipValidation, "skip-validation", false, "Skip the validation phase of all resolvers")
 	cCmd.Flags().BoolVar(&o.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")

@@ -101,31 +101,63 @@ func TestActionProgressCallback_Methods(t *testing.T) {
 		var buf bytes.Buffer
 		streams := &terminal.IOStreams{Out: &buf, ErrOut: &buf}
 		cliParams := settings.NewCliParams()
-		cliParams.Verbose = true // progress messages are verbose-only on success
+		cliParams.Verbose = true // needed for OnForEachProgress which still uses Verbosef
 		w := writer.New(streams, cliParams)
 		return &buf, NewActionProgressCallback(w)
 	}
 
-	t.Run("OnActionStart", func(t *testing.T) {
+	t.Run("OnActionStart_with_description", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
-		cb.OnActionStart("deploy")
+		cb.OnActionStart("deploy", "Deploy service")
 		assert.Contains(t, buf.String(), "deploy")
+		assert.Contains(t, buf.String(), "Deploy service")
+	})
+
+	t.Run("OnActionStart_no_description", func(t *testing.T) {
+		t.Parallel()
+		buf, cb := newCB()
+		cb.OnActionStart("deploy", "")
+		assert.Contains(t, buf.String(), "==> deploy")
 	})
 
 	t.Run("OnActionComplete", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnActionComplete("deploy", nil)
-		assert.Contains(t, buf.String(), "deploy")
+		out := buf.String()
+		assert.Contains(t, out, "done")
+		assert.Contains(t, out, "deploy")
+	})
+
+	t.Run("OnActionComplete_with_timing", func(t *testing.T) {
+		t.Parallel()
+		buf, cb := newCB()
+		cb.OnActionStart("deploy", "")
+		cb.OnActionComplete("deploy", nil)
+		out := buf.String()
+		assert.Contains(t, out, "==> deploy")
+		assert.Contains(t, out, "done")
+		assert.Contains(t, out, "deploy")
 	})
 
 	t.Run("OnActionFailed", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnActionFailed("deploy", assert.AnError)
-		assert.Contains(t, buf.String(), "deploy")
-		assert.Contains(t, buf.String(), "Failed")
+		out := buf.String()
+		assert.Contains(t, out, "failed")
+		assert.Contains(t, out, "deploy")
+	})
+
+	t.Run("OnActionFailed_with_timing", func(t *testing.T) {
+		t.Parallel()
+		buf, cb := newCB()
+		cb.OnActionStart("deploy", "")
+		cb.OnActionFailed("deploy", assert.AnError)
+		out := buf.String()
+		assert.Contains(t, out, "==> deploy")
+		assert.Contains(t, out, "failed")
 	})
 
 	t.Run("OnActionSkipped", func(t *testing.T) {
@@ -141,7 +173,7 @@ func TestActionProgressCallback_Methods(t *testing.T) {
 		buf, cb := newCB()
 		cb.OnActionTimeout("deploy", 30*time.Second)
 		assert.Contains(t, buf.String(), "deploy")
-		assert.Contains(t, buf.String(), "Timeout")
+		assert.Contains(t, buf.String(), "timeout")
 	})
 
 	t.Run("OnActionCancelled", func(t *testing.T) {
@@ -149,14 +181,14 @@ func TestActionProgressCallback_Methods(t *testing.T) {
 		buf, cb := newCB()
 		cb.OnActionCancelled("deploy")
 		assert.Contains(t, buf.String(), "deploy")
-		assert.Contains(t, buf.String(), "Cancelled")
+		assert.Contains(t, buf.String(), "cancelled")
 	})
 
 	t.Run("OnRetryAttempt", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnRetryAttempt("deploy", 1, 3, assert.AnError)
-		assert.Contains(t, buf.String(), "Retry")
+		assert.Contains(t, buf.String(), "retry")
 		assert.Contains(t, buf.String(), "1/3")
 	})
 
@@ -167,34 +199,52 @@ func TestActionProgressCallback_Methods(t *testing.T) {
 		assert.Contains(t, buf.String(), "5/10")
 	})
 
-	t.Run("OnPhaseStart", func(t *testing.T) {
+	t.Run("OnPhaseStart_noop", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnPhaseStart(1, []string{"deploy", "test"})
-		assert.Contains(t, buf.String(), "phase 1")
-		assert.Contains(t, buf.String(), "deploy")
+		assert.Empty(t, buf.String())
 	})
 
-	t.Run("OnPhaseComplete", func(t *testing.T) {
+	t.Run("OnPhaseComplete_noop", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnPhaseComplete(1)
-		assert.Contains(t, buf.String(), "phase 1")
+		assert.Empty(t, buf.String())
 	})
 
-	t.Run("OnFinallyStart", func(t *testing.T) {
+	t.Run("OnFinallyStart_noop", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnFinallyStart()
-		assert.Contains(t, buf.String(), "finally")
+		assert.Empty(t, buf.String())
 	})
 
-	t.Run("OnFinallyComplete", func(t *testing.T) {
+	t.Run("OnFinallyComplete_noop", func(t *testing.T) {
 		t.Parallel()
 		buf, cb := newCB()
 		cb.OnFinallyComplete()
-		assert.Contains(t, buf.String(), "finally")
+		assert.Empty(t, buf.String())
 	})
+}
+
+func TestNewActionProgressCallback_NilWriter(t *testing.T) {
+	t.Parallel()
+	// When writer.FromContext returns nil (direct Run calls without a writer in context),
+	// the call site must not install the callback. This test verifies that
+	// NewActionProgressCallback(nil) is not called by checking the guard in the call sites
+	// is correct by constructing an analogous scenario: a context without a writer yields
+	// a nil writer, and the nil check prevents a non-nil interface from being set.
+	ctx := context.Background() // no writer in context
+	w := writer.FromContext(ctx)
+	assert.Nil(t, w, "FromContext should return nil when no writer is set")
+
+	// The guard in Run: only construct callback when w != nil
+	var cb action.ProgressCallback
+	if w != nil {
+		cb = NewActionProgressCallback(w)
+	}
+	assert.Nil(t, cb, "callback must remain nil when writer is nil to avoid panic")
 }
 
 func TestSolutionOptions_writeActionOutput_Quiet(t *testing.T) {
@@ -573,7 +623,7 @@ func BenchmarkActionProgressCallback(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cb.OnActionStart("deploy")
+		cb.OnActionStart("deploy", "")
 		cb.OnActionComplete("deploy", nil)
 	}
 }

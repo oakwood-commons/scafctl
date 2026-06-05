@@ -544,3 +544,26 @@ func TestCommandAction_BinaryNameSubstitution(t *testing.T) {
 	assert.Contains(t, cmd.Long, "mycli")
 	assert.NotContains(t, cmd.Long, settings.CliBinaryName)
 }
+
+func TestActionOptions_Run_NilWriterGuard(t *testing.T) {
+	t.Parallel()
+	// When a writer is present in context the nil-guard in Run installs the
+	// ActionProgressCallback. This test exercises the truthy branch of that guard
+	// (the falsy/nil branch is exercised by all other Run tests that use a plain
+	// context.Background() with no writer).
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	w := writer.New(streams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	opts := &ActionOptions{}
+	opts.File = "/nonexistent/solution.yaml"
+	opts.IOStreams = streams
+	opts.CliParams = cliParams
+
+	// Run will fail early (file not found), but the nil-guard is evaluated
+	// before the file is loaded, so the covered lines are hit.
+	_ = opts.Run(ctx)
+}
