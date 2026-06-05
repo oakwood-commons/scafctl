@@ -6,10 +6,18 @@ package parameterprovider
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -370,4 +378,211 @@ func TestParameterProvider_Descriptor(t *testing.T) {
 	// Check schema
 	assert.Contains(t, desc.Schema.Properties, "key")
 	assert.Contains(t, desc.Schema.Required, "key")
+	assert.Contains(t, desc.Schema.Properties, "default")
+	assert.NotContains(t, desc.Schema.Required, "default")
+}
+
+func TestParameterProvider_Execute_Default_UsedWhenKeyMissing(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":     "env",
+		"default": "development",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "development", output.Data)
+	assert.Equal(t, false, output.Metadata["exists"])
+	assert.Equal(t, "string", output.Metadata["type"])
+}
+
+func TestParameterProvider_Execute_Default_NotUsedWhenKeyPresent(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"env": "production",
+	})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":     "env",
+		"default": "development",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "production", output.Data)
+	assert.Equal(t, true, output.Metadata["exists"])
+}
+
+func TestParameterProvider_Execute_Default_TypedValues(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	tests := []struct {
+		name         string
+		defaultVal   any
+		expectedData any
+		expectedType string
+	}{
+		{"string literal", "fallback", "fallback", "string"},
+		{"bool string true", "true", true, "boolean"},
+		{"integer string", "42", int64(42), "integer"},
+		{"csv string", "a,b,c", []string{"a", "b", "c"}, "array"},
+		{"already-bool", true, true, "boolean"},
+		{"already-int", int64(99), int64(99), "integer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := p.Execute(ctx, map[string]any{
+				"key":     "missing",
+				"default": tt.defaultVal,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.expectedData, output.Data)
+			assert.Equal(t, false, output.Metadata["exists"])
+			assert.Equal(t, tt.expectedType, output.Metadata["type"])
+		})
+	}
+}
+
+func TestParameterProvider_Execute_NoDefault_StillErrors(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key": "env",
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "not provided")
+}
+
+func TestWithHTTPClient_ExercisesOption(t *testing.T) {
+	t.Parallel()
+	allow := true
+	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	mock := &MockHTTPClient{Err: errors.New("mock-error")}
+	p := NewParameterProvider(WithHTTPClient(mock))
+	_, err := p.parseValue(ctx, "http://127.0.0.1/data")
+	assert.ErrorContains(t, err, "mock-error")
+}
+
+func TestParameterProvider_ParseValue_HTTP_Success(t *testing.T) {
+	t.Parallel()
+	allow := true
+	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	mock := &MockHTTPClient{
+		Response: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("remote-value")),
+		},
+	}
+	p := NewParameterProvider(WithHTTPClient(mock))
+	result, err := p.parseValue(ctx, "http://127.0.0.1/data")
+	require.NoError(t, err)
+	assert.Equal(t, "remote-value", result)
+}
+
+func TestParameterProvider_ParseValue_HTTP_NonOKStatus(t *testing.T) {
+	t.Parallel()
+	allow := true
+	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	mock := &MockHTTPClient{
+		Response: &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("")),
+		},
+	}
+	p := NewParameterProvider(WithHTTPClient(mock))
+	_, err := p.parseValue(ctx, "http://127.0.0.1/data")
+	assert.ErrorContains(t, err, "404")
+}
+
+func TestDefaultFileOps_ReadFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.txt")
+	require.NoError(t, os.WriteFile(path, []byte("file-content"), 0o600))
+
+	ops := &DefaultFileOps{}
+	content, err := ops.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "file-content", string(content))
+}
+
+func TestDefaultFileOps_ReadFile_Missing(t *testing.T) {
+	t.Parallel()
+	ops := &DefaultFileOps{}
+	_, err := ops.ReadFile(filepath.Join(t.TempDir(), "nonexistent.txt"))
+	assert.Error(t, err)
+}
+
+func TestDefaultHTTPClient_Get(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &DefaultHTTPClient{client: httpc.NewClient(&httpc.ClientConfig{
+		Timeout:      settings.DefaultHTTPTimeout,
+		RetryMax:     0,
+		RetryWaitMin: settings.DefaultHTTPRetryWaitMinimum,
+		RetryWaitMax: settings.DefaultHTTPRetryWaitMaximum,
+	})}
+
+	resp, err := c.Get(context.Background(), srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestParameterProvider_Execute_Default_ParseError(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	// "-" triggers a parse error in parseValue (stdin should have been resolved)
+	output, err := p.Execute(ctx, map[string]any{
+		"key":     "env",
+		"default": "-",
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "failed to parse default")
+	assert.Contains(t, err.Error(), "stdin value")
+}
+
+func TestParameterProvider_Execute_DryRun_WithDefault_IgnoresDefault(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	// dry-run is active, key is absent, default is provided
+	ctx := provider.WithDryRun(context.Background(), true)
+	ctx = provider.WithParameters(ctx, map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":     "env",
+		"default": "should-not-appear",
+	})
+
+	// dry-run fires before default check — always returns the dry-run sentinel
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "[DRY-RUN] Not retrieved", output.Data)
+	assert.True(t, output.Metadata["dryRun"].(bool))
 }
