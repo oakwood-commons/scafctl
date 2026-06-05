@@ -128,8 +128,8 @@ func runTags(ctx context.Context, opts *TagsOptions, outputOpts *kvx.OutputOptio
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	// Resolve auth handler
-	authHandler := resolveAuthHandler(ctx, remoteRef.Registry, "")
+	// Resolve auth provider
+	authProvider := resolveAuthProvider(ctx, remoteRef.Registry, "")
 	authScope := resolveAuthScope(ctx, remoteRef.Registry)
 
 	// Create remote catalog
@@ -138,7 +138,7 @@ func runTags(ctx context.Context, opts *TagsOptions, outputOpts *kvx.OutputOptio
 		Registry:        remoteRef.Registry,
 		Repository:      remoteRef.Repository,
 		CredentialStore: credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,

@@ -96,22 +96,26 @@ func BuildRemoteCatalogFromConfig(catCfg config.CatalogConfig, credStore *Creden
 		Logger:            logger,
 	}
 
-	// Wire auth handler if configured. Use GetRegistered (no fallback) to
-	// avoid triggering lazy plugin resolution from within a builder function.
-	// This prevents a circular dependency when BuildRemoteCatalogFromConfig is
-	// called inside the auth handler fallback resolver path (fallback →
-	// BuildPluginFetcher → BuildCatalogChain → Get → fallback → deadlock).
-	// Handlers that haven't been registered yet are simply skipped — the
-	// catalog will operate without dynamic auth, which is correct because you
-	// cannot authenticate a plugin download with the handler being downloaded.
-	if catCfg.AuthProvider != "" && authRegistry != nil {
-		handler, exists := authRegistry.GetRegistered(catCfg.AuthProvider)
-		if !exists {
-			logger.V(1).Info("auth provider not yet registered for catalog, skipping dynamic auth",
-				"catalog", catCfg.Name,
-				"authProvider", catCfg.AuthProvider)
+	// Wire auth provider name if configured.
+	if catCfg.AuthProvider != "" {
+		// Verify the handler is registered (no fallback) to avoid triggering
+		// lazy plugin resolution from within a builder function. This prevents
+		// a circular dependency when BuildRemoteCatalogFromConfig is called
+		// inside the auth handler fallback resolver path.
+		if authRegistry != nil {
+			_, exists := authRegistry.GetRegistered(catCfg.AuthProvider)
+			if !exists {
+				logger.V(1).Info("auth provider not yet registered for catalog, skipping dynamic auth",
+					"catalog", catCfg.Name,
+					"authProvider", catCfg.AuthProvider)
+			} else {
+				remoteCfg.AuthProvider = catCfg.AuthProvider
+				remoteCfg.AuthScope = catCfg.AuthScope
+			}
 		} else {
-			remoteCfg.AuthHandler = handler
+			// No auth registry available (e.g. API mode) — set provider name
+			// directly; tokenprovider will route to the correct backend.
+			remoteCfg.AuthProvider = catCfg.AuthProvider
 			remoteCfg.AuthScope = catCfg.AuthScope
 		}
 	}

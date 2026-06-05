@@ -11,12 +11,28 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
-	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 )
+
+// configureAuthAndTokenRegistry registers the given mock handler in both an
+// auth.Registry and a tokenprovider.Registry, then attaches both to ctx.
+// Use this when tests call code paths that invoke BridgeAuthToRegistry
+// (which needs both registries to resolve tokens and usernames in CLI mode).
+func configureAuthAndTokenRegistry(t *testing.T, ctx context.Context, h *auth.MockHandler) context.Context {
+	t.Helper()
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(h))
+	ctx = auth.WithRegistry(ctx, registry)
+	ts := tokenprovider.NewRegistry()
+	require.NoError(t, ts.Register(tokenprovider.NewAuthHandlerAdapter(h)))
+	ctx = tokenprovider.WithRegistry(ctx, ts)
+	return ctx
+}
 
 func TestNewRemoteCatalog(t *testing.T) {
 	t.Parallel()
@@ -60,15 +76,13 @@ func TestNewRemoteCatalog(t *testing.T) {
 
 	t.Run("with auth handler only", func(t *testing.T) {
 		t.Parallel()
-		handler := scafctlauth.NewMockHandler("test-handler")
-		handler.GetTokenResult = &scafctlauth.Token{AccessToken: "test-token"}
 		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
-			Name:        "test",
-			Registry:    "ghcr.io",
-			Repository:  "org/repo",
-			AuthHandler: handler,
-			AuthScope:   "repo:read",
-			Logger:      logr.Discard(),
+			Name:         "test",
+			Registry:     "ghcr.io",
+			Repository:   "org/repo",
+			AuthProvider: "test-handler",
+			AuthScope:    "repo:read",
+			Logger:       logr.Discard(),
 		})
 		require.NoError(t, err)
 		assert.NotNil(t, cat)
@@ -77,14 +91,13 @@ func TestNewRemoteCatalog(t *testing.T) {
 
 	t.Run("with credential store and auth handler", func(t *testing.T) {
 		t.Parallel()
-		handler := scafctlauth.NewMockHandler("test-handler")
 		credStore := &CredentialStore{}
 		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
 			Name:            "test",
 			Registry:        "ghcr.io",
 			Repository:      "org/repo",
 			CredentialStore: credStore,
-			AuthHandler:     handler,
+			AuthProvider:    "test-handler",
 			Logger:          logr.Discard(),
 		})
 		require.NoError(t, err)
@@ -1032,14 +1045,6 @@ func TestWrapWithCredentialHint(t *testing.T) {
 func TestAuthHandlerPrecedenceOverDockerConfig(t *testing.T) {
 	t.Parallel()
 
-	// Set up a mock auth handler that returns a valid token.
-	handler := scafctlauth.NewMockHandler("entra")
-	handler.GetTokenResult = &scafctlauth.Token{AccessToken: "fresh-entra-token"}
-	handler.StatusResult = &scafctlauth.Status{
-		Authenticated: true,
-		Claims:        &scafctlauth.Claims{Username: "testuser"},
-	}
-
 	// Set up a credential store with static Docker config creds for the same host.
 	credStore := &CredentialStore{
 		config: &dockerConfig{
@@ -1053,31 +1058,31 @@ func TestAuthHandlerPrecedenceOverDockerConfig(t *testing.T) {
 		logger: logr.Discard(),
 	}
 
-	// Create catalog with both credential store and auth handler.
 	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
 		Name:            "test",
 		Registry:        "myregistry.azurecr.io",
 		Repository:      "org/repo",
 		CredentialStore: credStore,
-		AuthHandler:     handler,
+		AuthProvider:    "entra",
 		Logger:          logr.Discard(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cat.client.Credential)
 
+	// Set up auth registry so BridgeAuthToRegistry can resolve the username in CLI mode.
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.StatusResult = &auth.Status{Authenticated: true}
+	mockHandler.GetTokenResult = &auth.Token{AccessToken: "fresh-entra-token", TokenType: "Bearer"}
+	ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
 	// Call the credential function and verify the auth handler is used, not Docker config.
-	cred, err := cat.client.Credential(context.Background(), "myregistry.azurecr.io")
+	cred, err := cat.client.Credential(ctx, "myregistry.azurecr.io")
 	require.NoError(t, err)
 	assert.Equal(t, "fresh-entra-token", cred.Password, "auth handler token should take precedence over Docker config")
-	assert.Equal(t, "entra auth handler token", cat.CredentialSource(), "credential source should indicate auth handler")
+	assert.Equal(t, "entra token", cat.CredentialSource(), "credential source should indicate auth handler")
 }
 
 func TestAuthHandlerFallsBackToCredentialStore(t *testing.T) {
 	t.Parallel()
-
-	// Set up a mock auth handler that fails to produce a token.
-	handler := scafctlauth.NewMockHandler("entra")
-	handler.GetTokenErr = fmt.Errorf("token expired")
 
 	// Set up a credential store with valid static Docker config creds.
 	credStore := &CredentialStore{
@@ -1097,13 +1102,16 @@ func TestAuthHandlerFallsBackToCredentialStore(t *testing.T) {
 		Registry:        "myregistry.azurecr.io",
 		Repository:      "org/repo",
 		CredentialStore: credStore,
-		AuthHandler:     handler,
+		AuthProvider:    "entra",
 		Logger:          logr.Discard(),
 	})
 	require.NoError(t, err)
-
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.GetTokenResult = &auth.Token{AccessToken: "", TokenType: "Bearer"}
+	mockHandler.GetTokenErr = fmt.Errorf("token expired")
+	ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
 	// When auth handler fails, credential store should be used.
-	cred, err := cat.client.Credential(context.Background(), "myregistry.azurecr.io")
+	cred, err := cat.client.Credential(ctx, "myregistry.azurecr.io")
 	require.NoError(t, err)
 	assert.Equal(t, "docker-user", cred.Username, "should fall back to Docker config when auth handler fails")
 	assert.Equal(t, "docker-password", cred.Password)

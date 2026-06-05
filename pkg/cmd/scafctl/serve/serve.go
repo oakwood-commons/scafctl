@@ -20,10 +20,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/runmode"
+	sidregistry "github.com/oakwood-commons/scafctl/pkg/serveridentity/registry"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/spf13/cobra"
 )
 
@@ -166,11 +169,18 @@ func runServe(ctx context.Context, opts *Options) error {
 	// lifecycle (shutdown) is managed consistently.
 	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients)
 
-	// // Build delegation registry for API-mode token delegation.
-	// delegationReg, err := buildDelegationRegistry(ctx, &cfg.APIServer, lgr)
-	// if err != nil {
-	// 	return fmt.Errorf("building delegation registry: %w", err)
-	// }
+	// Build server identity registry for API-mode token retrieval.
+	identityReg, err := sidregistry.TokenProviderRegistry(ctx, &cfg.APIServer, lgr)
+	if err != nil {
+		return fmt.Errorf("building identity registry: %w", err)
+	}
+
+	// Build token provider registry for unified token retrieval in API mode.
+	tsReg, err := tokenprovider.Build(runmode.API, nil, identityReg)
+	if err != nil {
+		return fmt.Errorf("building token provider registry: %w", err)
+	}
+
 	// Build server options
 	serverOpts := []api.ServerOption{
 		api.WithServerLogger(*lgr),
@@ -179,6 +189,8 @@ func runServe(ctx context.Context, opts *Options) error {
 		api.WithServerContext(ctx),
 		api.WithServerVersion(settings.VersionInformation.BuildVersion),
 		api.WithServerPluginPool(pluginPool),
+
+		api.WithServerTokenProviderRegistry(tsReg),
 	}
 	if authReg != nil {
 		serverOpts = append(serverOpts, api.WithServerAuthRegistry(authReg))

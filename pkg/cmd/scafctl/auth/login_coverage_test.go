@@ -504,7 +504,9 @@ func TestBridgeAuthToRegistryPostLogin_Success(t *testing.T) {
 		TokenType:   "Bearer",
 	}
 
-	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "quay", "quay.io", "", false)
+	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
+
+	err := bridgeAuthToRegistryPostLogin(ctx, w, "quay", "quay.io", "", false)
 	require.NoError(t, err)
 
 	// Verify the credential is written to the isolated native store.
@@ -526,8 +528,9 @@ func TestBridgeAuthToRegistryPostLogin_GetTokenError(t *testing.T) {
 
 	mock := auth.NewMockHandler("quay")
 	mock.GetTokenErr = fmt.Errorf("token exchange failed")
+	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
 
-	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "quay", "quay.io", "", false)
+	err := bridgeAuthToRegistryPostLogin(ctx, w, "quay", "quay.io", "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to bridge quay auth to registry quay.io")
 }
@@ -552,6 +555,7 @@ func TestCommandLogin_WithRegistryBridge(t *testing.T) {
 		TokenType:   "Bearer",
 	}
 	ctx = withTestHandler(ctx, mock)
+	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
 
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
@@ -692,6 +696,7 @@ func TestCommandLogin_AutoBridgeFromConfig(t *testing.T) {
 		TokenType:   "Bearer",
 	}
 	ctx = withTestHandler(ctx, mock)
+	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
 
 	// Inject config with a custom handler that has a registry field.
 	cfg := &config.Config{
@@ -736,12 +741,15 @@ func TestBridgeAuthToRegistryPostLogin_WithScope(t *testing.T) {
 	w := writer.New(terminal.NewIOStreams(nil, buf, buf, false), settings.NewCliParams())
 
 	mock := auth.NewMockHandler("gcp")
+	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 	mock.GetTokenResult = &auth.Token{
 		AccessToken: "scoped-token",
 		TokenType:   "Bearer",
 	}
 
-	err := bridgeAuthToRegistryPostLogin(ctx, w, mock, "gcp", "us-central1-docker.pkg.dev", "https://www.googleapis.com/auth/cloud-platform", false)
+	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
+
+	err := bridgeAuthToRegistryPostLogin(ctx, w, "gcp", "us-central1-docker.pkg.dev", "https://www.googleapis.com/auth/cloud-platform", false)
 	require.NoError(t, err)
 
 	// Verify GetToken was called with the scope.
@@ -769,11 +777,13 @@ func TestCommandLogin_AutoBridgeWithScope(t *testing.T) {
 	mock.LoginResult = &auth.Result{
 		Claims: &auth.Claims{Email: "svc@project.iam.gserviceaccount.com"},
 	}
+	mock.CapabilitiesValue = append(mock.CapabilitiesValue, auth.CapScopesOnTokenRequest)
 	mock.GetTokenResult = &auth.Token{
 		AccessToken: "scoped-auto-token",
 		TokenType:   "Bearer",
 	}
 	ctx = withTestHandler(ctx, mock)
+	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
 
 	// Config has a catalog with authProvider=gcp and an authScope.
 	cfg := &config.Config{

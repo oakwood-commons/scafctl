@@ -50,6 +50,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/runmode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -59,6 +60,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/spf13/cobra"
 )
 
@@ -725,6 +727,15 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				lgr.V(1).Info("official provider registry disabled via config")
 			}
 
+			// Build CLI-mode token provider registry for unified token retrieval.
+			// must run after auth registry is fully configured since some token providers
+			tsReg, tsErr := tokenprovider.Build(runmode.CLI, authRegistry, nil)
+			if tsErr != nil {
+				w.ErrorWithExit(fmt.Sprintf("failed to build token provider registry: %v", tsErr))
+				return
+			}
+			ctx = tokenprovider.WithRegistry(ctx, tsReg)
+
 			cCmd.SetContext(ctx)
 
 			// Only validate args for the root command itself, not subcommands
@@ -739,9 +750,12 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 			// Unhide pprof flags if profiling is enabled in config
 			if cfg.Logging.EnableProfiling {
-				_ = cCmd.PersistentFlags().MarkHidden("pprof")                   // First try to set hidden to ensure it exists
-				cCmd.PersistentFlags().Lookup("pprof").Hidden = false            //nolint:staticcheck // intentional
-				cCmd.PersistentFlags().Lookup("pprof-output-dir").Hidden = false //nolint:staticcheck // intentional
+				if f := cCmd.PersistentFlags().Lookup("pprof"); f != nil {
+					f.Hidden = false
+				}
+				if f := cCmd.PersistentFlags().Lookup("pprof-output-dir"); f != nil {
+					f.Hidden = false
+				}
 			}
 
 			// Call embedder's pre-run hook after all standard setup is complete.

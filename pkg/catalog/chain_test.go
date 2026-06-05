@@ -632,16 +632,13 @@ func TestBuildCatalogChain_WithAuthProviderNotFound(t *testing.T) {
 func TestNewRemoteCatalog_WithAuthHandlerNoCredStore(t *testing.T) {
 	t.Parallel()
 
-	mock := auth.NewMockHandler("test-handler")
-	mock.GetTokenResult = &auth.Token{AccessToken: "my-token", TokenType: "Bearer"}
-
 	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
-		Name:        "test",
-		Registry:    "registry.example.io",
-		Repository:  "",
-		AuthHandler: mock,
-		AuthScope:   "",
-		Logger:      logr.Discard(),
+		Name:         "test",
+		Registry:     "registry.example.io",
+		Repository:   "",
+		AuthProvider: "test-handler",
+		AuthScope:    "",
+		Logger:       logr.Discard(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cat)
@@ -652,9 +649,6 @@ func TestNewRemoteCatalog_WithAuthHandlerNoCredStore(t *testing.T) {
 func TestNewRemoteCatalog_WithAuthHandlerAndCredStore(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	mock := auth.NewMockHandler("test-handler")
-	mock.GetTokenResult = &auth.Token{AccessToken: "my-token", TokenType: "Bearer"}
-
 	credStore, err := NewCredentialStore(logr.Discard())
 	require.NoError(t, err)
 
@@ -662,7 +656,7 @@ func TestNewRemoteCatalog_WithAuthHandlerAndCredStore(t *testing.T) {
 		Name:            "test",
 		Registry:        "registry.example.io",
 		Repository:      "",
-		AuthHandler:     mock,
+		AuthProvider:    "test-handler",
 		CredentialStore: credStore,
 		Logger:          logr.Discard(),
 	})

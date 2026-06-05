@@ -369,6 +369,133 @@ func TestValidHTTPClientCacheTypes(t *testing.T) {
 	assert.Len(t, types, 2)
 }
 
+func TestGitHubIdentityConfig_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		cfg     *APIGitHubIdentityConfig
+		wantErr string
+	}{
+		{
+			name: "valid app credential",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{
+					Type: "app",
+					App: &GitHubAppCredentialConfig{
+						ClientID:       "Iv23li8abc123",
+						InstallationID: 78901234,
+						PrivateKey:     "env://GITHUB_APP_KEY",
+					},
+				},
+			},
+		},
+		{
+			name: "missing type",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{},
+			},
+			wantErr: "type is required",
+		},
+		{
+			name: "invalid type",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{Type: "unknown"},
+			},
+			wantErr: "invalid value",
+		},
+		{
+			name: "app type but nil app config",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{Type: "app"},
+			},
+			wantErr: "app configuration is required",
+		},
+		{
+			name: "missing clientId",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{
+					Type: "app",
+					App: &GitHubAppCredentialConfig{
+						InstallationID: 78901234,
+						PrivateKey:     "env://KEY",
+					},
+				},
+			},
+			wantErr: "clientId is required",
+		},
+		{
+			name: "missing installationId",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{
+					Type: "app",
+					App: &GitHubAppCredentialConfig{
+						ClientID:   "Iv23li8abc123",
+						PrivateKey: "env://KEY",
+					},
+				},
+			},
+			wantErr: "installationId is required",
+		},
+		{
+			name: "missing privateKey",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{
+					Type: "app",
+					App: &GitHubAppCredentialConfig{
+						ClientID:       "Iv23li8abc123",
+						InstallationID: 78901234,
+					},
+				},
+			},
+			wantErr: "privateKey is required",
+		},
+		{
+			name: "invalid privateKey scheme",
+			cfg: &APIGitHubIdentityConfig{
+				Credential: GitHubCredentialConfig{
+					Type: "app",
+					App: &GitHubAppCredentialConfig{
+						ClientID:       "Iv23li8abc123",
+						InstallationID: 78901234,
+						PrivateKey:     "bad://nope",
+					},
+				},
+			},
+			wantErr: "unsupported secret ref scheme",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGitHubIdentityConfig_EffectiveHostname(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default", func(t *testing.T) {
+		t.Parallel()
+		cfg := &APIGitHubIdentityConfig{}
+		assert.Equal(t, "github.com", cfg.EffectiveHostname())
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		t.Parallel()
+		cfg := &APIGitHubIdentityConfig{Hostname: "ghes.corp.com"}
+		assert.Equal(t, "ghes.corp.com", cfg.EffectiveHostname())
+	})
+}
+
 func TestIsValidHTTPClientCacheType(t *testing.T) {
 	t.Parallel()
 
