@@ -123,14 +123,14 @@ func warnStaleCredentials(ctx context.Context, w *writer.Writer, rc *catalog.Rem
 	}
 }
 
-// resolveAuthHandler attempts to find and return the auth handler for a registry.
+// resolveAuthProvider attempts to find and return the auth provider name for a registry.
 // It checks:
 //  1. Catalog config authProvider field (when catalogFlag resolves to a named catalog)
 //  2. InferAuthHandler (built-in + custom OAuth2 mappings)
 //
-// Returns nil if no handler can be resolved or the handler cannot be loaded.
+// Returns "" if no provider can be resolved.
 // This is best-effort — push/pull/delete still work via credential store alone.
-func resolveAuthHandler(ctx context.Context, registry, catalogFlag string) auth.Handler {
+func resolveAuthProvider(ctx context.Context, registry, catalogFlag string) string {
 	var handlerName string
 	cfg := config.FromContext(ctx)
 
@@ -160,16 +160,7 @@ func resolveAuthHandler(ctx context.Context, registry, catalogFlag string) auth.
 		}
 	}
 
-	if handlerName == "" {
-		return nil
-	}
-
-	handler, err := auth.GetHandler(ctx, handlerName)
-	if err != nil {
-		return nil
-	}
-
-	return handler
+	return handlerName
 }
 
 // resolveAuthScope returns the authScope configured for the named catalog, or
@@ -239,10 +230,10 @@ func resolveDiscoveryStrategy(ctx context.Context, catalogFlag string) config.Di
 }
 
 // verboseRemoteInfo logs user-facing verbose diagnostics about how a remote
-// catalog operation was resolved: registry, repository, auth handler, scope,
-// credential source, and handler auth status.
+// catalog operation was resolved: registry, repository, auth provider, scope,
+// credential source, and provider auth status.
 // Safe to call even when --verbose is off (Writer.Verbosef short-circuits).
-func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, repository string, handler auth.Handler, scope string) {
+func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, repository, provider, scope string) {
 	if !w.VerboseEnabled() {
 		return
 	}
@@ -250,10 +241,18 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 	w.Verbosef("Registry: %s", registry)
 	w.Verbosef("Repository: %s", repository)
 
-	if handler != nil {
-		w.Verbosef("Auth handler: %s", handler.Name())
+	if provider != "" {
+		w.Verbosef("Auth provider: %s", provider)
 		if scope != "" {
 			w.Verbosef("Auth scope: %s", scope)
+		}
+
+		// Try to get handler from context for status diagnostics (CLI only).
+		handler, err := auth.GetHandler(ctx, provider)
+		if err != nil || handler == nil {
+			w.Verbosef("Auth status: unknown (handler %q not available)", provider)
+			w.Verbose("Credentials: bridged from tokenprovider on-the-fly")
+			return
 		}
 
 		// Check handler auth status for troubleshooting.
@@ -267,7 +266,7 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 				reason = "not logged in"
 			}
 			w.Verbosef("Auth status: NOT AUTHENTICATED (%s)", reason)
-			w.Verbosef("Credential bridging will fail -- run 'auth login %s' first", handler.Name())
+			w.Verbosef("Credential bridging will fail -- run 'auth login %s' first", provider)
 		default:
 			identity := ""
 			if status.Claims != nil {
@@ -291,9 +290,9 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 				}
 			}
 		}
-		w.Verbose("Credentials: bridged from auth handler on-the-fly")
+		w.Verbose("Credentials: bridged from auth provider on-the-fly")
 	} else {
-		w.Verbose("Auth handler: none (using stored registry credentials)")
+		w.Verbose("Auth provider: none (using stored registry credentials)")
 	}
 }
 

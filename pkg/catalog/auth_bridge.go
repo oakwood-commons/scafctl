@@ -10,6 +10,9 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/runmode"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
+	"github.com/oakwood-commons/scafctl/pkg/tokenprovider/callerscope"
 )
 
 // RegistryUsernameDefault is the default username for OAuth2 token-based registry auth.
@@ -30,29 +33,64 @@ type RegistryUsernameProvider interface {
 // Used for name conflict detection when registering custom OAuth2 handlers.
 var builtinHandlerNames = []string{"github", "gcp", "entra"}
 
-// BridgeAuthToRegistry converts an auth handler's token into OCI registry credentials.
+// BridgeAuthToRegistry acquires a token via the tokenprovider registry and
+// returns OCI registry credentials (username, password). The token is
+// requested with callerscope.ServerCaller so that server-identity sources
+// (Entra client_credentials, GitHub App installation token) are selected
+// in API mode, while CLI adapters are used in CLI mode.
+//
 // Each registry type expects a specific username/password convention:
-//   - GitHub (ghcr.io): username=<github-username>, password=<access-token>
+//   - GitHub (ghcr.io): username=<github-username>  when available, otherwise oauth2accesstoken, password=<access-token>
 //   - GCP (gcr.io, *.pkg.dev): username=oauth2accesstoken, password=<access-token>
 //   - Entra (*.azurecr.io): username=00000000-0000-0000-0000-000000000000, password=<access-token>
 //   - Generic OAuth2: username=oauth2accesstoken (or custom registryUsername), password=<access-token>
-func BridgeAuthToRegistry(ctx context.Context, handler auth.Handler, registryHost, scope string) (string, string, error) {
-	opts := auth.TokenOptions{}
-	if scope != "" {
-		opts.Scope = scope
-	}
-
-	token, err := handler.GetToken(ctx, opts)
+func BridgeAuthToRegistry(ctx context.Context, provider, registryHost, scope string) (string, string, error) {
+	token, err := tokenprovider.GetToken(ctx, provider, tokenprovider.RequestOptions{
+		Scope:  scope,
+		Caller: callerscope.ServerCaller,
+	})
 	if err != nil {
-		return "", "", fmt.Errorf("get token from %s handler: %w", handler.Name(), err)
+		return "", "", fmt.Errorf("get token from %s: %w", provider, err)
+	}
+	// CLI mode: resolve username from the auth handler (e.g. GitHub
+	// username from claims).
+	if runmode.FromContext(ctx) != runmode.API {
+		username, err := registryUsernameFromAuthRegistry(ctx, provider, registryHost)
+		if err != nil {
+			return username, token.AccessToken, err
+		}
+		return username, token.AccessToken, nil
 	}
 
-	username, err := registryUsername(ctx, handler, registryHost)
+	return DefaultRegistryUsername(provider), token.AccessToken, nil
+}
+
+// registryUsernameFromAuthRegistry resolves the OCI registry username by
+// looking up the auth handler in the context's auth registry. Used in CLI
+// mode where handlers carry user claims (e.g. GitHub username).
+func registryUsernameFromAuthRegistry(ctx context.Context, provider, registryHost string) (string, error) {
+	authRegistry := auth.RegistryFromContext(ctx)
+	if authRegistry == nil {
+		return "", fmt.Errorf("no auth registry in context for provider %q", provider)
+	}
+	handler, err := authRegistry.Get(provider)
 	if err != nil {
-		return "", "", fmt.Errorf("determine registry username for %s: %w", registryHost, err)
+		return "", fmt.Errorf("auth provider %q not found in registry: %w", provider, err)
 	}
+	return registryUsername(ctx, handler, registryHost)
+}
 
-	return username, token.AccessToken, nil
+func DefaultRegistryUsername(handlerName string) string {
+	switch handlerName {
+	case "github":
+		return RegistryUsernameDefault
+	case "entra":
+		return RegistryUsernameACR
+	case "gcp":
+		return RegistryUsernameDefault
+	default:
+		return RegistryUsernameDefault
+	}
 }
 
 // registryUsername determines the appropriate username for a registry based on the auth handler.

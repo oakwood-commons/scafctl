@@ -304,6 +304,11 @@ func (c *APIIdentityConfig) Validate() error {
 			return fmt.Errorf("entra: %w", err)
 		}
 	}
+	if c.GitHub != nil {
+		if err := c.GitHub.Validate(); err != nil {
+			return fmt.Errorf("github: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -320,6 +325,62 @@ func (c *APIEntraIdentityConfig) Validate() error {
 	}
 	if err := c.AllowedFlows.Validate(); err != nil {
 		return fmt.Errorf("entra identity: allowedFlows: %w", err)
+	}
+	return nil
+}
+
+// Validate checks the GitHub identity configuration for completeness.
+func (c *APIGitHubIdentityConfig) Validate() error {
+	if err := c.Credential.Validate(); err != nil {
+		return fmt.Errorf("github identity: credential: %w", err)
+	}
+	return nil
+}
+
+// Validate checks the GitHub credential configuration.
+func (c *GitHubCredentialConfig) Validate() error {
+	switch c.Type {
+	case "app":
+		if c.App == nil {
+			return fmt.Errorf("app configuration is required when type is %q", c.Type)
+		}
+		return c.App.Validate()
+	case "pat":
+		if c.PAT == nil {
+			return fmt.Errorf("pat configuration is required when type is %q", c.Type)
+		}
+		return c.PAT.Validate()
+	case "":
+		return fmt.Errorf("type is required")
+	default:
+		return fmt.Errorf("type: invalid value %q, must be one of: app, pat", c.Type)
+	}
+}
+
+// Validate checks the GitHub PAT credential configuration for completeness.
+func (c *GitHubPATCredentialConfig) Validate() error {
+	if c.Token == "" {
+		return fmt.Errorf("token is required")
+	}
+	if err := c.Token.Validate(); err != nil {
+		return fmt.Errorf("token: %w", err)
+	}
+	return nil
+}
+
+// Validate checks the GitHub App credential configuration for completeness.
+func (c *GitHubAppCredentialConfig) Validate() error {
+	if c.ClientID == "" {
+		return fmt.Errorf("clientId is required")
+	}
+	if c.InstallationID == 0 {
+		return fmt.Errorf("installationId is required")
+	}
+	if c.PrivateKey == "" {
+		return fmt.Errorf("privateKey is required")
+	}
+	if err := c.PrivateKey.Validate(); err != nil {
+		return fmt.Errorf("privateKey: %w", err)
 	}
 	return nil
 }

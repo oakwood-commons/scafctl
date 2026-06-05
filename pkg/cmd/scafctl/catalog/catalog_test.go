@@ -74,7 +74,7 @@ func TestResolveAuthScope_EmptyWhenCatalogHasNoScope(t *testing.T) {
 	assert.Equal(t, "", scope)
 }
 
-func TestResolveAuthHandler_NilWhenNoConfig(t *testing.T) {
+func TestResolveAuthProvider_EmptyWhenNoConfig(t *testing.T) {
 	t.Parallel()
 
 	w := writer.New(
@@ -83,11 +83,11 @@ func TestResolveAuthHandler_NilWhenNoConfig(t *testing.T) {
 	)
 	ctx := writer.WithWriter(context.Background(), w)
 
-	handler := resolveAuthHandler(ctx, "ghcr.io", "")
-	assert.Nil(t, handler, "should return nil when no config in context")
+	provider := resolveAuthProvider(ctx, "ghcr.io", "")
+	assert.Equal(t, "github", provider, "should infer github from ghcr.io")
 }
 
-func TestResolveAuthHandler_NilWhenNoMatchingCatalog(t *testing.T) {
+func TestResolveAuthProvider_EmptyWhenNoMatchingCatalog(t *testing.T) {
 	t.Parallel()
 
 	cfg := &appconfig.Config{
@@ -107,11 +107,11 @@ func TestResolveAuthHandler_NilWhenNoMatchingCatalog(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = appconfig.WithConfig(ctx, cfg)
 
-	handler := resolveAuthHandler(ctx, "custom.io", "nonexistent")
-	assert.Nil(t, handler, "should return nil when catalog not found and no inference match")
+	provider := resolveAuthProvider(ctx, "custom.io", "nonexistent")
+	assert.Equal(t, "", provider, "should return empty when catalog not found and no inference match")
 }
 
-func TestResolveAuthHandler_FromCatalogConfig(t *testing.T) {
+func TestResolveAuthProvider_FromCatalogConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg := &appconfig.Config{
@@ -132,16 +132,15 @@ func TestResolveAuthHandler_FromCatalogConfig(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = appconfig.WithConfig(ctx, cfg)
 
-	// github handler may or may not be loadable in test environment,
-	// but the function should at least try (not panic)
-	_ = resolveAuthHandler(ctx, "ghcr.io", "gh-registry")
+	provider := resolveAuthProvider(ctx, "ghcr.io", "gh-registry")
+	assert.Equal(t, "github", provider)
 }
 
-// TestResolveAuthHandler_InferenceTakesPriorityOverDefault verifies that
+// TestResolveAuthProvider_InferenceTakesPriorityOverDefault verifies that
 // registry-host inference (e.g. *.pkg.dev → gcp) takes priority over the
 // default catalog's authProvider. Without this, a full OCI ref to a GCP
 // registry would incorrectly use the default catalog's handler (e.g. quay).
-func TestResolveAuthHandler_InferenceTakesPriorityOverDefault(t *testing.T) {
+func TestResolveAuthProvider_InferenceTakesPriorityOverDefault(t *testing.T) {
 	t.Parallel()
 
 	cfg := &appconfig.Config{
@@ -162,17 +161,9 @@ func TestResolveAuthHandler_InferenceTakesPriorityOverDefault(t *testing.T) {
 	ctx := writer.WithWriter(context.Background(), w)
 	ctx = appconfig.WithConfig(ctx, cfg)
 
-	// resolveAuthHandler returns nil because no auth registry is in context,
-	// but we can verify the priority logic by calling it and confirming it
-	// doesn't panic with the default-catalog-has-different-handler scenario.
-	handler := resolveAuthHandler(ctx, "us-central1-docker.pkg.dev", "")
-	// Handler is nil because auth.GetHandler fails in test, but the important
-	// assertion is below: InferAuthHandler returns "gcp" for *.pkg.dev, not
-	// the default catalog's "quay".
-	_ = handler
-
-	handlerName := catalog.InferAuthHandler("us-central1-docker.pkg.dev", cfg.Auth.CustomOAuth2)
-	assert.Equal(t, "gcp", handlerName, "registry host inference should identify gcp for *.pkg.dev")
+	// resolveAuthProvider should return "gcp" via inference, NOT "quay" from default catalog.
+	provider := resolveAuthProvider(ctx, "us-central1-docker.pkg.dev", "")
+	assert.Equal(t, "gcp", provider, "registry host inference should identify gcp for *.pkg.dev")
 
 	// The default catalog would return "quay" -- verify it's different
 	defaultCat, ok := cfg.GetDefaultCatalog()
@@ -599,7 +590,7 @@ func TestResolveVersionConstraint_ListError(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to list versions")
 }
 
-func TestVerboseRemoteInfo_NilHandler(t *testing.T) {
+func TestVerboseRemoteInfo_NoProvider(t *testing.T) {
 	t.Parallel()
 
 	var errBuf bytes.Buffer
@@ -610,12 +601,12 @@ func TestVerboseRemoteInfo_NilHandler(t *testing.T) {
 	w := writer.New(ioStreams, cliParams)
 	ctx := writer.WithWriter(context.Background(), w)
 
-	verboseRemoteInfo(ctx, w, "ghcr.io", "myorg/catalog", nil, "")
+	verboseRemoteInfo(ctx, w, "ghcr.io", "myorg/catalog", "", "")
 
 	output := errBuf.String()
 	assert.Contains(t, output, "Registry: ghcr.io")
 	assert.Contains(t, output, "Repository: myorg/catalog")
-	assert.Contains(t, output, "Auth handler: none")
+	assert.Contains(t, output, "Auth provider: none")
 }
 
 func TestVerboseRemoteInfo_AuthenticatedHandler(t *testing.T) {
@@ -627,7 +618,6 @@ func TestVerboseRemoteInfo_AuthenticatedHandler(t *testing.T) {
 	cliParams.Verbose = true
 	cliParams.NoColor = true
 	w := writer.New(ioStreams, cliParams)
-	ctx := writer.WithWriter(context.Background(), w)
 
 	mock := auth.NewMockHandler("gcp")
 	mock.StatusResult = &auth.Status{
@@ -636,10 +626,16 @@ func TestVerboseRemoteInfo_AuthenticatedHandler(t *testing.T) {
 		ExpiresAt:     time.Now().Add(30 * time.Minute),
 	}
 
-	verboseRemoteInfo(ctx, w, "us-docker.pkg.dev", "proj/repo", mock, "https://www.googleapis.com/auth/cloud-platform")
+	// Register mock handler in auth registry so verboseRemoteInfo can look it up.
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(mock)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	verboseRemoteInfo(ctx, w, "us-docker.pkg.dev", "proj/repo", "gcp", "https://www.googleapis.com/auth/cloud-platform")
 
 	output := errBuf.String()
-	assert.Contains(t, output, "Auth handler: gcp")
+	assert.Contains(t, output, "Auth provider: gcp")
 	assert.Contains(t, output, "Auth scope: https://www.googleapis.com/auth/cloud-platform")
 	assert.Contains(t, output, "authenticated as user@example.com")
 	assert.Contains(t, output, "remaining")
@@ -654,7 +650,6 @@ func TestVerboseRemoteInfo_NotAuthenticated(t *testing.T) {
 	cliParams.Verbose = true
 	cliParams.NoColor = true
 	w := writer.New(ioStreams, cliParams)
-	ctx := writer.WithWriter(context.Background(), w)
 
 	mock := auth.NewMockHandler("github")
 	mock.StatusResult = &auth.Status{
@@ -662,7 +657,12 @@ func TestVerboseRemoteInfo_NotAuthenticated(t *testing.T) {
 		Reason:        "expired",
 	}
 
-	verboseRemoteInfo(ctx, w, "ghcr.io", "myorg/catalog", mock, "")
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(mock)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	verboseRemoteInfo(ctx, w, "ghcr.io", "myorg/catalog", "github", "")
 
 	output := errBuf.String()
 	assert.Contains(t, output, "NOT AUTHENTICATED (expired)")
@@ -678,12 +678,16 @@ func TestVerboseRemoteInfo_StatusError(t *testing.T) {
 	cliParams.Verbose = true
 	cliParams.NoColor = true
 	w := writer.New(ioStreams, cliParams)
-	ctx := writer.WithWriter(context.Background(), w)
 
 	mock := auth.NewMockHandler("entra")
 	mock.StatusErr = fmt.Errorf("keychain error")
 
-	verboseRemoteInfo(ctx, w, "quay.io", "myorg/catalog", mock, "")
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(mock)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	verboseRemoteInfo(ctx, w, "quay.io", "myorg/catalog", "entra", "")
 
 	output := errBuf.String()
 	assert.Contains(t, output, "unknown (check failed: keychain error)")
@@ -698,7 +702,6 @@ func TestVerboseRemoteInfo_ExpiredToken(t *testing.T) {
 	cliParams.Verbose = true
 	cliParams.NoColor = true
 	w := writer.New(ioStreams, cliParams)
-	ctx := writer.WithWriter(context.Background(), w)
 
 	mock := auth.NewMockHandler("gcp")
 	mock.StatusResult = &auth.Status{
@@ -707,7 +710,12 @@ func TestVerboseRemoteInfo_ExpiredToken(t *testing.T) {
 		ExpiresAt:     time.Now().Add(-10 * time.Minute), // expired
 	}
 
-	verboseRemoteInfo(ctx, w, "us-docker.pkg.dev", "proj/repo", mock, "")
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(mock)
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	verboseRemoteInfo(ctx, w, "us-docker.pkg.dev", "proj/repo", "gcp", "")
 
 	output := errBuf.String()
 	assert.Contains(t, output, "EXPIRED")

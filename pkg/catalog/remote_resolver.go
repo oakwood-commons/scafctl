@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
 )
 
 // RemoteSolutionResolverConfig holds configuration for the remote solution resolver.
@@ -16,14 +15,15 @@ type RemoteSolutionResolverConfig struct {
 	// CredentialStore provides authentication credentials for remote registries.
 	CredentialStore *CredentialStore
 
-	// AuthHandlerFunc returns an auth handler for a given registry host.
-	// When set, the handler is passed to RemoteCatalogConfig.AuthHandler for
-	// automatic token bridging. May return nil if no handler is available.
-	AuthHandlerFunc func(registry string) scafctlauth.Handler
+	// AuthProviderFunc returns an auth provider name for a given registry host.
+	// When set, the provider name is passed to RemoteCatalogConfig.AuthProvider
+	// for automatic token bridging via tokenprovider. May return "" if no
+	// provider is available.
+	AuthProviderFunc func(registry string) string
 
 	// AuthScopeFunc returns an OAuth scope for a given registry host.
 	// When set, the scope is passed to RemoteCatalogConfig.AuthScope so
-	// handlers like GCP/Entra can request appropriately scoped tokens.
+	// providers like GCP/Entra can request appropriately scoped tokens.
 	AuthScopeFunc func(registry string) string
 
 	// Insecure allows HTTP connections to registries (for testing).
@@ -44,25 +44,25 @@ type RemoteSolutionResolverConfig struct {
 // full Docker-style reference (e.g., "ghcr.io/myorg/starter-kit@1.0.0").
 // It implements the get.RemoteResolver interface.
 type RemoteSolutionResolver struct {
-	credStore       *CredentialStore
-	authHandlerFunc func(registry string) scafctlauth.Handler
-	authScopeFunc   func(registry string) string
-	insecure        bool
-	artifactCache   ArtifactCacher
-	noCache         bool
-	logger          logr.Logger
+	credStore        *CredentialStore
+	authProviderFunc func(registry string) string
+	authScopeFunc    func(registry string) string
+	insecure         bool
+	artifactCache    ArtifactCacher
+	noCache          bool
+	logger           logr.Logger
 }
 
 // NewRemoteSolutionResolver creates a new RemoteSolutionResolver.
 func NewRemoteSolutionResolver(cfg RemoteSolutionResolverConfig) *RemoteSolutionResolver {
 	return &RemoteSolutionResolver{
-		credStore:       cfg.CredentialStore,
-		authHandlerFunc: cfg.AuthHandlerFunc,
-		authScopeFunc:   cfg.AuthScopeFunc,
-		insecure:        cfg.Insecure,
-		artifactCache:   cfg.ArtifactCache,
-		noCache:         cfg.NoCache,
-		logger:          cfg.Logger.WithName("remote-solution-resolver"),
+		credStore:        cfg.CredentialStore,
+		authProviderFunc: cfg.AuthProviderFunc,
+		authScopeFunc:    cfg.AuthScopeFunc,
+		insecure:         cfg.Insecure,
+		artifactCache:    cfg.ArtifactCache,
+		noCache:          cfg.NoCache,
+		logger:           cfg.Logger.WithName("remote-solution-resolver"),
 	}
 }
 
@@ -100,10 +100,10 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		refKind = ArtifactKindSolution
 	}
 
-	// Resolve auth handler and scope for this registry if available
-	var authHandler scafctlauth.Handler
-	if r.authHandlerFunc != nil {
-		authHandler = r.authHandlerFunc(remoteRef.Registry)
+	// Resolve auth provider and scope for this registry if available
+	var authProvider string
+	if r.authProviderFunc != nil {
+		authProvider = r.authProviderFunc(remoteRef.Registry)
 	}
 	var authScope string
 	if r.authScopeFunc != nil {
@@ -115,7 +115,7 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		Registry:        remoteRef.Registry,
 		Repository:      remoteRef.Repository,
 		CredentialStore: r.credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        r.insecure,
 		Logger:          r.logger,

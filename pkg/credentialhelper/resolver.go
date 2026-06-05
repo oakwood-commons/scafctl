@@ -55,6 +55,7 @@ func (r *AuthTokenResolver) Resolve(ctx context.Context, serverURL string) (*Cre
 	if err != nil {
 		return nil, fmt.Errorf("auth handler %q not available: %w", handlerName, err)
 	}
+	_ = handler // validated existence; BridgeAuthToRegistry uses provider name via tokenprovider
 
 	// Resolve profile and inject into context.
 	profile := auth.ResolveActiveProfile(ctx, handlerName)
@@ -63,7 +64,7 @@ func (r *AuthTokenResolver) Resolve(ctx context.Context, serverURL string) (*Cre
 	}
 
 	scope := catalog.InferDefaultScope(host)
-	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, host, scope)
+	username, password, err := catalog.BridgeAuthToRegistry(ctx, handlerName, host, scope)
 	if err != nil {
 		return nil, fmt.Errorf("bridge auth for %q: %w", serverURL, err)
 	}

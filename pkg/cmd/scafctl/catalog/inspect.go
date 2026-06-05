@@ -229,17 +229,17 @@ func runInspectRemote(ctx context.Context, opts *InspectOptions, outputOpts *kvx
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	authHandler := resolveAuthHandler(ctx, registry, "")
+	authProvider := resolveAuthProvider(ctx, registry, "")
 	authScope := resolveAuthScopeForRegistry(ctx, registry)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
@@ -311,17 +311,17 @@ func runInspectFromCatalog(ctx context.Context, opts *InspectOptions, outputOpts
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authHandler, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
@@ -418,7 +418,7 @@ func runInspectReferrers(ctx context.Context, opts *InspectOptions, outputOpts *
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
+	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
@@ -426,7 +426,7 @@ func runInspectReferrers(ctx context.Context, opts *InspectOptions, outputOpts *
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthHandler:     authHandler,
+		AuthProvider:    authProvider,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
