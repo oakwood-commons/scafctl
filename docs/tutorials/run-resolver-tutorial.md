@@ -1126,6 +1126,85 @@ Output:
 }
 ```
 
+### Default Values
+
+The parameter provider supports an optional `default` input that provides a
+fallback value when the parameter is not passed via `-r` flags. This is simpler
+than using a multi-step fallback chain with `onError: continue` and a `static`
+provider.
+
+Create a file called `param-default-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: param-default-demo
+  version: 1.0.0
+spec:
+  resolvers:
+    env:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: environment
+              default: development
+```
+
+Running without `-r` uses the default:
+
+{{< tabs "run-resolver-tutorial-cmd-23b" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run resolver -f param-default-demo.yaml -o json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f param-default-demo.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Output:
+
+```json
+{
+  "env": "development"
+}
+```
+
+Running with `-r` overrides the default:
+
+{{< tabs "run-resolver-tutorial-cmd-23c" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run resolver -f param-default-demo.yaml environment=staging -o json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f param-default-demo.yaml environment=staging -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Output:
+
+```json
+{
+  "env": "staging"
+}
+```
+
+> **Note:** The `default` input must be a literal value. The resolver executor
+> resolves all inputs before calling the provider, so a ValueRef default (e.g.
+> `default: {rslvr: fallback}`) would be evaluated even when the parameter
+> exists. Use the `onError: continue` fallback chain pattern when you need a
+> dynamic default.
+
 ### Parameter Key Validation
 
 Parameter keys are validated against the solution's parameter-type resolver names.
