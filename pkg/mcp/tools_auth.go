@@ -13,8 +13,42 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 )
 
+// profileFromRequest extracts and validates an optional "profile" parameter
+// from an MCP tool request. Returns the normalized profile name and any
+// validation error. Returns ("", nil) when no profile is specified.
+func profileFromRequest(args map[string]any) (string, error) {
+	profileVal, ok := args["profile"].(string)
+	if !ok || profileVal == "" {
+		return "", nil
+	}
+	normalized := auth.NormalizeProfileName(profileVal)
+	if normalized == "" {
+		return "", nil
+	}
+	if err := auth.ValidateProfileName(normalized); err != nil {
+		return "", fmt.Errorf("invalid profile: %w", err)
+	}
+	return normalized, nil
+}
+
 // registerAuthTools registers all auth-related MCP tools.
 func (s *Server) registerAuthTools() {
+	authSetProfileTool := mcp.NewTool("auth_set_profile",
+		mcp.WithDescription("Set the auth profile for the current MCP session. All subsequent tool calls "+
+			"will use this profile's credentials until changed or cleared. Pass an empty string or 'default' to "+
+			"reset to the startup default. Use auth_status to verify the active identity after switching."),
+		mcp.WithTitleAnnotation("Set Auth Profile"),
+		mcp.WithToolIcons(toolIcons["auth"]),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("profile",
+			mcp.Description("Auth profile name to activate (e.g., 'work', 'personal'). Omit or pass 'default' to reset to startup default."),
+		),
+	)
+	s.addTool(authSetProfileTool, s.handleSetProfile)
+
 	authStatusTool := mcp.NewTool("auth_status",
 		mcp.WithDescription("Report which auth handlers (e.g. entra, gcp, github) are configured and whether their tokens are valid. Auth handlers manage authentication and identity — they are NOT solution providers. Helps verify authentication is set up correctly before attempting operations that require it."),
 		mcp.WithTitleAnnotation("Auth Status"),
@@ -99,14 +133,12 @@ func (s *Server) handleAuthStatus(ctx context.Context, req mcp.CallToolRequest) 
 		})
 	}
 
-	// Extract optional profile parameter
-	if profileVal, ok := req.GetArguments()["profile"].(string); ok && profileVal != "" {
-		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
-			if err := auth.ValidateProfileName(normalized); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
-			}
-			ctx = auth.WithProfile(ctx, normalized)
-		}
+	profile, err := profileFromRequest(req.GetArguments())
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if profile != "" {
+		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	handlers := s.authReg.All()
@@ -236,13 +268,12 @@ func (s *Server) handleListCachedTokens(ctx context.Context, req mcp.CallToolReq
 	args := req.GetArguments()
 	handlerFilter, _ := args["handler"].(string)
 
-	if profileVal, ok := args["profile"].(string); ok && profileVal != "" {
-		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
-			if err := auth.ValidateProfileName(normalized); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
-			}
-			ctx = auth.WithProfile(ctx, normalized)
-		}
+	profile, err := profileFromRequest(args)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if profile != "" {
+		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	names := s.authReg.List()
@@ -340,13 +371,12 @@ func (s *Server) handlePurgeExpiredTokens(ctx context.Context, req mcp.CallToolR
 	args := req.GetArguments()
 	handlerFilter, _ := args["handler"].(string)
 
-	if profileVal, ok := args["profile"].(string); ok && profileVal != "" {
-		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
-			if err := auth.ValidateProfileName(normalized); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
-			}
-			ctx = auth.WithProfile(ctx, normalized)
-		}
+	profile, err := profileFromRequest(args)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if profile != "" {
+		ctx = auth.WithProfile(ctx, profile)
 	}
 
 	names := s.authReg.List()
@@ -401,5 +431,30 @@ func (s *Server) handlePurgeExpiredTokens(ctx context.Context, req mcp.CallToolR
 	return mcp.NewToolResultJSON(map[string]any{
 		"handlers":    results,
 		"totalPurged": total,
+	})
+}
+
+// handleSetProfile sets or clears the session-level auth profile override.
+func (s *Server) handleSetProfile(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	profileVal := req.GetString("profile", "")
+	normalized := auth.NormalizeProfileName(profileVal)
+
+	// Empty or built-in/default → clear the override.
+	if normalized == "" || profileVal == "" {
+		s.profileOverride.Store((*string)(nil))
+		return mcp.NewToolResultJSON(map[string]any{
+			"profile": "default",
+			"message": "Auth profile reset to startup default",
+		})
+	}
+
+	if err := auth.ValidateProfileName(normalized); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalid profile: %v", err)), nil
+	}
+
+	s.profileOverride.Store(&normalized)
+	return mcp.NewToolResultJSON(map[string]any{
+		"profile": normalized,
+		"message": fmt.Sprintf("Auth profile set to %q for this session. All subsequent tool calls will use this profile.", normalized),
 	})
 }

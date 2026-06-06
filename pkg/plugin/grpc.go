@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -332,6 +333,11 @@ func applyRequestContext(ctx context.Context, req *proto.ExecuteProviderRequest)
 
 	// Solution metadata
 	ctx = unmarshalSolutionMeta(ctx, req.SolutionMetadata)
+
+	// Auth profile
+	if req.AuthProfile != "" {
+		ctx = auth.WithProfile(ctx, req.AuthProfile)
+	}
 
 	return ctx, nil
 }
@@ -777,6 +783,11 @@ func buildExecuteProviderRequest(ctx context.Context, providerName string, input
 
 	// Solution metadata
 	req.SolutionMetadata = marshalSolutionMeta(ctx)
+
+	// Auth profile
+	if profile := auth.ProfileFromContext(ctx); profile != "" {
+		req.AuthProfile = profile
+	}
 
 	return req, nil
 }
