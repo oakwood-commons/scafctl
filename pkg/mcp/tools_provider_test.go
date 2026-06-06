@@ -371,6 +371,53 @@ func TestHandleRunProvider(t *testing.T) {
 		assert.Contains(t, text, "INVALID_INPUT")
 	})
 
+	t.Run("rejects invalid profile", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider": "static",
+			"inputs":   map[string]any{"value": "hello"},
+			"profile":  "has spaces",
+		}
+
+		result, err := srv.handleRunProvider(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "INVALID_INPUT")
+	})
+
+	t.Run("accepts valid profile", func(t *testing.T) {
+		reg, err := builtin.DefaultRegistry(context.Background())
+		require.NoError(t, err)
+		srv, err := NewServer(
+			WithServerRegistry(reg),
+			WithServerVersion("test"),
+		)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "run_provider"
+		request.Params.Arguments = map[string]any{
+			"provider": "static",
+			"inputs":   map[string]any{"value": "hello"},
+			"profile":  "work",
+		}
+
+		result, err := srv.handleRunProvider(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+	})
+
 	t.Run("returns error when registry nil", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)

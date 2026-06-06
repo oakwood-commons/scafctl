@@ -589,3 +589,135 @@ func (m *mcpMinimalHandler) InjectAuth(_ context.Context, _ *http.Request, _ aut
 }
 
 var _ auth.Handler = (*mcpMinimalHandler)(nil)
+
+func TestProfileFromRequest(t *testing.T) {
+	t.Run("empty args returns empty", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{})
+		assert.NoError(t, err)
+		assert.Empty(t, profile)
+	})
+
+	t.Run("missing profile key returns empty", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"other": "value"})
+		assert.NoError(t, err)
+		assert.Empty(t, profile)
+	})
+
+	t.Run("empty string returns empty", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"profile": ""})
+		assert.NoError(t, err)
+		assert.Empty(t, profile)
+	})
+
+	t.Run("valid profile returns normalized", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"profile": "work"})
+		assert.NoError(t, err)
+		assert.Equal(t, "work", profile)
+	})
+
+	t.Run("built-in alias returns empty", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"profile": "built-in"})
+		assert.NoError(t, err)
+		assert.Empty(t, profile)
+	})
+
+	t.Run("default alias returns empty", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"profile": "default"})
+		assert.NoError(t, err)
+		assert.Empty(t, profile)
+	})
+
+	t.Run("invalid profile returns error", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"profile": "has spaces"})
+		assert.Error(t, err)
+		assert.Empty(t, profile)
+		assert.Contains(t, err.Error(), "invalid profile")
+	})
+
+	t.Run("non-string type returns empty", func(t *testing.T) {
+		profile, err := profileFromRequest(map[string]any{"profile": 42})
+		assert.NoError(t, err)
+		assert.Empty(t, profile)
+	})
+}
+
+func TestHandleSetProfile(t *testing.T) {
+	t.Run("sets profile", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_set_profile"
+		request.Params.Arguments = map[string]any{"profile": "work"}
+
+		result, err := srv.handleSetProfile(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "work")
+
+		// Verify the override was stored.
+		p := srv.profileOverride.Load().(*string)
+		require.NotNil(t, p)
+		assert.Equal(t, "work", *p)
+	})
+
+	t.Run("clears with empty string", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		// Set first.
+		v := "work"
+		srv.profileOverride.Store(&v)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_set_profile"
+		request.Params.Arguments = map[string]any{"profile": ""}
+
+		result, err := srv.handleSetProfile(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "default")
+
+		p := srv.profileOverride.Load().(*string)
+		assert.Nil(t, p)
+	})
+
+	t.Run("clears with default alias", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		v := "personal"
+		srv.profileOverride.Store(&v)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_set_profile"
+		request.Params.Arguments = map[string]any{"profile": "default"}
+
+		result, err := srv.handleSetProfile(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		p := srv.profileOverride.Load().(*string)
+		assert.Nil(t, p)
+	})
+
+	t.Run("rejects invalid profile", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "auth_set_profile"
+		request.Params.Arguments = map[string]any{"profile": "has spaces"}
+
+		result, err := srv.handleSetProfile(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "invalid profile")
+	})
+}

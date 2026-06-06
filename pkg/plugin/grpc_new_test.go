@@ -13,6 +13,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
@@ -234,6 +235,7 @@ func TestBuildExecuteProviderRequest_RoundTrip(t *testing.T) {
 		Name:    "test-sol",
 		Version: "2.0.0",
 	})
+	ctx = auth.WithProfile(ctx, "work")
 
 	req, err := buildExecuteProviderRequest(ctx, "my-provider", []byte(`{"hello":"world"}`))
 	require.NoError(t, err)
@@ -258,10 +260,50 @@ func TestBuildExecuteProviderRequest_RoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(req.Parameters, &params))
 	assert.Equal(t, "us-east-1", params["region"])
 
+	assert.Equal(t, "work", req.AuthProfile)
+
 	// Resolver context must NOT be serialized into the request (issue #451).
 	// The engine resolves all ValueRefs before the gRPC call, so plugins
 	// only need concrete input values.
 	assert.Empty(t, req.Context, "resolver context should not be sent to plugins")
+}
+
+func TestBuildExecuteProviderRequest_AuthProfile(t *testing.T) {
+	t.Run("sets auth profile from context", func(t *testing.T) {
+		ctx := auth.WithProfile(context.Background(), "personal")
+		req, err := buildExecuteProviderRequest(ctx, "test", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Equal(t, "personal", req.AuthProfile)
+	})
+
+	t.Run("empty when no profile in context", func(t *testing.T) {
+		req, err := buildExecuteProviderRequest(context.Background(), "test", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Empty(t, req.AuthProfile)
+	})
+}
+
+func TestApplyRequestContext_AuthProfile(t *testing.T) {
+	t.Run("sets profile from request", func(t *testing.T) {
+		req := &proto.ExecuteProviderRequest{
+			ProviderName: "test",
+			Input:        []byte(`{}`),
+			AuthProfile:  "work",
+		}
+		ctx, err := applyRequestContext(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, "work", auth.ProfileFromContext(ctx))
+	})
+
+	t.Run("no profile when empty", func(t *testing.T) {
+		req := &proto.ExecuteProviderRequest{
+			ProviderName: "test",
+			Input:        []byte(`{}`),
+		}
+		ctx, err := applyRequestContext(context.Background(), req)
+		require.NoError(t, err)
+		assert.Empty(t, auth.ProfileFromContext(ctx))
+	})
 }
 
 func TestBuildExecuteProviderRequest_ResolverContextPruned(t *testing.T) {

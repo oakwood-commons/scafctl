@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -89,6 +90,14 @@ type Server struct {
 	sseServer *server.SSEServer
 	// httpServer is the Streamable HTTP transport server (nil for stdio).
 	httpServer *server.StreamableHTTPServer
+
+	// profileOverride holds an optional auth profile name set via the
+	// auth_set_profile MCP tool. When non-empty, freshConfigContext injects
+	// it into every request context so all tool calls use that profile.
+	// Stored as *string so atomic.Value can distinguish "never set" (nil)
+	// from "set to a named profile" (non-empty *string). The code never
+	// stores an empty string — clearing is done by storing nil.
+	profileOverride atomic.Value // *string
 }
 
 // ServerOption configures the MCP server.
@@ -455,7 +464,7 @@ Tool Latency Guide (helps optimize tool selection):
   ⚡ Instant (in-memory, no I/O):
     get_solution_schema, list_providers, get_provider_schema, list_lint_rules,
     explain_lint_rule, explain_kind, validate_expression, evaluate_cel,
-    get_run_command, list_auth_handlers, get_config_paths, get_version
+    get_run_command, list_auth_handlers, auth_set_profile, get_config_paths, get_version
   🔄 Fast (local file I/O):
     inspect_solution, lint_solution, diff_solution, list_catalog, catalog_inspect,
     list_examples, get_example, scaffold_solution, extract_resolver_refs,
@@ -810,8 +819,12 @@ func (s *Server) freshConfigContext(ctx context.Context) context.Context {
 	merged := mergeContext(ctx, s.ctx)
 	if s.cfgReloader != nil {
 		if cfg := s.cfgReloader.Config(); cfg != nil {
-			return config.WithConfig(merged, cfg)
+			merged = config.WithConfig(merged, cfg)
 		}
+	}
+	// Apply session-level profile override set by auth_set_profile tool.
+	if p, ok := s.profileOverride.Load().(*string); ok && p != nil && *p != "" {
+		merged = auth.WithProfile(merged, *p)
 	}
 	return merged
 }

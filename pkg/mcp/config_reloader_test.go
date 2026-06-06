@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,47 @@ func TestFreshConfigContext(t *testing.T) {
 		got := config.FromContext(ctx)
 		require.NotNil(t, got)
 		assert.Equal(t, 5, got.Version)
+	})
+
+	t.Run("applies profile override when set", func(t *testing.T) {
+		srv, err := NewServer(
+			WithServerConfig(&config.Config{Version: 1}),
+			WithServerName("testcli"),
+		)
+		require.NoError(t, err)
+
+		profile := "work"
+		srv.profileOverride.Store(&profile)
+
+		ctx := srv.freshConfigContext(context.Background())
+		assert.Equal(t, "work", auth.ProfileFromContext(ctx))
+	})
+
+	t.Run("no profile override leaves context unchanged", func(t *testing.T) {
+		srv, err := NewServer(
+			WithServerConfig(&config.Config{Version: 1}),
+			WithServerName("testcli"),
+		)
+		require.NoError(t, err)
+
+		ctx := srv.freshConfigContext(context.Background())
+		assert.Empty(t, auth.ProfileFromContext(ctx))
+	})
+
+	t.Run("cleared profile override leaves context unchanged", func(t *testing.T) {
+		srv, err := NewServer(
+			WithServerConfig(&config.Config{Version: 1}),
+			WithServerName("testcli"),
+		)
+		require.NoError(t, err)
+
+		// Set then clear.
+		profile := "work"
+		srv.profileOverride.Store(&profile)
+		srv.profileOverride.Store((*string)(nil))
+
+		ctx := srv.freshConfigContext(context.Background())
+		assert.Empty(t, auth.ProfileFromContext(ctx))
 	})
 }
 

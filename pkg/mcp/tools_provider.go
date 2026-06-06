@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
@@ -153,6 +154,10 @@ func (s *Server) registerProviderTools() {
 				"Only applies to official/plugin providers. When set, that exact version is loaded "+
 				"(fetching from the catalog if not already cached). Without this, the version is "+
 				"resolved automatically from the catalog."),
+		),
+		mcp.WithString("profile",
+			mcp.Description("Optional auth profile to use for this call (e.g., 'work', 'personal'). "+
+				"Overrides the session default for this single request. Use auth_set_profile to change the session default."),
 		),
 	)
 	s.addTool(runProviderTool, s.handleRunProvider)
@@ -443,6 +448,17 @@ func (s *Server) handleRunProvider(ctx context.Context, request mcp.CallToolRequ
 	capability := request.GetString("capability", "")
 	dryRun := request.GetBool("dry_run", false)
 	pluginVersion := request.GetString("plugin_version", "")
+
+	// Per-call auth profile override.
+	profile, profileErr := profileFromRequest(request.GetArguments())
+	if profileErr != nil {
+		return newStructuredError(ErrCodeInvalidInput, profileErr.Error(),
+			WithField("profile"),
+		), nil
+	}
+	if profile != "" {
+		ctx = auth.WithProfile(ctx, profile)
+	}
 
 	if s.registry == nil {
 		return newStructuredError(ErrCodeConfigError, "provider registry not available",
