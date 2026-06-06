@@ -75,4 +75,57 @@ func TestSanitizeConfig(t *testing.T) {
 		assert.Equal(t, "token", sanitized.Catalogs[0].Auth.Type)
 		assert.Equal(t, "MY_TOKEN", sanitized.Catalogs[0].Auth.TokenEnvVar)
 	})
+
+	t.Run("MCP upstream URLs redacted", func(t *testing.T) {
+		enabled := true
+		cfg := &Config{
+			MCP: MCPConfig{
+				Servers: map[string]MCPServerConfig{
+					"internal": {
+						Enabled: &enabled,
+						URL:     "http://svc.cluster.local:8080/mcp",
+						Auth: MCPServerAuthConfig{
+							Handler: "entra",
+							Scope:   "api://app-id/.default",
+						},
+						Timeout:    "60s",
+						ToolPrefix: "remote_",
+						Tools:      []string{"deploy_*"},
+					},
+				},
+			},
+		}
+
+		sanitized := SanitizeConfig(cfg)
+		require.Len(t, sanitized.MCP.Servers, 1)
+
+		srv := sanitized.MCP.Servers["internal"]
+		assert.Equal(t, RedactedValue, srv.URL, "URL should be redacted")
+		assert.Equal(t, &enabled, srv.Enabled)
+		assert.Equal(t, "entra", srv.Auth.Handler)
+		assert.Equal(t, "api://app-id/.default", srv.Auth.Scope)
+		assert.Equal(t, "60s", srv.Timeout)
+		assert.Equal(t, "remote_", srv.ToolPrefix)
+		assert.Equal(t, []string{"deploy_*"}, srv.Tools)
+	})
+
+	t.Run("MCP empty URL not redacted", func(t *testing.T) {
+		cfg := &Config{
+			MCP: MCPConfig{
+				Servers: map[string]MCPServerConfig{
+					"no-url": {URL: ""},
+				},
+			},
+		}
+
+		sanitized := SanitizeConfig(cfg)
+		assert.Equal(t, "", sanitized.MCP.Servers["no-url"].URL)
+	})
+
+	t.Run("MCP nil servers unchanged", func(t *testing.T) {
+		cfg := &Config{}
+
+		sanitized := SanitizeConfig(cfg)
+		assert.Nil(t, sanitized.MCP.Servers)
+	})
 }

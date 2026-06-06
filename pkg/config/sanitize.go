@@ -19,6 +19,7 @@ type SanitizedConfig struct {
 	Auth       SanitizedAuth      `json:"auth" yaml:"auth" doc:"Authentication configuration (redacted)"`
 	Build      BuildConfig        `json:"build" yaml:"build" doc:"Build configuration"`
 	APIServer  APIServerConfig    `json:"apiServer,omitempty" yaml:"apiServer,omitempty" doc:"REST API server configuration"`
+	MCP        SanitizedMCPConfig `json:"mcp,omitempty" yaml:"mcp,omitempty" doc:"MCP server configuration (URLs redacted)"`
 }
 
 // SanitizedCatalog redacts auth tokens from catalog config.
@@ -68,6 +69,21 @@ type SanitizedGCPAuth struct {
 	Project                   string   `json:"project,omitempty" yaml:"project,omitempty" doc:"GCP project ID" maxLength:"256" example:"my-gcp-project"`
 }
 
+// SanitizedMCPConfig mirrors MCPConfig but with URLs redacted.
+type SanitizedMCPConfig struct {
+	Servers map[string]SanitizedMCPServerConfig `json:"servers,omitempty" yaml:"servers,omitempty" doc:"Upstream MCP server configurations (URLs redacted)"`
+}
+
+// SanitizedMCPServerConfig contains only non-sensitive upstream MCP server fields.
+type SanitizedMCPServerConfig struct {
+	Enabled    *bool               `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"Whether this upstream server is active"`
+	URL        string              `json:"url,omitempty" yaml:"url,omitempty" doc:"Upstream URL (redacted)"`
+	Auth       MCPServerAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" doc:"Authentication configuration"`
+	Timeout    string              `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Request timeout"`
+	ToolPrefix string              `json:"toolPrefix,omitempty" yaml:"toolPrefix,omitempty" doc:"Prefix added to upstream tool names"`
+	Tools      []string            `json:"tools,omitempty" yaml:"tools,omitempty" doc:"Tool name allowlist patterns"`
+}
+
 // SanitizeConfig creates a sanitized copy of the config with sensitive values redacted.
 func SanitizeConfig(cfg *Config) SanitizedConfig {
 	s := SanitizedConfig{
@@ -80,6 +96,24 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 		Action:     cfg.Action,
 		Build:      cfg.Build,
 		APIServer:  cfg.APIServer,
+	}
+
+	// Sanitize MCP upstream servers — redact URLs.
+	if len(cfg.MCP.Servers) > 0 {
+		s.MCP.Servers = make(map[string]SanitizedMCPServerConfig, len(cfg.MCP.Servers))
+		for name, srv := range cfg.MCP.Servers {
+			sanitized := SanitizedMCPServerConfig{
+				Enabled:    srv.Enabled,
+				Auth:       srv.Auth,
+				Timeout:    srv.Timeout,
+				ToolPrefix: srv.ToolPrefix,
+				Tools:      srv.Tools,
+			}
+			if srv.URL != "" {
+				sanitized.URL = RedactedValue
+			}
+			s.MCP.Servers[name] = sanitized
+		}
 	}
 
 	// Sanitize catalogs

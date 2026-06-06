@@ -31,6 +31,7 @@ type Config struct {
 	APIServer  APIServerConfig  `json:"apiServer,omitempty" yaml:"apiServer,omitempty" mapstructure:"apiServer" doc:"REST API server configuration"`
 	Discovery  DiscoveryConfig  `json:"discovery,omitempty" yaml:"discovery,omitempty" mapstructure:"discovery" doc:"Auto-discovery configuration"`
 	Plugins    PluginsConfig    `json:"plugins,omitempty" yaml:"plugins,omitempty" mapstructure:"plugins" doc:"Plugin management configuration"`
+	MCP        MCPConfig        `json:"mcp,omitempty" yaml:"mcp,omitempty" mapstructure:"mcp" doc:"MCP server configuration"`
 }
 
 // DiscoveryStrategy controls how a remote catalog discovers available artifacts.
@@ -970,4 +971,53 @@ type IdentityFieldMapping struct {
 
 type TokenPassThroughConfig struct {
 	AllowedHeaders []string `json:"allowedHeaders,omitempty" yaml:"allowedHeaders,omitempty" mapstructure:"allowedHeaders" doc:"Allowed token header suffixes without the X-Authorization- prefix" maxItems:"50"`
+}
+
+// MCPConfig holds MCP server configuration.
+type MCPConfig struct {
+	// Servers maps upstream MCP server names to their configurations.
+	// Each entry defines a remote MCP server whose tools are auto-discovered
+	// and proxied through the local MCP server with auth token injection.
+	Servers map[string]MCPServerConfig `json:"servers,omitempty" yaml:"servers,omitempty" mapstructure:"servers" doc:"Upstream MCP server configurations"`
+}
+
+// MCPServerConfig configures a single upstream MCP server.
+type MCPServerConfig struct {
+	// Enabled controls whether this upstream server is active. Defaults to true
+	// when the entry is present.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Whether this upstream server is active (default: true)"`
+
+	// URL is the Streamable HTTP endpoint of the remote MCP server.
+	URL string `json:"url" yaml:"url" mapstructure:"url" doc:"Streamable HTTP URL of the remote MCP server" maxLength:"2048" example:"https://my-mcp-server.example.com/mcp"`
+
+	// Auth configures token injection for requests to this upstream server.
+	Auth MCPServerAuthConfig `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration for the upstream server"`
+
+	// Timeout is the request timeout for upstream calls. Use Go duration syntax.
+	Timeout string `json:"timeout,omitempty" yaml:"timeout,omitempty" mapstructure:"timeout" doc:"Request timeout for upstream calls" maxLength:"20" example:"30s"`
+
+	// ToolPrefix is an optional prefix added to all tools from this upstream
+	// server to avoid name collisions with local tools.
+	ToolPrefix string `json:"toolPrefix,omitempty" yaml:"toolPrefix,omitempty" mapstructure:"toolPrefix" doc:"Prefix added to upstream tool names" maxLength:"64" example:"upstream_"`
+
+	// Tools is an optional allowlist of glob patterns for tool names.
+	// An empty list means all tools are proxied.
+	Tools []string `json:"tools,omitempty" yaml:"tools,omitempty" mapstructure:"tools" doc:"Tool name allowlist patterns (glob, empty = all)" maxItems:"100"`
+}
+
+// IsEnabled returns whether the upstream server is enabled. Defaults to true.
+func (c MCPServerConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// MCPServerAuthConfig configures auth token injection for an upstream MCP server.
+type MCPServerAuthConfig struct {
+	// Handler is the name of the auth handler to use (e.g. "entra", "gcp", "github").
+	Handler string `json:"handler,omitempty" yaml:"handler,omitempty" mapstructure:"handler" doc:"Auth handler name for token injection" maxLength:"64" example:"entra"`
+
+	// Scope is the OAuth scope to request when acquiring tokens.
+	Scope string `json:"scope,omitempty" yaml:"scope,omitempty" mapstructure:"scope" doc:"OAuth scope for token requests" maxLength:"1024" example:"api://app-id/.default"`
 }
