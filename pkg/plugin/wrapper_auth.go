@@ -178,6 +178,15 @@ func (w *AuthHandlerWrapper) Status(ctx context.Context) (*auth.Status, error) {
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
 	defer span.End()
 
+	// Resolve the active profile on the host side before the gRPC boundary.
+	// Context values don't cross process boundaries, so the profile must be
+	// set here for AuthHandlerGRPCClient to include it in the request.
+	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
+		if profile := auth.ResolveActiveProfile(ctx, w.handlerName); profile != "" {
+			ctx = auth.WithProfile(ctx, profile)
+		}
+	}
+
 	return w.client.plugin.GetStatus(ctx, w.handlerName)
 }
 
@@ -186,6 +195,15 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 	ctx, span := authTracer.Start(ctx, "auth.plugin.get_token",
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
 	defer span.End()
+
+	// Resolve the active profile on the host side before the gRPC boundary.
+	// Context values don't cross process boundaries, so the profile must be
+	// set here for AuthHandlerGRPCClient to include it in the request.
+	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
+		if profile := auth.ResolveActiveProfile(ctx, w.handlerName); profile != "" {
+			ctx = auth.WithProfile(ctx, profile)
+		}
+	}
 
 	req := TokenRequest{
 		Scope:        opts.Scope,

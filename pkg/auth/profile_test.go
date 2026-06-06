@@ -182,3 +182,13 @@ func TestDisplayProfileName(t *testing.T) {
 		})
 	}
 }
+
+func TestWithProfileResolved_IsProfileResolved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	assert.False(t, IsProfileResolved(ctx))
+
+	ctx = WithProfileResolved(ctx)
+	assert.True(t, IsProfileResolved(ctx))
+}

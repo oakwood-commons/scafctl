@@ -415,3 +415,93 @@ func TestAuthHandlerWrapper_ApplyOverrides_PreservesHostConfig(t *testing.T) {
 	assert.Equal(t, "mycli", mock.lastConfig.BinaryName, "BinaryName should be preserved")
 	assert.Equal(t, "work", mock.lastConfig.Profile, "Profile should be preserved")
 }
+
+func TestAuthHandlerWrapper_Status_ResolvesActiveProfile(t *testing.T) {
+	t.Parallel()
+	var capturedProfile string
+	mock := &MockAuthHandlerPlugin{
+		statusFunc: func(ctx context.Context, _ string) (*auth.Status, error) {
+			capturedProfile = auth.ProfileFromContext(ctx)
+			return &auth.Status{Authenticated: true}, nil
+		},
+	}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "github"})
+
+	// Set up config with activeProfile = "work".
+	cfg := &config.Config{}
+	cfg.Auth.GitHub = &config.GitHubAuthConfig{ActiveProfile: "work"}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	status, err := wrapper.Status(ctx)
+	require.NoError(t, err)
+	assert.True(t, status.Authenticated)
+	assert.Equal(t, "work", capturedProfile, "should resolve active profile from config")
+}
+
+func TestAuthHandlerWrapper_Status_ExplicitProfileTakesPrecedence(t *testing.T) {
+	t.Parallel()
+	var capturedProfile string
+	mock := &MockAuthHandlerPlugin{
+		statusFunc: func(ctx context.Context, _ string) (*auth.Status, error) {
+			capturedProfile = auth.ProfileFromContext(ctx)
+			return &auth.Status{Authenticated: true}, nil
+		},
+	}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "github"})
+
+	cfg := &config.Config{}
+	cfg.Auth.GitHub = &config.GitHubAuthConfig{ActiveProfile: "work"}
+	ctx := config.WithConfig(context.Background(), cfg)
+	ctx = auth.WithProfile(ctx, "staging")
+
+	_, err := wrapper.Status(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "staging", capturedProfile, "explicit profile should take precedence")
+}
+
+func TestAuthHandlerWrapper_GetToken_ResolvesActiveProfile(t *testing.T) {
+	t.Parallel()
+	var capturedProfile string
+	mock := &MockAuthHandlerPlugin{
+		tokenFunc: func(ctx context.Context, _ string, _ TokenRequest) (*TokenResponse, error) {
+			capturedProfile = auth.ProfileFromContext(ctx)
+			return &TokenResponse{AccessToken: "tok"}, nil
+		},
+	}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "github"})
+
+	cfg := &config.Config{}
+	cfg.Auth.GitHub = &config.GitHubAuthConfig{ActiveProfile: "work"}
+	ctx := config.WithConfig(context.Background(), cfg)
+
+	token, err := wrapper.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "tok", token.AccessToken)
+	assert.Equal(t, "work", capturedProfile, "should resolve active profile from config")
+}
+
+func TestAuthHandlerWrapper_GetToken_ProfileResolvedSkipsReResolution(t *testing.T) {
+	t.Parallel()
+	var capturedProfile string
+	mock := &MockAuthHandlerPlugin{
+		tokenFunc: func(ctx context.Context, _ string, _ TokenRequest) (*TokenResponse, error) {
+			capturedProfile = auth.ProfileFromContext(ctx)
+			return &TokenResponse{AccessToken: "tok"}, nil
+		},
+	}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "github"})
+
+	// Config has activeProfile "work", but context is marked as resolved (built-in).
+	cfg := &config.Config{}
+	cfg.Auth.GitHub = &config.GitHubAuthConfig{ActiveProfile: "work"}
+	ctx := config.WithConfig(context.Background(), cfg)
+	ctx = auth.WithProfileResolved(ctx)
+
+	_, err := wrapper.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, capturedProfile, "should not re-resolve when already resolved")
+}

@@ -350,8 +350,12 @@ func (h *HostServiceServer) GetAuthToken(ctx context.Context, req *proto.GetAuth
 					Error: fmt.Sprintf("invalid profile from plugin: %v", err),
 				}, nil
 			}
+			ctx = auth.WithProfile(ctx, profile)
 		}
-		ctx = auth.WithProfile(ctx, profile)
+		// Mark profile as resolved even when normalized to "" (built-in/default).
+		// This prevents downstream GetToken from re-resolving the active profile
+		// from config, which would override an explicit built-in selection.
+		ctx = auth.WithProfileResolved(ctx)
 	}
 
 	resp, err := h.Deps.AuthTokenFunc(ctx, req.HandlerName, req.Scope, req.MinValidForSeconds, req.ForceRefresh)

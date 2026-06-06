@@ -319,6 +319,14 @@ func (h *Handler) PurgeExpiredTokens(ctx context.Context) (int, error) {
 
 // Status returns the current authentication state.
 func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
+	// Resolve the active profile when none is explicitly set in context.
+	// Same as GetToken: ensures callers like MCP auth_status see the active profile.
+	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
+		if profile := auth.ResolveActiveProfile(ctx, h.cfg.Name); profile != "" {
+			ctx = auth.WithProfile(ctx, profile)
+		}
+	}
+
 	if err := h.ensureSecrets(); err != nil {
 		return &auth.Status{Authenticated: false, Reason: "secrets store unavailable"}, nil //nolint:nilerr // graceful degradation
 	}
@@ -344,6 +352,17 @@ func (h *Handler) Status(ctx context.Context) (*auth.Status, error) {
 // GetToken returns a valid access token, refreshing if necessary.
 // If tokenExchange is configured, returns the derived token.
 func (h *Handler) GetToken(ctx context.Context, opts auth.TokenOptions) (*auth.Token, error) {
+	// Resolve the active profile when none is explicitly set in context.
+	// This ensures provider-level auth (e.g. HTTP provider's authProvider input)
+	// respects --auth-profile, SCAFCTL_AUTH_PROFILE, and config-level activeProfile.
+	// Skip when IsProfileResolved is true -- this means the caller already resolved
+	// the profile (e.g. "auth token --profile built-in" normalizing to default).
+	if auth.ProfileFromContext(ctx) == "" && !auth.IsProfileResolved(ctx) {
+		if profile := auth.ResolveActiveProfile(ctx, h.cfg.Name); profile != "" {
+			ctx = auth.WithProfile(ctx, profile)
+		}
+	}
+
 	if err := h.ensureSecrets(); err != nil {
 		return nil, err
 	}
