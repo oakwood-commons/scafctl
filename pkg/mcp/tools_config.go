@@ -71,6 +71,7 @@ func (s *Server) handleGetConfig(_ context.Context, request mcp.CallToolRequest)
 		"auth":       sanitized.Auth,
 		"build":      sanitized.Build,
 		"apiServer":  sanitized.APIServer,
+		"mcp":        sanitized.MCP,
 	}
 
 	sectionData, ok := validSections[section]
