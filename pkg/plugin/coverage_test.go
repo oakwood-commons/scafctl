@@ -1977,6 +1977,34 @@ func TestHostServiceServer_GetAuthToken_ExplicitProfileOverridesResolver(t *test
 	assert.Equal(t, "personal", auth.ProfileFromContext(capturedCtx))
 }
 
+func TestHostServiceServer_GetAuthToken_BuiltInProfileMarksResolved(t *testing.T) {
+	var capturedCtx context.Context
+	deps := HostServiceDeps{
+		AuthTokenFunc: func(ctx context.Context, handler, scope string, _ int64, _ bool) (*proto.GetAuthTokenResponse, error) {
+			capturedCtx = ctx
+			return &proto.GetAuthTokenResponse{
+				AccessToken: "default-tok",
+				TokenType:   "Bearer",
+			}, nil
+		},
+	}
+	server := &HostServiceServer{Deps: deps}
+
+	// "built-in" normalizes to "" via NormalizeProfileName, but the context
+	// should be marked as resolved to prevent downstream re-resolution.
+	resp, err := server.GetAuthToken(context.Background(), &proto.GetAuthTokenRequest{
+		HandlerName: "github",
+		Scope:       "repo",
+		Profile:     "built-in",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "default-tok", resp.AccessToken)
+	// Profile should be empty (built-in normalizes to "").
+	assert.Empty(t, auth.ProfileFromContext(capturedCtx))
+	// But it should be marked as resolved so GetToken doesn't re-resolve.
+	assert.True(t, auth.IsProfileResolved(capturedCtx), "context should be marked as profile-resolved")
+}
+
 func TestHostServiceClient_GetAuthToken_Success(t *testing.T) {
 	mock := &mockHostServiceClient{
 		getAuthTokenResp: &proto.GetAuthTokenResponse{

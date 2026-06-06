@@ -1072,3 +1072,119 @@ func TestHandler_PurgeExpiredTokens_NilCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }
+
+func TestHandler_GetToken_ResolvesActiveProfile(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.Name = "github"
+		cfg.ClientSecret = "test-secret"
+	})
+
+	// Store a refresh token under the "work" profile key.
+	_ = store.Set(context.Background(), secretKeyPrefix+"github.work."+secretKeyRefreshSuffix, []byte("good-refresh"))
+
+	// Build a context with config-level activeProfile but NO explicit WithProfile.
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		Auth: config.GlobalAuthConfig{
+			GitHub: &config.GitHubAuthConfig{ActiveProfile: "work"},
+		},
+	})
+
+	// GetToken should resolve the active profile from config and find the token.
+	token, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-access-token", token.AccessToken)
+}
+
+func TestHandler_GetToken_ExplicitProfileTakesPrecedence(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.Name = "github"
+		cfg.ClientSecret = "test-secret"
+	})
+
+	// Store refresh token ONLY under the "explicit" profile.
+	// The "config" profile has no token — if GetToken mistakenly uses it, the test fails.
+	_ = store.Set(context.Background(), secretKeyPrefix+"github.explicit."+secretKeyRefreshSuffix, []byte("good-refresh"))
+
+	// Context has config-level activeProfile="config" but explicit WithProfile="explicit".
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		Auth: config.GlobalAuthConfig{
+			GitHub: &config.GitHubAuthConfig{ActiveProfile: "config"},
+		},
+	})
+	ctx = auth.WithProfile(ctx, "explicit")
+
+	// Explicit profile should win — only the "explicit" profile has a valid token.
+	token, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-access-token", token.AccessToken)
+}
+
+func TestHandler_GetToken_GlobalFlagProfileResolved(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.Name = "github"
+		cfg.ClientSecret = "test-secret"
+	})
+
+	// Store refresh token under the "flag" profile.
+	_ = store.Set(context.Background(), secretKeyPrefix+"github.flag."+secretKeyRefreshSuffix, []byte("good-refresh"))
+
+	// Context has global --auth-profile flag set but no explicit WithProfile.
+	ctx := auth.WithGlobalProfile(context.Background(), "flag")
+
+	token, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-access-token", token.AccessToken)
+}
+
+func TestHandler_GetToken_NoProfileFallsBackToDefault(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "test-secret"
+	})
+
+	// Store refresh token under default (no profile) key.
+	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider."+secretKeyRefreshSuffix, []byte("good-refresh"))
+
+	// No profile anywhere — should use default key as before.
+	token, err := h.GetToken(context.Background(), auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-access-token", token.AccessToken)
+}
+
+func TestHandler_GetToken_ProfileResolvedSkipsReResolution(t *testing.T) {
+	srv := newTestOAuthServer(t)
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.Name = "github"
+		cfg.ClientSecret = "test-secret"
+	})
+
+	// Store refresh token ONLY under the default (built-in) profile key.
+	_ = store.Set(context.Background(), secretKeyPrefix+"github."+secretKeyRefreshSuffix, []byte("good-refresh"))
+
+	// Config has activeProfile="work", but the caller marked profile as resolved
+	// (simulating "auth token --profile built-in" which normalizes to default).
+	ctx := config.WithConfig(context.Background(), &config.Config{
+		Auth: config.GlobalAuthConfig{
+			GitHub: &config.GitHubAuthConfig{ActiveProfile: "work"},
+		},
+	})
+	ctx = auth.WithProfileResolved(ctx)
+
+	// GetToken should use the built-in (default) profile, NOT re-resolve to "work".
+	token, err := h.GetToken(ctx, auth.TokenOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-access-token", token.AccessToken)
+}

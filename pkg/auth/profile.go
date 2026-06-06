@@ -33,6 +33,9 @@ const profileContextKey contextKey = "auth.profile"
 // globalProfileContextKey stores the global --auth-profile flag value.
 const globalProfileContextKey contextKey = "auth.globalProfile"
 
+// profileResolvedContextKey marks that profile resolution has been performed.
+const profileResolvedContextKey contextKey = "auth.profileResolved"
+
 // validProfileName matches ASCII alphanumeric plus - and _.
 var validProfileName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
 
@@ -101,6 +104,20 @@ func WithGlobalProfile(ctx context.Context, profile string) context.Context {
 func GlobalProfileFromContext(ctx context.Context) string {
 	profile, _ := ctx.Value(globalProfileContextKey).(string)
 	return profile
+}
+
+// WithProfileResolved marks the context as having completed profile resolution.
+// This prevents GetToken from re-resolving the profile when a caller has already
+// determined the correct profile (including explicitly choosing the built-in profile).
+func WithProfileResolved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, profileResolvedContextKey, true)
+}
+
+// IsProfileResolved returns true if profile resolution has already been performed
+// for this context. When true, GetToken skips its automatic profile fallback.
+func IsProfileResolved(ctx context.Context) bool {
+	v, _ := ctx.Value(profileResolvedContextKey).(bool)
+	return v
 }
 
 // NormalizeProfileName maps the reserved names "built-in" and "default" to the
