@@ -91,7 +91,7 @@ type authHandlerStatus struct {
 }
 
 // handleAuthStatus reports auth provider status.
-func (s *Server) handleAuthStatus(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAuthStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if s.authReg == nil {
 		return mcp.NewToolResultJSON(map[string]any{
 			"handlers": []any{},
@@ -100,7 +100,6 @@ func (s *Server) handleAuthStatus(_ context.Context, req mcp.CallToolRequest) (*
 	}
 
 	// Extract optional profile parameter
-	ctx := s.ctx
 	if profileVal, ok := req.GetArguments()["profile"].(string); ok && profileVal != "" {
 		if normalized := auth.NormalizeProfileName(profileVal); normalized != "" {
 			if err := auth.ValidateProfileName(normalized); err != nil {

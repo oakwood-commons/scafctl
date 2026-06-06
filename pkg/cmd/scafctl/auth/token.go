@@ -127,6 +127,11 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				}
 				ctx = auth.WithProfile(ctx, effectiveProfile)
 			}
+			// Mark profile as resolved so GetToken doesn't re-resolve.
+			// This is needed when --profile built-in normalizes to "" (default).
+			if profileExplicit {
+				ctx = auth.WithProfileResolved(ctx)
+			}
 
 			// --force is an alias for --force-refresh
 			if force {
