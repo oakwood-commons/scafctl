@@ -882,7 +882,7 @@ func validateSources(action *Action, section string, errs *AggregatedValidationE
 // validateGlobSafety rejects absolute patterns and path traversal segments
 // to prevent fingerprinting files outside the solution tree.
 func validateGlobSafety(pattern string) error {
-	if filepath.IsAbs(pattern) {
+	if filepath.IsAbs(pattern) || strings.HasPrefix(pattern, "/") {
 		return fmt.Errorf("absolute patterns not allowed: %q", pattern)
 	}
 	for _, seg := range strings.Split(filepath.Clean(pattern), string(filepath.Separator)) {
