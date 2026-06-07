@@ -6693,6 +6693,8 @@ func TestIntegration_Plugins_Help(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "install")
 	assert.Contains(t, stdout, "list")
+	assert.Contains(t, stdout, "update")
+	assert.Contains(t, stdout, "prune")
 }
 
 // TestIntegration_Plugins_Install_Help verifies the plugins install command shows help.

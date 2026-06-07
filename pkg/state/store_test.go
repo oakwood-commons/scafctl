@@ -95,7 +95,7 @@ func TestResolveStatePath_Traversal(t *testing.T) {
 
 func TestResolveStatePath_Absolute(t *testing.T) {
 	t.Parallel()
-	abs := "/tmp/test-state.json"
+	abs := filepath.Join(t.TempDir(), "test-state.json")
 	result, err := ResolveStatePath(abs)
 	require.NoError(t, err)
 	assert.Equal(t, abs, result)

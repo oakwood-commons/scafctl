@@ -32,7 +32,7 @@ func ExpandGlobs(baseDir string, patterns []string) ([]string, error) {
 
 		// Reject absolute patterns and path traversal to prevent
 		// fingerprinting files outside the solution tree.
-		if filepath.IsAbs(pattern) {
+		if filepath.IsAbs(pattern) || strings.HasPrefix(pattern, "/") {
 			return nil, fmt.Errorf("%w: absolute patterns not allowed: %q", ErrPatternInvalid, pattern)
 		}
 		for _, seg := range strings.Split(filepath.Clean(pattern), string(filepath.Separator)) {
@@ -60,9 +60,10 @@ func ExpandGlobs(baseDir string, patterns []string) ([]string, error) {
 			if rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 				return nil, fmt.Errorf("%w: match %q escapes base directory", ErrPatternInvalid, m)
 			}
-			if _, exists := seen[rel]; !exists {
-				seen[rel] = struct{}{}
-				result = append(result, rel)
+			normalized := filepath.ToSlash(rel)
+			if _, exists := seen[normalized]; !exists {
+				seen[normalized] = struct{}{}
+				result = append(result, normalized)
 			}
 		}
 	}

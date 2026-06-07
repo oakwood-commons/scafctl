@@ -29,11 +29,15 @@ func CommandPlugins(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			Commands:
 			  install  - Pre-fetch plugin binaries declared in a solution
 			  list     - List cached plugin binaries
+			  update   - Update cached plugins to newer versions
+			  prune    - Remove old cached plugin versions
 		`), settings.CliBinaryName, cliParams.BinaryName),
 	}
 
 	cmd.AddCommand(CommandInstall(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandList(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandUpdate(cliParams, ioStreams, path))
+	cmd.AddCommand(CommandPrune(cliParams, ioStreams, path))
 
 	return cmd
 }
