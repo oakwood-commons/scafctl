@@ -20,13 +20,13 @@ spec:
 
     finally:
       report-failure:
-        description: Finally action that reads main action exit code via __actions
+        description: Finally action that detects main action failure via __actions
         provider: exec
         when:
-          expr: "__actions['failing-action'].results.success == false"
+          expr: "__actions['failing-action'].status == 'failed'"
         inputs:
           command:
-            expr: "'echo failure-detected: exitCode=' + string(__actions['failing-action'].results.exitCode)"
+            expr: "'echo failure-detected: status=' + __actions['failing-action'].status"
 
   testing:
     cases:
@@ -51,8 +51,8 @@ spec:
         extends: [_run-base]
         tags: [smoke]
         assertions:
-          - expression: __output.actions["failing-action"].results.success == false
-            message: "Main action should have non-zero exit code"
+          - expression: __output.actions["failing-action"].status == "failed"
+            message: "Main action should have failed status"
           - expression: __output.actions["report-failure"].status == "succeeded"
             message: "Finally action must still run when main action fails"
           - expression: __output.actions["report-failure"].results.stdout.contains("failure-detected")

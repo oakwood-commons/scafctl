@@ -1645,10 +1645,11 @@ spec:
 		"-f", solutionPath,
 	)
 
-	// With the embedded shell, command-not-found returns exit code 127
-	// (not a Go error), so the action "succeeds" with exitCode 127 in data.
-	// The CLI exits 0 because the provider did not return a Go error.
-	assert.Equal(t, 0, exitCode)
+	// The exec provider's embedded shell stat-checks the command before
+	// execution. A non-existent command returns a Go error (not exit code
+	// 127), which fails the action. The CLI exits with ActionFailed (6).
+	assert.Equal(t, 6, exitCode)
+	assert.Contains(t, stderr, "fail-no-retry")
 	t.Logf("stderr: %s", stderr)
 }
 
