@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "scafctl-dev": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/dist/scafctl",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
