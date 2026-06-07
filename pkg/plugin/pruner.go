@@ -42,26 +42,38 @@ type PruneResult struct {
 	Size     int64  `json:"size" yaml:"size" doc:"Freed bytes"`
 }
 
+// PruneSkipped describes an entry that could not be removed.
+type PruneSkipped struct {
+	Name     string `json:"name" yaml:"name" doc:"Plugin name"`
+	Version  string `json:"version,omitempty" yaml:"version,omitempty" doc:"Skipped version"`
+	Platform string `json:"platform,omitempty" yaml:"platform,omitempty" doc:"Platform"`
+	Reason   string `json:"reason" yaml:"reason" doc:"Why removal failed"`
+}
+
 // PruneSummary holds the full result of a prune operation.
 type PruneSummary struct {
-	Removed    []PruneResult `json:"removed" yaml:"removed" doc:"Removed entries"`
-	TotalFreed int64         `json:"totalFreed" yaml:"totalFreed" doc:"Total bytes freed"`
+	Removed    []PruneResult  `json:"removed" yaml:"removed" doc:"Removed entries"`
+	Skipped    []PruneSkipped `json:"skipped,omitempty" yaml:"skipped,omitempty" doc:"Entries that could not be removed"`
+	TotalFreed int64          `json:"totalFreed" yaml:"totalFreed" doc:"Total bytes freed"`
 }
 
 // Prune removes old cached plugin versions according to the given options.
 // It returns the list of removed entries. If dryRun is true, nothing is
 // deleted but the results reflect what would be removed.
 func (c *Cache) Prune(opts PruneOptions, dryRun bool) (*PruneSummary, error) {
-	if opts.Keep <= 0 {
-		opts.Keep = 1
-	}
-
 	if opts.All && !opts.Force {
 		return nil, fmt.Errorf("--all requires --force to confirm removal of all cached plugins")
 	}
 
 	if opts.All {
 		return c.pruneAll(dryRun)
+	}
+
+	// For targeted prune: keep=0 removes everything for the named plugins.
+	if opts.Keep == 0 && opts.Force && len(opts.Names) > 0 {
+		// Intentional full removal of specific plugins -- allow it.
+	} else if opts.Keep <= 0 {
+		opts.Keep = 1
 	}
 
 	all, err := c.List()
@@ -114,13 +126,24 @@ func (c *Cache) Prune(opts PruneOptions, dryRun bool) (*PruneSummary, error) {
 				versionDir := filepath.Dir(filepath.Dir(c.binaryPath(r.Name, r.Version, r.Platform)))
 				platformDir := filepath.Dir(c.binaryPath(r.Name, r.Version, r.Platform))
 				if err := os.RemoveAll(platformDir); err != nil {
-					return nil, fmt.Errorf("removing %s@%s (%s): %w", r.Name, r.Version, r.Platform, err)
+					summary.Skipped = append(summary.Skipped, PruneSkipped{
+						Name:     r.Name,
+						Version:  r.Version,
+						Platform: r.Platform,
+						Reason:   err.Error(),
+					})
+					continue
 				}
 				// Clean up empty version directory.
 				cleanEmptyDir(versionDir)
 			}
 			summary.Removed = append(summary.Removed, PruneResult(r))
 			summary.TotalFreed += r.Size
+		}
+		// If all versions were removed, clean up the name directory.
+		if !dryRun && opts.Keep == 0 && len(removals) > 0 {
+			nameDir := filepath.Join(c.dir, key.name)
+			cleanEmptyDir(nameDir)
 		}
 	}
 
@@ -147,7 +170,20 @@ func (c *Cache) pruneAll(dryRun bool) (*PruneSummary, error) {
 		}
 		for _, entry := range entries {
 			if err := os.RemoveAll(filepath.Join(c.dir, entry.Name())); err != nil {
-				return nil, fmt.Errorf("removing %s: %w", entry.Name(), err)
+				summary.Skipped = append(summary.Skipped, PruneSkipped{
+					Name:   entry.Name(),
+					Reason: err.Error(),
+				})
+				// Recalculate removed: exclude entries under this name.
+				filtered := summary.Removed[:0]
+				for _, r := range summary.Removed {
+					if r.Name != entry.Name() {
+						filtered = append(filtered, r)
+					} else {
+						summary.TotalFreed -= r.Size
+					}
+				}
+				summary.Removed = filtered
 			}
 		}
 	}
