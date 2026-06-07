@@ -22,13 +22,15 @@ func TestCommandPlugins(t *testing.T) {
 	assert.True(t, cmd.SilenceUsage)
 	assert.Nil(t, cmd.RunE, "parent plugins command should not have RunE")
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 2, "should have 2 subcommands: install, list")
+	require.Len(t, subCmds, 4, "should have 4 subcommands: install, list, update, prune")
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
 		cmdNames[i] = c.Name()
 	}
 	assert.Contains(t, cmdNames, "install")
 	assert.Contains(t, cmdNames, "list")
+	assert.Contains(t, cmdNames, "update")
+	assert.Contains(t, cmdNames, "prune")
 }
 
 func TestCommandInstall(t *testing.T) {
