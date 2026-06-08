@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -286,4 +287,176 @@ func TestSelectPruneTargets_NonSemverFallback(t *testing.T) {
 	for _, r := range targets {
 		assert.NotEqual(t, "xyz", r.Version)
 	}
+}
+
+func TestPrune_KeepZero_WithForceAndName(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+	seedCache(t, cacheDir, "github", "2.0.0")
+	seedCache(t, cacheDir, "exec", "0.5.0")
+
+	cache := NewCache(cacheDir)
+	summary, err := cache.Prune(PruneOptions{Keep: 0, Force: true, Names: []string{"github"}}, false)
+	require.NoError(t, err)
+
+	// All github versions removed, exec untouched.
+	assert.Len(t, summary.Removed, 2)
+	for _, r := range summary.Removed {
+		assert.Equal(t, "github", r.Name)
+	}
+
+	remaining, err := cache.List()
+	require.NoError(t, err)
+	assert.Len(t, remaining, 1)
+	assert.Equal(t, "exec", remaining[0].Name)
+}
+
+func TestPrune_KeepZero_WithoutForce_DefaultsToOne(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+	seedCache(t, cacheDir, "github", "2.0.0")
+
+	cache := NewCache(cacheDir)
+	// Keep=0 without force should default to 1.
+	summary, err := cache.Prune(PruneOptions{Keep: 0, Names: []string{"github"}}, false)
+	require.NoError(t, err)
+	assert.Len(t, summary.Removed, 1)
+	assert.Equal(t, "1.0.0", summary.Removed[0].Version)
+}
+
+func TestPrune_KeepZero_WithoutNames_DefaultsToOne(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+	seedCache(t, cacheDir, "github", "2.0.0")
+
+	cache := NewCache(cacheDir)
+	// Keep=0 with force but no names should default to 1.
+	summary, err := cache.Prune(PruneOptions{Keep: 0, Force: true}, false)
+	require.NoError(t, err)
+	assert.Len(t, summary.Removed, 1)
+	assert.Equal(t, "1.0.0", summary.Removed[0].Version)
+}
+
+func TestPrune_SkipsLockedFiles(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+	seedCache(t, cacheDir, "github", "2.0.0")
+
+	// Make the v1.0.0 platform directory non-removable via chmod.
+	cache := NewCache(cacheDir)
+	binPath := cache.binaryPath("github", "1.0.0", CurrentPlatform())
+	platformDir := filepath.Dir(binPath)
+	if err := os.Chmod(platformDir, 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
+	t.Cleanup(func() { os.Chmod(platformDir, 0o755) })
+
+	summary, err := cache.Prune(PruneOptions{Keep: 0, Force: true, Names: []string{"github"}}, false)
+	require.NoError(t, err)
+
+	// At least one entry should be skipped due to permission error.
+	if len(summary.Skipped) == 0 {
+		t.Skip("OS allowed removal despite chmod -- platform does not enforce")
+	}
+	assert.NotEmpty(t, summary.Skipped)
+	assert.NotEmpty(t, summary.Skipped[0].Reason)
+}
+
+func TestPruneAll_SkipsLockedEntry_RecalculatesRemoved(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+	seedCache(t, cacheDir, "exec", "0.5.0")
+
+	// Lock the github directory so pruneAll can't remove it.
+	githubDir := filepath.Join(cacheDir, "github")
+	if err := os.Chmod(githubDir, 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
+	t.Cleanup(func() { os.Chmod(githubDir, 0o755) })
+
+	cache := NewCache(cacheDir)
+	summary, err := cache.Prune(PruneOptions{All: true, Force: true}, false)
+	require.NoError(t, err)
+
+	if len(summary.Skipped) == 0 {
+		t.Skip("OS allowed removal despite chmod -- platform does not enforce")
+	}
+
+	// github should be skipped, exec should be removed.
+	assert.Len(t, summary.Skipped, 1)
+	assert.Equal(t, "github", summary.Skipped[0].Name)
+	assert.Empty(t, summary.Skipped[0].Version, "pruneAll skips use name only, no version")
+
+	// Only exec should be in Removed (github was recalculated out).
+	for _, r := range summary.Removed {
+		assert.Equal(t, "exec", r.Name, "github entries should have been recalculated out of Removed")
+	}
+}
+
+func TestPruneAll_SkipsLockedEntry_DryRunUnaffected(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+	seedCache(t, cacheDir, "exec", "0.5.0")
+
+	// Lock github -- but dry run should not attempt removal.
+	githubDir := filepath.Join(cacheDir, "github")
+	if err := os.Chmod(githubDir, 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
+	t.Cleanup(func() { os.Chmod(githubDir, 0o755) })
+
+	cache := NewCache(cacheDir)
+	summary, err := cache.Prune(PruneOptions{All: true, Force: true}, true)
+	require.NoError(t, err)
+
+	// Dry run lists everything as removed; skipped is empty.
+	assert.Len(t, summary.Removed, 2)
+	assert.Empty(t, summary.Skipped)
+}
+
+func TestPrune_KeepZero_CleansNameDirectory(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	seedCache(t, cacheDir, "github", "1.0.0")
+
+	cache := NewCache(cacheDir)
+	_, err := cache.Prune(PruneOptions{Keep: 0, Force: true, Names: []string{"github"}}, false)
+	require.NoError(t, err)
+
+	// The name directory should be cleaned up when all versions are removed.
+	_, statErr := os.Stat(filepath.Join(cacheDir, "github"))
+	assert.True(t, os.IsNotExist(statErr), "name directory should be removed when empty")
+}
+
+func TestPruneSkipped_OmitsEmptyFields_JSON(t *testing.T) {
+	t.Parallel()
+
+	// Verify omitempty works: Version/Platform should not appear when empty.
+	s := PruneSkipped{Name: "test", Reason: "locked"}
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(data), `"version"`)
+	assert.NotContains(t, string(data), `"platform"`)
+
+	// With values set, they should appear.
+	s2 := PruneSkipped{Name: "test", Version: "1.0.0", Platform: "linux/amd64", Reason: "locked"}
+	data2, err := json.Marshal(s2)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(data2), `"version"`)
+	assert.Contains(t, string(data2), `"platform"`)
 }
