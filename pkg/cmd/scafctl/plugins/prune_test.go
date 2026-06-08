@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -313,4 +314,134 @@ func TestRunPrune_DefaultCacheDir(t *testing.T) {
 
 	err := runPrune(ctx, opts, nil, kvxOpts)
 	require.NoError(t, err)
+}
+
+func TestRunPrune_AllSkipped_ShowsWarnings(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	kvxOpts := kvx.NewOutputOptions(ioStreams)
+	kvxOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	seedTestCache(t, cacheDir, "github", "1.0.0")
+	seedTestCache(t, cacheDir, "github", "2.0.0")
+
+	// Make both platform directories non-removable.
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	for _, ver := range []string{"1.0.0", "2.0.0"} {
+		dir := filepath.Join(cacheDir, "github", ver, platform)
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Skip("cannot restrict permissions on this platform")
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	}
+
+	opts := &PruneOptions{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+		CacheDir:  cacheDir,
+		Keep:      0,
+		Force:     true,
+	}
+
+	err := runPrune(ctx, opts, []string{"github"}, kvxOpts)
+	require.NoError(t, err)
+
+	stderrOut := errBuf.String()
+	if !strings.Contains(stderrOut, "Skipped") {
+		// On platforms where chmod doesn't block removal (Windows),
+		// the entries get removed instead of skipped.
+		t.Skip("platform allowed removal despite chmod")
+	}
+	assert.Contains(t, stderrOut, "Nothing pruned")
+}
+
+func TestRunPrune_PartialSkip_ShowsRemovedAndWarnings(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	kvxOpts := kvx.NewOutputOptions(ioStreams)
+	kvxOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	seedTestCache(t, cacheDir, "github", "1.0.0")
+	seedTestCache(t, cacheDir, "github", "2.0.0")
+
+	// Lock only v1.0.0.
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	lockedDir := filepath.Join(cacheDir, "github", "1.0.0", platform)
+	if err := os.Chmod(lockedDir, 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
+	t.Cleanup(func() { os.Chmod(lockedDir, 0o755) })
+
+	opts := &PruneOptions{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+		CacheDir:  cacheDir,
+		Keep:      0,
+		Force:     true,
+	}
+
+	err := runPrune(ctx, opts, []string{"github"}, kvxOpts)
+	require.NoError(t, err)
+
+	stderrOut := errBuf.String()
+	if !strings.Contains(stderrOut, "Skipped") {
+		t.Skip("platform allowed removal despite chmod")
+	}
+	// Should still report the successfully removed version.
+	assert.Contains(t, outBuf.String(), "2.0.0")
+	assert.Contains(t, stderrOut, "Pruned")
+	assert.Contains(t, stderrOut, "Skipped")
+}
+
+func TestRunPrune_SkippedWithoutVersion_ShowsNameOnly(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	kvxOpts := kvx.NewOutputOptions(ioStreams)
+	kvxOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	seedTestCache(t, cacheDir, "github", "1.0.0")
+	seedTestCache(t, cacheDir, "exec", "0.5.0")
+
+	// Lock the entire github directory for pruneAll.
+	if err := os.Chmod(filepath.Join(cacheDir, "github"), 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(cacheDir, "github"), 0o755) })
+
+	opts := &PruneOptions{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+		CacheDir:  cacheDir,
+		All:       true,
+		Force:     true,
+	}
+
+	err := runPrune(ctx, opts, nil, kvxOpts)
+	require.NoError(t, err)
+
+	stderrOut := errBuf.String()
+	if !strings.Contains(stderrOut, "Skipped") {
+		t.Skip("platform allowed removal despite chmod")
+	}
+	// pruneAll skips with Name only (no version), so the warning should
+	// use the name-only format.
+	assert.Contains(t, stderrOut, "Skipped github:")
 }

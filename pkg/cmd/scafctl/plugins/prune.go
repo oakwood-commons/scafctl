@@ -142,8 +142,20 @@ func runPrune(ctx context.Context, opts *PruneOptions, args []string, kvxOpts *k
 		return err
 	}
 
-	if len(summary.Removed) == 0 {
+	if len(summary.Removed) == 0 && len(summary.Skipped) == 0 {
 		w.PlainStderrf("Nothing to prune — cache is already clean.")
+		return kvxOpts.Write([]pruneResultItem{})
+	}
+
+	if len(summary.Removed) == 0 && len(summary.Skipped) > 0 {
+		for _, s := range summary.Skipped {
+			if s.Version != "" {
+				w.WarnStderrf("Skipped %s@%s (%s): %s", s.Name, s.Version, s.Platform, s.Reason)
+			} else {
+				w.WarnStderrf("Skipped %s: %s", s.Name, s.Reason)
+			}
+		}
+		w.PlainStderrf("Nothing pruned — all targets are locked or in use.")
 		return kvxOpts.Write([]pruneResultItem{})
 	}
 
@@ -169,6 +181,14 @@ func runPrune(ctx context.Context, opts *PruneOptions, args []string, kvxOpts *k
 
 	if !opts.DryRun {
 		w.PlainStderrf("Pruned %d version(s), freed %s.", len(summary.Removed), formatBytes(summary.TotalFreed))
+	}
+
+	for _, s := range summary.Skipped {
+		if s.Version != "" {
+			w.WarnStderrf("Skipped %s@%s (%s): %s", s.Name, s.Version, s.Platform, s.Reason)
+		} else {
+			w.WarnStderrf("Skipped %s: %s", s.Name, s.Reason)
+		}
 	}
 
 	return nil
