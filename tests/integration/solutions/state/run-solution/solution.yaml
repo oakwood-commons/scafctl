@@ -66,11 +66,9 @@ spec:
         args: ["-o", "json"]
         tags: [state, run-solution, smoke]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-first
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-first && mkdir -p /tmp/scafctl-it-state-runsol-first/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-first"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -89,14 +87,12 @@ spec:
         args: ["-o", "json"]
         tags: [state, run-solution]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-preseeded
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-preseeded && mkdir -p /tmp/scafctl-it-state-runsol-preseeded/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production","build_id":"build-042"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-runsol-preseeded/scafctl/run-solution-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-preseeded"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/run-solution-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -114,14 +110,12 @@ spec:
         args: ["-o", "json", "-r", "target=canary"]
         tags: [state, run-solution]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-override
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-override && mkdir -p /tmp/scafctl-it-state-runsol-override/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-runsol-override/scafctl/run-solution-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-override"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/run-solution-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -137,11 +131,9 @@ spec:
         args: ["-o", "json", "-r", "target=dev"]
         tags: [state, run-solution, command-info]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runsol-cmdinfo
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-cmdinfo && mkdir -p /tmp/scafctl-it-state-runsol-cmdinfo/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runsol-cmdinfo"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
