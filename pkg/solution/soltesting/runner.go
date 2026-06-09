@@ -1057,6 +1057,11 @@ func attachCommandOutput(result *TestResult, cmdOutput *CommandOutput) {
 
 // buildEnvMap builds the environment variable map for a test.
 // Precedence: process env → testConfig.env → testCase.env → <BINARY>_SANDBOX_DIR.
+//
+// After all values are set, any occurrence of ${<BINARY>_SANDBOX_DIR} in env
+// values is expanded to the actual sandbox path. This allows test YAMLs to
+// derive paths (e.g., XDG_STATE_HOME) from the sandbox directory, which is
+// guaranteed to be an OS-native absolute path on every platform.
 func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath string, extraEnv map[string]string) map[string]any {
 	env := make(map[string]any)
 
@@ -1078,7 +1083,17 @@ func (r *Runner) buildEnvMap(tc *TestCase, testConfig *TestConfig, sandboxPath s
 	}
 
 	// Always set sandbox dir
-	env[settings.SafeEnvPrefix(r.appName())+"_SANDBOX_DIR"] = sandboxPath
+	sandboxEnvKey := settings.SafeEnvPrefix(r.appName()) + "_SANDBOX_DIR"
+	env[sandboxEnvKey] = sandboxPath
+
+	// Expand ${<BINARY>_SANDBOX_DIR} references in env values so test YAMLs
+	// can build cross-platform absolute paths from the sandbox root.
+	placeholder := "${" + sandboxEnvKey + "}"
+	for k, v := range env {
+		if s, ok := v.(string); ok && strings.Contains(s, placeholder) {
+			env[k] = strings.ReplaceAll(s, placeholder, sandboxPath)
+		}
+	}
 
 	return env
 }

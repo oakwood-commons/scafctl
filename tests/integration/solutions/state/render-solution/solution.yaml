@@ -67,11 +67,9 @@ spec:
         args: ["-o", "json"]
         tags: [state, render, smoke]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-empty
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-empty && mkdir -p /tmp/scafctl-it-state-rendersol-empty/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-empty"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.actions["deploy"].inputs["command"].contains("default-target")
@@ -88,14 +86,12 @@ spec:
         args: ["-o", "json"]
         tags: [state, render]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-preseeded
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-preseeded && mkdir -p /tmp/scafctl-it-state-rendersol-preseeded/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"prod-cluster","app_version":"3.2.1"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-rendersol-preseeded/scafctl/render-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-preseeded"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/render-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.actions["deploy"].inputs["command"].contains("prod-cluster")
@@ -112,11 +108,9 @@ spec:
         args: ["-o", "json"]
         tags: [state, render, readonly]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-nowrite
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-nowrite && mkdir -p /tmp/scafctl-it-state-rendersol-nowrite/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-nowrite"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
 
@@ -129,14 +123,12 @@ spec:
         args: ["-o", "json", "-r", "target=edge"]
         tags: [state, render]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-rendersol-param
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-param && mkdir -p /tmp/scafctl-it-state-rendersol-param/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"cached-target"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-rendersol-param/scafctl/render-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-rendersol-param"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/render-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.actions["deploy"].inputs["command"].contains("edge")

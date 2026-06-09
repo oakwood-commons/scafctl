@@ -56,11 +56,9 @@ spec:
         args: ["-o", "json"]
         tags: [state, render]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-render-empty
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-render-empty && mkdir -p /tmp/scafctl-it-state-render-empty/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-render-empty"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.cached_name == "fallback-default"
@@ -77,14 +75,12 @@ spec:
         args: ["-o", "json"]
         tags: [state, render]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-render-preseeded
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-render-preseeded && mkdir -p /tmp/scafctl-it-state-render-preseeded/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"cached_name":"cached-from-state"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-render-preseeded/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-render-preseeded"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.cached_name == "cached-from-state"
@@ -101,14 +97,12 @@ spec:
         args: ["-o", "json"]
         tags: [state, render, immutable]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-render-immutable
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-render-immutable && mkdir -p /tmp/scafctl-it-state-render-immutable/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"cached_name":"immutable-cached"},"immutables":{"cached_name":{"value":"immutable-cached","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-render-immutable/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-render-immutable"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.cached_name == "immutable-cached"
