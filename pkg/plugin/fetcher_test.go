@@ -705,7 +705,14 @@ func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, pluginName), []byte("#!/bin/sh\n"), 0o755))
 
+	// Provide a catalog named "test" (not in allowlist) so the fallthrough
+	// to catalog resolution resolves from a disallowed catalog.
+	cat := newMockCatalog() // name = "test"
+	ref := testRef(pluginName, "")
+	cat.addArtifact(ref, []byte("#!/bin/sh\n"))
+
 	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
 		Cache:           NewCache(cacheDir),
 		Platform:        platform,
 		Logger:          logr.Discard(),
@@ -717,10 +724,12 @@ func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
 	}
 
 	// No lock file provided — fetcher uses cache-first path.
-	// Allowlist is set, cached entry has unknown origin → rejected.
+	// Allowlist is set, cached entry has unknown origin → falls through to
+	// catalog resolution. Catalog resolves from "test" which is not in the
+	// allowlist → rejected.
 	_, err := f.FetchPlugins(context.Background(), deps, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot verify against allowlist")
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
 }
 
 // ── RegisterCachedPlugin tests ──────────────────────────────────────────────
