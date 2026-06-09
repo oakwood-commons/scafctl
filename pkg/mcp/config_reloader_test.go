@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	mcpclient "github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/stretchr/testify/assert"
@@ -204,6 +206,87 @@ func TestResolveConfig(t *testing.T) {
 		// With no config file on disk, Global() will fail.
 		// resolveConfig should return nil gracefully.
 		_ = srv.resolveConfig()
+	})
+}
+
+func TestToolMiddleware_RefreshesContextPerCall(t *testing.T) {
+	t.Run("profile override visible through middleware dispatch", func(t *testing.T) {
+		srv, err := NewServer(
+			WithServerConfig(&config.Config{Version: 1}),
+			WithServerName("testcli"),
+		)
+		require.NoError(t, err)
+
+		// Register a probe tool that captures the profile from its context.
+		// capturedProfile is written inside the handler and read after CallTool
+		// returns.  This is safe because InProcessClient.CallTool dispatches
+		// synchronously — the handler completes before CallTool returns.
+		var capturedProfile string
+		srv.mcpServer.AddTool(mcp.NewTool("probe_profile"), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			capturedProfile = auth.ProfileFromContext(ctx)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{mcp.TextContent{Type: "text", Text: capturedProfile}},
+			}, nil
+		})
+
+		// Create an in-process client that dispatches through the middleware chain.
+		c, err := mcpclient.NewInProcessClient(srv.mcpServer)
+		require.NoError(t, err)
+		defer c.Close()
+
+		_, err = c.Initialize(t.Context(), mcp.InitializeRequest{})
+		require.NoError(t, err)
+
+		// Call before setting profile -- should be empty.
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "probe_profile"
+		_, err = c.CallTool(t.Context(), req)
+		require.NoError(t, err)
+		assert.Empty(t, capturedProfile, "no profile override yet")
+
+		// Set profile override (simulates auth_set_profile).
+		profile := "personal"
+		srv.profileOverride.Store(&profile)
+
+		// Call again -- middleware should refresh context with new profile.
+		_, err = c.CallTool(t.Context(), req)
+		require.NoError(t, err)
+		assert.Equal(t, "personal", capturedProfile, "middleware should inject fresh profile")
+	})
+
+	t.Run("cleared profile override is not visible", func(t *testing.T) {
+		srv, err := NewServer(
+			WithServerConfig(&config.Config{Version: 1}),
+			WithServerName("testcli"),
+		)
+		require.NoError(t, err)
+
+		// See first subtest for synchronous-dispatch safety rationale.
+		var capturedProfile string
+		srv.mcpServer.AddTool(mcp.NewTool("probe_profile2"), func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			capturedProfile = auth.ProfileFromContext(ctx)
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{mcp.TextContent{Type: "text", Text: "ok"}},
+			}, nil
+		})
+
+		c, err := mcpclient.NewInProcessClient(srv.mcpServer)
+		require.NoError(t, err)
+		defer c.Close()
+
+		_, err = c.Initialize(t.Context(), mcp.InitializeRequest{})
+		require.NoError(t, err)
+
+		// Set then clear profile.
+		profile := "work"
+		srv.profileOverride.Store(&profile)
+		srv.profileOverride.Store((*string)(nil))
+
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "probe_profile2"
+		_, err = c.CallTool(t.Context(), req)
+		require.NoError(t, err)
+		assert.Empty(t, capturedProfile, "cleared override should not appear")
 	})
 }
 

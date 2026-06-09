@@ -636,6 +636,26 @@ func TestBuildEnvMap_WithExtraEnv(t *testing.T) {
 	assert.Equal(t, "from-extra", env["OVERLAP"], "extraEnv should override tc.Env")
 }
 
+func TestBuildEnvMap_ExpandsSandboxDir(t *testing.T) {
+	r := &Runner{}
+
+	tc := &TestCase{
+		Env: map[string]string{
+			"XDG_STATE_HOME": "${SCAFCTL_SANDBOX_DIR}/state-home",
+			"PLAIN_VAR":      "no-expansion",
+		},
+	}
+
+	sandboxPath := filepath.Join(os.TempDir(), "scafctl-test-12345")
+	env := r.buildEnvMap(tc, nil, sandboxPath, nil)
+
+	assert.Equal(t, sandboxPath+"/state-home", env["XDG_STATE_HOME"],
+		"${SCAFCTL_SANDBOX_DIR} should be expanded to the sandbox path")
+	assert.Equal(t, "no-expansion", env["PLAIN_VAR"],
+		"values without the placeholder should not be modified")
+	assert.Equal(t, sandboxPath, env["SCAFCTL_SANDBOX_DIR"])
+}
+
 func TestMergeEnvForStep(t *testing.T) {
 	envMap := map[string]any{
 		"A": "1",

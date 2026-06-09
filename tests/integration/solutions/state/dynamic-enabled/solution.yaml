@@ -59,15 +59,13 @@ spec:
         args: ["-o", "json"]
         tags: [state, dynamic-enabled, smoke]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-disabled
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-disabled && mkdir -p /tmp/scafctl-it-state-dynen-disabled/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           # Pre-seed state with greeting = from-state
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-dynen-disabled/scafctl/dynamic-enabled-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-disabled"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "hello-default"
@@ -82,14 +80,12 @@ spec:
         args: ["-o", "json", "-r", "use_state=false"]
         tags: [state, dynamic-enabled]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-false
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-false && mkdir -p /tmp/scafctl-it-state-dynen-false/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-dynen-false/scafctl/dynamic-enabled-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-false"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "hello-default"
@@ -104,14 +100,12 @@ spec:
         args: ["-o", "json", "-r", "use_state=true"]
         tags: [state, dynamic-enabled]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-enabled
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-enabled && mkdir -p /tmp/scafctl-it-state-dynen-enabled/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"saved-hello"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-dynen-enabled/scafctl/dynamic-enabled-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-enabled"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "saved-hello"
@@ -126,11 +120,9 @@ spec:
         args: ["-o", "json", "-r", "use_state=true"]
         tags: [state, dynamic-enabled]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-nofile
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-nofile && mkdir -p /tmp/scafctl-it-state-dynen-nofile/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-nofile"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "hello-default"
@@ -145,14 +137,12 @@ spec:
         args: ["-o", "json", "-r", "use_state=true", "-r", "greeting=cli-hello"]
         tags: [state, dynamic-enabled]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynen-override
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-override && mkdir -p /tmp/scafctl-it-state-dynen-override/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-dynen-override/scafctl/dynamic-enabled-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynen-override"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "cli-hello"

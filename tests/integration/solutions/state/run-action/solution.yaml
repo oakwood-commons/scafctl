@@ -83,11 +83,9 @@ spec:
         args: ["lint", "-o", "json"]
         tags: [state, run-action, smoke]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-first
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-first && mkdir -p /tmp/scafctl-it-state-runact-first/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-first"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -103,14 +101,12 @@ spec:
         args: ["build", "-o", "json"]
         tags: [state, run-action]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-reads
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-reads && mkdir -p /tmp/scafctl-it-state-runact-reads/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production","version":"2.5.0"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-runact-reads/scafctl/run-action-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-reads"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/run-action-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -129,14 +125,12 @@ spec:
         args: ["deploy", "-o", "json", "-r", "env=canary"]
         tags: [state, run-action]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-override
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-override && mkdir -p /tmp/scafctl-it-state-runact-override/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-runact-override/scafctl/run-action-state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-override"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/run-action-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -152,11 +146,9 @@ spec:
         args: ["deploy", "-o", "json"]
         tags: [state, run-action]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-runact-deps
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-deps && mkdir -p /tmp/scafctl-it-state-runact-deps/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-runact-deps"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
