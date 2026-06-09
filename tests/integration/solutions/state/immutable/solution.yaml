@@ -71,11 +71,9 @@ spec:
         extends: [_base]
         tags: [smoke]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-immutable-first
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-immutable-first && mkdir -p /tmp/scafctl-it-immutable-first/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-immutable-first"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __output.locked_id == "generated-id-001"
             message: "Immutable resolver should fall through to static on first run"
@@ -89,14 +87,12 @@ spec:
         description: Writing same value to immutable entry succeeds silently
         extends: [_base]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-immutable-noop
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-immutable-noop && mkdir -p /tmp/scafctl-it-immutable-noop/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{"locked_id":{"value":"generated-id-001","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > /tmp/scafctl-it-immutable-noop/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-immutable-noop"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __output.locked_id == "generated-id-001"
             message: "Resolver should produce its static value matching state"
@@ -108,14 +104,12 @@ spec:
         description: Immutable value verified against state after resolve from saved params
         extends: [_base]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-immutable-preseeded
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-immutable-preseeded && mkdir -p /tmp/scafctl-it-immutable-preseeded/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"locked-from-state"},"immutables":{"locked_id":{"value":"locked-from-state","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > /tmp/scafctl-it-immutable-preseeded/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-immutable-preseeded"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __output.locked_id == "locked-from-state"
             message: "Immutable resolver should return value from saved parameters"
@@ -129,14 +123,12 @@ spec:
         args: ["-o", "json", "-r", "locked_id=override-attempt"]
         tags: [state, immutable]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-immutable-ignore
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-immutable-ignore && mkdir -p /tmp/scafctl-it-immutable-ignore/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"locked-from-state"},"immutables":{"locked_id":{"value":"locked-from-state","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > /tmp/scafctl-it-immutable-ignore/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-immutable-ignore"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __exitCode != 0
             message: "Should fail when parameter differs from locked immutable"
@@ -151,14 +143,12 @@ spec:
         extends: [_base]
         args: ["-o", "json", "-r", "mutable_value=updated-value"]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-immutable-mutable
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-immutable-mutable && mkdir -p /tmp/scafctl-it-immutable-mutable/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"mutable_value":"old-value"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-immutable-mutable/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-immutable-mutable"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __output.mutable_value == "updated-value"
             message: "Parameter should override mutable state value"
@@ -171,14 +161,12 @@ spec:
         extends: [_base]
         args: ["-o", "json", "-r", "locked_id=permanent-id", "-r", "mutable_value=fresh-value"]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-immutable-contrast
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-immutable-contrast && mkdir -p /tmp/scafctl-it-immutable-contrast/scafctl"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"permanent-id","mutable_value":"old-mutable"},"immutables":{"locked_id":{"value":"permanent-id","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > /tmp/scafctl-it-immutable-contrast/scafctl/state.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-immutable-contrast"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
         assertions:
           - expression: __output.locked_id == "permanent-id"
             message: "Immutable value should remain locked (same value resolves)"

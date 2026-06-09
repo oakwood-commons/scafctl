@@ -666,6 +666,18 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	// Register all tools
 	s.registerTools()
 
+	// Install tool handler middleware that refreshes the context on every
+	// tool call.  The stdio transport calls its contextFunc once at startup
+	// (not per-request), so session-level state changes (e.g. profile
+	// override from auth_set_profile) would otherwise be invisible to
+	// subsequent tool handlers.  This middleware is transport-agnostic and
+	// harmless for SSE/HTTP where the transport already refreshes per-request.
+	s.mcpServer.Use(func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return next(s.freshConfigContext(ctx), req)
+		}
+	})
+
 	// Register all resources
 	s.registerResources()
 
@@ -813,8 +825,11 @@ func (s *Server) doRegisterUpstreamTools(ctx context.Context) error {
 }
 
 // freshConfigContext returns a context with the latest config overlaid.
-// Called per-request by each transport's context func so that tool handlers
-// always see up-to-date configuration (e.g. after an auth profile switch).
+// Called per tool call via the Use() middleware registered in NewServer, and
+// additionally by each transport's context func.  The middleware ensures that
+// even transports that call their context func only once (stdio) still see
+// up-to-date configuration on every tool invocation (e.g. after an auth
+// profile switch via auth_set_profile).
 func (s *Server) freshConfigContext(ctx context.Context) context.Context {
 	merged := mergeContext(ctx, s.ctx)
 	if s.cfgReloader != nil {

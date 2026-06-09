@@ -59,11 +59,9 @@ spec:
         args: ["-o", "json", "-r", "project=alpha"]
         tags: [state, dynamic-path, smoke]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynpath-first
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynpath-first && mkdir -p /tmp/scafctl-it-state-dynpath-first/scafctl"
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynpath-first"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.config_value == "default-config"
@@ -78,14 +76,12 @@ spec:
         args: ["-o", "json", "-r", "project=beta"]
         tags: [state, dynamic-path]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynpath-preseeded
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynpath-preseeded && mkdir -p /tmp/scafctl-it-state-dynpath-preseeded/scafctl/dynamic"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-config"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-dynpath-preseeded/scafctl/dynamic/beta.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynpath-preseeded"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic/beta.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.config_value == "beta-config"
@@ -100,15 +96,13 @@ spec:
         args: ["-o", "json", "-r", "project=gamma"]
         tags: [state, dynamic-path]
         env:
-          XDG_STATE_HOME: /tmp/scafctl-it-state-dynpath-iso
+          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "rm -rf /tmp/scafctl-it-state-dynpath-iso && mkdir -p /tmp/scafctl-it-state-dynpath-iso/scafctl/dynamic"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic"
           # Pre-seed for project "beta" only
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-only"},"immutables":{},"fingerprints":{}}'
-              > /tmp/scafctl-it-state-dynpath-iso/scafctl/dynamic/beta.json
-        cleanup:
-          - command: "rm -rf /tmp/scafctl-it-state-dynpath-iso"
+              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/dynamic/beta.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.config_value == "default-config"
