@@ -76,6 +76,58 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	return NewChainCatalog(logger, catalogs...)
 }
 
+// BuildRemoteCatalogChain creates a ChainCatalog containing only remote
+// catalogs (user/embedder catalogs and the official catalog). The local
+// filesystem catalog is excluded.
+//
+// This is used by operations that need to check remote registries for newer
+// versions without being shadowed by locally cached artifacts (e.g. plugin
+// update checks).
+func BuildRemoteCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*ChainCatalog, error) {
+	var catalogs []Catalog
+
+	var credStore *CredentialStore
+	if cfg != nil {
+		cs, credErr := NewCredentialStore(logger)
+		if credErr != nil {
+			logger.V(1).Info("credential store not available, remote catalogs will use anonymous auth", "error", credErr)
+		} else {
+			credStore = cs
+		}
+
+		for _, catCfg := range cfg.Catalogs {
+			if catCfg.Name == config.CatalogNameLocal || catCfg.Name == config.CatalogNameOfficial {
+				continue
+			}
+
+			if catCfg.Type != config.CatalogTypeOCI || catCfg.URL == "" {
+				continue
+			}
+
+			remoteCat, remoteCatErr := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
+			if remoteCatErr != nil {
+				continue
+			}
+			catalogs = append(catalogs, remoteCat)
+		}
+
+		if !cfg.Settings.DisableOfficialCatalog {
+			if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
+				officialCat, officialErr := buildRemoteCatalog(*officialCfg, credStore, authRegistry, logger)
+				if officialErr == nil {
+					catalogs = append(catalogs, officialCat)
+				}
+			}
+		}
+	}
+
+	if len(catalogs) == 0 {
+		return nil, fmt.Errorf("no remote catalogs available")
+	}
+
+	return NewChainCatalog(logger, catalogs...)
+}
+
 // buildRemoteCatalog creates a RemoteCatalog from a CatalogConfig.
 func buildRemoteCatalog(catCfg config.CatalogConfig, credStore *CredentialStore, authRegistry *auth.Registry, logger logr.Logger) (*RemoteCatalog, error) {
 	return BuildRemoteCatalogFromConfig(catCfg, credStore, authRegistry, logger)

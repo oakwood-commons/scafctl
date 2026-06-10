@@ -185,13 +185,19 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 		chainLogger = logr.Discard()
 	}
 
-	chain, err := catalog.BuildCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
+	chain, err := catalog.BuildRemoteCatalogChain(appCfg, auth.RegistryFromContext(ctx), chainLogger)
 	if err != nil {
-		w.Errorf("failed to build catalog chain: %v", err)
-		return exitcode.WithCode(err, exitcode.CatalogError)
+		// Remote catalogs may not be configured (e.g. offline, no config).
+		// Proceed without a catalog — pinned versions and empty caches still
+		// work. PlanUpdates will fail for non-pinned plugins that need
+		// catalog resolution, which is the correct behavior.
+		chainLogger.V(1).Info("remote catalog chain not available, proceeding without catalog", "error", err)
 	}
 
-	catalogFetcher := catalog.NewPluginFetcher(chain, chainLogger)
+	var catalogFetcher *catalog.PluginFetcher
+	if chain != nil {
+		catalogFetcher = catalog.NewPluginFetcher(chain, chainLogger)
+	}
 
 	// Plan updates.
 	plan, err := plugin.PlanUpdates(ctx, cache, catalogFetcher, plugin.UpdateOptions{
@@ -268,6 +274,13 @@ func runUpdate(ctx context.Context, opts *UpdateOptions, args []string, kvxOpts 
 	if opts.DryRun {
 		w.PlainStderrf("Dry run: %d plugin(s) would be updated:", len(plan.Updates))
 		return kvxOpts.Write(items)
+	}
+
+	// Guard: downloading requires a remote catalog chain.
+	if chain == nil {
+		err := fmt.Errorf("cannot download updates: no remote catalogs available")
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
 	// Perform the updates by fetching new versions.

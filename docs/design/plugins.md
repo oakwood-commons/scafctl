@@ -665,6 +665,7 @@ When `PluginFetcher.FetchPlugin()` is called:
 - `darwin/amd64`
 - `darwin/arm64`
 - `windows/amd64`
+- `windows/arm64`
 
 ### Building Multi-Platform Artifacts
 

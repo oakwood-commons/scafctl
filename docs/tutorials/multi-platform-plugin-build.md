@@ -25,6 +25,7 @@ binary for the current platform.
 | `darwin/amd64` | macOS Intel |
 | `darwin/arm64` | macOS Apple Silicon |
 | `windows/amd64` | Windows x86-64 |
+| `windows/arm64` | Windows ARM64 (e.g. Surface Pro X, Snapdragon) |
 
 ## Prerequisites
 
