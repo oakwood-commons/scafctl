@@ -5,6 +5,7 @@ package fileprovider
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -198,9 +199,10 @@ func TestFileProvider_Execute_Write_InvalidPath(t *testing.T) {
 
 	ctx := context.Background()
 	inputs := map[string]any{
-		"operation": "write",
-		"path":      "/nonexistent/deeply/nested/path/file.txt",
-		"content":   "test",
+		"operation":  "write",
+		"path":       "/nonexistent/deeply/nested/path/file.txt",
+		"content":    "test",
+		"createDirs": false,
 	}
 
 	result, err := p.Execute(ctx, inputs)
@@ -1170,6 +1172,161 @@ func TestFileProvider_WriteTree_MissingEntryContent_Skipped(t *testing.T) {
 	assert.Equal(t, 0, data["filesWritten"])
 }
 
+func TestFileProvider_Execute_Write_AutoCreateDirs(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	tmpFile := filepath.Join(tmpDir, "auto", "nested", "dir", "test.txt")
+	content := "auto-created dirs"
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write",
+		"path":      tmpFile,
+		"content":   content,
+		// createDirs not set — should default to true
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["success"].(bool))
+
+	readContent, err := os.ReadFile(tmpFile)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(readContent))
+}
+
+func TestFileProvider_Execute_Write_CreateDirsFalse(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	tmpFile := filepath.Join(tmpDir, "no", "auto", "create", "test.txt")
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation":  "write",
+		"path":       tmpFile,
+		"content":    "should fail",
+		"createDirs": false,
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+}
+
+func TestFileProvider_Execute_Write_CreateDirsInvalidType(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation":  "write",
+		"path":       tmpFile,
+		"content":    "test",
+		"createDirs": "false", // string instead of bool
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "createDirs must be a boolean")
+}
+
+func TestFileProvider_WriteTree_ContentMapAutoSerialize(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	mapContent := map[string]any{
+		"name":    "test",
+		"version": "1.0.0",
+	}
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "config.json", "content": mapContent},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 1, data["filesWritten"])
+
+	written, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+
+	// Verify it's valid JSON matching the input
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(written, &parsed))
+	assert.Equal(t, "test", parsed["name"])
+	assert.Equal(t, "1.0.0", parsed["version"])
+}
+
+func TestFileProvider_WriteTree_ContentArrayAutoSerialize(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	arrayContent := []any{"one", "two", "three"}
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "list.json", "content": arrayContent},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 1, data["filesWritten"])
+
+	written, err := os.ReadFile(filepath.Join(tmpDir, "list.json"))
+	require.NoError(t, err)
+
+	var parsed []any
+	require.NoError(t, json.Unmarshal(written, &parsed))
+	assert.Len(t, parsed, 3)
+}
+
+func TestFileProvider_WriteTree_ContentNumericAutoSerialize(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := context.Background()
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "count.txt", "content": 42},
+		},
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 1, data["filesWritten"])
+
+	written, err := os.ReadFile(filepath.Join(tmpDir, "count.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "42", string(written))
+}
+
 func TestFileProvider_WriteTree_MixedFilesAndDirectories(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
@@ -1208,7 +1365,7 @@ func TestFileProvider_WriteTree_MixedFilesAndDirectories(t *testing.T) {
 	assert.Equal(t, "LOGO", string(content2))
 }
 
-func TestFileProvider_WriteTree_NonStringContentErrors(t *testing.T) {
+func TestFileProvider_WriteTree_NonStringContentAutoSerialized(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
 
@@ -1223,9 +1380,13 @@ func TestFileProvider_WriteTree_NonStringContentErrors(t *testing.T) {
 
 	result, err := p.Execute(ctx, inputs)
 
-	assert.Error(t, err)
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "entries[0].content must be a string")
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, 1, data["filesWritten"])
+
+	written, err := os.ReadFile(filepath.Join(tmpDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "123", string(written))
 }
 
 func TestFileProvider_WriteTree_DryRun(t *testing.T) {
