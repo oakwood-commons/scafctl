@@ -7098,6 +7098,47 @@ func TestIntegration_RunResolver_UnknownParamKeyNoSuggestion(t *testing.T) {
 	assert.Contains(t, stderr, "does not accept input")
 }
 
+// TestIntegration_Lint_MissingFallbackSource verifies missing-fallback-source lint rule detects all-conditional resolvers.
+func TestIntegration_Lint_MissingFallbackSource(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fallback-test
+  version: 1.0.0
+spec:
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: dev
+    endpoint:
+      resolve:
+        with:
+          - provider: static
+            when:
+              expr: '_.environment == "prod"'
+            inputs:
+              value: https://api.prod.example.com
+          - provider: static
+            when:
+              expr: '_.environment == "staging"'
+            inputs:
+              value: https://api.staging.example.com
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionFile, "-o", "json")
+
+	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
+	assert.Contains(t, stdout, "missing-fallback-source")
+}
+
 // TestIntegration_Lint_UnreachableTestPath verifies unreachable-test-path lint rule detects bad test file references.
 func TestIntegration_Lint_UnreachableTestPath(t *testing.T) {
 	t.Parallel()

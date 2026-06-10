@@ -485,7 +485,55 @@ Only keep explicit `dependsOn` for ordering without a data dependency:
               command: deploy.sh
 ```
 
-## 8. Using Lint with the MCP Server
+## 8. Missing Fallback Source
+
+The `missing-fallback-source` rule warns when all sources in a resolver's `resolve.with` have `when` conditions, leaving no unconditional fallback. If none of the conditions are met at runtime, the resolver fails with "no sources produced a value".
+
+```yaml
+# WARNING: all resolve sources have 'when' conditions with no unconditional fallback
+spec:
+  resolvers:
+    endpoint:
+      resolve:
+        with:
+          - provider: static
+            when:
+              expr: '_.environment == "prod"'
+            inputs:
+              value: https://api.prod.example.com
+          - provider: static
+            when:
+              expr: '_.environment == "staging"'
+            inputs:
+              value: https://api.staging.example.com
+```
+
+If `_.environment` is `"dev"`, neither condition matches and the resolver fails.
+
+**Fix**: Add an unconditional source as a fallback (typically at the end):
+
+```yaml
+    endpoint:
+      resolve:
+        with:
+          - provider: static
+            when:
+              expr: '_.environment == "prod"'
+            inputs:
+              value: https://api.prod.example.com
+          - provider: static
+            when:
+              expr: '_.environment == "staging"'
+            inputs:
+              value: https://api.staging.example.com
+          - provider: static
+            inputs:
+              value: https://api.dev.example.com
+```
+
+The unconditional source acts as a default when no other condition is satisfied.
+
+## 9. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 

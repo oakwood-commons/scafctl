@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -593,4 +594,155 @@ func TestLintResolvers_HyphenatedName(t *testing.T) {
 	assert.Contains(t, hyphenFindings[0].Message, "my-resolver")
 	assert.Contains(t, hyphenFindings[0].Message, "my_resolver")
 	assert.Equal(t, SeverityInfo, hyphenFindings[0].Severity)
+}
+
+// ---- missing-fallback-source ----
+
+func TestLintResolvers_MissingFallbackSource_AllConditional(t *testing.T) {
+	expr1 := celexp.Expression("_.authenticated == true")
+	expr2 := celexp.Expression("_.fallbackEnabled == true")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("http", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"myResolver": {
+			Description: "all sources conditional",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "http", When: &resolver.Condition{Expr: &expr1}},
+					{Provider: "http", When: &resolver.Condition{Expr: &expr2}},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := map[string]bool{"myResolver": true}
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	var findings []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == "missing-fallback-source" {
+			findings = append(findings, f)
+		}
+	}
+
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Equal(t, "resolvers.myResolver.resolve", findings[0].Location)
+	assert.Contains(t, findings[0].Message, "no unconditional fallback")
+}
+
+func TestLintResolvers_MissingFallbackSource_HasUnconditionalSource(t *testing.T) {
+	expr1 := celexp.Expression("_.authenticated == true")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("http", nil)))
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"myResolver": {
+			Description: "has unconditional fallback",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "http", When: &resolver.Condition{Expr: &expr1}},
+					{Provider: "static"},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := map[string]bool{"myResolver": true}
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-fallback-source", f.RuleName,
+			"should not warn when an unconditional source exists")
+	}
+}
+
+func TestLintResolvers_MissingFallbackSource_WhenTrue(t *testing.T) {
+	exprCond := celexp.Expression("_.environment == 'prod'")
+	exprTrue := celexp.Expression("true")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("http", nil)))
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"myResolver": {
+			Description: "has when: true fallback",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "http", When: &resolver.Condition{Expr: &exprCond}},
+					{Provider: "static", When: &resolver.Condition{Expr: &exprTrue}},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := map[string]bool{"myResolver": true}
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-fallback-source", f.RuleName,
+			"should not warn when a source has when: true (always passes)")
+	}
+}
+
+func TestLintResolvers_MissingFallbackSource_WhenTrueWithWhitespace(t *testing.T) {
+	exprCond := celexp.Expression("_.environment == 'prod'")
+	exprTrue := celexp.Expression("  true  ")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("http", nil)))
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"myResolver": {
+			Description: "has when: '  true  ' with whitespace",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "http", When: &resolver.Condition{Expr: &exprCond}},
+					{Provider: "static", When: &resolver.Condition{Expr: &exprTrue}},
+				},
+			},
+		},
+	}
+
+	referencedResolvers := map[string]bool{"myResolver": true}
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-fallback-source", f.RuleName,
+			"should not warn when a source has when: '  true  ' (whitespace-padded true)")
+	}
+}
+
+func TestLintResolvers_MissingFallbackSource_NoResolvePhase(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"myResolver": {
+			Description: "no resolve phase",
+		},
+	}
+
+	referencedResolvers := map[string]bool{"myResolver": true}
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-fallback-source", f.RuleName,
+			"should not warn when there is no resolve phase")
+	}
 }

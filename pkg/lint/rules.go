@@ -305,6 +305,17 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "An empty validate.with array is almost certainly unintentional. The validate phase will be silently skipped, which may cause unexpected behavior.",
 		Fix:         "Either add validation rules to the with array or remove the validate section entirely.",
 	},
+	"missing-fallback-source": {
+		Rule:        "missing-fallback-source",
+		Severity:    string(SeverityWarning),
+		Category:    "structure",
+		Description: "All sources in a resolver's resolve.with list have 'when' conditions with no unconditional fallback.",
+		Why:         "If every source has a 'when' condition and none of the conditions are met at runtime, the resolver will fail with 'no sources produced a value'. Adding an unconditional fallback (e.g. a static provider) ensures the resolver always produces a value.",
+		Fix:         "Add a source without a 'when' condition as the last entry in resolve.with. A static provider with a sensible default is a common pattern.",
+		Examples: []string{
+			"# Problem: all sources are conditional\nresolve:\n  with:\n    - provider: http\n      when:\n        expr: '_.authenticated == true'\n    - provider: http\n      when:\n        expr: '_.fallbackEnabled == true'\n\n# Fix: add unconditional fallback\nresolve:\n  with:\n    - provider: http\n      when:\n        expr: '_.authenticated == true'\n    - provider: static\n      inputs:\n        value: default-value",
+		},
+	},
 	"null-resolver": {
 		Rule:        "null-resolver",
 		Severity:    string(SeverityError),
