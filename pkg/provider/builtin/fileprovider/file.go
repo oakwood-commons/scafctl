@@ -5,6 +5,7 @@ package fileprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -88,9 +89,9 @@ func NewFileProvider() *FileProvider {
 				"content": schemahelper.StringProp("Content to write (required for write operation)",
 					schemahelper.WithExample("data: value"),
 					schemahelper.WithMaxLength(10485760)),
-				"createDirs": schemahelper.BoolProp("Create parent directories if they don't exist (for write operation)",
+				"createDirs": schemahelper.BoolProp("Create parent directories if they don't exist (for write operation). Defaults to true.",
 					schemahelper.WithExample(true),
-					schemahelper.WithDefault(false)),
+					schemahelper.WithDefault(true)),
 				"encoding": schemahelper.StringProp("File encoding for read/write operations",
 					schemahelper.WithExample("utf-8"),
 					schemahelper.WithDefault("utf-8"),
@@ -106,7 +107,7 @@ func NewFileProvider() *FileProvider {
 						[]string{"path"},
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path within basePath"),
-							"content": schemahelper.StringProp("File content to write"),
+							"content": schemahelper.AnyProp("File content to write. Strings are written as-is; non-string values (maps, arrays, numbers, bools) are auto-serialized to JSON."),
 							"onConflict": schemahelper.StringProp("Per-entry conflict resolution strategy override",
 								schemahelper.WithEnum("error", "overwrite", "skip", "skip-unchanged", "append")),
 							"dedupe": schemahelper.BoolProp("Per-entry deduplication override (only valid with append strategy)"),
@@ -216,15 +217,14 @@ inputs:
   path: ./config.yaml`,
 				},
 				{
-					Name:        "Write file with directory creation",
-					Description: "Write content to a file, creating parent directories if needed",
+					Name:        "Write file",
+					Description: "Write content to a file. Parent directories are created automatically (set createDirs: false to disable).",
 					YAML: `name: write-output
 provider: file
 inputs:
   operation: write
   path: ./output/data/result.txt
-  content: "Generated content"
-  createDirs: true`,
+  content: "Generated content"`,
 				},
 				{
 					Name:        "Check file existence",
@@ -451,7 +451,12 @@ func (p *FileProvider) executeWrite(ctx context.Context, absPath string, inputs 
 		return nil, fmt.Errorf("content is required for write operation")
 	}
 
-	createDirs, _ := inputs["createDirs"].(bool)
+	// createDirs defaults to true when not explicitly set.
+	createDirsPtr := boolPtrFromInputs(inputs, "createDirs")
+	if v, exists := inputs["createDirs"]; exists && v != nil && createDirsPtr == nil {
+		return nil, fmt.Errorf("createDirs must be a boolean, got %T", v)
+	}
+	createDirs := createDirsPtr == nil || *createDirsPtr
 
 	// Parse permissions — default to 0600 (owner read/write only).
 	fileMode := os.FileMode(0o600)
@@ -960,9 +965,16 @@ func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTree
 			// Skip directory entries (no content key) silently.
 			continue
 		}
-		content, ok := contentRaw.(string)
-		if !ok {
-			return nil, fmt.Errorf("entries[%d].content must be a string, got %T", i, contentRaw)
+		var content string
+		switch c := contentRaw.(type) {
+		case string:
+			content = c
+		default:
+			serialized, err := json.MarshalIndent(contentRaw, "", "  ")
+			if err != nil {
+				return nil, fmt.Errorf("entries[%d].content: failed to serialize %T to JSON: %w", i, contentRaw, err)
+			}
+			content = string(serialized)
 		}
 
 		entryOnConflict, _ := entry["onConflict"].(string)
