@@ -58,6 +58,23 @@ spec:
             inputs:
               value: "slow"
 
+    # missing-fallback-source (all sources conditional, no fallback)
+    conditional_only:
+      type: string
+      description: All sources are conditional with no fallback
+      resolve:
+        with:
+          - provider: static
+            when:
+              expr: '_.main_output == "prod"'
+            inputs:
+              value: "prod-value"
+          - provider: static
+            when:
+              expr: '_.main_output == "staging"'
+            inputs:
+              value: "staging-value"
+
     # non-validation-provider in validate block
     wrong_validate:
       type: string
@@ -131,6 +148,7 @@ spec:
         - empty_validate
         - loose_schema
         - no_desc
+        - conditional_only
       resolve:
         with:
           - provider: static

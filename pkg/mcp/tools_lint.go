@@ -44,7 +44,7 @@ func (s *Server) registerLintTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("rule",
 			mcp.Required(),
-			mcp.Description("The lint rule name to explain (e.g., 'unused-resolver', 'invalid-expression', 'missing-provider')"),
+			mcp.Description("The lint rule name to explain (e.g., 'unused-resolver', 'invalid-expression', 'missing-provider', 'missing-fallback-source')"),
 		),
 	)
 	s.addTool(explainLintRuleTool, s.handleExplainLintRule)

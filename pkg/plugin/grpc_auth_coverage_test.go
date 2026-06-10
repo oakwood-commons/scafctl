@@ -85,6 +85,7 @@ func TestStatusRoundTrip(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	original := &auth.Status{
 		Authenticated: true,
+		Reason:        "token validated successfully",
 		Claims: &auth.Claims{
 			Email: "user@example.com",
 			Name:  "Test User",
@@ -107,6 +108,7 @@ func TestStatusRoundTrip(t *testing.T) {
 	require.NotNil(t, roundTripped)
 
 	assert.Equal(t, original.Authenticated, roundTripped.Authenticated)
+	assert.Equal(t, original.Reason, roundTripped.Reason)
 	assert.Equal(t, original.TenantID, roundTripped.TenantID)
 	assert.Equal(t, original.ClientID, roundTripped.ClientID)
 	assert.Equal(t, original.TokenFile, roundTripped.TokenFile)
