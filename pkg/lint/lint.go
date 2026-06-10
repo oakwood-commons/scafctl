@@ -233,6 +233,23 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 						"resolve-foreach")
 				}
 			}
+
+			// Warn if all sources have 'when' conditions with no unconditional fallback.
+			if len(res.Resolve.With) > 0 {
+				allConditional := true
+				for _, step := range res.Resolve.With {
+					if step.When == nil || step.When.Expr == nil || strings.TrimSpace(string(*step.When.Expr)) == "true" {
+						allConditional = false
+						break
+					}
+				}
+				if allConditional {
+					result.addFinding(SeverityWarning, "structure", location+".resolve",
+						"all resolve sources have 'when' conditions with no unconditional fallback; resolver will fail if no condition is met",
+						"Add a source without a 'when' condition (e.g. a static provider) as a fallback",
+						"missing-fallback-source")
+				}
+			}
 		}
 
 		// Check for empty transform.with / validate.with arrays.

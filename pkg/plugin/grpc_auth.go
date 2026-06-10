@@ -560,6 +560,7 @@ func statusToProto(s *auth.Status) *proto.GetStatusResponse {
 	}
 	return &proto.GetStatusResponse{
 		Authenticated:   s.Authenticated,
+		Reason:          s.Reason,
 		Claims:          claimsToProto(s.Claims),
 		ExpiresAtUnix:   s.ExpiresAt.Unix(),
 		LastRefreshUnix: s.LastRefresh.Unix(),
@@ -578,6 +579,7 @@ func protoToStatus(resp *proto.GetStatusResponse) *auth.Status {
 	}
 	return &auth.Status{
 		Authenticated: resp.Authenticated,
+		Reason:        resp.Reason,
 		Claims:        protoToClaims(resp.Claims),
 		ExpiresAt:     time.Unix(resp.ExpiresAtUnix, 0),
 		LastRefresh:   time.Unix(resp.LastRefreshUnix, 0),
