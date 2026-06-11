@@ -7177,6 +7177,47 @@ spec:
 	assert.Contains(t, stdout, "unreachable-test-path")
 }
 
+// TestIntegration_Lint_TransformShapeMismatch verifies transform-shape-mismatch lint rule
+// detects when transform accesses provider-specific fields but resolve chain has a fallback
+// with a different output shape.
+func TestIntegration_Lint_TransformShapeMismatch(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: shape-mismatch-test
+  version: 1.0.0
+spec:
+  resolvers:
+    api_data:
+      description: Fetch data with static fallback
+      resolve:
+        with:
+          - provider: http
+            when:
+              expr: 'true'
+            inputs:
+              url: https://api.example.com/data
+          - provider: static
+            inputs:
+              value: []
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.body'
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionFile, "-o", "json")
+
+	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
+	assert.Contains(t, stdout, "transform-shape-mismatch")
+}
+
 // TestIntegration_MCPServeInfo_ExplainConcepts verifies explain_concepts tool is registered.
 func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
 	t.Parallel()

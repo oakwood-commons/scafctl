@@ -307,6 +307,10 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 
 		// Check for redundant dependsOn entries that are already inferred.
 		lintRedundantDependsOn(res, location, result, registry)
+
+		// Check for transform steps accessing provider-specific fields when
+		// the resolve chain includes a fallback with a different output shape.
+		lintTransformShapeMismatch(name, res, location, result, registry)
 	}
 }
 
@@ -407,6 +411,134 @@ func lintRedundantDependsOn(res *resolver.Resolver, location string, result *Res
 			fmt.Sprintf("dependsOn contains redundant entries already inferred from value references: %s", strings.Join(redundant, ", ")),
 			"Remove the redundant entries; only keep dependsOn for ordering dependencies not referenced by value",
 			"redundant-depends-on")
+	}
+}
+
+// lintTransformShapeMismatch detects resolvers where the transform phase accesses
+// provider-specific fields (like __self.body) but the resolve chain includes a
+// fallback with a different output shape (e.g., static returning a scalar/array).
+func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location string, result *Result, registry *provider.Registry) {
+	if res.Resolve == nil || res.Transform == nil {
+		return
+	}
+	if len(res.Resolve.With) < 2 || len(res.Transform.With) == 0 {
+		return
+	}
+
+	// Determine which resolve steps produce structured output (map with known fields)
+	// versus scalar/array output.
+	type sourceShape struct {
+		isStructured bool
+		fields       map[string]bool // known output fields (e.g., "body", "statusCode", "headers")
+	}
+
+	shapes := make([]sourceShape, len(res.Resolve.With))
+	hasStructured := false
+	hasNonStructured := false
+
+	for i, step := range res.Resolve.With {
+		if step.Provider == "static" || step.Provider == "" {
+			// Check if the static value is a map — if so, treat it as structured.
+			if valRef, ok := step.Inputs["value"]; ok && valRef != nil {
+				if m, isMap := valRef.Literal.(map[string]any); isMap && len(m) > 0 {
+					fields := make(map[string]bool, len(m))
+					for k := range m {
+						fields[k] = true
+					}
+					shapes[i] = sourceShape{isStructured: true, fields: fields}
+					hasStructured = true
+					continue
+				}
+			}
+			shapes[i] = sourceShape{isStructured: false}
+			hasNonStructured = true
+			continue
+		}
+
+		// Check the provider's output schema for CapabilityFrom (resolve phase).
+		if registry != nil {
+			if p, exists := registry.Get(step.Provider); exists {
+				desc := p.Descriptor()
+				if schema, ok := desc.OutputSchemas[provider.CapabilityFrom]; ok && schema != nil && len(schema.Properties) > 0 {
+					fields := make(map[string]bool, len(schema.Properties))
+					for fieldName := range schema.Properties {
+						fields[fieldName] = true
+					}
+					shapes[i] = sourceShape{isStructured: true, fields: fields}
+					hasStructured = true
+					continue
+				}
+			}
+		}
+
+		// If we can't determine the shape, assume it might be structured
+		// but don't flag — we only flag when we're confident about a mismatch.
+		shapes[i] = sourceShape{isStructured: true}
+		hasStructured = true
+	}
+
+	// Only proceed if the resolve chain has both structured and non-structured sources.
+	if !hasStructured || !hasNonStructured {
+		return
+	}
+
+	// Collect all known fields from structured providers.
+	structuredFields := make(map[string]bool)
+	for _, s := range shapes {
+		if s.isStructured {
+			for f := range s.fields {
+				structuredFields[f] = true
+			}
+		}
+	}
+
+	// If we couldn't determine specific fields, fall back to well-known HTTP fields.
+	if len(structuredFields) == 0 {
+		structuredFields = map[string]bool{
+			"body":       true,
+			"statusCode": true,
+			"headers":    true,
+		}
+	}
+
+	// Scan transform steps for __self.<field> access without a when guard.
+	for i, step := range res.Transform.With {
+		stepLocation := fmt.Sprintf("%s.transform.with[%d]", location, i)
+
+		// Skip if the transform step has a when guard.
+		if step.When != nil && step.When.Expr != nil && strings.TrimSpace(string(*step.When.Expr)) != "" && strings.TrimSpace(string(*step.When.Expr)) != "true" {
+			continue
+		}
+
+		// Scan all inputs for __self.<field> references.
+		for _, val := range step.Inputs {
+			if val == nil {
+				continue
+			}
+
+			var exprText string
+			if val.Expr != nil {
+				exprText = string(*val.Expr)
+			} else if val.Tmpl != nil {
+				exprText = string(*val.Tmpl)
+			} else if s, ok := val.Literal.(string); ok {
+				exprText = s
+			}
+			if exprText == "" {
+				continue
+			}
+
+			for field := range structuredFields {
+				pattern := "__self." + field
+				if strings.Contains(exprText, pattern) {
+					result.addFinding(SeverityWarning, "provider", stepLocation,
+						fmt.Sprintf("transform accesses '__self.%s' but the resolve chain includes a fallback that produces a different shape — add a 'when' condition to guard the transform", field),
+						fmt.Sprintf("Add a when guard, e.g.: when: { expr: \"type(__self) == map_type && has(__self.%s)\" }", field),
+						"transform-shape-mismatch")
+					return // One finding per resolver is sufficient.
+				}
+			}
+		}
 	}
 }
 
