@@ -1722,3 +1722,245 @@ func TestLintImmutableResolvers_NotImmutable(t *testing.T) {
 	findings := filterFindingsByRule(result, "immutable-requires-state")
 	assert.Empty(t, findings)
 }
+
+func newHTTPFakeProvider() *fakeProvider {
+	return &fakeProvider{
+		desc: &provider.Descriptor{
+			Name:       "http",
+			APIVersion: "v1",
+			Version:    semver.MustParse("1.0.0"),
+			Schema: &jsonschema.Schema{
+				Type:       "object",
+				Properties: map[string]*jsonschema.Schema{},
+			},
+			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
+				provider.CapabilityFrom: {
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"statusCode": {Type: "integer"},
+						"body":       {Type: "string"},
+						"headers":    {Type: "object"},
+					},
+				},
+			},
+			Description:  "HTTP provider",
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+		},
+	}
+}
+
+func TestLintTransformShapeMismatch(t *testing.T) {
+	bodyExpr := celexp.Expression("__self.body.items")
+	guardExpr := celexp.Expression("type(__self) == map_type && has(__self.body)")
+	credExpr := celexp.Expression("has(_.credentials)")
+	statusExpr := celexp.Expression("__self.statusCode == 200")
+	tmplContent := gotmpl.GoTemplatingContent("{{ .__self.body }}")
+	safeExpr := celexp.Expression("size(__self) > 0")
+
+	tests := []struct {
+		name        string
+		resolver    *resolver.Resolver
+		expectRule  bool
+		description string
+	}{
+		{
+			name: "flagged: http + static, transform accesses __self.body without guard",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http", When: &resolver.Condition{Expr: &credExpr}},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: []any{}}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &bodyExpr}}},
+					},
+				},
+			},
+			expectRule: true,
+		},
+		{
+			name: "flagged: http + static, transform accesses __self.statusCode",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http"},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: ""}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &statusExpr}}},
+					},
+				},
+			},
+			expectRule: true,
+		},
+		{
+			name: "flagged: http + static, go template accesses __self.body",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http"},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: ""}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "go-template", Inputs: map[string]*spec.ValueRef{"template": {Tmpl: &tmplContent}}},
+					},
+				},
+			},
+			expectRule: true,
+		},
+		{
+			name: "flagged: http + static, transform accesses __self.body via literal string",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http", When: &resolver.Condition{Expr: &credExpr}},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: []any{}}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Literal: "__self.body"}}},
+					},
+				},
+			},
+			expectRule: true,
+		},
+		{
+			name: "not flagged: static fallback is a map with same shape",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http", When: &resolver.Condition{Expr: &credExpr}},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: map[string]any{"body": "", "statusCode": 0}}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &bodyExpr}}},
+					},
+				},
+			},
+			expectRule: false,
+		},
+		{
+			name: "not flagged: transform has a when guard",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http", When: &resolver.Condition{Expr: &credExpr}},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: []any{}}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{
+							Provider: "cel",
+							When:     &resolver.Condition{Expr: &guardExpr},
+							Inputs:   map[string]*spec.ValueRef{"expression": {Expr: &bodyExpr}},
+						},
+					},
+				},
+			},
+			expectRule: false,
+		},
+		{
+			name: "not flagged: single resolve source",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http"},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &bodyExpr}}},
+					},
+				},
+			},
+			expectRule: false,
+		},
+		{
+			name: "not flagged: both sources are same provider type",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http", When: &resolver.Condition{Expr: &credExpr}},
+						{Provider: "http"},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &bodyExpr}}},
+					},
+				},
+			},
+			expectRule: false,
+		},
+		{
+			name: "not flagged: transform does not access structured fields",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http"},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: ""}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &safeExpr}}},
+					},
+				},
+			},
+			expectRule: false,
+		},
+		{
+			name: "not flagged: no transform phase",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http"},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: ""}}},
+					},
+				},
+			},
+			expectRule: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sol := &solution.Solution{
+				APIVersion: "scafctl.io/v1",
+				Kind:       "Solution",
+				Metadata:   solution.Metadata{Name: "test"},
+				Spec: solution.Spec{
+					Resolvers: map[string]*resolver.Resolver{
+						"api_data": tt.resolver,
+					},
+				},
+			}
+
+			reg := provider.NewRegistry()
+			require.NoError(t, reg.Register(newHTTPFakeProvider()))
+			require.NoError(t, reg.Register(newFakeProvider("static", map[string]*jsonschema.Schema{"value": {Type: "string"}})))
+			require.NoError(t, reg.Register(newFakeProvider("cel", map[string]*jsonschema.Schema{"expression": {Type: "string"}})))
+			require.NoError(t, reg.Register(newFakeProvider("go-template", map[string]*jsonschema.Schema{"template": {Type: "string"}})))
+
+			result := Solution(sol, "test.yaml", reg)
+			findings := filterFindingsByRule(result, "transform-shape-mismatch")
+
+			if tt.expectRule {
+				assert.NotEmpty(t, findings, "expected transform-shape-mismatch finding")
+				assert.Equal(t, SeverityWarning, findings[0].Severity)
+			} else {
+				assert.Empty(t, findings, "expected no transform-shape-mismatch finding")
+			}
+		})
+	}
+}
