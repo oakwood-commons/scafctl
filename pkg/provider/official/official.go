@@ -15,6 +15,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
+const (
+	// CatalogName is the name of the OCI catalog where official providers are published.
+	CatalogName = "official"
+)
+
 type contextKey struct{}
 
 // WithRegistry stores an official provider registry in the context.

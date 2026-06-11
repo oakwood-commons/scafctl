@@ -885,8 +885,16 @@ func BuildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
 // BuildPluginFetcherWithConfig can override. Other fields (Catalog,
 // BinaryName, Logger, Cache) are always derived from context.
 type PluginFetcherOverrides struct {
-	// AllowedCatalogs restricts which catalog names plugins may be fetched from.
+	// AllowedCatalogs restricts which catalog names plugins may be fetched from
+	// (Fetcher-level post-resolve check, belt-and-suspenders).
 	AllowedCatalogs []string
+	// ChainAllowedCatalogs restricts which catalogs are included in the chain
+	// during construction. Catalogs not in this list are excluded entirely.
+	ChainAllowedCatalogs []string
+	// PerCatalogArtifacts restricts which artifact names each catalog may serve.
+	// Keys are catalog names, values describe the policy for that catalog.
+	// Each matching catalog is wrapped with an AllowlistCatalog decorator.
+	PerCatalogArtifacts map[string]catalog.PluginPolicy
 	// Platform overrides the target platform. If empty, auto-detected.
 	Platform string
 	// NoCache bypasses the local cache when true.
@@ -909,7 +917,16 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 	}
 	appCfg := config.FromContext(ctx)
 	authReg := auth.RegistryFromContext(ctx)
-	catalogChain, err := catalog.BuildCatalogChain(appCfg, authReg, fetcherLogger)
+
+	var chainOpts []catalog.ChainCatalogOption
+	if override.ChainAllowedCatalogs != nil {
+		chainOpts = append(chainOpts, catalog.WithAllowedCatalogs(override.ChainAllowedCatalogs))
+	}
+	if override.PerCatalogArtifacts != nil {
+		chainOpts = append(chainOpts, catalog.WithPerCatalogArtifacts(override.PerCatalogArtifacts))
+	}
+
+	catalogChain, err := catalog.BuildCatalogChain(appCfg, authReg, fetcherLogger, chainOpts...)
 	if err != nil {
 		fetcherLogger.V(1).Info("catalog chain not available, plugin auto-fetch disabled", "error", err)
 		return nil, fmt.Errorf("building catalog chain: %w", err)

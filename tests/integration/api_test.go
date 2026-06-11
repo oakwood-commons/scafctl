@@ -22,6 +22,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -2046,6 +2047,14 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	require.NoError(t, os.WriteFile(pluginBinDir+"/"+pluginName, []byte("#!/bin/sh\n"), 0o755))
 
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
+		Catalog: catalog.NewMockCatalog("untrusted-registry",
+			catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
+				return catalog.ArtifactInfo{
+					Reference: ref,
+					Catalog:   "untrusted-registry",
+				}, nil
+			}),
+		),
 		Cache:           plugin.NewCache(cacheDir),
 		Platform:        platform,
 		AllowedCatalogs: []string{"approved-only"},

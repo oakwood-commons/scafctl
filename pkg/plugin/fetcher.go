@@ -225,22 +225,28 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 				// If a version constraint is specified, verify the cached version satisfies it.
 				satisfies, _ := cachedVersionSatisfies(dep.Version, cachedVer)
 				if satisfies {
-					// Security: reject cached plugins when an allowlist is configured
-					// but cache lacks catalog origin metadata.
+					// Security: when an allowlist is configured but the cache
+					// lacks catalog origin metadata, skip the cache hit and
+					// fall through to catalog resolution so provenance can be
+					// properly verified.
 					if err := f.checkCatalogAllowed(""); err != nil {
-						return FetchResult{}, fmt.Errorf("cached plugin %s: %w", dep.Name, err)
+						f.logger.V(0).Info("cached plugin lacks origin metadata, re-fetching from catalog for allowlist verification",
+							"name", dep.Name,
+							"version", cachedVer,
+							"reason", err.Error())
+					} else {
+						f.logger.V(1).Info("using cached plugin (no lock file)",
+							"name", dep.Name,
+							"version", cachedVer,
+							"path", cachedPath)
+						return FetchResult{
+							Name:      dep.Name,
+							Kind:      dep.Kind,
+							Version:   cachedVer,
+							Path:      cachedPath,
+							FromCache: true,
+						}, nil
 					}
-					f.logger.V(1).Info("using cached plugin (no lock file)",
-						"name", dep.Name,
-						"version", cachedVer,
-						"path", cachedPath)
-					return FetchResult{
-						Name:      dep.Name,
-						Kind:      dep.Kind,
-						Version:   cachedVer,
-						Path:      cachedPath,
-						FromCache: true,
-					}, nil
 				}
 			}
 		}

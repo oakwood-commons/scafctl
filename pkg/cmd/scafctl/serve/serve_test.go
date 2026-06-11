@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -135,7 +136,7 @@ func TestBuildPluginPool_AuthWiring(t *testing.T) {
 		},
 	}
 
-	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
 	defer pool.Shutdown()
 
 	// Pool should have been created (non-nil) with auth options forwarded.
@@ -156,7 +157,7 @@ func TestBuildPluginPool_SanitizesEnv(t *testing.T) {
 		},
 	}
 
-	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
 	defer pool.Shutdown()
 
 	// API server pools sanitize env by default
@@ -176,7 +177,7 @@ func TestBuildPluginPool_AllowedPlugins(t *testing.T) {
 		},
 	}
 
-	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, []string{"foo", "bar"})
 	defer pool.Shutdown()
 
 	// Verify that a non-allowed plugin is rejected
@@ -201,7 +202,7 @@ func TestBuildPluginPool_GRPCMaxMessageSize(t *testing.T) {
 		},
 	}
 
-	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
 	defer pool.Shutdown()
 
 	// Exactly one client option should have been added (the gRPC max message size).
@@ -220,8 +221,167 @@ func TestBuildPluginPool_GRPCMaxMessageSizeZeroIsNoop(t *testing.T) {
 		},
 	}
 
-	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil)
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
 	defer pool.Shutdown()
 
 	assert.Equal(t, 0, pool.ClientOptsLen(), "zero GRPCMaxMessageSize should not add a client opt")
+}
+
+func TestBuildPreloadDeps(t *testing.T) {
+	tests := []struct {
+		name         string
+		providers    []official.Provider
+		registered   []string
+		allowed      []string // nil means no allowlist (allow all)
+		wantDepNames []string
+	}{
+		{
+			name: "allowlist filters to only permitted providers",
+			providers: []official.Provider{
+				{Name: "exec", CatalogRef: "exec", DefaultVersion: "1.0.0"},
+				{Name: "git", CatalogRef: "git", DefaultVersion: "1.0.0"},
+				{Name: "directory", CatalogRef: "directory", DefaultVersion: "1.0.0"},
+			},
+			allowed:      []string{"exec", "directory"},
+			wantDepNames: []string{"exec", "directory"},
+		},
+		{
+			name: "nil allowlist permits all providers",
+			providers: []official.Provider{
+				{Name: "exec", CatalogRef: "exec", DefaultVersion: "1.0.0"},
+				{Name: "git", CatalogRef: "git", DefaultVersion: "1.0.0"},
+			},
+			allowed:      nil,
+			wantDepNames: []string{"exec", "git"},
+		},
+		{
+			name: "allowlist with no matches produces empty deps",
+			providers: []official.Provider{
+				{Name: "exec", CatalogRef: "exec", DefaultVersion: "1.0.0"},
+			},
+			allowed:      []string{"nonexistent"},
+			wantDepNames: nil,
+		},
+		{
+			name: "already-registered providers are skipped",
+			providers: []official.Provider{
+				{Name: "http", CatalogRef: "http", DefaultVersion: "1.0.0"},
+				{Name: "git", CatalogRef: "git", DefaultVersion: "1.0.0"},
+			},
+			registered:   []string{"http"},
+			wantDepNames: []string{"git"},
+		},
+		{
+			name: "combined allowlist and already registered",
+			providers: []official.Provider{
+				{Name: "http", CatalogRef: "http", DefaultVersion: "1.0.0"},
+				{Name: "git", CatalogRef: "git", DefaultVersion: "1.0.0"},
+				{Name: "directory", CatalogRef: "directory", DefaultVersion: "1.0.0"},
+			},
+			registered:   []string{"http"},
+			allowed:      []string{"http", "git"},
+			wantDepNames: []string{"git"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			officialReg := official.NewRegistryFrom(tt.providers)
+
+			var reg *provider.Registry
+			if len(tt.registered) > 0 {
+				reg, _ = builtin.DefaultRegistry(context.Background())
+			} else {
+				reg = provider.NewRegistry()
+			}
+
+			var options preLoadOptions
+			if tt.allowed != nil {
+				options.allowedPlugins = make(map[string]bool, len(tt.allowed))
+				for _, a := range tt.allowed {
+					options.allowedPlugins[a] = true
+				}
+			}
+
+			lgr := logr.Discard()
+			deps := buildPreloadDeps(officialReg, reg, &options, &lgr)
+
+			var gotNames []string
+			for _, d := range deps {
+				gotNames = append(gotNames, d.Name)
+			}
+
+			assert.ElementsMatch(t, tt.wantDepNames, gotNames)
+		})
+	}
+}
+
+func TestConfigurePreloadOptions(t *testing.T) {
+	tests := []struct {
+		name           string
+		perCatalog     map[string]catalog.PluginPolicy
+		catalogName    string
+		wantOptsLen    int
+		wantNilAllowed bool
+		wantAllowed    map[string]bool
+	}{
+		{
+			name:           "nil perCatalog applies no filter",
+			perCatalog:     nil,
+			catalogName:    "official",
+			wantOptsLen:    0,
+			wantNilAllowed: true,
+		},
+		{
+			name:           "wildcard policy applies no filter",
+			perCatalog:     map[string]catalog.PluginPolicy{"official": {AllowAll: true}},
+			catalogName:    "official",
+			wantOptsLen:    0,
+			wantNilAllowed: true,
+		},
+		{
+			name:           "catalog absent from map denies all",
+			perCatalog:     map[string]catalog.PluginPolicy{"other": {Plugins: []string{"foo"}}},
+			catalogName:    "official",
+			wantOptsLen:    1,
+			wantNilAllowed: false,
+			wantAllowed:    map[string]bool{},
+		},
+		{
+			name:           "explicit list filters to named plugins",
+			perCatalog:     map[string]catalog.PluginPolicy{"official": {Plugins: []string{"exec", "git"}}},
+			catalogName:    "official",
+			wantOptsLen:    1,
+			wantNilAllowed: false,
+			wantAllowed:    map[string]bool{"exec": true, "git": true},
+		},
+		{
+			name:           "empty map with catalog absent denies all",
+			perCatalog:     map[string]catalog.PluginPolicy{},
+			catalogName:    "official",
+			wantOptsLen:    1,
+			wantNilAllowed: false,
+			wantAllowed:    map[string]bool{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := configurePreloadOptions(tt.perCatalog, nil, tt.catalogName)
+
+			assert.Len(t, opts, tt.wantOptsLen)
+
+			options := &preLoadOptions{}
+			for _, opt := range opts {
+				opt(options)
+			}
+
+			if tt.wantNilAllowed {
+				assert.Nil(t, options.allowedPlugins)
+			} else {
+				require.NotNil(t, options.allowedPlugins)
+				assert.Equal(t, tt.wantAllowed, options.allowedPlugins)
+			}
+		})
+	}
 }
