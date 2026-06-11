@@ -208,10 +208,27 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 			if op, found := officialReg.Get(name); found {
 				lgr.V(1).Info("found provider in official registry", "name", name, "catalogRef", op.CatalogRef)
 
-				// Structured output for -o flag (including quiet) or interactive mode.
-				// Quiet mode is handled by kvx (produces no output), consistent with built-in providers.
+				// Attempt to load full schema from cached binary.
+				cache := plugin.NewCache(settings.PluginCacheDirFor(o.BinaryName))
+				if binPath, version, cached := cache.GetLatestBinary(op.CatalogRef); cached {
+					lgr.V(1).Info("probing cached official plugin for full schema", "name", name, "catalogRef", op.CatalogRef, "path", binPath)
+					desc, probeErr := plugin.ProbePluginDescriptor(ctx, binPath, name)
+					if probeErr == nil {
+						if (o.Output == "auto" || o.Output == "") && !o.Interactive {
+							return o.printProviderDetail(ctx, desc)
+						}
+						output := provdetail.BuildProviderDetail(*desc)
+						output["source"] = "official"
+						output["version"] = version
+						return o.writeOutput(ctx, output)
+					}
+					lgr.V(1).Info("failed to probe official plugin descriptor, falling back to minimal metadata", "name", name, "error", probeErr)
+				}
+
+				// Fallback: minimal metadata with hint.
 				if (o.Output != "" && o.Output != "auto") || o.Interactive {
 					detail := official.Detail(op)
+					detail["hint"] = fmt.Sprintf("Run '%s plugins install %s' to fetch the plugin and view full schema", o.BinaryName, op.CatalogRef)
 					return o.writeOutput(ctx, detail)
 				}
 
@@ -219,7 +236,8 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 				w := writer.FromContext(ctx)
 				if w != nil {
 					w.Plainlnf("Provider %q is an official plugin provider (catalog: %s, version: %s).\n"+
-						"It is auto-fetched on first use in a solution. Use 'plugins install' to pre-fetch.", name, op.CatalogRef, op.DefaultVersion)
+						"It is auto-fetched on first use in a solution. Use '%s plugins install %s' to pre-fetch and view full schema.",
+						name, op.CatalogRef, op.DefaultVersion, o.BinaryName, op.CatalogRef)
 				}
 				return nil
 			}
@@ -231,11 +249,26 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 		// Fallback: check the local plugin cache.
 		cache := plugin.NewCache(settings.PluginCacheDirFor(o.BinaryName))
 		if binPath, version, found := cache.GetLatestBinary(name); found {
-			// Validate the cached binary actually exposes providers before reporting it.
+			// Probe the cached binary for its full descriptor.
+			lgr.V(1).Info("probing cached plugin for full schema", "name", name, "path", binPath)
+			if desc, probeErr := plugin.ProbePluginDescriptor(ctx, binPath, name); probeErr == nil {
+				lgr.V(1).Info("found provider in plugin cache with full descriptor", "name", name, "version", version)
+				if (o.Output == "auto" || o.Output == "") && !o.Interactive {
+					return o.printProviderDetail(ctx, desc)
+				}
+				output := provdetail.BuildProviderDetail(*desc)
+				output["source"] = "local"
+				output["version"] = version
+				output["path"] = binPath
+				return o.writeOutput(ctx, output)
+			}
+			lgr.V(1).Info("cached binary failed full probe", "name", name, "path", binPath)
+
+			// Validate the cached binary at least exposes providers before reporting it.
 			if _, ok := plugin.ProbePluginDescription(ctx, binPath, name); !ok {
 				lgr.V(1).Info("cached binary is not a valid provider plugin", "name", name, "path", binPath)
 			} else {
-				lgr.V(1).Info("found provider in plugin cache", "name", name, "version", version, "path", binPath)
+				lgr.V(1).Info("found provider in plugin cache (minimal info)", "name", name, "version", version, "path", binPath)
 				w := writer.FromContext(ctx)
 				cachedDetail := map[string]any{
 					"name":    name,

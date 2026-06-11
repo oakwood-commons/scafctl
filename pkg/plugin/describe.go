@@ -5,9 +5,11 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
 // CachedPluginInfo describes a cached plugin with metadata obtained by
@@ -90,4 +92,71 @@ func ProbePluginDescription(ctx context.Context, binaryPath, name string) (strin
 	}
 
 	return wrapper.Descriptor().Description, true
+}
+
+// ProbePluginDescriptor starts a plugin binary, queries the named provider's
+// full descriptor, then kills the process. Returns nil and an error on failure.
+// This is a short-lived probe — it does not register the provider in any registry.
+func ProbePluginDescriptor(ctx context.Context, binaryPath, providerName string) (*provider.Descriptor, error) {
+	lgr := logr.FromContextOrDiscard(ctx)
+
+	const maxProbeTimeout = 10 * time.Second
+
+	// Guard against malfunctioning plugins that hang indefinitely.
+	ctx, cancel := context.WithTimeout(ctx, maxProbeTimeout)
+	defer cancel()
+
+	// Short-circuit if the caller already cancelled — avoid spawning a process.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// Derive startup timeout from the context deadline so it cannot outlive the caller.
+	startTimeout := maxProbeTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(dl); remaining < startTimeout {
+			startTimeout = remaining
+		}
+	}
+
+	client, err := NewClient(binaryPath, WithStartTimeout(startTimeout), WithSanitizedEnv())
+	if err != nil {
+		return nil, fmt.Errorf("starting plugin binary %s: %w", binaryPath, err)
+	}
+	defer client.Kill()
+
+	providers, err := client.GetProviders(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("querying plugin providers from %s: %w", binaryPath, err)
+	}
+
+	// Find the requested provider name among available providers.
+	targetName := providerName
+	found := false
+	for _, p := range providers {
+		if p == providerName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		if len(providers) == 0 {
+			return nil, fmt.Errorf("plugin exposes no providers")
+		}
+		lgr.V(1).Info("requested provider not found in plugin",
+			"requested", providerName, "available", providers)
+		return nil, fmt.Errorf("provider %q not found in plugin (available: %v)", providerName, providers)
+	}
+
+	wrapper, err := NewProviderWrapper(client, targetName, WithContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("getting provider descriptor: %w", err)
+	}
+
+	desc := wrapper.Descriptor()
+	if desc == nil {
+		return nil, fmt.Errorf("plugin returned nil descriptor for %q", targetName)
+	}
+
+	return desc, nil
 }
