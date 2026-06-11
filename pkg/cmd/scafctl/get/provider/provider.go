@@ -14,6 +14,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -22,6 +23,8 @@ import (
 	provdetail "github.com/oakwood-commons/scafctl/pkg/provider/detail"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -46,6 +49,8 @@ type Options struct {
 
 	// For dependency injection in tests
 	registry *provider.Registry
+
+	officialDetailLoader func(context.Context, string, official.Provider, *provider.Registry) (map[string]any, error)
 }
 
 // CommandProvider creates the 'get provider' subcommand
@@ -211,7 +216,13 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 				// Structured output for -o flag (including quiet) or interactive mode.
 				// Quiet mode is handled by kvx (produces no output), consistent with built-in providers.
 				if (o.Output != "" && o.Output != "auto") || o.Interactive {
-					detail := official.Detail(op)
+					detail, err := o.loadOfficialProviderDetail(ctx, name, op, reg)
+					if err != nil {
+						lgr.V(1).Info("failed to load official provider detail, using catalog metadata", "name", name, "error", err)
+						detail = official.Detail(op)
+						detail["schemaAvailable"] = false
+						detail["hint"] = "Full schema details are available when the provider plugin can be fetched or loaded from cache."
+					}
 					return o.writeOutput(ctx, detail)
 				}
 
@@ -274,6 +285,49 @@ func (o *Options) RunGetProvider(ctx context.Context, name string) error {
 	output := BuildProviderDetail(*desc)
 	output["source"] = "builtin"
 	return o.writeOutput(ctx, output)
+}
+
+func (o *Options) loadOfficialProviderDetail(ctx context.Context, name string, op official.Provider, reg *provider.Registry) (map[string]any, error) {
+	if o.officialDetailLoader != nil {
+		return o.officialDetailLoader(ctx, name, op, reg)
+	}
+	if config.FromContext(ctx) == nil {
+		return nil, fmt.Errorf("config not available")
+	}
+
+	fetcher, err := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{})
+	if err != nil {
+		return nil, fmt.Errorf("building plugin fetcher: %w", err)
+	}
+
+	dep := op.ToPluginDependency()
+	results, err := fetcher.FetchPlugins(ctx, []solution.PluginDependency{dep}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fetching provider %q: %w", name, err)
+	}
+
+	binaryName := settings.BinaryNameFromContext(ctx)
+	if binaryName == "" {
+		binaryName = o.BinaryName
+	}
+	if binaryName == "" {
+		binaryName = settings.CliBinaryName
+	}
+	pluginCfg := &plugin.ProviderConfig{BinaryName: binaryName}
+	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, pluginCfg, plugin.AuthClientOptsFromContext(ctx)...)
+	if err != nil {
+		return nil, fmt.Errorf("registering provider %q: %w", name, err)
+	}
+	defer plugin.KillAll(clients)
+
+	p, ok := reg.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("loaded plugin did not register provider %q", name)
+	}
+	detail := BuildProviderDetail(*p.Descriptor())
+	detail["source"] = "official"
+	detail["catalogRef"] = op.CatalogRef
+	return detail, nil
 }
 
 // printProviderDetail prints a nicely formatted provider detail view

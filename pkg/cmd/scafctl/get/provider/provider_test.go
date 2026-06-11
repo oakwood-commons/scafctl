@@ -958,6 +958,55 @@ func TestOptions_RunGetProvider_FallsBackToOfficialRegistry(t *testing.T) {
 		assert.Contains(t, output, "Official plugin provider")
 	})
 
+	t.Run("shows_loaded_schema_for_official_provider_with_structured_output", func(t *testing.T) {
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+			officialDetailLoader: func(_ context.Context, name string, op official.Provider, gotReg *provider.Registry) (map[string]any, error) {
+				assert.Equal(t, "exec", name)
+				assert.Equal(t, "exec", op.CatalogRef)
+				assert.Same(t, reg, gotReg)
+
+				desc := newMockProvider("exec", "Execute commands", []provider.Capability{provider.CapabilityAction}).Descriptor()
+				detail := BuildProviderDetail(*desc)
+				detail["source"] = "official"
+				detail["catalogRef"] = op.CatalogRef
+				return detail, nil
+			},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "exec", CatalogRef: "exec", DefaultVersion: "latest"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "exec")
+		require.NoError(t, err)
+
+		var detail map[string]any
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &detail))
+		assert.Equal(t, "exec", detail["name"])
+		assert.Equal(t, "official", detail["source"])
+		assert.Equal(t, "exec", detail["catalogRef"])
+		assert.Contains(t, detail, "schema")
+		assert.Contains(t, detail, "outputSchemas")
+		assert.Contains(t, detail, "cliUsage")
+		assert.NotContains(t, detail, "schemaAvailable")
+	})
+
 	t.Run("returns_error_when_provider_not_in_any_registry", func(t *testing.T) {
 		var outBuf bytes.Buffer
 		ioStreams := &terminal.IOStreams{
