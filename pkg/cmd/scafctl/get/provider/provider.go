@@ -314,13 +314,14 @@ func (o *Options) loadOfficialProviderDetail(ctx context.Context, name string, o
 		binaryName = settings.CliBinaryName
 	}
 	pluginCfg := &plugin.ProviderConfig{BinaryName: binaryName}
-	clients, err := plugin.RegisterFetchedPlugins(ctx, reg, results, pluginCfg, plugin.AuthClientOptsFromContext(ctx)...)
+	detailReg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+	clients, err := plugin.RegisterFetchedPlugins(ctx, detailReg, results, pluginCfg, plugin.AuthClientOptsFromContext(ctx)...)
 	if err != nil {
 		return nil, fmt.Errorf("registering provider %q: %w", name, err)
 	}
 	defer plugin.KillAll(clients)
 
-	p, ok := reg.Get(name)
+	p, ok := detailReg.Get(name)
 	if !ok {
 		return nil, fmt.Errorf("loaded plugin did not register provider %q", name)
 	}
