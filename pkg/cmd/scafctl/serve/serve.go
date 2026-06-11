@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -134,6 +135,41 @@ func runServe(ctx context.Context, opts *Options) error {
 		return fmt.Errorf("initializing provider registry: %w", err)
 	}
 
+	// Build server identity registry for API-mode token retrieval.
+	identityReg, err := sidregistry.TokenProviderRegistry(ctx, &cfg.APIServer, lgr)
+	if err != nil {
+		return fmt.Errorf("building identity registry: %w", err)
+	}
+	// Build token provider registry for unified token retrieval in API mode.
+	tsReg, err := tokenprovider.Build(runmode.API, nil, identityReg)
+	if err != nil {
+		return fmt.Errorf("building token provider registry: %w", err)
+	}
+
+	ctx = tokenprovider.WithRegistry(ctx, tsReg)
+
+	// Parse plugin allowlist at startup boundary (validates "catalog/plugin" format).
+	var (
+		bareNames  []string
+		perCatalog map[string]catalog.PluginPolicy
+	)
+	if len(cfg.APIServer.Plugins.AllowedPlugins) > 0 {
+		parsed, parseErr := plugin.ParseAllowedPlugins(cfg.APIServer.Plugins.AllowedPlugins)
+		if parseErr != nil {
+			return fmt.Errorf("invalid plugin allowlist: %w", parseErr)
+		}
+		bareNames = plugin.BareNames(parsed)
+		perCatalog = plugin.GroupByCatalog(parsed)
+	}
+
+	// AllowedCatalogs controls which catalogs participate in the chain.
+	catalogNames := cfg.APIServer.Plugins.AllowedCatalogs
+
+	// If a catalog is in allowedCatalogs but has no plugins assigned in
+	// allowedPlugins, backfill it with a deny-all policy so
+	// BuildCatalogChain wraps it with an empty allowlist.
+	perCatalog = populateCatalogPolicies(catalogNames, perCatalog)
+
 	// Build official provider registry for auto-resolution
 	var officialReg *official.Registry
 	if cfg.Settings.DisableOfficialProviders {
@@ -142,44 +178,33 @@ func runServe(ctx context.Context, opts *Options) error {
 		officialReg = official.NewRegistry()
 	}
 
-	// Build plugin fetcher for auto-fetching plugin binaries from catalogs
+	// Build plugin fetcher for auto-fetching plugin binaries from catalogs.
+	// Chain construction respects catalog and per-catalog artifact allowlists.
 	var pluginFetcher *plugin.Fetcher
 	if fetcher, fetchErr := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{
-		AllowedCatalogs: cfg.APIServer.Plugins.AllowedCatalogs,
+		AllowedCatalogs:      catalogNames,
+		ChainAllowedCatalogs: catalogNames,
+		PerCatalogArtifacts:  perCatalog,
 	}); fetchErr == nil {
 		pluginFetcher = fetcher
 	} else {
 		lgr.V(1).Info("plugin fetcher not available; official providers will not be pre-loaded", "error", fetchErr)
 	}
 
-	// Pre-load all official providers into the registry at server startup.
-	// This avoids per-request gRPC spawn overhead and ensures the extracted
-	// providers (exec, directory, git, etc.) are available for all endpoints.
+	// Pre-load official providers (filtered by per-catalog allowlist).
 	var pluginClients []*plugin.Client
 	if officialReg != nil && pluginFetcher != nil {
-		clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, pluginFetcher)
+		var preloadOpts []PreLoadOption
+		preloadOpts = configurePreloadOptions(perCatalog, preloadOpts, official.CatalogName)
+		clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, pluginFetcher, preloadOpts...)
 		if preloadErr != nil {
 			lgr.V(0).Info("warning: some official providers could not be pre-loaded", "error", preloadErr)
 		}
 		pluginClients = clients
 	}
 
-	// Create plugin pool for managing external plugin lifecycle.
-	// Pre-loaded official providers are adopted into the pool so their
-	// lifecycle (shutdown) is managed consistently.
-	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients)
-
-	// Build server identity registry for API-mode token retrieval.
-	identityReg, err := sidregistry.TokenProviderRegistry(ctx, &cfg.APIServer, lgr)
-	if err != nil {
-		return fmt.Errorf("building identity registry: %w", err)
-	}
-
-	// Build token provider registry for unified token retrieval in API mode.
-	tsReg, err := tokenprovider.Build(runmode.API, nil, identityReg)
-	if err != nil {
-		return fmt.Errorf("building token provider registry: %w", err)
-	}
+	// Create plugin pool (bare-name fast-reject for external plugins).
+	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients, bareNames)
 
 	// Build server options
 	serverOpts := []api.ServerOption{
@@ -229,6 +254,62 @@ func runServe(ctx context.Context, opts *Options) error {
 	return srv.Start()
 }
 
+func populateCatalogPolicies(catalogNames []string, perCatalog map[string]catalog.PluginPolicy) map[string]catalog.PluginPolicy {
+	if len(catalogNames) > 0 {
+		if perCatalog == nil {
+			perCatalog = make(map[string]catalog.PluginPolicy, len(catalogNames))
+		}
+		for _, name := range catalogNames {
+			if _, exists := perCatalog[name]; !exists {
+				perCatalog[name] = catalog.PluginPolicy{Plugins: []string{}}
+			}
+		}
+	}
+	return perCatalog
+}
+
+func configurePreloadOptions(perCatalog map[string]catalog.PluginPolicy, preloadOpts []PreLoadOption, catalogName string) []PreLoadOption {
+	// When perCatalog is nil (no allowlist configured), no filter is applied.
+	if perCatalog != nil {
+		// An allowlist is configured; determine official catalog policy.
+		policy, ok := perCatalog[catalogName]
+		switch {
+		case !ok:
+			// catalog absent from policy map: deny all.
+			preloadOpts = append(preloadOpts, WithAllowedPlugins([]string{}))
+		case policy.AllowAll:
+			// Wildcard ("catalog/*"): no filter needed.
+		default:
+			// Explicit list of allowed plugins.
+			preloadOpts = append(preloadOpts, WithAllowedPlugins(policy.Plugins))
+		}
+	}
+	return preloadOpts
+}
+
+type preLoadOptions struct {
+	allowedPlugins map[string]bool
+}
+
+type PreLoadOption func(*preLoadOptions)
+
+func WithAllowedPlugins(plugins []string) PreLoadOption {
+	return func(opts *preLoadOptions) {
+		if plugins == nil {
+			// nil means "no filter" — leave allowedPlugins unchanged.
+			return
+		}
+		// Non-nil (including empty) sets an explicit allowlist.
+		// An empty slice means "deny all".
+		if opts.allowedPlugins == nil {
+			opts.allowedPlugins = make(map[string]bool, len(plugins))
+		}
+		for _, p := range plugins {
+			opts.allowedPlugins[p] = true
+		}
+	}
+}
+
 // preloadOfficialProviders fetches all official providers and registers them
 // into the provider registry. This is called at server startup so that
 // extracted providers (exec, directory, git, etc.) are immediately available
@@ -242,26 +323,15 @@ func preloadOfficialProviders(
 	reg *provider.Registry,
 	officialReg *official.Registry,
 	fetcher *plugin.Fetcher,
+	opts ...PreLoadOption,
 ) ([]*plugin.Client, error) {
+	options := &preLoadOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 	lgr := logger.FromContext(ctx)
 
-	// Build plugin dependencies for all official providers
-	providers := officialReg.Names()
-	deps := make([]solution.PluginDependency, 0, len(providers))
-	for _, name := range providers {
-		p, ok := officialReg.Get(name)
-		if !ok {
-			continue
-		}
-		// Skip providers already in the registry (e.g., builtins)
-		if reg.Has(name) {
-			if lgr != nil {
-				lgr.V(1).Info("official provider already registered, skipping pre-load", "provider", name)
-			}
-			continue
-		}
-		deps = append(deps, p.ToPluginDependency())
-	}
+	deps := buildPreloadDeps(officialReg, reg, options, lgr)
 
 	if len(deps) == 0 {
 		return nil, nil
@@ -301,16 +371,49 @@ func preloadOfficialProviders(
 	return clients, nil
 }
 
+// buildPreloadDeps determines which official providers need to be fetched
+// based on the allowlist and what's already registered.
+func buildPreloadDeps(
+	officialReg *official.Registry,
+	reg *provider.Registry,
+	options *preLoadOptions,
+	lgr *logr.Logger,
+) []solution.PluginDependency {
+	providers := officialReg.Names()
+	deps := make([]solution.PluginDependency, 0, len(providers))
+	for _, name := range providers {
+		if options.allowedPlugins != nil && !options.allowedPlugins[name] {
+			if lgr != nil {
+				lgr.V(1).Info("official provider not allowed, skipping pre-load", "provider", name)
+			}
+			continue
+		}
+		p, ok := officialReg.Get(name)
+		if !ok {
+			continue
+		}
+		// Skip providers already in the registry (e.g., builtins)
+		if reg.Has(name) {
+			if lgr != nil {
+				lgr.V(1).Info("official provider already registered, skipping pre-load", "provider", name)
+			}
+			continue
+		}
+		deps = append(deps, p.ToPluginDependency())
+	}
+	return deps
+}
+
 // buildPluginPool creates a Pool configured from the API server settings and
 // adopts any pre-loaded official plugin clients into it.
-func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fetcher, reg *provider.Registry, lgr *logr.Logger, preloaded []*plugin.Client) *plugin.Pool {
+func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fetcher, reg *provider.Registry, lgr *logr.Logger, preloaded []*plugin.Client, allowedPluginNames []string) *plugin.Pool {
 	poolOpts := []plugin.PoolOption{
 		plugin.WithIdleTimeout(5 * time.Minute),
 		plugin.WithMaxPlugins(50),
 		plugin.WithDisableExternal(!cfg.APIServer.Plugins.AllowExternal),
 	}
-	if len(cfg.APIServer.Plugins.AllowedPlugins) > 0 {
-		poolOpts = append(poolOpts, plugin.WithAllowedPlugins(cfg.APIServer.Plugins.AllowedPlugins))
+	if len(allowedPluginNames) > 0 {
+		poolOpts = append(poolOpts, plugin.WithAllowedPlugins(allowedPluginNames))
 	}
 	// Wire auth host dependencies so plugins can use host auth
 	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {

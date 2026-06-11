@@ -16,117 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockCatalog implements the Catalog interface for testing.
-type mockCatalog struct {
-	name                string
-	artifacts           map[string]mockArtifact
-	listFunc            func(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error)
-	storeFunc           func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
-	deleteFunc          func(ctx context.Context, ref Reference) error
-	fetchFunc           func(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error)
-	fetchWithBundleFunc func(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error)
-	resolveFunc         func(ctx context.Context, ref Reference) (ArtifactInfo, error)
-}
-
-type mockArtifact struct {
-	content    []byte
-	bundleData []byte
-	info       ArtifactInfo
-}
-
-func newMockCatalog(name string) *mockCatalog {
-	return &mockCatalog{
-		name:      name,
-		artifacts: make(map[string]mockArtifact),
-	}
-}
-
-func (m *mockCatalog) addArtifact(ref Reference, content []byte, annotations map[string]string) {
-	m.artifacts[ref.String()] = mockArtifact{
-		content: content,
-		info: ArtifactInfo{
-			Reference:   ref,
-			Digest:      fmt.Sprintf("sha256:mock-%s", ref.String()),
-			Annotations: annotations,
-			Catalog:     m.name,
-		},
-	}
-}
-
-func (m *mockCatalog) Name() string { return m.name }
-
-func (m *mockCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
-	if m.storeFunc != nil {
-		return m.storeFunc(ctx, ref, content, bundleData, annotations, force)
-	}
-	info := ArtifactInfo{Reference: ref, Catalog: m.name}
-	m.artifacts[ref.String()] = mockArtifact{content: content, bundleData: bundleData, info: info}
-	return info, nil
-}
-
-func (m *mockCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
-	if m.fetchFunc != nil {
-		return m.fetchFunc(ctx, ref)
-	}
-	a, ok := m.artifacts[ref.String()]
-	if !ok {
-		return nil, ArtifactInfo{}, ErrArtifactNotFound
-	}
-	return a.content, a.info, nil
-}
-
-func (m *mockCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
-	if m.fetchWithBundleFunc != nil {
-		return m.fetchWithBundleFunc(ctx, ref)
-	}
-	a, ok := m.artifacts[ref.String()]
-	if !ok {
-		return nil, nil, ArtifactInfo{}, ErrArtifactNotFound
-	}
-	return a.content, a.bundleData, a.info, nil
-}
-
-func (m *mockCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
-	if m.resolveFunc != nil {
-		return m.resolveFunc(ctx, ref)
-	}
-	a, ok := m.artifacts[ref.String()]
-	if !ok {
-		return ArtifactInfo{}, ErrArtifactNotFound
-	}
-	return a.info, nil
-}
-
-func (m *mockCatalog) List(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error) {
-	if m.listFunc != nil {
-		return m.listFunc(ctx, kind, name)
-	}
-	var results []ArtifactInfo
-	for _, a := range m.artifacts {
-		if name != "" && a.info.Reference.Name != name {
-			continue
-		}
-		if a.info.Reference.Kind != kind {
-			continue
-		}
-		results = append(results, a.info)
-	}
-	return results, nil
-}
-
-func (m *mockCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
-	_, ok := m.artifacts[ref.String()]
-	return ok, nil
-}
-
-func (m *mockCatalog) Delete(ctx context.Context, ref Reference) error {
-	if m.deleteFunc != nil {
-		return m.deleteFunc(ctx, ref)
-	}
-	delete(m.artifacts, ref.String())
-	return nil
-}
-
 func testRef(name, version string) Reference {
 	ref := Reference{
 		Kind: ArtifactKindProvider,
@@ -765,4 +654,140 @@ func TestBuildCatalogChain_SkipsReservedNamesFromMiddle(t *testing.T) {
 	middle, ok := chain.catalogs[1].(*RemoteCatalog)
 	require.True(t, ok)
 	assert.Equal(t, "my-catalog", middle.name)
+}
+
+func TestBuildCatalogChain_WithAllowedCatalogs_ExcludesLocal(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "ghcr.io/example",
+			},
+		},
+	}
+
+	// Only allow "official" — local should be excluded.
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard(), WithAllowedCatalogs([]string{config.CatalogNameOfficial}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	for _, cat := range chain.catalogs {
+		assert.NotEqual(t, LocalCatalogName, cat.Name())
+	}
+}
+
+func TestBuildCatalogChain_WithAllowedCatalogs_ExcludesOfficial(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "ghcr.io/example",
+			},
+		},
+	}
+
+	// Only allow "local" — official should be excluded.
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard(), WithAllowedCatalogs([]string{LocalCatalogName}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	for _, cat := range chain.catalogs {
+		assert.NotEqual(t, config.CatalogNameOfficial, cat.Name())
+	}
+}
+
+func TestBuildCatalogChain_WithPerCatalogArtifacts_DenyDefault(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Policy only mentions "other-catalog" — local should be wrapped with deny-all.
+	chain, err := BuildCatalogChain(nil, nil, logr.Discard(), WithPerCatalogArtifacts(map[string]PluginPolicy{
+		"other-catalog": {Plugins: []string{"foo"}},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Local catalog should be wrapped with an empty allowlist (deny all).
+	wrapped, ok := chain.catalogs[0].(*AllowlistCatalog)
+	require.True(t, ok, "expected local catalog to be wrapped in AllowlistCatalog")
+	assert.Equal(t, LocalCatalogName, wrapped.Name())
+	assert.False(t, wrapped.isAllowed("anything"))
+}
+
+func TestBuildCatalogChain_WithPerCatalogArtifacts_EmptyMapDeniesAll(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Empty map (e.g. allowedPlugins: []) — all catalogs should be denied.
+	chain, err := BuildCatalogChain(nil, nil, logr.Discard(), WithPerCatalogArtifacts(map[string]PluginPolicy{}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Local catalog should be wrapped with deny-all.
+	wrapped, ok := chain.catalogs[0].(*AllowlistCatalog)
+	require.True(t, ok, "expected local catalog to be wrapped in AllowlistCatalog")
+	assert.False(t, wrapped.isAllowed("exec"))
+	assert.False(t, wrapped.isAllowed("anything"))
+}
+
+func TestBuildCatalogChain_WithPerCatalogArtifacts_Wildcard(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Wildcard policy for local — should not be wrapped.
+	chain, err := BuildCatalogChain(nil, nil, logr.Discard(), WithPerCatalogArtifacts(map[string]PluginPolicy{
+		LocalCatalogName: {AllowAll: true},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Wildcard means no wrapping — underlying type should be *LocalCatalog.
+	assert.IsType(t, &LocalCatalog{}, chain.catalogs[0])
+}
+
+func TestBuildCatalogChain_WithPerCatalogArtifacts_ExplicitList(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Explicit list for local catalog — only "exec" is allowed.
+	chain, err := BuildCatalogChain(nil, nil, logr.Discard(), WithPerCatalogArtifacts(map[string]PluginPolicy{
+		LocalCatalogName: {Plugins: []string{"exec"}},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	wrapped, ok := chain.catalogs[0].(*AllowlistCatalog)
+	require.True(t, ok, "expected local catalog to be wrapped in AllowlistCatalog")
+	assert.True(t, wrapped.isAllowed("exec"))
+	assert.False(t, wrapped.isAllowed("git"))
+}
+
+func TestBuildCatalogChain_WithPerCatalogArtifacts_OfficialDenyDefault(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: config.CatalogNameOfficial,
+				Type: config.CatalogTypeOCI,
+				URL:  "ghcr.io/example",
+			},
+		},
+	}
+
+	// Policy only mentions local — official should be wrapped with deny-all.
+	chain, err := BuildCatalogChain(cfg, nil, logr.Discard(), WithPerCatalogArtifacts(map[string]PluginPolicy{
+		LocalCatalogName: {AllowAll: true},
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Find the official catalog in the chain (should be last).
+	last := chain.catalogs[len(chain.catalogs)-1]
+	wrapped, ok := last.(*AllowlistCatalog)
+	require.True(t, ok, "expected official catalog to be wrapped in AllowlistCatalog")
+	assert.Equal(t, config.CatalogNameOfficial, wrapped.Name())
+	assert.False(t, wrapped.isAllowed("exec"))
 }

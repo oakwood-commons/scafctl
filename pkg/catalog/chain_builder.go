@@ -11,6 +11,49 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
+// PluginPolicy describes what is allowed from a single catalog.
+type PluginPolicy struct {
+	AllowAll bool     // true = wildcard ("catalog/*"), Plugins is ignored
+	Plugins  []string // explicit plugin names (only meaningful when AllowAll is false)
+}
+
+type ChainCatalogOptions struct {
+	allowedCatalogs     map[string]bool
+	perCatalogArtifacts map[string]PluginPolicy
+}
+
+type ChainCatalogOption func(*ChainCatalogOptions)
+
+func WithAllowedCatalogs(catalogNames []string) ChainCatalogOption {
+	return func(opt *ChainCatalogOptions) {
+		if len(catalogNames) == 0 {
+			return
+		}
+		if opt.allowedCatalogs == nil {
+			opt.allowedCatalogs = make(map[string]bool)
+		}
+		for _, name := range catalogNames {
+			opt.allowedCatalogs[name] = true
+		}
+	}
+}
+
+// WithPerCatalogArtifacts restricts which artifacts each catalog may serve.
+// The map keys are catalog names; values describe the policy for that catalog.
+// Catalogs present with AllowAll=true are unrestricted. Catalogs present with
+// an explicit Plugins list are wrapped with an AllowlistCatalog. Catalogs NOT
+// in the map are wrapped with an empty allowlist (deny all) when restrictions
+// are active.
+func WithPerCatalogArtifacts(perCatalog map[string]PluginPolicy) ChainCatalogOption {
+	return func(opt *ChainCatalogOptions) {
+		opt.perCatalogArtifacts = perCatalog
+	}
+}
+
+func isCatalogAllowed(name string, allowed map[string]bool) bool {
+	return allowed == nil || allowed[name]
+}
+
 // BuildCatalogChain creates a ChainCatalog from the application configuration.
 //
 // The chain order is deterministic:
@@ -20,14 +63,23 @@ import (
 //
 // If authRegistry is provided, catalogs with an authProvider field will use
 // the corresponding auth handler for dynamic token injection.
-func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger) (*ChainCatalog, error) {
+func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger logr.Logger, opts ...ChainCatalogOption) (*ChainCatalog, error) {
 	var catalogs []Catalog
+
+	// Apply options
+	var options ChainCatalogOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 
 	// 1. Local catalog always comes first.
 	localCat, err := NewLocalCatalog(logger)
-	if err != nil {
+	switch {
+	case err != nil:
 		logger.V(1).Info("local catalog not available", "error", err)
-	} else {
+	case !isCatalogAllowed(localCat.Name(), options.allowedCatalogs):
+		logger.V(1).Info("local catalog not in allowed list, skipping")
+	default:
 		catalogs = append(catalogs, localCat)
 	}
 
@@ -51,6 +103,11 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 				continue
 			}
 
+			if !isCatalogAllowed(catCfg.Name, options.allowedCatalogs) {
+				logger.V(1).Info("catalog not in allowed list, skipping", "catalog", catCfg.Name)
+				continue
+			}
+
 			remoteCat, remoteCatErr := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
 			if remoteCatErr != nil {
 				continue
@@ -60,7 +117,9 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 
 		// 3. Official catalog always comes last (unless disabled).
 		if !cfg.Settings.DisableOfficialCatalog {
-			if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
+			if !isCatalogAllowed(config.CatalogNameOfficial, options.allowedCatalogs) {
+				logger.V(1).Info("official catalog not in allowed list, skipping")
+			} else if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
 				officialCat, officialErr := buildRemoteCatalog(*officialCfg, credStore, authRegistry, logger)
 				if officialErr == nil {
 					catalogs = append(catalogs, officialCat)
@@ -71,6 +130,22 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 
 	if len(catalogs) == 0 {
 		return nil, fmt.Errorf("no catalogs available (local catalog could not be initialized)")
+	}
+
+	// Wrap catalogs with per-catalog artifact allowlists when configured.
+	if options.perCatalogArtifacts != nil {
+		for i, cat := range catalogs {
+			policy, ok := options.perCatalogArtifacts[cat.Name()]
+			switch {
+			case ok && policy.AllowAll:
+				// Wildcard: no restriction needed
+			case ok:
+				catalogs[i] = NewAllowlistCatalog(cat, policy.Plugins)
+			default:
+				// Catalog not in policy map: deny all when restrictions are active
+				catalogs[i] = NewAllowlistCatalog(cat, []string{})
+			}
+		}
 	}
 
 	return NewChainCatalog(logger, catalogs...)
