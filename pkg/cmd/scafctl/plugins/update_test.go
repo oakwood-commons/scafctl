@@ -296,6 +296,34 @@ func TestRunUpdate_DryRun_WithCachedPlugin(t *testing.T) {
 	assert.Equal(t, "github", items[0].Name)
 }
 
+func TestRunUpdate_PinnedVersion_NoCatalog_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	kvxOpts := kvx.NewOutputOptions(ioStreams)
+	kvxOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	seedTestCache(t, cacheDir, "exec", "1.0.0")
+
+	opts := &UpdateOptions{
+		CliParams: cliParams,
+		IOStreams: ioStreams,
+		CacheDir:  cacheDir,
+		Target:    "latest",
+		All:       true,
+	}
+
+	// Pinned to different version with no catalog → should error (not panic).
+	err := runUpdate(ctx, opts, []string{"exec@2.0.0"}, kvxOpts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no remote catalogs available")
+}
+
 func TestCommandUpdate_FlagsRegistered(t *testing.T) {
 	t.Parallel()
 

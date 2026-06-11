@@ -161,5 +161,6 @@ func TestSupportedPluginPlatforms(t *testing.T) {
 	assert.Contains(t, SupportedPluginPlatforms, "darwin/amd64")
 	assert.Contains(t, SupportedPluginPlatforms, "darwin/arm64")
 	assert.Contains(t, SupportedPluginPlatforms, "windows/amd64")
-	assert.Len(t, SupportedPluginPlatforms, 5)
+	assert.Contains(t, SupportedPluginPlatforms, "windows/arm64")
+	assert.Len(t, SupportedPluginPlatforms, 6)
 }

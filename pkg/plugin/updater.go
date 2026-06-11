@@ -77,6 +77,9 @@ func PluginKindFromCacheKey(cacheKey string) (name string, kind solution.PluginK
 
 // PlanUpdates checks the catalog for newer versions of cached plugins and
 // returns an UpdatePlan describing what would change.
+//
+// If catalogFetcher is nil, all plugins that require catalog resolution are
+// reported as failed with a "no remote catalogs configured" error.
 func PlanUpdates(ctx context.Context, cache *Cache, catalogFetcher *catalog.PluginFetcher, opts UpdateOptions) (*UpdatePlan, error) {
 	if len(opts.Names) == 0 && !opts.All {
 		return nil, fmt.Errorf("no plugin names specified; use positional args or --all")
@@ -127,6 +130,14 @@ func PlanUpdates(ctx context.Context, cache *Cache, catalogFetcher *catalog.Plug
 
 		name, kind := PluginKindFromCacheKey(cacheKey)
 		artifactKind := pluginKindToArtifactKind(kind)
+
+		if catalogFetcher == nil {
+			plan.Failed = append(plan.Failed, UpdateError{
+				Name:  cacheKey,
+				Error: "no remote catalogs configured; cannot check for updates",
+			})
+			continue
+		}
 
 		// Build version constraint based on target.
 		constraint := buildUpdateConstraint(currentVer, target)

@@ -16,6 +16,7 @@ var SupportedPluginPlatforms = []string{
 	"darwin/amd64",
 	"darwin/arm64",
 	"windows/amd64",
+	"windows/arm64",
 }
 
 // PlatformBinary pairs a platform string (e.g. "linux/amd64") with the
