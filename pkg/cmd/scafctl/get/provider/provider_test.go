@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -24,6 +26,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// pluginBinaryName returns the platform-appropriate binary filename.
+// On Windows, plugin binaries have an .exe suffix to match Cache.binaryPath.
+func pluginBinaryName(name string) string {
+	if runtime.GOOS == "windows" {
+		return name + ".exe"
+	}
+	return name
+}
 
 // mockProvider implements provider.Provider for testing
 type mockProvider struct {
@@ -379,6 +390,240 @@ func TestOptions_RunGetProvider(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOptions_RunGetProvider_OfficialProviderWithoutCache(t *testing.T) {
+	t.Run("returns_hint_in_structured_output_when_plugin_not_cached", func(t *testing.T) {
+		// Isolate from real plugin cache.
+		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+		xdg.Reload()
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{BinaryName: "scafctl"}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "github", CatalogRef: "gh-plugin", DefaultVersion: "latest", Description: "GitHub provider"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "github")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "github")
+		assert.Contains(t, output, "hint")
+		assert.Contains(t, output, "plugins install")
+		assert.Contains(t, output, "gh-plugin", "hint should reference CatalogRef, not provider name")
+	})
+
+	t.Run("returns_human_text_in_default_output_when_plugin_not_cached", func(t *testing.T) {
+		// Isolate from real plugin cache.
+		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+		xdg.Reload()
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{
+			Out:    &outBuf,
+			ErrOut: &outBuf,
+		}
+		cliParams := &settings.Run{BinaryName: "scafctl"}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: ""},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "github", CatalogRef: "gh-plugin", DefaultVersion: "latest", Description: "GitHub provider"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "github")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "github")
+		assert.Contains(t, output, "official plugin provider")
+		assert.Contains(t, output, "plugins install")
+		assert.Contains(t, output, "gh-plugin", "install hint should reference CatalogRef, not provider name")
+	})
+}
+
+func TestOptions_RunGetProvider_OfficialProviderWithCachedBinary(t *testing.T) {
+	t.Run("falls_back_to_hint_when_probe_fails_structured", func(t *testing.T) {
+		// Create a fake cached binary that exists but isn't a valid plugin.
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		// Set up fake binary at the expected cache path.
+		platform := runtime.GOOS + "-" + runtime.GOARCH
+		binDir := filepath.Join(cacheDir, "scafctl", "plugins", "gh-plugin", "1.0.0", platform)
+		require.NoError(t, os.MkdirAll(binDir, 0o755))
+		binPath := filepath.Join(binDir, pluginBinaryName("gh-plugin"))
+		require.NoError(t, os.WriteFile(binPath, []byte("#!/bin/sh\nexit 1\n"), 0o755))
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{BinaryName: "scafctl"}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "github", CatalogRef: "gh-plugin", DefaultVersion: "latest", Description: "GitHub provider"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "github")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		// Should fall back to hint since probe fails on a fake binary.
+		assert.Contains(t, output, "hint")
+		assert.Contains(t, output, "gh-plugin")
+	})
+
+	t.Run("falls_back_to_human_text_when_probe_fails_default", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		platform := runtime.GOOS + "-" + runtime.GOARCH
+		binDir := filepath.Join(cacheDir, "scafctl", "plugins", "gh-plugin", "1.0.0", platform)
+		require.NoError(t, os.MkdirAll(binDir, 0o755))
+		binPath := filepath.Join(binDir, pluginBinaryName("gh-plugin"))
+		require.NoError(t, os.WriteFile(binPath, []byte("#!/bin/sh\nexit 1\n"), 0o755))
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{BinaryName: "scafctl"}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: ""},
+		}
+
+		officialReg := official.NewRegistryFrom([]official.Provider{
+			{Name: "github", CatalogRef: "gh-plugin", DefaultVersion: "latest", Description: "GitHub provider"},
+		})
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+		ctx = official.WithRegistry(ctx, officialReg)
+
+		err := options.RunGetProvider(ctx, "github")
+		require.NoError(t, err)
+
+		output := outBuf.String()
+		assert.Contains(t, output, "official plugin provider")
+		assert.Contains(t, output, "gh-plugin")
+	})
+}
+
+func TestOptions_RunGetProvider_PluginCacheWithProbeFallback(t *testing.T) {
+	t.Run("falls_back_to_minimal_info_when_probe_fails_structured", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		// Create a fake cached plugin binary (not a valid plugin process).
+		platform := runtime.GOOS + "-" + runtime.GOARCH
+		binDir := filepath.Join(cacheDir, "scafctl", "plugins", "my-plugin", "2.0.0", platform)
+		require.NoError(t, os.MkdirAll(binDir, 0o755))
+		binPath := filepath.Join(binDir, pluginBinaryName("my-plugin"))
+		require.NoError(t, os.WriteFile(binPath, []byte("#!/bin/sh\nexit 1\n"), 0o755))
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{BinaryName: "scafctl"}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+
+		// No official registry — so it goes to the plugin cache fallback.
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		err := options.RunGetProvider(ctx, "my-plugin")
+		// The probe fails and the ProbePluginDescription also fails — provider not found.
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "my-plugin")
+	})
+
+	t.Run("falls_back_to_human_text_when_probe_fails_default", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+
+		platform := runtime.GOOS + "-" + runtime.GOARCH
+		binDir := filepath.Join(cacheDir, "scafctl", "plugins", "my-plugin", "2.0.0", platform)
+		require.NoError(t, os.MkdirAll(binDir, 0o755))
+		binPath := filepath.Join(binDir, pluginBinaryName("my-plugin"))
+		require.NoError(t, os.WriteFile(binPath, []byte("#!/bin/sh\nexit 1\n"), 0o755))
+
+		var outBuf bytes.Buffer
+		ioStreams := &terminal.IOStreams{Out: &outBuf, ErrOut: &outBuf}
+		cliParams := &settings.Run{BinaryName: "scafctl"}
+		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
+
+		options := &Options{
+			IOStreams:      ioStreams,
+			CliParams:      cliParams,
+			BinaryName:     "scafctl",
+			registry:       reg,
+			KvxOutputFlags: flags.KvxOutputFlags{Output: ""},
+		}
+
+		w := writer.New(ioStreams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		err := options.RunGetProvider(ctx, "my-plugin")
+		// Same as above — probe fails, description probe also fails.
+		assert.Error(t, err)
+	})
 }
 
 func TestOptions_filterProviders(t *testing.T) {
@@ -927,6 +1172,10 @@ func TestOptions_RunListProviders_IncludesOfficialProviders(t *testing.T) {
 
 func TestOptions_RunGetProvider_FallsBackToOfficialRegistry(t *testing.T) {
 	t.Run("shows_info_for_official_provider_not_in_builtin_registry", func(t *testing.T) {
+		// Isolate from real plugin cache so the probe doesn't find a cached binary.
+		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+		xdg.Reload()
+
 		var outBuf bytes.Buffer
 		ioStreams := &terminal.IOStreams{
 			Out:    &outBuf,
