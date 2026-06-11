@@ -414,6 +414,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Redundant (inferred from expr):\nimageRef:\n  dependsOn: [registry, namespace]\n  resolve:\n    with:\n      - provider: cel\n        inputs:\n          expression:\n            expr: _.registry + \"/\" + _.namespace\n\n# Correct (no explicit dependsOn needed):\nimageRef:\n  resolve:\n    with:\n      - provider: cel\n        inputs:\n          expression:\n            expr: _.registry + \"/\" + _.namespace",
 		},
 	},
+	"transform-shape-mismatch": {
+		Rule:        "transform-shape-mismatch",
+		Severity:    string(SeverityWarning),
+		Category:    "provider",
+		Description: "A transform step accesses provider-specific fields (e.g., __self.body) but the resolve chain includes a fallback that produces a different shape.",
+		Why:         "When a resolve chain has both a provider returning a structured object (e.g., http returns {statusCode, body, headers}) and a static fallback returning a scalar or array, transform steps accessing provider-specific fields will fail at runtime when the fallback path is taken.",
+		Fix:         "Add a 'when' condition to the transform step to guard against the shape mismatch, e.g.:\n  when:\n    expr: 'type(__self) == map_type && has(__self.body)'",
+		Examples: []string{
+			"# Problem: transform assumes http shape but static fallback is []\nresolve:\n  with:\n    - provider: http\n      when:\n        expr: 'has(_.credentials)'\n      inputs:\n        url: https://api.example.com/data\n    - provider: static\n      inputs:\n        value: []\ntransform:\n  with:\n    - provider: cel\n      inputs:\n        expression: '__self.body.items'\n\n# Fix: add a when guard on the transform step\ntransform:\n  with:\n    - provider: cel\n      when:\n        expr: 'type(__self) != list_type'\n      inputs:\n        expression: '__self.body.items'",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

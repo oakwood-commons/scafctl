@@ -135,6 +135,25 @@ spec:
             inputs:
               expression: "_.bad_provider + _.guarded"
 
+    # transform-shape-mismatch (transform accesses __self.body but static fallback returns [])
+    shape_mismatch:
+      description: Resolver with mismatched transform shape
+      resolve:
+        with:
+          - provider: http
+            when:
+              expr: 'has(_.main_output)'
+            inputs:
+              url: https://api.example.com/data
+          - provider: static
+            inputs:
+              value: []
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.body.items'
+
     # used resolver so not everything is unused
     main_output:
       type: string
@@ -149,6 +168,7 @@ spec:
         - loose_schema
         - no_desc
         - conditional_only
+        - shape_mismatch
       resolve:
         with:
           - provider: static

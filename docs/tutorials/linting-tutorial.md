@@ -533,7 +533,75 @@ If `_.environment` is `"dev"`, neither condition matches and the resolver fails.
 
 The unconditional source acts as a default when no other condition is satisfied.
 
-## 9. Using Lint with the MCP Server
+## 9. Transform Shape Mismatch
+
+The `transform-shape-mismatch` rule warns when a transform step accesses provider-specific fields (like `__self.body`) but the resolve chain includes a fallback that produces a different shape. When the fallback path is taken at runtime, the transform will fail because the expected fields don't exist.
+
+```yaml
+# WARNING: transform accesses '__self.body' but static fallback produces []
+spec:
+  resolvers:
+    api_data:
+      description: Fetch data from API with empty fallback
+      resolve:
+        with:
+          - provider: http
+            when:
+              expr: 'has(_.credentials)'
+            inputs:
+              url: https://api.example.com/data
+          - provider: static
+            inputs:
+              value: []
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.body.items'
+```
+
+When `_.credentials` is not set, the static fallback returns `[]` (an array). The transform then tries to access `__self.body` on an array, which fails.
+
+**Fix**: Add a `when` guard to the transform step so it only runs when the structured shape is present:
+
+```yaml
+      transform:
+        with:
+          - provider: cel
+            when:
+              expr: 'type(__self) != list_type'
+            inputs:
+              expression: '__self.body.items'
+```
+
+Or use `has()` to check for the field:
+
+```yaml
+      transform:
+        with:
+          - provider: cel
+            when:
+              expr: 'type(__self) == map_type && has(__self.body)'
+            inputs:
+              expression: '__self.body.items'
+```
+
+For more details:
+
+{{< tabs "linting-tutorial-cmd-12" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl lint explain transform-shape-mismatch
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain transform-shape-mismatch
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+## 10. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 
