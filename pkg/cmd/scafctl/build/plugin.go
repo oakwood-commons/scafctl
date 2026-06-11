@@ -52,7 +52,7 @@ func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 
 			  --platform <os/arch>=<path>
 
-			Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64
+			Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64
 
 			The resulting artifact is stored as an OCI image index (fat manifest) with one
 			manifest per platform. At runtime, scafctl automatically selects the correct

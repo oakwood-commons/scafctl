@@ -31,6 +31,56 @@ func TestBuildRemoteCatalog_ParsesURL(t *testing.T) {
 	assert.Equal(t, "test", remoteCat.Name())
 }
 
+func TestBuildRemoteCatalogChain_ExcludesLocal(t *testing.T) {
+	t.Parallel()
+
+	logger := logr.Discard()
+
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{
+				Name: "my-registry",
+				Type: config.CatalogTypeOCI,
+				URL:  "oci://ghcr.io/myorg",
+			},
+		},
+	}
+
+	chain, err := BuildRemoteCatalogChain(cfg, nil, logger)
+	require.NoError(t, err)
+	require.NotNil(t, chain)
+
+	// Verify no catalog in the chain is the local catalog.
+	for _, cat := range chain.Catalogs() {
+		assert.NotEqual(t, LocalCatalogName, cat.Name(),
+			"BuildRemoteCatalogChain must not include the local catalog")
+	}
+}
+
+func TestBuildRemoteCatalogChain_NilConfig_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	chain, err := BuildRemoteCatalogChain(nil, nil, logr.Discard())
+	assert.Nil(t, chain)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no remote catalogs available")
+}
+
+func TestBuildRemoteCatalogChain_NoCatalogs_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Settings: config.Settings{
+			DisableOfficialCatalog: true,
+		},
+	}
+
+	chain, err := BuildRemoteCatalogChain(cfg, nil, logr.Discard())
+	assert.Nil(t, chain)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no remote catalogs available")
+}
+
 func TestBuildRemoteCatalogFromConfig_AuthProvider_UsesGetRegistered(t *testing.T) {
 	t.Parallel()
 

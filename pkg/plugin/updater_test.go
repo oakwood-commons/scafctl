@@ -95,6 +95,26 @@ func TestPlanUpdates_PluginNotInCache(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found in cache")
 }
 
+func TestPlanUpdates_NilFetcher_ReportsFailed(t *testing.T) {
+	t.Parallel()
+
+	cacheDir := t.TempDir()
+	seedUpdaterCache(t, cacheDir, "exec", "1.0.0")
+
+	cache := NewCache(cacheDir)
+
+	// Nil catalogFetcher with a cached plugin — should report it as failed, not panic.
+	plan, err := PlanUpdates(t.Context(), cache, nil, UpdateOptions{
+		All:    true,
+		Target: UpdateTargetLatest,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, plan.Updates)
+	require.Len(t, plan.Failed, 1)
+	assert.Equal(t, "exec", plan.Failed[0].Name)
+	assert.Contains(t, plan.Failed[0].Error, "no remote catalogs configured")
+}
+
 // mockCatalogForUpdater implements catalog.Catalog for updater tests.
 type mockCatalogForUpdater struct {
 	resolveFunc func(ctx context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error)

@@ -35,7 +35,7 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 	s.addTool(listPlatformsTool, s.handleCatalogListPlatforms)
 
 	buildPluginTool := mcp.NewTool("build_plugin",
-		mcp.WithDescription("Build a multi-platform plugin artifact into the local catalog as an OCI image index. Each platform entry maps an OS/architecture pair to a local binary path. Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64. Use this to package cross-compiled plugin binaries for distribution."),
+		mcp.WithDescription("Build a multi-platform plugin artifact into the local catalog as an OCI image index. Each platform entry maps an OS/architecture pair to a local binary path. Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64. Use this to package cross-compiled plugin binaries for distribution."),
 		mcp.WithTitleAnnotation("Build Plugin"),
 		mcp.WithToolIcons(toolIcons["plugin"]),
 		mcp.WithReadOnlyHintAnnotation(false),
