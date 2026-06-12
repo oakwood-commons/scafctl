@@ -290,7 +290,7 @@ func DefaultPluginCacheDir() string {
 type DiscoveryMode int
 
 const (
-	// DiscoveryModeDefault searches all known file names (current behavior).
+	// DiscoveryModeDefault searches solution and taskfile names (excludes action files).
 	DiscoveryModeDefault DiscoveryMode = iota
 	// DiscoveryModeAction searches action files first, then falls back to solution files.
 	DiscoveryModeAction
@@ -322,6 +322,8 @@ func SolutionFoldersFor(binaryName string) []string {
 }
 
 // SolutionFileNamesFor returns the solution file names for the given binary name.
+// Action file names (actions.yaml/yml) are intentionally excluded; they are only
+// returned by [ActionFileNamesFor] for use with [DiscoveryModeAction].
 func SolutionFileNamesFor(binaryName string) []string {
 	return []string{
 		"solution.yaml",
@@ -332,8 +334,6 @@ func SolutionFileNamesFor(binaryName string) []string {
 		fmt.Sprintf("%s.json", binaryName),
 		"taskfile.yaml",
 		"taskfile.yml",
-		"actions.yaml",
-		"actions.yml",
 	}
 }
 
@@ -352,23 +352,9 @@ func ActionFileNamesFor(binaryName string) []string {
 	}
 }
 
-// SolutionOnlyFileNamesFor returns file names excluding actions.yaml/yml.
-func SolutionOnlyFileNamesFor(binaryName string) []string {
-	return []string{
-		"solution.yaml",
-		"solution.yml",
-		fmt.Sprintf("%s.yaml", binaryName),
-		fmt.Sprintf("%s.yml", binaryName),
-		"solution.json",
-		fmt.Sprintf("%s.json", binaryName),
-		"taskfile.yaml",
-		"taskfile.yml",
-	}
-}
-
 // FileNamesForMode returns the appropriate file name list based on mode and binary name.
 // When customActionFiles is non-empty and mode is DiscoveryModeAction, those file names
-// are used instead of the defaults (with solution files appended as fallback).
+// are used instead of the defaults (with solution and taskfile names appended as fallback).
 func FileNamesForMode(mode DiscoveryMode, binaryName string, customActionFiles []string) []string {
 	switch mode {
 	case DiscoveryModeDefault:
@@ -376,11 +362,11 @@ func FileNamesForMode(mode DiscoveryMode, binaryName string, customActionFiles [
 	case DiscoveryModeAction:
 		if len(customActionFiles) > 0 {
 			// Concat avoids mutating the caller's backing array.
-			return slices.Concat(customActionFiles, SolutionOnlyFileNamesFor(binaryName))
+			return slices.Concat(customActionFiles, SolutionFileNamesFor(binaryName))
 		}
 		return ActionFileNamesFor(binaryName)
 	case DiscoveryModeSolution:
-		return SolutionOnlyFileNamesFor(binaryName)
+		return SolutionFileNamesFor(binaryName)
 	default:
 		return SolutionFileNamesFor(binaryName)
 	}

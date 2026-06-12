@@ -176,10 +176,9 @@ func TestFindAllSolutions(t *testing.T) {
 		assert.False(t, results[1].IsActionFile)
 	})
 
-	t.Run("default mode does not reorder action files", func(t *testing.T) {
+	t.Run("default mode does not discover action files", func(t *testing.T) {
 		t.Parallel()
-		// In default mode, folder priority should be preserved — scafctl/
-		// folder files come before root files.
+		// In default mode, actions.yaml should NOT be discovered.
 		existingFiles := map[string]bool{
 			"scafctl/solution.yaml": true,
 			"actions.yaml":          true,
@@ -197,8 +196,8 @@ func TestFindAllSolutions(t *testing.T) {
 		)
 		results := getter.FindAllSolutions()
 
-		require.Len(t, results, 2)
-		assert.Equal(t, "scafctl/solution.yaml", results[0].Path, "subfolder should come first in default mode")
+		require.Len(t, results, 1)
+		assert.Equal(t, "scafctl/solution.yaml", results[0].Path, "only solution file should be found")
 	})
 }
 

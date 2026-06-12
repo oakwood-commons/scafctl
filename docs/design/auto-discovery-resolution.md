@@ -74,10 +74,12 @@ The search combines folder prefixes with file names in this order:
 6. `scafctl.json`
 7. `taskfile.yaml`
 8. `taskfile.yml`
-9. `actions.yaml`
-10. `actions.yml`
 
-This produces 30 candidate paths checked in priority order (3 folders x 10 names).
+Action file names (`actions.yaml`, `actions.yml`) are only searched when
+`DiscoveryModeAction` is active (e.g., `run action`). They are not included
+in the default search list.
+
+This produces 24 candidate paths checked in priority order (3 folders x 8 names).
 
 ### FindAllSolutions vs FindSolution
 
@@ -97,10 +99,13 @@ of available solutions in a workspace.
 
 ## Behavior Examples
 
+The `Using ...` and multi-match messages below are emitted via `writer.Verbosef`
+and only appear when `--verbose` is enabled.
+
 ### Single match (common case)
 
 ~~~
-$ scafctl lint
+$ scafctl lint --verbose
 Using solution.yaml
 ...
 ~~~
@@ -108,9 +113,9 @@ Using solution.yaml
 ### Multiple matches, low-risk command
 
 ~~~
-$ scafctl lint
+$ scafctl lint --verbose
 Using solution.yaml
-WARNING: Multiple solution files found (also: actions.yaml); using first match
+WARNING: Multiple solution files found (also: taskfile.yaml); using first match
 ...
 ~~~
 
@@ -118,7 +123,7 @@ WARNING: Multiple solution files found (also: actions.yaml); using first match
 
 ~~~
 $ scafctl build solution
-Error: multiple solution files found: solution.yaml, actions.yaml; use -f/--file to specify which one
+Error: multiple solution files found: solution.yaml, taskfile.yaml; use -f/--file to specify which one
 ~~~
 
 ## API
