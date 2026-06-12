@@ -69,7 +69,7 @@ When no `-f` flag is provided, all CLI commands use the unified `Resolve()` func
 
 1. Returns the explicit `-f` path if provided.
 2. Returns the positional argument if provided (catalog reference).
-3. Auto-discovers solution files by searching folder prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`, `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`, `actions.yaml`, `actions.yml`).
+3. Auto-discovers solution files by searching folder prefixes (`scafctl/`, `.scafctl/`, `.`) combined with file names (`solution.yaml`, `solution.yml`, `scafctl.yaml`, `scafctl.yml`, `solution.json`, `scafctl.json`, `taskfile.yaml`, `taskfile.yml`). Action file names (`actions.yaml`, `actions.yml`) are only searched in `DiscoveryModeAction` (used by `run action`).
 
 **Multi-match ambiguity handling** uses risk levels:
 - **Low-risk** (`DiscoveryRiskLow`): uses first match, emits a warning about other matches. Used by `run`, `lint`, `test`.
