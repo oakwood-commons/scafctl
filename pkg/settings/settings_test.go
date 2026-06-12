@@ -96,14 +96,14 @@ func TestSolutionFileNamesFor(t *testing.T) {
 		{
 			name:        "default binary name",
 			binaryName:  "scafctl",
-			wantLen:     10,
-			mustContain: []string{"solution.yaml", "scafctl.yaml", "scafctl.json", "taskfile.yaml", "taskfile.yml", "actions.yaml", "actions.yml"},
+			wantLen:     8,
+			mustContain: []string{"solution.yaml", "scafctl.yaml", "scafctl.json", "taskfile.yaml", "taskfile.yml"},
 		},
 		{
 			name:        "custom binary name",
 			binaryName:  "mycli",
-			wantLen:     10,
-			mustContain: []string{"solution.yaml", "mycli.yaml", "mycli.json", "taskfile.yaml", "taskfile.yml", "actions.yaml", "actions.yml"},
+			wantLen:     8,
+			mustContain: []string{"solution.yaml", "mycli.yaml", "mycli.json", "taskfile.yaml", "taskfile.yml"},
 		},
 	}
 	for _, tt := range tests {
@@ -206,9 +206,9 @@ func TestTaskfileNotInActionMode(t *testing.T) {
 	assert.NotContains(t, actionFiles, "taskfile.yml")
 }
 
-func TestTaskfileInSolutionOnlyMode(t *testing.T) {
+func TestTaskfileInSolutionMode(t *testing.T) {
 	t.Parallel()
-	solFiles := SolutionOnlyFileNamesFor("scafctl")
+	solFiles := SolutionFileNamesFor("scafctl")
 	assert.Contains(t, solFiles, "taskfile.yaml")
 	assert.Contains(t, solFiles, "taskfile.yml")
 }
@@ -217,21 +217,17 @@ func TestTaskfilePriority(t *testing.T) {
 	t.Parallel()
 	files := SolutionFileNamesFor("scafctl")
 	taskIdx := -1
-	actionIdx := -1
 	solutionIdx := -1
 	for i, f := range files {
 		switch f {
 		case "taskfile.yaml":
 			taskIdx = i
-		case "actions.yaml":
-			actionIdx = i
 		case "solution.yaml":
 			solutionIdx = i
 		}
 	}
-	// taskfile.yaml should come after solution.yaml but before actions.yaml
+	// taskfile.yaml should come after solution.yaml
 	assert.Greater(t, taskIdx, solutionIdx, "taskfile.yaml should come after solution.yaml")
-	assert.Less(t, taskIdx, actionIdx, "taskfile.yaml should come before actions.yaml")
 }
 
 func TestSafeEnvPrefix(t *testing.T) {
@@ -265,9 +261,9 @@ func TestActionFileNamesFor(t *testing.T) {
 	assert.Contains(t, names, "mycli.yaml")
 }
 
-func TestSolutionOnlyFileNamesFor(t *testing.T) {
+func TestSolutionFileNamesFor_ExcludesActionFiles(t *testing.T) {
 	t.Parallel()
-	names := SolutionOnlyFileNamesFor("mycli")
+	names := SolutionFileNamesFor("mycli")
 	for _, n := range names {
 		assert.False(t, IsActionFile(n), "should not contain action files: %s", n)
 	}
@@ -307,11 +303,12 @@ func TestFileNamesForMode(t *testing.T) {
 		wantNotContains   string
 	}{
 		{
-			name:         "default mode returns all",
-			mode:         DiscoveryModeDefault,
-			binaryName:   "scafctl",
-			wantFirst:    "solution.yaml",
-			wantContains: "actions.yaml",
+			name:            "default mode excludes actions",
+			mode:            DiscoveryModeDefault,
+			binaryName:      "scafctl",
+			wantFirst:       "solution.yaml",
+			wantContains:    "taskfile.yaml",
+			wantNotContains: "actions.yaml",
 		},
 		{
 			name:         "action mode prefers actions",
