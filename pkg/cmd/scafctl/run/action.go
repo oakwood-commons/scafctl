@@ -399,7 +399,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// override) so resolver paths resolve relative to the solution file.
 	// Pass actionCtx so WhatIf generation sees CLI overrides (output-dir, etc.).
 	if o.DryRun {
-		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd)
 	}
 
 	// Execute resolvers
@@ -479,13 +479,13 @@ func (o *ActionOptions) exitWithCode(ctx context.Context, err error, code int) e
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs
 // resolvers (side-effect-free) and produces a structured WhatIf report.
-func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
+func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string) error {
 	s := &SolutionOptions{
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
 	}
-	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow)
+	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow, stateData, cwd)
 }
 
 // resolveOutputDir validates and creates the output directory.

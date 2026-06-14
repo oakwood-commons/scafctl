@@ -610,6 +610,51 @@ func TestSolutionOptions_writeDryRunTable(t *testing.T) {
 		assert.Contains(t, output, "build.output")
 		assert.Contains(t, output, "deferred")
 	})
+
+	t.Run("with fingerprint status", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		streams := &terminal.IOStreams{Out: &buf, ErrOut: &buf}
+		cliParams := settings.NewCliParams()
+		w := writer.New(streams, cliParams)
+		ctx := writer.WithWriter(context.Background(), w)
+
+		opts := &SolutionOptions{}
+		report := &dryrun.Report{
+			Solution:    "fp-test",
+			HasWorkflow: true,
+			ActionPlan: []dryrun.WhatIfAction{
+				{
+					Name:              "build",
+					Phase:             0,
+					WhatIf:            "Would compile",
+					FingerprintStatus: "up-to-date",
+					FingerprintReason: "up-to-date",
+				},
+				{
+					Name:              "deploy",
+					Phase:             1,
+					WhatIf:            "Would deploy",
+					FingerprintStatus: "stale",
+					FingerprintReason: "sources changed",
+				},
+				{
+					Name:   "cleanup",
+					Phase:  1,
+					WhatIf: "Would cleanup",
+				},
+			},
+		}
+
+		err := opts.writeDryRunTable(ctx, report)
+		assert.NoError(t, err)
+		output := buf.String()
+		assert.Contains(t, output, "fingerprint: up-to-date")
+		assert.Contains(t, output, "fingerprint: stale")
+		assert.Contains(t, output, "sources changed")
+		// cleanup has no fingerprint status — should not show fingerprint line
+		assert.NotContains(t, output, "fingerprint: )")
+	})
 }
 
 // Benchmarks

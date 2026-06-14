@@ -41,6 +41,7 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 	cmd.AddCommand(CommandSet(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandDelete(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandClear(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(CommandFingerprints(cliParams, ioStreams, cmdPath))
 
 	return cmd
 }
