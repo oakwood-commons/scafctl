@@ -76,10 +76,6 @@ spec:
         description: First run resolves from defaults and persists to state
         extends: [_base]
         tags: [smoke]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __output.name == "default-name"
             message: "First run should use static default"
@@ -94,13 +90,10 @@ spec:
       second-run-from-state:
         description: Second run reads values from state parameters (simulated via pre-seed)
         extends: [_base]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-verify","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"name":"saved-name","count":"42","enabled_flag":"false"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
+              > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.name == "saved-name"
             message: "Parameter provider should return persisted string value"
@@ -116,10 +109,6 @@ spec:
         description: Parameter value overrides static and is what gets saved
         extends: [_base]
         args: ["-o", "json", "-r", "name=custom-name"]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __output.name == "custom-name"
             message: "Parameter should override static default"
@@ -133,13 +122,10 @@ spec:
         description: Parameter overrides existing state value on next run
         extends: [_base]
         args: ["-o", "json", "-r", "name=new-name"]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-verify","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"name":"old-name"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
+              > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.name == "new-name"
             message: "Parameter should win over stale state value"

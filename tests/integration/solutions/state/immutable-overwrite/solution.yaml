@@ -49,10 +49,6 @@ spec:
         command: [run, resolver]
         args: ["-o", "json"]
         tags: [state, immutable, smoke]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
             message: "First write should succeed"
@@ -67,13 +63,10 @@ spec:
         command: [run, resolver]
         args: ["-o", "json"]
         tags: [state, immutable]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{"value":{"value":"fixed-value","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
+              > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode == 0
             message: "Same-value write should succeed silently"
@@ -88,13 +81,10 @@ spec:
         command: [run, resolver]
         args: ["-o", "json"]
         tags: [state, immutable, negative]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{"value":{"value":"original-locked","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
+              > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode != 0
             message: "Should fail when trying to overwrite immutable entry with different value"
@@ -111,13 +101,10 @@ spec:
         command: [run, resolver]
         args: ["-o", "json"]
         tags: [state, immutable]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/state.json
+              > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode == 0
             message: "Should succeed when immutables section has no conflict"

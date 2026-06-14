@@ -66,10 +66,6 @@ spec:
         command: [render, solution]
         args: ["-o", "json"]
         tags: [state, render, smoke]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.actions["deploy"].inputs["command"].contains("default-target")
@@ -85,13 +81,10 @@ spec:
         command: [render, solution]
         args: ["-o", "json"]
         tags: [state, render]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"prod-cluster","app_version":"3.2.1"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/render-state.json
+              > $SCAFCTL_SANDBOX_DIR/render-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.actions["deploy"].inputs["command"].contains("prod-cluster")
@@ -107,10 +100,6 @@ spec:
         command: [render, solution]
         args: ["-o", "json"]
         tags: [state, render, readonly]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
 
@@ -122,13 +111,10 @@ spec:
         command: [render, solution]
         args: ["-o", "json", "-r", "target=edge"]
         tags: [state, render]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"cached-target"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/render-state.json
+              > $SCAFCTL_SANDBOX_DIR/render-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.actions["deploy"].inputs["command"].contains("edge")

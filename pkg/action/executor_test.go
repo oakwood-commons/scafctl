@@ -1402,3 +1402,151 @@ func TestExecutor_Execute_FingerprintInputsChanged(t *testing.T) {
 	assert.Equal(t, StatusSkipped, result.Actions["generate"].Status)
 	assert.Equal(t, SkipReasonUpToDate, result.Actions["generate"].SkipReason)
 }
+
+func TestExecutor_Execute_FingerprintScopeFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/template.tpl", []byte("hello"), 0o644))
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "ok"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// First run with scope: files — should execute (first run)
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Fingerprint: &FingerprintConfig{
+					Scope: FingerprintScopeFiles,
+				},
+				Inputs: map[string]*spec.ValueRef{
+					"env": {Literal: "staging"},
+				},
+			},
+		},
+	}
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second run: same files, different inputs — should SKIP because scope=files
+	workflow2 := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Fingerprint: &FingerprintConfig{
+					Scope: FingerprintScopeFiles,
+				},
+				Inputs: map[string]*spec.ValueRef{
+					"env": {Literal: "production"},
+				},
+			},
+		},
+	}
+
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	result, err := executor2.Execute(context.Background(), workflow2)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount) // NOT incremented — inputs ignored
+	assert.Equal(t, StatusSkipped, result.Actions["generate"].Status)
+	assert.Equal(t, SkipReasonUpToDate, result.Actions["generate"].SkipReason)
+
+	// Verify no inputs hash was stored in state
+	inputsHash := fingerprint.LoadInputsHash(stateData, "generate")
+	assert.Empty(t, inputsHash, "inputs hash should not be stored when scope=files")
+}
+
+func TestExecutor_Execute_FingerprintScopeAll_IsDefault(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/template.tpl", []byte("hello"), 0o644))
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "ok"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// First run with no fingerprint config (default = scope: all)
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Inputs: map[string]*spec.ValueRef{
+					"env": {Literal: "staging"},
+				},
+			},
+		},
+	}
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second run: same files, different inputs — should RE-EXECUTE (scope=all checks inputs)
+	workflow2 := &Workflow{
+		Actions: map[string]*Action{
+			"generate": {
+				Provider: "test-provider",
+				Sources:  []string{"*.tpl"},
+				Inputs: map[string]*spec.ValueRef{
+					"env": {Literal: "production"},
+				},
+			},
+		},
+	}
+
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	_, err = executor2.Execute(context.Background(), workflow2)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount) // Incremented — inputs changed triggers re-execution
+}

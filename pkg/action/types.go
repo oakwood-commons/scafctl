@@ -95,6 +95,12 @@ type Action struct {
 	// generated files will trigger re-execution.
 	Generates []string `json:"generates,omitempty" yaml:"generates,omitempty" doc:"Glob patterns for output files" maxItems:"100"`
 
+	// Fingerprint controls fingerprint behavior for up-to-date checks.
+	// By default (scope: all), both file hashes and resolved input hashes are checked.
+	// Set scope to "files" to skip input hashing when inputs contain volatile values.
+	// Requires sources to be set.
+	Fingerprint *FingerprintConfig `json:"fingerprint,omitempty" yaml:"fingerprint,omitempty" doc:"Fingerprint configuration for up-to-date checks"`
+
 	// When is a condition that must evaluate to true for the action to execute.
 	// If false, the action is skipped with SkipReasonCondition.
 	When *spec.Condition `json:"when,omitempty" yaml:"when,omitempty" doc:"Condition for execution (skipped if false)"`
@@ -156,6 +162,44 @@ func (m ResultSchemaMode) OrDefault() ResultSchemaMode {
 		return ResultSchemaModeError
 	}
 	return m
+}
+
+// FingerprintScope controls which data is included in up-to-date fingerprint checks.
+type FingerprintScope string
+
+const (
+	// FingerprintScopeAll includes file hashes and resolved input hashes (default).
+	FingerprintScopeAll FingerprintScope = "all"
+
+	// FingerprintScopeFiles includes only file hashes (sources + generates), skipping input hashing.
+	FingerprintScopeFiles FingerprintScope = "files"
+)
+
+// IsValid returns true if the fingerprint scope is valid.
+func (s FingerprintScope) IsValid() bool {
+	switch s {
+	case FingerprintScopeAll, FingerprintScopeFiles, "":
+		return true
+	default:
+		return false
+	}
+}
+
+// OrDefault returns the scope or the default (FingerprintScopeAll) if empty.
+func (s FingerprintScope) OrDefault() FingerprintScope {
+	if s == "" {
+		return FingerprintScopeAll
+	}
+	return s
+}
+
+// FingerprintConfig controls fingerprint behavior for an action.
+type FingerprintConfig struct {
+	// Scope controls which data is included in the fingerprint check.
+	// "all" (default) checks both file hashes and resolved input hashes.
+	// "files" checks only file hashes (sources + generates), useful when
+	// inputs contain volatile values like timestamps that change every run.
+	Scope FingerprintScope `json:"scope,omitempty" yaml:"scope,omitempty" doc:"Fingerprint scope: all (files+inputs) or files (files only)" maxLength:"16" example:"files" default:"all"`
 }
 
 // RetryConfig defines automatic retry behavior for failed actions.

@@ -16,7 +16,7 @@ func TestLoadFromFile_NotFound(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing.json")
 
-	sd, err := LoadFromFile(path)
+	sd, err := LoadFromFile(path, "")
 	require.NoError(t, err)
 	assert.Equal(t, SchemaVersionCurrent, sd.SchemaVersion)
 	assert.Empty(t, sd.Parameters)
@@ -30,10 +30,10 @@ func TestLoadFromFile_RoundTrip(t *testing.T) {
 	sd.Parameters["env"] = "prod"
 	sd.Metadata.Solution = "test-sol"
 
-	err := SaveToFile(path, sd)
+	err := SaveToFile(path, "", sd)
 	require.NoError(t, err)
 
-	loaded, err := LoadFromFile(path)
+	loaded, err := LoadFromFile(path, "")
 	require.NoError(t, err)
 	assert.Equal(t, "test-sol", loaded.Metadata.Solution)
 	require.Contains(t, loaded.Parameters, "env")
@@ -45,7 +45,7 @@ func TestLoadFromFile_InvalidJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.json")
 	require.NoError(t, os.WriteFile(path, []byte("{invalid"), 0o600))
 
-	_, err := LoadFromFile(path)
+	_, err := LoadFromFile(path, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
 }
@@ -57,7 +57,7 @@ func TestLoadFromFile_NilMapsNormalized(t *testing.T) {
 	content := `{"schemaVersion":1,"metadata":{},"command":{},"parameters":null,"immutables":null,"fingerprints":null}`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-	loaded, err := LoadFromFile(path)
+	loaded, err := LoadFromFile(path, "")
 	require.NoError(t, err)
 	assert.NotNil(t, loaded.Parameters)
 	assert.NotNil(t, loaded.Immutables)
@@ -72,7 +72,7 @@ func TestSaveToFile_CreatesDirectory(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "subdir", "nested", "state.json")
 
-	err := SaveToFile(path, NewData())
+	err := SaveToFile(path, "", NewData())
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(path)
@@ -81,14 +81,14 @@ func TestSaveToFile_CreatesDirectory(t *testing.T) {
 
 func TestResolveStatePath_EmptyPath(t *testing.T) {
 	t.Parallel()
-	_, err := ResolveStatePath("")
+	_, err := ResolveStatePath("", "/tmp")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
 }
 
 func TestResolveStatePath_Traversal(t *testing.T) {
 	t.Parallel()
-	_, err := ResolveStatePath("../../../etc/passwd")
+	_, err := ResolveStatePath("../../../etc/passwd", "/tmp")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "traversal")
 }
@@ -96,14 +96,29 @@ func TestResolveStatePath_Traversal(t *testing.T) {
 func TestResolveStatePath_Absolute(t *testing.T) {
 	t.Parallel()
 	abs := filepath.Join(t.TempDir(), "test-state.json")
-	result, err := ResolveStatePath(abs)
+	result, err := ResolveStatePath(abs, "/should-be-ignored")
 	require.NoError(t, err)
 	assert.Equal(t, abs, result)
 }
 
+func TestResolveStatePath_RelativeWithBaseDir(t *testing.T) {
+	t.Parallel()
+	baseDir := t.TempDir()
+	result, err := ResolveStatePath("my-state.json", baseDir)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(baseDir, "my-state.json"), result)
+}
+
+func TestResolveStatePath_RelativeWithEmptyBaseDir(t *testing.T) {
+	t.Parallel()
+	_, err := ResolveStatePath("my-state.json", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "base directory is required")
+}
+
 func TestLoadFromFile_EmptyPath(t *testing.T) {
 	t.Parallel()
-	_, err := LoadFromFile("")
+	_, err := LoadFromFile("", "/tmp")
 	require.Error(t, err)
 }
 
@@ -113,7 +128,7 @@ func TestLoadFromFile_UnsupportedSchemaVersion(t *testing.T) {
 	err := os.WriteFile(path, []byte(`{"schemaVersion":999,"metadata":{},"parameters":{}}`), 0o600)
 	require.NoError(t, err)
 
-	_, err = LoadFromFile(path)
+	_, err = LoadFromFile(path, "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedSchemaVersion)
 	assert.Contains(t, err.Error(), "999")
@@ -121,7 +136,7 @@ func TestLoadFromFile_UnsupportedSchemaVersion(t *testing.T) {
 
 func TestSaveToFile_EmptyPath(t *testing.T) {
 	t.Parallel()
-	err := SaveToFile("", NewData())
+	err := SaveToFile("", "/tmp", NewData())
 	require.Error(t, err)
 }
 
@@ -131,12 +146,12 @@ func BenchmarkLoadFromFile(b *testing.B) {
 	for i := range 100 {
 		sd.Parameters[filepath.Join("key", string(rune('a'+i%26)))] = "value"
 	}
-	require.NoError(b, SaveToFile(path, sd))
+	require.NoError(b, SaveToFile(path, "", sd))
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = LoadFromFile(path)
+		_, _ = LoadFromFile(path, "")
 	}
 }
 
@@ -149,6 +164,6 @@ func BenchmarkSaveToFile(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		path := filepath.Join(dir, "bench.json")
-		_ = SaveToFile(path, sd)
+		_ = SaveToFile(path, "", sd)
 	}
 }

@@ -9,15 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 )
 
 // LoadFromFile reads and unmarshals a StateData JSON file.
 // If the file does not exist, it returns an empty StateData.
-// The path is resolved relative to paths.StateDir() unless absolute.
-func LoadFromFile(path string) (*Data, error) {
-	absPath, err := ResolveStatePath(path)
+// Relative paths are resolved against baseDir.
+func LoadFromFile(path, baseDir string) (*Data, error) {
+	absPath, err := ResolveStatePath(path, baseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +56,9 @@ func LoadFromFile(path string) (*Data, error) {
 }
 
 // SaveToFile marshals and writes StateData to a JSON file using atomic write.
-// The path is resolved relative to paths.StateDir() unless absolute.
-func SaveToFile(path string, sd *Data) error {
-	absPath, err := ResolveStatePath(path)
+// Relative paths are resolved against baseDir.
+func SaveToFile(path, baseDir string, sd *Data) error {
+	absPath, err := ResolveStatePath(path, baseDir)
 	if err != nil {
 		return err
 	}
@@ -108,9 +106,9 @@ func SaveToFile(path string, sd *Data) error {
 }
 
 // ResolveStatePath resolves a state file path. Absolute paths are used as-is.
-// Relative paths are resolved against paths.StateDir().
+// Relative paths are resolved against baseDir.
 // Path traversal (../) is rejected.
-func ResolveStatePath(path string) (string, error) {
+func ResolveStatePath(path, baseDir string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("state path is required")
 	}
@@ -127,5 +125,9 @@ func ResolveStatePath(path string) (string, error) {
 		return filepath.Clean(path), nil
 	}
 
-	return filepath.Join(paths.StateDir(), cleaned), nil
+	if baseDir == "" {
+		return "", fmt.Errorf("base directory is required for relative state path: %s", path)
+	}
+
+	return filepath.Join(baseDir, cleaned), nil
 }

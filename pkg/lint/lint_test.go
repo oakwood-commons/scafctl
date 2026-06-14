@@ -1964,3 +1964,117 @@ func TestLintTransformShapeMismatch(t *testing.T) {
 		})
 	}
 }
+
+func TestLintAction_FingerprintWithoutSources(t *testing.T) {
+	t.Parallel()
+	reg := provider.NewRegistry()
+
+	tests := []struct {
+		name       string
+		action     *action.Action
+		expectRule bool
+	}{
+		{
+			name: "fingerprint with sources",
+			action: &action.Action{
+				Name:     "build",
+				Provider: "test",
+				Sources:  []string{"*.go"},
+				Fingerprint: &action.FingerprintConfig{
+					Scope: action.FingerprintScopeFiles,
+				},
+			},
+			expectRule: false,
+		},
+		{
+			name: "fingerprint without sources",
+			action: &action.Action{
+				Name:     "deploy",
+				Provider: "test",
+				Fingerprint: &action.FingerprintConfig{
+					Scope: action.FingerprintScopeFiles,
+				},
+			},
+			expectRule: true,
+		},
+		{
+			name: "no fingerprint no sources",
+			action: &action.Action{
+				Name:     "deploy",
+				Provider: "test",
+			},
+			expectRule: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sol := &solution.Solution{
+				Spec: solution.Spec{
+					Workflow: &action.Workflow{
+						Actions: map[string]*action.Action{
+							tt.action.Name: tt.action,
+						},
+					},
+				},
+			}
+			result := Solution(sol, "test.yaml", reg)
+			findings := filterFindingsByRule(result, "fingerprint-without-sources")
+			if tt.expectRule {
+				require.NotEmpty(t, findings)
+				assert.Equal(t, SeverityWarning, findings[0].Severity)
+			} else {
+				assert.Empty(t, findings)
+			}
+		})
+	}
+}
+
+func TestLintAction_InvalidFingerprintScope(t *testing.T) {
+	t.Parallel()
+	reg := provider.NewRegistry()
+
+	tests := []struct {
+		name       string
+		scope      action.FingerprintScope
+		expectRule bool
+	}{
+		{"valid scope all", action.FingerprintScopeAll, false},
+		{"valid scope files", action.FingerprintScopeFiles, false},
+		{"valid scope empty", "", false},
+		{"invalid scope", action.FingerprintScope("none"), true},
+		{"invalid scope typo", action.FingerprintScope("file"), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sol := &solution.Solution{
+				Spec: solution.Spec{
+					Workflow: &action.Workflow{
+						Actions: map[string]*action.Action{
+							"build": {
+								Name:     "build",
+								Provider: "test",
+								Sources:  []string{"*.go"},
+								Fingerprint: &action.FingerprintConfig{
+									Scope: tt.scope,
+								},
+							},
+						},
+					},
+				},
+			}
+			result := Solution(sol, "test.yaml", reg)
+			findings := filterFindingsByRule(result, "invalid-fingerprint-scope")
+			if tt.expectRule {
+				require.NotEmpty(t, findings)
+				assert.Equal(t, SeverityError, findings[0].Severity)
+				assert.Contains(t, findings[0].Message, string(tt.scope))
+			} else {
+				assert.Empty(t, findings)
+			}
+		})
+	}
+}

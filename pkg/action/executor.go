@@ -578,7 +578,18 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Phase 2: Input-based fingerprint check (only when files were fresh).
 	// Compares resolved inputs hash against stored state to detect resolver changes.
+	// Skipped when fingerprint.scope is "files" (user opted out of input hashing).
 	if filesFresh {
+		scope := fingerprintScope(action.Action)
+		if scope == FingerprintScopeFiles {
+			// scope: files — skip input check, files alone determine freshness
+			e.actionContext.MarkSkipped(actionName, SkipReasonUpToDate)
+			if e.progressCallback != nil {
+				e.progressCallback.OnActionSkipped(actionName, string(SkipReasonUpToDate))
+			}
+			return nil
+		}
+
 		fpResult, fpErr := e.fingerprintChecker.CheckInputs(ctx, actionName, resolvedInputs)
 		if fpErr != nil {
 			logger.FromContext(ctx).V(0).Info("fingerprint inputs check failed, executing action",
@@ -693,7 +704,12 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Record fingerprint after successful execution
 	if e.fingerprintChecker != nil && len(action.Sources) > 0 {
-		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd, resolvedInputs); recordErr != nil {
+		scope := fingerprintScope(action.Action)
+		var recordInputs map[string]any
+		if scope != FingerprintScopeFiles {
+			recordInputs = resolvedInputs
+		}
+		if recordErr := e.fingerprintChecker.Record(ctx, actionName, action.Sources, action.Generates, e.cwd, recordInputs); recordErr != nil {
 			logger.FromContext(ctx).V(0).Info("fingerprint record failed",
 				"action", actionName, "error", recordErr.Error())
 		}
@@ -864,3 +880,12 @@ func (NoOpProgressCallback) OnPhaseStart(_ int, _ []string)             {}
 func (NoOpProgressCallback) OnPhaseComplete(_ int)                      {}
 func (NoOpProgressCallback) OnFinallyStart()                            {}
 func (NoOpProgressCallback) OnFinallyComplete()                         {}
+
+// fingerprintScope returns the effective fingerprint scope for an action.
+// Returns FingerprintScopeAll when no fingerprint config is set.
+func fingerprintScope(act *Action) FingerprintScope {
+	if act.Fingerprint == nil {
+		return FingerprintScopeAll
+	}
+	return act.Fingerprint.Scope.OrDefault()
+}

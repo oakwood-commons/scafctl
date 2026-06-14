@@ -241,9 +241,9 @@ Solution identity (name, version) is already in `metadata` and does not need to 
 
 ### Storage Location
 
-The built-in `file` provider backend stores files under `paths.StateDir()` (`$XDG_STATE_HOME/scafctl/`), which is already defined and documented in `pkg/paths/`. This is the XDG-canonical location for user-specific state data like logs, history, and session state.
+The built-in `file` provider backend resolves relative state paths against the solution file's parent directory (via `provider.SolutionDirectoryFromContext`). This keeps state files co-located with the solution that owns them. Absolute paths are used as-is.
 
-On macOS: `~/.local/state/scafctl/`
+CLI state commands (`scafctl state list`, `get`, `set`, `delete`, `clear`) resolve relative `--path` values against the XDG state directory (`$XDG_STATE_HOME/scafctl/`, i.e. `~/.local/state/scafctl/` on macOS).
 
 ---
 
@@ -355,16 +355,16 @@ The built-in `file` provider supports state persistence via `CapabilityState`. S
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `operation` | string (enum: `state_load`, `state_save`, `state_delete`) | Yes | Operation to perform |
-| `path` | string | Yes | File path relative to `paths.StateDir()` |
+| `path` | string | Yes | File path (relative to solution directory, or absolute) |
 | `data` | object | For `state_save` | The full `Data` object to persist |
 
 ### Operations
 
 | Operation | Behavior |
 |-----------|----------|
-| `state_load` | Reads JSON from `paths.StateDir()/<path>`. Returns empty state structure if file does not exist (first run). |
-| `state_save` | Writes `Data` as JSON to `paths.StateDir()/<path>`. Creates directories as needed. Uses atomic write (temp + rename). |
-| `state_delete` | Removes the state file at `paths.StateDir()/<path>`. |
+| `state_load` | Reads JSON from the resolved path (relative to solution directory). Returns empty state structure if file does not exist (first run). |
+| `state_save` | Writes `Data` as JSON to the resolved path. Creates directories as needed. Uses atomic write (temp + rename). |
+| `state_delete` | Removes the state file at the resolved path. |
 
 ### Dry-Run Behavior
 
@@ -513,7 +513,7 @@ A `scafctl state` command group provides manual state management, mirroring the 
 | `scafctl state delete --path <file> --key <key>` | Delete a key |
 | `scafctl state clear --path <file>` | Clear all values |
 
-- `--path` is relative to `paths.StateDir()`
+- `--path` is relative to the XDG state directory (`paths.StateDir()`) for CLI commands
 - `list` and `get` support `-o table/json/yaml/quiet` via `kvx.OutputOptions`
 
 ---
