@@ -117,7 +117,7 @@ The parameters `username=alice` and `region=eu-west-1` are now saved to `~/.loca
 
 - **state.enabled** -- Activates state persistence. Can be a literal `true`, a CEL expression, or template. Because state is loaded before resolvers run, resolver references (`rslvr:...`) are not supported here.
 - **state.backend.provider** -- The provider that handles persistence. Use `file` for local files.
-- **state.backend.inputs.path** -- Where to store the state file, relative to the XDG state directory (`~/.local/state/scafctl/` on macOS/Linux).
+- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the solution file's parent directory. Absolute paths are used as-is. CLI state commands (`scafctl state list`, etc.) resolve relative paths against the XDG state directory (`~/.local/state/scafctl/`).
 
 No per-resolver configuration is needed. All CLI parameters are persisted automatically when state is enabled.
 
@@ -501,7 +501,7 @@ scafctl state clear --path state-demo.json
 {{< /tabs >}}
 
 > [!NOTE]
-> `scafctl state list` and `scafctl state get` support `-o json`, `-o yaml`, and `-o quiet` output formats. The `--path` flag is relative to the XDG state directory. Use an absolute path to reference files outside the state directory.
+> `scafctl state list` and `scafctl state get` support `-o json`, `-o yaml`, and `-o quiet` output formats. The `--path` flag is relative to the XDG state directory (`~/.local/state/scafctl/`). Use an absolute path to reference files outside the state directory.
 
 ---
 

@@ -174,7 +174,34 @@ Sources []string `json:"sources,omitempty" yaml:"sources,omitempty" doc:"Glob pa
 // from the last successful run, the action is skipped. Manual edits to
 // generated files will trigger re-execution.
 Generates []string `json:"generates,omitempty" yaml:"generates,omitempty" doc:"Glob patterns for output files" maxItems:"100"`
+
+// Fingerprint controls fingerprint behavior for up-to-date checks.
+// By default (scope: all), both file hashes and resolved input hashes are checked.
+// Set scope to "files" to skip input hashing when inputs contain volatile values.
+// Requires sources to be set.
+Fingerprint *FingerprintConfig `json:"fingerprint,omitempty" yaml:"fingerprint,omitempty" doc:"Fingerprint configuration for up-to-date checks"`
 ~~~
+
+#### FingerprintConfig
+
+~~~go
+// FingerprintScope controls which data is included in up-to-date fingerprint checks.
+type FingerprintScope string // "all" (default) | "files"
+
+// FingerprintConfig controls fingerprint behavior for an action.
+type FingerprintConfig struct {
+    Scope FingerprintScope `json:"scope,omitempty" yaml:"scope,omitempty"`
+}
+~~~
+
+| Scope | Behavior |
+|-------|----------|
+| `all` (default) | Check file hashes (Phase 1) AND resolved input hashes (Phase 2). Both must match for skip. |
+| `files` | Check file hashes only. Input changes are ignored. Useful when inputs contain volatile values (timestamps, build IDs) that change every run. |
+
+When `scope: files`, the executor skips Phase 2 (input hashing) and `Record()` does not store an inputs hash. This prevents ghost state (stored hashes that are never compared).
+
+**Lint rule**: `fingerprint-without-sources` (warning) fires when `fingerprint` is set but `sources` is empty, since fingerprinting has no effect without source files.
 
 ### 4.7 New Skip Reason
 

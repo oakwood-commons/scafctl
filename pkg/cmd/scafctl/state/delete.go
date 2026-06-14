@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -34,7 +35,7 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			sd, err := state.LoadFromFile(path)
+			sd, err := state.LoadFromFile(path, paths.StateDir())
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
@@ -42,7 +43,7 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			}
 
 			// Verify the file actually exists (LoadFromFile returns empty for non-existent).
-			resolved, resolveErr := state.ResolveStatePath(path)
+			resolved, resolveErr := state.ResolveStatePath(path, paths.StateDir())
 			if resolveErr != nil {
 				w.Errorf("%v", resolveErr)
 				return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
@@ -56,7 +57,7 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			// Check parameters first
 			if _, ok := sd.Parameters[key]; ok {
 				delete(sd.Parameters, key)
-				if err := state.SaveToFile(path, sd); err != nil {
+				if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 					err := fmt.Errorf("failed to save state: %w", err)
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)
@@ -73,7 +74,7 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				delete(sd.Immutables, key)
-				if err := state.SaveToFile(path, sd); err != nil {
+				if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 					err := fmt.Errorf("failed to save state: %w", err)
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.GeneralError)

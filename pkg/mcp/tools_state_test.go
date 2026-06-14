@@ -21,7 +21,7 @@ func seedTestState(t *testing.T, path string) {
 	sd := state.NewData()
 	sd.Parameters["env"] = "prod"
 	sd.Parameters["count"] = float64(42)
-	require.NoError(t, state.SaveToFile(path, sd))
+	require.NoError(t, state.SaveToFile(path, "", sd))
 }
 
 func newStateRequest(name string, args map[string]any) mcp.CallToolRequest {
@@ -146,7 +146,7 @@ func TestHandleStateDelete(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		// Verify key was deleted
-		sd, loadErr := state.LoadFromFile(path)
+		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.NotContains(t, sd.Parameters, "env")
 		assert.Contains(t, sd.Parameters, "count")
@@ -180,7 +180,7 @@ func TestHandleStateDelete(t *testing.T) {
 		assert.Contains(t, output["message"], "cleared 2 entries")
 
 		// Verify all entries gone
-		sd, loadErr := state.LoadFromFile(path)
+		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.Empty(t, sd.Parameters)
 		assert.Empty(t, sd.Immutables)
@@ -209,7 +209,7 @@ func TestHandleStateSet(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
 
-		sd, loadErr := state.LoadFromFile(path)
+		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		require.Contains(t, sd.Parameters, "region")
 		assert.Equal(t, "us-east-1", sd.Parameters["region"])
@@ -227,7 +227,7 @@ func TestHandleStateSet(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
 
-		sd, loadErr := state.LoadFromFile(path)
+		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.Equal(t, "staging", sd.Parameters["env"])
 	})
@@ -236,7 +236,7 @@ func TestHandleStateSet(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "state.json")
 		sd := state.NewData()
 		sd.Immutables["locked"] = &state.ImmutableEntry{Value: "v1", Type: "string", CreatedAt: time.Now().UTC()}
-		require.NoError(t, state.SaveToFile(path, sd))
+		require.NoError(t, state.SaveToFile(path, "", sd))
 
 		result, err := srv.handleStateSet(context.Background(), newStateRequest("state_set", map[string]any{
 			"path":  path,
@@ -247,7 +247,7 @@ func TestHandleStateSet(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		// Parameters should have the new value; immutables remain unchanged
-		reloaded, loadErr := state.LoadFromFile(path)
+		reloaded, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.Equal(t, "v2", reloaded.Parameters["locked"])
 		assert.Equal(t, "v1", reloaded.Immutables["locked"].Value)
@@ -266,7 +266,7 @@ func TestHandleStateSet(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
 
-		sd, loadErr := state.LoadFromFile(path)
+		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		// JSON roundtrip converts int64 to float64
 		assert.Equal(t, float64(8080), sd.Parameters["port"])
@@ -285,7 +285,7 @@ func TestHandleStateSet(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
 
-		sd, loadErr := state.LoadFromFile(path)
+		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.Equal(t, true, sd.Parameters["debug"])
 	})

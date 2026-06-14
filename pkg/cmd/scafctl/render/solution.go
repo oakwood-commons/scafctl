@@ -768,6 +768,15 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 		return ctx, params, nil
 	}
 
+	// Set solution directory so the file state backend can resolve relative
+	// state paths against the directory containing the solution file.
+	// Skip pseudo-paths (catalog:, remote:, URLs) — they are not filesystem paths.
+	if solPath := sol.GetPath(); solPath != "" && !strings.Contains(solPath, ":") {
+		if _, ok := provider.SolutionDirectoryFromContext(ctx); !ok {
+			ctx = provider.WithSolutionDirectory(ctx, filepath.Dir(solPath))
+		}
+	}
+
 	stateMgr := state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
 	cmdInfo := state.CommandInfo{
 		Subcommand: "render solution",

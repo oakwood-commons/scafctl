@@ -81,7 +81,9 @@ func TestFileProvider_StateDeleteNotFound(t *testing.T) {
 
 func TestFileProvider_StateDispatch(t *testing.T) {
 	p := NewFileProvider()
+	solDir := t.TempDir()
 	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
+	ctx = provider.WithSolutionDirectory(ctx, solDir)
 
 	// Dispatch routes state_load through the Execute path
 	result, err := p.Execute(ctx, map[string]any{
@@ -92,6 +94,50 @@ func TestFileProvider_StateDispatch(t *testing.T) {
 	// state_load with non-existent file returns empty state
 	data := result.Data.(map[string]any)
 	assert.True(t, data["success"].(bool))
+}
+
+func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) {
+	p := NewFileProvider()
+	solDir := t.TempDir()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
+	ctx = provider.WithSolutionDirectory(ctx, solDir)
+
+	stateData := state.NewData()
+	stateData.Parameters["key"] = "value"
+
+	// Save with a relative path -- should resolve to solDir
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "state_save",
+		"path":      "my-state.json",
+		"data":      stateData,
+	})
+	require.NoError(t, err)
+
+	// Verify file exists in solution directory
+	_, err = os.Stat(filepath.Join(solDir, "my-state.json"))
+	require.NoError(t, err)
+
+	// Load back via relative path
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "state_load",
+		"path":      "my-state.json",
+	})
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["success"].(bool))
+}
+
+func TestFileProvider_StateDispatch_NoSolutionDir_RejectsRelative(t *testing.T) {
+	p := NewFileProvider()
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
+
+	// Relative path without solution directory should error
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "state_load",
+		"path":      "relative/path.json",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "base directory is required")
 }
 
 func TestFileProvider_StateDryRun(t *testing.T) {

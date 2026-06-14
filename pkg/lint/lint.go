@@ -703,6 +703,21 @@ func lintAction(act *action.Action, location string, validDeps map[string]bool, 
 	if act.ResultSchema != nil {
 		lintResultSchema(act.ResultSchema, location+".resultSchema", result)
 	}
+
+	if act.Fingerprint != nil {
+		if len(act.Sources) == 0 {
+			result.addFinding(SeverityWarning, "workflow", location,
+				"fingerprint block has no effect without sources",
+				"Add sources patterns or remove the fingerprint block",
+				"fingerprint-without-sources")
+		}
+		if !act.Fingerprint.Scope.IsValid() {
+			result.addFinding(SeverityError, "workflow", location+".fingerprint.scope",
+				fmt.Sprintf("unknown fingerprint scope %q", act.Fingerprint.Scope),
+				"Use 'all' (check files and inputs) or 'files' (check files only)",
+				"invalid-fingerprint-scope")
+		}
+	}
 }
 
 func lintResultSchema(schema *jsonschema.Schema, location string, result *Result) {

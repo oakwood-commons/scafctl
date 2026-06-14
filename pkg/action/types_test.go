@@ -299,3 +299,27 @@ func TestResultSchemaMode_OrDefault(t *testing.T) {
 	assert.Equal(t, ResultSchemaModeWarn, ResultSchemaModeWarn.OrDefault())
 	assert.Equal(t, ResultSchemaModeIgnore, ResultSchemaModeIgnore.OrDefault())
 }
+
+func TestFingerprintScope_IsValid(t *testing.T) {
+	tests := []struct {
+		scope    FingerprintScope
+		expected bool
+	}{
+		{FingerprintScopeAll, true},
+		{FingerprintScopeFiles, true},
+		{"", true},
+		{"invalid", false},
+		{"inputs", false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.scope), func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.scope.IsValid())
+		})
+	}
+}
+
+func TestFingerprintScope_OrDefault(t *testing.T) {
+	assert.Equal(t, FingerprintScopeAll, FingerprintScope("").OrDefault())
+	assert.Equal(t, FingerprintScopeAll, FingerprintScopeAll.OrDefault())
+	assert.Equal(t, FingerprintScopeFiles, FingerprintScopeFiles.OrDefault())
+}

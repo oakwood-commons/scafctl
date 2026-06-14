@@ -353,10 +353,9 @@ trigger a **one-time re-execution** (`ReasonFirstRun` on missing inputs hash).
 
 ## 12. Non-Goals
 
-- **Exclude list for inputs**: Not implementing `fingerprint.exclude` to skip
-  specific inputs. Documented limitation for now; can be added in a follow-up
-  if demand arises.
+- **Exclude list for inputs**: Not implementing per-input `fingerprint.exclude`.
+  Use `fingerprint.scope: files` to skip all input hashing instead.
 - **Partial input hashing**: Not differentiating static vs dynamic inputs. All
-  resolved inputs are hashed uniformly.
+  resolved inputs are hashed uniformly (when scope is `all`).
 - **Input-only fingerprinting**: `sources` is still required to opt into
   fingerprinting. Actions without `sources` run every time, as before.

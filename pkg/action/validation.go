@@ -877,6 +877,16 @@ func validateSources(action *Action, section string, errs *AggregatedValidationE
 			Message:    "generates requires sources to be set",
 		})
 	}
+
+	// Validate fingerprint.scope
+	if action.Fingerprint != nil && !action.Fingerprint.Scope.IsValid() {
+		errs.AddError(&ValidationError{
+			Section:    section,
+			ActionName: action.Name,
+			Field:      "fingerprint.scope",
+			Message:    fmt.Sprintf("fingerprint.scope must be 'all' or 'files', got %q", action.Fingerprint.Scope),
+		})
+	}
 }
 
 // validateGlobSafety rejects absolute patterns and path traversal segments

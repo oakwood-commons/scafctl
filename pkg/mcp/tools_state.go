@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
@@ -105,7 +106,7 @@ func (s *Server) handleStateList(_ context.Context, request mcp.CallToolRequest)
 		), nil
 	}
 
-	sd, err := state.LoadFromFile(path)
+	sd, err := state.LoadFromFile(path, paths.StateDir())
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err),
 			WithSuggestion("Check that the path is correct and the file is valid JSON"),
@@ -184,7 +185,7 @@ func (s *Server) handleStateGet(_ context.Context, request mcp.CallToolRequest) 
 		), nil
 	}
 
-	sd, err := state.LoadFromFile(path)
+	sd, err := state.LoadFromFile(path, paths.StateDir())
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err)), nil
 	}
@@ -223,7 +224,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 		), nil
 	}
 
-	sd, err := state.LoadFromFile(path)
+	sd, err := state.LoadFromFile(path, paths.StateDir())
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err)), nil
 	}
@@ -234,7 +235,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 		// Delete a single key -- check parameters first, then immutables
 		if _, ok := sd.Parameters[key]; ok {
 			delete(sd.Parameters, key)
-			if err := state.SaveToFile(path, sd); err != nil {
+			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 				return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 			}
 			return mcp.NewToolResultJSON(map[string]any{
@@ -245,7 +246,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 
 		if _, ok := sd.Immutables[key]; ok {
 			delete(sd.Immutables, key)
-			if err := state.SaveToFile(path, sd); err != nil {
+			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 				return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 			}
 			return mcp.NewToolResultJSON(map[string]any{
@@ -265,7 +266,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 	sd.Parameters = make(map[string]any)
 	sd.Immutables = make(map[string]*state.ImmutableEntry)
 	sd.Fingerprints = make(map[string]*state.FingerprintEntry)
-	if err := state.SaveToFile(path, sd); err != nil {
+	if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 	}
 
@@ -294,7 +295,7 @@ func (s *Server) handleStateSet(_ context.Context, request mcp.CallToolRequest) 
 
 	value := request.GetString("value", "")
 
-	sd, err := state.LoadFromFile(path)
+	sd, err := state.LoadFromFile(path, paths.StateDir())
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err),
 			WithSuggestion("Check that the path is correct and the file is valid JSON"),
@@ -313,7 +314,7 @@ func (s *Server) handleStateSet(_ context.Context, request mcp.CallToolRequest) 
 	// Default to parameters section
 	sd.Parameters[key] = coerced
 
-	if err := state.SaveToFile(path, sd); err != nil {
+	if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 	}
 

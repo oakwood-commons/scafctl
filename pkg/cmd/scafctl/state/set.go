@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -37,7 +38,7 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			sd, err := state.LoadFromFile(path)
+			sd, err := state.LoadFromFile(path, paths.StateDir())
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
@@ -67,7 +68,7 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 				sd.Parameters[key] = coerced
 			}
 
-			if err := state.SaveToFile(path, sd); err != nil {
+			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
 				err := fmt.Errorf("failed to save state: %w", err)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
