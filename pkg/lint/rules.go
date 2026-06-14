@@ -425,6 +425,28 @@ var KnownRules = map[string]RuleMeta{
 			"# Problem: transform assumes http shape but static fallback is []\nresolve:\n  with:\n    - provider: http\n      when:\n        expr: 'has(_.credentials)'\n      inputs:\n        url: https://api.example.com/data\n    - provider: static\n      inputs:\n        value: []\ntransform:\n  with:\n    - provider: cel\n      inputs:\n        expression: '__self.body.items'\n\n# Fix: add a when guard on the transform step\ntransform:\n  with:\n    - provider: cel\n      when:\n        expr: 'type(__self) != list_type'\n      inputs:\n        expression: '__self.body.items'",
 		},
 	},
+	"fingerprint-without-sources": {
+		Rule:        "fingerprint-without-sources",
+		Severity:    string(SeverityWarning),
+		Category:    "workflow",
+		Description: "An action has a fingerprint block but no sources defined. Fingerprinting requires sources to function.",
+		Why:         "The fingerprint system hashes source files to determine whether an action is up-to-date. Without sources, there are no files to hash and the fingerprint block has no effect.",
+		Fix:         "Either add sources patterns to the action or remove the fingerprint block.",
+		Examples: []string{
+			"# Correct:\nactions:\n  build:\n    sources:\n      - 'src/**/*.go'\n    fingerprint:\n      scope: files\n    provider: exec\n    inputs:\n      command: go build",
+		},
+	},
+	"invalid-fingerprint-scope": {
+		Rule:        "invalid-fingerprint-scope",
+		Severity:    string(SeverityError),
+		Category:    "workflow",
+		Description: "The fingerprint.scope value is not a recognized option.",
+		Why:         "An unrecognized scope silently defaults to 'all', which may not be the intended behavior. Valid values are 'all' and 'files'.",
+		Fix:         "Set fingerprint.scope to 'all' (check both files and inputs) or 'files' (check files only).",
+		Examples: []string{
+			"# Correct:\nactions:\n  build:\n    sources:\n      - 'src/**/*.go'\n    fingerprint:\n      scope: files\n    provider: exec\n    inputs:\n      command: go build",
+		},
+	},
 }
 
 // ListRules returns all known lint rules sorted by severity (error > warning > info)

@@ -65,10 +65,6 @@ spec:
         command: [run, solution]
         args: ["-o", "json"]
         tags: [state, run-solution, smoke]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -86,13 +82,10 @@ spec:
         command: [run, solution]
         args: ["-o", "json"]
         tags: [state, run-solution]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production","build_id":"build-042"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/run-solution-state.json
+              > $SCAFCTL_SANDBOX_DIR/run-solution-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -109,13 +102,10 @@ spec:
         command: [run, solution]
         args: ["-o", "json", "-r", "target=canary"]
         tags: [state, run-solution]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state-home/scafctl/run-solution-state.json
+              > $SCAFCTL_SANDBOX_DIR/run-solution-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -130,10 +120,6 @@ spec:
         command: [run, solution]
         args: ["-o", "json", "-r", "target=dev"]
         tags: [state, run-solution, command-info]
-        env:
-          XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}/state-home"
-        init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state-home/scafctl"
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"

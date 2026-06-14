@@ -91,7 +91,7 @@ destructive in annotations (it mutates state data).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `path` | string | Yes | State file path relative to `paths.StateDir()` |
+| `path` | string | Yes | State file path (relative to solution directory, or absolute) |
 | `key` | string | Yes | State entry key |
 | `value` | string | Yes | Value to store (string -- same as CLI behavior) |
 | `type` | string | No | Type annotation (default: `"string"`) |

@@ -151,13 +151,18 @@ func (p *FileProvider) dispatchStateOperation(ctx context.Context, operation str
 		return nil, fmt.Errorf("%s: path is required for state operations", ProviderName)
 	}
 
-	absPath, err := state.ResolveStatePath(statePath)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", ProviderName, err)
-	}
-
 	if provider.DryRunFromContext(ctx) {
 		return p.executeStateDryRun(operation)
+	}
+
+	// Use solution directory as base for relative state paths.
+	// Falls back to empty string which ResolveStatePath rejects for relative paths,
+	// ensuring callers must provide an explicit base directory.
+	baseDir, _ := provider.SolutionDirectoryFromContext(ctx)
+
+	absPath, err := state.ResolveStatePath(statePath, baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
 
 	switch operation {

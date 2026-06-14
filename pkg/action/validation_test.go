@@ -1171,3 +1171,63 @@ func TestValidateSources_RejectsTraversalInGenerates(t *testing.T) {
 	assert.Contains(t, errs.Errors[0].Message, "path traversal not allowed")
 	assert.Equal(t, "generates", errs.Errors[0].Field)
 }
+
+func TestValidateSources_InvalidFingerprintScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		scope   FingerprintScope
+		wantErr bool
+	}{
+		{name: "valid all", scope: FingerprintScopeAll, wantErr: false},
+		{name: "valid files", scope: FingerprintScopeFiles, wantErr: false},
+		{name: "valid empty", scope: "", wantErr: false},
+		{name: "invalid typo", scope: "file", wantErr: true},
+		{name: "invalid unknown", scope: "none", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			action := &Action{
+				Name:     "build",
+				Provider: "exec",
+				Sources:  []string{"src/**/*.go"},
+				Fingerprint: &FingerprintConfig{
+					Scope: tt.scope,
+				},
+			}
+			errs := &AggregatedValidationError{}
+			validateSources(action, "workflow.actions", errs)
+
+			if tt.wantErr {
+				require.NotEmpty(t, errs.Errors)
+				assert.Equal(t, "fingerprint.scope", errs.Errors[len(errs.Errors)-1].Field)
+				assert.Contains(t, errs.Errors[len(errs.Errors)-1].Message, "fingerprint.scope must be")
+			} else {
+				for _, e := range errs.Errors {
+					assert.NotEqual(t, "fingerprint.scope", e.Field)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateWorkflow_InvalidFingerprintScope(t *testing.T) {
+	t.Parallel()
+	w := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "exec",
+				Sources:  []string{"*.go"},
+				Fingerprint: &FingerprintConfig{
+					Scope: "file",
+				},
+			},
+		},
+	}
+	err := ValidateWorkflow(w, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "fingerprint.scope must be")
+}

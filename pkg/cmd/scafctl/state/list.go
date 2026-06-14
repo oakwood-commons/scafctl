@@ -10,6 +10,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -48,7 +49,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			}
 
 			// Resolve and verify the file exists before loading.
-			resolved, err := state.ResolveStatePath(opts.Path)
+			resolved, err := state.ResolveStatePath(opts.Path, paths.StateDir())
 			if err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -59,7 +60,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			sd, err := state.LoadFromFile(opts.Path)
+			sd, err := state.LoadFromFile(opts.Path, paths.StateDir())
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
