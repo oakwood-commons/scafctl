@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -16,58 +17,92 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// clearOptions holds the options for the clear command.
+type clearOptions struct {
+	Path             string
+	Action           string
+	FingerprintsOnly bool
+}
+
 // CommandClear creates the 'state clear' command.
 func CommandClear(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command {
-	var path string
+	opts := &clearOptions{}
 
 	cmd := &cobra.Command{
 		Use:   "clear",
-		Short: "Clear all state values",
-		Long:  "Remove all stored parameters, immutables, and fingerprints from a state file, preserving metadata.",
+		Short: "Clear state values",
+		Long:  "Remove stored parameters, immutables, and fingerprints from a state file, preserving metadata.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ctx := cmd.Context()
-			w := writer.FromContext(ctx)
-			if w == nil {
-				return fmt.Errorf("writer not initialized in context")
-			}
-
-			sd, err := state.LoadFromFile(path, paths.StateDir())
-			if err != nil {
-				err := fmt.Errorf("failed to load state: %w", err)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.GeneralError)
-			}
-
-			// Verify the file actually exists (LoadFromFile returns empty for non-existent).
-			resolved, resolveErr := state.ResolveStatePath(path, paths.StateDir())
-			if resolveErr != nil {
-				w.Errorf("%v", resolveErr)
-				return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-			}
-			if _, statErr := os.Stat(resolved); os.IsNotExist(statErr) {
-				err := fmt.Errorf("state file not found: %s", resolved)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.FileNotFound)
-			}
-
-			count := len(sd.Parameters) + len(sd.Immutables) + len(sd.Fingerprints)
-			sd.Parameters = make(map[string]any)
-			sd.Immutables = make(map[string]*state.ImmutableEntry)
-			sd.Fingerprints = make(map[string]*state.FingerprintEntry)
-
-			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
-				err := fmt.Errorf("failed to save state: %w", err)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.GeneralError)
-			}
-
-			w.Successf("Cleared %d entries\n", count)
-			return nil
+			return runClear(cmd, opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to state directory)")
+	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to state directory or absolute)")
+	cmd.Flags().StringVar(&opts.Action, "action", "", "Clear fingerprints for a specific action only")
+	cmd.Flags().BoolVar(&opts.FingerprintsOnly, "fingerprints-only", false, "Clear only fingerprint entries, keep parameters and immutables")
 	_ = cmd.MarkFlagRequired("path")
+	cmd.MarkFlagsMutuallyExclusive("action", "fingerprints-only")
 
 	return cmd
+}
+
+func runClear(cmd *cobra.Command, opts *clearOptions) error {
+	ctx := cmd.Context()
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return fmt.Errorf("writer not initialized in context")
+	}
+
+	// Resolve and verify the file exists.
+	resolved, resolveErr := state.ResolveStatePath(opts.Path, paths.StateDir())
+	if resolveErr != nil {
+		w.Errorf("%v", resolveErr)
+		return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
+	}
+	if _, statErr := os.Stat(resolved); os.IsNotExist(statErr) {
+		err := fmt.Errorf("state file not found: %s", resolved)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.FileNotFound)
+	}
+
+	sd, err := state.LoadFromFile(opts.Path, paths.StateDir())
+	if err != nil {
+		err := fmt.Errorf("failed to load state: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	count := clearEntries(sd, opts)
+
+	if err := state.SaveToFile(opts.Path, paths.StateDir(), sd); err != nil {
+		err := fmt.Errorf("failed to save state: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	w.Successf("Cleared %d entries\n", count)
+	return nil
+}
+
+// clearEntries removes entries from state data based on the clear options.
+// Returns the number of entries removed.
+func clearEntries(sd *state.Data, opts *clearOptions) int {
+	// --action: clear fingerprints for a specific action only
+	if opts.Action != "" {
+		return fingerprint.ClearAction(sd, opts.Action)
+	}
+
+	// --fingerprints-only: clear all fingerprints, keep parameters and immutables
+	if opts.FingerprintsOnly {
+		count := len(sd.Fingerprints)
+		sd.Fingerprints = make(map[string]*state.FingerprintEntry)
+		return count
+	}
+
+	// Default: clear everything
+	count := len(sd.Parameters) + len(sd.Immutables) + len(sd.Fingerprints)
+	sd.Parameters = make(map[string]any)
+	sd.Immutables = make(map[string]*state.ImmutableEntry)
+	sd.Fingerprints = make(map[string]*state.FingerprintEntry)
+	return count
 }
