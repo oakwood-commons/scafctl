@@ -14,12 +14,13 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 )
 
 // registerRefsTools registers resolver reference extraction tools.
 func (s *Server) registerRefsTools() {
 	extractRefssTool := mcp.NewTool("extract_resolver_refs",
-		mcp.WithDescription("Extract resolver references (_.resolverName patterns) from Go templates or CEL expressions. Returns a list of referenced resolver names, which should be used to populate the 'dependsOn' field. Accepts inline text or a file path."),
+		mcp.WithDescription("Extract resolver references (_.resolverName patterns) from Go templates or CEL expressions. Returns a list of referenced resolver names, which should be used to populate the 'dependsOn' field. Accepts inline text, a file path, or a directory path to scan all template files recursively."),
 		mcp.WithTitleAnnotation("Extract Resolver References"),
 		mcp.WithToolIcons(toolIcons["refs"]),
 		mcp.WithDeferLoading(true),
@@ -32,6 +33,12 @@ func (s *Server) registerRefsTools() {
 		),
 		mcp.WithString("file",
 			mcp.Description("Path to a template file to analyze"),
+		),
+		mcp.WithString("directory",
+			mcp.Description("Path to a directory to scan recursively for template files (.tpl, .tmpl, .gotmpl). Returns aggregated resolver references from all files."),
+		),
+		mcp.WithString("glob",
+			mcp.Description("Comma-separated glob patterns matched against the base filename when scanning a directory (e.g. '*.tpl,*.yaml'). Defaults to '*.tpl,*.tmpl,*.gotmpl'"),
 		),
 		mcp.WithString("type",
 			mcp.Description("Expression type: 'go-template' (default) or 'cel'"),
@@ -47,12 +54,31 @@ func (s *Server) registerRefsTools() {
 func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	text := request.GetString("text", "")
 	filePath := request.GetString("file", "")
+	directory := request.GetString("directory", "")
+	glob := request.GetString("glob", "")
 	exprType := request.GetString("type", "go-template")
 	cwd := request.GetString("cwd", "")
 
-	if text == "" && filePath == "" {
-		return newStructuredError(ErrCodeInvalidInput, "either 'text' or 'file' must be provided",
-			WithSuggestion("Provide inline expression text via 'text' or a file path via 'file'"),
+	if text == "" && filePath == "" && directory == "" {
+		return newStructuredError(ErrCodeInvalidInput, "either 'text', 'file', or 'directory' must be provided",
+			WithSuggestion("Provide inline expression text via 'text', a file path via 'file', or a directory path via 'directory'"),
+		), nil
+	}
+
+	// Reject ambiguous multi-input: only one of text/file/directory may be provided
+	inputCount := 0
+	if text != "" {
+		inputCount++
+	}
+	if filePath != "" {
+		inputCount++
+	}
+	if directory != "" {
+		inputCount++
+	}
+	if inputCount > 1 {
+		return newStructuredError(ErrCodeInvalidInput, "only one of 'text', 'file', or 'directory' may be provided",
+			WithSuggestion("Provide exactly one input source"),
 		), nil
 	}
 
@@ -62,6 +88,11 @@ func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallTo
 			WithField("cwd"),
 			WithSuggestion("Provide a valid existing directory path"),
 		), nil
+	}
+
+	// Handle directory scanning mode
+	if directory != "" {
+		return s.handleExtractRefsFromDirectory(ctx, directory, glob, exprType)
 	}
 
 	source := "inline"
@@ -91,7 +122,7 @@ func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallTo
 	case "go-template":
 		resolverNames, err = extractGoTemplateRefs(content)
 	case "cel":
-		resolverNames, err = extractCELRefs(content)
+		resolverNames, err = extractCELRefs(ctx, content)
 	default:
 		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("unsupported type %q", exprType),
 			WithField("type"),
@@ -116,6 +147,66 @@ func (s *Server) handleExtractResolverRefs(_ context.Context, request mcp.CallTo
 		"count":      len(uniqueResolverNames(details)),
 		"details":    details,
 	})
+}
+
+// handleExtractRefsFromDirectory scans a directory recursively for template files
+// and returns aggregated resolver references from all matched files.
+func (s *Server) handleExtractRefsFromDirectory(ctx context.Context, directory, glob, exprType string) (*mcp.CallToolResult, error) {
+	resolved, err := provider.AbsFromContext(ctx, directory)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to resolve directory path: %v", err),
+			WithField("directory"),
+		), nil
+	}
+
+	globs := refs.ParseGlobs(glob)
+	scanResult, err := refs.ScanDirectory(ctx, resolved, globs, exprType)
+	if err != nil {
+		// Map domain errors to structured MCP errors
+		errMsg := err.Error()
+		switch {
+		case strings.Contains(errMsg, "unsupported expression type"):
+			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("unsupported type %q", exprType),
+				WithField("type"),
+				WithSuggestion("Use 'go-template' or 'cel'"),
+			), nil
+		case strings.Contains(errMsg, "not found"):
+			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("directory %q not found: %v", directory, err),
+				WithField("directory"),
+				WithSuggestion("Check that the directory path exists and is accessible"),
+			), nil
+		case strings.Contains(errMsg, "is not a directory"):
+			return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("%q is not a directory", directory),
+				WithField("directory"),
+				WithSuggestion("Use 'file' parameter for single files, or provide a directory path"),
+			), nil
+		case strings.Contains(errMsg, "invalid glob pattern"):
+			return newStructuredError(ErrCodeInvalidInput, errMsg,
+				WithField("glob"),
+				WithSuggestion("Check glob syntax (e.g. unclosed character class)"),
+			), nil
+		default:
+			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to scan directory: %v", err),
+				WithField("directory"),
+			), nil
+		}
+	}
+
+	result := map[string]any{
+		"source":     "directory",
+		"sourceType": exprType,
+		"directory":  directory,
+		"references": scanResult.References,
+		"count":      scanResult.Count,
+		"details":    scanResult.Details,
+		"files":      scanResult.Files,
+		"filesCount": scanResult.FilesCount,
+	}
+	if len(scanResult.Warnings) > 0 {
+		result["warnings"] = scanResult.Warnings
+	}
+
+	return mcp.NewToolResultJSON(result)
 }
 
 // refDetail represents a resolver and its referenced fields.
@@ -152,9 +243,9 @@ func extractGoTemplateRefs(content string) ([]string, error) {
 }
 
 // extractCELRefs extracts resolver references from a CEL expression.
-func extractCELRefs(content string) ([]string, error) {
+func extractCELRefs(ctx context.Context, content string) ([]string, error) {
 	expr := celexp.Expression(content)
-	vars, err := expr.GetUnderscoreVariables(context.TODO())
+	vars, err := expr.GetUnderscoreVariables(ctx)
 	if err != nil {
 		return nil, err
 	}
