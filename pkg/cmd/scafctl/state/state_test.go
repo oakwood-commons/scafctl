@@ -53,6 +53,7 @@ func TestCommandState_HasSubcommands(t *testing.T) {
 	assert.Contains(t, names, "set")
 	assert.Contains(t, names, "delete")
 	assert.Contains(t, names, "clear")
+	assert.Contains(t, names, "fingerprints")
 }
 
 // ── List tests ────────────────────────────────────────────────────────────────
@@ -353,4 +354,253 @@ func TestCommandClear_EmptyState(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Cleared 0 entries")
+}
+
+// ── CommandFingerprints tests ────────────────────────────────────────────────
+
+func seedFingerprintState(t *testing.T, path string) {
+	t.Helper()
+	sd := state.NewData()
+	now := time.Now().UTC()
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc123", UpdatedAt: now}
+	sd.Fingerprints["__fingerprint:build:generates"] = &state.FingerprintEntry{Value: "def456", UpdatedAt: now}
+	sd.Fingerprints["__fingerprint:deploy:sources"] = &state.FingerprintEntry{Value: "ghi789", UpdatedAt: now}
+	require.NoError(t, state.SaveToFile(path, "", sd))
+}
+
+func TestCommandFingerprints_WithEntries(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "fp.json")
+	seedFingerprintState(t, path)
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandFingerprints(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "-o", "json"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "build")
+	assert.Contains(t, buf.String(), "deploy")
+	assert.Contains(t, buf.String(), "sources")
+}
+
+func TestCommandFingerprints_FilterAction(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "fp.json")
+	seedFingerprintState(t, path)
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandFingerprints(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--action", "build", "-o", "json"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "build")
+	assert.NotContains(t, buf.String(), "deploy")
+}
+
+func TestCommandFingerprints_NoEntries(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "empty.json")
+	require.NoError(t, state.SaveToFile(path, "", state.NewData()))
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandFingerprints(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "No fingerprint entries found")
+}
+
+func TestCommandFingerprints_MissingPath(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandFingerprints(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required flag(s) \"path\" not set")
+}
+
+// ── CommandClear selective tests ─────────────────────────────────────────────
+
+func TestCommandClear_FingerprintsOnly(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "fp.json")
+	sd := state.NewData()
+	now := time.Now().UTC()
+	sd.Parameters["env"] = "prod"
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc", UpdatedAt: now}
+	require.NoError(t, state.SaveToFile(path, "", sd))
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandClear(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--fingerprints-only"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Cleared 1 entries")
+
+	reloaded, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	assert.Len(t, reloaded.Parameters, 1)
+	assert.Empty(t, reloaded.Fingerprints)
+}
+
+func TestCommandClear_Action(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "fp.json")
+	seedFingerprintState(t, path)
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandClear(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--action", "build"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Cleared 2 entries")
+
+	reloaded, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	assert.Len(t, reloaded.Fingerprints, 1)
+	assert.Contains(t, reloaded.Fingerprints, "__fingerprint:deploy:sources")
+}
+
+func TestCommandClear_ActionAndFingerprintsOnlyMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "fp.json")
+	seedFingerprintState(t, path)
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandClear(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--action", "build", "--fingerprints-only"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "if any flags in the group [action fingerprints-only] are set none of the others can be")
+}
+
+// ── clearEntries unit tests ──────────────────────────────────────────────────
+
+func TestClearEntries_Default(t *testing.T) {
+	t.Parallel()
+	sd := state.NewData()
+	now := time.Now().UTC()
+	sd.Parameters["env"] = "prod"
+	sd.Immutables["key"] = &state.ImmutableEntry{Value: "val", CreatedAt: now}
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc", UpdatedAt: now}
+
+	count := clearEntries(sd, &clearOptions{})
+	assert.Equal(t, 3, count)
+	assert.Empty(t, sd.Parameters)
+	assert.Empty(t, sd.Immutables)
+	assert.Empty(t, sd.Fingerprints)
+}
+
+func TestClearEntries_FingerprintsOnly(t *testing.T) {
+	t.Parallel()
+	sd := state.NewData()
+	now := time.Now().UTC()
+	sd.Parameters["env"] = "prod"
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc", UpdatedAt: now}
+	sd.Fingerprints["__fingerprint:deploy:sources"] = &state.FingerprintEntry{Value: "def", UpdatedAt: now}
+
+	count := clearEntries(sd, &clearOptions{FingerprintsOnly: true})
+	assert.Equal(t, 2, count)
+	assert.Len(t, sd.Parameters, 1)
+	assert.Empty(t, sd.Fingerprints)
+}
+
+func TestClearEntries_Action(t *testing.T) {
+	t.Parallel()
+	sd := state.NewData()
+	now := time.Now().UTC()
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc", UpdatedAt: now}
+	sd.Fingerprints["__fingerprint:build:generates"] = &state.FingerprintEntry{Value: "def", UpdatedAt: now}
+	sd.Fingerprints["__fingerprint:deploy:sources"] = &state.FingerprintEntry{Value: "ghi", UpdatedAt: now}
+
+	count := clearEntries(sd, &clearOptions{Action: "build"})
+	assert.Equal(t, 2, count)
+	assert.Len(t, sd.Fingerprints, 1)
+	assert.Contains(t, sd.Fingerprints, "__fingerprint:deploy:sources")
+}
+
+// ── buildFingerprintRows unit tests ──────────────────────────────────────────
+
+func TestBuildFingerprintRows(t *testing.T) {
+	t.Parallel()
+	sd := state.NewData()
+	now := time.Now().UTC()
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc123", UpdatedAt: now}
+	sd.Fingerprints["__fingerprint:build:generates"] = &state.FingerprintEntry{Value: "def456", UpdatedAt: now}
+
+	rows := buildFingerprintRows(sd, []string{"build"})
+	require.Len(t, rows, 2)
+	assert.Equal(t, "build", rows[0]["action"])
+	assert.Equal(t, "generates", rows[0]["type"]) // sorted by key, generates < sources
+	assert.Equal(t, "def456", rows[0]["hash"])
+	assert.Equal(t, "build", rows[1]["action"])
+	assert.Equal(t, "sources", rows[1]["type"])
+	assert.Equal(t, "abc123", rows[1]["hash"])
+	_, hasUpdatedAt := rows[0]["updatedAt"]
+	assert.True(t, hasUpdatedAt, "non-zero timestamp should include updatedAt")
+}
+
+func TestBuildFingerprintRows_ZeroTimestamp(t *testing.T) {
+	t.Parallel()
+	sd := state.NewData()
+	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc123"}
+
+	rows := buildFingerprintRows(sd, []string{"build"})
+	require.Len(t, rows, 1)
+	assert.Equal(t, "abc123", rows[0]["hash"])
+	_, hasUpdatedAt := rows[0]["updatedAt"]
+	assert.False(t, hasUpdatedAt, "zero timestamp should omit updatedAt")
+}
+
+func TestBuildFingerprintRows_Empty(t *testing.T) {
+	t.Parallel()
+	sd := state.NewData()
+	rows := buildFingerprintRows(sd, nil)
+	assert.Nil(t, rows)
+}
+
+func TestSplitFingerprintKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		key      string
+		wantName string
+		wantType string
+	}{
+		{"__fingerprint:build:sources", "build", "sources"},
+		{"__fingerprint:deploy:generates", "deploy", "generates"},
+		{"__fingerprint:test:inputs", "test", "inputs"},
+		{"not-a-key", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			t.Parallel()
+			name, typ := splitFingerprintKey(tt.key)
+			assert.Equal(t, tt.wantName, name)
+			assert.Equal(t, tt.wantType, typ)
+		})
+	}
 }

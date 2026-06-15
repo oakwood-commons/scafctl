@@ -5,6 +5,8 @@ package fingerprint
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/state"
@@ -99,4 +101,73 @@ func SaveHashes(data *state.Data, actionName, sourcesHash, generatesHash, inputs
 	} else {
 		delete(data.Fingerprints, inputsKey(actionName))
 	}
+}
+
+// KeyPrefix is the shared prefix for all fingerprint state keys.
+const KeyPrefix = "__fingerprint:"
+
+// ParseActionName extracts the action name from a fingerprint state key.
+// Returns the action name and true if the key is a valid fingerprint key,
+// or empty string and false otherwise.
+//
+// Keys have format: __fingerprint:<actionName>:<type>
+func ParseActionName(key string) (string, bool) {
+	if !strings.HasPrefix(key, KeyPrefix) {
+		return "", false
+	}
+	rest := key[len(KeyPrefix):]
+	lastColon := strings.LastIndex(rest, ":")
+	if lastColon <= 0 || lastColon == len(rest)-1 {
+		return "", false
+	}
+	return rest[:lastColon], true
+}
+
+// SplitKey parses a fingerprint state key into the action name and type
+// (sources, generates, or inputs). Returns empty strings and false if the
+// key is not a valid fingerprint key.
+func SplitKey(key string) (name, typ string, ok bool) {
+	name, ok = ParseActionName(key)
+	if !ok {
+		return "", "", false
+	}
+	// Key format: __fingerprint:<name>:<type>
+	typ = key[len(KeyPrefix)+len(name)+1:]
+	return name, typ, true
+}
+
+// ClearAction removes all fingerprint entries (sources, generates, inputs) for the
+// given action name from state data. Returns the number of entries removed.
+func ClearAction(data *state.Data, actionName string) int {
+	if data == nil || data.Fingerprints == nil {
+		return 0
+	}
+	removed := 0
+	for _, key := range []string{sourcesKey(actionName), generatesKey(actionName), inputsKey(actionName)} {
+		if _, ok := data.Fingerprints[key]; ok {
+			delete(data.Fingerprints, key)
+			removed++
+		}
+	}
+	return removed
+}
+
+// ListActions returns a deduplicated, sorted list of action names that have
+// fingerprint entries in the given state data.
+func ListActions(data *state.Data) []string {
+	if data == nil || len(data.Fingerprints) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for key := range data.Fingerprints {
+		if name, ok := ParseActionName(key); ok {
+			seen[name] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

@@ -6,6 +6,8 @@ package dryrun
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -14,9 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
 // helpers
@@ -477,4 +481,130 @@ func TestGenerate_NilWorkflowOverrideFallsBack(t *testing.T) {
 	assert.True(t, report.HasWorkflow)
 	require.Len(t, report.ActionPlan, 1)
 	assert.Equal(t, "deploy", report.ActionPlan[0].Name)
+}
+
+// fingerprint status tests
+
+func TestGenerate_FingerprintStatus_FirstRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(srcFile, []byte("package main"), 0o600))
+
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build": {
+				Provider: "shell",
+				Sources:  []string{"main.go"},
+			},
+		},
+	}
+
+	sd := state.NewData()
+	report, err := Generate(context.Background(), sol, Options{
+		StateData: sd,
+		Cwd:       tmpDir,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "stale", report.ActionPlan[0].FingerprintStatus)
+	assert.Equal(t, "first run", report.ActionPlan[0].FingerprintReason)
+}
+
+func TestGenerate_FingerprintStatus_UpToDate(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(srcFile, []byte("package main"), 0o600))
+
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build": {
+				Provider: "shell",
+				Sources:  []string{"main.go"},
+			},
+		},
+	}
+
+	// Pre-populate state with matching hash
+	sd := state.NewData()
+	hash, err := fingerprint.HashFiles(tmpDir, []string{"main.go"})
+	require.NoError(t, err)
+	fingerprint.SaveHashes(sd, "build", hash, "", "")
+
+	report, err := Generate(context.Background(), sol, Options{
+		StateData: sd,
+		Cwd:       tmpDir,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "up-to-date", report.ActionPlan[0].FingerprintStatus)
+	assert.Equal(t, "up-to-date", report.ActionPlan[0].FingerprintReason)
+}
+
+func TestGenerate_FingerprintStatus_SourcesChanged(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(srcFile, []byte("package main"), 0o600))
+
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build": {
+				Provider: "shell",
+				Sources:  []string{"main.go"},
+			},
+		},
+	}
+
+	// Pre-populate state with a different hash
+	sd := state.NewData()
+	fingerprint.SaveHashes(sd, "build", "sha256:old-hash", "", "")
+
+	report, err := Generate(context.Background(), sol, Options{
+		StateData: sd,
+		Cwd:       tmpDir,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "stale", report.ActionPlan[0].FingerprintStatus)
+	assert.Equal(t, "sources changed", report.ActionPlan[0].FingerprintReason)
+}
+
+func TestGenerate_FingerprintStatus_NoStateData(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build": {
+				Provider: "shell",
+				Sources:  []string{"main.go"},
+			},
+		},
+	}
+
+	// No StateData -- fingerprint status should be empty
+	report, err := Generate(context.Background(), sol, Options{})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Empty(t, report.ActionPlan[0].FingerprintStatus)
+	assert.Empty(t, report.ActionPlan[0].FingerprintReason)
+}
+
+func TestGenerate_FingerprintStatus_NoSources(t *testing.T) {
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"deploy": {Provider: "shell"},
+		},
+	}
+
+	sd := state.NewData()
+	report, err := Generate(context.Background(), sol, Options{
+		StateData: sd,
+		Cwd:       "/tmp",
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Empty(t, report.ActionPlan[0].FingerprintStatus)
+	assert.Empty(t, report.ActionPlan[0].FingerprintReason)
 }

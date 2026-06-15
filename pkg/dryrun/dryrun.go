@@ -16,8 +16,10 @@ import (
 	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
 // Report is the full structured WhatIf dry-run output.
@@ -50,6 +52,8 @@ type WhatIfAction struct {
 	When               string            `json:"when,omitempty" yaml:"when,omitempty" doc:"Conditional expression" maxLength:"2048" example:"_.enabled == true"`
 	MaterializedInputs map[string]any    `json:"materializedInputs,omitempty" yaml:"materializedInputs,omitempty" doc:"Inputs resolved at plan time (only with --verbose)"`
 	DeferredInputs     map[string]string `json:"deferredInputs,omitempty" yaml:"deferredInputs,omitempty" doc:"Inputs deferred until runtime"`
+	FingerprintStatus  string            `json:"fingerprintStatus,omitempty" yaml:"fingerprintStatus,omitempty" doc:"Fingerprint cache status: up-to-date, stale, or error" maxLength:"32" example:"up-to-date"`
+	FingerprintReason  string            `json:"fingerprintReason,omitempty" yaml:"fingerprintReason,omitempty" doc:"Reason for fingerprint status" maxLength:"64" example:"sources changed"`
 }
 
 // Options controls the dry-run generation.
@@ -63,6 +67,12 @@ type Options struct {
 	ResolverData map[string]any `json:"-" yaml:"-"`
 	// Verbose includes MaterializedInputs in the report when true.
 	Verbose bool `json:"-" yaml:"-"`
+	// StateData is the loaded state for fingerprint up-to-date checks.
+	// When set, actions with sources are checked against stored fingerprints
+	// to report whether they would be skipped as up-to-date.
+	StateData *state.Data `json:"-" yaml:"-"`
+	// Cwd is the working directory for glob expansion during fingerprint checks.
+	Cwd string `json:"-" yaml:"-"`
 	// Workflow overrides the solution's workflow for report generation.
 	// When set, this workflow is used instead of sol.Spec.Workflow,
 	// allowing callers to pass a filtered workflow without mutating the solution.
@@ -172,6 +182,13 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 				// Generate WhatIf message from the provider
 				entry.WhatIf = describeWhatIf(ctx, reg, ea.Provider, ea.MaterializedInputs)
 
+				// Check fingerprint status for actions with sources
+				if len(ea.Sources) > 0 && opts.StateData != nil && opts.Cwd != "" {
+					entry.FingerprintStatus, entry.FingerprintReason = checkFingerprintStatus(
+						ctx, ea, opts.StateData, opts.Cwd,
+					)
+				}
+
 				// Only include MaterializedInputs in verbose mode
 				if opts.Verbose && len(ea.MaterializedInputs) > 0 {
 					entry.MaterializedInputs = ea.MaterializedInputs
@@ -212,4 +229,18 @@ func versionString(v fmt.Stringer) string {
 		return ""
 	}
 	return v.String()
+}
+
+// checkFingerprintStatus checks the fingerprint cache status for an action
+// with sources. Returns a human-readable status and reason.
+func checkFingerprintStatus(ctx context.Context, ea *action.ExpandedAction, sd *state.Data, cwd string) (string, string) {
+	checker := fingerprint.NewChecker(sd)
+	result, err := checker.CheckFiles(ctx, ea.ExpandedName, ea.Sources, ea.Generates, cwd)
+	if err != nil {
+		return "error", err.Error()
+	}
+	if !result.Stale {
+		return "up-to-date", string(result.Reason)
+	}
+	return "stale", string(result.Reason)
 }

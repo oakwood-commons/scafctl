@@ -513,7 +513,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// action-phase WhatIf report uses actionCtx which has the working-dir
 	// override for accurate output-dir resolution.
 	if o.DryRun {
-		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd)
 	}
 
 	// Execute resolvers if present
@@ -599,7 +599,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // override) so resolver paths resolve relative to the solution file.
 // actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
 // so that dryrun.Generate / WhatIf sees the same context as real execution.
-func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow) error {
+func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string) error {
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
@@ -616,6 +616,8 @@ func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, 
 		ResolverData: resolverData,
 		Verbose:      o.Verbose,
 		Workflow:     workflow,
+		StateData:    stateData,
+		Cwd:          cwd,
 	})
 	if err != nil {
 		return o.exitWithCode(resolverCtx, fmt.Errorf("dry-run failed: %w", err), exitcode.GeneralError)
@@ -692,6 +694,9 @@ func (o *SolutionOptions) writeDryRunTable(ctx context.Context, report *dryrun.R
 				for k, v := range act.DeferredInputs {
 					w.Plainlnf("    (deferred: %s = %s)", k, v)
 				}
+			}
+			if act.FingerprintStatus != "" {
+				w.Plainlnf("    (fingerprint: %s \u2014 %s)", act.FingerprintStatus, act.FingerprintReason)
 			}
 			if len(act.MaterializedInputs) > 0 {
 				w.Plainlnf("    Inputs:")

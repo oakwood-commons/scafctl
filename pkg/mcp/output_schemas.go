@@ -226,7 +226,9 @@ var outputSchemaDryRun = json.RawMessage(`{
 					"dependencies": { "type": "array", "items": { "type": "string" } },
 					"when": { "type": "string" },
 					"materializedInputs": { "type": "object" },
-					"deferredInputs": { "type": "object" }
+					"deferredInputs": { "type": "object" },
+					"fingerprintStatus": { "type": "string", "description": "Fingerprint cache status: up-to-date, stale, or error" },
+					"fingerprintReason": { "type": "string", "description": "Reason for fingerprint status" }
 				}
 			}
 		},
