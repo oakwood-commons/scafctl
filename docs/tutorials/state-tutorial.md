@@ -23,7 +23,8 @@ This tutorial walks you through using state persistence in scafctl. The state sy
 6. [Dynamic State Paths](#dynamic-state-paths)
 7. [CLI Commands](#cli-commands)
 8. [Command Behavior](#command-behavior)
-9. [Common Patterns](#common-patterns)
+9. [Save-Time Overrides](#save-time-overrides)
+10. [Common Patterns](#common-patterns)
 
 ---
 
@@ -552,6 +553,108 @@ Use `render solution` to preview what an action graph would look like with curre
 | `run solution` | Yes | Yes | After actions succeed |
 | `run action` | Yes | Yes | After actions succeed |
 | `render solution` | Yes | No (read-only) | -- |
+
+---
+
+## Save-Time Overrides
+
+Some workflows need different backend inputs at load time vs save time. For example, a GitHub backend may load state from the `main` branch but save state to a feature branch determined by a resolver. The `saveOverrides` field makes this possible.
+
+### The Problem
+
+Backend `inputs` are resolved at **both** load and save time. Because state loads before resolvers run, `inputs` cannot use resolver references (`rslvr:`) or `_` in CEL -- those values do not exist yet.
+
+But at save time, resolvers have already executed. `saveOverrides` lets you provide inputs that are only resolved at save time, when resolver data is available.
+
+### How It Works
+
+1. At **load time**: only `inputs` are resolved (using `__params` and literals).
+2. At **save time**: both `inputs` and `saveOverrides` are resolved. Keys in `saveOverrides` override keys in `inputs`.
+
+### Example: GitHub PR Workflow
+
+This pattern loads state from `main` and saves to a resolver-derived feature branch:
+
+~~~yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: pr-workflow
+  version: 1.0.0
+
+state:
+  enabled: true
+  backend:
+    provider: github
+    inputs:
+      owner: { literal: "my-org" }
+      repo: { literal: "my-repo" }
+      path:
+        expr: "'state/' + __params.app_name + '.json'"
+      ref: { literal: "main" }
+    saveOverrides:
+      branch: { rslvr: featureBranch }
+      message:
+        expr: "'chore(state): update state for ' + _.app_name"
+
+spec:
+  resolvers:
+    app_name:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+
+    featureBranch:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "branch_name"
+~~~
+
+Run it:
+
+{{< tabs "state-tutorial-cmd-saveoverrides" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run resolver -f ./pr-workflow.yaml \
+  -r app_name=my-app -r branch_name=feat/my-feature
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f ./pr-workflow.yaml `
+  -r app_name=my-app -r branch_name=feat/my-feature
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+At load time, state is read from `main` using the `ref` input. At save time, the `branch` from `saveOverrides` overrides the default, saving state to `feat/my-feature`. After the PR merges, subsequent runs load the merged state from `main`.
+
+### Lint Rules
+
+Two lint rules help validate `saveOverrides` configuration:
+
+| Rule | Severity | What It Catches |
+|------|----------|----------------|
+| `state-save-override-state-ref` | Error | `saveOverrides` referencing the `state` provider (circular dependency) |
+| `state-github-no-save-branch` | Info | GitHub backend without a save-specific branch (hint for PR workflows) |
+
+Run `scafctl lint` to check your configuration.
+
+### Restrictions
+
+- `saveOverrides` values **can** use `rslvr:`, `_` in CEL, and `__params`.
+- `saveOverrides` values **cannot** reference the `state` provider (circular dependency).
+- Keys in `saveOverrides` override same-named keys in `inputs` at save time only.
+- At load time, `saveOverrides` are completely ignored -- no errors are raised for resolver-dependent expressions.
+
+> [!TIP]
+> See [examples/solutions/state/github-state.yaml](https://github.com/oakwood-commons/scafctl/blob/main/examples/solutions/state/github-state.yaml) for a complete working example.
 
 ---
 

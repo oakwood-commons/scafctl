@@ -28,6 +28,35 @@ scafctl run resolver -f solution.yaml
 scafctl state list --path state-example.json
 ~~~
 
+## github-state.yaml
+
+GitHub-based state persistence with PR workflows using `saveOverrides`.
+State is loaded from `main` and saved to a resolver-derived feature branch,
+enabling PR-based review of state changes.
+
+Requires the `github` provider plugin (>= 0.6.0).
+
+### First Run
+
+~~~sh
+scafctl run resolver -f ./github-state.yaml \
+  -r app_name=my-app -r branch_name=feat/my-feature -r environment=prod
+~~~
+
+### How it works
+
+- **Load**: reads state from `refs/heads/main` at `state/<app_name>.json`
+- **Save**: writes state to the `featureBranch` resolver value (e.g., `feat/my-feature`)
+- **saveOverrides**: the `branch` and `message` inputs are only resolved at
+  save time when resolver data (`_`) is available
+
+### Prerequisites
+
+~~~sh
+scafctl auth login github
+scafctl plugins install github
+~~~
+
 ### Clear State
 
 ~~~sh

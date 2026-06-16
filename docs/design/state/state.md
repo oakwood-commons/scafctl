@@ -102,7 +102,22 @@ State is declared via a top-level `state` field on the `Solution` struct, as a p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `provider` | `string` | Yes | Name of a registered provider with `CapabilityState` (e.g., `"file"`) |
-| `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs -- follows the same pattern as resolver provider inputs |
+| `inputs` | `map[string]*ValueRef` | Yes | Provider-specific inputs resolved at **both** load and save time. Must only use `literal`, `__params` expressions, or templates -- resolver references (`rslvr:`) and `_` in CEL are not available at load time. |
+| `saveOverrides` | `map[string]*ValueRef` | No | Provider-specific inputs resolved **only** at save time. Can use resolver references (`rslvr:`), `_` in CEL, and all other ValueRef forms. Keys that overlap with `inputs` override them at save time. |
+
+### Save-Time Inputs (`saveOverrides`)
+
+Some state backends need different configuration for load vs save. For example, a GitHub backend may read state from the `main` branch but write state to a feature branch determined at runtime by a resolver.
+
+`saveOverrides` are resolved only during `state_save` operations (after resolvers have executed). At load time, they are skipped entirely -- no errors are raised for resolver-dependent expressions.
+
+At save time, the final input map is computed as:
+
+```
+finalInputs = merge(resolvedInputs, resolvedSaveOverrides)
+```
+
+Where `saveOverrides` keys override `inputs` keys. This allows a provider to use a default value from `inputs` (e.g., `branch: main`) that gets overridden by a save-specific value (e.g., `branch: { rslvr: featureBranch }`).
 
 ### Example
 
@@ -372,18 +387,159 @@ During dry-run: `state_load` returns empty state, `state_save` and `state_delete
 
 ## GitHub Provider State Operations
 
-The `github` provider also supports `CapabilityState`, storing state as JSON files in a GitHub repository.
+The `github` provider also supports `CapabilityState`, storing state as JSON files in a GitHub repository. The GitHub backend supports asymmetric read/write targets: loading state from one branch (e.g., `main`) and saving to another (e.g., a feature branch created by the action workflow).
 
 ### Input Schema
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `operation` | string (enum: `state_load`, `state_save`, `state_delete`) | Yes | Operation to perform |
-| `owner` | string | Yes | Repository owner |
-| `repo` | string | Yes | Repository name |
-| `path` | string | Yes | File path in the repository |
-| `branch` | string | No | Branch name (defaults to default branch) |
-| `data` | object | For `state_save` | The full `Data` object to persist |
+| Field | Type | Required For | Description |
+|-------|------|-------------|-------------|
+| `operation` | string (enum: `state_load`, `state_save`, `state_delete`) | All | Operation to perform |
+| `owner` | string | All | Repository owner |
+| `repo` | string | All | Repository name |
+| `path` | string | All | File path in the repository |
+| `ref` | string | `state_load` | Branch/ref to read state from (e.g., `main`). Only needed at load time. |
+| `branch` | string | `state_save`, `state_delete` | Branch to write state to. Can reference a resolver via `saveOverrides`. |
+| `message` | string | No | Commit message (defaults to `"chore(state): update state"`) |
+| `data` | object | `state_save` | The full state data object to persist |
+
+### Asymmetric Read/Write Configuration
+
+The GitHub backend is designed for PR-based workflows where:
+
+1. State is **loaded** from the default branch (`main`) -- reflecting the last merged state
+2. State is **saved** to a feature branch -- alongside scaffolded files in the same PR
+
+This is achieved using `saveOverrides`:
+
+~~~yaml
+state:
+  enabled: true
+  backend:
+    provider: github
+    inputs:
+      owner: { literal: "my-org" }
+      repo: { literal: "my-repo" }
+      path: { expr: "'state/' + __params.app_name + '.json'" }
+      ref: { literal: "main" }
+    saveOverrides:
+      branch: { rslvr: featureBranch }
+      message: { expr: "'chore(state): save ' + __params.app_name" }
+~~~
+
+At load time: `ref` (from `inputs`) determines where to read. At save time: `branch` (from `saveOverrides`) determines where to write.
+
+### Concurrency: `expectedHeadOid`
+
+The GitHub `createCommitOnBranch` GraphQL mutation requires `expectedHeadOid`. The state provider fetches the current HEAD OID of the target branch immediately before committing. This serves two purposes:
+
+1. **API requirement** -- GitHub rejects commits without a valid `expectedHeadOid`
+2. **Lightweight optimistic locking** -- if a concurrent process committed to the same branch between the fetch and the commit, the mutation fails with a conflict error rather than silently overwriting
+
+On conflict, the provider returns an error: `"state save conflict: concurrent commit on branch <name>"`. The user re-runs to pick up the latest state.
+
+### Eventual Consistency in PR Workflows
+
+In PR-based workflows, state on `main` is eventually consistent:
+
+- State saved to a feature branch only reaches `main` when the PR merges
+- Until merge, subsequent `state_load` reads from `main` and gets the pre-PR state
+- This means immutables, fingerprints, and parameter replay reflect the last **merged** state
+
+This is semantically correct: state reflects what is committed/deployed, not what is proposed. Actions re-execute on subsequent runs because the previous run's state has not landed on `main` yet.
+
+### Operations
+
+| Operation | Behavior |
+|-----------|----------|
+| `state_load` | Read JSON file from `owner/repo/path@ref`. Return empty state on 404 (first run). |
+| `state_save` | Fetch HEAD OID of `branch`, call `createCommitOnBranch` with state JSON as file addition. Fail on OID conflict. |
+| `state_delete` | Fetch HEAD OID of `branch`, call `createCommitOnBranch` with file deletion. Idempotent on missing file. |
+
+### Dry-Run Behavior
+
+During dry-run: `state_load` returns empty state, `state_save` and `state_delete` report what-if actions without making API calls.
+
+### Full Workflow Example
+
+~~~yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: deploy-infra
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: github
+    inputs:
+      owner: { literal: "my-org" }
+      repo: { literal: "infra-state" }
+      path: { expr: "'state/' + __params.app_name + '.json'" }
+      ref: { literal: "main" }
+    saveOverrides:
+      branch: { rslvr: featureBranch }
+      message: { expr: "'chore(state): update ' + __params.app_name" }
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "App Name"
+    featureBranch:
+      type: string
+      resolve:
+        with:
+          - expr: "'scafctl/' + _.appName + '/' + string(timestamp.now())"
+    clusterId:
+      type: string
+      immutable: true
+      saveToState: true
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              key: "clusterId"
+              required: false
+          - provider: exec
+            inputs:
+              command: "uuidgen"
+  workflow:
+    actions:
+      create-branch:
+        provider: github
+        inputs:
+          operation: create_branch
+          owner: { rslvr: org }
+          repo: { literal: "infra-state" }
+          branch: { rslvr: featureBranch }
+      commit-files:
+        dependsOn: [create-branch]
+        provider: github
+        inputs:
+          operation: create_commit
+          owner: { literal: "my-org" }
+          repo: { literal: "infra-state" }
+          branch: { rslvr: featureBranch }
+          message: "feat: scaffold infrastructure"
+          additions:
+            - path: main.tf
+              content: { rslvr: renderedTerraform }
+      open-pr:
+        dependsOn: [commit-files]
+        provider: github
+        inputs:
+          operation: create_pull_request
+          owner: { literal: "my-org" }
+          repo: { literal: "infra-state" }
+          branch: { rslvr: featureBranch }
+          base: main
+          title: { expr: "'feat: deploy ' + _.appName" }
+~~~
+
+After actions complete, the state manager saves state as a second commit on `featureBranch`. The PR contains both the scaffolded files and the state file.
 
 ### Future Backends
 
@@ -396,7 +552,7 @@ The backend is a provider capability, so new backends are just providers impleme
 | S3 (future) | `s3` (or plugin) | `bucket`, `key`, `region` |
 | HTTP API (future) | `http` (or plugin) | `url`, `method`, `headers` |
 
-No changes to `pkg/state/` or the core execution flow are needed to add a new backend.
+No changes to the resolver executor or provider executor are needed to add a new backend. The state manager handles all backend-specific input resolution (including the `saveOverrides` split) transparently.
 
 ---
 
@@ -412,7 +568,7 @@ The `enabled` and `backend.inputs` fields are resolved using CLI parameters (`-r
 
 3. **Evaluate `enabled`** -- Resolve the `ValueRef` using CLI params (`__params`). If falsy, skip state entirely and proceed with normal stateless execution.
 
-4. **Resolve backend inputs** -- Resolve all `ValueRef` inputs for the backend provider (e.g., the `path` template) using CLI params (`__params`).
+4. **Resolve backend inputs** -- Resolve all `ValueRef` inputs for the backend provider (e.g., the `path` template) using CLI params (`__params`). Only `inputs` are resolved at load time; `saveOverrides` are skipped.
 
 5. **Load state** -- Call the backend provider with `operation: load` via `provider.Execute()` with `WithExecutionMode(ctx, CapabilityState)`. This is a standalone provider call -- completely independent of the resolver system.
 
@@ -422,7 +578,7 @@ The `enabled` and `backend.inputs` fields are resolved using CLI parameters (`-r
 
 8. **Normal execution** -- `resolver.Executor.Execute()` runs. Resolvers with `saveToState: true` persist their results. The `state` provider reads/writes entries via context.
 
-9. **Flush** -- After all resolvers complete, collect results from `saveToState` resolvers, update state data, and call the backend provider with `operation: save`.
+9. **Flush** -- After all resolvers complete, resolve both `inputs` and `saveOverrides` (merged, `saveOverrides` overrides). Collect results from `saveToState` resolvers, update state data, and call the backend provider with `operation: save`.
 
 ### Integration Point
 
@@ -479,6 +635,8 @@ State loading happens in the command layer (`pkg/cmd/scafctl/run/common.go`) bef
 | `state.enabled` and `state.backend.inputs` must NOT contain resolver references (`rslvr:`) | State loads before resolvers run, so resolver outputs are not available |
 | `state.enabled` and `state.backend.inputs` must NOT reference the `state` provider | State must be loaded before the state provider can function -- circular dependency |
 | `state.backend.provider` must resolve to a registered provider with `CapabilityState` | Ensures the backend is valid |
+| `state.backend.saveOverrides` may contain resolver references (`rslvr:`) and `_` in CEL | These are only resolved at save time when resolver data is available |
+| `state.backend.saveOverrides` must NOT reference the `state` provider | Prevents circular dependency even at save time |
 
 ### Lint Warnings
 
