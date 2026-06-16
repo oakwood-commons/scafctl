@@ -81,10 +81,10 @@ func buildFunctionHints() map[string]string {
 			hints[extFunc.Name] = "e.g. yamlEncode(_.config)"
 		case "yamlDecode":
 			hints[extFunc.Name] = "e.g. yamlDecode(_.yamlStr)"
-		case "urlEncode":
-			hints[extFunc.Name] = "e.g. urlEncode(_.queryParam)"
-		case "urlDecode":
-			hints[extFunc.Name] = "e.g. urlDecode(_.encoded)"
+		case "url.encode":
+			hints[extFunc.Name] = "e.g. url.encode(_.queryParam)"
+		case "url.decode":
+			hints[extFunc.Name] = "e.g. url.decode(_.encoded)"
 
 		// String functions
 		case "regex.match":
