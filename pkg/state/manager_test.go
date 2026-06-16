@@ -770,3 +770,201 @@ func TestResolveWithParams(t *testing.T) {
 		assert.Contains(t, err.Error(), "empty value reference")
 	})
 }
+
+func TestManagerSave_SaveOverrides(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no saveOverrides backward compat", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.NoError(t, err)
+		assert.Len(t, backend.saveCalls, 1)
+		assert.Equal(t, "state.json", backend.saveCalls[0]["path"])
+	})
+
+	t.Run("saveOverrides with literal values", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": literalValueRef("feature-branch"),
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.NoError(t, err)
+		assert.Len(t, backend.saveCalls, 1)
+		assert.Equal(t, "feature-branch", backend.saveCalls[0]["branch"])
+		assert.Equal(t, "state.json", backend.saveCalls[0]["path"])
+	})
+
+	t.Run("saveOverrides with rslvr reference", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		branchResolver := "featureBranch"
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Resolver: &branchResolver},
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		resolverData := map[string]any{"featureBranch": "feat/my-feature"}
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.NoError(t, err)
+		assert.Len(t, backend.saveCalls, 1)
+		assert.Equal(t, "feat/my-feature", backend.saveCalls[0]["branch"])
+	})
+
+	t.Run("saveOverrides with CEL expression using resolver data", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		expr := celexp.Expression("'feat/' + _.appName")
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Expr: &expr},
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		resolverData := map[string]any{"appName": "my-app"}
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, resolverData, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.NoError(t, err)
+		assert.Len(t, backend.saveCalls, 1)
+		assert.Equal(t, "feat/my-app", backend.saveCalls[0]["branch"])
+	})
+
+	t.Run("saveOverrides key overlaps with inputs key", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs: map[string]*spec.ValueRef{
+					"path":   literalValueRef("state.json"),
+					"branch": literalValueRef("main"),
+				},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": literalValueRef("feature-branch"),
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.NoError(t, err)
+		assert.Len(t, backend.saveCalls, 1)
+		// saveOverrides value should win
+		assert.Equal(t, "feature-branch", backend.saveCalls[0]["branch"])
+		// non-overridden input should remain
+		assert.Equal(t, "state.json", backend.saveCalls[0]["path"])
+	})
+
+	t.Run("saveOverrides ignored at load time", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		// saveOverrides with a rslvr: ref -- would fail if resolved at load time
+		branchResolver := "featureBranch"
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Resolver: &branchResolver},
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		// Load should succeed -- saveOverrides are not resolved
+		result, err := mgr.Load(context.Background(), nil, CommandInfo{Subcommand: "run solution"})
+		assert.NoError(t, err)
+		assert.False(t, result.Skipped)
+	})
+
+	t.Run("saveOverrides resolution error", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		expr := celexp.Expression("_.nonexistent.nested.value")
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Expr: &expr},
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "save overrides")
+	})
+
+	t.Run("saveOverrides with nil ValueRef entry", func(t *testing.T) {
+		t.Parallel()
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "mock-state",
+				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": nil,
+				},
+			},
+		}
+		mgr := NewManager(cfg, reg, "test-version")
+		sd := NewData()
+		rctx := resolver.NewContext()
+		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
+		assert.NoError(t, err)
+		assert.Len(t, backend.saveCalls, 1)
+		// nil saveOverride should be skipped, not overwrite
+		_, hasBranch := backend.saveCalls[0]["branch"]
+		assert.False(t, hasBranch)
+	})
+}

@@ -384,6 +384,22 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "State configuration is resolved before resolver execution using only CLI parameters (-r flags) and environment data. Direct rslvr: references will fail at runtime because resolver results do not exist yet.",
 		Fix:         "Use a CEL expression referencing CLI parameters instead, e.g.:\n  path:\n    expr: \"__params.appName + '-state.json'\"\nwhere appName is passed via -r appName=myapp.",
 	},
+	"state-save-override-state-ref": {
+		Rule:        "state-save-override-state-ref",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "A state.backend.saveOverrides field references the 'state' provider, creating a circular dependency.",
+		Why:         "The state provider reads from the state being saved, so referencing it in saveOverrides would create a circular dependency. Use resolver references or CEL expressions instead.",
+		Fix:         "Use a resolver reference (rslvr:) or CEL expression (expr:) that does not depend on the state provider.",
+	},
+	"state-github-no-save-branch": {
+		Rule:        "state-github-no-save-branch",
+		Severity:    string(SeverityInfo),
+		Category:    "state",
+		Description: "GitHub state backend has no save branch configured. For PR workflows, use saveOverrides to set the branch at save time.",
+		Why:         "Without a save-specific branch, state is saved to the same branch used for loading (typically main). For PR-based workflows, you likely want to save state to a feature branch derived from a resolver.",
+		Fix:         "Add a saveOverrides.branch field referencing a resolver:\n  saveOverrides:\n    branch: { rslvr: featureBranch }\nThis ensures state is saved to the same branch as your scaffolded files.",
+	},
 	"unused-suppression": {
 		Rule:        "unused-suppression",
 		Severity:    string(SeverityInfo),

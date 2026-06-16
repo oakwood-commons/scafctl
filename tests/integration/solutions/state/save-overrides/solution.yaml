@@ -1,0 +1,106 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-save-overrides
+  version: 1.0.0
+  description: |
+    Functional tests for state backend saveOverrides.
+    Verifies that saveOverrides inputs are resolved only at save time (when
+    resolver data is available), merged with base inputs (overriding on
+    conflict), and completely ignored at load time.
+
+    The save-overrides mechanism allows different paths/config for load vs save.
+    This test uses the file provider where inputs.path is used at load time and
+    saveOverrides.path overrides it at save time with a resolver-derived value.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: default-state.json
+    saveOverrides:
+      path:
+        expr: "'override-' + _.env + '.json'"
+
+spec:
+  resolvers:
+    env:
+      description: Environment name used to derive the save-time state path
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "env"
+          - provider: static
+            inputs:
+              value: "dev"
+
+    app_name:
+      description: Application name from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+          - provider: static
+            inputs:
+              value: "my-app"
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [render-defaults]
+
+    cases:
+      _base:
+        description: Base template for save-overrides tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, save-overrides]
+        assertions:
+          - expression: __exitCode == 0
+
+      # =====================================================================
+      # First run: empty state, saveOverrides.path resolves using _.env
+      # =====================================================================
+      first-run-resolves-overrides:
+        description: Save succeeds with saveOverrides using resolver data in CEL
+        extends: [_base]
+        args: ["-o", "json", "-r", "env=prod", "-r", "app_name=alpha"]
+        tags: [smoke]
+        assertions:
+          - expression: __output.env == "prod"
+          - expression: __output.app_name == "alpha"
+
+      # =====================================================================
+      # Load reads from inputs.path (default-state.json), not override path
+      # =====================================================================
+      load-uses-inputs-path:
+        description: State load reads from inputs.path, ignoring saveOverrides
+        extends: [_base]
+        args: ["-o", "json", "-r", "env=staging"]
+        init:
+          # Pre-seed at inputs.path -- this should be found at load time
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-overrides","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-default-path"},"immutables":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/default-state.json
+        assertions:
+          - expression: __output.app_name == "from-default-path"
+            message: "State should load from inputs.path (default-state.json), not saveOverrides path"
+          - expression: __output.env == "staging"
+            message: "CLI param should override state"
+
+      # =====================================================================
+      # saveOverrides with literal values merge correctly
+      # =====================================================================
+      saveoverrides-literal:
+        description: Literal saveOverrides value is used without resolver data
+        extends: [_base]
+        assertions:
+          - expression: __output.env == "dev"
+            message: "Default env should resolve from static provider"
+

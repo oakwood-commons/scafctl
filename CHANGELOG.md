@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(state)* Add `saveOverrides` field to state backend for save-time-only input resolution, enabling patterns like loading from `main` and saving to a resolver-derived feature branch
+- *(lint)* Add `state-save-override-state-ref` rule (error) to catch circular state provider references in saveOverrides
+- *(lint)* Add `state-github-no-save-branch` rule (info) to suggest save-specific branch configuration for GitHub state backends
 - *(cli)* [**breaking**] Unified solution auto-discovery and resolution chain across all commands (#260)
   - Add `taskfile.yaml` and `taskfile.yml` to default discovery search order (after solution/binary files, before actions)
   - All commands now use the same resolution chain: `-f` flag → positional catalog ref → auto-discovery

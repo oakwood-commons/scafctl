@@ -13,6 +13,8 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -253,4 +255,113 @@ type testProvider struct {
 func (p *testProvider) Descriptor() *provider.Descriptor { return p.desc }
 func (p *testProvider) Execute(_ context.Context, _ any) (*provider.Output, error) {
 	return &provider.Output{}, nil
+}
+
+func TestBuildSolutionExplanation_NoState(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Metadata.Name = "no-state"
+
+	exp := BuildSolutionExplanation(sol)
+	assert.Nil(t, exp.State)
+}
+
+func TestBuildSolutionExplanation_WithState(t *testing.T) {
+	sol := &solution.Solution{
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Literal: "state.json"},
+				},
+			},
+		},
+	}
+	sol.Metadata.Name = "with-state"
+
+	exp := BuildSolutionExplanation(sol)
+	require.NotNil(t, exp.State)
+	assert.True(t, exp.State.Enabled)
+	assert.Equal(t, "file", exp.State.Provider)
+	assert.Equal(t, []string{"path"}, exp.State.InputKeys)
+	assert.Nil(t, exp.State.OverrideKeys)
+}
+
+func TestBuildSolutionExplanation_WithSaveOverrides(t *testing.T) {
+	rslvrName := "featureBranch"
+	sol := &solution.Solution{
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs: map[string]*spec.ValueRef{
+					"owner": {Literal: "my-org"},
+					"repo":  {Literal: "my-repo"},
+					"path":  {Literal: "state.json"},
+				},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch":  {Resolver: &rslvrName},
+					"message": {Literal: "commit msg"},
+				},
+			},
+		},
+	}
+	sol.Metadata.Name = "with-overrides"
+
+	exp := BuildSolutionExplanation(sol)
+	require.NotNil(t, exp.State)
+	assert.Equal(t, "github", exp.State.Provider)
+	assert.Equal(t, []string{"owner", "path", "repo"}, exp.State.InputKeys)
+	assert.Equal(t, []string{"branch", "message"}, exp.State.OverrideKeys)
+}
+
+func TestBuildSolutionExplanation_StateDisabled(t *testing.T) {
+	sol := &solution.Solution{
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: false},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	sol.Metadata.Name = "disabled-state"
+
+	exp := BuildSolutionExplanation(sol)
+	require.NotNil(t, exp.State)
+	assert.False(t, exp.State.Enabled)
+}
+
+func TestBuildSolutionExplanation_StateEnabledNil(t *testing.T) {
+	sol := &solution.Solution{
+		State: &state.Config{
+			Enabled: nil,
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	sol.Metadata.Name = "nil-enabled"
+
+	exp := BuildSolutionExplanation(sol)
+	require.NotNil(t, exp.State)
+	assert.True(t, exp.State.Enabled, "nil Enabled defaults to true")
+}
+
+func TestSortedKeys(t *testing.T) {
+	t.Run("nil map", func(t *testing.T) {
+		result := sortedKeys[string](nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("empty map", func(t *testing.T) {
+		result := sortedKeys(map[string]string{})
+		assert.Nil(t, result)
+	})
+
+	t.Run("returns sorted", func(t *testing.T) {
+		result := sortedKeys(map[string]int{"c": 3, "a": 1, "b": 2})
+		assert.Equal(t, []string{"a", "b", "c"}, result)
+	})
 }
