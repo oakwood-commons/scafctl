@@ -1,0 +1,80 @@
+# =============================================================================
+# GitHub State Backend Example (PR Workflow)
+# =============================================================================
+# Demonstrates GitHub-based state persistence with PR-based workflows using
+# saveOverrides. State is loaded from the main branch and saved to a
+# resolver-derived feature branch, enabling PR-based review of state changes.
+#
+# This example requires the github provider plugin (>= 0.6.0).
+#
+# Usage:
+#   First run:
+#     scafctl run resolver -f ./github-state.yaml \
+#       -r app_name=my-app -r branch_name=feat/my-feature
+#
+#   Subsequent runs (params replayed from state on main after PR merge):
+#     scafctl run resolver -f ./github-state.yaml
+#
+# Prerequisites:
+#   - GitHub authentication configured (scafctl auth login github)
+#   - github provider plugin installed (scafctl plugins install github)
+#   - Target repository exists with the configured path structure
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: github-state-example
+  version: 1.0.0
+  description: |
+    GitHub-based state persistence with PR workflow.
+    Loads state from main, saves to a feature branch derived from a resolver.
+
+# State configuration:
+# - Loads from refs/heads/main (fixed ref in inputs)
+# - Saves to the branch specified in saveOverrides (resolved at save time)
+state:
+  enabled: true
+  backend:
+    provider: github
+    inputs:
+      owner: { literal: "my-org" }
+      repo: { literal: "my-repo" }
+      path:
+        expr: "'state/' + __params.app_name + '.json'"
+      ref: { literal: "main" }
+    saveOverrides:
+      branch: { rslvr: featureBranch }
+      message:
+        expr: "'chore(state): update state for ' + _.app_name"
+
+spec:
+  resolvers:
+    app_name:
+      description: Application name for state file path isolation
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+
+    featureBranch:
+      description: Target branch for saving state (e.g., feat/my-feature)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "branch_name"
+
+    environment:
+      description: Deployment environment
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "environment"
+          - provider: static
+            inputs:
+              value: "dev"

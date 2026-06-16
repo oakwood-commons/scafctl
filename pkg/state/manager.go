@@ -153,6 +153,18 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 		return fmt.Errorf("state: resolve backend inputs for save: %w", err)
 	}
 
+	// Resolve save-only overrides (can use rslvr: and _ since resolvers have run)
+	if len(m.config.Backend.SaveOverrides) > 0 {
+		overrides, err := m.resolveSaveOverrides(ctx, resolverData, mergedParams)
+		if err != nil {
+			return fmt.Errorf("state: resolve save overrides: %w", err)
+		}
+		// Merge: saveOverrides keys override inputs keys
+		for k, v := range overrides {
+			backendInputs[k] = v
+		}
+	}
+
 	// Look up backend provider
 	backendProvider, err := m.getBackendProvider()
 	if err != nil {
@@ -210,6 +222,25 @@ func (m *Manager) resolveBackendInputs(ctx context.Context, resolverData, params
 		val, err := resolveWithParams(ctx, vr, resolverData, params)
 		if err != nil {
 			return nil, fmt.Errorf("resolve input %q: %w", key, err)
+		}
+		resolved[key] = val
+	}
+
+	return resolved, nil
+}
+
+// resolveSaveOverrides resolves all SaveOverrides ValueRefs.
+// These are only called at save time when resolver data (_) is available.
+func (m *Manager) resolveSaveOverrides(ctx context.Context, resolverData, params map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any, len(m.config.Backend.SaveOverrides))
+
+	for key, vr := range m.config.Backend.SaveOverrides {
+		if vr == nil {
+			continue
+		}
+		val, err := resolveWithParams(ctx, vr, resolverData, params)
+		if err != nil {
+			return nil, fmt.Errorf("resolve save override %q: %w", key, err)
 		}
 		resolved[key] = val
 	}

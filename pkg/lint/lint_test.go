@@ -1455,6 +1455,241 @@ func TestLintState_ResolverRefInBackendInputs(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "app_name")
 }
 
+func TestLintState_SaveOverrideStateRef(t *testing.T) {
+	expr := celexp.Expression("__state.branch")
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Expr: &expr},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-save-override-state-ref")
+	assert.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "branch")
+}
+
+func TestLintState_SaveOverrideRslvrAllowed(t *testing.T) {
+	rslvrName := "featureBranch"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"featureBranch": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Resolver: &rslvrName},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	// rslvr: is allowed in saveOverrides (unlike inputs)
+	findings := filterFindingsByRule(result, "state-resolver-ref")
+	assert.Empty(t, findings)
+	findings = filterFindingsByRule(result, "state-save-override-state-ref")
+	assert.Empty(t, findings)
+}
+
+func TestLintState_SaveOverrideNoFalsePositive(t *testing.T) {
+	// Expressions using 'state/' as a string prefix must NOT trigger the state-ref rule
+	expr := celexp.Expression("'state/' + _.branch")
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"branch": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"path": {Expr: &expr},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-save-override-state-ref")
+	assert.Empty(t, findings, "expression using 'state/' string should not trigger false positive")
+}
+
+func TestLintState_GitHubNoSaveBranch(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-github-no-save-branch")
+	assert.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "no save branch")
+}
+
+func TestLintState_GitHubWithSaveBranchInOverrides(t *testing.T) {
+	rslvrName := "featureBranch"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"featureBranch": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Resolver: &rslvrName},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-github-no-save-branch")
+	assert.Empty(t, findings) // branch is configured via saveOverrides
+}
+
+func TestLintState_GitHubWithBranchInInputs(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs: map[string]*spec.ValueRef{
+					"path":   {Literal: "state.json"},
+					"branch": {Literal: "main"},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("github", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-github-no-save-branch")
+	assert.Empty(t, findings) // branch is configured via inputs
+}
+
+func TestLintState_NonGitHubNoSaveBranchHint(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-github-no-save-branch")
+	assert.Empty(t, findings) // hint only fires for github provider
+}
+
 func TestLintResolveForEach(t *testing.T) {
 	prov := newFakeProvider("http", map[string]*jsonschema.Schema{
 		"url": {Type: "string"},

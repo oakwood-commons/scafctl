@@ -1266,6 +1266,8 @@ func lintState(sol *solution.Solution, result *Result, registry *provider.Regist
 		return
 	}
 	lintStateResolverRefs(sol, result)
+	lintStateSaveOverrides(sol, result)
+	lintStateGitHubNoSaveBranch(sol, result)
 }
 
 // lintStateBackend validates the backend provider configuration.
@@ -1327,6 +1329,56 @@ func lintStateResolverRefs(sol *solution.Solution, result *Result) {
 				"Use a CEL expression referencing a CLI parameter instead (e.g. expr: \"__params.appName + '-state.json'\")",
 				"state-resolver-ref")
 		}
+	}
+}
+
+// lintStateSaveOverrides validates saveOverrides fields.
+// saveOverrides MAY contain rslvr: references (unlike inputs), but must NOT
+// reference the state provider (circular dependency).
+func lintStateSaveOverrides(sol *solution.Solution, result *Result) {
+	for key, vr := range sol.State.Backend.SaveOverrides {
+		location := fmt.Sprintf("state.backend.saveOverrides.%s", key)
+		if vr == nil {
+			result.addFinding(SeverityError, "provider", location,
+				fmt.Sprintf("input '%s' has no value (dangling YAML key)", key),
+				"Provide a value for the input or remove the key entirely",
+				"nil-provider-input")
+			continue
+		}
+		// Check for state provider references using ReferencedVariables
+		if vr.ReferencesVariable("__state") {
+			result.addFinding(SeverityError, "state", location,
+				fmt.Sprintf("saveOverrides input %q references the state provider, creating a circular dependency", key),
+				"Use a resolver reference (rslvr:) or CEL expression that does not depend on the state provider",
+				"state-save-override-state-ref")
+		}
+	}
+}
+
+// lintStateGitHubNoSaveBranch fires an info hint when the state backend is
+// github and neither inputs.branch nor saveOverrides.branch is configured.
+func lintStateGitHubNoSaveBranch(sol *solution.Solution, result *Result) {
+	if sol.State.Backend.Provider != "github" {
+		return
+	}
+
+	hasBranch := false
+
+	// Check inputs for branch
+	if _, ok := sol.State.Backend.Inputs["branch"]; ok {
+		hasBranch = true
+	}
+
+	// Check saveOverrides for branch
+	if _, ok := sol.State.Backend.SaveOverrides["branch"]; ok {
+		hasBranch = true
+	}
+
+	if !hasBranch {
+		result.addFinding(SeverityInfo, "state", "state.backend",
+			"GitHub state backend has no save branch configured",
+			"For PR workflows, create a resolver for the branch name and reference it:\n  saveOverrides:\n    branch: { rslvr: <your-branch-resolver> }\nThis ensures state is saved to the same branch as your scaffolded files",
+			"state-github-no-save-branch")
 	}
 }
 

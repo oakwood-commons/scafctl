@@ -54,6 +54,15 @@ type Backend struct {
 	// Go templates spread resolver data at top level (e.g. {{ .name }}) and expose CLI
 	// parameters under __params (e.g. {{ .__params.project }}).
 	Inputs map[string]*spec.ValueRef `json:"inputs" yaml:"inputs" doc:"Provider-specific inputs (ValueRef for dynamic resolution)"`
+
+	// SaveOverrides are provider-specific inputs resolved only at save time when
+	// resolver data (_) is available. Keys that overlap with Inputs override them
+	// at save time. This enables patterns like loading state from a fixed branch
+	// (via Inputs) and saving to a resolver-derived branch (via SaveOverrides).
+	//
+	// At load time, SaveOverrides are completely ignored -- no errors are raised
+	// for resolver-dependent expressions.
+	SaveOverrides map[string]*spec.ValueRef `json:"saveOverrides,omitempty" yaml:"saveOverrides,omitempty" doc:"Save-time-only inputs that override Inputs keys"`
 }
 
 // Data is the complete persisted state structure.

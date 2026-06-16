@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // SolutionExplanation holds structured explanation data for a solution.
@@ -42,6 +43,8 @@ type SolutionExplanation struct {
 
 	Source      string            `json:"source,omitempty" yaml:"source,omitempty" doc:"Source repository URL" maxLength:"500"`
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"Free-form key-value annotations"`
+
+	State *StateInfo `json:"state,omitempty" yaml:"state,omitempty" doc:"State persistence configuration"`
 
 	Tags        []string         `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Solution tags" maxItems:"50"`
 	Links       []LinkInfo       `json:"links,omitempty" yaml:"links,omitempty" doc:"Related links" maxItems:"50"`
@@ -89,6 +92,14 @@ type LinkInfo struct {
 type MaintainerInfo struct {
 	Name  string `json:"name" yaml:"name" doc:"Maintainer name" maxLength:"128" example:"Jane Doe"`
 	Email string `json:"email,omitempty" yaml:"email,omitempty" doc:"Maintainer email" maxLength:"256" example:"jane@example.com"`
+}
+
+// StateInfo holds structured information about state persistence configuration.
+type StateInfo struct {
+	Enabled      bool     `json:"enabled" yaml:"enabled" doc:"Whether state persistence is configured"`
+	Provider     string   `json:"provider" yaml:"provider" doc:"Backend provider name" maxLength:"253" example:"file"`
+	InputKeys    []string `json:"inputKeys,omitempty" yaml:"inputKeys,omitempty" doc:"Configured backend input keys" maxItems:"50"`
+	OverrideKeys []string `json:"overrideKeys,omitempty" yaml:"overrideKeys,omitempty" doc:"Configured saveOverrides keys" maxItems:"50"`
 }
 
 // FileDependencyInfo describes a file dependency discovered via static analysis.
@@ -175,6 +186,11 @@ func BuildSolutionExplanation(sol *solution.Solution) *SolutionExplanation {
 	if sol.Spec.HasActions() && sol.Spec.Workflow != nil {
 		exp.Actions = buildActionInfos(sol.Spec.Workflow.Actions, sm, "spec.workflow.actions")
 		exp.Finally = buildActionInfos(sol.Spec.Workflow.Finally, sm, "spec.workflow.finally")
+	}
+
+	// State
+	if sol.State != nil {
+		exp.State = buildStateInfo(sol)
 	}
 
 	// Tags
@@ -367,4 +383,44 @@ func extractPhases(r *resolver.Resolver) []string {
 		phases = append(phases, "validate")
 	}
 	return phases
+}
+
+// buildStateInfo extracts structured state persistence information from a solution.
+func buildStateInfo(sol *solution.Solution) *StateInfo {
+	info := &StateInfo{
+		Enabled:  stateEnabled(sol.State.Enabled),
+		Provider: sol.State.Backend.Provider,
+	}
+
+	info.InputKeys = sortedKeys(sol.State.Backend.Inputs)
+	info.OverrideKeys = sortedKeys(sol.State.Backend.SaveOverrides)
+
+	return info
+}
+
+// stateEnabled determines the effective enabled value from a ValueRef.
+// Returns true (the default) when the ValueRef is nil or contains a non-literal
+// expression (dynamic values are assumed enabled for inspect purposes).
+func stateEnabled(vr *spec.ValueRef) bool {
+	if vr == nil {
+		return true
+	}
+	if b, ok := vr.Literal.(bool); ok {
+		return b
+	}
+	// Non-literal (expr/tmpl) -- assume enabled for inspect display
+	return true
+}
+
+// sortedKeys returns the sorted keys of a map.
+func sortedKeys[V any](m map[string]V) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
