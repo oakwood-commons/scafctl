@@ -320,6 +320,7 @@ Expression Debugging:
     json.unmarshal(string) / json.marshal(value) -- JSON serialization
     yaml.unmarshal(string) / yaml.marshal(value) -- YAML serialization
     base64.encode(string) / base64.decode(string) -- Base64 encoding
+    url.encode(string) / url.decode(string) -- URL form-encoding (application/x-www-form-urlencoded)
     regex.match(pattern, string) / regex.replace(string, pattern, replacement)
     map.merge(map1, map2) -- deep-merge two maps
 
