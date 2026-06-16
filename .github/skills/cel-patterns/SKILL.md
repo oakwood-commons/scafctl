@@ -90,6 +90,8 @@ math.max(a, b)    // Maximum
 ```cel
 base64.encode(bytes("hello"))   // Base64 encode
 base64.decode("aGVsbG8=")      // Base64 decode
+url.encode("hello world")      // URL form-encode -> "hello+world"
+url.decode("hello+world")      // URL form-decode -> "hello world"
 ```
 
 ### Bindings
@@ -182,6 +184,14 @@ regex.split("[,;]", _.input)               // Split by pattern
 ```cel
 sort.objects(_.items, "name")              // Sort objects by field (ascending)
 sort.objectsDescending(_.items, "score")   // Sort objects by field (descending)
+```
+
+### URL (`pkg/celexp/ext/url/`)
+
+```cel
+url.encode("hello world")                  // Form-encode -> "hello+world"
+url.decode("hello+world")                  // Form-decode -> "hello world"
+url.decode("hello%20world")                // Also decodes %XX -> "hello world"
 ```
 
 ### Strings (`pkg/celexp/ext/strings/`)

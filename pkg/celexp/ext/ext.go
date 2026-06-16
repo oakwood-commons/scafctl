@@ -21,6 +21,7 @@ import (
 	celsort "github.com/oakwood-commons/scafctl/pkg/celexp/ext/sort"
 	celstrings "github.com/oakwood-commons/scafctl/pkg/celexp/ext/strings"
 	celtime "github.com/oakwood-commons/scafctl/pkg/celexp/ext/time"
+	celurl "github.com/oakwood-commons/scafctl/pkg/celexp/ext/url"
 )
 
 var (
@@ -764,6 +765,10 @@ func Custom() celexp.ExtFunctionList {
 		// Time functions
 		celtime.NowFunc(),
 		celtime.NowFmtFunc(),
+
+		// URL functions
+		celurl.EncodeFunc(),
+		celurl.DecodeFunc(),
 	}
 
 	// Assign categories based on function name prefix
@@ -780,6 +785,7 @@ func Custom() celexp.ExtFunctionList {
 		"sort.":    "collections",
 		"strings.": "strings",
 		"time.":    "time",
+		"url.":     "encoding",
 	}
 	for i := range funcs {
 		if funcs[i].Category != "" {
