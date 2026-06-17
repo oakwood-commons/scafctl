@@ -54,38 +54,46 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			// Check parameters first
-			if _, ok := sd.Parameters[key]; ok {
+			// Check where the key exists
+			_, inParams := sd.Parameters[key]
+			_, inImmutables := sd.Immutables[key]
+
+			if !inParams && !inImmutables {
+				err := fmt.Errorf("key %q not found in state", key)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// If the key is in immutables, require --force
+			if inImmutables && !force {
+				err := fmt.Errorf("key %q is immutable; deleting it will cause the next run to generate a new value. Use --force to confirm", key)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Delete from both maps in one pass
+			if inParams {
 				delete(sd.Parameters, key)
-				if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
-					err := fmt.Errorf("failed to save state: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-				w.Successf("Deleted parameter %q\n", key)
-				return nil
 			}
-
-			// Check immutables
-			if _, ok := sd.Immutables[key]; ok {
-				if !force {
-					err := fmt.Errorf("key %q is immutable; deleting it will cause the next run to generate a new value. Use --force to confirm", key)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
+			if inImmutables {
 				delete(sd.Immutables, key)
-				if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
-					err := fmt.Errorf("failed to save state: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-				w.Successf("Deleted immutable key %q\n", key)
-				return nil
 			}
 
-			err = fmt.Errorf("key %q not found in state", key)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
+			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
+				err := fmt.Errorf("failed to save state: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
+			switch {
+			case inParams && inImmutables:
+				w.Successf("Deleted parameter and immutable key %q\n", key)
+			case inImmutables:
+				w.Successf("Deleted immutable key %q\n", key)
+			default:
+				w.Successf("Deleted parameter %q\n", key)
+			}
+			return nil
 		},
 	}
 

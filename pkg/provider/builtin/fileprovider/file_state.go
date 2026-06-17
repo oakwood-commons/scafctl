@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
@@ -155,10 +156,10 @@ func (p *FileProvider) dispatchStateOperation(ctx context.Context, operation str
 		return p.executeStateDryRun(operation)
 	}
 
-	// Use solution directory as base for relative state paths.
-	// Falls back to empty string which ResolveStatePath rejects for relative paths,
-	// ensuring callers must provide an explicit base directory.
-	baseDir, _ := provider.SolutionDirectoryFromContext(ctx)
+	// Use XDG state directory as base for relative state paths.
+	// This aligns with the CLI state commands which also use paths.StateDir(),
+	// ensuring consistent path resolution between runtime and CLI inspection.
+	baseDir := paths.StateDir()
 
 	absPath, err := state.ResolveStatePath(statePath, baseDir)
 	if err != nil {

@@ -57,6 +57,8 @@ spec:
 
   testing:
     config:
+      env:
+        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       # render-defaults: solution has no workflow.actions section
       skipBuiltins: [render-defaults]
 
@@ -91,9 +93,10 @@ spec:
         description: Second run reads values from state parameters (simulated via pre-seed)
         extends: [_base]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-verify","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"name":"saved-name","count":"42","enabled_flag":"false"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/state.json
         assertions:
           - expression: __output.name == "saved-name"
             message: "Parameter provider should return persisted string value"
@@ -123,9 +126,10 @@ spec:
         extends: [_base]
         args: ["-o", "json", "-r", "name=new-name"]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-verify","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"name":"old-name"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/state.json
         assertions:
           - expression: __output.name == "new-name"
             message: "Parameter should win over stale state value"

@@ -47,6 +47,8 @@ spec:
 
   testing:
     config:
+      env:
+        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       skipBuiltins: [render-defaults]
 
     cases:
@@ -59,10 +61,11 @@ spec:
         args: ["-o", "json"]
         tags: [state, dynamic-enabled, smoke]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           # Pre-seed state with greeting = from-state
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/dynamic-enabled-state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "hello-default"
@@ -77,9 +80,10 @@ spec:
         args: ["-o", "json", "-r", "use_state=false"]
         tags: [state, dynamic-enabled]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/dynamic-enabled-state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "hello-default"
@@ -94,9 +98,10 @@ spec:
         args: ["-o", "json", "-r", "use_state=true"]
         tags: [state, dynamic-enabled]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"saved-hello"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/dynamic-enabled-state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "saved-hello"
@@ -124,9 +129,10 @@ spec:
         args: ["-o", "json", "-r", "use_state=true", "-r", "greeting=cli-hello"]
         tags: [state, dynamic-enabled]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-enabled","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"from-state"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/dynamic-enabled-state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/dynamic-enabled-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.greeting == "cli-hello"

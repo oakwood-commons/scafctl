@@ -44,6 +44,8 @@ spec:
 
   testing:
     config:
+      env:
+        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       skipBuiltins: [render-defaults]
 
     cases:
@@ -71,9 +73,10 @@ spec:
         args: ["-o", "json"]
         tags: [state, render]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"cached_name":"cached-from-state"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.cached_name == "cached-from-state"
@@ -90,9 +93,10 @@ spec:
         args: ["-o", "json"]
         tags: [state, render, immutable]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"cached_name":"immutable-cached"},"immutables":{"cached_name":{"value":"immutable-cached","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.cached_name == "immutable-cached"

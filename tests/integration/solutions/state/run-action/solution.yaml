@@ -71,6 +71,8 @@ spec:
 
   testing:
     config:
+      env:
+        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       skipBuiltins: [render-defaults]
 
     cases:
@@ -97,9 +99,10 @@ spec:
         args: ["build", "-o", "json"]
         tags: [state, run-action]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production","version":"2.5.0"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/run-action-state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/run-action-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"
@@ -118,9 +121,10 @@ spec:
         args: ["deploy", "-o", "json", "-r", "env=canary"]
         tags: [state, run-action]
         init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/run-action-state.json
+              > $SCAFCTL_SANDBOX_DIR/scafctl/run-action-state.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.status == "succeeded"

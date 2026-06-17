@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
@@ -81,9 +82,11 @@ func TestFileProvider_StateDeleteNotFound(t *testing.T) {
 
 func TestFileProvider_StateDispatch(t *testing.T) {
 	p := NewFileProvider()
-	solDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	xdg.Reload()
+
 	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
-	ctx = provider.WithSolutionDirectory(ctx, solDir)
 
 	// Dispatch routes state_load through the Execute path
 	result, err := p.Execute(ctx, map[string]any{
@@ -96,16 +99,18 @@ func TestFileProvider_StateDispatch(t *testing.T) {
 	assert.True(t, data["success"].(bool))
 }
 
-func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) {
+func TestFileProvider_StateDispatch_RelativeResolvesToXDGStateDir(t *testing.T) {
 	p := NewFileProvider()
-	solDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateDir)
+	xdg.Reload()
+
 	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
-	ctx = provider.WithSolutionDirectory(ctx, solDir)
 
 	stateData := state.NewData()
 	stateData.Parameters["key"] = "value"
 
-	// Save with a relative path -- should resolve to solDir
+	// Save with a relative path -- should resolve to XDG state dir
 	_, err := p.Execute(ctx, map[string]any{
 		"operation": "state_save",
 		"path":      "my-state.json",
@@ -113,8 +118,8 @@ func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	// Verify file exists in solution directory
-	_, err = os.Stat(filepath.Join(solDir, "my-state.json"))
+	// Verify file exists in XDG state directory (under scafctl subdir)
+	_, err = os.Stat(filepath.Join(stateDir, "scafctl", "my-state.json"))
 	require.NoError(t, err)
 
 	// Load back via relative path
@@ -125,19 +130,6 @@ func TestFileProvider_StateDispatch_RelativeResolvesToSolutionDir(t *testing.T) 
 	require.NoError(t, err)
 	data := result.Data.(map[string]any)
 	assert.True(t, data["success"].(bool))
-}
-
-func TestFileProvider_StateDispatch_NoSolutionDir_RejectsRelative(t *testing.T) {
-	p := NewFileProvider()
-	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityState)
-
-	// Relative path without solution directory should error
-	_, err := p.Execute(ctx, map[string]any{
-		"operation": "state_load",
-		"path":      "relative/path.json",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "base directory is required")
 }
 
 func TestFileProvider_StateDryRun(t *testing.T) {

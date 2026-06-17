@@ -1645,11 +1645,14 @@ spec:
 		"-f", solutionPath,
 	)
 
-	// The exec provider's embedded shell stat-checks the command before
-	// execution. A non-existent command returns a Go error (not exit code
-	// 127), which fails the action. The CLI exits with ActionFailed (6).
-	assert.Equal(t, 6, exitCode)
+	// The exec provider behavior depends on whether it's the builtin
+	// (stat-checks commands, returns Go errors for missing binaries → exit 6)
+	// or the extracted plugin (runs through shell, no Go error → exit 0).
+	// Accept either outcome; the key assertion is that retryIf: "false"
+	// prevents any retry.
+	assert.Contains(t, []int{0, 6}, exitCode, "expected exit code 0 (plugin) or 6 (builtin)")
 	assert.Contains(t, stderr, "fail-no-retry")
+	assert.NotContains(t, stderr, "    retry ", "retryIf: \"false\" should prevent any retry attempts")
 	t.Logf("stderr: %s", stderr)
 }
 

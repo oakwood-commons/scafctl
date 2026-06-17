@@ -88,6 +88,17 @@ spec:
           - provider: static
             inputs:
               value: "us-east-1"
+
+    team:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "team"
+          - provider: static
+            inputs:
+              value: "default"
 ```
 
 ### Step 2: Run the Solution
@@ -108,17 +119,18 @@ scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
 Output:
 
 ```
-username: alice
 region: eu-west-1
+team: default
+username: alice
 ```
 
-The parameters `username=alice` and `region=eu-west-1` are now saved to `~/.local/state/scafctl/state-demo.json`.
+The parameters `username=alice` and `region=eu-west-1` are now saved to `state-demo.json` in the XDG state directory (`~/.local/state/scafctl/`).
 
 ### Understanding the Structure
 
 - **state.enabled** -- Activates state persistence. Can be a literal `true`, a CEL expression, or template. Because state is loaded before resolvers run, resolver references (`rslvr:...`) are not supported here.
 - **state.backend.provider** -- The provider that handles persistence. Use `file` for local files.
-- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the solution file's parent directory. Absolute paths are used as-is. CLI state commands (`scafctl state list`, etc.) resolve relative paths against the XDG state directory (`~/.local/state/scafctl/`).
+- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the XDG state directory (`~/.local/state/scafctl/`). Absolute paths are used as-is. Use `__solution_dir` in CEL expressions or Go templates to build solution-relative paths if needed (e.g., `expr: '__solution_dir + "/state.json"'`).
 
 No per-resolver configuration is needed. All CLI parameters are persisted automatically when state is enabled.
 
@@ -146,8 +158,9 @@ scafctl run resolver -f state-demo.yaml
 Output:
 
 ```
-username: alice
 region: eu-west-1
+team: default
+username: alice
 ```
 
 Both values come from the saved parameters in state. No re-prompting needed.
@@ -165,9 +178,9 @@ This means the `parameter` provider seamlessly reads from state on repeat runs -
 
 ## Parameter Merging
 
-Parameters accumulate across runs. New keys are added, existing keys are overwritten by CLI values.
+Parameters accumulate across runs. Existing keys are overwritten by CLI values, and keys not provided on the CLI are preserved from state.
 
-### Example: Gradual Parameter Building
+### Example: Overriding a Saved Parameter
 
 {{< tabs "state-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
@@ -175,8 +188,8 @@ Parameters accumulate across runs. New keys are added, existing keys are overwri
 # First run: set username and region
 scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
 
-# Second run: override region, add a new parameter
-scafctl run resolver -f state-demo.yaml -r region=us-west-2 -r team=platform
+# Second run: override region, keep username from state
+scafctl run resolver -f state-demo.yaml -r region=us-west-2
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -184,13 +197,46 @@ scafctl run resolver -f state-demo.yaml -r region=us-west-2 -r team=platform
 # First run: set username and region
 scafctl run resolver -f state-demo.yaml -r username=alice -r region=eu-west-1
 
-# Second run: override region, add a new parameter
-scafctl run resolver -f state-demo.yaml -r region=us-west-2 -r team=platform
+# Second run: override region, keep username from state
+scafctl run resolver -f state-demo.yaml -r region=us-west-2
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
 After the second run, the state file contains:
+
+```json
+{
+  "parameters": {
+    "username": "alice",
+    "region": "us-west-2"
+  }
+}
+```
+
+- `username` was preserved from the first run (not provided again).
+- `region` was overwritten by the CLI value.
+
+### Example: Adding a New Parameter
+
+You can add a new parameter on a later run, as long as the solution declares it as a resolver parameter:
+
+{{< tabs "state-tutorial-cmd-3b" >}}
+{{% tab "Bash" %}}
+```bash
+# Third run: add team (declared in the solution), keep username and region from state
+scafctl run resolver -f state-demo.yaml -r team=platform
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Third run: add team (declared in the solution), keep username and region from state
+scafctl run resolver -f state-demo.yaml -r team=platform
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+After the third run, the state file contains:
 
 ```json
 {
@@ -202,9 +248,11 @@ After the second run, the state file contains:
 }
 ```
 
-- `username` was preserved from the first run (not provided again).
-- `region` was overwritten by the CLI value.
+- `username` and `region` were preserved from state.
 - `team` was added as a new key.
+
+> [!NOTE]
+> Only parameters that correspond to a declared resolver with `provider: parameter` are accepted. Passing an unknown key (e.g., `-r foo=bar` when no resolver uses `key: "foo"`) produces an error.
 
 ### Merge Rules
 
@@ -212,7 +260,7 @@ After the second run, the state file contains:
 |----------|----------|
 | Key in state, not in CLI | Preserved from state |
 | Key in both state and CLI | CLI value wins |
-| Key in CLI, not in state | Added to state |
+| Key in CLI, not in state | Added to state (must be a declared resolver parameter) |
 | No CLI parameters | All saved parameters used as-is |
 
 ---
@@ -306,23 +354,25 @@ scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
 Output:
 
 ```
-Error: immutable entry "project_id": resolved value differs from locked value; use 'scafctl state delete' to remove it first
+Error: state save: cannot overwrite immutable state entry "project_id": resolved value differs from locked value; use the state delete command to remove it first
 ```
 
 ### Step 4: Unlocking an Immutable Value
 
-To change an immutable value, explicitly delete it from state first:
+To change an immutable value, explicitly delete it from state first. The `--force` flag removes the key from both `parameters` and `immutables` in a single call:
 
 {{< tabs "state-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl state delete --path state-immutable.json --key project_id --immutable
+# Delete from both parameters and immutables in one call
+scafctl state delete --path state-immutable.json --key project_id --force
 scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl state delete --path state-immutable.json --key project_id --immutable
+# Delete from both parameters and immutables in one call
+scafctl state delete --path state-immutable.json --key project_id --force
 scafctl run resolver -f state-immutable.yaml -r project_id=proj-xyz789
 ```
 {{% /tab %}}
@@ -376,6 +426,14 @@ state:
 
 spec:
   resolvers:
+    project:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "project"
+
     region:
       type: string
       resolve:
@@ -405,7 +463,7 @@ scafctl run resolver -f state-dynamic.yaml -r project=backend -r region=eu-west-
 {{% /tab %}}
 {{< /tabs >}}
 
-Each project gets its own state file with its own parameter history:
+Each project gets its own state file with its own parameter history (in the XDG state directory `~/.local/state/scafctl/`):
 
 ```
 ~/.local/state/scafctl/deploy/frontend.json
@@ -471,8 +529,8 @@ scafctl state set --path state-demo.json --key username --value bob
 # Delete a parameter
 scafctl state delete --path state-demo.json --key username
 
-# Delete an immutable value
-scafctl state delete --path state-demo.json --key project_id --immutable
+# Delete an immutable value (requires --force)
+scafctl state delete --path state-demo.json --key project_id --force
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -480,8 +538,8 @@ scafctl state delete --path state-demo.json --key project_id --immutable
 # Delete a parameter
 scafctl state delete --path state-demo.json --key username
 
-# Delete an immutable value
-scafctl state delete --path state-demo.json --key project_id --immutable
+# Delete an immutable value (requires --force)
+scafctl state delete --path state-demo.json --key project_id --force
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -676,14 +734,24 @@ State is only active when the `enable_state` CLI parameter is set to `true` (e.g
 
 ### Replay in CI validation
 
-A CI validator can replay a solution using the state file committed alongside generated code:
+A CI validator can replay a solution using the state file configured in the solution YAML. For CI environments, use `__solution_dir` to store state alongside the solution (committed to version control), or set `XDG_STATE_HOME` to a workspace-relative directory:
 
-```bash
-# Replay using the state file from the PR (parameters are loaded automatically)
-scafctl run solution -f app-registration.yaml --state-file ./apps/my-app/state.json
+```yaml
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path:
+        expr: '__solution_dir + "/my-app-state.json"'
 ```
 
-Because all CLI parameters are persisted in state, the solution replays deterministically without any `-r` flags. The validator can then diff the output against the PR contents.
+```bash
+# Replay -- saved parameters are loaded automatically from the configured state path
+scafctl run solution -f app-registration.yaml
+```
+
+No `-r` flags are needed. The validator can then diff the output against the PR contents.
 
 ### Immutable infrastructure identifiers
 
