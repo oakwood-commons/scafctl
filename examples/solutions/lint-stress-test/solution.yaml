@@ -1,5 +1,10 @@
 # Lint stress-test solution -- intentionally triggers many lint rules.
 # Run: scafctl lint -f examples/solutions/lint-stress-test/solution.yaml
+#
+# Rules NOT triggered here (require special setups):
+#   resolver-cycle          -- cycles prevent solution loading entirely
+#   missing-template-dependency -- requires external .tpl files on disk
+#                                  (see tests/integration/solutions/lint-missing-template-dependency)
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -18,6 +23,16 @@ spec:
           - provider: nonexistent-provider
             inputs:
               value: hello
+
+    # hyphenated-name
+    my-hyphenated-name:
+      type: string
+      description: Resolver with hyphens triggers hyphenated-name warning
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hyphens bad"
 
     # invalid-expression (bad CEL in when)
     guarded:

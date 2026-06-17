@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -592,8 +593,8 @@ func TestLintResolvers_HyphenatedName(t *testing.T) {
 
 	require.Len(t, hyphenFindings, 1)
 	assert.Contains(t, hyphenFindings[0].Message, "my-resolver")
-	assert.Contains(t, hyphenFindings[0].Message, "my_resolver")
-	assert.Equal(t, SeverityInfo, hyphenFindings[0].Severity)
+	assert.Contains(t, hyphenFindings[0].Message, "myResolver")
+	assert.Equal(t, SeverityWarning, hyphenFindings[0].Severity)
 }
 
 // ---- missing-fallback-source ----
@@ -744,5 +745,840 @@ func TestLintResolvers_MissingFallbackSource_NoResolvePhase(t *testing.T) {
 	for _, f := range result.Findings {
 		assert.NotEqual(t, "missing-fallback-source", f.RuleName,
 			"should not warn when there is no resolve phase")
+	}
+}
+
+// ---- hyphensToCamelCase ----
+
+func TestHyphensToCamelCase(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"my-resolver", "myResolver"},
+		{"my-resolver-name", "myResolverName"},
+		{"simple", "simple"},
+		{"a-b-c", "aBC"},
+		{"already-camelCase", "alreadyCamelCase"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.expected, hyphensToCamelCase(tt.input))
+		})
+	}
+}
+
+// ---- resolver-cycle ----
+
+func TestLintResolverCycles_NoCycle(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	rslvrA := "resolverA"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"resolverA": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "hello"},
+					}},
+				},
+			},
+		},
+		"resolverB": {
+			DependsOn: []string{rslvrA},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Resolver: &rslvrA},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolverCycles(sol, result, reg)
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "resolver-cycle", f.RuleName, "no cycle should be detected")
+	}
+}
+
+func TestLintResolverCycles_SimpleCycle(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	rslvrA := "resolverA"
+	rslvrB := "resolverB"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"resolverA": {
+			DependsOn: []string{rslvrB},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Resolver: &rslvrB},
+					}},
+				},
+			},
+		},
+		"resolverB": {
+			DependsOn: []string{rslvrA},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Resolver: &rslvrA},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolverCycles(sol, result, reg)
+
+	var cycleFindings []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == "resolver-cycle" {
+			cycleFindings = append(cycleFindings, f)
+		}
+	}
+
+	require.Len(t, cycleFindings, 1)
+	assert.Equal(t, SeverityError, cycleFindings[0].Severity)
+	assert.Contains(t, cycleFindings[0].Message, "circular dependency")
+}
+
+func TestLintResolverCycles_ValidateCycleSuggestion(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+	require.NoError(t, reg.Register(newFakeProviderWithCapabilities("validation", []provider.Capability{provider.CapabilityValidation})))
+
+	rslvrA := "resolverA"
+	rslvrB := "resolverB"
+	expr := celexp.Expression("_.resolverA == true")
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"resolverA": {
+			DependsOn: []string{rslvrB},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Resolver: &rslvrB},
+					}},
+				},
+			},
+		},
+		"resolverB": {
+			DependsOn: []string{rslvrA},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "default"},
+					}},
+				},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{
+					{
+						Provider: "validation",
+						Inputs: map[string]*spec.ValueRef{
+							"expression": {Expr: &expr},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolverCycles(sol, result, reg)
+
+	var cycleFindings []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == "resolver-cycle" {
+			cycleFindings = append(cycleFindings, f)
+		}
+	}
+
+	require.Len(t, cycleFindings, 1)
+	assert.Contains(t, cycleFindings[0].Suggestion, "validate block",
+		"cycle involving validate block should suggest extracting validation")
+}
+
+// ---- collectTemplateFileResolverRefs ----
+
+func TestCollectTemplateFileResolverRefs(t *testing.T) {
+	// Create a temp directory with a template file.
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	tplContent := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .appName }}
+data:
+  region: {{ .region }}
+  cluster: {{ .clusterName }}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "config.tpl"), []byte(tplContent), 0o644))
+
+	sol := &solution.Solution{}
+	sol.Bundle = solution.Bundle{
+		Include: []string{"templates/**/*.tpl"},
+	}
+
+	refs := collectTemplateFileResolverRefs(sol, tmpDir)
+
+	assert.True(t, refs["appName"], "should find appName reference")
+	assert.True(t, refs["region"], "should find region reference")
+	assert.True(t, refs["clusterName"], "should find clusterName reference")
+}
+
+func TestCollectTemplateFileResolverRefs_DirectoryProvider(t *testing.T) {
+	// Create a temp directory with a template file.
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "mytemplates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	tplContent := `Hello {{ .userName }}`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "greeting.tpl"), []byte(tplContent), 0o644))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path": {Literal: "mytemplates"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectTemplateFileResolverRefs(sol, tmpDir)
+	assert.True(t, refs["userName"], "should find userName reference from directory provider path")
+}
+
+// ---- missing-template-dependency ----
+
+func TestLintTemplateFileDependencies_MissingDep(t *testing.T) {
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	tplContent := `name: {{ .appName }}
+env: {{ .environment }}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "config.tpl"), []byte(tplContent), 0o644))
+
+	sourceResolver := "templateSource"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"appName": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "myapp"},
+					}},
+				},
+			},
+		},
+		"environment": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "prod"},
+					}},
+				},
+			},
+		},
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path":           {Literal: "templates"},
+							"operation":      {Literal: "list"},
+							"includeContent": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+		"rendered": {
+			// Only depends on templateSource, missing appName and environment.
+			DependsOn: []string{"templateSource"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"operation": {Literal: "render-tree"},
+							"entries":   {Resolver: &sourceResolver},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintTemplateFileDependencies(sol, tmpDir, result, nil)
+
+	var depFindings []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == "missing-template-dependency" {
+			depFindings = append(depFindings, f)
+		}
+	}
+
+	assert.GreaterOrEqual(t, len(depFindings), 1, "should find at least one missing dependency")
+
+	// Check that at least one of the missing refs is reported.
+	messages := make([]string, 0, len(depFindings))
+	for _, f := range depFindings {
+		messages = append(messages, f.Message)
+	}
+	allMessages := ""
+	for _, m := range messages {
+		allMessages += m + " "
+	}
+	assert.True(t,
+		(assert.ObjectsAreEqual(true, contains(allMessages, "appName")) ||
+			assert.ObjectsAreEqual(true, contains(allMessages, "environment"))),
+		"should mention appName or environment as missing dependency")
+}
+
+func TestLintTemplateFileDependencies_AllDepsPresent(t *testing.T) {
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	tplContent := `name: {{ .appName }}`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "config.tpl"), []byte(tplContent), 0o644))
+
+	sourceResolver := "templateSource"
+	appNameResolver := "appName"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"appName": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "myapp"},
+					}},
+				},
+			},
+		},
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path": {Literal: "templates"},
+						},
+					},
+				},
+			},
+		},
+		"rendered": {
+			DependsOn: []string{"templateSource", "appName"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"operation": {Literal: "render-tree"},
+							"entries":   {Resolver: &sourceResolver},
+							"data":      {Resolver: &appNameResolver},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintTemplateFileDependencies(sol, tmpDir, result, nil)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-template-dependency", f.RuleName,
+			"should not report missing dependency when all deps are present")
+	}
+}
+
+func TestLintTemplateFileDependencies_CustomDelimiters(t *testing.T) {
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	// Template uses custom delimiters; default '{{' parsing would miss the ref.
+	tplContent := `name: <% .appName %>`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "config.tpl"), []byte(tplContent), 0o644))
+
+	sourceResolver := "templateSource"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"appName": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "myapp"},
+					}},
+				},
+			},
+		},
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path": {Literal: "templates"},
+						},
+					},
+				},
+			},
+		},
+		"rendered": {
+			// Missing appName dependency.
+			DependsOn: []string{"templateSource"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"operation":  {Literal: "render-tree"},
+							"entries":    {Resolver: &sourceResolver},
+							"leftDelim":  {Literal: "<%"},
+							"rightDelim": {Literal: "%>"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintTemplateFileDependencies(sol, tmpDir, result, nil)
+
+	var found bool
+	for _, f := range result.Findings {
+		if f.RuleName == "missing-template-dependency" && contains(f.Message, "appName") {
+			found = true
+		}
+	}
+	assert.True(t, found, "should detect appName ref parsed with custom delimiters")
+}
+
+func TestLintTemplateFileDependencies_LiteralDataKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	// Template references 'config', which is satisfied by a literal data map
+	// key, not the same-named resolver.
+	tplContent := `host: {{ .config }}`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "config.tpl"), []byte(tplContent), 0o644))
+
+	sourceResolver := "templateSource"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"config": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "unrelated"},
+					}},
+				},
+			},
+		},
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path": {Literal: "templates"},
+						},
+					},
+				},
+			},
+		},
+		"rendered": {
+			// Does not depend on the 'config' resolver, but provides 'config'
+			// as a literal data key, so no warning should be raised.
+			DependsOn: []string{"templateSource"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"operation": {Literal: "render-tree"},
+							"entries":   {Resolver: &sourceResolver},
+							"data": {Literal: map[string]any{
+								"config": "local-value",
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintTemplateFileDependencies(sol, tmpDir, result, nil)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-template-dependency", f.RuleName,
+			"should not warn for refs satisfied by a literal data key")
+	}
+}
+
+// ---- findResolverCycles ----
+
+func TestFindResolverCycles_NoCycles(t *testing.T) {
+	deps := map[string][]string{
+		"a": {"b"},
+		"b": {"c"},
+		"c": {},
+	}
+	cycles := findResolverCycles(deps)
+	assert.Empty(t, cycles)
+}
+
+func TestFindResolverCycles_SimpleCycle(t *testing.T) {
+	deps := map[string][]string{
+		"a": {"b"},
+		"b": {"a"},
+	}
+	cycles := findResolverCycles(deps)
+	assert.Len(t, cycles, 1)
+}
+
+func TestFindResolverCycles_SelfCycle(t *testing.T) {
+	deps := map[string][]string{
+		"a": {"a"},
+	}
+	cycles := findResolverCycles(deps)
+	assert.Len(t, cycles, 1)
+}
+
+func TestFindResolverCycles_MultipleCycles(t *testing.T) {
+	deps := map[string][]string{
+		"a": {"b"},
+		"b": {"a"},
+		"c": {"d"},
+		"d": {"c"},
+	}
+	cycles := findResolverCycles(deps)
+	assert.Len(t, cycles, 2)
+}
+
+func TestFindResolverCycles_DistinctCyclesSameSmallestNode(t *testing.T) {
+	// a->b->a and a->c->a share their smallest node "a" but are distinct cycles.
+	// Both must be reported (previously de-duplicated to one).
+	deps := map[string][]string{
+		"a": {"b", "c"},
+		"b": {"a"},
+		"c": {"a"},
+	}
+	cycles := findResolverCycles(deps)
+	assert.Len(t, cycles, 2)
+}
+
+func TestCanonicalCycleKey_RotationInvariant(t *testing.T) {
+	// The same directed cycle discovered from different start nodes yields the
+	// same key.
+	assert.Equal(t,
+		canonicalCycleKey([]string{"a", "b", "c", "a"}),
+		canonicalCycleKey([]string{"b", "c", "a", "b"}),
+	)
+	assert.Equal(t,
+		canonicalCycleKey([]string{"a", "b", "c", "a"}),
+		canonicalCycleKey([]string{"c", "a", "b", "c"}),
+	)
+}
+
+func TestCanonicalCycleKey_DistinctCycles(t *testing.T) {
+	// Distinct cycles sharing the smallest node produce different keys.
+	assert.NotEqual(t,
+		canonicalCycleKey([]string{"a", "b", "a"}),
+		canonicalCycleKey([]string{"a", "c", "a"}),
+	)
+}
+
+func TestCanonicalCycleKey_Empty(t *testing.T) {
+	assert.Empty(t, canonicalCycleKey(nil))
+	assert.Empty(t, canonicalCycleKey([]string{}))
+}
+
+// ---- collectReachableDependencies ----
+
+func TestCollectReachableDependencies_DependsOnTransitive(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"a": {Name: "a", DependsOn: []string{"b"}},
+		"b": {Name: "b", DependsOn: []string{"c"}},
+		"c": {Name: "c"},
+	}
+	reachable := collectReachableDependencies("a", sol, nil)
+	assert.True(t, reachable["b"])
+	assert.True(t, reachable["c"])
+}
+
+func TestCollectReachableDependencies_InferredFromExpr(t *testing.T) {
+	// "main" references "dep" only via a CEL expression input. The dependency
+	// must be discovered (previously missed, causing false-positive warnings).
+	expr := celexp.Expression("_.dep")
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"main": {
+			Name: "main",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "cel",
+					Inputs: map[string]*spec.ValueRef{
+						"expression": {Expr: &expr},
+					},
+				}},
+			},
+		},
+		"dep": {Name: "dep"},
+	}
+	reachable := collectReachableDependencies("main", sol, nil)
+	assert.True(t, reachable["dep"], "dependency inferred from expr should be reachable")
+}
+
+func TestCollectReachableDependencies_InferredFromResolverRef(t *testing.T) {
+	depName := "dep"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"main": {
+			Name: "main",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "static",
+					Inputs: map[string]*spec.ValueRef{
+						"value": {Resolver: &depName},
+					},
+				}},
+			},
+		},
+		"dep": {Name: "dep"},
+	}
+	reachable := collectReachableDependencies("main", sol, nil)
+	assert.True(t, reachable["dep"])
+}
+
+// ---- findEntriesSourceResolver ----
+
+func TestFindEntriesSourceResolver_ResolverRef(t *testing.T) {
+	name := "entriesSource"
+	step := resolver.ProviderSource{
+		Inputs: map[string]*spec.ValueRef{
+			"entries": {Resolver: &name},
+		},
+	}
+	assert.Equal(t, "entriesSource", findEntriesSourceResolver(step, nil))
+}
+
+func TestFindEntriesSourceResolver_DotNotation(t *testing.T) {
+	expr := celexp.Expression("_.myResolver.entries")
+	step := resolver.ProviderSource{
+		Inputs: map[string]*spec.ValueRef{
+			"entries": {Expr: &expr},
+		},
+	}
+	assert.Equal(t, "myResolver", findEntriesSourceResolver(step, nil))
+}
+
+func TestFindEntriesSourceResolver_BracketNotationDoubleQuote(t *testing.T) {
+	expr := celexp.Expression(`_["my-resolver"].entries`)
+	step := resolver.ProviderSource{
+		Inputs: map[string]*spec.ValueRef{
+			"entries": {Expr: &expr},
+		},
+	}
+	assert.Equal(t, "my-resolver", findEntriesSourceResolver(step, nil))
+}
+
+func TestFindEntriesSourceResolver_BracketNotationSingleQuote(t *testing.T) {
+	expr := celexp.Expression(`_['my-resolver'].entries`)
+	step := resolver.ProviderSource{
+		Inputs: map[string]*spec.ValueRef{
+			"entries": {Expr: &expr},
+		},
+	}
+	assert.Equal(t, "my-resolver", findEntriesSourceResolver(step, nil))
+}
+
+func TestFindEntriesSourceResolver_NoEntries(t *testing.T) {
+	step := resolver.ProviderSource{Inputs: map[string]*spec.ValueRef{}}
+	assert.Empty(t, findEntriesSourceResolver(step, nil))
+}
+
+// ---- discoverTemplateFilesFromResolver ----
+
+func TestDiscoverTemplateFilesFromResolver_HonorsRecursive(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "top.tpl"), []byte("x"), 0o600))
+	sub := filepath.Join(dir, "nested")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "deep.tpl"), []byte("y"), 0o600))
+
+	recursiveFalse := &spec.ValueRef{Literal: false}
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"tree": {
+			Name: "tree",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "directory",
+					Inputs: map[string]*spec.ValueRef{
+						"path":      {Literal: dir},
+						"recursive": recursiveFalse,
+					},
+				}},
+			},
+		},
+	}
+
+	files := discoverTemplateFilesFromResolver(sol, "tree", "")
+	assert.Len(t, files, 1, "non-recursive walk should only return top-level files")
+	assert.Equal(t, filepath.Join(dir, "top.tpl"), files[0])
+}
+
+func TestDiscoverTemplateFilesFromResolver_NonRecursiveByDefault(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "top.tpl"), []byte("x"), 0o600))
+	sub := filepath.Join(dir, "nested")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "deep.tpl"), []byte("y"), 0o600))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"tree": {
+			Name: "tree",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "directory",
+					Inputs: map[string]*spec.ValueRef{
+						"path": {Literal: dir},
+					},
+				}},
+			},
+		},
+	}
+
+	files := discoverTemplateFilesFromResolver(sol, "tree", "")
+	assert.Len(t, files, 1, "default walk should be non-recursive, matching the directory provider")
+	assert.Equal(t, filepath.Join(dir, "top.tpl"), files[0])
+}
+
+func TestDiscoverTemplateFilesFromResolver_HonorsRecursiveTrue(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "top.tpl"), []byte("x"), 0o600))
+	sub := filepath.Join(dir, "nested")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "deep.tpl"), []byte("y"), 0o600))
+
+	recursiveTrue := &spec.ValueRef{Literal: true}
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"tree": {
+			Name: "tree",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "directory",
+					Inputs: map[string]*spec.ValueRef{
+						"path":      {Literal: dir},
+						"recursive": recursiveTrue,
+					},
+				}},
+			},
+		},
+	}
+
+	files := discoverTemplateFilesFromResolver(sol, "tree", "")
+	assert.Len(t, files, 2, "recursive: true should descend into subdirectories")
+}
+
+func TestDiscoverTemplateFilesFromResolver_HonorsFilterGlob(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.tpl"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "skip.tpl"), []byte("y"), 0o600))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"tree": {
+			Name: "tree",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "directory",
+					Inputs: map[string]*spec.ValueRef{
+						"path":       {Literal: dir},
+						"filterGlob": {Literal: "keep.*"},
+					},
+				}},
+			},
+		},
+	}
+
+	files := discoverTemplateFilesFromResolver(sol, "tree", "")
+	assert.Len(t, files, 1)
+	assert.Equal(t, filepath.Join(dir, "keep.tpl"), files[0])
+}
+
+// contains is a helper for substring matching in test assertions.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// newFakeProviderWithCapabilities creates a test provider with specific capabilities.
+func newFakeProviderWithCapabilities(name string, caps []provider.Capability) *fakeProvider {
+	outputSchemas := make(map[provider.Capability]*jsonschema.Schema)
+	for _, cap := range caps {
+		switch cap {
+		case provider.CapabilityValidation:
+			outputSchemas[cap] = &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"valid":  {Type: "boolean"},
+					"errors": {Type: "array"},
+				},
+			}
+		default:
+			outputSchemas[cap] = &jsonschema.Schema{Type: "object"}
+		}
+	}
+	return &fakeProvider{
+		desc: &provider.Descriptor{
+			Name:          name,
+			APIVersion:    "v1",
+			Version:       semver.MustParse("1.0.0"),
+			Schema:        &jsonschema.Schema{Type: "object"},
+			OutputSchemas: outputSchemas,
+			Description:   "Test provider",
+			Capabilities:  caps,
+		},
 	}
 }

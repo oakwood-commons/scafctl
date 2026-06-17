@@ -57,13 +57,13 @@ var KnownRules = map[string]RuleMeta{
 	},
 	"hyphenated-name": {
 		Rule:        "hyphenated-name",
-		Severity:    string(SeverityInfo),
+		Severity:    string(SeverityWarning),
 		Category:    "naming",
 		Description: "A resolver name contains hyphens, which require bracket notation in CEL expressions.",
-		Why:         "Hyphens in resolver names require quoting in CEL: _[\"my-resolver\"] instead of _.my_resolver. This is more verbose and error-prone.",
-		Fix:         "Use underscores instead of hyphens for CEL-friendly access: my_resolver instead of my-resolver.",
+		Why:         "Hyphens in resolver names require quoting in CEL: _[\"my-resolver\"] instead of _.myResolver. This is more verbose and error-prone for both humans and AI agents.",
+		Fix:         "Use camelCase for CEL-friendly access: myResolver instead of my-resolver.",
 		Examples: []string{
-			"# Hyphenated (requires quoting in CEL):\nresolvers:\n  my-service:\n    ...\n# Access: _[\"my-service\"]\n\n# Underscored (direct CEL access):\nresolvers:\n  my_service:\n    ...\n# Access: _.my_service",
+			"# Hyphenated (requires quoting in CEL):\nresolvers:\n  my-service:\n    ...\n# Access: _[\"my-service\"]\n\n# camelCase (direct CEL access):\nresolvers:\n  myService:\n    ...\n# Access: _.myService",
 		},
 	},
 	"unused-resolver": {
@@ -450,6 +450,28 @@ var KnownRules = map[string]RuleMeta{
 		Fix:         "Either add sources patterns to the action or remove the fingerprint block.",
 		Examples: []string{
 			"# Correct:\nactions:\n  build:\n    sources:\n      - 'src/**/*.go'\n    fingerprint:\n      scope: files\n    provider: exec\n    inputs:\n      command: go build",
+		},
+	},
+	"missing-template-dependency": {
+		Rule:        "missing-template-dependency",
+		Severity:    string(SeverityWarning),
+		Category:    "dependency",
+		Description: "A go-template render-tree resolver reads external template files that reference resolvers not listed in its dependsOn and not otherwise reachable in its dependency graph.",
+		Why:         "When a go-template render-tree step renders external .tpl files, the DAG cannot auto-detect which resolver names are used inside those files. Missing dependencies cause 'map has no entry for key' runtime errors because the template executes before its data dependencies are resolved.",
+		Fix:         "Add the missing resolver names to the dependsOn list of the render-tree resolver, or of the resolver that consumes the rendered output.",
+		Examples: []string{
+			"# Template file (templates/main.tpl) uses {{ .appName }} and {{ .region }}\n# Ensure both are in dependsOn:\nresolvers:\n  rendered:\n    dependsOn: [appName, region, templateSource]\n    resolve:\n      with:\n        - provider: go-template\n          inputs:\n            operation: render-tree\n            entries:\n              rslvr: templateSource\n            data:\n              rslvr: _",
+		},
+	},
+	"resolver-cycle": {
+		Rule:        "resolver-cycle",
+		Severity:    string(SeverityError),
+		Category:    "dependency",
+		Description: "The resolver dependency graph contains a circular dependency.",
+		Why:         "Circular dependencies between resolvers create infinite loops that prevent the DAG from being scheduled. The dependency graph must be acyclic.",
+		Fix:         "Break the cycle by reordering dependencies, removing unnecessary references, or extracting cycle-causing logic into a separate resolver. When a validate block causes the cycle, extract the validation into a dedicated resolver that runs after all its dependencies.",
+		Examples: []string{
+			"# Problem: validate block creates a cycle\n# resolverA validate needs resolverB, but resolverB depends on resolverA\n\n# Fix: extract the validation into a separate resolver\nresolvers:\n  resolverA:\n    resolve:\n      with:\n        - provider: parameter\n          inputs:\n            key: inputA\n  validateA:\n    dependsOn: [resolverA, resolverB]\n    validate:\n      with:\n        - provider: validation\n          inputs:\n            expression:\n              expr: '_.resolverB.valid == true'\n            message: 'Validation failed'",
 		},
 	},
 	"invalid-fingerprint-scope": {
