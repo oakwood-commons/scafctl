@@ -11,9 +11,9 @@ This tutorial covers using scafctl's lint commands to validate solution files, e
 
 scafctl includes a built-in linter that checks solution YAML files for:
 
-- **Schema violations** — Invalid field names, wrong types, missing required fields
-- **Best practices** — Missing descriptions, unused resolvers, naming conventions
-- **Correctness** — Broken resolver references, invalid CEL expressions, circular dependencies
+- **Schema violations** -- Invalid field names, wrong types, missing required fields
+- **Best practices** -- Missing descriptions, unused resolvers, naming conventions
+- **Correctness** -- Broken resolver references, invalid CEL expressions, circular dependencies
 
 ```mermaid
 flowchart LR
@@ -90,7 +90,7 @@ scafctl lint -f solution.yaml -o json
 
 ### Quiet Mode
 
-For scripts and CI pipelines — exit code only:
+For scripts and CI pipelines -- exit code only:
 
 {{< tabs "linting-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
@@ -199,12 +199,12 @@ scafctl lint explain missing-description
 
 This shows:
 
-- **Description** — What the rule checks
-- **Severity** — Error, warning, or info
-- **Category** — Which category (e.g., best-practice, correctness, schema)
-- **Why it matters** — Why this rule exists
-- **How to fix** — Step-by-step fix instructions
-- **Examples** — Before/after YAML showing the fix
+- **Description** -- What the rule checks
+- **Severity** -- Error, warning, or info
+- **Category** -- Which category (e.g., best-practice, correctness, schema)
+- **Why it matters** -- Why this rule exists
+- **How to fix** -- Step-by-step fix instructions
+- **Examples** -- Before/after YAML showing the fix
 
 ### JSON Output
 
@@ -291,7 +291,7 @@ metadata:
 ### Invalid Resolver Reference
 
 ```yaml
-# Before (triggers error — 'settings' doesn't exist)
+# Before (triggers error -- 'settings' doesn't exist)
 resolvers:
   config:
     type: string
@@ -323,7 +323,7 @@ resolvers:
 ### Unknown Fields
 
 ```yaml
-# Before (triggers error — 'deps' is not a valid field)
+# Before (triggers error -- 'deps' is not a valid field)
 resolvers:
   greeting:
     type: string
@@ -349,7 +349,7 @@ resolvers:
 ### Unreachable Test Path
 
 ```yaml
-# Before (triggers warning — file doesn't exist)
+# Before (triggers warning -- file doesn't exist)
 testing:
   cases:
     my-test:
@@ -394,7 +394,7 @@ scafctl lint explain unreachable-test-path
 The `hyphenated-name` rule warns when resolver names contain hyphens. While valid YAML, hyphens require quoting in CEL expressions:
 
 ```yaml
-# ⚠️ INFO: hyphenated names require quoting in CEL
+# WARNING: hyphenated names require quoting in CEL
 spec:
   resolvers:
     my-service-name:
@@ -414,12 +414,12 @@ spec:
               expression: '_["my-service-name"]'
 ```
 
-**Fix**: Use underscores instead of hyphens for CEL-friendly access:
+**Fix**: Use camelCase for CEL-friendly access:
 
 ```yaml
 spec:
   resolvers:
-    my_service_name:  # Can use _.my_service_name in CEL
+    myServiceName:  # Can use _.myServiceName in CEL
       resolve:
         with:
           - provider: static
@@ -427,14 +427,14 @@ spec:
               value: hello
 ```
 
-This is an **info**-level finding (not an error) because hyphenated names are valid — they just require bracket notation in CEL expressions.
+This is a **warning**-level finding (not an error) because hyphenated names are valid -- they just require bracket notation in CEL expressions.
 
 ## 7. Redundant dependsOn
 
 The `redundant-depends-on` rule detects when a resolver's `dependsOn` entries are already auto-inferred from value references. scafctl automatically infers dependencies from `expr:`, `rslvr:`, and `tmpl:` references -- explicit `dependsOn` is only needed for pure ordering dependencies (where a resolver must wait for another without referencing its value).
 
 ```yaml
-# ℹ️ INFO: dependsOn is redundant — all listed dependencies are already inferred
+# INFO: dependsOn is redundant -- all listed dependencies are already inferred
 spec:
   resolvers:
     registry:
@@ -601,18 +601,177 @@ scafctl lint explain transform-shape-mismatch
 {{% /tab %}}
 {{< /tabs >}}
 
-## 10. Using Lint with the MCP Server
+## 10. Resolver Cycles
+
+The `resolver-cycle` rule detects circular dependencies in the resolver dependency graph. Cycles prevent the DAG scheduler from ordering resolvers and always cause runtime failures.
+
+```yaml
+# ERROR: circular dependency detected
+spec:
+  resolvers:
+    alpha:
+      dependsOn: [beta]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: a
+
+    beta:
+      dependsOn: [alpha]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: b
+```
+
+The cycle `alpha -> beta -> alpha` means neither resolver can run first.
+
+**Fix**: Break the cycle by removing one of the dependencies. Often, the real pattern is that a `validate` block creates the cycle -- extract it into a separate resolver:
+
+```yaml
+spec:
+  resolvers:
+    alpha:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: inputA
+
+    beta:
+      dependsOn: [alpha]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression:
+                expr: '_.alpha + "-derived"'
+
+    # Validation extracted into its own resolver
+    validateAlpha:
+      dependsOn: [alpha, beta]
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression:
+                expr: '_.beta != ""'
+              message: "Beta must not be empty"
+```
+
+This is an **error**-level finding because cycles always prevent execution.
+
+For more details:
+
+{{< tabs "linting-tutorial-cmd-13" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl lint explain resolver-cycle
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain resolver-cycle
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+## 11. Missing Template Dependencies
+
+The `missing-template-dependency` rule checks render-tree resolvers that process external template files (`.tpl`, `.tmpl`, `.gotmpl`). If a template file references a resolver name (e.g., `{{ .appName }}`) that isn't in the render-tree resolver's dependency graph, the lint warns you.
+
+```yaml
+# WARNING: render-tree resolver 'rendered' uses template files that reference
+# resolver 'port', but 'port' is not in its dependency graph
+spec:
+  resolvers:
+    appName:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    port:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "8080"
+
+    templateFiles:
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    rendered:
+      dependsOn: [templateFiles, appName]  # Missing 'port'!
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: _
+```
+
+If `templates/main.tpl` contains `{{ .appName }} on port {{ .port }}`, the `port` resolver may not be resolved before the template renders, causing a "map has no entry for key" error at runtime.
+
+**Fix**: Add the missing resolver to `dependsOn`:
+
+```yaml
+    rendered:
+      dependsOn: [templateFiles, appName, port]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: _
+```
+
+This is a **warning**-level finding. The linter scans template files on disk to discover references that the DAG cannot auto-detect from the solution YAML alone.
+
+For more details:
+
+{{< tabs "linting-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl lint explain missing-template-dependency
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain missing-template-dependency
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+## 12. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 
-- **`lint_solution` tool** — Same as `scafctl lint` but returns structured JSON to the AI
-- **`explain_lint_rule` tool** — Same as `scafctl lint explain`
-- **`validate_expressions` tool** — Validate CEL expressions without running them
+- **`lint_solution` tool** -- Same as `scafctl lint` but returns structured JSON to the AI
+- **`explain_lint_rule` tool** -- Same as `scafctl lint explain`
+- **`validate_expressions` tool** -- Validate CEL expressions without running them
 
-The AI agent can lint your solution as part of its workflow — for example, the `debug_solution` and `update_solution` prompts automatically include linting steps.
+The AI agent can lint your solution as part of its workflow -- for example, the `debug_solution` and `update_solution` prompts automatically include linting steps.
 
 ## Next Steps
 
-- [Eval Tutorial](eval-tutorial.md) — Validate and test expressions
-- [Functional Testing Tutorial](functional-testing.md) — Automated solution testing
-- [MCP Server Tutorial](mcp-server-tutorial.md) — AI-assisted development with linting
+- [Eval Tutorial](eval-tutorial.md) -- Validate and test expressions
+- [Functional Testing Tutorial](functional-testing.md) -- Automated solution testing
+- [MCP Server Tutorial](mcp-server-tutorial.md) -- AI-assisted development with linting

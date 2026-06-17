@@ -468,7 +468,7 @@ tasks:
         PASSED=0
         SKIPPED=0
 
-        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/|lint-stress-test/|compose-demo/workflow|compose-demo/resolvers|state/github-state"
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/|lint-stress-test/|lint-resolver-cycle/|lint-missing-template-dependency/|compose-demo/workflow|compose-demo/resolvers|state/github-state"
 
         {
           find examples/solutions -name '*.yaml'
