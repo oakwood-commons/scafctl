@@ -11,10 +11,12 @@ import (
 	"io"
 	"os"
 	stdfilepath "path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
@@ -42,6 +44,12 @@ type ResolverOptions struct {
 	// Names is the list of resolver names to execute (positional args).
 	// If empty, all resolvers are executed.
 	Names []string
+
+	// Actions scopes resolver output to one or more actions by name.
+	// When set, resolver names are extracted from each action's inputs
+	// and the resolver execution is filtered to only those resolvers
+	// (plus their transitive dependencies). Multiple values are unioned.
+	Actions []string
 
 	// SkipTransform skips the transform and validation phases,
 	// returning raw resolved values.
@@ -225,7 +233,16 @@ Examples:
   scafctl run resolver --progress -f ./my-solution.yaml
 
   # Show provider metrics
-  scafctl run resolver --show-metrics -f ./my-solution.yaml`, settings.CliBinaryName, cliParams.BinaryName),
+  scafctl run resolver --show-metrics -f ./my-solution.yaml
+
+  # Show only the resolvers consumed by a specific action
+  scafctl run resolver --action tag -f ./my-solution.yaml
+
+  # Union resolvers from multiple actions
+  scafctl run resolver --action tag --action release -f ./my-solution.yaml
+
+  # Run from catalog without -f (auto-fallback)
+  scafctl run resolver ford-proxy`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ArbitraryArgs,
 		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user
@@ -251,6 +268,7 @@ Examples:
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
+	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope resolver output to the resolvers consumed by this action (repeatable)")
 
 	setResolverHelpFunc(cCmd)
 
@@ -339,13 +357,23 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			exitcode.InvalidInput)
 	}
 
+	// Track whether the file was explicitly provided (via -f flag or as a
+	// positional unambiguous catalog reference). Auto-discovered files set
+	// o.File inside prepareSolutionForExecution, so we capture the state here
+	// to enable catalog fallback when auto-discovery finds a non-solution file.
+	fileWasExplicit := o.File != ""
+
 	// Prepare solution: load, set up registry, handle bundles
 	sol, reg, solutionDir, cleanup, providerCtx, err := o.prepareSolutionForExecution(ctx)
 	if err != nil {
-		// When no -f/--file was provided, auto-discovery failed to find a
-		// solution file, and the first positional arg looks like a catalog
-		// reference, retry using that arg as the solution source.
-		if o.File == "" && errors.Is(err, get.ErrNoSolutionFound) && len(o.Names) > 0 && get.IsCatalogReference(o.Names[0]) {
+		// When no explicit file was provided and auto-discovery either found
+		// nothing (ErrNoSolutionFound) or picked a known non-solution file
+		// (taskfile.yaml/yml), check if the first positional arg looks like a
+		// catalog reference and retry using it as the solution source.
+		// We intentionally do NOT retry when a real solution file was discovered
+		// but failed to parse -- that would mask useful validation errors.
+		canRetry := errors.Is(err, get.ErrNoSolutionFound) || isNonSolutionDiscoveryFile(o.File)
+		if !fileWasExplicit && canRetry && len(o.Names) > 0 && get.IsCatalogReference(o.Names[0]) {
 			o.File = o.Names[0]
 			o.Names = o.Names[1:]
 			lgr.V(1).Info("retrying with first positional arg as catalog reference", "file", o.File)
@@ -354,6 +382,15 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		if err != nil {
 			return o.exitWithCode(ctx, err, exitcode.FileNotFound)
 		}
+	}
+
+	// Validate mutually exclusive --action and positional resolver names.
+	// This check is placed after catalog fallback so that bare catalog names
+	// (parsed into o.Names) can be consumed by fallback first.
+	if len(o.Actions) > 0 && len(o.Names) > 0 {
+		return o.exitWithCode(ctx,
+			fmt.Errorf("--action and positional resolver names are mutually exclusive"),
+			exitcode.InvalidInput)
 	}
 	defer cleanup()
 	if providerCtx != nil {
@@ -410,6 +447,16 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 
 	// Get all resolvers, then filter by names if specified
 	allResolvers := sol.Spec.ResolversToSlice()
+
+	// --action: extract resolver names consumed by the specified action(s)
+	if len(o.Actions) > 0 {
+		actionNames, actionErr := o.resolveActionResolverNames(sol)
+		if actionErr != nil {
+			return o.exitWithCode(ctx, actionErr, exitcode.InvalidInput)
+		}
+		o.Names = actionNames
+		lgr.V(1).Info("--action resolved to resolver names", "actions", o.Actions, "resolvers", actionNames)
+	}
 
 	// Validate parameter keys against parameter provider 'key' inputs (early typo detection)
 	if len(params) > 0 {
@@ -692,6 +739,101 @@ func setResolverHelpFunc(cmd *cobra.Command) {
 			fmt.Fprint(c.OutOrStdout(), helpText)
 		}
 	})
+}
+
+// resolveActionResolverNames looks up the specified action(s) in the solution's
+// workflow and extracts the resolver names referenced by their inputs, forEach.in,
+// and when conditions. Multiple actions are unioned. Returns an error if the
+// solution has no workflow or an action does not exist.
+func (o *ResolverOptions) resolveActionResolverNames(sol *solution.Solution) ([]string, error) {
+	if !sol.Spec.HasWorkflow() {
+		return nil, fmt.Errorf("--action requires a solution with a workflow section, but %q has none", sol.Metadata.Name)
+	}
+
+	workflow := sol.Spec.Workflow
+	unioned := make(map[string]bool)
+
+	for _, actionName := range o.Actions {
+		act, found := workflow.Actions[actionName]
+		if !found {
+			// Also check finally actions
+			act, found = workflow.Finally[actionName]
+		}
+		if !found {
+			// Build available action names for the error message
+			available := make([]string, 0, len(workflow.Actions))
+			for name := range workflow.Actions {
+				available = append(available, name)
+			}
+			for name := range workflow.Finally {
+				available = append(available, name)
+			}
+			sort.Strings(available)
+			return nil, fmt.Errorf("action %q not found (available: %s)", actionName, strings.Join(available, ", "))
+		}
+
+		// Build a set of forEach alias names to exclude from extracted refs.
+		// These are iteration variables, not resolver names.
+		forEachAliases := make(map[string]bool)
+		if act.ForEach != nil {
+			if act.ForEach.Item != "" {
+				forEachAliases[act.ForEach.Item] = true
+			}
+			if act.ForEach.Index != "" {
+				forEachAliases[act.ForEach.Index] = true
+			}
+		}
+
+		// Extract resolver names from the action's inputs
+		for _, name := range resolver.ExtractRefsFromValueRefs(act.Inputs) {
+			if !forEachAliases[name] {
+				unioned[name] = true
+			}
+		}
+
+		// Extract from forEach.in if present
+		if act.ForEach != nil && act.ForEach.In != nil {
+			for _, name := range resolver.ExtractRefsFromValueRefs(map[string]*resolver.ValueRef{"in": act.ForEach.In}) {
+				unioned[name] = true
+			}
+		}
+
+		// Extract from the when condition if present
+		if act.When != nil && act.When.Expr != nil {
+			celExpr := celexp.Expression(*act.When.Expr)
+			vars, err := celExpr.GetUnderscoreVariables(context.TODO())
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse when condition for action %q: %w", actionName, err)
+			}
+			for _, v := range vars {
+				if !forEachAliases[v] {
+					unioned[v] = true
+				}
+			}
+		}
+	}
+
+	if len(unioned) == 0 {
+		if len(o.Actions) == 1 {
+			return nil, fmt.Errorf("action %q does not reference any resolvers in its inputs or conditions", o.Actions[0])
+		}
+		return nil, fmt.Errorf("actions %v do not reference any resolvers in their inputs or conditions", o.Actions)
+	}
+
+	names := make([]string, 0, len(unioned))
+	for name := range unioned {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// isNonSolutionDiscoveryFile returns true if the given path refers to a file
+// that auto-discovery may resolve but is not a valid solution file. When such
+// a file is found and loading fails, the catalog fallback is safe to try.
+func isNonSolutionDiscoveryFile(path string) bool {
+	base := stdfilepath.Base(path)
+	return base == "taskfile.yaml" || base == "taskfile.yml"
 }
 
 // extractSolutionPath determines the solution file path from:

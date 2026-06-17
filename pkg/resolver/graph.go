@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -217,6 +218,22 @@ func extractDepsFromValueRef(ref *ValueRef, deps map[string]bool) {
 	}
 }
 
+// ExtractRefsFromValueRefs extracts all resolver names referenced by a set of
+// ValueRef values. This is useful for determining which resolvers an action
+// depends on based on its inputs map. The result is sorted for deterministic output.
+func ExtractRefsFromValueRefs(inputs map[string]*ValueRef) []string {
+	deps := make(map[string]bool)
+	for _, ref := range inputs {
+		extractDepsFromValueRef(ref, deps)
+	}
+	result := make([]string, 0, len(deps))
+	for dep := range deps {
+		result = append(result, dep)
+	}
+	sort.Strings(result)
+	return result
+}
+
 // extractDepsFromLiteral recursively extracts dependencies from literal values
 // that may contain CEL expression strings or Go template syntax
 func extractDepsFromLiteral(literal any, deps map[string]bool) {
@@ -244,6 +261,33 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 			}
 		}
 	case map[string]any:
+		// Check if this map represents a nested ValueRef ({rslvr: x}, {expr: "..."}, {tmpl: "..."}).
+		// This handles inputs like: env: {APP: {rslvr: appName}}
+		// We check for ValueRef-like keys and extract deps, but do NOT
+		// early-return — sibling fields may also contain references.
+		isValueRef := false
+		if rslvr, ok := v["rslvr"].(string); ok {
+			if !exclude[rslvr] {
+				deps[rslvr] = true
+			}
+			isValueRef = true
+		}
+		if expr, ok := v["expr"].(string); ok {
+			extractDepsFromExpression(expr, deps)
+			isValueRef = true
+		}
+		if tmpl, ok := v["tmpl"].(string); ok {
+			if len(exclude) > 0 {
+				extractDepsFromTemplateWithExclusions(tmpl, deps, exclude)
+			} else {
+				extractDepsFromTemplate(tmpl, deps)
+			}
+			isValueRef = true
+		}
+		if isValueRef {
+			return
+		}
+
 		// Check for go-template provider pattern: if this map has a "template"
 		// string and a "data" map, exclude data keys from template references.
 		// This prevents false-positive resolver dependencies when the template
