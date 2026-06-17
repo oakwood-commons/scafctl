@@ -7,6 +7,10 @@ All notable changes to this project will be documented in this file.
 ### 🚀 Features
 
 - *(state)* Add `saveOverrides` field to state backend for save-time-only input resolution, enabling patterns like loading from `main` and saving to a resolver-derived feature branch
+- *(lint)* Add `resolver-cycle` rule (error) to detect circular dependencies in the resolver dependency graph
+- *(lint)* Add `missing-template-dependency` rule (warning) to detect render-tree resolvers missing template file dependencies
+- *(lint)* Change `hyphenated-name` severity from info to warning and recommend camelCase instead of underscores
+- *(lint)* Add template-file scanning to prevent false-positive `unused-resolver` warnings for resolvers only referenced in `.tpl` files
 - *(lint)* Add `state-save-override-state-ref` rule (error) to catch circular state provider references in saveOverrides
 - *(lint)* Add `state-github-no-save-branch` rule (info) to suggest save-specific branch configuration for GitHub state backends
 - *(cli)* [**breaking**] Unified solution auto-discovery and resolution chain across all commands (#260)

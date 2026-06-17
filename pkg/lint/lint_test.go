@@ -1333,6 +1333,33 @@ func TestLintState_InvalidBackendProvider(t *testing.T) {
 	assert.Len(t, findings, 1)
 }
 
+func TestLintState_BundlePluginSuppressesFinding(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "github", Kind: solution.PluginKindProvider, Version: ">=0.1.0"},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "github",
+				Inputs:   map[string]*spec.ValueRef{"repo": {Literal: "my-org/my-repo"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "invalid-state-backend")
+	assert.Empty(t, findings, "bundle.plugins-declared provider should not trigger invalid-state-backend")
+}
+
 func TestLintState_ProviderWithoutCapabilityState(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",

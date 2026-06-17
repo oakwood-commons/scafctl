@@ -1,0 +1,72 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-resolver-cycle
+  version: 1.0.0
+  description: |
+    Tests the resolver-cycle lint rule. Resolver cycles are caught during
+    solution loading (spec validation), so the lint command fails with an
+    error message before producing JSON findings output.
+
+spec:
+  resolvers:
+    # Circular dependency: alpha -> beta -> alpha
+    alpha:
+      description: First resolver in a cycle
+      dependsOn: [beta]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: a
+
+    beta:
+      description: Second resolver in a cycle
+      dependsOn: [alpha]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: b
+
+    # Not part of any cycle — should not be flagged
+    standalone:
+      description: Independent resolver with no cycles
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ok
+
+  testing:
+    config:
+      # lint: solution intentionally has a resolver cycle
+      # resolve-defaults: resolvers cannot be resolved due to the cycle
+      skipBuiltins: [lint, resolve-defaults, render-defaults]
+
+    cases:
+      cycle-detected:
+        description: Lint fails with cycle error during solution load
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, resolver-cycle]
+        assertions:
+          - expression: __exitCode != 0
+            message: "Resolver cycle should cause non-zero exit"
+          - expression: >
+              __stderr.contains("cycle detected")
+            message: "Error message should mention cycle detected"
+          - expression: >
+              __stderr.contains("alpha") && __stderr.contains("beta")
+            message: "Error message should mention the resolvers involved in the cycle"
+
+      standalone-not-in-error:
+        description: Standalone resolver should not appear in the cycle error
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, resolver-cycle]
+        assertions:
+          - expression: >
+              !__stderr.contains("standalone")
+            message: "Standalone resolver should not appear in cycle error message"
