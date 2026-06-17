@@ -1401,3 +1401,142 @@ func TestExtractDeps_GoTemplateDataExclusion(t *testing.T) {
 		assert.NotEqual(t, "appName", dep, "appName should not be a dependency (provided by data)")
 	}
 }
+
+func TestExtractRefsFromValueRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		inputs map[string]*ValueRef
+		want   map[string]bool
+	}{
+		{
+			name:   "nil inputs",
+			inputs: nil,
+			want:   map[string]bool{},
+		},
+		{
+			name:   "empty inputs",
+			inputs: map[string]*ValueRef{},
+			want:   map[string]bool{},
+		},
+		{
+			name: "direct resolver reference",
+			inputs: map[string]*ValueRef{
+				"target": {Resolver: stringPtr("environment")},
+			},
+			want: map[string]bool{"environment": true},
+		},
+		{
+			name: "CEL expression reference",
+			inputs: map[string]*ValueRef{
+				"url": {Expr: celExpPtr("_.config.host + ':' + string(_.config.port)")},
+			},
+			want: map[string]bool{"config": true},
+		},
+		{
+			name: "template reference",
+			inputs: map[string]*ValueRef{
+				"greeting": {Tmpl: tmplPtr("Hello {{ ._.username }}")},
+			},
+			want: map[string]bool{"username": true},
+		},
+		{
+			name: "multiple mixed references",
+			inputs: map[string]*ValueRef{
+				"target":  {Resolver: stringPtr("environment")},
+				"url":     {Expr: celExpPtr("_.config.host")},
+				"message": {Tmpl: tmplPtr("{{ ._.greeting }}")},
+				"literal": {Literal: "static-value"},
+			},
+			want: map[string]bool{"environment": true, "config": true, "greeting": true},
+		},
+		{
+			name: "literal value produces no refs",
+			inputs: map[string]*ValueRef{
+				"name": {Literal: "hello"},
+			},
+			want: map[string]bool{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractRefsFromValueRefs(tt.inputs)
+			gotMap := make(map[string]bool, len(got))
+			for _, dep := range got {
+				gotMap[dep] = true
+			}
+			assert.Equal(t, tt.want, gotMap)
+		})
+	}
+}
+
+func TestExtractRefsFromValueRefs_NestedValueRefMaps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		inputs map[string]*ValueRef
+		want   []string
+	}{
+		{
+			name: "nested rslvr in literal map",
+			inputs: map[string]*ValueRef{
+				"env": {Literal: map[string]any{
+					"APP_NAME": map[string]any{"rslvr": "appName"},
+					"APP_PORT": "8080",
+				}},
+			},
+			want: []string{"appName"},
+		},
+		{
+			name: "nested expr in literal map",
+			inputs: map[string]*ValueRef{
+				"config": {Literal: map[string]any{
+					"url": map[string]any{"expr": "_.host + ':' + string(_.port)"},
+				}},
+			},
+			want: []string{"host", "port"},
+		},
+		{
+			name: "nested tmpl in literal map",
+			inputs: map[string]*ValueRef{
+				"labels": {Literal: map[string]any{
+					"version": map[string]any{"tmpl": "{{ ._.appVersion }}"},
+				}},
+			},
+			want: []string{"appVersion"},
+		},
+		{
+			name: "mixed nested and top-level refs",
+			inputs: map[string]*ValueRef{
+				"direct": {Resolver: stringPtr("directRef")},
+				"nested": {Literal: map[string]any{
+					"inner": map[string]any{"rslvr": "nestedRef"},
+				}},
+			},
+			want: []string{"directRef", "nestedRef"},
+		},
+		{
+			name: "deeply nested rslvr in array",
+			inputs: map[string]*ValueRef{
+				"items": {Literal: []any{
+					map[string]any{"rslvr": "first"},
+					map[string]any{"rslvr": "second"},
+					"plain-string",
+				}},
+			},
+			want: []string{"first", "second"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractRefsFromValueRefs(tt.inputs)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

@@ -2312,3 +2312,893 @@ func TestResolverOptions_Run_CatalogFallback(t *testing.T) {
 	assert.Equal(t, "my-solution", opts.File, "fallback should set File to the first positional arg")
 	assert.Empty(t, opts.Names, "fallback should remove the arg from Names")
 }
+
+func TestResolverOptions_Run_CatalogFallbackAfterAutoDiscoveryFailure(t *testing.T) {
+	// NOTE: no t.Parallel() — os.Chdir mutates process-global state.
+
+	// When auto-discovery finds a non-solution file (e.g. taskfile.yaml) and
+	// loading fails, the fallback should still fire if positional arg looks
+	// like a catalog reference. This tests the #501 fix.
+	tmpDir := t.TempDir()
+
+	// Create a non-solution YAML file that will be auto-discovered
+	taskfilePath := filepath.Join(tmpDir, "taskfile.yaml")
+	err := os.WriteFile(taskfilePath, []byte("version: '3'\ntasks:\n  build:\n    cmds:\n      - echo hi\n"), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Names: []string{"my-proxy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	// Change to tmpDir so auto-discovery finds taskfile.yaml
+	origDir, _ := os.Getwd()
+	require.NoError(t, os.Chdir(tmpDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	err = opts.Run(ctx)
+	// The run will fail (no catalog configured), but we should see the
+	// fallback path was taken: File should be set to the catalog ref.
+	assert.Error(t, err)
+	assert.Equal(t, "my-proxy", opts.File, "fallback should set File to catalog ref after auto-discovery load failure")
+	assert.Empty(t, opts.Names, "fallback should consume the positional arg")
+}
+
+func TestResolverOptions_Run_ActionFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: action-flag-test
+  version: 1.0.0
+spec:
+  resolvers:
+    repoUrl:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://github.com/example/repo"
+    version:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.2.3"
+    tagName:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'v' + _.version"
+    unrelated:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "should-not-appear"
+  workflow:
+    actions:
+      tag:
+        provider: shell
+        inputs:
+          command:
+            tmpl: "git tag {{ ._.tagName }} {{ ._.repoUrl }}"
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"tag"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	var result map[string]any
+	err = json.Unmarshal(stdout.Bytes(), &result)
+	require.NoError(t, err)
+
+	// Should include resolvers consumed by the "tag" action (tagName, repoUrl)
+	// and their transitive deps (version, since tagName depends on it)
+	assert.Contains(t, result, "repoUrl")
+	assert.Contains(t, result, "tagName")
+	assert.Contains(t, result, "version") // transitive dep of tagName
+	// Should NOT include unrelated resolver
+	assert.NotContains(t, result, "unrelated")
+}
+
+func TestResolverOptions_Run_ActionFlag_NotFound(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: action-not-found-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  workflow:
+    actions:
+      deploy:
+        provider: shell
+        inputs:
+          command:
+            rslvr: greeting
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"nonexistent"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "action \"nonexistent\" not found")
+}
+
+func TestResolverOptions_Run_ActionFlag_NoWorkflow(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-workflow-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"deploy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "--action requires a solution with a workflow section")
+}
+
+func TestResolverOptions_Run_ActionFlagMutuallyExclusiveWithNames(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mutual-exclusion-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  workflow:
+    actions:
+      tag:
+        provider: shell
+        inputs:
+          command:
+            rslvr: greeting
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"tag"},
+		Names:   []string{"repoUrl"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "--action and positional resolver names are mutually exclusive")
+}
+
+func TestResolverOptions_Run_ActionFlag_WhenCondition(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: when-condition-test
+  version: 1.0.0
+spec:
+  resolvers:
+    enabled:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: true
+    config:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "prod-config"
+    unrelated:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "skip-me"
+  workflow:
+    actions:
+      deploy:
+        provider: shell
+        when:
+          expr: "_.enabled == true"
+        inputs:
+          command:
+            rslvr: config
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"deploy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	var result map[string]any
+	err = json.Unmarshal(stdout.Bytes(), &result)
+	require.NoError(t, err)
+
+	// Should include "config" from inputs and "enabled" from when condition
+	assert.Contains(t, result, "config")
+	assert.Contains(t, result, "enabled")
+	// Should NOT include unrelated resolver
+	assert.NotContains(t, result, "unrelated")
+}
+
+func TestResolverOptions_Run_ActionFlag_LiteralOnlyInputs(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: literal-only-test
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  workflow:
+    actions:
+      echo:
+        provider: shell
+        inputs:
+          command: "echo hello"
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"echo"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "action \"echo\" does not reference any resolvers in its inputs or conditions")
+}
+
+func TestResolverOptions_Run_ActionFlag_FinallyAction(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: finally-action-test
+  version: 1.0.0
+spec:
+  resolvers:
+    slackUrl:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://hooks.slack.com/xxx"
+    unrelated:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "skip-me"
+  workflow:
+    actions:
+      deploy:
+        provider: shell
+        inputs:
+          command: "echo deploy"
+    finally:
+      notify:
+        provider: shell
+        inputs:
+          command:
+            tmpl: "curl {{ ._.slackUrl }}"
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"notify"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	var result map[string]any
+	err = json.Unmarshal(stdout.Bytes(), &result)
+	require.NoError(t, err)
+
+	// Should include slackUrl from finally action's template input
+	assert.Contains(t, result, "slackUrl")
+	// Should NOT include unrelated resolver
+	assert.NotContains(t, result, "unrelated")
+}
+
+func TestResolverOptions_Run_ActionFlag_ForEachIn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: foreach-test
+  version: 1.0.0
+spec:
+  resolvers:
+    regions:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - us-east-1
+                - eu-west-1
+    config:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "base-config"
+    unrelated:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "skip-me"
+  workflow:
+    actions:
+      deploy:
+        provider: shell
+        forEach:
+          in:
+            rslvr: regions
+          item: region
+        inputs:
+          command:
+            rslvr: config
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"deploy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	var result map[string]any
+	err = json.Unmarshal(stdout.Bytes(), &result)
+	require.NoError(t, err)
+
+	// Should include both "regions" (from forEach.in) and "config" (from inputs template)
+	assert.Contains(t, result, "regions")
+	assert.Contains(t, result, "config")
+	// Should NOT include unrelated resolver
+	assert.NotContains(t, result, "unrelated")
+}
+
+func TestResolverOptions_Run_ActionFlag_MultiAction(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: multi-action-test
+  version: 1.0.0
+spec:
+  resolvers:
+    repoUrl:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://github.com/example/repo"
+    version:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "1.2.3"
+    slackUrl:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "https://hooks.slack.com/xxx"
+    unrelated:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "skip-me"
+  workflow:
+    actions:
+      tag:
+        provider: shell
+        inputs:
+          command:
+            rslvr: repoUrl
+      notify:
+        provider: shell
+        inputs:
+          url:
+            rslvr: slackUrl
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"tag", "notify"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	var result map[string]any
+	err = json.Unmarshal(stdout.Bytes(), &result)
+	require.NoError(t, err)
+
+	// Should include resolvers from both actions
+	assert.Contains(t, result, "repoUrl")
+	assert.Contains(t, result, "slackUrl")
+	// Should NOT include unrelated resolver
+	assert.NotContains(t, result, "unrelated")
+}
+
+func TestResolverOptions_Run_ActionFlag_ForEachAliasExcluded(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: foreach-alias-test
+  version: 1.0.0
+spec:
+  resolvers:
+    regions:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - us-east-1
+                - eu-west-1
+    config:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "base-config"
+  workflow:
+    actions:
+      deploy:
+        provider: shell
+        forEach:
+          in:
+            rslvr: regions
+          item: region
+          index: idx
+        inputs:
+          command:
+            tmpl: "deploy {{ ._.config }} to {{ .region }} ({{ .idx }})"
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"deploy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	require.NoError(t, err)
+
+	var result map[string]any
+	err = json.Unmarshal(stdout.Bytes(), &result)
+	require.NoError(t, err)
+
+	// Should include "regions" (from forEach.in) and "config" (from template)
+	assert.Contains(t, result, "regions")
+	assert.Contains(t, result, "config")
+	// "region" and "idx" are forEach aliases, NOT resolvers
+	assert.NotContains(t, result, "region")
+	assert.NotContains(t, result, "idx")
+}
+
+func TestResolverOptions_Run_ActionFlag_CELParseError(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-error-test
+  version: 1.0.0
+spec:
+  resolvers:
+    config:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+  workflow:
+    actions:
+      deploy:
+        provider: shell
+        when:
+          expr: "_.config == true &&& invalid"
+        inputs:
+          command:
+            rslvr: config
+`
+	err := os.WriteFile(solutionPath, []byte(solutionContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Actions: []string{"deploy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err = opts.Run(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse when condition for action \"deploy\"")
+}
+
+func TestResolverOptions_Run_CatalogFallbackNotFiredForMalformedSolution(t *testing.T) {
+	// NOTE: no t.Parallel() — os.Chdir mutates process-global state.
+
+	// When auto-discovery finds a real solution.yaml that is malformed,
+	// the catalog fallback should NOT fire — the user should see the real
+	// validation error instead of a confusing catalog lookup failure.
+	tmpDir := t.TempDir()
+
+	// Create a malformed solution.yaml (invalid apiVersion)
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	err := os.WriteFile(solutionPath, []byte("apiVersion: invalid/v99\nkind: Solution\nmetadata:\n  name: broken\n"), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistry(),
+		},
+		Names: []string{"my-proxy"},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	// Change to tmpDir so auto-discovery finds solution.yaml
+	origDir, _ := os.Getwd()
+	require.NoError(t, os.Chdir(tmpDir))
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	err = opts.Run(ctx)
+	assert.Error(t, err)
+	// Should get the validation error, NOT a catalog lookup error.
+	// The fallback should NOT have consumed the first name as a catalog ref.
+	assert.NotEqual(t, "my-proxy", opts.File, "fallback should NOT fire for a malformed solution.yaml")
+}
