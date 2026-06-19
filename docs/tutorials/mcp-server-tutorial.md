@@ -755,6 +755,18 @@ MCP resources are read-only data endpoints that AI agents can fetch on demand:
 | `provider://reference` | Compact reference of all providers with required/optional inputs, capabilities, and descriptions |
 | `solution://{name}/tests` | Functional test cases defined in a solution's `spec.testing.cases` — test names, descriptions, assertions, tags, and configuration |
 
+### Subscribing to Resource Updates
+
+The server advertises resource subscriptions, so clients that support them can call `resources/subscribe` on a `solution://` URI and receive a live `resources/updated` notification whenever the backing solution file changes on disk. This lets an AI agent keep its view of a solution -- its graph, schema, or tests -- fresh without re-fetching on a timer.
+
+Key behaviors:
+
+- **Sub-resources share the file.** Subscribing to any solution sub-resource (`solution://{name}/schema`, `solution://{name}/graph`, or `solution://{name}/tests`) watches the same underlying solution file, so an edit notifies every subscription for that solution.
+- **Debounced.** Rapid successive writes (such as an editor save-all) are collapsed into a single notification after a short quiet period (300ms).
+- **Atomic-save safe.** The server watches the parent directory of the solution file, so editors that save via rename are handled correctly.
+- **Local files only.** Solutions referenced by catalog name or URL have no watchable local file, so the subscription is acknowledged but no updates are emitted.
+- **Automatic cleanup.** Subscriptions are released on `resources/unsubscribe` and when the client session ends.
+
 ## 9. Available Prompts
 
 MCP prompts are predefined templates that guide AI agents through common workflows:
