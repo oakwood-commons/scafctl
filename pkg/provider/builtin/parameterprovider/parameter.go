@@ -28,6 +28,9 @@ const (
 	ProviderName = "parameter"
 	// Version is the version of the parameter provider
 	Version = "1.0.0"
+	// TypeString is the value for the "type" input that forces a parameter
+	// value to be returned verbatim as a string, suppressing type inference.
+	TypeString = "string"
 )
 
 // HTTPClient defines the interface for HTTP operations
@@ -104,6 +107,9 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					schemahelper.WithExample("env")),
 				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
 					schemahelper.WithExample("fallback")),
+				"type": schemahelper.StringProp("Force the parameter value to be returned verbatim as a string, suppressing automatic type inference (boolean, number, JSON, CSV, file://, http://). The only supported value is \"string\".",
+					schemahelper.WithEnum(TypeString),
+					schemahelper.WithExample(TypeString)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -141,6 +147,14 @@ inputs:
 					YAML: `provider: parameter
 inputs:
   key: dryRun`,
+				},
+				{
+					Name:        "Force a value to stay a string",
+					Description: "Return the value verbatim, suppressing type inference (e.g. keep a numeric ID as a string)",
+					YAML: `provider: parameter
+inputs:
+  key: billingId
+  type: string`,
 				},
 			},
 		},
@@ -184,6 +198,10 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 		return nil, fmt.Errorf("%s: key is required and must be a string", ProviderName)
 	}
 
+	// Determine whether the caller wants to suppress type coercion and keep
+	// the value verbatim as a string.
+	forceString := wantsStringType(inputs)
+
 	// Get parameters from context
 	params, ok := provider.ParametersFromContext(ctx)
 	if !ok {
@@ -192,14 +210,14 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(key, inputs)
+		return p.executeDryRun(key, forceString)
 	}
 
 	// Look up the parameter
 	rawValue, exists := params[key]
 	if !exists {
 		if def, hasDefault := inputs["default"]; hasDefault {
-			parsedDefault, err := p.parseValue(ctx, def)
+			parsedDefault, err := p.resolveValue(ctx, def, forceString)
 			if err != nil {
 				return nil, fmt.Errorf("%s: failed to parse default for parameter %q: %w", ProviderName, key, err)
 			}
@@ -216,7 +234,7 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 	}
 
 	// Parse the value according to precedence rules
-	parsedValue, err := p.parseValue(ctx, rawValue)
+	parsedValue, err := p.resolveValue(ctx, rawValue, forceString)
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to parse parameter %q: %w", ProviderName, key, err)
 	}
@@ -229,6 +247,26 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 			"type":   detectType(parsedValue),
 		},
 	}, nil
+}
+
+// resolveValue returns the value for a parameter. When forceString is true the
+// value is returned verbatim as a string (with any surrounding double quotes
+// removed) and all type-inference rules are skipped; non-string inputs are
+// coerced to their string representation so the output type stays consistent
+// with the requested type: string. Otherwise the standard parsing precedence
+// rules are applied.
+func (p *ParameterProvider) resolveValue(ctx context.Context, value any, forceString bool) (any, error) {
+	if forceString {
+		str, ok := value.(string)
+		if !ok {
+			return fmt.Sprintf("%v", value), nil
+		}
+		if isQuoted(str) {
+			return strings.Trim(str, `"`), nil
+		}
+		return str, nil
+	}
+	return p.parseValue(ctx, value)
 }
 
 // parseValue applies the parsing precedence rules to a parameter value
@@ -355,14 +393,33 @@ func detectType(value any) string {
 	}
 }
 
-func (p *ParameterProvider) executeDryRun(key string, _ map[string]any) (*provider.Output, error) {
+func (p *ParameterProvider) executeDryRun(key string, forceString bool) (*provider.Output, error) {
+	typeName := "unknown"
+	if forceString {
+		typeName = "string"
+	}
 	return &provider.Output{
 		Data: "[DRY-RUN] Not retrieved",
 		Metadata: map[string]any{
 			"dryRun": true,
 			"key":    key,
 			"exists": false,
-			"type":   "unknown",
+			"type":   typeName,
 		},
 	}, nil
+}
+
+// wantsStringType reports whether the inputs request that the parameter value
+// be returned verbatim as a string (type: string), suppressing type inference.
+// The provider schema constrains the "type" input to the exact value
+// TypeString, so the comparison is an exact, case-sensitive match to mirror
+// what the executor validates before calling Execute. Surrounding whitespace is
+// not trimmed, so callers that bypass schema validation (e.g. direct resolver
+// execution) stay consistent with the descriptor's declared enum.
+func wantsStringType(inputs map[string]any) bool {
+	t, ok := inputs["type"].(string)
+	if !ok {
+		return false
+	}
+	return t == TypeString
 }

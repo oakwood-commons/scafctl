@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -649,4 +650,126 @@ func BenchmarkFilter(b *testing.B) {
 		}
 		ss.Filter(findings)
 	}
+}
+
+// makeTransformSuppressYAML returns YAML where a standalone ignore directive on
+// line 8 annotates a `transform:` block whose key is on line 9.
+func makeTransformSuppressYAML() []byte {
+	return []byte("spec:\n" + // 1
+		"  resolvers:\n" + // 2
+		"    api_data:\n" + // 3
+		"      resolve:\n" + // 4
+		"        with:\n" + // 5
+		"          - provider: http\n" + // 6
+		"          - provider: static\n" + // 7
+		"      # scafctl-lint-ignore: transform-shape-mismatch\n" + // 8
+		"      transform:\n" + // 9
+		"        with:\n" + // 10
+		"          - provider: cel\n" + // 11
+		"            inputs:\n" + // 12
+		"              expression:\n" + // 13
+		"                expr: \"__self.body\"\n") // 14
+}
+
+func transformSourceMap() *sourcepos.SourceMap {
+	sm := sourcepos.NewSourceMap()
+	sm.Set("spec.resolvers.api_data.transform", sourcepos.Position{Line: 9, Column: 7, File: "test.yaml"})
+	return sm
+}
+
+func TestFilter_BlockScopedSuppression_StandaloneAboveTransform(t *testing.T) {
+	t.Parallel()
+
+	ss := ParseDirectives(makeTransformSuppressYAML(), "test.yaml").WithSourceMap(transformSourceMap())
+
+	// Finding resolves to a deeper line (14) inside the transform block.
+	finding := &Finding{
+		RuleName:   "transform-shape-mismatch",
+		Location:   "resolvers.api_data.transform.with[0]",
+		Line:       14,
+		SourceFile: "test.yaml",
+	}
+
+	kept := ss.Filter([]*Finding{finding})
+	assert.Empty(t, kept, "finding inside the annotated transform block should be suppressed")
+}
+
+func TestFilter_BlockScopedSuppression_RequiresSourceMap(t *testing.T) {
+	t.Parallel()
+
+	// Without a source map, the deeper-line finding is not suppressed.
+	ss := ParseDirectives(makeTransformSuppressYAML(), "test.yaml")
+
+	finding := &Finding{
+		RuleName:   "transform-shape-mismatch",
+		Location:   "resolvers.api_data.transform.with[0]",
+		Line:       14,
+		SourceFile: "test.yaml",
+	}
+
+	kept := ss.Filter([]*Finding{finding})
+	assert.Len(t, kept, 1, "without a source map only line-based matching applies")
+}
+
+func TestFilter_BlockScopedSuppression_RuleMustMatch(t *testing.T) {
+	t.Parallel()
+
+	ss := ParseDirectives(makeTransformSuppressYAML(), "test.yaml").WithSourceMap(transformSourceMap())
+
+	// A different rule inside the same block is not suppressed.
+	finding := &Finding{
+		RuleName:   "some-other-rule",
+		Location:   "resolvers.api_data.transform.with[0]",
+		Line:       14,
+		SourceFile: "test.yaml",
+	}
+
+	kept := ss.Filter([]*Finding{finding})
+	assert.Len(t, kept, 1, "block suppression must still respect the directive's rule list")
+}
+
+func TestFilter_BlockScopedSuppression_OutsideBlockNotSuppressed(t *testing.T) {
+	t.Parallel()
+
+	ss := ParseDirectives(makeTransformSuppressYAML(), "test.yaml").WithSourceMap(transformSourceMap())
+
+	// A finding in the resolve block (line 6) is outside the transform block.
+	finding := &Finding{
+		RuleName:   "transform-shape-mismatch",
+		Location:   "resolvers.api_data.resolve.with[0]",
+		Line:       6,
+		SourceFile: "test.yaml",
+	}
+
+	kept := ss.Filter([]*Finding{finding})
+	assert.Len(t, kept, 1, "findings outside the annotated block must not be suppressed")
+}
+
+func TestFilter_BlockScopedSuppression_InlineOnTransform(t *testing.T) {
+	t.Parallel()
+
+	yaml := []byte("spec:\n" + // 1
+		"  resolvers:\n" + // 2
+		"    api_data:\n" + // 3
+		"      transform: # scafctl-lint-ignore: transform-shape-mismatch\n" + // 4
+		"        with:\n" + // 5
+		"          - provider: cel\n" + // 6
+		"            inputs:\n" + // 7
+		"              expression:\n" + // 8
+		"                expr: \"__self.body\"\n") // 9
+
+	sm := sourcepos.NewSourceMap()
+	sm.Set("spec.resolvers.api_data.transform", sourcepos.Position{Line: 4, Column: 7, File: "test.yaml"})
+
+	ss := ParseDirectives(yaml, "test.yaml").WithSourceMap(sm)
+
+	finding := &Finding{
+		RuleName:   "transform-shape-mismatch",
+		Location:   "resolvers.api_data.transform.with[0]",
+		Line:       9,
+		SourceFile: "test.yaml",
+	}
+
+	kept := ss.Filter([]*Finding{finding})
+	assert.Empty(t, kept, "inline directive on transform key should suppress findings within the block")
 }

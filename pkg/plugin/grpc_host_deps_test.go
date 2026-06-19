@@ -5,6 +5,8 @@ package plugin
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -149,6 +151,153 @@ func TestHostDepsFromAuthRegistry_HandlersFunc_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, handlers)
 	assert.Empty(t, defaultH)
+}
+
+// makeTestJWT builds an unsigned three-part JWT whose payload encodes the given
+// claims. Only the payload (part index 1) is decoded by ParseJWTClaims.
+func makeTestJWT(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	enc := func(v any) string {
+		b, err := json.Marshal(v)
+		require.NoError(t, err)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	header := enc(map[string]string{"alg": "none", "typ": "JWT"})
+	return header + "." + enc(payload) + ".sig"
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_NoScope_StatusClaims(t *testing.T) {
+	reg := auth.NewRegistry()
+	mock := auth.NewMockHandler("h")
+	mock.StatusResult = &auth.Status{
+		Authenticated: true,
+		Claims: &auth.Claims{
+			Subject: "user-123",
+			Email:   "user@example.com",
+			Name:    "Jane Doe",
+		},
+	}
+	require.NoError(t, reg.Register(mock))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	require.NotNil(t, deps.AuthIdentityFunc)
+
+	claims, err := deps.AuthIdentityFunc(context.Background(), "h", "")
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	assert.Equal(t, "user-123", claims.Subject)
+	assert.Equal(t, "user@example.com", claims.Email)
+	assert.Equal(t, "Jane Doe", claims.Name)
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_NoScope_NoClaims(t *testing.T) {
+	reg := auth.NewRegistry()
+	mock := auth.NewMockHandler("h")
+	// Authenticated (e.g. device-code) but no cached identity claims.
+	mock.StatusResult = &auth.Status{Authenticated: true}
+	require.NoError(t, reg.Register(mock))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	claims, err := deps.AuthIdentityFunc(context.Background(), "h", "")
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.Contains(t, err.Error(), "scope")
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_NotAuthenticated(t *testing.T) {
+	reg := auth.NewRegistry()
+	mock := auth.NewMockHandler("h")
+	mock.StatusResult = &auth.Status{Authenticated: false}
+	require.NoError(t, reg.Register(mock))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	claims, err := deps.AuthIdentityFunc(context.Background(), "h", "")
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.Contains(t, err.Error(), "not authenticated")
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_WithScope_JWTClaims(t *testing.T) {
+	reg := auth.NewRegistry()
+	mock := auth.NewMockHandler("h")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: makeTestJWT(t, map[string]any{
+			"sub":   "sub-from-jwt",
+			"email": "jwt@example.com",
+			"tid":   "tenant-1",
+			"oid":   "object-1",
+		}),
+		TokenType: "Bearer",
+	}
+	require.NoError(t, reg.Register(mock))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	claims, err := deps.AuthIdentityFunc(context.Background(), "h", "api://app/.default")
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	assert.Equal(t, "sub-from-jwt", claims.Subject)
+	assert.Equal(t, "jwt@example.com", claims.Email)
+	assert.Equal(t, "tenant-1", claims.TenantId)
+	assert.Equal(t, "object-1", claims.ObjectId)
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_WithScope_OpaqueTokenFallsBack(t *testing.T) {
+	reg := auth.NewRegistry()
+	mock := auth.NewMockHandler("h")
+	// Opaque (non-JWT) access token -> claims derived from Status instead.
+	mock.GetTokenResult = &auth.Token{AccessToken: "opaque-token", TokenType: "Bearer"}
+	mock.StatusResult = &auth.Status{
+		Authenticated: true,
+		Claims:        &auth.Claims{Subject: "status-sub"},
+	}
+	require.NoError(t, reg.Register(mock))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	claims, err := deps.AuthIdentityFunc(context.Background(), "h", "api://app/.default")
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	assert.Equal(t, "status-sub", claims.Subject)
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_WithScope_NilToken(t *testing.T) {
+	reg := auth.NewRegistry()
+	// Handler returns (nil, nil) from GetToken: no token, no error.
+	mock := auth.NewMockHandler("h")
+	mock.GetTokenResult = nil
+	require.NoError(t, reg.Register(mock))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	claims, err := deps.AuthIdentityFunc(context.Background(), "h", "api://app/.default")
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.Contains(t, err.Error(), "handler returned no token")
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_UnknownHandler(t *testing.T) {
+	reg := auth.NewRegistry()
+	deps := HostDepsFromAuthRegistry(reg)
+
+	claims, err := deps.AuthIdentityFunc(context.Background(), "", "")
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.Contains(t, err.Error(), "no auth handlers registered")
+}
+
+func TestHostDepsFromAuthRegistry_IdentityFunc_EmptyHandlerResolvesToDefault(t *testing.T) {
+	reg := auth.NewRegistry()
+	mockA := auth.NewMockHandler("alpha")
+	mockA.StatusResult = &auth.Status{
+		Authenticated: true,
+		Claims:        &auth.Claims{Subject: "alpha-sub"},
+	}
+	require.NoError(t, reg.Register(mockA))
+	require.NoError(t, reg.Register(auth.NewMockHandler("beta")))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	claims, err := deps.AuthIdentityFunc(context.Background(), "", "")
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+	assert.Equal(t, "alpha-sub", claims.Subject)
 }
 
 func BenchmarkHostDepsFromAuthRegistry(b *testing.B) {
