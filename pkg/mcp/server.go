@@ -98,6 +98,10 @@ type Server struct {
 	// from "set to a named profile" (non-empty *string). The code never
 	// stores an empty string — clearing is done by storing nil.
 	profileOverride atomic.Value // *string
+
+	// subscriptions tracks MCP resource subscriptions and delivers live
+	// resources/updated notifications when a watched solution file changes.
+	subscriptions *subscriptionManager
 }
 
 // ServerOption configures the MCP server.
@@ -623,6 +627,13 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 	s.cfgReloader = newConfigReloader(initialCfg, configReloaderTTL, s.logger)
 
+	// Build observability hooks and add subscription lifecycle hooks so the
+	// server can deliver live resources/updated notifications. The hooks
+	// close over s, so they observe s.subscriptions once it is initialized
+	// below (after the mcp-go server exists).
+	obsHooks := newObservabilityHooks(s.logger)
+	s.registerSubscriptionHooks(obsHooks)
+
 	// Build server options for mcp-go
 	serverOpts := []server.ServerOption{
 		server.WithToolCapabilities(true),
@@ -639,7 +650,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		// Task support for async long-running operations
 		server.WithTaskCapabilities(true, true, true),
 		// Observability hooks & middleware
-		server.WithHooks(newObservabilityHooks(s.logger)),
+		server.WithHooks(obsHooks),
 		server.WithToolHandlerMiddleware(toolTimingMiddleware(s.logger)),
 		server.WithResourceHandlerMiddleware(resourceTimingMiddleware(s.logger)),
 		// Completions providers
@@ -663,6 +674,11 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 
 	// Enable sampling capability
 	s.mcpServer.EnableSampling()
+
+	// Initialize the resource subscription manager now that the mcp-go server
+	// (the notifier) exists. The subscription hooks registered above reference
+	// s.subscriptions lazily, so they pick this up on the first subscribe.
+	s.subscriptions = newSubscriptionManager(s.mcpServer, s.resolveSubscriptionFile, subscriptionDebounceDuration, s.logger)
 
 	// Register all tools
 	s.registerTools()
@@ -723,6 +739,10 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 // Close releases resources owned by the server. Safe to call multiple times
 // and concurrently with Serve*/Handler/Info.
 func (s *Server) Close() {
+	if s.subscriptions != nil {
+		s.subscriptions.Close()
+	}
+
 	s.upstreamMu.Lock()
 	proxies := s.upstreamProxies
 	s.upstreamProxies = make(map[string]*upstream.Proxy)

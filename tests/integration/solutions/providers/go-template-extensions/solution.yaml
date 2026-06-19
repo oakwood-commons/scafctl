@@ -315,6 +315,24 @@ spec:
                   {{ toHcl .toHclIndentData | indent 2 }}
                 }
 
+    toHclScalarList:
+      description: toHcl with a top-level scalar list renders a bare HCL array
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-scalar-list
+              template: '{{ list "repo:a:ref:main" "repo:b:ref:main" | toHcl }}'
+
+    toHclEmptyList:
+      description: toHcl with an empty list renders []
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-empty-list
+              template: '{{ list | toHcl }}'
+
     # ─────────────────────────────────────────────
     # Custom YAML Functions (toYaml, fromYaml, mustToYaml, mustFromYaml)
     # ─────────────────────────────────────────────
@@ -618,6 +636,22 @@ spec:
           - expression: '__output.toHclWithIndent.contains("resource")'
           - expression: '__output.toHclWithIndent.contains("ami")'
           - expression: '__output.toHclWithIndent.contains("instance_type")'
+
+      tohcl-scalar-list:
+        description: Verify toHcl renders a top-level scalar list as a bare HCL array
+        extends: [_base]
+        tags: [custom, toHcl, hcl]
+        assertions:
+          - expression: '__output.toHclScalarList.contains("[\"repo:a:ref:main\", \"repo:b:ref:main\"]")'
+            message: "Top-level scalar list should render as a bare HCL array"
+
+      tohcl-empty-list:
+        description: Verify toHcl renders an empty list as []
+        extends: [_base]
+        tags: [custom, toHcl, hcl]
+        assertions:
+          - expression: '__output.toHclEmptyList.contains("[]")'
+            message: "Empty list should render as []"
 
       # Custom YAML function tests
       toyaml-simple:

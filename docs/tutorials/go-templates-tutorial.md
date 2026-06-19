@@ -1917,10 +1917,38 @@ resource "aws_s3_bucket" "main" {
 }
 ```
 
+### Top-Level Scalar Lists
+
+When the value passed to `toHcl` is a top-level list of scalars (not a map), it
+renders as a bare HCL array. An empty list renders as `[]`.
+
+```yaml
+    refsHcl:
+      description: Render a list of refs as a bare HCL array
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: refs-hcl
+              template: |
+                {{ list "repo:a:ref:main" "repo:b:ref:main" | toHcl }}
+```
+
+Output:
+
+```hcl
+["repo:a:ref:main", "repo:b:ref:main"]
+```
+
+A top-level list of maps still renders as repeated HCL blocks, so `toHcl` picks
+the right shape automatically based on the list's element types.
+
 ### What You Learned
 
 - **`toHcl`** — Converts maps, lists, and primitives into HCL syntax.
 - **Nested structures** — Maps within maps render as nested HCL blocks.
+- **Top-level scalar lists** -- Render as a bare HCL array (`["a", "b"]`); empty lists render as `[]`.
 - **Combined with Sprig** — Use `indent` (from Sprig) to properly nest the generated HCL.
 - **Terraform workflows** — Generate provider blocks, resource definitions, and variable files from structured data.
 
