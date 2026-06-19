@@ -760,7 +760,97 @@ scafctl lint explain missing-template-dependency
 {{% /tab %}}
 {{< /tabs >}}
 
-## 12. Using Lint with the MCP Server
+## 12. Suppressing Findings
+
+When a finding is a deliberate, reviewed exception, you can suppress it with an
+inline YAML comment directive instead of disabling the rule globally. Directives
+are read directly from the solution file, so they travel with the code they
+annotate.
+
+### Ignore a Single Location
+
+`# scafctl-lint-ignore` suppresses findings on the next line. Placed as an inline
+comment, it suppresses findings on its own line:
+
+```yaml
+spec:
+  resolvers:
+    # scafctl-lint-ignore: missing-description
+    api_data:
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/data # scafctl-lint-ignore: insecure-url
+```
+
+Without a rule list (`# scafctl-lint-ignore`) the directive suppresses **all**
+rules at that location. With a comma-separated list
+(`# scafctl-lint-ignore: rule-a, rule-b`) it only suppresses the named rules.
+
+### Block-Scoped Suppression
+
+When the directive annotates a YAML block key (such as `transform:`), it
+suppresses matching findings anywhere inside that block -- even when the
+finding's reported line is deeper than the directive. This is handy for rules
+like `transform-shape-mismatch` whose finding points at a nested step:
+
+```yaml
+spec:
+  resolvers:
+    api_data:
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/data
+          - provider: static
+            inputs:
+              value: []
+      # scafctl-lint-ignore: transform-shape-mismatch
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.body.items'
+```
+
+The same works inline on the block key:
+
+```yaml
+      transform: # scafctl-lint-ignore: transform-shape-mismatch
+```
+
+### Disable a Range or a Whole File
+
+Use a `disable`/`enable` pair to suppress findings across a range of lines, or
+`disable-file` to suppress them for the entire file:
+
+```yaml
+# scafctl-lint-disable: missing-description
+spec:
+  resolvers:
+    a: { resolve: { with: [{ provider: static, inputs: { value: 1 } }] } }
+    b: { resolve: { with: [{ provider: static, inputs: { value: 2 } }] } }
+# scafctl-lint-enable: missing-description
+```
+
+```yaml
+# scafctl-lint-disable-file: unused-resolver
+```
+
+| Directive | Scope |
+|-----------|-------|
+| `# scafctl-lint-ignore[: rules]` | Next line (or current line when inline); block-scoped when on a block key |
+| `# scafctl-lint-disable[: rules]` | From this line until a matching `enable` (or end of file) |
+| `# scafctl-lint-enable[: rules]` | Ends a preceding `disable` block |
+| `# scafctl-lint-disable-file[: rules]` | The entire file |
+
+> **Tip:** Prefer a narrow `scafctl-lint-ignore` on the exact line or block over
+> `disable-file`. Targeted suppressions keep the rest of the file linted and make
+> the intent obvious to reviewers.
+
+## 13. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 

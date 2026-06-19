@@ -1236,6 +1236,69 @@ scafctl run resolver -f param-demo.yaml unknown=value
 {{% /tab %}}
 {{< /tabs >}}
 
+### Forcing a String Value
+
+By default the parameter provider infers a type from the raw value: `true`/`false`
+become booleans, numeric strings become numbers, JSON objects/arrays are parsed,
+comma-separated values become lists, and `file://`/`http://` values are loaded.
+When you need the value kept verbatim as a string -- for example a numeric ID
+with leading zeros, or a value that merely looks like JSON -- set `type: string`
+on the input. This suppresses all type inference and returns the value exactly as
+provided.
+
+Create a file called `param-string-demo.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: param-string-demo
+  version: 1.0.0
+spec:
+  resolvers:
+    # Inferred: "00042" would become the number 42
+    billingId:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: billingId
+    # Verbatim: stays the string "00042"
+    billingIdString:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: billingId
+              type: string
+```
+
+{{< tabs "run-resolver-tutorial-cmd-24b" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run resolver -f param-string-demo.yaml billingId=00042 -o json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f param-string-demo.yaml billingId=00042 -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Output -- type inference drops the leading zeros, `type: string` preserves them:
+
+```json
+{
+  "billingId": 42,
+  "billingIdString": "00042"
+}
+```
+
+> **Note:** `type: string` only accepts the literal value `string`. It applies to
+> both CLI-supplied values and the `default` input, so a `default` value is also
+> returned verbatim. Non-string defaults are coerced to their string form.
+
 ---
 
 ## Common Workflows
