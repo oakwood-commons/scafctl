@@ -132,29 +132,13 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"result": schemahelper.StringProp("The rendered template output (render operation)", schemahelper.WithExample("Hello, World!")),
-					"entries": schemahelper.ArrayProp("Array of rendered file entries (render-tree operation)",
-						schemahelper.WithItems(schemahelper.ObjectProp(
-							"A rendered file entry",
-							nil,
-							map[string]*jsonschema.Schema{
-								"path":    schemahelper.StringProp("Relative file path from the source directory"),
-								"content": schemahelper.StringProp("Rendered template content"),
-							},
-						))),
+					"result": schemahelper.AnyProp("The resolver value, auto-unwrapped. For the 'render' operation this is the rendered template string. For the 'render-tree' operation this is the array of rendered file entries (each an object with 'path' and 'content' strings). Reference the value directly as _.<resolver> -- the render-tree value is the bare array, there is no .entries wrapper.",
+						schemahelper.WithExample("Hello, World!")),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success": schemahelper.BoolProp("Whether the template rendered successfully"),
-					"result":  schemahelper.StringProp("The rendered template output (render operation)", schemahelper.WithExample("Hello, World!")),
-					"entries": schemahelper.ArrayProp("Array of rendered file entries (render-tree operation)",
-						schemahelper.WithItems(schemahelper.ObjectProp(
-							"A rendered file entry",
-							nil,
-							map[string]*jsonschema.Schema{
-								"path":    schemahelper.StringProp("Relative file path from the source directory"),
-								"content": schemahelper.StringProp("Rendered template content"),
-							},
-						))),
+					"result": schemahelper.AnyProp("The rendered output. For the 'render' operation this is the rendered template string. For the 'render-tree' operation this is the array of rendered file entries (each an object with 'path' and 'content' strings).",
+						schemahelper.WithExample("Hello, World!")),
 				}),
 			},
 			Tags: []string{"template", "go-template", "text/template", "transform", "render"},

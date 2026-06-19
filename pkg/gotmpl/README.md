@@ -608,6 +608,11 @@ Converts a Go object into HCL (HashiCorp Configuration Language) format:
 //   host = "localhost"
 //   port = 443
 // }
+
+// Top-level scalar lists become bare HCL arrays:
+{{ list "repo:a:ref:main" "repo:b:ref:main" | toHcl }}
+// Output:
+// ["repo:a:ref:main", "repo:b:ref:main"]
 ```
 
 ##### toYaml
