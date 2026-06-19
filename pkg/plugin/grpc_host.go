@@ -561,9 +561,65 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 			handlers := authReg.List()
 			var defaultHandler string
 			if len(handlers) > 0 {
+				// authReg.List() returns handler names in sorted order, so the
+				// default is the first handler alphabetically.
 				defaultHandler = handlers[0]
 			}
 			return handlers, defaultHandler, nil
+		},
+		AuthIdentityFunc: func(ctx context.Context, handler, scope string) (*proto.Claims, error) {
+			// Resolve empty handler name to the default handler (the first in
+			// authReg.List(), which is sorted, i.e. first alphabetically).
+			if handler == "" {
+				handlers := authReg.List()
+				if len(handlers) == 0 {
+					return nil, fmt.Errorf("no auth handlers registered")
+				}
+				handler = handlers[0]
+			}
+			h, err := authReg.Get(handler)
+			if err != nil {
+				return nil, fmt.Errorf("auth handler %q: %w", handler, err)
+			}
+
+			// When a scope is supplied, mint a token for that scope and derive
+			// claims from the JWT. This path works even when no ID token is
+			// cached (e.g. device-code sessions) because the access token
+			// itself carries identity claims.
+			if scope != "" {
+				token, terr := h.GetToken(ctx, auth.TokenOptions{Scope: scope})
+				if terr != nil {
+					return nil, fmt.Errorf("get token from %q for scope %q: %w", handler, scope, terr)
+				}
+				if token == nil {
+					return nil, fmt.Errorf("get token from %q for scope %q: handler returned no token", handler, scope)
+				}
+				if claims, perr := auth.ParseJWTClaims(token.AccessToken); perr == nil {
+					return claimsToProto(claims), nil
+				}
+				// Opaque/non-JWT access token: fall back to stored status claims.
+			}
+
+			// No scope (or the scoped token was opaque): use the claims cached
+			// at login time from the OIDC ID token.
+			st, serr := h.Status(ctx)
+			if serr != nil {
+				return nil, fmt.Errorf("get auth status from %q: %w", handler, serr)
+			}
+			if st == nil || !st.Authenticated {
+				return nil, fmt.Errorf("auth handler %q is not authenticated", handler)
+			}
+			if st.Claims == nil || st.Claims.IsEmpty() {
+				// Authenticated, but no identity claims are available without a
+				// scope. This is common for device-code sessions where no ID
+				// token is stored. Return an actionable error rather than a
+				// silent unauthenticated fallback.
+				return nil, fmt.Errorf(
+					"no identity claims available for auth handler %q without a scope; "+
+						"supply a scope (e.g. inputs.scope: api://<app-id>/.default) so a "+
+						"scoped token can be minted to derive identity claims", handler)
+			}
+			return claimsToProto(st.Claims), nil
 		},
 	}
 }

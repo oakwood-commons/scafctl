@@ -2165,6 +2165,24 @@ func TestLintTransformShapeMismatch(t *testing.T) {
 			expectRule: false,
 		},
 		{
+			name: "not flagged: phase-level when guard makes shape access valid",
+			resolver: &resolver.Resolver{
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{
+						{Provider: "http", When: &resolver.Condition{Expr: &credExpr}},
+						{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: []any{}}}},
+					},
+				},
+				Transform: &resolver.TransformPhase{
+					When: &resolver.Condition{Expr: &guardExpr},
+					With: []resolver.ProviderTransform{
+						{Provider: "cel", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &bodyExpr}}},
+					},
+				},
+			},
+			expectRule: false,
+		},
+		{
 			name: "not flagged: transform does not access structured fields",
 			resolver: &resolver.Resolver{
 				Resolve: &resolver.ResolvePhase{

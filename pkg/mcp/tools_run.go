@@ -120,9 +120,7 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 	}
 
 	// Load solution.
-	prepResult, err := prepare.Solution(ctx, path,
-		prepare.WithRegistry(s.registry),
-	)
+	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
 			WithField("path"),

@@ -92,6 +92,78 @@ func TestParameterProvider_Execute_NoKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "key is required")
 }
 
+func TestParameterProvider_Execute_ForceString(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      any
+		typeIn   any
+		expected any
+	}{
+		{"integer kept as string", "52926", "string", "52926"},
+		{"boolean kept as string", "false", "string", "false"},
+		{"float kept as string", "3.14", "string", "3.14"},
+		{"csv kept as string", "a,b,c", "string", "a,b,c"},
+		{"json kept as string", `{"a":1}`, "string", `{"a":1}`},
+		{"quoted value is unquoted", `"52926"`, "string", "52926"},
+		{"non-string default coerced to string", int64(52926), "string", "52926"},
+		{"coercion still applies without type", "52926", nil, int64(52926)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"billingId": tt.raw,
+			})
+
+			inputs := map[string]any{"key": "billingId"}
+			if tt.typeIn != nil {
+				inputs["type"] = tt.typeIn
+			}
+
+			output, err := p.Execute(ctx, inputs)
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.expected, output.Data)
+			assert.Equal(t, true, output.Metadata["exists"])
+		})
+	}
+}
+
+func TestParameterProvider_Execute_ForceString_Default(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":     "billingId",
+		"type":    "string",
+		"default": "52926",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "52926", output.Data)
+	assert.Equal(t, false, output.Metadata["exists"])
+	assert.Equal(t, "string", output.Metadata["type"])
+}
+
+func TestParameterProvider_Execute_ForceString_DryRun(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithDryRun(provider.WithParameters(context.Background(), map[string]any{
+		"billingId": "52926",
+	}), true)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "billingId",
+		"type": "string",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "string", output.Metadata["type"])
+	assert.Equal(t, true, output.Metadata["dryRun"])
+}
+
 func TestParameterProvider_ParseValue_Boolean(t *testing.T) {
 	p := NewParameterProvider()
 	ctx := context.Background()

@@ -332,9 +332,7 @@ func (s *Server) handleLintSolution(_ context.Context, request mcp.CallToolReque
 	}
 
 	// Use prepare.Solution which handles catalog resolution and registry setup
-	prepResult, err := prepare.Solution(ctx, file,
-		prepare.WithRegistry(s.registry),
-	)
+	prepResult, err := prepare.Solution(ctx, file, s.prepareOptions(ctx)...)
 	if err != nil {
 		errMsg := err.Error()
 
@@ -429,9 +427,7 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 	}
 
 	// Load solution via prepare.Solution
-	prepResult, err := prepare.Solution(ctx, path,
-		prepare.WithRegistry(s.registry),
-	)
+	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
 	if err != nil {
 		errMsg := err.Error()
 
@@ -695,9 +691,7 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 
 	// Load solution
-	prepResult, err := prepare.Solution(ctx, path,
-		prepare.WithRegistry(s.registry),
-	)
+	prepResult, err := prepare.Solution(ctx, path, s.prepareOptions(ctx)...)
 	if err != nil {
 		errMsg := err.Error()
 

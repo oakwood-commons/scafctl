@@ -116,7 +116,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintProviderInputs(sol, result, registry)
 
 	// Apply suppression directives parsed from inline YAML comments.
-	suppressions := ParseDirectives(sol.RawContent(), filePath)
+	suppressions := ParseDirectives(sol.RawContent(), filePath).WithSourceMap(result.sourceMap)
 	result.Findings = suppressions.Filter(result.Findings)
 	result.Findings = append(result.Findings, suppressions.UnusedFindings()...)
 
@@ -432,6 +432,11 @@ func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location strin
 	if res.Resolve == nil || res.Transform == nil {
 		return
 	}
+	// A non-trivial phase-level when guard already protects every transform step,
+	// so the shape access is safe — don't flag.
+	if isNonTrivialGuard(res.Transform.When) {
+		return
+	}
 	if len(res.Resolve.With) < 2 || len(res.Transform.With) == 0 {
 		return
 	}
@@ -517,7 +522,7 @@ func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location strin
 		stepLocation := fmt.Sprintf("%s.transform.with[%d]", location, i)
 
 		// Skip if the transform step has a when guard.
-		if step.When != nil && step.When.Expr != nil && strings.TrimSpace(string(*step.When.Expr)) != "" && strings.TrimSpace(string(*step.When.Expr)) != "true" {
+		if isNonTrivialGuard(step.When) {
 			continue
 		}
 
@@ -551,6 +556,17 @@ func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location strin
 			}
 		}
 	}
+}
+
+// isNonTrivialGuard reports whether a when condition is a meaningful guard, i.e.
+// it has a non-empty CEL expression that is not the literal "true". Such a guard
+// is assumed to protect downstream shape-specific access.
+func isNonTrivialGuard(c *resolver.Condition) bool {
+	if c == nil || c.Expr == nil {
+		return false
+	}
+	expr := strings.TrimSpace(string(*c.Expr))
+	return expr != "" && expr != "true"
 }
 
 // lintResolverCycles checks for circular dependencies in the resolver dependency graph.
