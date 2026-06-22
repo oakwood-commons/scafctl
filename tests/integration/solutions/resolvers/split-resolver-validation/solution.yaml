@@ -1,0 +1,140 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-split-resolver-validation
+  version: 1.0.0
+  description: |
+    Functional tests for the split-resolver validation pattern documented in
+    the validation-patterns tutorial. A raw resolver fetches an upstream
+    response and validates connectivity (statusCode == 200) against the
+    unshaped payload, while a downstream resolver reshapes the body into the
+    final output contract. Uses a mock HTTP server started via
+    testConfig.services.
+
+spec:
+  resolvers:
+    mockBaseUrl:
+      description: Base URL of the mock server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    userRaw:
+      description: Raw upstream fetch with a connectivity check on the unshaped response
+      dependsOn: [mockBaseUrl]
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/users/me'"
+              method: GET
+              autoParseJson: true
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self.statusCode == 200"
+            message: "User endpoint unreachable or returned a non-200 status"
+
+    user:
+      description: Downstream reshape into the final output contract
+      dependsOn: [userRaw]
+      type: object
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: _.userRaw.body
+
+    userMissingRaw:
+      description: Raw fetch against a missing endpoint to exercise the failure path
+      dependsOn: [mockBaseUrl]
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/users/missing'"
+              method: GET
+              autoParseJson: true
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self.statusCode == 200"
+            message: "User endpoint unreachable or returned a non-200 status"
+
+  testing:
+    config:
+      # resolve-defaults: userMissingRaw fails validation by design
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: mock-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /users/me
+              method: GET
+              status: 200
+              body: '{"id":1,"name":"alice"}'
+              headers:
+                Content-Type: application/json
+            - path: /users/missing
+              method: GET
+              status: 404
+              body: '{"error":"not found"}'
+              headers:
+                Content-Type: application/json
+
+    cases:
+      _base:
+        description: Base template that allows private IPs so the mock server is reachable
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml"]
+        tags: [resolver, validation, split-resolver]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+
+      raw-validation-passes:
+        description: Raw resolver validates statusCode == 200 on the unshaped response
+        extends: [_base]
+        args: ["userRaw"]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.userRaw.statusCode == 200
+            message: "Raw resolver should expose the upstream status code"
+
+      downstream-reshape:
+        description: Downstream resolver reshapes the validated body into the final contract
+        extends: [_base]
+        args: ["user"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.user.name == "alice"'
+            message: "Downstream resolver should reshape the raw body into an object"
+          - expression: __output.user.id == 1
+
+      non-200-fails-with-message:
+        description: Raw resolver validation fails on a non-200 upstream response
+        extends: [_base]
+        args: ["userMissingRaw"]
+        tags: [negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Non-200 upstream should fail the raw resolver validation"
+          - expression: __stderr.contains("non-200 status")
+            message: "Failure should surface the custom validation message"

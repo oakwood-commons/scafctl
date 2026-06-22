@@ -2251,6 +2251,58 @@ spec:
 - Avoid using transform for validation (e.g., don't throw errors in CEL expressions)
 - Avoid using validate for data transformation
 
+### Validating a Raw Upstream Response (Split-Resolver Pattern)
+
+The validate phase always runs **after** transform and type coercion, so
+`__self` and the validated value are the resolver's **final output**, never the
+raw provider response. This is intentional: validation rules describe the
+resolver's output contract, and validating a pre-transform value is misleading
+because the rules are written against the expected final shape.
+
+When you need to assert against the **raw upstream response** -- for example,
+checking connectivity or that a remote resource exists before reshaping the
+payload -- do not try to inspect a pre-transform value inside a single resolver.
+Instead, split the work across two resolvers:
+
+1. A **raw resolver** that performs the fetch and carries the connectivity or
+   existence `validate` rules against the unshaped response.
+2. A **transform resolver** that `dependsOn` the raw resolver and reshapes its
+   value into the final contract.
+
+~~~yaml
+spec:
+  resolvers:
+    # 1. Raw fetch + connectivity/existence checks on the unshaped response.
+    userRaw:
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/users/me
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              # Assert on the raw response shape.
+              expression: "__self.statusCode == 200"
+            message: "User endpoint unreachable or returned a non-200 status"
+
+    # 2. Downstream reshape into the final output contract.
+    user:
+      dependsOn: [userRaw]
+      type: object
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: _.userRaw.body
+~~~
+
+This keeps each resolver single-purpose: `userRaw` owns the fetch and its
+liveness checks, while `user` owns the final shape. It avoids introducing
+implicit pre-transform bindings into the validate phase and keeps the
+output-contract semantics of `validate` intact.
+
 ### Conditional Resolvers
 
 **Use `when:` for feature flags and optional configuration:**

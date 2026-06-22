@@ -36,12 +36,6 @@ type ScaffoldInput struct {
 	// discovered through static analysis of provider inputs.
 	// These are automatically populated onto generated test cases.
 	FileDependencies []string
-
-	// SolutionSubdir is the subdirectory path of the solution file relative to
-	// the project root (e.g., "myapp" when the solution is at myapp/solution.yaml).
-	// When set, generated test cases include BaseDir so the test runner nests
-	// solution files under this subdirectory within the sandbox.
-	SolutionSubdir string
 }
 
 // Scaffold generates a skeleton test suite from the provided solution data.
@@ -82,16 +76,6 @@ func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 		for name, tc := range result.Cases {
 			if name != filesBaseTemplateName {
 				tc.Extends = []string{filesBaseTemplateName}
-			}
-		}
-	}
-
-	// When the solution lives in a subdirectory, set BaseDir on all non-template
-	// test cases so the runner nests solution files under this subdirectory within the sandbox.
-	if input.SolutionSubdir != "" {
-		for name, tc := range result.Cases {
-			if !strings.HasPrefix(name, "_") {
-				tc.BaseDir = input.SolutionSubdir
 			}
 		}
 	}

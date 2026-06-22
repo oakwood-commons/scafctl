@@ -1625,6 +1625,44 @@ resolve:
 | `pages` | int | Number of pages fetched (only when paginating) |
 | `totalItems` | int | Total items collected across all pages (only when paginating) |
 
+#### Non-JSON and Empty Response Bodies
+
+`body` is only parsed into a structured value when `autoParseJson` is enabled
+**and** the response `Content-Type` is JSON **and** the body is non-empty.
+Otherwise `body` is the **raw response string**, and an empty response yields an
+empty string (`""`).
+
+Some endpoints return a bare scalar as `text/plain` rather than JSON --- for
+example, a Microsoft Graph `$count` endpoint returns a number like `42`, and may
+return an empty body when there is nothing to count. Coercing such a `body`
+directly to a number fails on the empty string, so guard it in CEL and supply a
+default before converting:
+
+```yaml
+resolvers:
+  user_count_raw:
+    resolve:
+      with:
+        - provider: http
+          inputs:
+            url: https://graph.microsoft.com/v1.0/users/$count
+            headers:
+              ConsistencyLevel: eventual
+
+  user_count:
+    type: int
+    dependsOn: [user_count_raw]
+    resolve:
+      with:
+        - provider: cel
+          inputs:
+            # Treat an empty/whitespace body as 0, then convert to int.
+            expression: int(_.user_count_raw.body.trim() == "" ? "0" : _.user_count_raw.body.trim())
+```
+
+This keeps the generic `http` provider free of endpoint-specific behavior while
+making the numeric coercion explicit and safe at the solution level.
+
 ### Examples
 
 ```yaml
