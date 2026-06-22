@@ -1,0 +1,132 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-http-empty-body
+  version: 1.0.0
+  description: |
+    Functional tests for the HTTP provider's non-JSON and empty response-body
+    behavior documented in the provider reference. When autoParseJson is off (or
+    the Content-Type is not JSON, or the body is empty), `body` is the raw
+    response string and an empty response yields "". A downstream CEL resolver
+    guards the empty case before coercing the bare scalar to an int. Uses a mock
+    HTTP server started via testConfig.services.
+
+spec:
+  resolvers:
+    mockBaseUrl:
+      description: Base URL of the mock server from env
+      resolve:
+        with:
+          - provider: env
+            inputs:
+              operation: get
+              name: MOCK_BASE_URL
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.value"
+
+    userCountRaw:
+      description: GET a text/plain scalar count (raw string body, not parsed)
+      dependsOn: [mockBaseUrl]
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/count'"
+              method: GET
+
+    userCount:
+      description: Coerce the raw count to an int, defaulting an empty body to 0
+      dependsOn: [userCountRaw]
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'int(_.userCountRaw.body.trim() == "" ? "0" : _.userCountRaw.body.trim())'
+
+    emptyCountRaw:
+      description: GET an endpoint that returns an empty body
+      dependsOn: [mockBaseUrl]
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/count-empty'"
+              method: GET
+
+    emptyCount:
+      description: Empty body coerces to 0 via the guard
+      dependsOn: [emptyCountRaw]
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'int(_.emptyCountRaw.body.trim() == "" ? "0" : _.emptyCountRaw.body.trim())'
+
+  testing:
+    config:
+      # resolve-defaults: resolvers depend on MOCK_BASE_URL env var and mock routes
+      # render-defaults: solution has no workflow.actions section
+      skipBuiltins: [resolve-defaults, render-defaults]
+      services:
+        - name: mock-api
+          type: http
+          portEnv: MOCK_HTTP_PORT
+          baseUrlEnv: MOCK_BASE_URL
+          routes:
+            - path: /count
+              method: GET
+              status: 200
+              body: "42"
+              headers:
+                Content-Type: text/plain
+            - path: /count-empty
+              method: GET
+              status: 200
+              body: ""
+              headers:
+                Content-Type: text/plain
+
+    cases:
+      _base:
+        description: Base template that allows private IPs so the mock server is reachable
+        command: [run, resolver]
+        args: ["-o", "json", "--config", "config.yaml"]
+        tags: [provider, http, empty-body]
+        init:
+          - command: "printf 'httpClient:\\n  allowPrivateIPs: true\\n' > config.yaml"
+
+      raw-body-is-string:
+        description: A text/plain response leaves body as the raw string
+        extends: [_base]
+        args: ["userCountRaw"]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.userCountRaw.body == "42"'
+            message: "Non-JSON body should be the raw response string"
+
+      scalar-coerces-to-int:
+        description: The raw scalar body coerces to an int
+        extends: [_base]
+        args: ["userCount"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.userCount == 42
+            message: "Guarded coercion should convert the scalar body to an int"
+
+      empty-body-defaults-to-zero:
+        description: An empty response body is guarded and defaults to 0
+        extends: [_base]
+        args: ["emptyCount"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.emptyCount == 0
+            message: "Empty body should default to 0 instead of failing coercion"

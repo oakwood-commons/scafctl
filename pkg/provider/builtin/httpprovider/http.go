@@ -258,14 +258,14 @@ func NewHTTPProvider() *HTTPProvider {
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					fieldBody:    schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldBody:    schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
 					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					fieldBody:    schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldBody:    schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
 					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
@@ -273,7 +273,7 @@ func NewHTTPProvider() *HTTPProvider {
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":    schemahelper.BoolProp("Whether the HTTP request completed successfully (2xx status)"),
 					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					fieldBody:    schemahelper.AnyProp("Response body as string (default) or parsed JSON object when autoParseJson is true. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldBody:    schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
 					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
 					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
 					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),

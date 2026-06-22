@@ -1,0 +1,54 @@
+# Prerequisites: scafctl auth login entra --scope https://graph.microsoft.com/.default
+#
+# Run: scafctl run resolver -f examples/providers/http-empty-body.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-empty-body-example
+  displayName: HTTP Non-JSON and Empty Body Example
+  category: providers
+  tags:
+    - http
+    - provider-example
+  description: |
+    The HTTP provider only parses `body` into a structured value when
+    autoParseJson is enabled AND the Content-Type is JSON AND the body is
+    non-empty. Otherwise `body` is the raw response string, and an empty
+    response yields an empty string ("").
+
+    Some endpoints return a bare scalar as text/plain rather than JSON --- for
+    example, a Microsoft Graph $count endpoint returns a number like 42 and may
+    return an empty body when there is nothing to count. Coercing such a body
+    directly to a number fails on the empty string, so guard it in CEL and
+    supply a default before converting. This keeps the generic http provider
+    free of endpoint-specific behavior while making the numeric coercion
+    explicit and safe at the solution level.
+
+spec:
+  resolvers:
+    # Raw fetch of a text/plain scalar count. body stays a raw string because
+    # the response is not JSON.
+    user_count_raw:
+      description: Raw $count response (text/plain scalar)
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://graph.microsoft.com/v1.0/users/$count
+              method: GET
+              headers:
+                ConsistencyLevel: eventual
+              authProvider: entra
+              scope: "https://graph.microsoft.com/.default"
+
+    # Guarded coercion: treat an empty/whitespace body as 0, then convert to int.
+    user_count:
+      description: Count coerced to an int, defaulting an empty body to 0
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'int(_.user_count_raw.body.trim() == "" ? "0" : _.user_count_raw.body.trim())'
