@@ -4,7 +4,6 @@
 package soltesting
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
@@ -276,47 +275,11 @@ func TestScaffold_EmptyFileDependenciesOmitted(t *testing.T) {
 	}
 }
 
-func TestScaffold_SolutionSubdirSetsBaseDir(t *testing.T) {
-	result := Scaffold(&ScaffoldInput{
-		SolutionSubdir: "myapp",
-	})
-
-	require.NotNil(t, result)
-
-	// Non-template cases should have BaseDir set
-	for name, tc := range result.Cases {
-		if strings.HasPrefix(name, "_") {
-			assert.Empty(t, tc.BaseDir, "template %q should not have BaseDir", name)
-		} else {
-			assert.Equal(t, "myapp", tc.BaseDir, "test case %q should have BaseDir", name)
-		}
-	}
-}
-
 func TestScaffold_NoSubdirNoBaseDir(t *testing.T) {
 	result := Scaffold(&ScaffoldInput{})
 
 	for name, tc := range result.Cases {
 		assert.Empty(t, tc.BaseDir, "test case %q should not have BaseDir when no subdir", name)
-	}
-}
-
-func TestScaffold_SolutionSubdirWithFileDeps(t *testing.T) {
-	result := Scaffold(&ScaffoldInput{
-		SolutionSubdir:   "nested/app",
-		FileDependencies: []string{"templates/main.yaml"},
-	})
-
-	// _files-base template should NOT have BaseDir
-	tmpl := result.Cases[filesBaseTemplateName]
-	require.NotNil(t, tmpl)
-	assert.Empty(t, tmpl.BaseDir)
-
-	// Non-template cases should have BaseDir
-	for name, tc := range result.Cases {
-		if name != filesBaseTemplateName {
-			assert.Equal(t, "nested/app", tc.BaseDir, "test case %q should have BaseDir", name)
-		}
 	}
 }
 

@@ -111,48 +111,59 @@ The `validation` provider runs checks during the **validate phase** of a resolve
 Validate string values against regex patterns:
 
 ```yaml
-# examples/providers/validation/regex-patterns.yaml
-apiVersion: scafctl.io/v1alpha1
+apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: regex-validation-demo
   version: 1.0.0
 spec:
   resolvers:
-    - name: email
-      value: "user@example.com"
+    email:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "user@example.com"
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               match: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-              message: "Must be a valid email address"
+            message: "Must be a valid email address"
 
-    - name: semver
-      value: "v1.2.3"
+    semver:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "v1.2.3"
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               match: '^v?\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$'
-              message: "Must be a valid semantic version"
+            message: "Must be a valid semantic version"
 
-    - name: k8s_name
-      value: "my-service-01"
+    k8s_name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "my-service-01"
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               match: '^[a-z][a-z0-9-]{0,61}[a-z0-9]$'
               notMatch: '--'
-              message: "Must be a valid Kubernetes resource name"
+            message: "Must be a valid Kubernetes resource name"
 ```
 
 {{% details "▶ Try it" %}}
-Run this example
+Save the snippet above as `regex-patterns.yaml`, then run:
 
 ```bash
-scafctl run solution -f regex-patterns.yaml
+scafctl run resolver -f regex-patterns.yaml
 ```
 {{% /details %}}
 
@@ -161,52 +172,64 @@ scafctl run solution -f regex-patterns.yaml
 Use CEL expressions for complex, type-aware validation:
 
 ```yaml
-# examples/providers/validation/cel-validation.yaml
-apiVersion: scafctl.io/v1alpha1
+apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: cel-validation-demo
   version: 1.0.0
 spec:
   resolvers:
-    - name: port
-      value: 8080
+    port:
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 8080
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               expression: "__self >= 1024 && __self <= 65535"
-              message: "Port must be in the unprivileged range (1024-65535)"
+            message: "Port must be in the unprivileged range (1024-65535)"
 
-    - name: environment
-      value: "staging"
+    environment:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "staging"
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               expression: "__self in ['development', 'staging', 'production']"
-              message: "Environment must be one of: development, staging, production"
+            message: "Environment must be one of: development, staging, production"
 
-    - name: password
-      value: "SecureP@ss1"
+    password:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "SecureP@ss1"
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               match: '.{8,}'
-              message: "Password must be at least 8 characters"
+            message: "Password must be at least 8 characters"
           - provider: validation
-            input:
+            inputs:
               match: '[A-Z]'
-              message: "Password must contain an uppercase letter"
+            message: "Password must contain an uppercase letter"
           - provider: validation
-            input:
+            inputs:
               match: '[0-9]'
-              message: "Password must contain a digit"
+            message: "Password must contain a digit"
           - provider: validation
-            input:
+            inputs:
               match: '[!@#$%^&*]'
-              message: "Password must contain a special character"
+            message: "Password must contain a special character"
 ```
 
 > [!NOTE]
@@ -217,40 +240,110 @@ spec:
 Validate relationships between different resolver values:
 
 ```yaml
-apiVersion: scafctl.io/v1alpha1
+apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: cross-field-validation
   version: 1.0.0
 spec:
   resolvers:
-    - name: min_replicas
-      value: 2
+    min_replicas:
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 2
 
-    - name: max_replicas
-      value: 10
+    max_replicas:
+      type: int
+      dependsOn: [min_replicas]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 10
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               expression: "__self >= _.min_replicas"
-              message: "max_replicas must be >= min_replicas"
+            message: "max_replicas must be >= min_replicas"
 
-    - name: environment
-      value: "production"
+    environment:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "production"
 
-    - name: replicas
-      value: 3
+    replicas:
+      type: int
+      dependsOn: [environment]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 3
       validate:
         with:
           - provider: validation
-            input:
+            inputs:
               expression: |
                 _.environment == 'production'
                   ? __self >= 3
                   : __self >= 1
-              message: "Production requires at least 3 replicas"
+            message: "Production requires at least 3 replicas"
 ```
+
+---
+
+### Pattern: Validating a Raw Upstream Response (Split-Resolver)
+
+The validate phase runs **after** transform and type coercion, so `__self` is
+always the resolver's final output -- never the raw provider response. To assert
+against a raw upstream response (for example, checking connectivity or that a
+remote resource exists before reshaping it), split the work across two
+resolvers: a raw resolver that fetches and carries the connectivity/existence
+checks, and a downstream resolver that depends on it and reshapes the value.
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: split-resolver-validation
+  version: 1.0.0
+spec:
+  resolvers:
+    # 1. Raw fetch + connectivity/existence checks on the unshaped response.
+    user_raw:
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/users/me
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "__self.statusCode == 200"
+            message: "User endpoint unreachable or returned a non-200 status"
+
+    # 2. Downstream reshape into the final output contract.
+    user:
+      dependsOn: [user_raw]
+      type: object
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: _.user_raw.body
+```
+
+This keeps each resolver single-purpose: `user_raw` owns the fetch and its
+liveness checks, while `user` owns the final shape. It avoids inspecting a
+pre-transform value inside a single resolver and preserves the output-contract
+semantics of `validate`.
 
 ---
 
@@ -259,52 +352,52 @@ spec:
 Actions can define a `resultSchema` to validate their output structure using JSON Schema:
 
 ```yaml
-apiVersion: scafctl.io/v1alpha1
+apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: result-schema-demo
   version: 1.0.0
 spec:
   resolvers:
-    - name: config
+    config:
       resolve:
         with:
           - provider: http
-            input:
+            inputs:
               method: GET
               url: https://api.example.com/config
 
-  actions:
-    - name: deploy
-      resultSchema:
-        type: object
-        required:
-          - status
-          - deploymentId
-        properties:
-          status:
-            type: string
-            enum: [success, pending, failed]
-          deploymentId:
-            type: string
-            pattern: "^deploy-[a-f0-9]{8}$"
-          instances:
-            type: array
-            minItems: 1
-            items:
-              type: object
-              required: [id, region]
-              properties:
-                id:
-                  type: string
-                region:
-                  type: string
-                  enum: [us-east-1, us-west-2, eu-west-1]
-        additionalProperties: false
-      steps:
-        - provider: exec
-          input:
-            command: "echo '{\"status\":\"success\",\"deploymentId\":\"deploy-a1b2c3d4\",\"instances\":[{\"id\":\"i-1\",\"region\":\"us-east-1\"}]}'"
+  workflow:
+    actions:
+      deploy:
+        resultSchema:
+          type: object
+          required:
+            - status
+            - deploymentId
+          properties:
+            status:
+              type: string
+              enum: [success, pending, failed]
+            deploymentId:
+              type: string
+              pattern: "^deploy-[a-f0-9]{8}$"
+            instances:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                required: [id, region]
+                properties:
+                  id:
+                    type: string
+                  region:
+                    type: string
+                    enum: [us-east-1, us-west-2, eu-west-1]
+          additionalProperties: false
+        provider: exec
+        inputs:
+          command: "echo '{\"status\":\"success\",\"deploymentId\":\"deploy-a1b2c3d4\",\"instances\":[{\"id\":\"i-1\",\"region\":\"us-east-1\"}]}'"
 ```
 
 If the action output doesn't match the schema, execution fails with a clear error:
@@ -448,21 +541,21 @@ Apply multiple validation rules by chaining `validation` provider entries:
 validate:
   with:
     - provider: validation
-      input:
+      inputs:
         match: '.{8,}'
-        message: "Must be at least 8 characters"
+      message: "Must be at least 8 characters"
     - provider: validation
-      input:
+      inputs:
         match: '[A-Z]'
-        message: "Must contain an uppercase letter"
+      message: "Must contain an uppercase letter"
     - provider: validation
-      input:
+      inputs:
         notMatch: '\s'
-        message: "Must not contain whitespace"
+      message: "Must not contain whitespace"
     - provider: validation
-      input:
+      inputs:
         expression: "__self != _.username"
-        message: "Must not match the username"
+      message: "Must not match the username"
 ```
 
 ---
@@ -481,11 +574,11 @@ validate:
     - provider: validation
       inputs:
         match: "^[a-z][a-z0-9-]*$"
-        message: "expr: 'Invalid name \"' + string(__self) + '\": must start with a lowercase letter and contain only [a-z0-9-]'"
+      message: "expr: 'Invalid name \"' + string(__self) + '\": must start with a lowercase letter and contain only [a-z0-9-]'"
     - provider: validation
       inputs:
         expression: "size(__self) <= 63"
-        message: "expr: 'Name \"' + string(__self) + '\" is ' + string(size(__self)) + ' chars (max 63)'"
+      message: "expr: 'Name \"' + string(__self) + '\" is ' + string(size(__self)) + ' chars (max 63)'"
 ```
 
 ### Go Template Messages
@@ -498,11 +591,11 @@ validate:
     - provider: validation
       inputs:
         expression: "__self != _.environment"
-        message: "tmpl: Name '{{.__self}}' must not match the environment name '{{.environment}}'"
+      message: "tmpl: Name '{{.__self}}' must not match the environment name '{{.environment}}'"
     - provider: validation
       inputs:
         match: "^[a-z]"
-        message: "tmpl: Value '{{.__self}}' must start with a lowercase letter"
+      message: "tmpl: Value '{{.__self}}' must start with a lowercase letter"
 ```
 
 ### Fallback Behavior
@@ -519,7 +612,7 @@ validate:
     - provider: validation
       inputs:
         match: "^[a-z]"
-        message: "Must start with a lowercase letter"
+      message: "Must start with a lowercase letter"
 ```
 
 ---

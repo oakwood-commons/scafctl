@@ -28,6 +28,7 @@ This directory contains practical examples demonstrating various resolver patter
 | [transform-pipeline.yaml](transform-pipeline.yaml) | Multi-step data transformation |
 | [foreach-filter.yaml](foreach-filter.yaml) | ForEach in resolve phase with filter to strip nil results |
 | [validation.yaml](validation.yaml) | Input validation patterns |
+| [split-resolver-validation.yaml](split-resolver-validation.yaml) | Validate a raw upstream response, then reshape downstream |
 
 ### CEL Expressions
 

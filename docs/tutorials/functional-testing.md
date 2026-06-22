@@ -506,6 +506,45 @@ files produce a test `error`** to catch typos early.
 
 ---
 
+## Repo-Root-Relative Paths (`baseDir`)
+
+By default scafctl resolves resolver file paths relative to the **solution
+file's own directory**. A solution that references `./output/data.json` finds
+its files no matter which directory it lives in or where you run the command
+from, so most tests need no special handling.
+
+`baseDir` exists for the case where a solution lives in a subdirectory of a
+repository and its resolvers reference paths relative to the **repository root**
+instead (for example `./config/output/data.json`, including the subdirectory
+prefix). Setting `baseDir` on the test case nests the solution and its files
+under that subdirectory inside the sandbox and runs the command from the sandbox
+root, so those repo-root-relative paths resolve correctly.
+
+```yaml
+cases:
+  read-repo-relative-config:
+    description: Solution under ./config uses repo-root-relative paths
+    baseDir: config
+    command: [run, resolver]
+    args: ["-o", "json"]
+    assertions:
+      - expression: __exitCode == 0
+```
+
+With `baseDir: config`, a solution that references `./config/output/data.json`
+is placed at `<sandbox>/config/solution.yaml` and reads/writes
+`<sandbox>/config/output/data.json`, matching the real repository layout.
+
+`baseDir` must be a relative path and may not traverse above the sandbox root
+(`..`). While the `run resolver` command accepts a `--base-dir` flag, prefer
+setting `baseDir` on the test case rather than passing `--base-dir` through
+`args`: the per-test setting nests the solution in the sandbox correctly and
+keeps each test self-contained and reproducible in CI. When a base template sets
+`baseDir`, cases that `extends` it inherit the value, so you can set it once on a
+shared base case.
+
+---
+
 ## Expected Failures
 
 Test that a command fails as expected:
