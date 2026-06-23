@@ -469,6 +469,27 @@ func TestGoTemplateProvider_Descriptor_Schema(t *testing.T) {
 	assert.NotContains(t, desc.Schema.Required, "ignoredBlocks")
 }
 
+// TestGoTemplateProvider_OutputSchema_NoEntriesWrapper guards against the
+// render-tree schema-vs-runtime mismatch: the runtime resolver value for
+// render-tree auto-unwraps to a bare []{path, content} list, so the output
+// schema must NOT advertise a top-level "entries" property (which would lead
+// authors to write _.<resolver>.entries and hit a runtime indexing error).
+func TestGoTemplateProvider_OutputSchema_NoEntriesWrapper(t *testing.T) {
+	p := NewGoTemplateProvider()
+	desc := p.Descriptor()
+
+	for _, capability := range []provider.Capability{provider.CapabilityTransform, provider.CapabilityAction} {
+		schema, ok := desc.OutputSchemas[capability]
+		require.True(t, ok, "output schema should exist for capability %q", capability)
+		require.NotNil(t, schema)
+
+		assert.NotContains(t, schema.Properties, "entries",
+			"capability %q output schema must not advertise an 'entries' wrapper (render-tree value is a bare list)", capability)
+		assert.Contains(t, schema.Properties, "result",
+			"capability %q output schema should document the unwrapped value under 'result'", capability)
+	}
+}
+
 func TestGoTemplateProvider_Execute_IgnoredBlocks(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()

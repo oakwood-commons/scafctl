@@ -97,7 +97,18 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 
 	referencedResolvers := collectReferencedResolvers(sol)
 
+	// Scan external template files on disk for resolver references.
+	// This prevents false-positive unused-resolver warnings for resolvers
+	// consumed only in .tpl files (not referenced in the solution YAML).
+	solutionDir := filepath.Dir(filePath)
+	templateFileRefs := collectTemplateFileResolverRefs(sol, solutionDir)
+	for ref := range templateFileRefs {
+		referencedResolvers[ref] = true
+	}
+
 	lintResolvers(sol, result, registry, referencedResolvers)
+	lintTemplateFileDependencies(sol, solutionDir, result, registry)
+	lintResolverCycles(sol, result, registry)
 	lintWorkflow(sol, result, registry)
 	lintState(sol, result, registry)
 	lintImmutableResolvers(sol, result)
@@ -105,7 +116,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintProviderInputs(sol, result, registry)
 
 	// Apply suppression directives parsed from inline YAML comments.
-	suppressions := ParseDirectives(sol.RawContent(), filePath)
+	suppressions := ParseDirectives(sol.RawContent(), filePath).WithSourceMap(result.sourceMap)
 	result.Findings = suppressions.Filter(result.Findings)
 	result.Findings = append(result.Findings, suppressions.UnusedFindings()...)
 
@@ -184,10 +195,10 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 		}
 
 		if strings.Contains(name, "-") {
-			result.addFinding(SeverityInfo, "naming", location,
-				fmt.Sprintf("resolver name '%s' contains hyphens — use underscores for CEL compatibility (e.g., '%s')",
-					name, strings.ReplaceAll(name, "-", "_")),
-				"Hyphens in resolver names require quoting in CEL expressions. Use underscores for direct access: _.my_resolver",
+			result.addFinding(SeverityWarning, "naming", location,
+				fmt.Sprintf("resolver name '%s' contains hyphens — use camelCase for CEL compatibility (e.g., '%s')",
+					name, hyphensToCamelCase(name)),
+				"Hyphens in resolver names require quoting in CEL expressions: _[\"my-resolver\"] instead of _.myResolver",
 				"hyphenated-name")
 		}
 
@@ -421,6 +432,11 @@ func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location strin
 	if res.Resolve == nil || res.Transform == nil {
 		return
 	}
+	// A non-trivial phase-level when guard already protects every transform step,
+	// so the shape access is safe — don't flag.
+	if isNonTrivialGuard(res.Transform.When) {
+		return
+	}
 	if len(res.Resolve.With) < 2 || len(res.Transform.With) == 0 {
 		return
 	}
@@ -506,7 +522,7 @@ func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location strin
 		stepLocation := fmt.Sprintf("%s.transform.with[%d]", location, i)
 
 		// Skip if the transform step has a when guard.
-		if step.When != nil && step.When.Expr != nil && strings.TrimSpace(string(*step.When.Expr)) != "" && strings.TrimSpace(string(*step.When.Expr)) != "true" {
+		if isNonTrivialGuard(step.When) {
 			continue
 		}
 
@@ -540,6 +556,158 @@ func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location strin
 			}
 		}
 	}
+}
+
+// isNonTrivialGuard reports whether a when condition is a meaningful guard, i.e.
+// it has a non-empty CEL expression that is not the literal "true". Such a guard
+// is assumed to protect downstream shape-specific access.
+func isNonTrivialGuard(c *resolver.Condition) bool {
+	if c == nil || c.Expr == nil {
+		return false
+	}
+	expr := strings.TrimSpace(string(*c.Expr))
+	return expr != "" && expr != "true"
+}
+
+// lintResolverCycles checks for circular dependencies in the resolver dependency graph.
+// When a cycle involves a resolver with a validate block, the suggestion specifically
+// recommends extracting the validation into a separate resolver.
+func lintResolverCycles(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
+	}
+
+	// Build the dependency map for all resolvers.
+	deps := make(map[string][]string, len(sol.Spec.Resolvers))
+	for name, res := range sol.Spec.Resolvers {
+		if res == nil {
+			continue
+		}
+		deps[name] = resolver.ExtractDependencies(res, lookup)
+	}
+
+	// Detect cycles using DFS-based cycle detection.
+	cycles := findResolverCycles(deps)
+	for _, cycle := range cycles {
+		// Check if any resolver in the cycle has a validate block.
+		hasValidate := false
+		for _, name := range cycle {
+			if res, ok := sol.Spec.Resolvers[name]; ok && res != nil && res.Validate != nil && len(res.Validate.With) > 0 {
+				hasValidate = true
+				break
+			}
+		}
+
+		location := fmt.Sprintf("resolvers.%s", cycle[0])
+		cycleStr := strings.Join(cycle, " → ")
+
+		suggestion := "Break the cycle by reordering dependencies or removing unnecessary references"
+		if hasValidate {
+			suggestion = "A validate block is part of this cycle. Extract the validation into a separate resolver that depends on all required values, breaking the cycle"
+		}
+
+		result.addFinding(SeverityError, "dependency", location,
+			fmt.Sprintf("circular dependency detected: %s", cycleStr),
+			suggestion,
+			"resolver-cycle")
+	}
+}
+
+// findResolverCycles detects all unique cycles in a dependency graph using DFS.
+// Returns a list of cycles, where each cycle is a list of resolver names
+// ending with the name that closes the cycle.
+func findResolverCycles(deps map[string][]string) [][]string {
+	const (
+		white = 0 // not visited
+		gray  = 1 // in current path
+		black = 2 // fully processed
+	)
+
+	color := make(map[string]int, len(deps))
+	path := make([]string, 0)
+	var cycles [][]string
+	reported := make(map[string]bool) // deduplicate cycles by canonical signature
+
+	var dfs func(node string)
+	dfs = func(node string) {
+		color[node] = gray
+		path = append(path, node)
+
+		for _, dep := range deps[node] {
+			if color[dep] == gray {
+				// Found a cycle: extract it from the path.
+				cycleStart := -1
+				for i, n := range path {
+					if n == dep {
+						cycleStart = i
+						break
+					}
+				}
+				if cycleStart >= 0 {
+					cycle := make([]string, len(path)-cycleStart+1)
+					copy(cycle, path[cycleStart:])
+					cycle[len(cycle)-1] = dep // close the cycle
+
+					// Deduplicate using a canonical signature derived from the
+					// whole cycle path so distinct cycles that share the same
+					// smallest node (e.g. a->b->a and a->c->a) are both reported.
+					key := canonicalCycleKey(cycle)
+					if !reported[key] {
+						reported[key] = true
+						cycles = append(cycles, cycle)
+					}
+				}
+			} else if color[dep] == white {
+				dfs(dep)
+			}
+		}
+
+		path = path[:len(path)-1]
+		color[node] = black
+	}
+
+	for node := range deps {
+		if color[node] == white {
+			dfs(node)
+		}
+	}
+
+	return cycles
+}
+
+// canonicalCycleKey builds a rotation-invariant signature for a cycle so that
+// the same directed cycle discovered from different start nodes deduplicates,
+// while genuinely distinct cycles (even those sharing their smallest node)
+// produce different keys. The input cycle is expected to end with the node that
+// closes it (i.e. cycle[len-1] == cycle[0]); that closing duplicate is dropped
+// before rotating the remaining nodes to start at the lexicographically
+// smallest member.
+func canonicalCycleKey(cycle []string) string {
+	nodes := cycle
+	if len(nodes) > 1 && nodes[0] == nodes[len(nodes)-1] {
+		nodes = nodes[:len(nodes)-1]
+	}
+	if len(nodes) == 0 {
+		return ""
+	}
+
+	start := 0
+	for i := 1; i < len(nodes); i++ {
+		if nodes[i] < nodes[start] {
+			start = i
+		}
+	}
+
+	rotated := make([]string, 0, len(nodes))
+	for i := 0; i < len(nodes); i++ {
+		rotated = append(rotated, nodes[(start+i)%len(nodes)])
+	}
+	return strings.Join(rotated, "\x00")
 }
 
 func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Registry) {
@@ -855,6 +1023,18 @@ func validateCELSyntax(expr string) error {
 	return nil
 }
 
+// hyphensToCamelCase converts a hyphenated name to camelCase.
+// e.g., "my-resolver-name" -> "myResolverName"
+func hyphensToCamelCase(name string) string {
+	parts := strings.Split(name, "-")
+	for i := 1; i < len(parts); i++ {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
+
 // validateTemplateSyntax checks if a Go template is syntactically valid.
 // Delegates to gotmpl.ValidateSyntax so that sprig and custom extension
 // functions are registered during parsing, matching runtime behavior.
@@ -956,6 +1136,406 @@ func scanExpressionForResolverRefs(expr string, pattern *regexp.Regexp, refs map
 			}
 		}
 	}
+}
+
+// collectTemplateFileResolverRefs scans external template files on disk
+// for resolver references. It discovers template files via:
+//  1. bundle.include glob patterns (matching *.tpl, *.tmpl, *.gotmpl files)
+//  2. directory provider 'path' inputs from resolvers
+//
+// Returns a set of resolver names referenced in external template files.
+func collectTemplateFileResolverRefs(sol *solution.Solution, solutionDir string) map[string]bool {
+	refs := make(map[string]bool)
+	if solutionDir == "" {
+		return refs
+	}
+
+	// Collect template file paths from bundle.include globs and directory provider inputs.
+	templateFiles := discoverTemplateFiles(sol, solutionDir)
+
+	for _, absPath := range templateFiles {
+		fileRefs, err := resolverRefs.ExtractFromTemplateFile(absPath, "", "")
+		if err != nil {
+			continue // Skip files that can't be parsed (non-template files, syntax errors)
+		}
+		for _, ref := range fileRefs {
+			refs[ref] = true
+		}
+	}
+
+	return refs
+}
+
+// discoverTemplateFiles finds template files on disk from bundle.include patterns
+// and directory provider path inputs. Returns absolute paths.
+func discoverTemplateFiles(sol *solution.Solution, solutionDir string) []string {
+	seen := make(map[string]bool)
+	var files []string
+
+	addFile := func(absPath string) {
+		if seen[absPath] {
+			return
+		}
+		seen[absPath] = true
+		files = append(files, absPath)
+	}
+
+	templateExtensions := map[string]bool{
+		".tpl":    true,
+		".tmpl":   true,
+		".gotmpl": true,
+	}
+
+	isTemplateFile := func(path string) bool {
+		ext := filepath.Ext(path)
+		return templateExtensions[ext]
+	}
+
+	// 1. Scan bundle.include patterns for template files.
+	for _, pattern := range sol.Bundle.Include {
+		absPattern := filepath.Join(solutionDir, pattern)
+		matches, err := doublestar.FilepathGlob(absPattern)
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			if isTemplateFile(match) {
+				addFile(match)
+			}
+		}
+	}
+
+	// 2. Scan directory provider path inputs for template directories.
+	if sol.Spec.Resolvers != nil {
+		for _, res := range sol.Spec.Resolvers {
+			if res == nil || res.Resolve == nil {
+				continue
+			}
+			for _, step := range res.Resolve.With {
+				if step.Provider != "directory" {
+					continue
+				}
+				pathVal, ok := step.Inputs["path"]
+				if !ok || pathVal == nil {
+					continue
+				}
+				// Only handle literal string paths (not expressions/templates).
+				pathStr, ok := pathVal.Literal.(string)
+				if !ok || pathStr == "" {
+					continue
+				}
+
+				absPath := pathStr
+				if !filepath.IsAbs(absPath) {
+					absPath = filepath.Join(solutionDir, absPath)
+				}
+
+				// Walk the directory for template files, honoring the directory
+				// provider's literal recursive/filterGlob inputs.
+				walkDirectoryProviderTemplates(step, absPath, isTemplateFile, addFile)
+			}
+		}
+	}
+
+	return files
+}
+
+// directoryWalkOptions holds the subset of directory-provider inputs that the
+// lint heuristics can honor statically so discovery better matches the files
+// the provider would actually return at runtime. Non-literal (expr/tmpl) inputs
+// cannot be evaluated statically and fall back to permissive defaults.
+type directoryWalkOptions struct {
+	recursive  bool
+	filterGlob string
+}
+
+// readDirectoryWalkOptions extracts literal recursive and filterGlob inputs from
+// a directory-provider step. recursive defaults to false to match the directory
+// provider's runtime default (it does not descend into subdirectories unless
+// recursive: true is set); filterGlob defaults to empty (no additional
+// filtering).
+func readDirectoryWalkOptions(step resolver.ProviderSource) directoryWalkOptions {
+	opts := directoryWalkOptions{recursive: false}
+	if v, ok := step.Inputs["recursive"]; ok && v != nil {
+		if b, ok := v.Literal.(bool); ok {
+			opts.recursive = b
+		}
+	}
+	if v, ok := step.Inputs["filterGlob"]; ok && v != nil {
+		if s, ok := v.Literal.(string); ok && s != "" {
+			opts.filterGlob = s
+		}
+	}
+	return opts
+}
+
+// walkDirectoryProviderTemplates walks absPath collecting template files,
+// honoring the directory provider's literal recursive and filterGlob inputs.
+// When recursive is false, nested directories are skipped. When filterGlob is
+// set, files whose entry name (basename) does not match the glob are skipped --
+// matching the directory provider, which filters on entry names rather than the
+// full relative path; an invalid glob is ignored so discovery stays best-effort.
+func walkDirectoryProviderTemplates(step resolver.ProviderSource, absPath string, isTemplateFile func(string) bool, addFile func(string)) {
+	opts := readDirectoryWalkOptions(step)
+	_ = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error { //nolint:errcheck // best-effort scan
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			// When not recursive, process the root directory but do not descend.
+			if !opts.recursive && path != absPath {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if opts.filterGlob != "" {
+			if matched, matchErr := doublestar.Match(opts.filterGlob, info.Name()); matchErr == nil && !matched {
+				return nil
+			}
+		}
+		if isTemplateFile(path) {
+			addFile(path)
+		}
+		return nil
+	})
+}
+
+// lintTemplateFileDependencies checks that resolvers using the go-template
+// provider with render-tree operation have all resolver names referenced in
+// their source template files listed in dependsOn (or reachable via the DAG).
+func lintTemplateFileDependencies(sol *solution.Solution, solutionDir string, result *Result, registry *provider.Registry) {
+	if sol.Spec.Resolvers == nil || solutionDir == "" {
+		return
+	}
+
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
+	}
+
+	for name, res := range sol.Spec.Resolvers {
+		if res == nil || res.Resolve == nil {
+			continue
+		}
+
+		for _, step := range res.Resolve.With {
+			if step.Provider != "go-template" {
+				continue
+			}
+
+			// Check if this is a render-tree operation.
+			opVal, ok := step.Inputs["operation"]
+			if !ok || opVal == nil {
+				continue
+			}
+			opStr, ok := opVal.Literal.(string)
+			if !ok || opStr != "render-tree" {
+				continue
+			}
+
+			// Find the source resolver for entries (usually a directory provider).
+			sourceResolverName := findEntriesSourceResolver(step, sol)
+			if sourceResolverName == "" {
+				continue
+			}
+
+			// Discover template files from the source resolver's directory provider.
+			templateFiles := discoverTemplateFilesFromResolver(sol, sourceResolverName, solutionDir)
+			if len(templateFiles) == 0 {
+				continue
+			}
+
+			// Honor any custom delimiters configured on the render-tree step so
+			// template parsing matches go-template runtime behavior.
+			leftDelim := stringInput(step, "leftDelim")
+			rightDelim := stringInput(step, "rightDelim")
+
+			// Top-level keys provided by a literal "data" map are local template
+			// context, not resolver references, and must not require dependsOn.
+			dataKeys := literalDataKeys(step)
+
+			// Collect all resolver names referenced in template files.
+			templateRefs := make(map[string]bool)
+			for _, f := range templateFiles {
+				fileRefs, err := resolverRefs.ExtractFromTemplateFile(f, leftDelim, rightDelim)
+				if err != nil {
+					continue
+				}
+				for _, ref := range fileRefs {
+					templateRefs[ref] = true
+				}
+			}
+
+			// Build the set of resolvers reachable from this resolver's dependency graph.
+			reachable := collectReachableDependencies(name, sol, lookup)
+
+			// Check for references not covered by dependsOn or inferred deps.
+			location := fmt.Sprintf("resolvers.%s", name)
+			for ref := range templateRefs {
+				// Skip self-reference and reserved names.
+				if ref == name || ref == "_" || strings.HasPrefix(ref, "__") {
+					continue
+				}
+				// Skip refs satisfied by a literal data map key, not a resolver.
+				if dataKeys[ref] {
+					continue
+				}
+				// Skip if the referenced resolver doesn't exist (could be a template variable).
+				if _, exists := sol.Spec.Resolvers[ref]; !exists {
+					continue
+				}
+				if !reachable[ref] {
+					result.addFinding(SeverityWarning, "dependency", location,
+						fmt.Sprintf("render-tree resolver '%s' uses template files that reference resolver '%s', but '%s' is not in its dependency graph",
+							name, ref, ref),
+						fmt.Sprintf("Add '%s' to the dependsOn list of resolver '%s'", ref, name),
+						"missing-template-dependency")
+				}
+			}
+		}
+	}
+}
+
+// stringInput returns the literal string value of the named step input, or an
+// empty string if the input is absent or not a string literal.
+func stringInput(step resolver.ProviderSource, key string) string {
+	val, ok := step.Inputs[key]
+	if !ok || val == nil {
+		return ""
+	}
+	s, ok := val.Literal.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
+// literalDataKeys returns the set of top-level keys from a render-tree step's
+// literal "data" map. These keys are local template context and must not be
+// treated as resolver references when checking template dependencies.
+func literalDataKeys(step resolver.ProviderSource) map[string]bool {
+	val, ok := step.Inputs["data"]
+	if !ok || val == nil || val.Literal == nil {
+		return nil
+	}
+	dataMap, ok := val.Literal.(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make(map[string]bool, len(dataMap))
+	for k := range dataMap {
+		keys[k] = true
+	}
+	return keys
+}
+
+// findEntriesSourceResolver extracts the resolver name from a render-tree step's
+// entries input. Returns the resolver name if it's a direct rslvr: reference,
+// or tries to extract it from an expr: reference.
+func findEntriesSourceResolver(step resolver.ProviderSource, _ *solution.Solution) string {
+	entriesVal, ok := step.Inputs["entries"]
+	if !ok || entriesVal == nil {
+		return ""
+	}
+	if entriesVal.Resolver != nil {
+		return *entriesVal.Resolver
+	}
+	// Check expr for _.resolverName.entries or _["resolver-name"].entries pattern.
+	if entriesVal.Expr != nil {
+		expr := strings.TrimSpace(string(*entriesVal.Expr))
+		// Bracket notation: _["resolver-name"].entries or _['resolver-name'].entries
+		if strings.HasPrefix(expr, "_[") {
+			rest := strings.TrimPrefix(expr, "_[")
+			if len(rest) > 0 && (rest[0] == '"' || rest[0] == '\'') {
+				quote := rest[0]
+				rest = rest[1:]
+				if idx := strings.IndexByte(rest, quote); idx > 0 {
+					return rest[:idx]
+				}
+			}
+			return ""
+		}
+		// Dot notation: _.resolverName.entries
+		if strings.HasPrefix(expr, "_.") {
+			parts := strings.SplitN(strings.TrimPrefix(expr, "_."), ".", 2)
+			if len(parts) > 0 && parts[0] != "" {
+				return parts[0]
+			}
+		}
+	}
+	return ""
+}
+
+// discoverTemplateFilesFromResolver finds template files by looking at the
+// directory provider configuration of the given source resolver.
+func discoverTemplateFilesFromResolver(sol *solution.Solution, resolverName, solutionDir string) []string {
+	res, ok := sol.Spec.Resolvers[resolverName]
+	if !ok || res == nil || res.Resolve == nil {
+		return nil
+	}
+
+	for _, step := range res.Resolve.With {
+		if step.Provider != "directory" {
+			continue
+		}
+		pathVal, ok := step.Inputs["path"]
+		if !ok || pathVal == nil {
+			continue
+		}
+		pathStr, ok := pathVal.Literal.(string)
+		if !ok || pathStr == "" {
+			continue
+		}
+
+		absPath := pathStr
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(solutionDir, absPath)
+		}
+
+		templateExtensions := map[string]bool{
+			".tpl":    true,
+			".tmpl":   true,
+			".gotmpl": true,
+		}
+		isTemplateFile := func(path string) bool {
+			return templateExtensions[filepath.Ext(path)]
+		}
+
+		var files []string
+		walkDirectoryProviderTemplates(step, absPath, isTemplateFile, func(path string) {
+			files = append(files, path)
+		})
+		return files
+	}
+
+	return nil
+}
+
+// collectReachableDependencies returns all resolver names reachable from the
+// given resolver's dependency graph (direct + transitive). It uses
+// resolver.ExtractDependencies so that explicit dependsOn entries and
+// dependencies inferred from expr:, rslvr:, and tmpl: references are all
+// considered, avoiding false-positive missing-template-dependency warnings.
+func collectReachableDependencies(name string, sol *solution.Solution, lookup resolver.DescriptorLookup) map[string]bool {
+	reachable := make(map[string]bool)
+	var visit func(string)
+	visit = func(n string) {
+		res, ok := sol.Spec.Resolvers[n]
+		if !ok || res == nil {
+			return
+		}
+		for _, dep := range resolver.ExtractDependencies(res, lookup) {
+			if dep == "" || dep == n {
+				continue
+			}
+			if !reachable[dep] {
+				reachable[dep] = true
+				visit(dep)
+			}
+		}
+	}
+	visit(name)
+	return reachable
 }
 
 func lintTests(sol *solution.Solution, solutionPath string, result *Result) {
@@ -1286,10 +1866,15 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry *provider
 
 	prov, found := registry.Get(backendName)
 	if !found {
-		result.addFinding(SeverityError, "state", location+".backend.provider",
-			fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
-			"Use a registered provider with CapabilityState such as 'file' or 'http'. External providers like 'github' require an installed plugin",
-			"invalid-state-backend")
+		// If the provider is declared in bundle.plugins (or is an official
+		// provider), it will be resolved at runtime. We cannot verify
+		// capabilities at lint time, so skip the finding.
+		if !registry.Has(backendName) {
+			result.addFinding(SeverityError, "state", location+".backend.provider",
+				fmt.Sprintf("state backend provider '%s' not found in registry", backendName),
+				"Use a registered provider with CapabilityState such as 'file' or 'http'. External providers like 'github' require an installed plugin",
+				"invalid-state-backend")
+		}
 	} else {
 		desc := prov.Descriptor()
 		hasState := false

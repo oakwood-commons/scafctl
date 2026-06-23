@@ -45,8 +45,6 @@ spec:
 
   testing:
     config:
-      env:
-        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       # render-defaults: solution has no workflow.actions section
       # resolve-defaults: dynamic state path requires __params.project
       skipBuiltins: [render-defaults, resolve-defaults]
@@ -74,10 +72,10 @@ spec:
         args: ["-o", "json", "-r", "project=beta"]
         tags: [state, dynamic-path]
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl/dynamic"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/dynamic"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-config"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/scafctl/dynamic/beta.json
+              > $SCAFCTL_SANDBOX_DIR/dynamic/beta.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.config_value == "beta-config"
@@ -92,11 +90,11 @@ spec:
         args: ["-o", "json", "-r", "project=gamma"]
         tags: [state, dynamic-path]
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl/dynamic"
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/dynamic"
           # Pre-seed for project "beta" only
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-only"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/scafctl/dynamic/beta.json
+              > $SCAFCTL_SANDBOX_DIR/dynamic/beta.json
         assertions:
           - expression: __exitCode == 0
           - expression: __output.config_value == "default-config"

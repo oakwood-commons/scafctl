@@ -45,8 +45,6 @@ spec:
 
   testing:
     config:
-      env:
-        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       # render-defaults: solution has no workflow.actions section
       skipBuiltins: [render-defaults]
 
@@ -73,10 +71,9 @@ spec:
         description: Verify parameter provider reads from pre-seeded state parameters
         extends: [_base]
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-persistence","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"hello-from-state","counter":"99"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/scafctl/state.json
+              > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.greeting == "hello-from-state"
             message: "Parameter provider should read pre-seeded value from state"

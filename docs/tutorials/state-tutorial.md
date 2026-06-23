@@ -124,13 +124,13 @@ team: default
 username: alice
 ```
 
-The parameters `username=alice` and `region=eu-west-1` are now saved to `state-demo.json` in the XDG state directory (`~/.local/state/scafctl/`).
+The parameters `username=alice` and `region=eu-west-1` are now saved to `state-demo.json` in the solution file's parent directory.
 
 ### Understanding the Structure
 
 - **state.enabled** -- Activates state persistence. Can be a literal `true`, a CEL expression, or template. Because state is loaded before resolvers run, resolver references (`rslvr:...`) are not supported here.
 - **state.backend.provider** -- The provider that handles persistence. Use `file` for local files.
-- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the XDG state directory (`~/.local/state/scafctl/`). Absolute paths are used as-is. Use `__solution_dir` in CEL expressions or Go templates to build solution-relative paths if needed (e.g., `expr: '__solution_dir + "/state.json"'`).
+- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the solution file's parent directory. Absolute paths are used as-is. CLI state commands (`scafctl state list`, etc.) resolve relative paths against the XDG state directory (`~/.local/state/scafctl/`).
 
 No per-resolver configuration is needed. All CLI parameters are persisted automatically when state is enabled.
 
@@ -463,11 +463,11 @@ scafctl run resolver -f state-dynamic.yaml -r project=backend -r region=eu-west-
 {{% /tab %}}
 {{< /tabs >}}
 
-Each project gets its own state file with its own parameter history (in the XDG state directory `~/.local/state/scafctl/`):
+Each project gets its own state file with its own parameter history:
 
 ```
-~/.local/state/scafctl/deploy/frontend.json
-~/.local/state/scafctl/deploy/backend.json
+<solution-dir>/deploy/frontend.json
+<solution-dir>/deploy/backend.json
 ```
 
 ---
@@ -734,24 +734,14 @@ State is only active when the `enable_state` CLI parameter is set to `true` (e.g
 
 ### Replay in CI validation
 
-A CI validator can replay a solution using the state file configured in the solution YAML. For CI environments, use `__solution_dir` to store state alongside the solution (committed to version control), or set `XDG_STATE_HOME` to a workspace-relative directory:
-
-```yaml
-state:
-  enabled: true
-  backend:
-    provider: file
-    inputs:
-      path:
-        expr: '__solution_dir + "/my-app-state.json"'
-```
+A CI validator can replay a solution using the state file committed alongside generated code:
 
 ```bash
-# Replay -- saved parameters are loaded automatically from the configured state path
-scafctl run solution -f app-registration.yaml
+# Replay using the state file from the PR (parameters are loaded automatically)
+scafctl run solution -f app-registration.yaml --state-file ./apps/my-app/state.json
 ```
 
-No `-r` flags are needed. The validator can then diff the output against the PR contents.
+Because all CLI parameters are persisted in state, the solution replays deterministically without any `-r` flags. The validator can then diff the output against the PR contents.
 
 ### Immutable infrastructure identifiers
 

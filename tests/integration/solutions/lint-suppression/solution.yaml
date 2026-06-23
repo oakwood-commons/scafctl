@@ -1,0 +1,95 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-suppression
+  version: 1.0.0
+  description: |
+    Tests inline lint suppression directives, including block-scoped
+    suppression. Two resolvers trigger the transform-shape-mismatch rule;
+    one is suppressed with a `# scafctl-lint-ignore` directive placed on its
+    `transform:` block key, the other is left flagged.
+
+spec:
+  resolvers:
+    # Triggers transform-shape-mismatch: the resolve chain mixes a structured
+    # http source with a non-structured static fallback ([]), and the transform
+    # accesses __self.body. No directive — the finding is reported.
+    shapeMismatchFlagged:
+      description: Resolver with an unguarded shape-mismatched transform
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/data
+          - provider: static
+            inputs:
+              value: []
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.body.items'
+
+    # Same shape mismatch, but a block-scoped ignore directive on the
+    # `transform:` key suppresses the finding for the whole transform block.
+    shapeMismatchSuppressed:
+      description: Resolver whose shape-mismatch finding is suppressed
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/data
+          - provider: static
+            inputs:
+              value: []
+      # scafctl-lint-ignore: transform-shape-mismatch
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '__self.body.items'
+
+    # Root resolver so the two above are not reported as unused.
+    main:
+      description: Aggregates the two resolvers
+      type: string
+      dependsOn: [shapeMismatchFlagged, shapeMismatchSuppressed]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: done
+
+  testing:
+    config:
+      # lint: solution intentionally triggers transform-shape-mismatch
+      # resolve-defaults: http resolver requires network access
+      skipBuiltins: [lint, resolve-defaults, render-defaults]
+
+    cases:
+      flagged-finding-reported:
+        description: The unguarded resolver is reported by transform-shape-mismatch
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, suppression]
+        assertions:
+          - expression: __exitCode == 0
+            message: "transform-shape-mismatch is warning-level, should not fail"
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "transform-shape-mismatch" &&
+                f.location.contains("shapeMismatchFlagged"))
+            message: "Unsuppressed resolver should be flagged"
+
+      suppressed-finding-hidden:
+        description: The block-scoped ignore directive suppresses the finding
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, suppression]
+        assertions:
+          - expression: >
+              !__output.findings.exists(f,
+                f.ruleName == "transform-shape-mismatch" &&
+                f.location.contains("shapeMismatchSuppressed"))
+            message: "Block-scoped ignore should suppress the transform finding"

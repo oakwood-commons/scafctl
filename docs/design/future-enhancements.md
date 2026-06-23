@@ -190,7 +190,7 @@ Source: [state.md](state/state.md)
 
 ### [Done] Immutable Resolvers
 
-**Implemented.** Resolvers can declare `immutable: true` to lock their state entry permanently after first write. On subsequent runs the value is read from state; attempts to overwrite with a different value error. Lint rules `immutable-without-save` and `immutable-no-state-read` warn about common misconfigurations. See `pkg/resolver/resolver.go`, `pkg/state/manager.go`, and `pkg/lint/lint.go`.
+**Implemented.** Resolvers can declare `immutable: true` to lock their resolved value in state permanently after first write. On subsequent runs the resolver still executes, but its value is compared against the stored value and execution fails if they differ. See `pkg/resolver/resolver.go` and `pkg/state/manager.go`.
 
 ---
 

@@ -172,24 +172,29 @@ func writeHclMap(buf *strings.Builder, m map[string]any, indent int) error {
 	return nil
 }
 
-// writeHclList writes a top-level list (array of blocks).
+// writeHclList writes a top-level list. Lists of maps/objects are rendered as
+// blocks; lists of scalars are rendered as a bare HCL array (["a", "b"]).
 func writeHclList(buf *strings.Builder, list []any, indent int) error {
 	if len(list) == 0 {
+		buf.WriteString("[]")
 		return nil
 	}
 
-	for _, item := range list {
-		switch v := item.(type) {
-		case map[string]any:
-			if err := writeHclMap(buf, v, indent); err != nil {
+	if isListOfMaps(list) {
+		for _, item := range list {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("expected map in list of maps, got %T", item)
+			}
+			if err := writeHclMap(buf, itemMap, indent); err != nil {
 				return err
 			}
-		default:
-			return fmt.Errorf("top-level list elements must be maps/objects, got %T", v)
 		}
+		return nil
 	}
 
-	return nil
+	// Top-level scalar list — emit as a bare HCL array.
+	return writeHclListValue(buf, list, indent)
 }
 
 // writeHclListValue writes a list value in HCL list syntax: [val1, val2, ...]

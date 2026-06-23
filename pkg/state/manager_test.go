@@ -769,32 +769,6 @@ func TestResolveWithParams(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "empty value reference")
 	})
-
-	t.Run("CEL uses __solution_dir", func(t *testing.T) {
-		ctx := provider.WithSolutionDirectory(context.Background(), "/opt/solutions/myapp")
-		expr := celexp.Expression("__solution_dir + '/state.json'")
-		vr := &spec.ValueRef{Expr: &expr}
-		val, err := resolveWithParams(ctx, vr, nil, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, "/opt/solutions/myapp/state.json", val)
-	})
-
-	t.Run("template uses __solution_dir", func(t *testing.T) {
-		ctx := provider.WithSolutionDirectory(context.Background(), "/opt/solutions/myapp")
-		tmpl := gotmpl.GoTemplatingContent("{{ .__solution_dir }}/state.json")
-		vr := &spec.ValueRef{Tmpl: &tmpl}
-		val, err := resolveWithParams(ctx, vr, nil, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, "/opt/solutions/myapp/state.json", val)
-	})
-
-	t.Run("CEL __solution_dir empty when no context", func(t *testing.T) {
-		expr := celexp.Expression("__solution_dir == ''")
-		vr := &spec.ValueRef{Expr: &expr}
-		val, err := resolveWithParams(context.Background(), vr, nil, nil)
-		assert.NoError(t, err)
-		assert.Equal(t, true, val)
-	})
 }
 
 func TestManagerSave_SaveOverrides(t *testing.T) {

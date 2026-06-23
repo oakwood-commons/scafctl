@@ -77,6 +77,25 @@ spec:
             inputs:
               value: fallback-used
 
+    verbatimString:
+      description: Numeric-looking value forced to stay a string (type string)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: billingId
+              default: "00042"
+              type: string
+
+    coercedNumber:
+      description: Same value with default type inference (becomes a number)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: billingId
+              default: 42
+
   testing:
     config:
       # resolve-defaults: resolvers use parameter provider requiring external -r flag input
@@ -132,3 +151,21 @@ spec:
         assertions:
           - expression: __output.missingParam == "fallback-used"
             message: "Non-existent parameter should trigger fallback chain"
+
+      string-type-default:
+        description: Verify type string returns the default verbatim (no coercion)
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          - expression: __output.verbatimString == "00042"
+            message: "type string default should stay a verbatim string with leading zeros"
+
+      string-type-suppresses-coercion:
+        description: Verify type string keeps a numeric value as a string while default inference coerces it
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "billingId=12345"]
+        assertions:
+          - expression: __output.verbatimString == "12345"
+            message: "type string should keep the numeric value as a string"
+          - expression: __output.coercedNumber == 12345
+            message: "without type string the same value should be coerced to a number"

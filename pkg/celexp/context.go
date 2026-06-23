@@ -56,12 +56,6 @@ const (
 	// raw CLI parameters regardless of resolver execution state.
 	// Example: __params.gcp_project
 	VarParams = "__params"
-
-	// VarSolutionDir is the variable name for the solution file's parent directory.
-	// Available in state backend input expressions so that state paths can be
-	// computed relative to the solution file when needed.
-	// Example: __solution_dir + "/state.json"
-	VarSolutionDir = "__solution_dir"
 )
 
 type costLimitContextKey struct{}

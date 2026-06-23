@@ -208,6 +208,54 @@ func TestToHcl_TopLevelPrimitive(t *testing.T) {
 	}
 }
 
+func TestToHcl_TopLevelScalarList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected string
+	}{
+		{
+			name:     "string list",
+			input:    []any{"repo:a:ref:main", "repo:b:ref:main"},
+			expected: `["repo:a:ref:main", "repo:b:ref:main"]`,
+		},
+		{
+			name:     "int list",
+			input:    []any{float64(1), float64(2), float64(3)},
+			expected: "[1, 2, 3]",
+		},
+		{
+			name:     "bool list",
+			input:    []any{true, false},
+			expected: "[true, false]",
+		},
+		{
+			name:     "empty list",
+			input:    []any{},
+			expected: "[]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ToHcl(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestToHcl_TopLevelListOfMaps(t *testing.T) {
+	input := []any{
+		map[string]any{"name": "a"},
+		map[string]any{"name": "b"},
+	}
+
+	result, err := ToHcl(input)
+	require.NoError(t, err)
+	assert.Equal(t, "name = \"a\"\nname = \"b\"\n", result)
+}
+
 func TestToHcl_ComplexExample(t *testing.T) {
 	input := map[string]any{
 		"ami":           "abc-123",

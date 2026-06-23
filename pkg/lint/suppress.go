@@ -7,6 +7,8 @@ import (
 	"bufio"
 	"bytes"
 	"strings"
+
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 )
 
 // DirectiveType represents the kind of suppression directive.
@@ -49,6 +51,19 @@ type Directive struct {
 type SuppressionSet struct {
 	directives []Directive
 	used       []bool
+	sourceMap  *sourcepos.SourceMap
+}
+
+// WithSourceMap attaches a source map to the suppression set, enabling
+// block-scoped suppression. When set, a standalone or inline ignore directive
+// placed on a block key (e.g. `transform:`) suppresses findings whose logical
+// location falls anywhere within that block, even when the finding's resolved
+// line is deeper than the directive's line. Returns the set for chaining.
+func (ss *SuppressionSet) WithSourceMap(sm *sourcepos.SourceMap) *SuppressionSet {
+	if ss != nil {
+		ss.sourceMap = sm
+	}
+	return ss
 }
 
 // ParseDirectives scans raw YAML bytes for suppression comments and returns
@@ -268,6 +283,13 @@ func (ss *SuppressionSet) isSuppressed(f *Finding) bool {
 					return true
 				}
 			}
+			// Block-scoped fallback: when the directive targets a YAML block
+			// key (e.g. `transform:`), suppress findings located within that
+			// block even if the resolved line is deeper than the directive.
+			if ss.locationInBlockAt(f, ss.ignoreTargetLine(d)) {
+				ss.used[i] = true
+				return true
+			}
 
 		case DirectiveDisable:
 			// Find the matching enable directive (or EOF).
@@ -279,6 +301,44 @@ func (ss *SuppressionSet) isSuppressed(f *Finding) bool {
 
 		case DirectiveEnable:
 			// Enable directives don't suppress — they end a disable block.
+		}
+	}
+	return false
+}
+
+// ignoreTargetLine returns the source line of the YAML node that an ignore
+// directive targets. Inline directives target their own line; standalone
+// comments target the following line (the block key they annotate).
+func (ss *SuppressionSet) ignoreTargetLine(d *Directive) int {
+	if d.Inline {
+		return d.Line
+	}
+	return d.Line + 1
+}
+
+// locationInBlockAt reports whether the finding's logical location falls within
+// a YAML block whose key is recorded at the given source line. It requires a
+// source map; without one it always returns false (preserving line-based
+// behavior). The "spec." prefix on source-map paths is stripped to match lint
+// finding locations.
+func (ss *SuppressionSet) locationInBlockAt(f *Finding, line int) bool {
+	if ss.sourceMap == nil || line <= 0 || f.Location == "" {
+		return false
+	}
+	for _, p := range ss.sourceMap.Paths() {
+		pos, ok := ss.sourceMap.Get(p)
+		if !ok || pos.Line != line {
+			continue
+		}
+		// In compose scenarios, only consider blocks from the same source file.
+		if f.SourceFile != "" && pos.File != "" && f.SourceFile != pos.File {
+			continue
+		}
+		block := strings.TrimPrefix(p, "spec.")
+		if f.Location == block ||
+			strings.HasPrefix(f.Location, block+".") ||
+			strings.HasPrefix(f.Location, block+"[") {
+			return true
 		}
 	}
 	return false

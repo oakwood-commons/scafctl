@@ -194,7 +194,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
         "scafctl",
         cfg.version,
         server.WithToolCapabilities(false),    // No listChanged for now
-        server.WithResourceCapabilities(true, false), // Subscribe=true, listChanged=false
+        server.WithResourceCapabilities(true, true), // Subscribe=true, listChanged=true
         server.WithRecovery(),                 // Recover from panics in handlers
         server.WithInstructions(serverInstructions),
     )

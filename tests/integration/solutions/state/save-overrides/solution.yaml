@@ -52,8 +52,6 @@ spec:
 
   testing:
     config:
-      env:
-        XDG_STATE_HOME: "${SCAFCTL_SANDBOX_DIR}"
       # render-defaults: solution has no workflow.actions section
       skipBuiltins: [render-defaults]
 
@@ -86,11 +84,10 @@ spec:
         extends: [_base]
         args: ["-o", "json", "-r", "env=staging"]
         init:
-          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/scafctl"
           # Pre-seed at inputs.path -- this should be found at load time
           - command: >-
               printf '{"schemaVersion":1,"metadata":{"solution":"test-state-save-overrides","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-default-path"},"immutables":{},"fingerprints":{}}'
-              > $SCAFCTL_SANDBOX_DIR/scafctl/default-state.json
+              > $SCAFCTL_SANDBOX_DIR/default-state.json
         assertions:
           - expression: __output.app_name == "from-default-path"
             message: "State should load from inputs.path (default-state.json), not saveOverrides path"

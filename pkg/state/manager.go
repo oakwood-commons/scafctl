@@ -248,8 +248,7 @@ func (m *Manager) resolveSaveOverrides(ctx context.Context, resolverData, params
 	return resolved, nil
 }
 
-// resolveWithParams resolves a ValueRef with CLI params available as __params
-// and the solution directory available as __solution_dir.
+// resolveWithParams resolves a ValueRef with CLI params available as __params.
 // resolverData is passed as the standard _ variable. For literal and resolver-ref
 // ValueRefs, params are not used (they are only relevant for CEL and templates).
 func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, params map[string]any) (any, error) {
@@ -262,15 +261,9 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 		return vr.Resolve(ctx, resolverData, nil)
 	}
 
-	// Retrieve solution directory from context for __solution_dir
-	solutionDir, _ := provider.SolutionDirectoryFromContext(ctx)
-
-	// CEL expression — inject __params and __solution_dir as additional variables
+	// CEL expression — inject __params as an additional variable
 	if vr.Expr != nil {
-		additionalVars := map[string]any{
-			celexp.VarParams:      params,
-			celexp.VarSolutionDir: solutionDir,
-		}
+		additionalVars := map[string]any{celexp.VarParams: params}
 		result, err := celexp.EvaluateExpression(ctx, string(*vr.Expr), resolverData, additionalVars)
 		if err != nil {
 			return nil, fmt.Errorf("failed to evaluate expression: %w", err)
@@ -278,14 +271,13 @@ func resolveWithParams(ctx context.Context, vr *spec.ValueRef, resolverData, par
 		return result, nil
 	}
 
-	// Go template — add __params and __solution_dir to template data
+	// Go template — add __params to template data
 	if vr.Tmpl != nil {
-		templateData := make(map[string]any, len(resolverData)+3)
+		templateData := make(map[string]any, len(resolverData)+2)
 		for k, val := range resolverData {
 			templateData[k] = val
 		}
 		templateData[celexp.VarParams] = params
-		templateData[celexp.VarSolutionDir] = solutionDir
 		result, err := gotmpl.Execute(ctx, gotmpl.TemplateOptions{
 			Content:    string(*vr.Tmpl),
 			Data:       templateData,
