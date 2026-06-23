@@ -85,10 +85,14 @@ type Solution struct {
 	// This is where the actual work of the solution is defined.
 	Spec Spec `json:"spec,omitempty" yaml:"spec,omitempty" doc:"Execution specification"`
 
-	// State configures optional per-solution persistence of resolver values across executions.
-	// When configured, resolvers with saveToState: true have their results persisted to a
-	// backend (e.g., local file, GitHub repo) and can be read back on subsequent runs via
-	// the state provider. State is opt-in -- solutions without this field are stateless.
+	// State configures optional per-solution persistence of CLI parameters across executions.
+	// When configured, the parameters (-r values) used on each run are saved to a backend
+	// (the built-in file or http backends, or an external backend supplied by a plugin
+	// provider such as github) and
+	// automatically replayed on subsequent runs, so the
+	// solution reproduces the same resolver values without re-supplying inputs. Resolvers
+	// marked immutable: true additionally have their resolved value locked in state after the
+	// first run. State is opt-in -- solutions without this field are stateless.
 	State *state.Config `json:"state,omitempty" yaml:"state,omitempty" doc:"Optional state persistence configuration" required:"false"`
 
 	// path is an internal field for the file path where the solution was loaded from
