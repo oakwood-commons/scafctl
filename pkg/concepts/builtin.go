@@ -329,23 +329,23 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 		Name:     "state",
 		Title:    "State Persistence",
 		Category: "state",
-		Summary:  "Opt-in persistence that saves and restores resolver values across solution runs.",
-		Explanation: `State persistence allows a solution to remember resolver values between executions. When enabled, resolved values marked with 'saveToState: true' are saved after execution and restored on the next run.
+		Summary:  "Opt-in persistence that saves and replays CLI parameters across solution runs.",
+		Explanation: `State persistence lets a solution replay its inputs between executions. When enabled, the CLI parameters ('-r key=value' values) used on each run are saved and automatically replayed on the next run, so the solution produces the same resolver values without re-supplying inputs.
 
 **Configuration** — add a top-level 'state' block to the solution:
 - **enabled** — literal bool, CEL expression, or template controlling activation.
-- **backend** — which provider stores the state (e.g., file, github, http).
+- **backend** — which provider stores the state (e.g., file, http).
 
 **Lifecycle**:
-1. Before resolvers run, the state manager calls the backend provider with 'state_load' to load any existing state.
-2. Loaded state is available to the 'state' provider via the fallback chain pattern.
-3. After execution, resolvers with 'saveToState: true' are persisted via 'state_save'.
+1. Before resolvers run, the state manager calls the backend provider with 'state_load' to load any existing state, then merges the saved parameters with the current CLI parameters (CLI values win on conflict).
+2. Resolvers execute normally — the parameter provider returns the merged (replayed) values.
+3. After execution, the state manager calls 'state_save' to persist the merged parameter set plus the locked values of any resolvers marked 'immutable: true'.
 
-**State provider** — used inside resolver fallback chains to read individual keys from loaded state. Returns ErrKeyNotFound when the key is not found (with required: true), so the next provider in the chain takes over via onError: continue.
+**Immutable resolvers** — mark a resolver 'immutable: true' to lock its resolved value in state after the first run. On later runs the resolver still executes, but its value is compared against the stored value and execution fails if they differ. Use this for non-deterministic values (e.g., UUIDs) that must stay stable across runs.
 
-**Backend providers** — file (local JSON via XDG state dir), http (remote REST API). External providers (e.g., github) can be installed as plugins. Each implements CapabilityState with state_load, state_save, and state_delete operations.`,
+**Backend providers** — file (local JSON; relative paths resolve against the solution directory), http (remote REST API). External providers (e.g., github) can be installed as plugins. Each implements CapabilityState with state_load, state_save, and state_delete operations.`,
 		Examples: []string{
-			"# Enable state with file backend\nstate:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \"my-app-state.json\"\n\nspec:\n  resolvers:\n    username:\n      type: string\n      saveToState: true\n      resolve:\n        with:\n          - provider: state\n            inputs:\n              key: \"username\"\n              required: false\n          - provider: parameter\n            inputs:\n              name: \"username\"",
+			"# Enable state with file backend; parameters replay automatically\nstate:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \"my-app-state.json\"\n\nspec:\n  resolvers:\n    # Locked after the first run -- value is saved and verified on later runs\n    deployment_id:\n      type: string\n      immutable: true\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"deployment_id\"\n    # Mutable -- replayed from saved parameters, overridable via -r\n    region:\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"region\"\n          - provider: static\n            inputs:\n              value: \"us-west-2\"",
 		},
 		SeeAlso: []string{"resolver", "provider", "cel-expression"},
 	},

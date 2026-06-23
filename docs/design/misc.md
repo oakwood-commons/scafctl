@@ -137,8 +137,9 @@ scafctl is stateless by default:
 
 Solutions can opt into state persistence via a top-level `state` block. When configured:
 
-- Resolver values marked with `saveToState: true` are persisted to a backend (local file, or external providers via plugins)
-- The `state` provider reads previously saved values during resolver execution
+- The CLI parameters (`-r key=value` values) used on each run are persisted to a backend (the built-in `file` or `http` backends, or external providers like `github` via plugins)
+- Saved parameters are replayed automatically on subsequent runs and merged with any new `-r` values (CLI values win on conflict)
+- Resolvers marked `immutable: true` additionally have their resolved value locked in state after the first run
 - State is loaded before resolvers run and saved after they complete
 
 See [State Design Doc](state/) for full details.

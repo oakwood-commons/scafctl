@@ -5,6 +5,17 @@ weight: 16
 
 # Immutable Resolvers Implementation Plan
 
+> **Superseded.** This plan describes an earlier design that relied on a
+> `saveToState` resolver field and a resolver-facing `state` provider fallback
+> chain. Both were dropped before release. Immutable resolvers shipped using the
+> parameter-replay model -- the `immutable: true` field alone locks a resolver's
+> resolved value in state (no `saveToState`, no `state` provider). The lint rules
+> `immutable-without-save` and `immutable-no-state-read` proposed below were never
+> implemented; the actual rule is `immutable-requires-state`. See
+> [parameter-replay-design.md](parameter-replay-design.md) for the final design
+> and [state.md](state.md) for the current behavior. This document is retained
+> for historical context only.
+
 This document is the implementation plan for the "Immutable Resolvers" future
 enhancement described in the [state design doc](state.md#immutable-resolvers-future-enhancement).
 
