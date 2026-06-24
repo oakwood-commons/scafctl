@@ -41,6 +41,30 @@ func NewAuthTokenResolver(registry *auth.Registry, opts ...ResolverOption) *Auth
 	return r
 }
 
+// ReauthRequiredError indicates that an auth handler was successfully inferred
+// for a registry, but acquiring a fresh token failed — typically because the
+// stored token is missing or expired and the handler can only refresh through
+// an interactive login. Interactive login cannot run inside a non-interactive
+// credential-helper subprocess, so the user must run `auth login` beforehand.
+//
+// Callers can detect this via errors.As to render an actionable message that
+// names the exact handler to re-authenticate.
+type ReauthRequiredError struct {
+	// Handler is the inferred auth handler name (e.g. "github", "entra").
+	Handler string
+	// ServerURL is the registry server URL that was being resolved.
+	ServerURL string
+	// Err is the underlying failure from the token bridge.
+	Err error
+}
+
+func (e *ReauthRequiredError) Error() string {
+	return fmt.Sprintf("no valid token for registry %q via auth handler %q: %v", e.ServerURL, e.Handler, e.Err)
+}
+
+// Unwrap exposes the underlying error for errors.Is/As chains.
+func (e *ReauthRequiredError) Unwrap() error { return e.Err }
+
 // Resolve infers the auth handler for serverURL, resolves the active profile,
 // and returns fresh credentials. Returns an error if no handler can be inferred
 // or the handler is not registered/authenticated.
@@ -66,7 +90,14 @@ func (r *AuthTokenResolver) Resolve(ctx context.Context, serverURL string) (*Cre
 	scope := catalog.InferDefaultScope(host)
 	username, password, err := catalog.BridgeAuthToRegistry(ctx, handlerName, host, scope)
 	if err != nil {
-		return nil, fmt.Errorf("bridge auth for %q: %w", serverURL, err)
+		// A handler was inferred but no usable token could be acquired. Surface
+		// a typed error so the credential-helper get command can emit an
+		// actionable "run <binary> auth login <handler>" message.
+		return nil, &ReauthRequiredError{
+			Handler:   handlerName,
+			ServerURL: serverURL,
+			Err:       fmt.Errorf("bridge auth for %q: %w", serverURL, err),
+		}
 	}
 
 	return &Credential{

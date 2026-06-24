@@ -42,6 +42,7 @@ import (
 	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
@@ -891,6 +892,17 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				_ = telShutdown(shutCtx)
 			}
 		})
+	}
+
+	// When the binary is invoked under a docker-credential-<name> alias (the
+	// symlink created by `credential-helper install`), rewrite the arguments so
+	// the helper verb routes into the credential-helper command tree. This makes
+	// scafctl — and any embedder building the CLI via Root — a working Docker/
+	// Podman credential helper with no extra wiring. os.Args[0] carries the alias
+	// name as exec'd; cobra otherwise ignores it. SetArgs expects args without
+	// the program name, so pass rewritten[1:].
+	if rewritten, isAlias := credentialhelper.RewriteAliasArgs(os.Args); isAlias {
+		cCmd.SetArgs(rewritten[1:])
 	}
 
 	return cCmd, cleanup
