@@ -130,7 +130,7 @@ The parameters `username=alice` and `region=eu-west-1` are now saved to `state-d
 
 - **state.enabled** -- Activates state persistence. Can be a literal `true`, a CEL expression, or template. Because state is loaded before resolvers run, resolver references (`rslvr:...`) are not supported here.
 - **state.backend.provider** -- The provider that handles persistence. Use `file` for local files.
-- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the solution file's parent directory. Absolute paths are used as-is. CLI state commands (`scafctl state list`, etc.) resolve relative paths against the XDG state directory (`~/.local/state/scafctl/`).
+- **state.backend.inputs.path** -- Where to store the state file. Relative paths are resolved against the solution file's parent directory. Absolute paths are used as-is. CLI state commands (`scafctl state list`, etc.) resolve relative paths against the current working directory.
 
 No per-resolver configuration is needed. All CLI parameters are persisted automatically when state is enabled.
 
@@ -560,7 +560,7 @@ scafctl state clear --path state-demo.json
 {{< /tabs >}}
 
 > [!NOTE]
-> `scafctl state list` and `scafctl state get` support `-o json`, `-o yaml`, and `-o quiet` output formats. The `--path` flag is relative to the XDG state directory (`~/.local/state/scafctl/`). Use an absolute path to reference files outside the state directory.
+> `scafctl state list` and `scafctl state get` support `-o json`, `-o yaml`, and `-o quiet` output formats. The `--path` flag is relative to the current working directory. Use an absolute path to reference files in other locations.
 
 ---
 
@@ -723,22 +723,32 @@ Run `scafctl lint` to check your configuration.
 ```yaml
 state:
   enabled:
-    expr: "__params.enable_state == true"
+    expr: "has(__params.enable_state) && __params.enable_state == 'true'"
   backend:
     provider: file
     inputs:
       path: "my-app.json"
 ```
 
-State is only active when the `enable_state` CLI parameter is set to `true` (e.g., `-r enable_state=true`).
+State is only active when the `enable_state` CLI parameter is set to `true` (e.g., `-r enable_state=true`). The `has()` guard prevents a CEL error when the parameter is omitted, and the value is compared as a string since CLI parameters are always strings.
 
 ### Replay in CI validation
 
-A CI validator can replay a solution using the state file committed alongside generated code:
+A CI validator can replay a solution where the state backend path points to a committed state file:
+
+```yaml
+# app-registration.yaml -- state file lives alongside generated code
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "./apps/my-app/state.json"
+```
 
 ```bash
-# Replay using the state file from the PR (parameters are loaded automatically)
-scafctl run solution -f app-registration.yaml --state-file ./apps/my-app/state.json
+# Replay from the solution directory (parameters are loaded automatically from state)
+scafctl run solution -f app-registration.yaml
 ```
 
 Because all CLI parameters are persisted in state, the solution replays deterministically without any `-r` flags. The validator can then diff the output against the PR contents.

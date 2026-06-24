@@ -6,11 +6,11 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
@@ -26,7 +26,10 @@ func (s *Server) registerStateTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("State file path relative to the XDG state directory (e.g., 'my-app-state.json')"),
+			mcp.Description("State file path (relative to working directory or absolute)"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.addTool(listTool, s.handleStateList)
@@ -41,11 +44,14 @@ func (s *Server) registerStateTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("State file path relative to the XDG state directory"),
+			mcp.Description("State file path (relative to working directory or absolute)"),
 		),
 		mcp.WithString("key",
 			mcp.Required(),
 			mcp.Description("State entry key to retrieve (typically a resolver name)"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.addTool(getTool, s.handleStateGet)
@@ -60,10 +66,13 @@ func (s *Server) registerStateTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("State file path relative to the XDG state directory"),
+			mcp.Description("State file path (relative to working directory or absolute)"),
 		),
 		mcp.WithString("key",
 			mcp.Description("State entry key to delete. Omit to clear all entries."),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
 		),
 	)
 	s.addTool(deleteTool, s.handleStateDelete)
@@ -78,7 +87,7 @@ func (s *Server) registerStateTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("path",
 			mcp.Required(),
-			mcp.Description("State file path relative to the XDG state directory"),
+			mcp.Description("State file path (relative to working directory or absolute)"),
 		),
 		mcp.WithString("key",
 			mcp.Required(),
@@ -92,8 +101,20 @@ func (s *Server) registerStateTools() {
 			mcp.Description("Value type for coercion: string (default), int, float, bool"),
 			mcp.Enum("string", "int", "float", "bool"),
 		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
 	)
 	s.addTool(setTool, s.handleStateSet)
+}
+
+// stateBaseDir returns the base directory for resolving relative state paths.
+// If cwd is provided, it is used directly; otherwise os.Getwd() is called.
+func stateBaseDir(cwd string) (string, error) {
+	if cwd != "" {
+		return cwd, nil
+	}
+	return os.Getwd()
 }
 
 // handleStateList lists all entries in a state file.
@@ -106,7 +127,12 @@ func (s *Server) handleStateList(_ context.Context, request mcp.CallToolRequest)
 		), nil
 	}
 
-	sd, err := state.LoadFromFile(path, paths.StateDir())
+	baseDir, err := stateBaseDir(request.GetString("cwd", ""))
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("cannot determine working directory: %v", err)), nil
+	}
+
+	sd, err := state.LoadFromFile(path, baseDir)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err),
 			WithSuggestion("Check that the path is correct and the file is valid JSON"),
@@ -185,7 +211,12 @@ func (s *Server) handleStateGet(_ context.Context, request mcp.CallToolRequest) 
 		), nil
 	}
 
-	sd, err := state.LoadFromFile(path, paths.StateDir())
+	baseDir, err := stateBaseDir(request.GetString("cwd", ""))
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("cannot determine working directory: %v", err)), nil
+	}
+
+	sd, err := state.LoadFromFile(path, baseDir)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err)), nil
 	}
@@ -224,7 +255,12 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 		), nil
 	}
 
-	sd, err := state.LoadFromFile(path, paths.StateDir())
+	baseDir, err := stateBaseDir(request.GetString("cwd", ""))
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("cannot determine working directory: %v", err)), nil
+	}
+
+	sd, err := state.LoadFromFile(path, baseDir)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err)), nil
 	}
@@ -235,7 +271,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 		// Delete a single key -- check parameters first, then immutables
 		if _, ok := sd.Parameters[key]; ok {
 			delete(sd.Parameters, key)
-			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
+			if err := state.SaveToFile(path, baseDir, sd); err != nil {
 				return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 			}
 			return mcp.NewToolResultJSON(map[string]any{
@@ -246,7 +282,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 
 		if _, ok := sd.Immutables[key]; ok {
 			delete(sd.Immutables, key)
-			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
+			if err := state.SaveToFile(path, baseDir, sd); err != nil {
 				return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 			}
 			return mcp.NewToolResultJSON(map[string]any{
@@ -266,7 +302,7 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 	sd.Parameters = make(map[string]any)
 	sd.Immutables = make(map[string]*state.ImmutableEntry)
 	sd.Fingerprints = make(map[string]*state.FingerprintEntry)
-	if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
+	if err := state.SaveToFile(path, baseDir, sd); err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 	}
 
@@ -295,7 +331,12 @@ func (s *Server) handleStateSet(_ context.Context, request mcp.CallToolRequest) 
 
 	value := request.GetString("value", "")
 
-	sd, err := state.LoadFromFile(path, paths.StateDir())
+	baseDir, err := stateBaseDir(request.GetString("cwd", ""))
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("cannot determine working directory: %v", err)), nil
+	}
+
+	sd, err := state.LoadFromFile(path, baseDir)
 	if err != nil {
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err),
 			WithSuggestion("Check that the path is correct and the file is valid JSON"),
@@ -314,7 +355,7 @@ func (s *Server) handleStateSet(_ context.Context, request mcp.CallToolRequest) 
 	// Default to parameters section
 	sd.Parameters[key] = coerced
 
-	if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
+	if err := state.SaveToFile(path, baseDir, sd); err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
 	}
 

@@ -105,7 +105,6 @@ func (s *Server) handleGetConfigPaths(_ context.Context, _ mcp.CallToolRequest) 
 		{Name: "config", Path: paths.ConfigDir(), Description: "Configuration files (config.yaml)", XDGVariable: "XDG_CONFIG_HOME"},
 		{Name: "data", Path: paths.DataDir(), Description: "Application data", XDGVariable: "XDG_DATA_HOME"},
 		{Name: "cache", Path: paths.CacheDir(), Description: "Cache root", XDGVariable: "XDG_CACHE_HOME"},
-		{Name: "state", Path: paths.StateDir(), Description: "Logs, history, session state", XDGVariable: "XDG_STATE_HOME"},
 		{Name: "catalog", Path: paths.CatalogDir(), Description: "Local artifact catalogs", XDGVariable: "XDG_DATA_HOME"},
 		{Name: "secrets", Path: paths.SecretsDirPath(), Description: "Credential storage", XDGVariable: "XDG_DATA_HOME"},
 		{Name: "httpCache", Path: paths.HTTPCacheDir(), Description: "HTTP response cache", XDGVariable: "XDG_CACHE_HOME"},

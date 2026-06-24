@@ -9,7 +9,6 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -43,7 +42,14 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 			}
 
 			// Resolve and verify the file exists before loading.
-			resolved, err := state.ResolveStatePath(opts.Path, paths.StateDir())
+			cwd, err := os.Getwd()
+			if err != nil {
+				err := fmt.Errorf("cannot determine working directory: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
+			resolved, err := state.ResolveStatePath(opts.Path, cwd)
 			if err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -54,7 +60,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			sd, err := state.LoadFromFile(opts.Path, paths.StateDir())
+			sd, err := state.LoadFromFile(opts.Path, cwd)
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
@@ -95,7 +101,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to state directory)")
+	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
 	cmd.Flags().StringVar(&opts.Key, "key", "", "Key to retrieve")
 	_ = cmd.MarkFlagRequired("path")
 	_ = cmd.MarkFlagRequired("key")

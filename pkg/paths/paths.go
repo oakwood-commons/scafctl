@@ -160,19 +160,6 @@ func CatalogDir() string {
 	return filepath.Join(xdg.DataHome, appName, CatalogDirName)
 }
 
-// StateDir returns the path to the state directory.
-// Used for logs, history, and session state.
-//
-// Returns: $XDG_STATE_HOME/scafctl/
-//
-// Platform defaults:
-//   - Linux: ~/.local/state/scafctl/
-//   - macOS: ~/.local/state/scafctl/
-//   - Windows: %LOCALAPPDATA%\scafctl\
-func StateDir() string {
-	return filepath.Join(xdg.StateHome, appName)
-}
-
 // BuildCacheDir returns the default path to the build cache directory.
 //
 // Returns: $XDG_CACHE_HOME/scafctl/build-cache/

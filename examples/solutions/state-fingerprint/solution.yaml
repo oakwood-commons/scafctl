@@ -67,7 +67,7 @@ metadata:
 # STATE CONFIGURATION
 # =============================================================================
 # State persists resolver values and fingerprint hashes between executions.
-# The file backend stores a JSON file under $XDG_STATE_HOME/scafctl/.
+# The file backend stores a JSON file relative to the solution file's directory.
 state:
   enabled: true
   backend:

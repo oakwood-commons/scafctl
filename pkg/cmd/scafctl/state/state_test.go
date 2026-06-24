@@ -87,7 +87,7 @@ func TestCommandList_EmptyState(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "No state entries found")
+	assert.Contains(t, buf.String(), "State file is empty")
 }
 
 func TestCommandList_WithEntries(t *testing.T) {
