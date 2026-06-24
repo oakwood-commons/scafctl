@@ -234,6 +234,18 @@ func ExtractRefsFromValueRefs(inputs map[string]*ValueRef) []string {
 	return result
 }
 
+// ExtractRefsFromValueRef extracts all resolver names referenced by a single
+// ValueRef, accumulating them into the provided deps set. It handles direct
+// resolver references, CEL expressions, Go templates, and nested literal values
+// using the same AST-based logic the dependency graph uses. Passing a nil ref or
+// deps map is a no-op (deps must be non-nil to collect results).
+func ExtractRefsFromValueRef(ref *ValueRef, deps map[string]bool) {
+	if deps == nil {
+		return
+	}
+	extractDepsFromValueRef(ref, deps)
+}
+
 // extractDepsFromLiteral recursively extracts dependencies from literal values
 // that may contain CEL expression strings or Go template syntax
 func extractDepsFromLiteral(literal any, deps map[string]bool) {

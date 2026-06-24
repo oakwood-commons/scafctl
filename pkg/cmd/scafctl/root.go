@@ -39,6 +39,7 @@ import (
 	solutioncmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/solution"
 	statecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/state"
 	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
+	validatecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/validate"
 	vendorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/vendor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/version"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -838,6 +839,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddCommand(withGroup(groupCore, render.CommandRender(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, lint.CommandLint(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, testcmd.CommandTest(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupCore, validatecmd.CommandValidate(cliParams, ioStreams, binaryName)))
 
 	// Inspection Commands — explore and understand solutions
 	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, binaryName)))

@@ -7,6 +7,7 @@ package execute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -94,16 +95,135 @@ type ResolverExecutionConfig struct {
 
 	// SkipTransform skips resolver transforms.
 	SkipTransform bool `json:"skipTransform,omitempty" yaml:"skipTransform,omitempty" doc:"Skip resolver transforms"`
+
+	// NonFatalValidation, when true, treats resolver validation-only failures
+	// as non-fatal: the populated values are returned alongside structured
+	// diagnostics (ResolverExecutionResult.Diagnostics) instead of aborting
+	// with an error. Resolve- and transform-phase failures (where no value
+	// could be produced) remain fatal. This is used by inspection and
+	// troubleshooting paths (run resolver, preview_resolvers) so that resolver
+	// output remains useful even when validation fails. It implies validate-all
+	// semantics so that all reachable resolvers populate their values.
+	NonFatalValidation bool `json:"nonFatalValidation,omitempty" yaml:"nonFatalValidation,omitempty" doc:"Treat validation failures as non-fatal and return partial values with diagnostics"`
 }
 
 // ResolverExecutionResult holds the structured output of resolver execution.
 type ResolverExecutionResult struct {
-	// Data contains the resolved values keyed by resolver name.
+	// Data contains the resolved values keyed by resolver name. When
+	// NonFatalValidation is enabled, this also includes partial values produced
+	// by resolvers that failed validation (their value is captured post-transform
+	// before the validate phase rejects it).
 	Data map[string]any `json:"data" yaml:"data" doc:"Resolved values"`
 
 	// Context is the resolver execution context with full metadata.
-	// Only available when execution succeeds.
 	Context *resolver.Context `json:"-" yaml:"-"`
+
+	// Diagnostics holds the resolver validation or execution error collected
+	// when NonFatalValidation is enabled. It is nil when execution was clean.
+	// Use DiagnosticsFromError to convert it into a structured list.
+	Diagnostics error `json:"-" yaml:"-"`
+}
+
+// ResolverDiagnostic describes a single resolver validation or execution
+// failure surfaced during a non-fatal inspection run.
+type ResolverDiagnostic struct {
+	// Resolver is the name of the resolver that failed. It may be empty when
+	// the failure is not attributable to a specific resolver.
+	Resolver string `json:"resolver,omitempty" yaml:"resolver,omitempty" doc:"Name of the resolver that failed"`
+
+	// Phase is the execution phase number where the failure occurred (0 when unknown).
+	Phase int `json:"phase,omitempty" yaml:"phase,omitempty" doc:"Phase number where the failure occurred"`
+
+	// Message is the human-readable failure description.
+	Message string `json:"message" yaml:"message" doc:"Human-readable failure message"`
+}
+
+// DiagnosticsFromError converts a resolver execution error into a structured
+// list of per-resolver diagnostics. It understands AggregatedExecutionError
+// (validate-all mode) and AggregatedValidationError, and falls back to a single
+// generic diagnostic for any other error. Returns nil when err is nil.
+func DiagnosticsFromError(err error) []ResolverDiagnostic {
+	if err == nil {
+		return nil
+	}
+
+	var aggExec *resolver.AggregatedExecutionError
+	if errors.As(err, &aggExec) {
+		diags := make([]ResolverDiagnostic, 0, len(aggExec.Errors))
+		for _, fr := range aggExec.Errors {
+			if fr == nil {
+				continue
+			}
+			msg := fr.ErrMessage
+			if msg == "" && fr.Err != nil {
+				msg = fr.Err.Error()
+			}
+			diags = append(diags, ResolverDiagnostic{
+				Resolver: fr.ResolverName,
+				Phase:    fr.Phase,
+				Message:  msg,
+			})
+		}
+		return diags
+	}
+
+	var aggVal *resolver.AggregatedValidationError
+	if errors.As(err, &aggVal) {
+		return []ResolverDiagnostic{{
+			Resolver: aggVal.ResolverName,
+			Message:  aggVal.Error(),
+		}}
+	}
+
+	return []ResolverDiagnostic{{Message: err.Error()}}
+}
+
+// isValidationFailure reports whether a single resolver failure originated from
+// the validate phase. Resolve- and transform-phase failures (where no value
+// could be produced) return false so callers keep treating them as fatal.
+func isValidationFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var aggVal *resolver.AggregatedValidationError
+	if errors.As(err, &aggVal) {
+		return true
+	}
+	var execErr *resolver.ExecutionError
+	if errors.As(err, &execErr) {
+		return execErr.Phase == "validate"
+	}
+	return false
+}
+
+// IsValidationOnlyFailure reports whether every failure contained in err is a
+// validation failure. It returns false when err contains any non-validation
+// failure (such as a resolve- or transform-phase error) so those remain fatal.
+// Non-fatal inspection mode only suppresses pure validation failures.
+func IsValidationOnlyFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var aggExec *resolver.AggregatedExecutionError
+	if errors.As(err, &aggExec) {
+		if len(aggExec.Errors) == 0 {
+			return false
+		}
+		sawFailure := false
+		for _, fr := range aggExec.Errors {
+			if fr == nil {
+				continue
+			}
+			sawFailure = true
+			if !isValidationFailure(fr.Err) {
+				return false
+			}
+		}
+		// If every entry was nil there is no concrete failure to classify, so
+		// do not treat the aggregated error as validation-only.
+		return sawFailure
+	}
+	return isValidationFailure(err)
 }
 
 // Resolvers runs the resolver execution pipeline on the given solution.
@@ -151,7 +271,7 @@ func Resolvers(
 	if cfg.MaxValueSize > 0 {
 		executorOpts = append(executorOpts, resolver.WithMaxValueSize(cfg.MaxValueSize))
 	}
-	if cfg.ValidateAll {
+	if cfg.ValidateAll || cfg.NonFatalValidation {
 		executorOpts = append(executorOpts, resolver.WithValidateAll(true))
 	}
 	if cfg.SkipValidation {
@@ -166,23 +286,51 @@ func Resolvers(
 	ctx = ApplySolutionCELCostLimit(ctx, sol)
 
 	// Execute resolvers
-	resultCtx, err := executor.Execute(ctx, resolvers, params)
-	if err != nil {
-		return nil, fmt.Errorf("resolver execution failed: %w", err)
-	}
+	resultCtx, execErr := executor.Execute(ctx, resolvers, params)
 
-	// Get resolver context with results
+	// Get resolver context with results. This is populated even on failure, so
+	// retrieve it before deciding how to handle execErr.
 	resolverCtx, ok := resolver.FromContext(resultCtx)
 	if !ok {
+		// Execution failed before a resolver context could be established
+		// (e.g., phase build failure). Surface the underlying error.
+		if execErr != nil {
+			return nil, fmt.Errorf("resolver execution failed: %w", execErr)
+		}
 		return nil, fmt.Errorf("failed to retrieve resolver results")
 	}
 
-	// Build resolver data map
+	// Build resolver data map. In non-fatal mode, also include partial values
+	// captured by resolvers that failed validation so callers can inspect them.
 	for name := range sol.Spec.Resolvers {
 		result, ok := resolverCtx.GetResult(name)
-		if ok && result.Status == resolver.ExecutionStatusSuccess {
+		if !ok {
+			continue
+		}
+		if result.Status == resolver.ExecutionStatusSuccess {
+			resolverData[name] = result.Value
+		} else if cfg.NonFatalValidation && result.Value != nil {
 			resolverData[name] = result.Value
 		}
+	}
+
+	if execErr != nil {
+		if cfg.NonFatalValidation && IsValidationOnlyFailure(execErr) {
+			// Non-fatal: return the populated values plus diagnostics instead of
+			// aborting, so the inspection path remains useful. Only pure
+			// validation failures are suppressed; resolve/transform failures
+			// (where no value exists) remain fatal below.
+			if lgr != nil {
+				lgr.V(1).Info("resolver execution completed with validation diagnostics",
+					"resolvedCount", len(resolverData))
+			}
+			return &ResolverExecutionResult{
+				Data:        resolverData,
+				Context:     resolverCtx,
+				Diagnostics: execErr,
+			}, nil
+		}
+		return nil, fmt.Errorf("resolver execution failed: %w", execErr)
 	}
 
 	if lgr != nil {

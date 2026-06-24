@@ -261,6 +261,31 @@ func TestGetUnderscoreVariables_EdgeCases(t *testing.T) {
 			expected:   []string{"user"},
 		},
 		{
+			name:       "optional select",
+			expression: `_.?platformProfileID`,
+			expected:   []string{"platformProfileID"},
+		},
+		{
+			name:       "optional select with method chain",
+			expression: `_.?platformProfileID.orValue("")`,
+			expected:   []string{"platformProfileID"},
+		},
+		{
+			name:       "optional select mixed with plain select",
+			expression: `_.?platformProfileID.orValue("") + _.moduleSource`,
+			expected:   []string{"moduleSource", "platformProfileID"},
+		},
+		{
+			name:       "optional index bracket notation",
+			expression: `_[?"my-resolver"]`,
+			expected:   []string{"my-resolver"},
+		},
+		{
+			name:       "optional select inside map literal",
+			expression: `{"a": _.?platformProfileID.orValue(""), "b": _.moduleSource}`,
+			expected:   []string{"moduleSource", "platformProfileID"},
+		},
+		{
 			name:       "unclosed parenthesis",
 			expression: "_.value + (_.other",
 			wantError:  true,

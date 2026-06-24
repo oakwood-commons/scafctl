@@ -82,19 +82,32 @@ spec:
           - expression: '__output.validValue == "good"'
 
       regex-failure:
-        description: Verify regex validation failure
+        description: Verify regex validation failure exits non-zero with --fail-on-validation
         command: [run, resolver]
-        args: ["invalidRegex"]
+        args: ["invalidRegex", "--fail-on-validation"]
         tags: [edge-case, validation, negative]
         expectFailure: true
         assertions:
           - expression: __exitCode != 0
             message: "Should fail validation"
 
-      expression-failure:
-        description: Verify CEL expression validation failure
+      regex-failure-non-fatal:
+        description: Verify regex validation failure is non-fatal by default (value still shown)
         command: [run, resolver]
-        args: ["invalidExpression"]
+        args: ["invalidRegex", "-o", "json"]
+        tags: [edge-case, validation]
+        assertions:
+          - expression: __exitCode == 0
+            message: "run resolver must be non-fatal by default"
+          - expression: '__output.invalidRegex == "BAD_VALUE!"'
+            message: "Partial value must still be shown despite validation failure"
+          - expression: '__stderr.contains("failed validation")'
+            message: "Validation diagnostics must appear on stderr"
+
+      expression-failure:
+        description: Verify CEL expression validation failure exits non-zero with --fail-on-validation
+        command: [run, resolver]
+        args: ["invalidExpression", "--fail-on-validation"]
         tags: [edge-case, validation, negative]
         expectFailure: true
         assertions:
@@ -102,11 +115,36 @@ spec:
             message: "Should fail validation"
 
       not-match-failure:
-        description: Verify notMatch validation failure
+        description: Verify notMatch validation failure exits non-zero with --fail-on-validation
         command: [run, resolver]
-        args: ["invalidNotMatch"]
+        args: ["invalidNotMatch", "--fail-on-validation"]
         tags: [edge-case, validation, negative]
         expectFailure: true
         assertions:
           - expression: __exitCode != 0
             message: "Should fail validation"
+
+      validate-resolver-passes:
+        description: Verify 'validate resolver' exits 0 when validation passes
+        command: [validate, resolver]
+        args: ["validValue", "-o", "json"]
+        tags: [edge-case, validation, smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "validate resolver must exit 0 when validation passes"
+          - expression: '__output.validValue == "good"'
+            message: "Resolved value must still be shown"
+
+      validate-resolver-fails:
+        description: Verify 'validate resolver' exits 2 (validation failed) on failure
+        command: [validate, resolver]
+        args: ["invalidRegex", "-o", "json"]
+        tags: [edge-case, validation, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode == 2
+            message: "validate resolver must exit 2 on validation failure"
+          - expression: '__output.invalidRegex == "BAD_VALUE!"'
+            message: "Resolved value must still be shown despite validation failure"
+          - expression: '__stderr.contains("failed validation")'
+            message: "Validation diagnostics must appear on stderr"

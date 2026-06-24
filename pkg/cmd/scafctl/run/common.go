@@ -200,6 +200,14 @@ type sharedResolverOptions struct {
 	// declare them explicitly in bundle.plugins.
 	Strict bool
 
+	// nonFatalValidation, when true, makes executeResolvers treat resolver
+	// validation-only failures as non-fatal: it returns the populated values
+	// and resolver context alongside the error instead of discarding them.
+	// Resolve- and transform-phase failures remain fatal. Set only by
+	// inspection commands (run resolver, validate resolver), never by run
+	// solution / run action which keep validation as a hard gate.
+	nonFatalValidation bool
+
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
 
@@ -491,7 +499,7 @@ func (o *sharedResolverOptions) executeResolvers(
 	if progressCallback != nil {
 		executorOpts = append(executorOpts, resolver.WithProgressCallback(progressCallback))
 	}
-	if resolverCfg.ValidateAll {
+	if resolverCfg.ValidateAll || o.nonFatalValidation {
 		executorOpts = append(executorOpts, resolver.WithValidateAll(true))
 	}
 	if o.SkipValidation {
@@ -540,26 +548,30 @@ func (o *sharedResolverOptions) executeResolvers(
 
 	// Execute resolvers
 	resultCtx, err := executor.Execute(ctx, resolvers, params)
-	if err != nil {
+
+	// Retrieve the resolver context with results. It is populated even on
+	// failure, so fetch it before deciding how to handle the error.
+	resolverCtx, ctxOK := resolver.FromContext(resultCtx)
+	if !ctxOK {
 		if progress != nil {
 			progress.Wait()
 		}
-		return nil, nil, fmt.Errorf("resolver execution failed: %w", err)
-	}
-
-	// Get resolver context with results
-	resolverCtx, ok := resolver.FromContext(resultCtx)
-	if !ok {
-		if progress != nil {
-			progress.Wait()
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolver execution failed: %w", err)
 		}
 		return nil, nil, fmt.Errorf("failed to retrieve resolver results")
 	}
 
-	// Build resolver data map
+	// Build resolver data map. In non-fatal mode, also include partial values
+	// captured by resolvers that failed validation so they remain inspectable.
 	for name := range sol.Spec.Resolvers {
 		result, ok := resolverCtx.GetResult(name)
-		if ok && result.Status == resolver.ExecutionStatusSuccess {
+		if !ok {
+			continue
+		}
+		if result.Status == resolver.ExecutionStatusSuccess {
+			resolverData[name] = result.Value
+		} else if o.nonFatalValidation && result.Value != nil {
 			resolverData[name] = result.Value
 		}
 	}
@@ -567,6 +579,19 @@ func (o *sharedResolverOptions) executeResolvers(
 	// Wait for progress bars to complete
 	if progress != nil {
 		progress.Wait()
+	}
+
+	if err != nil {
+		// In non-fatal mode, return the populated values and context alongside
+		// the error so the caller can render values plus diagnostics instead of
+		// aborting -- but only for pure validation failures. Resolve- and
+		// transform-phase failures (where no value exists) remain fatal and
+		// discard partial results so the caller surfaces a hard failure. In
+		// fatal mode (run solution / run action), all errors are fatal.
+		if o.nonFatalValidation && execute.IsValidationOnlyFailure(err) {
+			return resolverData, resolverCtx, fmt.Errorf("resolver execution failed: %w", err)
+		}
+		return nil, nil, fmt.Errorf("resolver execution failed: %w", err)
 	}
 
 	lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))

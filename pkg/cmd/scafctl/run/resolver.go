@@ -73,6 +73,11 @@ type ResolverOptions struct {
 	// ShowExecution includes the __execution metadata in output.
 	ShowExecution bool
 
+	// FailOnValidation makes the command exit with a non-zero status when any
+	// resolver fails validation. By default, validation failures are reported as
+	// non-fatal diagnostics (values are still shown) and the command exits 0.
+	FailOnValidation bool
+
 	// DynamicArgs are resolver parameters from positional key=value syntax
 	// (e.g. env=prod region=us-east-1, captured from positional args containing '=').
 	DynamicArgs []string
@@ -268,7 +273,89 @@ Examples:
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
+	cCmd.Flags().BoolVar(&options.FailOnValidation, "fail-on-validation", false, "Exit non-zero when any resolver fails validation (by default validation failures are non-fatal diagnostics)")
 	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope resolver output to the resolvers consumed by this action (repeatable)")
+
+	setResolverHelpFunc(cCmd)
+
+	return cCmd
+}
+
+// CommandValidateResolver creates the 'validate resolver' subcommand. It reuses
+// the resolver execution machinery but always treats validation failures as
+// fatal (exit code 2), making it a validation gate suitable for CI. Unlike
+// 'run resolver', it does not expose graph/snapshot modes — its sole purpose is
+// to validate resolver outputs and report failures.
+func CommandValidateResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	options := &ResolverOptions{FailOnValidation: true}
+
+	cfg := runCommandConfig{
+		cliParams: cliParams,
+		ioStreams: ioStreams,
+		path:      path,
+		runner:    options,
+		getOutputFn: func() string {
+			return options.Output
+		},
+		setIOStreamFn: func(ios *terminal.IOStreams, cli *settings.Run) {
+			options.BinaryName = cli.BinaryName
+			options.IOStreams = ios
+			options.CliParams = cli
+		},
+	}
+
+	cCmd := &cobra.Command{
+		Use:     "resolver [resolver-name...] [key=value...]",
+		Aliases: []string{"res", "resolvers"},
+		Short:   "Validate resolvers and fail when validation does not pass",
+		Long: strings.ReplaceAll(`Validate a solution's resolvers and exit non-zero on validation failure.
+
+This command executes the resolvers (resolve, transform, and validate phases)
+and reports any validation failures as errors. Unlike 'run resolver', which
+treats validation failures as non-fatal diagnostics and exits 0, this command
+exits with code 2 when any resolver fails validation. Use it as a validation
+gate in CI pipelines or pre-commit checks.
+
+Resolved values are still printed so failures can be inspected. Input
+parameters and solution sources work exactly as in 'run resolver'.
+
+`+ResolverParametersHelp+`
+
+EXIT CODES:
+  0  All resolvers validated successfully
+  1  Resolver execution failed
+  2  Validation failed
+  3  Invalid solution (cycle/parse error)
+  4  File not found
+
+Examples:
+  # Validate all resolvers (auto-discovery)
+  scafctl validate resolver
+
+  # Validate resolvers from a solution file
+  scafctl validate resolver -f ./my-solution.yaml
+
+  # Validate with parameters
+  scafctl validate resolver -f ./my-solution.yaml env=prod region=us-east1
+
+  # Validate specific resolvers (with their dependencies)
+  scafctl validate resolver db config -f ./my-solution.yaml`, settings.CliBinaryName, cliParams.BinaryName),
+		Args: cobra.ArbitraryArgs,
+		PreRun: func(cCmd *cobra.Command, args []string) {
+			options.flagsChanged = make(map[string]bool)
+			cCmd.Flags().Visit(func(f *pflag.Flag) {
+				options.flagsChanged[f.Name] = true
+			})
+			fileExplicit := options.flagsChanged["file"]
+			parseResolverArgs(args, options, fileExplicit)
+		},
+		RunE:         makeRunEFunc(cfg, "resolver"),
+		SilenceUsage: true,
+	}
+
+	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
+	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
+	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope validation to the resolvers consumed by this action (repeatable)")
 
 	setResolverHelpFunc(cCmd)
 
@@ -528,20 +615,28 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		o.sharedResolverOptions.SkipTransform = true
 	}
 
+	// run resolver is an inspection command: validation failures must never
+	// withhold the produced values. Enable non-fatal mode so executeResolvers
+	// returns partial values plus diagnostics instead of aborting.
+	o.nonFatalValidation = true
+
 	// Track timing
 	start := time.Now()
 
 	// Execute resolvers
-	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
-	if err != nil {
-		return o.exitWithCode(ctx, err, exitcode.GeneralError)
+	resolverData, resolverCtx, execErr := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	if execErr != nil && resolverCtx == nil {
+		// A hard failure occurred before any values could be produced
+		// (e.g., phase build error). Abort with the error.
+		return o.exitWithCode(ctx, execErr, exitcode.GeneralError)
 	}
 
 	elapsed := time.Since(start)
 
 	// State lifecycle: save merged parameters and check immutable values
-	// after successful resolver execution.
-	if stateMgr != nil && stateData != nil {
+	// after successful resolver execution. Skip the save when validation failed
+	// so invalid values are never persisted.
+	if stateMgr != nil && stateData != nil && execErr == nil {
 		solMeta := buildStateSolutionMeta(sol)
 		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
@@ -586,12 +681,70 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		results["__execution"] = executionData
 	}
 
+	// Surface non-fatal validation diagnostics on stderr so the resolved values
+	// (on stdout) remain useful for troubleshooting and machine consumption.
+	if execErr != nil {
+		o.renderValidationDiagnostics(ctx, execErr)
+	}
+
 	// When -o test: generate a functional test definition instead of normal output.
 	if o.Output == "test" {
 		return o.generateTestOutput(ctx, []string{"run", "resolver"}, o.Names, results)
 	}
 
-	return o.writeResolverOutput(ctx, results, o.BinaryName+" run resolver")
+	if err := o.writeResolverOutput(ctx, results, o.BinaryName+" run resolver"); err != nil {
+		return err
+	}
+
+	// In non-fatal mode the values are always shown. When --fail-on-validation
+	// is set, exit non-zero so CI/gating callers detect the failure.
+	if execErr != nil && o.FailOnValidation {
+		return exitcode.WithCode(execErr, exitcode.ValidationFailed)
+	}
+
+	return nil
+}
+
+// renderValidationDiagnostics writes a human-readable summary of resolver
+// validation-only failures to stderr. It is used by the non-fatal inspection
+// path so the resolved values on stdout are not polluted. Resolve- and
+// transform-phase failures remain fatal and are reported earlier.
+func (o *ResolverOptions) renderValidationDiagnostics(ctx context.Context, execErr error) {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		// Fall back to a writer built from the command's IO streams so
+		// diagnostics are still emitted when the caller did not seed a writer
+		// into the context (e.g. embedders or direct Run invocations).
+		if o.IOStreams != nil {
+			cliParams := o.CliParams
+			if cliParams == nil {
+				// Writer methods dereference cliParams; default it so direct
+				// ResolverOptions.Run() calls outside the cobra wiring do not panic.
+				cliParams = &settings.Run{}
+			}
+			w = writer.New(o.IOStreams, cliParams)
+		} else {
+			return
+		}
+	}
+
+	diags := execute.DiagnosticsFromError(execErr)
+	if len(diags) == 0 {
+		w.WarnStderrf("resolver validation failed: %v", execErr)
+		return
+	}
+
+	w.WarnStderrf("%d resolver(s) failed validation:", len(diags))
+	for _, d := range diags {
+		if d.Resolver != "" {
+			w.PlainStderrf("  - %s: %s", d.Resolver, d.Message)
+		} else {
+			w.PlainStderrf("  - %s", d.Message)
+		}
+	}
+	if !o.FailOnValidation {
+		w.PlainStderrf("(values shown above; pass --fail-on-validation to exit non-zero)")
+	}
 }
 
 // showResolverGraph renders the resolver dependency graph without executing providers
@@ -628,6 +781,10 @@ func (o *ResolverOptions) showResolverSnapshot(
 		o.sharedResolverOptions.SkipTransform = true
 	}
 
+	// Capture the snapshot even when validation fails: non-fatal mode keeps the
+	// populated resolver context so the snapshot reflects partial values.
+	o.nonFatalValidation = true
+
 	start := time.Now()
 
 	// Execute resolvers
@@ -639,6 +796,9 @@ func (o *ResolverOptions) showResolverSnapshot(
 		lgr.V(1).Info("resolver execution completed with errors", "error", err)
 		status = resolver.ExecutionStatusFailed
 		// Continue to capture snapshot even with errors
+	}
+	if resolverCtx == nil {
+		resolverCtx = resolver.NewContext()
 	}
 
 	// Re-inject resolver context into context.Context for CaptureSnapshot

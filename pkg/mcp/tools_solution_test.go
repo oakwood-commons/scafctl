@@ -635,6 +635,110 @@ spec:
 		assert.Equal(t, float64(2), derivedPlan["phase"], "derived should be in phase 2")
 		assert.Equal(t, float64(1), derivedPlan["dependencyCount"], "derived should have 1 dependency")
 	})
+
+	t.Run("validation failure is non-fatal by default and includes values plus diagnostics", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "badval.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: badval
+  version: 1.0.0
+spec:
+  resolvers:
+    name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Bob"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^Alice$"
+              message: "name must be Alice"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError, "validation failure must be non-fatal by default")
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		assert.Equal(t, false, parsed["valid"], "valid should be false when validation fails")
+		diagnostics, ok := parsed["diagnostics"].([]any)
+		require.True(t, ok, "diagnostics should be present")
+		assert.NotEmpty(t, diagnostics)
+
+		resolvers := parsed["resolvers"].(map[string]any)
+		name := resolvers["name"].(map[string]any)
+		assert.Equal(t, "Bob", name["value"], "partial value must still be returned")
+		assert.Equal(t, "failed", name["status"])
+	})
+
+	t.Run("strict mode reports error but still includes values", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "badval-strict.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: badval-strict
+  version: 1.0.0
+spec:
+  resolvers:
+    name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Bob"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^Alice$"
+              message: "name must be Alice"
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path":   solFile,
+			"strict": true,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError, "strict mode must report an error on validation failure")
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		assert.Equal(t, false, parsed["valid"])
+		resolvers := parsed["resolvers"].(map[string]any)
+		name := resolvers["name"].(map[string]any)
+		assert.Equal(t, "Bob", name["value"], "values must still be included in strict mode")
+	})
 }
 
 func TestHandleGetRunCommand(t *testing.T) {

@@ -42,7 +42,9 @@ func (e Expression) GetVariablesWithPrefix(ctx context.Context, prefix string) (
 	if factory != nil {
 		env, err = factory(ctx)
 	} else {
-		env, err = cel.NewEnv()
+		// Enable optional types so optional access (_.?name, _[?"name"]) parses
+		// even when no extension factory is registered (e.g. white-box tests).
+		env, err = cel.NewEnv(cel.OptionalTypes())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
@@ -125,7 +127,9 @@ func (e Expression) RequiredVariables(ctx context.Context) ([]string, error) {
 	if factory != nil {
 		env, err = factory(ctx)
 	} else {
-		env, err = cel.NewEnv()
+		// Enable optional types so optional access (_.?name, _[?"name"]) parses
+		// even when no extension factory is registered (e.g. white-box tests).
+		env, err = cel.NewEnv(cel.OptionalTypes())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
@@ -216,15 +220,21 @@ func extractVariablesWithPrefix(expr *exprpb.Expr, prefix string, vars map[strin
 		// Process function calls and their arguments
 		call := expr.GetCallExpr()
 
-		// Handle bracket/index access: _["resolverName"] is parsed as a CallExpr
-		// with function "_[_]", where args[0] is the map operand and args[1] is the key.
-		if useSelect && call.GetFunction() == "_[_]" && len(call.GetArgs()) == 2 {
-			operand := call.GetArgs()[0]
-			key := call.GetArgs()[1]
-			if operand.GetIdentExpr() != nil && operand.GetIdentExpr().GetName() == baseIdent {
-				// Check if the key is a string constant (e.g., _["resolverName"])
-				if key.GetConstExpr() != nil && key.GetConstExpr().GetStringValue() != "" {
-					vars[key.GetConstExpr().GetStringValue()] = struct{}{}
+		// Handle index and optional access, all of which are parsed as a CallExpr
+		// with args[0] the operand and args[1] the field/key string constant:
+		//   _["resolverName"]  -> function "_[_]"   (bracket index)
+		//   _.?resolverName    -> function "_?._"   (optional select)
+		//   _[?"resolverName"] -> function "_[?_]"  (optional index)
+		if useSelect && len(call.GetArgs()) == 2 {
+			switch call.GetFunction() {
+			case "_[_]", "_?._", "_[?_]":
+				operand := call.GetArgs()[0]
+				key := call.GetArgs()[1]
+				if operand.GetIdentExpr() != nil && operand.GetIdentExpr().GetName() == baseIdent {
+					// Check if the key is a string constant (e.g., _["resolverName"])
+					if key.GetConstExpr() != nil && key.GetConstExpr().GetStringValue() != "" {
+						vars[key.GetConstExpr().GetStringValue()] = struct{}{}
+					}
 				}
 			}
 		}

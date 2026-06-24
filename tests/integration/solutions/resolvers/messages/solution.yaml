@@ -78,7 +78,7 @@ spec:
       static-custom-error:
         description: Verify static custom error message overrides default
         command: [run, resolver, invalidPortStatic]
-        args: ["-o", "json"]
+        args: ["-o", "json", "--fail-on-validation"]
         tags: [resolver, messages, negative]
         expectFailure: true
         assertions:
@@ -89,7 +89,7 @@ spec:
       cel-custom-error:
         description: Verify CEL-based custom error message includes dynamic content
         command: [run, resolver, invalidPortCel]
-        args: ["-o", "json"]
+        args: ["-o", "json", "--fail-on-validation"]
         tags: [resolver, messages, negative]
         expectFailure: true
         assertions:

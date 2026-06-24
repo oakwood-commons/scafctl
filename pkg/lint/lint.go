@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -1011,8 +1010,11 @@ func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 }
 
 // validateCELSyntax checks if a CEL expression is syntactically valid.
+// The env enables cel.OptionalTypes() so that optional access syntax
+// (_.?name, _[?"name"]) parses successfully, matching the env used by the
+// reference collector and runtime evaluation in pkg/celexp.
 func validateCELSyntax(expr string) error {
-	env, err := cel.NewEnv()
+	env, err := cel.NewEnv(cel.OptionalTypes())
 	if err != nil {
 		return err
 	}
@@ -1045,97 +1047,52 @@ func validateTemplateSyntax(tmpl string) error {
 func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 	refs := make(map[string]bool)
 
-	resolverRefPattern := regexp.MustCompile(`_\.([a-zA-Z_][a-zA-Z0-9_]*)|__resolvers\.([a-zA-Z_][a-zA-Z0-9_]*)`)
-
+	// Walk every ValueRef and condition in the solution, extracting resolver
+	// references via the same AST-based logic used to build the dependency graph.
+	// This recognizes plain (_.name), bracket (_["name"]), and optional
+	// (_.?name, _[?"name"]) CEL access, Go-template references, and nested
+	// literals, and applies go-template data-scope exclusions -- keeping the
+	// unused-resolver rule consistent with actual dependency resolution.
 	_ = walk.Walk(sol, &walk.Visitor{
 		ValueRef: func(_ string, vr *spec.ValueRef) error {
-			if vr.Resolver != nil {
-				refs[*vr.Resolver] = true
-			}
-			if vr.Expr != nil {
-				scanExpressionForResolverRefs(string(*vr.Expr), resolverRefPattern, refs)
-			}
-			if vr.Tmpl != nil {
-				// Use the Go template AST to extract references, which handles
-				// both {{ .resolverName }} and {{ ._.resolverName }} patterns.
-				tmplRefs, err := gotmpl.GetGoTemplateReferences(string(*vr.Tmpl), "", "")
-				if err == nil {
-					for _, ref := range tmplRefs {
-						// Skip scoped references inside {{ with }}/{{ range }} bodies
-						if ref.Scoped {
-							continue
-						}
-
-						name := resolverRefs.ExtractResolverName(ref.Path)
-						if name != "" {
-							refs[name] = true
-						}
-					}
-				}
-				// Also scan with regex as a fallback
-				scanExpressionForResolverRefs(string(*vr.Tmpl), resolverRefPattern, refs)
-			}
-			if vr.Literal != nil {
-				scanLiteralForResolverRefs(vr.Literal, resolverRefPattern, refs)
-			}
+			resolver.ExtractRefsFromValueRef(vr, refs)
 			return nil
 		},
 		Condition: func(_, _ string, expr *celexp.Expression) error {
-			scanExpressionForResolverRefs(string(*expr), resolverRefPattern, refs)
+			resolver.ExtractRefsFromValueRef(&spec.ValueRef{Expr: expr}, refs)
 			return nil
 		},
 	})
 
+	// A resolver named in another resolver's dependsOn array is used, even when
+	// it is not referenced by any expression or template. The walker does not
+	// visit dependsOn, so collect those references explicitly.
+	if sol.Spec.Resolvers != nil {
+		for _, r := range sol.Spec.Resolvers {
+			if r == nil {
+				continue
+			}
+			for _, dep := range r.DependsOn {
+				if dep != "" {
+					refs[dep] = true
+				}
+			}
+		}
+	}
+
+	// State configuration (enabled, backend inputs, saveOverrides) can reference
+	// resolvers. The walker does not traverse state, so scan it explicitly.
+	if sol.State != nil {
+		resolver.ExtractRefsFromValueRef(sol.State.Enabled, refs)
+		for _, vr := range sol.State.Backend.Inputs {
+			resolver.ExtractRefsFromValueRef(vr, refs)
+		}
+		for _, vr := range sol.State.Backend.SaveOverrides {
+			resolver.ExtractRefsFromValueRef(vr, refs)
+		}
+	}
+
 	return refs
-}
-
-// scanLiteralForResolverRefs scans literal values (maps, slices) for nested
-// resolver references, expressions, and templates. Nested maps with a single
-// "rslvr", "expr", or "tmpl" key are treated as resolver references.
-func scanLiteralForResolverRefs(v any, pattern *regexp.Regexp, refs map[string]bool) {
-	switch val := v.(type) {
-	case string:
-		// Scan plain string literals for _.resolverName patterns.
-		// This catches CEL expression inputs (e.g., `expression: "has(_.foo)"`),
-		// Go template inputs, and any other string that may reference resolvers.
-		scanExpressionForResolverRefs(val, pattern, refs)
-	case map[string]any:
-		// Check if this map itself is a resolver reference
-		if rslvr, ok := val["rslvr"]; ok {
-			if name, ok := rslvr.(string); ok {
-				refs[name] = true
-			}
-		}
-		if expr, ok := val["expr"]; ok {
-			if s, ok := expr.(string); ok {
-				scanExpressionForResolverRefs(s, pattern, refs)
-			}
-		}
-		if tmpl, ok := val["tmpl"]; ok {
-			if s, ok := tmpl.(string); ok {
-				scanExpressionForResolverRefs(s, pattern, refs)
-			}
-		}
-		// Recurse into nested values
-		for _, child := range val {
-			scanLiteralForResolverRefs(child, pattern, refs)
-		}
-	case []any:
-		for _, item := range val {
-			scanLiteralForResolverRefs(item, pattern, refs)
-		}
-	}
-}
-
-func scanExpressionForResolverRefs(expr string, pattern *regexp.Regexp, refs map[string]bool) {
-	matches := pattern.FindAllStringSubmatch(expr, -1)
-	for _, match := range matches {
-		for i := 1; i < len(match); i++ {
-			if match[i] != "" {
-				refs[match[i]] = true
-			}
-		}
-	}
 }
 
 // collectTemplateFileResolverRefs scans external template files on disk
