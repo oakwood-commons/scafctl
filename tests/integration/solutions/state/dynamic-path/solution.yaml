@@ -99,3 +99,17 @@ spec:
           - expression: __exitCode == 0
           - expression: __output.config_value == "default-config"
             message: "Gamma project should not see beta's state file"
+
+      # =====================================================================
+      # Missing required __params produces actionable error
+      # =====================================================================
+      dynamic-path-missing-param:
+        description: Missing __params.project produces actionable error with param hint
+        command: [run, resolver]
+        args: ["-o", "json"]
+        # No -r project=... supplied -- state backend path cannot be resolved
+        tags: [state, dynamic-path, error-handling]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("missing required parameters")
+          - expression: __stderr.contains("project")

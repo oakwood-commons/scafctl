@@ -412,8 +412,17 @@ func TestCommandDelete_SaveError(t *testing.T) {
 	seedState(t, path)
 
 	// Make directory read-only so SaveToFile fails
-	require.NoError(t, os.Chmod(dir, 0o555))
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
 	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	// Verify the restriction is actually enforced (e.g. not running as root)
+	probe := filepath.Join(dir, ".probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err == nil {
+		os.Remove(probe)
+		t.Skip("filesystem does not enforce permission restrictions")
+	}
 
 	ctx, buf := newTestContext(t)
 	cmd := CommandDelete(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")

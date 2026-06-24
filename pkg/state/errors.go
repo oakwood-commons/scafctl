@@ -3,7 +3,11 @@
 
 package state
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 var (
 	// ErrInvalidBackend indicates the configured backend provider lacks CapabilityState.
@@ -19,3 +23,26 @@ var (
 	// version of scafctl and cannot be safely read by this version.
 	ErrUnsupportedSchemaVersion = errors.New("unsupported state schema version")
 )
+
+// MissingParamsError is returned when state load fails because the state
+// backend configuration references __params keys that were not supplied via
+// CLI -r flags. It wraps the original evaluation error and includes the list
+// of missing parameter names so callers can produce actionable messages.
+type MissingParamsError struct {
+	// Missing is the sorted list of __params keys not found in the supplied params.
+	Missing []string `json:"missing" yaml:"missing" doc:"Parameter names required by state backend"`
+
+	// Original is the underlying evaluation error.
+	Original error `json:"-" yaml:"-"`
+}
+
+func (e *MissingParamsError) Error() string {
+	return fmt.Sprintf(
+		"state backend requires parameters [%s] that were not supplied: %v",
+		strings.Join(e.Missing, ", "), e.Original,
+	)
+}
+
+func (e *MissingParamsError) Unwrap() error {
+	return e.Original
+}

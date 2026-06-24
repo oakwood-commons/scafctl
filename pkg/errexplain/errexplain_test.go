@@ -126,6 +126,15 @@ func TestExplain_DirectoryNotFound_CatalogContext(t *testing.T) {
 	assert.Contains(t, exp.RootCause, "loaded from a catalog without a bundle")
 }
 
+func TestExplain_StateMissingParams(t *testing.T) {
+	exp := Explain(`state backend requires parameters [project, env] that were not supplied: state: resolve backend inputs: failed to execute template`)
+	assert.Equal(t, "state_configuration", exp.Category)
+	assert.Contains(t, exp.Summary, "project, env")
+	assert.Contains(t, exp.Suggestions[0], "-r project=<value>")
+	assert.Contains(t, exp.Suggestions[0], "-r env=<value>")
+	assert.Contains(t, exp.RootCause, "__params")
+}
+
 func BenchmarkExplain(b *testing.B) {
 	errors := []string{
 		`resolver "api" failed in resolve phase (step 0, provider http): connection refused`,

@@ -6,6 +6,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -909,6 +910,30 @@ func buildStateSolutionMeta(sol *solution.Solution) state.SolutionMeta {
 		meta.Version = sol.Metadata.Version.String()
 	}
 	return meta
+}
+
+// buildParamFlagHint formats missing param names as -r flags for user hints.
+func buildParamFlagHint(params []string) string {
+	parts := make([]string, 0, len(params))
+	for _, p := range params {
+		parts = append(parts, fmt.Sprintf("-r %s=<value>", p))
+	}
+	return strings.Join(parts, " ")
+}
+
+// handleStateLoadError checks whether a state load error is caused by missing
+// CLI parameters and, if so, prints an actionable hint to stderr before
+// returning the exit error. This is called from run resolver, run solution,
+// and run action when stateMgr.Load() fails.
+func (o *sharedResolverOptions) handleStateLoadError(ctx context.Context, loadErr error) error {
+	var missingErr *state.MissingParamsError
+	if errors.As(loadErr, &missingErr) {
+		paramFlags := buildParamFlagHint(missingErr.Missing)
+		err := fmt.Errorf("state load: missing required parameters [%s]. Supply with: %s",
+			strings.Join(missingErr.Missing, ", "), paramFlags)
+		return o.exitWithCode(ctx, err, exitcode.GeneralError)
+	}
+	return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
 }
 
 // extractParameterKeys collects the CLI parameter keys accepted by a set of resolvers.

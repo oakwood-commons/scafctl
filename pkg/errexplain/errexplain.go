@@ -291,5 +291,36 @@ func knownPatterns() []pattern {
 				return exp
 			},
 		},
+		{
+			name:  "state-missing-params",
+			regex: regexp.MustCompile(`state backend requires parameters \[([^\]]+)\] that were not supplied`),
+			build: func(m []string, _ string) Explanation {
+				params := m[1]
+				return Explanation{
+					Category:  "state_configuration",
+					Summary:   fmt.Sprintf("State backend needs CLI parameters: %s", params),
+					RootCause: "The state backend path uses __params references in CEL or Go template expressions, but those parameters were not supplied via -r flags",
+					Suggestions: []string{
+						fmt.Sprintf("Supply the missing parameters with -r flags: %s", formatParamHints(params)),
+						"State is loaded before resolvers run, so __params (CLI -r flags) are the only data source",
+						"Check the state.backend.inputs section of your solution YAML for __params references",
+						"If this is a replay run, the state file path must be deterministic from CLI params alone",
+					},
+				}
+			},
+		},
 	}
+}
+
+// formatParamHints converts a comma-separated param list into -r flag format.
+func formatParamHints(params string) string {
+	parts := strings.Split(params, ", ")
+	hints := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			hints = append(hints, fmt.Sprintf("-r %s=<value>", p))
+		}
+	}
+	return strings.Join(hints, " ")
 }
