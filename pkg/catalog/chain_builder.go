@@ -199,7 +199,6 @@ func BuildRemoteCatalogChain(cfg *config.Config, authRegistry *auth.Registry, lo
 	if len(catalogs) == 0 {
 		return nil, fmt.Errorf("no remote catalogs available")
 	}
-
 	return NewChainCatalog(logger, catalogs...)
 }
 

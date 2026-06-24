@@ -352,7 +352,7 @@ func TestPrune_SkipsLockedFiles(t *testing.T) {
 
 	// Make the v1.0.0 platform directory non-removable via chmod.
 	cache := NewCache(cacheDir)
-	binPath := cache.binaryPath("github", "1.0.0", CurrentPlatform())
+	binPath := cache.binaryPath("github", "1.0.0", CurrentPlatform(), "")
 	platformDir := filepath.Dir(binPath)
 	if err := os.Chmod(platformDir, 0o555); err != nil {
 		t.Skip("cannot restrict permissions on this platform")

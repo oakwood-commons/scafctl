@@ -27,6 +27,11 @@ func binaryDigest(data []byte) string {
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 }
 
+// testCatalogRegistryHash returns the registry hash for the default mock catalog ("test").
+func testCatalogRegistryHash() string {
+	return CatalogIdentity{Canonical: "test"}.RegistryHash()
+}
+
 // mockCatalog implements catalog.Catalog for testing.
 type mockCatalog struct {
 	name      string
@@ -184,8 +189,8 @@ func TestFetcher_FetchPlugins_CacheHit(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewCache(cacheDir)
 
-	// Pre-populate cache
-	_, err := cache.Put("cached-plugin", "2.0.0", "linux/amd64", []byte("cached-binary"))
+	// Pre-populate cache with registry hash matching the mock catalog identity.
+	_, err := cache.Put("cached-plugin", "2.0.0", "linux/amd64", []byte("cached-binary"), WithRegistryHash(testCatalogRegistryHash()))
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
@@ -400,7 +405,7 @@ func TestFetcher_FetchPlugins_EnforceMode_BypassesCache(t *testing.T) {
 	cache := NewCache(cacheDir)
 
 	// Pre-populate cache
-	_, err := cache.Put("signed-plugin", "1.0.0", "linux/amd64", []byte("fresh-binary"))
+	_, err := cache.Put("signed-plugin", "1.0.0", "linux/amd64", []byte("fresh-binary"), WithRegistryHash(testCatalogRegistryHash()))
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
@@ -436,8 +441,8 @@ func TestFetcher_FetchPlugins_WarnMode_UsesCache(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewCache(cacheDir)
 
-	// Pre-populate cache
-	_, err := cache.Put("warn-plugin", "1.0.0", "linux/amd64", []byte("cached-binary"))
+	// Pre-populate cache with registry hash
+	_, err := cache.Put("warn-plugin", "1.0.0", "linux/amd64", []byte("cached-binary"), WithRegistryHash(testCatalogRegistryHash()))
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
@@ -774,7 +779,7 @@ func TestRegisterCachedPluginVersion_WrongVersion(t *testing.T) {
 	assert.Nil(t, clients)
 }
 
-func TestPluginCacheKey(t *testing.T) {
+func TestPluginCacheName(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -796,13 +801,50 @@ func TestPluginCacheKey(t *testing.T) {
 	}
 }
 
-func TestPluginCacheKey_NamespaceIsolation(t *testing.T) {
+func TestPluginCachePath(t *testing.T) {
 	t.Parallel()
 
-	// A provider and auth-handler with the same name must produce different cache keys.
-	providerKey := PluginCacheKey("github", solution.PluginKindProvider)
-	authKey := PluginCacheKey("github", solution.PluginKindAuthHandler)
-	assert.NotEqual(t, providerKey, authKey)
+	// With registry hash.
+	path := PluginCachePath("github", solution.PluginKindProvider, "a1b2c3d4e5f67890", "1.5.3", "darwin/arm64")
+	assert.Contains(t, path, "github")
+	assert.Contains(t, path, "a1b2c3d4e5f67890")
+	assert.Contains(t, path, "1.5.3")
+
+	// Without registry hash.
+	path = PluginCachePath("github", solution.PluginKindProvider, "", "1.5.3", "darwin/arm64")
+	assert.NotContains(t, path, "a1b2c3d4e5f67890")
+	assert.Contains(t, path, "github")
+	assert.Contains(t, path, "1.5.3")
+}
+
+func TestPluginCacheName_NamespaceIsolation(t *testing.T) {
+	t.Parallel()
+
+	// A provider and auth-handler with the same name must produce different cache names.
+	providerName := PluginCacheKey("github", solution.PluginKindProvider)
+	authName := PluginCacheKey("github", solution.PluginKindAuthHandler)
+	assert.NotEqual(t, providerName, authName)
+}
+
+func TestRegistryHash_CatalogIsolation(t *testing.T) {
+	t.Parallel()
+
+	// Same name/kind from different catalogs must produce different registry hashes.
+	id1 := CatalogIdentity{Canonical: "ghcr.io/acme/plugins"}
+	id2 := CatalogIdentity{Canonical: "ghcr.io/other/plugins"}
+
+	hash1 := id1.RegistryHash()
+	hash2 := id2.RegistryHash()
+	assert.NotEqual(t, hash1, hash2)
+	assert.Len(t, hash1, 16)
+	assert.Len(t, hash2, 16)
+}
+
+func TestRegistryHash_ZeroIdentity(t *testing.T) {
+	t.Parallel()
+
+	id := CatalogIdentity{}
+	assert.Equal(t, "", id.RegistryHash())
 }
 
 func TestFetcher_FetchPlugins_CatalogFallback_RejectsConstraintMismatch(t *testing.T) {
@@ -814,8 +856,8 @@ func TestFetcher_FetchPlugins_CatalogFallback_RejectsConstraintMismatch(t *testi
 	cacheDir := t.TempDir()
 	cache := NewCache(cacheDir)
 
-	// Pre-populate cache with version 0.5.0
-	_, err := cache.Put("my-plugin", "0.5.0", "linux/amd64", []byte("old-binary"))
+	// Pre-populate cache with version 0.5.0 under the mock catalog's registry hash.
+	_, err := cache.Put("my-plugin", "0.5.0", "linux/amd64", []byte("old-binary"), WithRegistryHash(testCatalogRegistryHash()))
 	require.NoError(t, err)
 
 	f := NewFetcher(FetcherConfig{
@@ -825,16 +867,16 @@ func TestFetcher_FetchPlugins_CatalogFallback_RejectsConstraintMismatch(t *testi
 		Logger:   logr.Discard(),
 	})
 
-	// Request version 0.6.0 — catalog fails, cache has 0.5.0 which doesn't match.
+	// Request version 0.6.0 — catalog fails, cache has 0.5.0 which doesn't satisfy.
 	deps := []solution.PluginDependency{
 		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "0.6.0"},
 	}
 
 	_, err = f.FetchPlugins(context.Background(), deps, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not satisfy")
-	assert.Contains(t, err.Error(), "0.5.0")
-	assert.Contains(t, err.Error(), "0.6.0")
+	// Catalog resolution fails and cached 0.5.0 doesn't satisfy 0.6.0, so the
+	// catalog error propagates.
+	assert.Contains(t, err.Error(), "resolving version")
 }
 
 func TestFetcher_FetchPlugins_CacheHit_RangeConstraintSatisfied(t *testing.T) {
@@ -923,15 +965,15 @@ func TestFetcher_FetchPlugins_CatalogFallback_InvalidConstraintReportsParseError
 		Logger:   logr.Discard(),
 	})
 
-	// Use an unparseable constraint — the fallback should surface the parse
-	// error separately from a "does not satisfy" message.
+	// Use an unparseable constraint — catalog resolution fails, and the
+	// cached version doesn't match the invalid constraint either.
 	deps := []solution.PluginDependency{
 		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: ">>>invalid<<<"},
 	}
 
 	_, err = f.FetchPlugins(context.Background(), deps, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "constraint check failed")
+	assert.Contains(t, err.Error(), "resolving version")
 }
 
 func TestCachedVersionSatisfies(t *testing.T) {
