@@ -678,6 +678,21 @@ func TestExtractDepsFromExpression(t *testing.T) {
 			want: []string{"env", "region"},
 		},
 		{
+			name: "optional select",
+			expr: `_.?platformProfileID.orValue("")`,
+			want: []string{"platformProfileID"},
+		},
+		{
+			name: "optional select mixed with plain select",
+			expr: `_.?optionalDep.orValue("") + _.plainDep`,
+			want: []string{"optionalDep", "plainDep"},
+		},
+		{
+			name: "optional index bracket notation",
+			expr: `_[?"my-resolver"].orValue("")`,
+			want: []string{"my-resolver"},
+		},
+		{
 			name: "invalid expression (should not panic)",
 			expr: "this is not valid CEL",
 			want: []string{},
@@ -956,6 +971,54 @@ func TestBuildGraph(t *testing.T) {
 				// Verify stats
 				assert.Equal(t, 2, graph.Stats.TotalResolvers)
 				assert.Equal(t, 2, graph.Stats.TotalPhases)
+			},
+		},
+		{
+			name: "dependency via optional access expression",
+			resolvers: []*Resolver{
+				{
+					Name: "base",
+					Type: TypeString,
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{
+								Provider: "static",
+								Inputs: map[string]*ValueRef{
+									"value": {Literal: "base"},
+								},
+							},
+						},
+					},
+				},
+				{
+					Name: "dependent",
+					Type: TypeString,
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{
+								Provider: "cel",
+								Inputs: map[string]*ValueRef{
+									"value": {Expr: celExpPtr(`_.?base.orValue("")`)},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+			validate: func(t *testing.T, graph *Graph) {
+				require.Equal(t, 2, len(graph.Nodes))
+				// Optional access _.?base must produce a dependency edge so that
+				// base is ordered before dependent.
+				require.Equal(t, 2, len(graph.Phases))
+				assert.Equal(t, 1, len(graph.Edges))
+
+				phaseOf := make(map[string]int)
+				for _, n := range graph.Nodes {
+					phaseOf[n.Name] = n.Phase
+				}
+				assert.Less(t, phaseOf["base"], phaseOf["dependent"],
+					"base must resolve before dependent when referenced via optional access")
 			},
 		},
 		{
@@ -1471,6 +1534,68 @@ func TestExtractRefsFromValueRefs(t *testing.T) {
 			assert.Equal(t, tt.want, gotMap)
 		})
 	}
+}
+
+func TestExtractRefsFromValueRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  *ValueRef
+		want map[string]bool
+	}{
+		{
+			name: "nil ref is a no-op",
+			ref:  nil,
+			want: map[string]bool{},
+		},
+		{
+			name: "direct resolver reference",
+			ref:  &ValueRef{Resolver: stringPtr("environment")},
+			want: map[string]bool{"environment": true},
+		},
+		{
+			name: "cel expression reference",
+			ref:  &ValueRef{Expr: celExpPtr("_.config.host + ':' + string(_.config.port)")},
+			want: map[string]bool{"config": true},
+		},
+		{
+			name: "template reference",
+			ref:  &ValueRef{Tmpl: tmplPtr("Hello {{ ._.username }}")},
+			want: map[string]bool{"username": true},
+		},
+		{
+			name: "nested literal map reference",
+			ref: &ValueRef{Literal: map[string]any{
+				"APP_NAME": map[string]any{"rslvr": "appName"},
+			}},
+			want: map[string]bool{"appName": true},
+		},
+		{
+			name: "literal value produces no refs",
+			ref:  &ValueRef{Literal: "static"},
+			want: map[string]bool{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			deps := make(map[string]bool)
+			ExtractRefsFromValueRef(tt.ref, deps)
+			assert.Equal(t, tt.want, deps)
+		})
+	}
+}
+
+func TestExtractRefsFromValueRef_NilDepsIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	// A nil deps map must be a no-op and must not panic, even with a
+	// non-nil ref that would otherwise produce dependencies.
+	assert.NotPanics(t, func() {
+		ExtractRefsFromValueRef(&ValueRef{Resolver: stringPtr("environment")}, nil)
+	})
 }
 
 func TestExtractRefsFromValueRefs_NestedValueRefMaps(t *testing.T) {

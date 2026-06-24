@@ -127,7 +127,7 @@ func (s *Server) registerSolutionTools() {
 
 	// preview_resolvers
 	previewResolversTool := mcp.NewTool("preview_resolvers",
-		mcp.WithDescription("Execute a solution's resolver chain and return each resolver's resolved value. This is the 'does it actually work?' step between writing YAML and running the full solution. Shows the resolved value, type, and status for every resolver. Accepts optional input parameters for parameter-type resolvers. Use the 'resolver' parameter to debug a single resolver and see its resolve/transform/validate pipeline in detail."),
+		mcp.WithDescription("Execute a solution's resolver chain and return each resolver's resolved value. This is the 'does it actually work?' step between writing YAML and running the full solution. Shows the resolved value, type, and status for every resolver. Accepts optional input parameters for parameter-type resolvers. Use the 'resolver' parameter to debug a single resolver and see its resolve/transform/validate pipeline in detail. Validation failures are non-fatal by default: resolved values are still returned alongside a 'diagnostics' list so you can troubleshoot. Set 'strict' to true to have the tool report an error when validation fails (values are still included)."),
 		mcp.WithTitleAnnotation("Preview Resolvers"),
 		mcp.WithToolIcons(toolIcons["solution"]),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -144,6 +144,9 @@ func (s *Server) registerSolutionTools() {
 		),
 		mcp.WithString("resolver",
 			mcp.Description("Debug a single resolver by name. Returns detailed pipeline info (resolve, transform, validate phases) for just this resolver and its dependencies."),
+		),
+		mcp.WithBoolean("strict",
+			mcp.Description("Report an error result when any resolver fails validation. The resolved values and diagnostics are still included. Default: false (validation failures are non-fatal)."),
 		),
 		mcp.WithString("output_dir",
 			mcp.Description("Target directory for action output. Included for path preview purposes — resolvers always use CWD regardless of this setting."),
@@ -776,8 +779,12 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	}
 
 	cfg := execute.ResolverExecutionConfigFromContext(ctx)
+	// Validation failures must not withhold resolved values: enable non-fatal
+	// mode so resolver execution returns partial values plus diagnostics.
+	cfg.NonFatalValidation = true
 	// Check if we're debugging a single resolver
 	resolverFilter := request.GetString("resolver", "")
+	strict := request.GetBool("strict", false)
 
 	// Send progress notifications during execution
 	progress := newProgressReporter(s, request)
@@ -900,7 +907,19 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 			}
 		}
 
-		if val, ok := result.Data[name]; ok {
+		if res, ok := result.Context.GetResult(name); ok {
+			preview.Value = res.Value
+			switch res.Status {
+			case resolver.ExecutionStatusSuccess:
+				preview.Status = "resolved"
+			case resolver.ExecutionStatusFailed:
+				preview.Status = "failed"
+			case resolver.ExecutionStatusSkipped:
+				preview.Status = "skipped"
+			default:
+				preview.Status = "unresolved"
+			}
+		} else if val, ok := result.Data[name]; ok {
 			preview.Value = val
 			preview.Status = "resolved"
 		} else {
@@ -941,6 +960,29 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 	// This lets AI agents understand execution order without re-parsing the YAML.
 	if planRaw, ok := result.Context.Get(celexp.VarPlan); ok {
 		response["plan"] = planRaw
+	}
+
+	// Surface non-fatal validation diagnostics so agents can troubleshoot while
+	// still seeing the resolved values. When strict is requested, report the
+	// result as an error (values remain included for context).
+	diags := execute.DiagnosticsFromError(result.Diagnostics)
+	if len(diags) > 0 {
+		response["diagnostics"] = diags
+		response["valid"] = false
+		if strict {
+			result2, jsonErr := mcp.NewToolResultJSON(response)
+			if jsonErr != nil {
+				return nil, jsonErr
+			}
+			result2.IsError = true
+			result2.Content = append(result2.Content,
+				mcp.NewResourceLink("solution://"+path, "Solution YAML", "Raw solution YAML content", "application/x-yaml"),
+				mcp.NewResourceLink("solution://"+path+"/graph", "Dependency Graph", "Resolver dependency graph", "application/json"),
+			)
+			return result2, nil
+		}
+	} else {
+		response["valid"] = true
 	}
 
 	result2, err := mcp.NewToolResultJSON(response)
