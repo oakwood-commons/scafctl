@@ -723,7 +723,7 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `list_providers` | List all providers with capability and category filtering |
 | `list_solutions` | List solutions from the local catalog with name filtering |
 | `preview_action` | Preview what each action in a workflow would do WITHOUT executing — shows materialized inputs, deferred values, phases, dependencies, and cross-section references (`crossSectionRefs`) for finally actions reading main-section results |
-| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value, output schema, and source positions. Use `resolver` param to focus on a single resolver and its dependencies |
+| `preview_resolvers` | Execute a solution's resolver chain and return each resolver's resolved value, output schema, and source positions. Use `resolver` param to focus on a single resolver and its dependencies. Validation failures are non-fatal by default: resolved values are returned alongside a `diagnostics` list and `valid: false`. Set `strict: true` to report an error result on validation failure (values are still included) |
 | `render_solution` | Render action, resolver, or action-deps graphs as structured JSON |
 | `run_solution_tests` | Execute functional tests defined in a solution and return structured results. Use `verbose=true` for full assertion details |
 | `scaffold_solution` | Generate a complete skeleton solution YAML from parameters — name, description, features, and providers |

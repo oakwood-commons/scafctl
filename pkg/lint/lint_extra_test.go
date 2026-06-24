@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -97,6 +98,10 @@ func TestValidateCELSyntax_Valid(t *testing.T) {
 	assert.NoError(t, validateCELSyntax("1 + 1"))
 	assert.NoError(t, validateCELSyntax("_.myResolver"))
 	assert.NoError(t, validateCELSyntax("'hello' + ' world'"))
+	// Optional access syntax must parse -- the env enables cel.OptionalTypes()
+	// to match the reference collector and runtime evaluation.
+	assert.NoError(t, validateCELSyntax(`_.?optionalDep.orValue("")`))
+	assert.NoError(t, validateCELSyntax(`_[?"optionalDep"].orValue("")`))
 }
 
 func TestValidateCELSyntax_Invalid(t *testing.T) {
@@ -556,6 +561,118 @@ func TestLintResolvers_CELExpressionInputNotFlaggedUnused(t *testing.T) {
 				"unixResult referenced in CEL expression should not be flagged unused")
 		}
 	}
+}
+
+func TestLintResolvers_OptionalAccessNotFlaggedUnused(t *testing.T) {
+	// A resolver referenced only via optional access (_.?name) must NOT be
+	// flagged as unused -- the AST-based collector recognizes optional select.
+	optExpr := celexp.Expression(`_.?optionalDep.orValue("")`)
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+	require.NoError(t, reg.Register(newFakeProvider("cel", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"optionalDep": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static"}},
+			},
+		},
+		"consumer": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{
+					Provider: "cel",
+					Inputs: map[string]*spec.ValueRef{
+						"expression": {Expr: &optExpr},
+					},
+				}},
+			},
+		},
+	}
+
+	referencedResolvers := collectReferencedResolvers(sol)
+	assert.True(t, referencedResolvers["optionalDep"],
+		"optional access _.?optionalDep should mark optionalDep as referenced")
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+	for _, f := range result.Findings {
+		if f.RuleName == "unused-resolver" {
+			assert.NotContains(t, f.Message, "optionalDep",
+				"optionalDep referenced via optional access should not be flagged unused")
+		}
+	}
+}
+
+func TestLintResolvers_DependsOnCountedAsUsage(t *testing.T) {
+	// A resolver referenced only via another resolver's dependsOn must NOT be
+	// flagged as unused.
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"base": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static"}},
+			},
+		},
+		"dependent": {
+			DependsOn: []string{"base"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static"}},
+			},
+		},
+	}
+
+	referencedResolvers := collectReferencedResolvers(sol)
+	assert.True(t, referencedResolvers["base"],
+		"dependsOn membership should mark base as referenced")
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, referencedResolvers)
+	for _, f := range result.Findings {
+		if f.RuleName == "unused-resolver" {
+			assert.NotContains(t, f.Message, "base",
+				"base referenced via dependsOn should not be flagged unused")
+		}
+	}
+}
+
+func TestLintResolvers_StateReferenceCountedAsUsage(t *testing.T) {
+	// Resolvers referenced only from the state block (saveOverrides rslvr and a
+	// backend input expression) must NOT be flagged as unused.
+	branch := "featureBranch"
+	pathExpr := celexp.Expression("_.statePath")
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"featureBranch": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static"}},
+			},
+		},
+		"statePath": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{{Provider: "static"}},
+			},
+		},
+	}
+	sol.State = &state.Config{
+		Enabled: &spec.ValueRef{Literal: true},
+		Backend: state.Backend{
+			Provider:      "github",
+			Inputs:        map[string]*spec.ValueRef{"path": {Expr: &pathExpr}},
+			SaveOverrides: map[string]*spec.ValueRef{"branch": {Resolver: &branch}},
+		},
+	}
+
+	referencedResolvers := collectReferencedResolvers(sol)
+	assert.True(t, referencedResolvers["featureBranch"],
+		"saveOverrides rslvr reference should mark featureBranch as referenced")
+	assert.True(t, referencedResolvers["statePath"],
+		"backend input expr reference should mark statePath as referenced")
 }
 
 func TestLintResolvers_HyphenatedName(t *testing.T) {

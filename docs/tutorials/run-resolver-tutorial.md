@@ -456,9 +456,11 @@ Output:
 
 ## Skipping Phases
 
-Resolvers execute through three ordered phases: **resolve → transform → validate**. You can skip phases to inspect intermediate values — particularly useful when validation blocks output and you need to see what was actually resolved.
+Resolvers execute through three ordered phases: **resolve -> transform -> validate**. You can skip phases to inspect intermediate values, or rely on the non-fatal validation behavior described below to see resolved values even when validation fails.
 
-Create a file called `phases-demo.yaml`. This example resolves a port number, transforms it by adding `8000`, then validates the result is within the valid port range. The input value of `60000` is intentionally too high — after the transform, the result (`68000`) exceeds the valid range:
+> **Validation is non-fatal in `run resolver`.** Because `run resolver` is an inspection and troubleshooting command, validation failures never withhold the produced values. The resolved values are still printed, validation diagnostics are written to stderr, and the command exits `0`. To make validation failures exit non-zero (for example, in CI), pass `--fail-on-validation`. To gate on validation as the primary intent, use the dedicated [`scafctl validate resolver`](#validate-resolver) command, which presets fatal validation.
+
+Create a file called `phases-demo.yaml`. This example resolves a port number, transforms it by adding `8000`, then validates the result is within the valid port range. The input value of `60000` is intentionally too high -- after the transform, the result (`68000`) exceeds the valid range:
 
 ```yaml
 apiVersion: scafctl.io/v1
@@ -488,7 +490,7 @@ spec:
               message: "Port must be between 1024 and 65535"
 ```
 
-Running the resolver fails because the transformed value (`68000`) exceeds the valid port range:
+Running the resolver reports a validation failure because the transformed value (`68000`) exceeds the valid port range -- but the value is still shown:
 
 {{< tabs "run-resolver-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
@@ -503,17 +505,44 @@ scafctl run resolver -f phases-demo.yaml -o json
 {{% /tab %}}
 {{< /tabs >}}
 
-Output:
+Output (values on stdout, exit `0`):
+
+```json
+{
+  "port": 68000
+}
+```
+
+Diagnostics on stderr:
 
 ```
-❌ resolver execution failed: ... validation: Port must be between 1024 and 65535
+Warning: 1 resolver(s) failed validation:
+  - port: Port must be between 1024 and 65535
+(values shown above; pass --fail-on-validation to exit non-zero)
 ```
 
-The validation error blocks the output entirely — you can't see the resolved value.
+You can see the resolved value (`68000`) directly, and the diagnostic explains why it is invalid -- no flags required.
+
+To make validation failures exit non-zero, add `--fail-on-validation`:
+
+{{< tabs "run-resolver-tutorial-cmd-9b" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl run resolver -f phases-demo.yaml -o json --fail-on-validation
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl run resolver -f phases-demo.yaml -o json --fail-on-validation
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+The values are still printed, the diagnostics still appear on stderr, but the command now exits `2` (validation failed).
 
 ### Skip Validation
 
-Use `--skip-validation` to bypass the validation phase and see the actual value:
+Use `--skip-validation` to bypass the validation phase entirely (no diagnostics, no validation work):
 
 {{< tabs "run-resolver-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
@@ -536,7 +565,7 @@ Output:
 }
 ```
 
-Now you can see the problem: the transform added `8000` to `60000`, producing `68000` which exceeds the valid port range. Without `--skip-validation`, this value would be hidden behind the error.
+Now you can see the problem: the transform added `8000` to `60000`, producing `68000` which exceeds the valid port range. Unlike the default non-fatal behavior, `--skip-validation` produces no validation diagnostics at all.
 
 ### Skip Transform (and Validation)
 
@@ -567,6 +596,27 @@ This reveals the provider returned `60000` — confirming the root cause is the 
 
 > [!WARNING]
 > **Note**: `--skip-transform` implies `--skip-validation` because validating a pre-transform value is misleading — validation rules are written against the expected final shape.
+
+---
+
+## Validate Resolver
+
+When your primary intent is to **gate on validation** rather than inspect values, use the dedicated `scafctl validate resolver` command. It behaves like `run resolver` but presets fatal validation: validation failures exit `2` (validation failed). It is equivalent to `run resolver --fail-on-validation`, expressed as a first-class verb for clarity in scripts and CI pipelines.
+
+{{< tabs "run-resolver-tutorial-cmd-validate" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl validate resolver -f phases-demo.yaml -o json
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl validate resolver -f phases-demo.yaml -o json
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+The resolved values are still printed and diagnostics still appear on stderr, but the command exits `2` when any resolver fails validation. Use `run resolver` for day-to-day troubleshooting (exit `0`) and `validate resolver` when a non-zero exit on validation failure is the goal.
 
 ---
 

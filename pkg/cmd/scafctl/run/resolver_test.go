@@ -3202,3 +3202,44 @@ func TestResolverOptions_Run_CatalogFallbackNotFiredForMalformedSolution(t *test
 	// The fallback should NOT have consumed the first name as a catalog ref.
 	assert.NotEqual(t, "my-proxy", opts.File, "fallback should NOT fire for a malformed solution.yaml")
 }
+
+func TestResolverOptions_renderValidationDiagnostics_NilCliParamsNoPanic(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+
+	// CliParams is intentionally nil to mirror direct ResolverOptions.Run()
+	// invocations outside the cobra wiring. The fallback writer must default
+	// cli params so Writer methods do not panic on a nil dereference.
+	opts := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: nil,
+		},
+	}
+
+	// No writer seeded into the context forces the IOStreams fallback path.
+	ctx := context.Background()
+
+	assert.NotPanics(t, func() {
+		opts.renderValidationDiagnostics(ctx, assert.AnError)
+	})
+	assert.Contains(t, stderr.String(), "failed validation")
+}
+
+func TestResolverOptions_renderValidationDiagnostics_NoIOStreamsNoPanic(t *testing.T) {
+	t.Parallel()
+
+	// Without a context writer and without IOStreams there is nowhere to write,
+	// so the function must return without panicking.
+	opts := &ResolverOptions{}
+
+	assert.NotPanics(t, func() {
+		opts.renderValidationDiagnostics(context.Background(), assert.AnError)
+	})
+}

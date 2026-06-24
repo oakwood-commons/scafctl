@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1250,6 +1251,50 @@ func TestIntegration_RunResolver_GraphMermaid(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "graph")
+}
+
+func TestIntegration_Validate_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "validate", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// Top-level validate command help advertises the resolver subcommand.
+	assert.Contains(t, stdout, "Validate")
+	assert.Contains(t, stdout, "resolver")
+}
+
+func TestIntegration_ValidateResolver_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "validate", "resolver", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "resolver")
+	assert.Contains(t, stdout, "--file")
+}
+
+func TestIntegration_ValidateResolver_Passes(t *testing.T) {
+	t.Parallel()
+	// A solution with no validation failures exits 0.
+	_, _, exitCode := runScafctl(t,
+		"validate", "resolver",
+		"-f", "examples/resolver-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_ValidateResolver_FailsNonZero(t *testing.T) {
+	t.Parallel()
+	// The validate gate presets fatal validation, so a solution with validation
+	// failures must exit non-zero (ValidationFailed == 2).
+	_, _, exitCode := runScafctl(t,
+		"validate", "resolver",
+		"-f", "examples/resolver-validation-failures-demo.yaml",
+		"-o", "json",
+	)
+
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
 }
 
 func TestIntegration_RunResolver_GraphJSON(t *testing.T) {

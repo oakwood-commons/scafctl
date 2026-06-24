@@ -191,6 +191,22 @@ var outputSchemaPreviewResolvers = json.RawMessage(`{
 			"description": "Map of resolver name to resolved value or error",
 			"additionalProperties": {}
 		},
+		"valid": {
+			"type": "boolean",
+			"description": "False when one or more resolvers failed validation (see diagnostics)"
+		},
+		"diagnostics": {
+			"type": "array",
+			"description": "Non-fatal validation-only diagnostics. Present when valid is false; resolved values are still returned. Resolve/transform failures return an error result instead.",
+			"items": {
+				"type": "object",
+				"properties": {
+					"resolver": { "type": "string" },
+					"phase": { "type": "integer" },
+					"message": { "type": "string" }
+				}
+			}
+		},
 		"summary": {
 			"type": "object",
 			"properties": {
