@@ -2017,6 +2017,12 @@ func TestIntegration_AuthTokenHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--scope")
 	assert.Contains(t, stdout, "--min-valid-for")
 	assert.Contains(t, stdout, "--force-refresh")
+	// Render-mode flags and the raw-by-default behavior must be documented.
+	assert.Contains(t, stdout, "--raw")
+	assert.Contains(t, stdout, "--curl")
+	assert.Contains(t, stdout, "--export")
+	assert.Contains(t, stdout, "--exec-credential")
+	assert.Contains(t, stdout, "prints the raw access token")
 }
 
 func TestIntegration_AuthMigrateHelp(t *testing.T) {
@@ -8470,7 +8476,7 @@ func TestIntegration_CredentialHelperInstallHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "install", "--help")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "docker-credential-scafctl symlink")
+	assert.Contains(t, stdout, "docker-credential-scafctl credential helper")
 	assert.Contains(t, stdout, "--bin-dir")
 	assert.Contains(t, stdout, "--docker")
 	assert.Contains(t, stdout, "--podman")
@@ -8481,10 +8487,37 @@ func TestIntegration_CredentialHelperUninstallHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "credential-helper", "uninstall", "--help")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "docker-credential-scafctl symlink")
+	assert.Contains(t, stdout, "docker-credential-scafctl symlink or managed shim")
 	assert.Contains(t, stdout, "--bin-dir")
 	assert.Contains(t, stdout, "--docker")
 	assert.Contains(t, stdout, "--podman")
+}
+
+// TestIntegration_CredentialHelperInstallUninstall exercises the real install
+// and uninstall flow against a temp bin directory. On POSIX a symlink is
+// created; the Windows shim path is covered by unit tests in the
+// credentialhelper package.
+func TestIntegration_CredentialHelperInstallUninstall(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink install path is POSIX-only; Windows shim is covered by unit tests")
+	}
+
+	binDir := t.TempDir()
+	helperPath := filepath.Join(binDir, "docker-credential-scafctl")
+
+	stdout, stderr, exitCode := runScafctl(t, "credential-helper", "install", "--bin-dir", binDir)
+	require.Equal(t, 0, exitCode, "install should succeed: stdout=%q stderr=%q", stdout, stderr)
+
+	info, err := os.Lstat(helperPath)
+	require.NoError(t, err, "helper should be created at %s", helperPath)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink, "helper should be a symlink on POSIX")
+
+	_, _, exitCode = runScafctl(t, "credential-helper", "uninstall", "--bin-dir", binDir)
+	assert.Equal(t, 0, exitCode, "uninstall should succeed")
+
+	_, statErr := os.Lstat(helperPath)
+	assert.True(t, os.IsNotExist(statErr), "helper should be removed after uninstall")
 }
 
 func TestIntegration_CredentialHelperGetNotFound(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/atotto/clipboard"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/execcredential"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -37,17 +39,21 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		curl         bool
 		curlURL      string
 		exportToken  bool
+		execCred     bool
 		profile      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "token <handler>",
-		Short: "Get an access token (for debugging)",
+		Short: "Get an access token",
 		Long: strings.ReplaceAll(heredoc.Doc(`
 			Get an access token from an auth handler.
 
-			This command is primarily for debugging and testing. It retrieves
-			a valid access token from the specified handler.
+			By default it prints the raw access token to stdout, which is
+			convenient for scripting (command substitution, environment variables,
+			Authorization headers). Use -o json|yaml for the full token metadata
+			object, or a render flag (--export, --curl, --exec-credential) to shape
+			the token for a specific tool.
 
 			For handlers that support per-request scopes (e.g., Entra), the --scope
 			flag is required and specifies which resource scope to request.
@@ -95,6 +101,9 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 
 			  # Emit a ready-to-run curl command with the token injected
 			  scafctl auth token entra --scope "https://management.azure.com/.default" --curl --curl-url "https://management.azure.com/subscriptions?api-version=2020-01-01"
+
+			  # Emit a Kubernetes ExecCredential (for a kubeconfig exec credential plugin)
+			  scafctl auth token entra --scope "https://management.azure.com/.default" --exec-credential
 
 			  # Export the token as a shell variable (eval-compatible)
 			  eval $(scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform" --export)
@@ -191,6 +200,34 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
+			// Kubernetes exec-credential: emit a client-go ExecCredential. Explicit
+			// via --exec-credential, or auto-detected when kubectl invokes this binary
+			// as an exec plugin (KUBERNETES_EXEC_INFO set) and no other render mode or
+			// explicit output format was requested.
+			execInfo := os.Getenv(execcredential.ExecInfoEnv)
+			wantExecCred := execCred
+			if !wantExecCred && execInfo != "" &&
+				!rawToken && !clip && !exportToken && !curl && !decode &&
+				!outputFlags.FormatExplicit && !outputFlags.Interactive &&
+				outputFlags.Expression == "" {
+				wantExecCred = true
+			}
+			if wantExecCred {
+				cred := execcredential.NewWithAPIVersion(
+					execcredential.APIVersionFromExecInfo(execInfo),
+					token.AccessToken,
+					token.ExpiresAt,
+				)
+				data, marshalErr := cred.JSON()
+				if marshalErr != nil {
+					marshalErr = fmt.Errorf("failed to encode exec credential: %w", marshalErr)
+					w.Errorf("%v", marshalErr)
+					return exitcode.WithCode(marshalErr, exitcode.GeneralError)
+				}
+				w.Plainln(string(data))
+				return nil
+			}
+
 			if rawToken {
 				w.Plainln(token.AccessToken)
 				return nil
@@ -267,6 +304,13 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return outputOpts.Write(decoded)
 			}
 
+			// Default output is the raw token for scriptability. The structured
+			// metadata object is opt-in via -o / --interactive / --expression.
+			if !outputFlags.FormatExplicit && !outputFlags.Interactive && outputFlags.Expression == "" {
+				w.Plainln(token.AccessToken)
+				return nil
+			}
+
 			result := map[string]any{
 				"handler":     handlerName,
 				"flow":        string(token.Flow),
@@ -305,6 +349,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().BoolVar(&curl, "curl", false, "Emit a ready-to-run curl command with the token injected")
 	cmd.Flags().StringVar(&curlURL, "curl-url", "", "URL to embed in the --curl output (default: '<URL>' placeholder)")
 	cmd.Flags().BoolVar(&exportToken, "export", false, fmt.Sprintf("Output a shell export statement: eval $(%s auth token ... --export)", cliParams.BinaryName))
+	cmd.Flags().BoolVar(&execCred, "exec-credential", false, "Emit a Kubernetes client-go ExecCredential JSON (for kubectl/oc exec credential plugins; auto-detected when KUBERNETES_EXEC_INFO is set)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 

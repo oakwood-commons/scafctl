@@ -4,7 +4,9 @@
 package auth
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,9 +131,10 @@ func TestCommandToken_GitHubSuccessWithoutScope(t *testing.T) {
 	require.Len(t, mock.GetTokenCalls, 1)
 	assert.Equal(t, "", mock.GetTokenCalls[0].Scope)
 
+	// Default output is the raw token (scriptable), not the metadata object.
 	output := buf.String()
-	assert.Contains(t, output, "handler")
-	assert.Contains(t, output, "github")
+	assert.Equal(t, "gho_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", strings.TrimSpace(output))
+	assert.NotContains(t, output, "handler")
 }
 
 func TestCommandToken_Success(t *testing.T) {
@@ -161,15 +164,11 @@ func TestCommandToken_Success(t *testing.T) {
 	require.Len(t, mock.GetTokenCalls, 1)
 	assert.Equal(t, "https://graph.microsoft.com/.default", mock.GetTokenCalls[0].Scope)
 
-	// Verify output includes all fields
+	// Default output is the raw access token for scriptability.
 	output := buf.String()
-	assert.Contains(t, output, "handler")
-	assert.Contains(t, output, "entra")
-	assert.Contains(t, output, "scope")
-	assert.Contains(t, output, "graph.microsoft.com")
-	assert.Contains(t, output, "tokenType")
-	assert.Contains(t, output, "Bearer")
-	assert.Contains(t, output, "accessToken") // Full token is present, not masked
+	assert.Equal(t, "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6Ik1uQ19WWmNBVGZNNXBP", strings.TrimSpace(output))
+	assert.NotContains(t, output, "tokenType")
+	assert.NotContains(t, output, "handler")
 }
 
 func TestCommandToken_JSONOutput(t *testing.T) {
@@ -325,4 +324,158 @@ func TestCommandToken_ShortToken(t *testing.T) {
 	output := buf.String()
 	assert.Contains(t, output, "short")
 	assert.NotContains(t, output, "...")
+}
+
+// decodeExecCredential parses the command output as an ExecCredential JSON.
+func decodeExecCredential(t *testing.T, output string) map[string]any {
+	t.Helper()
+	var ec map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(output)), &ec))
+	return ec
+}
+
+func TestCommandToken_ExecCredential(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	expiry := time.Now().Add(time.Hour).UTC()
+	mock := newEntraMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "eyJexec-cred-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   expiry,
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--exec-credential"})
+
+	require.NoError(t, cmd.Execute())
+
+	ec := decodeExecCredential(t, buf.String())
+	assert.Equal(t, "client.authentication.k8s.io/v1", ec["apiVersion"])
+	assert.Equal(t, "ExecCredential", ec["kind"])
+	status, ok := ec["status"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "eyJexec-cred-token", status["token"])
+	assert.Equal(t, expiry.Format(time.RFC3339), status["expirationTimestamp"])
+}
+
+func TestCommandToken_ExecCredentialAutoDetect(t *testing.T) {
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{}}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "auto-detected-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	// No --exec-credential flag: presence of KUBERNETES_EXEC_INFO triggers it.
+	cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default"})
+
+	require.NoError(t, cmd.Execute())
+
+	ec := decodeExecCredential(t, buf.String())
+	status, ok := ec["status"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "auto-detected-token", status["token"])
+}
+
+func TestCommandToken_ExecCredentialEchoesAPIVersion(t *testing.T) {
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1beta1","kind":"ExecCredential","spec":{}}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "beta-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "--exec-credential"})
+
+	require.NoError(t, cmd.Execute())
+
+	ec := decodeExecCredential(t, buf.String())
+	assert.Equal(t, "client.authentication.k8s.io/v1beta1", ec["apiVersion"])
+}
+
+func TestCommandToken_ExplicitFormatBeatsExecInfo(t *testing.T) {
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1"}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "explicit-json-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	// Explicit -o json must win over KUBERNETES_EXEC_INFO auto-detect.
+	cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "-o", "json"})
+
+	require.NoError(t, cmd.Execute())
+
+	output := buf.String()
+	assert.Contains(t, output, "tokenType")
+	assert.NotContains(t, output, "ExecCredential")
+}
+
+func TestCommandToken_ExpressionBeatsExecInfo(t *testing.T) {
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1"}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock()
+	mock.SetToken(&auth.Token{
+		AccessToken: "expression-token",
+		TokenType:   "Bearer",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		Scope:       "https://graph.microsoft.com/.default",
+	})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	// An explicit -e/--expression must win over KUBERNETES_EXEC_INFO auto-detect.
+	cmd.SetArgs([]string{"entra", "--scope", "https://graph.microsoft.com/.default", "-e", "_.handler"})
+
+	require.NoError(t, cmd.Execute())
+
+	output := buf.String()
+	assert.Contains(t, output, "entra")
+	assert.NotContains(t, output, "ExecCredential")
 }

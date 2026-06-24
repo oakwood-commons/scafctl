@@ -9,10 +9,10 @@ This directory contains examples and cheat-sheets for the `scafctl auth` command
 ### Login
 
 ```bash
-# Entra ID (browser OAuth + PKCE — default)
+# Entra ID (browser OAuth + PKCE -- default)
 scafctl auth login entra
 
-# GitHub (browser OAuth + PKCE — default)
+# GitHub (browser OAuth + PKCE -- default)
 scafctl auth login github
 
 # GCP (browser OAuth)
@@ -27,7 +27,7 @@ scafctl auth login github --flow github-app         # requires GitHub App creden
 scafctl auth login gcp --flow service-principal     # requires GOOGLE_APPLICATION_CREDENTIALS
 scafctl auth login gcp --flow gcloud-adc            # uses existing gcloud ADC file
 
-# Idempotent — skip if already authenticated (safe for scripts and CI)
+# Idempotent -- skip if already authenticated (safe for scripts and CI)
 scafctl auth login entra --skip-if-authenticated
 scafctl auth login github --skip-if-authenticated
 scafctl auth login gcp --skip-if-authenticated
@@ -56,11 +56,11 @@ scafctl auth diagnose
 Output example:
 ```
 ✅ [ok]   auth registry: registered handlers: [entra gcp github]
-⚠️  [warn] config file: config file not found — using built-in defaults
-✅ [ok]   env GITHUB_TOKEN: GitHub personal access token — set
+⚠️  [warn] config file: config file not found -- using built-in defaults
+✅ [ok]   env GITHUB_TOKEN: GitHub personal access token -- set
 ✅ [ok]   entra: authenticated: authenticated as "user@example.com", expires in 58m
 ⚠️  [warn] entra: token cache: 3 cached token(s), 1 expired
-⚠️  [warn] github: not authenticated — run 'scafctl auth login github'
+⚠️  [warn] github: not authenticated -- run 'scafctl auth login github'
 
 ⚠️ Diagnostics complete: 3 warning(s), 5 ok (no failures)
 ```
@@ -87,7 +87,7 @@ Get structured output for CI pipelines:
 scafctl auth diagnose -o json
 ```
 
-> The `clock-skew` check compares your system clock against an external time source and warns if the skew exceeds 5 minutes — a common but easy-to-miss cause of token validation failures.
+> The `clock-skew` check compares your system clock against an external time source and warns if the skew exceeds 5 minutes -- a common but easy-to-miss cause of token validation failures.
 
 ---
 
@@ -145,7 +145,7 @@ scafctl auth list entra --purge-expired
 ```
 
 The `getTokenCommand` column shows the exact `scafctl auth token` command to
-retrieve each access token — copy-paste it directly into your terminal.
+retrieve each access token -- copy-paste it directly into your terminal.
 
 ---
 
@@ -184,7 +184,7 @@ scafctl auth token entra --scope "https://graph.microsoft.com/.default" \
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" \
     --curl --curl-url "https://graph.microsoft.com/v1.0/me" | bash
 
-# No URL — uses <URL> placeholder for inspection
+# No URL -- uses <URL> placeholder for inspection
 scafctl auth token github --curl
 ```
 
@@ -193,10 +193,10 @@ scafctl auth token github --curl
 `--decode` shows both the JWT **header** (algorithm, key ID) and the **payload** (claims):
 
 ```bash
-# Table format — immediately readable
+# Table format -- immediately readable
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode
 
-# JSON format — pipe to jq for filtering
+# JSON format -- pipe to jq for filtering
 scafctl auth token entra --scope "https://graph.microsoft.com/.default" --decode -o json \
     | jq '{alg: .header.alg, kid: .header.kid, upn: .payload.upn, expires: .payload.exp_human, roles: .payload.roles}'
 ```
@@ -210,6 +210,21 @@ Unix timestamp fields (`exp`, `iat`, `nbf`, `auth_time`) automatically get a
 scafctl auth token entra --scope "https://management.azure.com/.default" --clip
 # ✓ Token copied to clipboard (expires in 58m42s).
 ```
+
+### Kubernetes ExecCredential (kubectl / oc)
+
+Emit a client-go `ExecCredential` so kubectl/oc reuse your scafctl identity:
+
+```bash
+scafctl auth token entra --scope "<cluster-scope>/.default" --exec-credential
+```
+
+scafctl auto-detects `KUBERNETES_EXEC_INFO` and emits the envelope even without
+the flag. See [kubectl-exec-credential.md](kubectl-exec-credential.md) for the
+full kubeconfig wiring.
+
+> Note: `auth token` prints the **raw token by default**; `--raw` remains an
+> explicit alias. Use `-o json`/`-o yaml` for the structured metadata object.
 
 ---
 
@@ -264,6 +279,7 @@ scafctl auth handlers remove entra
 
 ## Related
 
-- [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) — full walkthrough
-- [HTTP Provider with Entra](../providers/http-entra.yaml) — example HTTP call with Entra auth
-- [GitHub API Provider](../providers/github-api.yaml) — example GitHub API call
+- [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) -- full walkthrough
+- [kubectl Exec Credential](kubectl-exec-credential.md) -- use scafctl as a Kubernetes credential plugin
+- [HTTP Provider with Entra](../providers/http-entra.yaml) -- example HTTP call with Entra auth
+- [GitHub API Provider](../providers/github-api.yaml) -- example GitHub API call
