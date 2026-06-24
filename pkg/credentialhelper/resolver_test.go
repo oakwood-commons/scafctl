@@ -6,6 +6,7 @@ package credentialhelper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -105,6 +106,52 @@ func TestHelperGet_DynamicResolution(t *testing.T) {
 		got, err := helper.Get(context.Background(), "ghcr.io")
 		require.NoError(t, err)
 		assert.Equal(t, "stored-token", got.Secret, "nil credential should fall through")
+	})
+
+	t.Run("reauth error surfaced when no fallback", func(t *testing.T) {
+		t.Parallel()
+		store := secrets.NewMockStore()
+		resolver := &mockResolver{err: &ReauthRequiredError{
+			Handler:   "github",
+			ServerURL: "ghcr.io",
+			Err:       fmt.Errorf("bridge auth for %q: token expired", "ghcr.io"),
+		}}
+		helper := New(store, WithTokenResolver(resolver))
+
+		_, err := helper.Get(context.Background(), "ghcr.io")
+		require.Error(t, err)
+		var reauth *ReauthRequiredError
+		require.ErrorAs(t, err, &reauth, "reauth error should be surfaced, not masked as 'credentials not found'")
+		assert.Equal(t, "github", reauth.Handler)
+		assert.Equal(t, "ghcr.io", reauth.ServerURL)
+	})
+
+	t.Run("reauth error masked by stored fallback", func(t *testing.T) {
+		t.Parallel()
+		store := secrets.NewMockStore()
+		cred := Credential{ServerURL: "ghcr.io", Username: "stored-user", Secret: "stored-token"}
+		data, _ := json.Marshal(cred)
+		store.Data["credhelper:ghcr.io"] = data
+
+		resolver := &mockResolver{err: &ReauthRequiredError{Handler: "github", ServerURL: "ghcr.io"}}
+		helper := New(store, WithTokenResolver(resolver))
+
+		got, err := helper.Get(context.Background(), "ghcr.io")
+		require.NoError(t, err, "a usable stored credential should win over a reauth hint")
+		assert.Equal(t, "stored-token", got.Secret)
+	})
+
+	t.Run("plain resolver error stays credentials not found", func(t *testing.T) {
+		t.Parallel()
+		store := secrets.NewMockStore()
+		resolver := &mockResolver{err: fmt.Errorf("no auth handler for registry")}
+		helper := New(store, WithTokenResolver(resolver))
+
+		_, err := helper.Get(context.Background(), "unknown.io")
+		require.Error(t, err)
+		var reauth *ReauthRequiredError
+		assert.False(t, errors.As(err, &reauth))
+		assert.Contains(t, err.Error(), "credentials not found")
 	})
 }
 
@@ -257,6 +304,11 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 		_, err := resolver.Resolve(ctx, "ghcr.io")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "bridge auth")
+
+		var reauth *ReauthRequiredError
+		require.ErrorAs(t, err, &reauth, "a failed token bridge should yield a ReauthRequiredError")
+		assert.Equal(t, "github", reauth.Handler)
+		assert.Equal(t, "ghcr.io", reauth.ServerURL)
 	})
 
 	t.Run("custom handler via config", func(t *testing.T) {

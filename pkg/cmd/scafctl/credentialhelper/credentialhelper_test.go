@@ -5,7 +5,10 @@ package credentialhelper
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
@@ -63,6 +66,33 @@ func TestCommandGet_Structure(t *testing.T) {
 	assert.Equal(t, "get", cmd.Use)
 	assert.True(t, cmd.SilenceUsage)
 	assert.True(t, cmd.SilenceErrors)
+}
+
+func TestFormatGetError(t *testing.T) {
+	t.Run("reauth error yields actionable hint with binary name", func(t *testing.T) {
+		ctx := settings.IntoContext(context.Background(), &settings.Run{BinaryName: "mybin"})
+		err := &credentialhelper.ReauthRequiredError{
+			Handler:   "github",
+			ServerURL: "https://ghcr.io",
+		}
+		msg := formatGetError(ctx, err)
+		assert.Contains(t, msg, "mybin auth login github")
+		assert.Contains(t, msg, "https://ghcr.io")
+		assert.Contains(t, msg, "credential-helper subprocess")
+	})
+
+	t.Run("reauth error wrapped in chain is detected", func(t *testing.T) {
+		ctx := context.Background() // no settings -> default binary name
+		base := &credentialhelper.ReauthRequiredError{Handler: "entra", ServerURL: "acr.azurecr.io"}
+		wrapped := fmt.Errorf("get failed: %w", base)
+		msg := formatGetError(ctx, wrapped)
+		assert.Contains(t, msg, settings.CliBinaryName+" auth login entra")
+	})
+
+	t.Run("plain error returns its message verbatim", func(t *testing.T) {
+		msg := formatGetError(context.Background(), errors.New("credentials not found"))
+		assert.Equal(t, "credentials not found", msg)
+	})
 }
 
 func TestCommandStore_Structure(t *testing.T) {

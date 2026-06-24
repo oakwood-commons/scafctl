@@ -90,12 +90,14 @@ func (h *Helper) Get(ctx context.Context, serverURL string) (*Credential, error)
 
 	// Try dynamic resolution first — this returns a fresh token from the
 	// auth handler, avoiding stale bridged credentials.
+	var resolverErr error
 	if h.tokenResolver != nil {
 		cred, err := h.tokenResolver.Resolve(ctx, serverURL)
 		if err == nil && cred != nil {
 			return cred, nil
 		}
-		// Fall through to stored credentials on any error.
+		// Remember the resolver error; fall through to stored credentials.
+		resolverErr = err
 	}
 
 	// Check credhelper: namespace next
@@ -120,6 +122,15 @@ func (h *Helper) Get(ctx context.Context, serverURL string) (*Credential, error)
 				Secret:    native.Password,
 			}, nil
 		}
+	}
+
+	// No stored fallback was found. When dynamic resolution failed because the
+	// inferred handler needs an interactive re-login, surface that typed error
+	// so the caller can render an actionable message instead of a bare
+	// "credentials not found".
+	var reauth *ReauthRequiredError
+	if errors.As(resolverErr, &reauth) {
+		return nil, reauth
 	}
 
 	return nil, fmt.Errorf("credentials not found")

@@ -134,10 +134,26 @@ The credential helper protocol uses four stdin/stdout commands:
 
 When Docker calls `get`, scafctl checks credentials in this order:
 
-1. **credhelper namespace** -- credentials stored via `docker login` (through scafctl)
-2. **Native credential store** -- credentials stored via `scafctl catalog login`
+1. **Dynamic token resolution** -- infers the auth handler for the registry and
+   mints a fresh token from it (auto-refreshing via a stored refresh token when
+   available)
+2. **credhelper namespace** -- credentials stored via `docker login` (through scafctl)
+3. **Native credential store** -- credentials stored via `scafctl catalog login`
 
-This means credentials from either source are available to Docker.
+This means credentials from any source are available to Docker.
+
+> **Note:** `get` runs as a non-interactive subprocess (no TTY). If the inferred
+> auth handler has no valid token and can only refresh through an interactive
+> login, dynamic resolution cannot complete inside the helper. scafctl emits an
+> actionable error naming the exact command to run, for example:
+>
+> ```json
+> {
+>   "message": "no valid credentials for https://ghcr.io: run 'scafctl auth login github' to re-authenticate (interactive login cannot run inside a credential-helper subprocess)"
+> }
+> ```
+>
+> Run the named `auth login` once; subsequent `get` calls then refresh silently.
 
 ## Using with Podman/Buildah
 
@@ -184,9 +200,38 @@ scafctl catalog login ghcr.io --username oauth2 --password @- < token.txt
 docker pull ghcr.io/your-org/your-image:latest
 ```
 
-## Uninstall
+## Embedding scafctl in another CLI
 
-Remove the credential helper integration:
+scafctl is consumable as a library by downstream CLIs that ship their own
+binary name. The credential helper works for embedders with **no extra wiring**:
+when the binary is invoked under a `docker-credential-<name>` alias, the shared
+root command automatically routes the helper verb into the `credential-helper`
+command tree.
+
+If you build your CLI via the shared `scafctl.Root(...)` constructor, you get
+this for free -- `credential-helper install` creates a
+`docker-credential-<yourbinary>` symlink, and Docker/Podman invoking it just
+works.
+
+For a fully custom `main` that does not use `scafctl.Root`, call the exported,
+side-effect-free dispatch helper at the very top of `main`:
+
+```go
+import "github.com/oakwood-commons/scafctl/pkg/credentialhelper"
+
+func main() {
+    // Route docker-credential-<name> <verb> into "credential-helper <verb>".
+    if rewritten, isAlias := credentialhelper.RewriteAliasArgs(os.Args); isAlias {
+        rootCmd.SetArgs(rewritten[1:]) // SetArgs excludes the program name
+    }
+    // ... normal command execution ...
+}
+```
+
+The actionable `get` error (see [How It Works](#how-it-works)) is derived from
+your configured binary name, so it names `your-binary auth login <handler>`.
+
+## Uninstall
 
 ```bash
 # Remove symlink and Docker config entry
