@@ -394,6 +394,16 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
 
 	// Fetch binary
 	results, err := p.fetcher.FetchPlugins(ctx, []solution.PluginDependency{entry.dep}, nil)
+	// Release cache pins — placed before error check so partial results
+	// are released on failure. After exec, the OS has the binary mapped
+	// in memory so the on-disk file can be safely evicted by the LRU cache.
+	defer func() {
+		for i := range results {
+			if results[i].Release != nil {
+				results[i].Release()
+			}
+		}
+	}()
 	if err != nil {
 		entry.failWith(fmt.Errorf("fetching: %w", err))
 		return

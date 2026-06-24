@@ -56,6 +56,12 @@ const (
 
 	// DefaultGracePeriod is the default grace period for action cancellation.
 	DefaultGracePeriod = 30 * time.Second
+
+	// DefaultPluginFetchTimeout is the default timeout for fetching plugins from catalogs.
+	DefaultPluginFetchTimeout = 2 * time.Minute
+
+	// DefaultPluginResolveTimeout is the default timeout for plugin resolution
+	DefaultPluginResolveTimeout = 30 * time.Second
 )
 
 // File conflict defaults
@@ -115,6 +121,12 @@ func DefaultHTTPCacheDir() string {
 
 // Size limits
 const (
+	// DefaultPluginCacheMaxSize is the default maximum size for the managed
+	// plugin cache in API server mode. Parsed as a human-readable byte string
+	// (e.g., "512MB", "1GB"). 512 MB comfortably holds ~35 plugins with room
+	// for version overlap during updates.
+	DefaultPluginCacheMaxSize = "512MB"
+
 	// DefaultMaxResponseBodySize is the maximum HTTP response body size the
 	// HTTP provider will read into memory (100 MB). This prevents denial of
 	// service via unbounded response bodies from malicious or misconfigured
@@ -175,6 +187,9 @@ const (
 	// is used instead. Matches the minimum:"1048576" validation tag on the
 	// config struct.
 	MinGRPCMaxMessageSize = 1024 * 1024
+
+	// DefaultFetchConcurrency is the max concurrency for plugin fetches in FetchPlugins (errgroup limit).
+	DefaultFetchConcurrency = 4
 )
 
 // API server defaults

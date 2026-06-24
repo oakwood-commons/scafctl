@@ -25,6 +25,7 @@ import (
 	sidregistry "github.com/oakwood-commons/scafctl/pkg/serveridentity/registry"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
@@ -177,14 +178,31 @@ func runServe(ctx context.Context, opts *Options) error {
 	} else {
 		officialReg = official.NewRegistry()
 	}
-
 	// Build plugin fetcher for auto-fetching plugin binaries from catalogs.
 	// Chain construction respects catalog and per-catalog artifact allowlists.
 	var pluginFetcher *plugin.Fetcher
+	var pluginCache *plugin.Cache
+	if !cfg.APIServer.Plugins.DisableDiskCache {
+		cacheMaxSize, sizeErr := pluginCacheMaxSize(cfg)
+		if sizeErr != nil {
+			return fmt.Errorf("invalid plugin cache size: %w", sizeErr)
+		}
+		mc, cacheErr := plugin.NewManagedCache(settings.PluginCacheDirFor(opts.CliParams.BinaryName), cacheMaxSize)
+		if cacheErr != nil {
+			lgr.V(1).Info("managed plugin cache unavailable, falling back to unbounded", "error", cacheErr)
+		} else {
+			if warmErr := mc.WarmUp(); warmErr != nil {
+				lgr.V(1).Info("plugin cache warm-up failed", "error", warmErr)
+			}
+			pluginCache = mc
+		}
+	}
 	if fetcher, fetchErr := prepare.BuildPluginFetcherWithConfig(ctx, prepare.PluginFetcherOverrides{
 		AllowedCatalogs:      catalogNames,
 		ChainAllowedCatalogs: catalogNames,
 		PerCatalogArtifacts:  perCatalog,
+		Cache:                pluginCache,
+		NoCache:              cfg.APIServer.Plugins.DisableDiskCache,
 	}); fetchErr == nil {
 		pluginFetcher = fetcher
 	} else {
@@ -266,6 +284,16 @@ func populateCatalogPolicies(catalogNames []string, perCatalog map[string]catalo
 		}
 	}
 	return perCatalog
+}
+
+// pluginCacheMaxSize returns the configured plugin cache size in bytes.
+// Falls back to settings.DefaultPluginCacheMaxSize when the config field is empty.
+func pluginCacheMaxSize(cfg *config.Config) (int64, error) {
+	raw := cfg.APIServer.Plugins.DiskCacheMaxSize
+	if raw == "" {
+		raw = settings.DefaultPluginCacheMaxSize
+	}
+	return builder.ParseByteSize(raw)
 }
 
 func configurePreloadOptions(perCatalog map[string]catalog.PluginPolicy, preloadOpts []PreLoadOption, catalogName string) []PreLoadOption {
@@ -351,8 +379,19 @@ func preloadOfficialProviders(
 		}
 		lgr.V(0).Info("pre-loading official providers for API server", "providers", names)
 	}
-
+	start := time.Now()
 	fetchResults, fetchErr := fetcher.FetchPlugins(ctx, deps, nil)
+	lgr.V(1).Info("official provider fetch complete", "duration", time.Since(start).String(), "success", fetchErr == nil)
+	// Release cache pins — once RegisterFetchedPlugins execs each binary,
+	// the OS has it mapped in memory and the on-disk file can be evicted.
+	// Placed before the error check so partial results are released on failure.
+	defer func() {
+		for i := range fetchResults {
+			if fetchResults[i].Release != nil {
+				fetchResults[i].Release()
+			}
+		}
+	}()
 	if fetchErr != nil {
 		return nil, fmt.Errorf("fetching official providers: %w", fetchErr)
 	}

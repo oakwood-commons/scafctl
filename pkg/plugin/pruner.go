@@ -35,11 +35,12 @@ type PruneOptions struct {
 
 // PruneResult describes the outcome of a prune operation for a single plugin version.
 type PruneResult struct {
-	Name     string `json:"name" yaml:"name" doc:"Plugin name"`
-	Version  string `json:"version" yaml:"version" doc:"Removed version"`
-	Platform string `json:"platform" yaml:"platform" doc:"Platform"`
-	Path     string `json:"path" yaml:"path" doc:"Removed path"`
-	Size     int64  `json:"size" yaml:"size" doc:"Freed bytes"`
+	Name         string `json:"name" yaml:"name" doc:"Plugin name"`
+	Version      string `json:"version" yaml:"version" doc:"Removed version"`
+	Platform     string `json:"platform" yaml:"platform" doc:"Platform"`
+	Path         string `json:"path" yaml:"path" doc:"Removed path"`
+	Size         int64  `json:"size" yaml:"size" doc:"Freed bytes"`
+	RegistryHash string `json:"registryHash,omitempty" yaml:"registryHash,omitempty" doc:"Registry hash directory"`
 }
 
 // PruneSkipped describes an entry that could not be removed.
@@ -123,8 +124,8 @@ func (c *Cache) Prune(opts PruneOptions, dryRun bool) (*PruneSummary, error) {
 		removals := selectPruneTargets(plugins, opts.Keep)
 		for _, r := range removals {
 			if !dryRun {
-				versionDir := filepath.Dir(filepath.Dir(c.binaryPath(r.Name, r.Version, r.Platform)))
-				platformDir := filepath.Dir(c.binaryPath(r.Name, r.Version, r.Platform))
+				versionDir := filepath.Dir(filepath.Dir(c.binaryPath(r.Name, r.Version, r.Platform, r.RegistryHash)))
+				platformDir := filepath.Dir(c.binaryPath(r.Name, r.Version, r.Platform, r.RegistryHash))
 				if err := os.RemoveAll(platformDir); err != nil {
 					summary.Skipped = append(summary.Skipped, PruneSkipped{
 						Name:     r.Name,

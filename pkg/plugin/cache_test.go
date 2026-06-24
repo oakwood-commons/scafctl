@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -117,15 +118,15 @@ func TestCache_BinaryPath_WindowsExeExtension(t *testing.T) {
 	cache := NewCache("/tmp/plugins")
 
 	// Windows platform should get .exe extension
-	winPath := cache.binaryPath("myplugin", "1.0.0", "windows/amd64")
+	winPath := cache.binaryPath("myplugin", "1.0.0", "windows/amd64", "")
 	assert.Equal(t, "myplugin.exe", filepath.Base(winPath))
 
 	// Linux platform should NOT get .exe extension
-	linuxPath := cache.binaryPath("myplugin", "1.0.0", "linux/amd64")
+	linuxPath := cache.binaryPath("myplugin", "1.0.0", "linux/amd64", "")
 	assert.Equal(t, "myplugin", filepath.Base(linuxPath))
 
 	// Darwin platform should NOT get .exe extension
-	darwinPath := cache.binaryPath("myplugin", "1.0.0", "darwin/arm64")
+	darwinPath := cache.binaryPath("myplugin", "1.0.0", "darwin/arm64", "")
 	assert.Equal(t, "myplugin", filepath.Base(darwinPath))
 }
 
@@ -224,7 +225,7 @@ func TestCache_Put_RenameRetryAfterConflictingPath(t *testing.T) {
 	version := "1.0.0"
 	platform := "windows/amd64"
 
-	binaryPath := cache.binaryPath(name, version, platform)
+	binaryPath := cache.binaryPath(name, version, platform, "")
 	require.NoError(t, os.MkdirAll(binaryPath, 0o755))
 
 	data := []byte("fresh-binary")
@@ -245,7 +246,7 @@ func TestCache_Put_RenameFailsWhenDestinationIsNonEmptyDir(t *testing.T) {
 	version := "1.0.0"
 	platform := "windows/amd64"
 
-	binaryPath := cache.binaryPath(name, version, platform)
+	binaryPath := cache.binaryPath(name, version, platform, "")
 	require.NoError(t, os.MkdirAll(binaryPath, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(binaryPath, "keep.txt"), []byte("x"), 0o644))
 
@@ -461,4 +462,199 @@ func TestCache_ListCurrentPlatform_PicksLatestSemver(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, "10.0.0", result[0].Version, "should pick latest by semver, not directory order")
+}
+
+// --- Managed-mode tests ---
+
+func TestManagedCache_PutAndGet(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, err := NewManagedCache(tmpDir, 10*1024*1024)
+	require.NoError(t, err)
+
+	data := []byte("#!/bin/bash\necho managed")
+	name := "managed-plugin"
+	version := "2.0.0"
+	platform := "linux/amd64"
+
+	path, err := cache.Put(name, version, platform, data)
+	require.NoError(t, err)
+	assert.Contains(t, path, name)
+	assert.Contains(t, path, version)
+
+	// Get without digest
+	gotPath, ok := cache.Get(name, version, platform, "")
+	assert.True(t, ok)
+	assert.Equal(t, path, gotPath)
+
+	// Get with correct digest
+	digest, err := cache.Digest(name, version, platform)
+	require.NoError(t, err)
+	gotPath, ok = cache.Get(name, version, platform, digest)
+	assert.True(t, ok)
+	assert.Equal(t, path, gotPath)
+
+	// Get with wrong digest
+	_, ok = cache.Get(name, version, platform, "sha256:wrong")
+	assert.False(t, ok)
+}
+
+func TestManagedCache_Pin(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, err := NewManagedCache(tmpDir, 10*1024*1024)
+	require.NoError(t, err)
+
+	data := []byte("binary-content")
+	name := "pin-plugin"
+	version := "1.0.0"
+	platform := "darwin/arm64"
+
+	_, err = cache.Put(name, version, platform, data)
+	require.NoError(t, err)
+
+	path, release, ok := cache.Pin(name, version, platform)
+	require.True(t, ok)
+	assert.NotEmpty(t, path)
+	assert.NotNil(t, release)
+
+	// File exists at pinned path
+	_, statErr := os.Stat(path)
+	assert.NoError(t, statErr)
+
+	// Release should not panic
+	release()
+}
+
+func TestManagedCache_PinMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, err := NewManagedCache(tmpDir, 10*1024*1024)
+	require.NoError(t, err)
+
+	_, _, ok := cache.Pin("nonexistent", "1.0.0", "linux/amd64")
+	assert.False(t, ok)
+}
+
+func TestManagedCache_GetLatestCached(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, err := NewManagedCache(tmpDir, 10*1024*1024)
+	require.NoError(t, err)
+
+	platform := "linux/amd64"
+	_, err = cache.Put("myplugin", "1.0.0", platform, []byte("v1"))
+	require.NoError(t, err)
+	_, err = cache.Put("myplugin", "2.5.0", platform, []byte("v2.5"))
+	require.NoError(t, err)
+	_, err = cache.Put("myplugin", "2.0.0", platform, []byte("v2"))
+	require.NoError(t, err)
+
+	path, version, ok := cache.GetLatestCached("myplugin", platform)
+	require.True(t, ok)
+	assert.Equal(t, "2.5.0", version)
+	assert.Contains(t, path, "2.5.0")
+}
+
+func TestManagedCache_Remove(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache, err := NewManagedCache(tmpDir, 10*1024*1024)
+	require.NoError(t, err)
+
+	platform := "linux/amd64"
+	path, err := cache.Put("rm-plugin", "1.0.0", platform, []byte("data"))
+	require.NoError(t, err)
+
+	// Exists before remove
+	_, ok := cache.Get("rm-plugin", "1.0.0", platform, "")
+	assert.True(t, ok)
+
+	// Remove
+	err = cache.Remove("rm-plugin", "1.0.0", platform)
+	assert.NoError(t, err)
+
+	// Gone after remove
+	_, ok = cache.Get("rm-plugin", "1.0.0", platform, "")
+	assert.False(t, ok)
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+func TestManagedCache_Eviction(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Small budget: 100 bytes — each entry is ~14 bytes
+	cache, err := NewManagedCache(tmpDir, 100)
+	require.NoError(t, err)
+
+	platform := "linux/amd64"
+	// Write enough entries to trigger eviction
+	for i := 0; i < 10; i++ {
+		ver := fmt.Sprintf("1.0.%d", i)
+		_, err := cache.Put("evict-plugin", ver, platform, []byte("binary-content"))
+		require.NoError(t, err)
+	}
+
+	// Some early versions should have been evicted
+	_, ok := cache.Get("evict-plugin", "1.0.0", platform, "")
+	assert.False(t, ok, "earliest version should be evicted")
+
+	// Latest should still exist
+	_, ok = cache.Get("evict-plugin", "1.0.9", platform, "")
+	assert.True(t, ok, "latest version should survive")
+}
+
+func TestManagedCache_WarmUp(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Pre-populate the cache directory manually
+	platform := "linux/amd64"
+	platformKey := PlatformCacheKey(platform)
+	for _, ver := range []string{"1.0.0", "2.0.0", "3.0.0"} {
+		dir := filepath.Join(tmpDir, "warm-plugin", ver, platformKey)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "warm-plugin"), []byte("bin-"+ver), 0o755))
+	}
+
+	// Create cache and warm up
+	cache, err := NewManagedCache(tmpDir, 10*1024*1024)
+	require.NoError(t, err)
+	require.NoError(t, cache.WarmUp())
+
+	// Should find the latest version
+	path, version, ok := cache.GetLatestCached("warm-plugin", platform)
+	assert.True(t, ok)
+	assert.Equal(t, "3.0.0", version)
+	assert.Contains(t, path, "3.0.0")
+
+	// Pin should work after warm-up
+	pinPath, release, ok := cache.Pin("warm-plugin", "2.0.0", platform)
+	assert.True(t, ok)
+	assert.Contains(t, pinPath, "2.0.0")
+	release()
+}
+
+func TestUnboundedCache_Pin(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	data := []byte("binary")
+	platform := "linux/amd64"
+	_, err := cache.Put("pin-test", "1.0.0", platform, data)
+	require.NoError(t, err)
+
+	// Pin should work (stat-based, no-op release)
+	path, release, ok := cache.Pin("pin-test", "1.0.0", platform)
+	assert.True(t, ok)
+	assert.NotEmpty(t, path)
+	assert.NotNil(t, release)
+	release() // no-op, should not panic
+
+	// Pin missing should return false
+	_, _, ok = cache.Pin("nonexistent", "1.0.0", platform)
+	assert.False(t, ok)
+}
+
+func TestManagedCache_WarmUpNoOp(t *testing.T) {
+	tmpDir := t.TempDir()
+	cache := NewCache(tmpDir)
+
+	// WarmUp on unbounded cache is a no-op
+	err := cache.WarmUp()
+	assert.NoError(t, err)
 }

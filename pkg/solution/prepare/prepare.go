@@ -895,6 +895,9 @@ type PluginFetcherOverrides struct {
 	// Keys are catalog names, values describe the policy for that catalog.
 	// Each matching catalog is wrapped with an AllowlistCatalog decorator.
 	PerCatalogArtifacts map[string]catalog.PluginPolicy
+	// Cache overrides the local plugin cache. When nil, a default unbounded
+	// cache is created inside the Fetcher.
+	Cache *plugin.Cache
 	// Platform overrides the target platform. If empty, auto-detected.
 	Platform string
 	// NoCache bypasses the local cache when true.
@@ -934,6 +937,7 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 
 	cfg := plugin.FetcherConfig{
 		Catalog:         catalogChain,
+		Cache:           override.Cache,
 		BinaryName:      settings.BinaryNameFromContext(ctx),
 		Logger:          fetcherLogger,
 		AllowedCatalogs: override.AllowedCatalogs,
