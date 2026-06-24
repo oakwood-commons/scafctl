@@ -385,3 +385,53 @@ func TestConfigurePreloadOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestPluginCacheMaxSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int64
+		wantErr bool
+	}{
+		{
+			name:  "empty uses default",
+			input: "",
+			want:  512 * 1024 * 1024,
+		},
+		{
+			name:  "explicit MB",
+			input: "256MB",
+			want:  256 * 1024 * 1024,
+		},
+		{
+			name:  "explicit GB",
+			input: "2GB",
+			want:  2 * 1024 * 1024 * 1024,
+		},
+		{
+			name:  "lowercase",
+			input: "128mb",
+			want:  128 * 1024 * 1024,
+		},
+		{
+			name:    "invalid string",
+			input:   "not-a-size",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.APIServer.Plugins.DiskCacheMaxSize = tt.input
+
+			got, err := pluginCacheMaxSize(cfg)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

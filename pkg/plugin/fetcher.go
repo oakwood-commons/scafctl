@@ -6,7 +6,10 @@ package plugin
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,20 +21,31 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 )
+
+var ErrDedupTimeout = errors.New("operation timed out while waiting for concurrent request")
 
 // Fetcher resolves, downloads, caches, and loads plugin binaries at runtime.
 // It checks a local cache first, then falls back to fetching from catalogs.
 type Fetcher struct {
-	binaryName      string
-	catalogFetcher  *catalog.PluginFetcher
-	cache           *Cache
-	platform        string
-	noCache         bool
-	logger          logr.Logger
-	allowedCatalogs map[string]bool // if non-nil, only these catalog names are permitted
-	sigPolicy       *SignaturePolicy
-	sigVerifier     SignatureVerifier
+	binaryName        string
+	catalogFetcher    *catalog.PluginFetcher
+	cache             *Cache
+	platform          string
+	noCache           bool
+	logger            logr.Logger
+	allowedCatalogs   map[string]bool            // if non-nil, only these catalog names are permitted
+	catalogIdentities map[string]CatalogIdentity // alias (lowercase) → identity
+	sigPolicy         *SignaturePolicy
+	sigVerifier       SignatureVerifier
+	sfResolver        singleflight.Group
+	sfFetcher         singleflight.Group
+}
+type pluginFetchResult struct {
+	bytes []byte
+	info  catalog.ArtifactInfo
 }
 
 // FetcherConfig configures a Fetcher.
@@ -100,17 +114,190 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		sigVerifier = NewSignatureVerifier()
 	}
 
+	// Build catalog identity map for cache key derivation.
+	catalogIdentities := buildCatalogIdentities(cfg.Catalog)
+
 	return &Fetcher{
-		binaryName:      binaryName,
-		catalogFetcher:  catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
-		cache:           cache,
-		platform:        platform,
-		noCache:         cfg.NoCache,
-		logger:          cfg.Logger.WithName("plugin-fetcher"),
-		allowedCatalogs: allowedCatalogs,
-		sigPolicy:       cfg.SignaturePolicy,
-		sigVerifier:     sigVerifier,
+		binaryName:        binaryName,
+		catalogFetcher:    catalog.NewPluginFetcher(cfg.Catalog, cfg.Logger),
+		cache:             cache,
+		platform:          platform,
+		noCache:           cfg.NoCache,
+		logger:            cfg.Logger.WithName("plugin-fetcher"),
+		allowedCatalogs:   allowedCatalogs,
+		catalogIdentities: catalogIdentities,
+		sigPolicy:         cfg.SignaturePolicy,
+		sigVerifier:       sigVerifier,
 	}
+}
+
+// buildCatalogIdentities enumerates catalogs from the given catalog (which may
+// be a chain) and builds a map of alias (lowercase) → CatalogIdentity.
+func buildCatalogIdentities(cat catalog.Catalog) map[string]CatalogIdentity {
+	if cat == nil {
+		return nil
+	}
+
+	type catalogsLister interface {
+		Catalogs() []catalog.Catalog
+	}
+
+	var cats []catalog.Catalog
+	if chain, ok := cat.(catalogsLister); ok {
+		cats = chain.Catalogs()
+	} else {
+		cats = []catalog.Catalog{cat}
+	}
+
+	identities := make(map[string]CatalogIdentity, len(cats))
+	for _, c := range cats {
+		id := IdentityFromCatalog(c)
+		identities[strings.ToLower(id.Alias)] = id
+	}
+	return identities
+}
+
+// resolveCatalogIdentity resolves a catalog alias (from ArtifactInfo.Catalog or
+// lock file) to its CatalogIdentity. Returns a zero identity when the alias is
+// empty. For unknown aliases, constructs an identity with precomputed hash.
+func (f *Fetcher) resolveCatalogIdentity(resolvedFrom string) CatalogIdentity {
+	if resolvedFrom == "" {
+		return CatalogIdentity{}
+	}
+	if id, ok := f.catalogIdentities[strings.ToLower(resolvedFrom)]; ok {
+		return id
+	}
+	// Not a known alias — treat as literal canonical.
+	return NewCatalogIdentity(resolvedFrom, "")
+}
+
+// sortedCatalogIdentities returns catalog identities in a deterministic order
+// (sorted by alias). This ensures consistent plugin selection when iterating
+// across catalogs without a lock file.
+func (f *Fetcher) sortedCatalogIdentities() []CatalogIdentity {
+	ids := make([]CatalogIdentity, 0, len(f.catalogIdentities))
+	for _, id := range f.catalogIdentities {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i].Alias < ids[j].Alias
+	})
+	return ids
+}
+
+func (s *Fetcher) resolvePlugin(ctx context.Context, kind catalog.ArtifactKind, name, version string) (catalog.ArtifactInfo, error) {
+	key := name + "/" + string(kind) + "/" + version
+	return dedupeRequest(ctx, &s.sfResolver, key, settings.DefaultPluginResolveTimeout, func(ctx context.Context) (catalog.ArtifactInfo, error) {
+		return s.catalogFetcher.ResolvePlugin(ctx, name, kind, version)
+	})
+}
+
+func (s *Fetcher) fetchPlugin(ctx context.Context, kind catalog.ArtifactKind, name, version, platform string) ([]byte, catalog.ArtifactInfo, error) {
+	checkKey := name + "/" + string(kind) + "/" + version + "/" + platform
+	result, err := dedupeRequest(ctx, &s.sfFetcher, checkKey, settings.DefaultPluginFetchTimeout, func(ctx context.Context) (pluginFetchResult, error) {
+		bytes, info, err := s.catalogFetcher.FetchPlugin(ctx, name, kind, version, platform)
+		fetchResult := pluginFetchResult{
+			bytes: bytes,
+			info:  info,
+		}
+		return fetchResult, err
+	})
+	if err != nil {
+		return nil, catalog.ArtifactInfo{}, err
+	}
+	return result.bytes, result.info, nil
+}
+
+func dedupeRequest[T any](ctx context.Context, g *singleflight.Group, key string, timeOut time.Duration, fn func(context.Context) (T, error)) (T, error) {
+	ch := g.DoChan(key, func() (any, error) {
+		sfCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeOut)
+		defer cancel()
+		val, err := fn(sfCtx)
+		if sfCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+			g.Forget(key)
+			return val, fmt.Errorf("%w: %w", ErrDedupTimeout, err)
+		}
+		return val, err
+	})
+	var zero T
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return zero, res.Err
+		}
+		val, ok := res.Val.(T)
+		if !ok {
+			return zero, fmt.Errorf("unexpected result type %T", res.Val)
+		}
+		return val, nil
+	case <-ctx.Done():
+		// Caller's own context — always ctx.Err() (Canceled or DeadlineExceeded)
+		return zero, ctx.Err()
+	}
+}
+
+// tryCachedAcrossCatalogs attempts to find a cached plugin binary across all
+// known catalog identities. This is used when no lock file is present and we
+// don't yet know which catalog the plugin came from. Returns the first hit.
+// Identities are iterated in sorted order (by alias) to ensure deterministic
+// plugin selection across runs.
+func (f *Fetcher) tryCachedAcrossCatalogs(dep solution.PluginDependency) (FetchResult, bool) {
+	cacheName := PluginCacheKey(dep.Name, dep.Kind)
+	for _, id := range f.sortedCatalogIdentities() {
+		pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform, WithRegistryHash(id.RegistryHash()))
+		if !ok {
+			continue
+		}
+		satisfies, _ := cachedVersionSatisfies(dep.Version, cachedVer)
+		if !satisfies {
+			release()
+			continue
+		}
+		if err := f.checkCatalogAllowed(id.Alias); err != nil {
+			release()
+			continue
+		}
+		f.logger.V(1).Info("using cached plugin (no lock file)",
+			"name", dep.Name,
+			"version", cachedVer,
+			"path", pinPath,
+			"catalog", id.Alias)
+		return FetchResult{
+			Name:      dep.Name,
+			Kind:      dep.Kind,
+			Version:   cachedVer,
+			Path:      pinPath,
+			FromCache: true,
+			Catalog:   id.Alias,
+			Release:   release,
+		}, true
+	}
+	// Also try with zero identity (legacy / no catalog info).
+	pinPath, cachedVer, release, ok := f.cache.GetLatestCachedPin(cacheName, f.platform)
+	if !ok {
+		return FetchResult{}, false
+	}
+	satisfies, _ := cachedVersionSatisfies(dep.Version, cachedVer)
+	if !satisfies {
+		release()
+		return FetchResult{}, false
+	}
+	if err := f.checkCatalogAllowed(""); err != nil {
+		release()
+		return FetchResult{}, false
+	}
+	f.logger.V(1).Info("using cached plugin (no lock file, legacy path)",
+		"name", dep.Name,
+		"version", cachedVer,
+		"path", pinPath)
+	return FetchResult{
+		Name:      dep.Name,
+		Kind:      dep.Kind,
+		Version:   cachedVer,
+		Path:      pinPath,
+		FromCache: true,
+		Release:   release,
+	}, true
 }
 
 // FetchResult contains the result of fetching a single plugin.
@@ -142,6 +329,10 @@ type FetchResult struct {
 
 	// Catalog is the catalog name the plugin was fetched from (empty if cached).
 	Catalog string
+
+	// Release releases the pin on the cached binary. Must be called when the
+	// binary is no longer in use. Nil when pinning is not active (CLI mode).
+	Release func()
 }
 
 // FetchPlugins resolves and downloads plugin binaries for all declared
@@ -158,14 +349,22 @@ func (f *Fetcher) FetchPlugins(ctx context.Context, plugins []solution.PluginDep
 		return nil, nil
 	}
 
-	results := make([]FetchResult, 0, len(plugins))
+	results := make([]FetchResult, len(plugins))
+	errGroup, ctx := errgroup.WithContext(ctx)
+	errGroup.SetLimit(settings.DefaultFetchConcurrency)
+	for i, dep := range plugins {
+		errGroup.Go(func() error {
+			result, err := f.fetchOne(ctx, dep, lockPlugins)
+			if err != nil {
+				return fmt.Errorf("plugin %s (%s): %w", dep.Name, dep.Kind, err)
+			}
+			results[i] = result
+			return nil
+		})
+	}
 
-	for _, dep := range plugins {
-		result, err := f.fetchOne(ctx, dep, lockPlugins)
-		if err != nil {
-			return nil, fmt.Errorf("plugin %s (%s): %w", dep.Name, dep.Kind, err)
-		}
-		results = append(results, result)
+	if err := errGroup.Wait(); err != nil {
+		return results, err
 	}
 
 	return results, nil
@@ -195,7 +394,6 @@ func (f *Fetcher) fetchOne(ctx context.Context, dep solution.PluginDependency, l
 // doFetchOne performs the actual resolution and fetch logic for a single plugin.
 func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency, lockPlugins []bundler.LockPlugin) (FetchResult, error) {
 	kind := pluginKindToArtifactKind(dep.Kind)
-	cacheKey := PluginCacheKey(dep.Name, dep.Kind)
 
 	// Check lock file for a pinned version
 	locked := findLockPlugin(lockPlugins, dep.Name, string(dep.Kind))
@@ -220,34 +418,10 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 	} else {
 		// No lock file — prefer cached version to avoid network latency.
 		// Only resolve from catalog if no cached version exists.
+		// Since the cache key includes the catalog hash, try all known catalogs.
 		if !f.noCache {
-			if cachedPath, cachedVer, ok := f.cache.GetLatestCached(cacheKey, f.platform); ok {
-				// If a version constraint is specified, verify the cached version satisfies it.
-				satisfies, _ := cachedVersionSatisfies(dep.Version, cachedVer)
-				if satisfies {
-					// Security: when an allowlist is configured but the cache
-					// lacks catalog origin metadata, skip the cache hit and
-					// fall through to catalog resolution so provenance can be
-					// properly verified.
-					if err := f.checkCatalogAllowed(""); err != nil {
-						f.logger.V(0).Info("cached plugin lacks origin metadata, re-fetching from catalog for allowlist verification",
-							"name", dep.Name,
-							"version", cachedVer,
-							"reason", err.Error())
-					} else {
-						f.logger.V(1).Info("using cached plugin (no lock file)",
-							"name", dep.Name,
-							"version", cachedVer,
-							"path", cachedPath)
-						return FetchResult{
-							Name:      dep.Name,
-							Kind:      dep.Kind,
-							Version:   cachedVer,
-							Path:      cachedPath,
-							FromCache: true,
-						}, nil
-					}
-				}
+			if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
+				return result, nil
 			}
 		}
 
@@ -257,40 +431,20 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 			"constraint", dep.Version,
 			"hint", fmt.Sprintf("Run '%s build solution' to pin plugin versions", f.binaryName))
 
-		info, err := f.catalogFetcher.ResolvePlugin(ctx, dep.Name, kind, dep.Version)
+		info, err := f.resolvePlugin(ctx, kind, dep.Name, dep.Version)
 		if err != nil {
 			// Fallback: if catalog resolution fails, check if a cached version
 			// satisfies the requested constraint. If the cached version does not
 			// match, fail with the original error so users are never silently
 			// given a different version than they requested.
 			if !f.noCache {
-				if cachedPath, cachedVer, ok := f.cache.GetLatestCached(cacheKey, f.platform); ok {
-					// Verify cached version satisfies the requested constraint.
-					satisfies, constraintErr := cachedVersionSatisfies(dep.Version, cachedVer)
-					if constraintErr != nil {
-						return FetchResult{}, fmt.Errorf("resolving version: %w (constraint check failed: %w)", err, constraintErr)
-					}
-					if !satisfies {
-						return FetchResult{}, fmt.Errorf("resolving version: %w (cached version %s does not satisfy %q)", err, cachedVer, dep.Version)
-					}
-
-					// Security: reject cached plugins when an allowlist is configured
-					// but cache lacks catalog origin metadata.
-					if allowErr := f.checkCatalogAllowed(""); allowErr != nil {
-						return FetchResult{}, fmt.Errorf("cached plugin %s: %w", dep.Name, allowErr)
-					}
+				if result, ok := f.tryCachedAcrossCatalogs(dep); ok {
 					f.logger.V(0).Info("catalog resolution failed, using cached version",
 						"name", dep.Name,
-						"version", cachedVer,
-						"path", cachedPath,
+						"version", result.Version,
+						"path", result.Path,
 						"error", err)
-					return FetchResult{
-						Name:      dep.Name,
-						Kind:      dep.Kind,
-						Version:   cachedVer,
-						Path:      cachedPath,
-						FromCache: true,
-					}, nil
+					return result, nil
 				}
 			}
 			return FetchResult{}, fmt.Errorf("resolving version: %w", err)
@@ -321,6 +475,11 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		}
 	}
 
+	// Derive the registry hash now that we know the origin.
+	identity := f.resolveCatalogIdentity(resolvedFrom)
+	registryHash := identity.RegistryHash()
+	cacheName := PluginCacheKey(dep.Name, dep.Kind)
+
 	// Check local cache.
 	//
 	// In enforce mode, cache reads are skipped so every execution performs a
@@ -328,7 +487,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 	// allowed because verification is advisory.
 	skipCache := f.noCache || (f.sigPolicy != nil && f.sigPolicy.Mode == SignatureModeEnforce)
 	if !skipCache {
-		if cachedPath, ok := f.cache.Get(cacheKey, version, f.platform, expectedDigest); ok {
+		if cachedPath, release, ok := f.cache.GetPin(cacheName, version, f.platform, expectedDigest, WithRegistryHash(registryHash)); ok {
 			f.logger.V(1).Info("plugin found in cache",
 				"name", dep.Name,
 				"version", version,
@@ -341,6 +500,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 				Path:      cachedPath,
 				Digest:    expectedDigest,
 				FromCache: true,
+				Release:   release,
 			}, nil
 		}
 	}
@@ -351,7 +511,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		"version", version,
 		"platform", f.platform)
 
-	data, fetchInfo, err := f.catalogFetcher.FetchPlugin(ctx, dep.Name, kind, version, f.platform)
+	data, fetchInfo, err := f.fetchPlugin(ctx, kind, dep.Name, version, f.platform) // populate singleflight cache for concurrent requests
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("fetching binary: %w", err)
 	}
@@ -392,23 +552,24 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		}
 	}
 
-	// Write to cache
-	cachedPath, err := f.cache.Put(cacheKey, version, f.platform, data)
+	// Write to cache and pin atomically — no eviction gap.
+	// Re-derive identity if fetchInfo provided catalog info we didn't have earlier.
+	if resolvedFrom == "" && fetchInfo.Catalog != "" {
+		resolvedFrom = fetchInfo.Catalog
+		identity = f.resolveCatalogIdentity(resolvedFrom)
+		registryHash = identity.RegistryHash()
+	}
+	cachedPath, release, err := f.cache.SetPin(cacheName, version, f.platform, data, WithRegistryHash(registryHash))
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("caching binary: %w", err)
 	}
 
 	digest := fetchInfo.Digest
 	if digest == "" {
-		// Compute digest from the downloaded data
-		d, err := f.cache.Digest(cacheKey, version, f.platform)
+		d, err := f.cache.Digest(cacheName, version, f.platform, WithRegistryHash(registryHash))
 		if err == nil {
 			digest = d
 		}
-	}
-
-	if resolvedFrom == "" {
-		resolvedFrom = fetchInfo.Catalog
 	}
 
 	f.logger.V(1).Info("plugin fetched and cached",
@@ -427,6 +588,7 @@ func (f *Fetcher) doFetchOne(ctx context.Context, dep solution.PluginDependency,
 		FromCache: false,
 		Catalog:   resolvedFrom,
 		Signature: sigResult,
+		Release:   release,
 	}, nil
 }
 
@@ -581,16 +743,24 @@ func pluginKindToArtifactKind(kind solution.PluginKind) catalog.ArtifactKind {
 	}
 }
 
-// PluginCacheKey returns a cache-safe key for a plugin that avoids namespace
-// collisions between different plugin kinds. Provider plugins use the bare
-// name (e.g. "github") for backward compatibility with existing caches.
-// Auth-handler plugins are prefixed (e.g. "auth-handler-github") so a provider
-// named "github" and an auth-handler named "github" occupy separate cache slots.
+// PluginCacheKey returns the directory name for a plugin in the cache.
+// Provider plugins use the bare name; auth-handler plugins are prefixed
+// with "auth-handler-". This is the name component only (no registry hash).
 func PluginCacheKey(name string, kind solution.PluginKind) string {
 	if kind == solution.PluginKindAuthHandler {
 		return "auth-handler-" + name
 	}
 	return name
+}
+
+// PluginCachePath builds the relative cache path for a plugin binary directory.
+// When registryHash is empty, the registry-hash directory level is omitted.
+func PluginCachePath(name string, kind solution.PluginKind, registryHash, version, platform string) string {
+	cacheName := PluginCacheKey(name, kind)
+	if registryHash != "" {
+		return filepath.Join(cacheName, registryHash, version, PlatformCacheKey(platform))
+	}
+	return filepath.Join(cacheName, version, PlatformCacheKey(platform))
 }
 
 // findLockPlugin looks up a lock plugin entry by name and kind.
@@ -613,6 +783,7 @@ func (f *Fetcher) checkCatalogAllowed(resolvedFrom string) error {
 
 // RegisterCachedPlugin looks up a provider plugin by name in the local cache,
 // starts it, and registers its providers into the given registry.
+// The name should be the cache name (e.g. "aws-provider" or "auth-handler-github").
 // Returns the created clients (caller must Kill them on cleanup) or an error
 // if the plugin is not cached.
 func RegisterCachedPlugin(ctx context.Context, name string, registry *provider.Registry, cfg *ProviderConfig, cacheDir string, clientOpts ...ClientOption) ([]*Client, error) {
@@ -635,6 +806,7 @@ func RegisterCachedPlugin(ctx context.Context, name string, registry *provider.R
 
 // RegisterCachedPluginVersion loads a specific version of a cached plugin into
 // the registry. Returns an error if that exact version is not cached.
+// The name should be the cache name (e.g. "aws-provider").
 func RegisterCachedPluginVersion(ctx context.Context, name, version string, registry *provider.Registry, cfg *ProviderConfig, cacheDir string, clientOpts ...ClientOption) ([]*Client, error) {
 	cache := NewCache(cacheDir)
 	platform := CurrentPlatform()

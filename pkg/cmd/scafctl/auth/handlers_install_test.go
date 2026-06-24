@@ -74,12 +74,12 @@ func TestCommandHandlersInstall_AlreadyCached(t *testing.T) {
 	cliParams.BinaryName = "testcli"
 
 	// Create the binary at the exact path the cache will look for:
-	// $XDG_CACHE_HOME/testcli/plugins/<cacheKey>/<version>/<platformCacheKey>/<cacheKey>
-	cacheKey := plugin.PluginCacheKey("github", solution.PluginKindAuthHandler)
+	// $XDG_CACHE_HOME/testcli/plugins/<cacheName>/<version>/<platformCacheKey>/<cacheName>
+	cacheName := plugin.PluginCacheKey("github", solution.PluginKindAuthHandler)
 	platform := plugin.CurrentPlatform()
-	binDir := filepath.Join(xdgCache, "testcli", "plugins", cacheKey, "1.0.0", plugin.PlatformCacheKey(platform))
+	binDir := filepath.Join(xdgCache, "testcli", "plugins", cacheName, "1.0.0", plugin.PlatformCacheKey(platform))
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, cacheKey), []byte("fake"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, cacheName), []byte("fake"), 0o755))
 
 	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
 
@@ -123,11 +123,11 @@ func TestCommandHandlersInstall_ForceBypassesCache(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	cliParams.BinaryName = "testcli"
 
-	cacheKey := plugin.PluginCacheKey("github", solution.PluginKindAuthHandler)
+	cacheName := plugin.PluginCacheKey("github", solution.PluginKindAuthHandler)
 	platform := plugin.CurrentPlatform()
-	binDir := filepath.Join(xdgCache, "testcli", "plugins", cacheKey, "1.0.0", plugin.PlatformCacheKey(platform))
+	binDir := filepath.Join(xdgCache, "testcli", "plugins", cacheName, "1.0.0", plugin.PlatformCacheKey(platform))
 	require.NoError(t, os.MkdirAll(binDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, cacheKey), []byte("fake"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, cacheName), []byte("fake"), 0o755))
 
 	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
 

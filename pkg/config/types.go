@@ -725,6 +725,13 @@ type APIPluginConfig struct {
 	// fetched from. Catalog names are matched against catalog config entries.
 	// Empty means all configured catalogs are permitted.
 	AllowedCatalogs []string `json:"allowedCatalogs,omitempty" yaml:"allowedCatalogs,omitempty" mapstructure:"allowedCatalogs" doc:"Catalog name allowlist for plugin fetches (empty = allow all configured catalogs)" maxItems:"50"`
+
+	DisableDiskCache bool `json:"disableDiskCache,omitempty" yaml:"disableDiskCache,omitempty" mapstructure:"disableDiskCache" doc:"Disable disk caching for plugins loaded via the API (default: false)"`
+
+	// DiskCacheMaxSize is the maximum total size for the managed plugin disk cache.
+	// Accepts human-readable byte strings (e.g., "512MB", "1GB").
+	// When empty, defaults to settings.DefaultPluginCacheMaxSize (512MB).
+	DiskCacheMaxSize string `json:"diskCacheMaxSize,omitempty" yaml:"diskCacheMaxSize,omitempty" mapstructure:"diskCacheMaxSize" doc:"Maximum size for the plugin binary disk cache (e.g., '512MB', '1GB')" example:"512MB" maxLength:"20"`
 }
 
 // APITLSConfig holds TLS configuration for the API server.
