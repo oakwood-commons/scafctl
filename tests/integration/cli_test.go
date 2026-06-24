@@ -8509,6 +8509,91 @@ func TestIntegration_CredentialHelperListEmpty(t *testing.T) {
 	}
 }
 
+// runCredHelperSymlink invokes the integration binary through a
+// docker-credential-<name> symlink, mirroring how Docker/Podman exec a
+// credential helper. It returns stdout, stderr, and the exit code.
+func runCredHelperSymlink(t *testing.T, aliasName, stdin, verb string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink dispatch test is POSIX-only")
+	}
+
+	linkDir := t.TempDir()
+	linkPath := filepath.Join(linkDir, aliasName)
+	require.NoError(t, os.Symlink(binaryPath, linkPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, linkPath, verb)
+	cmd.Dir = findProjectRoot()
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
+	stdout = outBuf.String()
+	stderr = errBuf.String()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("failed to run credential helper symlink: %v", err)
+		}
+	}
+	return stdout, stderr, exitCode
+}
+
+// TestIntegration_CredentialHelperSymlinkDispatch verifies that invoking the
+// binary under a docker-credential-<name> alias routes into the
+// credential-helper command tree (Problem 1 in issue #540). Without the
+// argv[0] dispatch, cobra would fail with "unknown command \"get\"".
+func TestIntegration_CredentialHelperSymlinkDispatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("get routes via scafctl alias", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runCredHelperSymlink(t, "docker-credential-scafctl", "https://unknown.registry.io", "get")
+
+		assert.NotContains(t, stderr, "unknown command", "argv[0] dispatch should route get into credential-helper")
+		assert.NotEqual(t, 0, exitCode, "unknown registry should fail")
+
+		var errResp map[string]string
+		require.NoError(t, json.Unmarshal([]byte(stdout), &errResp), "stdout should be a JSON error response, got: %q / stderr: %q", stdout, stderr)
+		assert.Contains(t, errResp["message"], "credentials not found")
+	})
+
+	t.Run("embedder binary name also routes", func(t *testing.T) {
+		t.Parallel()
+		// The dispatch keys off the docker-credential- prefix, not the binary
+		// suffix, so an embedder alias routes the same way.
+		stdout, stderr, exitCode := runCredHelperSymlink(t, "docker-credential-myembedder", "https://unknown.registry.io", "get")
+
+		assert.NotContains(t, stderr, "unknown command")
+		assert.NotEqual(t, 0, exitCode)
+
+		var errResp map[string]string
+		require.NoError(t, json.Unmarshal([]byte(stdout), &errResp), "stdout should be JSON, got: %q / stderr: %q", stdout, stderr)
+		assert.Contains(t, errResp["message"], "credentials not found")
+	})
+
+	t.Run("list routes and returns valid JSON", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runCredHelperSymlink(t, "docker-credential-scafctl", "", "list")
+
+		assert.NotContains(t, stderr, "unknown command", "argv[0] dispatch should route list into credential-helper")
+		if exitCode == 0 {
+			var result map[string]string
+			require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+			assert.NotNil(t, result)
+		}
+	})
+}
+
 // ============================================================================
 // Plugin Execution Integration Tests
 // ============================================================================

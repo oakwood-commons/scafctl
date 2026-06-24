@@ -9,6 +9,7 @@ package credentialhelper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -104,7 +105,7 @@ func commandGet() *cobra.Command {
 			}
 			cred, err := helper.Get(cmd.Context(), string(input))
 			if err != nil {
-				return writeError(os.Stdout, err.Error())
+				return writeError(os.Stdout, formatGetError(cmd.Context(), err))
 			}
 			return json.NewEncoder(os.Stdout).Encode(cred) //nolint:gosec // G117: required by Docker credential helper protocol
 		},
@@ -194,4 +195,22 @@ func writeError(w io.Writer, message string) error {
 	resp := credentialhelper.ErrorResponse{Message: message}
 	_ = json.NewEncoder(w).Encode(resp)
 	return exitcode.WithCode(fmt.Errorf("%s", message), exitcode.GeneralError)
+}
+
+// formatGetError renders the message written to the credential-helper error
+// response. When the failure is a ReauthRequiredError — a handler was inferred
+// but no usable token could be acquired non-interactively — it produces an
+// actionable hint naming the exact `auth login` command to run, derived from
+// the configured binary name so embedders get the correct command too.
+func formatGetError(ctx context.Context, err error) string {
+	var reauth *credentialhelper.ReauthRequiredError
+	if errors.As(err, &reauth) {
+		bin := settings.BinaryNameFromContext(ctx)
+		return fmt.Sprintf(
+			"no valid credentials for %s: run '%s auth login %s' to re-authenticate "+
+				"(interactive login cannot run inside a credential-helper subprocess)",
+			reauth.ServerURL, bin, reauth.Handler,
+		)
+	}
+	return err.Error()
 }
