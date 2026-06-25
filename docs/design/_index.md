@@ -46,6 +46,7 @@ Architecture and design documentation for scafctl.
 - [Entra Auth Implementation](entra-auth-implementation.md) — Microsoft Entra ID authentication
 - [GCP Auth Handler](gcp-auth-handler.md) — Google Cloud Platform authentication
 - [GitHub Auth Handler](github-auth-handler.md) — GitHub authentication
+- [Kubernetes / OpenShift Auth](kubernetes-auth.md) — Exec-credential bridge and cluster-resolver hook
 - [State](state.md) — State management design
 
 ## Contributing
