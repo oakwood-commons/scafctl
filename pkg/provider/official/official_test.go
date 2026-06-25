@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewRegistry_Contains10Providers(t *testing.T) {
+func TestNewRegistry_ContainsAllProviders(t *testing.T) {
 	r := NewRegistry()
-	assert.Equal(t, 10, r.Len())
+	assert.Equal(t, len(DefaultProviders()), r.Len())
 }
 
 func TestNewRegistry_AllNamesPresent(t *testing.T) {
@@ -21,7 +21,7 @@ func TestNewRegistry_AllNamesPresent(t *testing.T) {
 
 	expected := []string{
 		"directory", "env", "exec", "git", "github", "hcl",
-		"identity", "metadata", "secret", "sleep",
+		"identity", "kubeconfig", "metadata", "secret", "sleep",
 	}
 	assert.Equal(t, expected, r.Names())
 }
@@ -130,7 +130,7 @@ func TestDefaultProviders_ReturnsCopy(t *testing.T) {
 }
 
 func TestDefaultProviders_Count(t *testing.T) {
-	assert.Equal(t, 10, len(DefaultProviders()))
+	assert.Equal(t, NewRegistry().Len(), len(DefaultProviders()))
 }
 
 func TestDefaultProviders_ExtendPattern(t *testing.T) {
@@ -139,7 +139,7 @@ func TestDefaultProviders_ExtendPattern(t *testing.T) {
 	)
 
 	r := NewRegistryFrom(extended)
-	assert.Equal(t, 11, r.Len())
+	assert.Equal(t, len(extended), r.Len())
 	assert.True(t, r.Has("exec"))
 	assert.True(t, r.Has("aws"))
 }
@@ -198,7 +198,7 @@ func TestRegistry_Len(t *testing.T) {
 		providers []Provider
 		want      int
 	}{
-		{name: "default", providers: DefaultProviders(), want: 10},
+		{name: "default", providers: DefaultProviders(), want: len(DefaultProviders())},
 		{name: "empty", providers: nil, want: 0},
 		{name: "custom", providers: []Provider{{Name: "a"}, {Name: "b"}}, want: 2},
 	}

@@ -47,6 +47,7 @@ Architecture and design documentation for scafctl.
 - [GCP Auth Handler](gcp-auth-handler.md) — Google Cloud Platform authentication
 - [GitHub Auth Handler](github-auth-handler.md) — GitHub authentication
 - [Kubernetes / OpenShift Auth](kubernetes-auth.md) — Exec-credential bridge and cluster-resolver hook
+- [Kubeconfig Provider Implementation Plan](kubeconfig-provider-implementation-plan.md) — Phase 2 plan for the kubeconfig provider plugin
 - [State](state.md) — State management design
 
 ## Contributing

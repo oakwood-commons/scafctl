@@ -18,7 +18,8 @@ The design is layered by dependency weight so each phase ships independently:
 |-------|-------|----------|--------|
 | 1a | Handler-agnostic exec-credential output on `auth token` | core (`pkg/auth/execcredential`) | Shipped |
 | 1b | `ClusterResolver` interface + `RootOptions` hook | core (`pkg/kube`) | Shipped |
-| 2 | Kubeconfig provider plugin (`client-go`/`clientcmd`) | plugin | Planned |
+| 2a | Kubeconfig provider capability contract + host-side manager | core (`pkg/kubeconfig`, `CapabilityKubeconfig`) | Shipped |
+| 2b | Kubeconfig provider plugin implementation (`client-go`/`clientcmd`) | plugin | Planned |
 | 3 | Thin `login` / `kube` command | core | Planned |
 | 4 | OpenShift OAuth auth-handler plugin | plugin | Planned |
 
@@ -113,28 +114,79 @@ run the embedder's lookup inside a non-interactive subprocess (latency plus a
 hard runtime dependency). The runtime helper then mints a token for fixed args
 with no resolver involved.
 
-## Phases 2-4 (Planned)
+## Phases 2-4
 
-- **Phase 2 -- Kubeconfig provider plugin.** Carries `client-go`/`clientcmd`.
-  Merges/writes the kubeconfig cluster, user, and context with an `ExecConfig`
-  credential plugin; provides `DetectAuthType`, `CheckAPIServerReachable`
-  (`/healthz`), and `Whoami` (SelfSubjectReview). Vendor-neutral; reused by both
-  OIDC and OpenShift paths.
-- **Phase 3 -- Thin `login` / `kube` command.** Orchestration only: run
-  `handler.Login` to mint a token, then delegate the kubeconfig write to the
-  Phase 2 provider over the existing provider RPC. Consumes
-  `kube.ClusterResolver` to resolve a positional cluster name into `--server`
-  and `--audience`. `client-go` never enters core.
+- **Phase 2a -- Kubeconfig provider capability contract (Shipped).** The
+  in-core `CapabilityKubeconfig` provider capability plus the host-side driver
+  in `pkg/kubeconfig` (typed inputs/outputs, `Manager`, mock, official-provider
+  registration). Defines the six operations dispatched on the `operation`
+  input -- `kubeconfig_write`, `kubeconfig_remove`, `current_server`,
+  `detect_auth_type`, `reachable`, `whoami` -- each returning `success: boolean`.
+  No `client-go` enters core; the manager resolves and drives the external
+  plugin over the existing provider RPC.
+- **Phase 2b -- Kubeconfig provider plugin implementation (Planned).** Carries
+  `client-go`/`clientcmd`. Merges/writes the kubeconfig cluster, user, and
+  context with an `ExecConfig` credential plugin; implements `DetectAuthType`,
+  `CheckAPIServerReachable` (`/healthz`), and `Whoami` (SelfSubjectReview).
+  Vendor-neutral; reused by both OIDC and OpenShift paths.
+- **Phase 3 -- Kube wiring on `auth login` / `auth logout`.** Orchestration
+  only: run the handler login to mint a token, then delegate the kubeconfig
+  write to the Phase 2b provider over the existing provider RPC. Surfaced as
+  `auth login <handler> --cluster <name>` (and matching `auth logout`) rather
+  than a new top-level command. Consumes `kube.ClusterResolver` to resolve a
+  cluster name into `--server` and `--audience`. `client-go` never enters core.
 - **Phase 4 -- OpenShift OAuth handler plugin.** The one genuinely
   OpenShift-specific credential source: localhost-callback implicit-grant flow,
   plus `ListProjects` / MOTD behind graceful degradation.
 
 ## Design Decisions
 
-- **No `client-go` in core.** It lives only in the Phase 2 kubeconfig provider
+- **No `client-go` in core.** It lives only in the Phase 2b kubeconfig provider
   plugin (and an optional shared library), never in `pkg/kube`.
 - **No cluster data in core.** Cluster resolution is an embedder concern behind
   `ClusterResolver`.
 - **`kube` package naming.** Every `ClusterInfo` field is Kubernetes-API-server
   specific, so the package is named for the `kube` domain rather than a generic
   `cluster` name.
+
+## Resolved Open Questions
+
+The four open questions from issue #536 are resolved as follows. These shape
+Phases 2-4.
+
+### Q1 -- Command Placement
+
+Fold kube login into the existing auth group as
+`auth login <handler> --cluster <name>` (plus matching `auth logout`), rather
+than adding a top-level `login` command. The handler is the credential source
+(unchanged); `--cluster <name>` triggers the kube wiring. Without `--cluster`,
+`auth login` behaves exactly as before.
+
+### Q2 -- Handler Granularity
+
+Keep single-purpose handlers; do not build a branching meta-handler. Reuse the
+existing handlers (`gcp`, `entra`, `github`, and a future generic `oidc`
+handler) for OIDC clusters, and add exactly one `openshift` OAuth handler as a
+Phase 4 plugin for the bundled-OAuth case. Selection happens at the command
+level via `ClusterInfo.AuthType` plus the provider's `DetectAuthType`, not
+inside a handler.
+
+### Q3 -- Thin Command vs Embedder-Provided
+
+The kube wiring lives in core (so every embedder gets it) and delegates all
+`client-go` work to the Phase 2b kubeconfig provider over gRPC. The provider is
+auto-fetched on demand via the existing plugin `Fetcher`; if it cannot be
+fetched, core degrades gracefully to `auth token <handler> --exec-credential`
+for manual kubeconfig wiring (which already works without any plugin). The
+provider RPC surface is roughly `WriteKubeconfig`, `RemoveManagedEntries`,
+`GetCurrentContextServer`, `DetectAuthType`, `CheckAPIServerReachable`, and
+`Whoami`.
+
+### Q4 -- Token Cache
+
+Reuse the existing auth keyring `TokenCache`; do not add a kube-specific cache.
+The exec-credential path already reads from it, so a second cache would create
+two sources of truth. The Phase 2b provider stays stateless and never handles
+tokens. The resolved OIDC audience is folded into the cache-key scope dimension
+so audience-specific tokens are distinct entries. Kube logout clears the keyring
+(existing path) and additionally removes the managed kubeconfig entry.

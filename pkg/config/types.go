@@ -107,7 +107,7 @@ type Settings struct {
 	DisableOfficialCatalog bool `json:"disableOfficialCatalog,omitempty" yaml:"disableOfficialCatalog,omitempty" mapstructure:"disableOfficialCatalog" doc:"Disable the built-in official catalog"`
 
 	// DisableOfficialProviders prevents auto-resolution of official first-party
-	// providers (the 10 extracted providers published to ghcr.io/oakwood-commons).
+	// providers (published to ghcr.io/oakwood-commons).
 	// When true, providers must be either built-in or explicitly declared in
 	// bundle.plugins. Embedders can set this when their CLI should not
 	// auto-fetch providers from the scafctl community catalog.
