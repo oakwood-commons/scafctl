@@ -116,8 +116,8 @@ func TestHandleListOfficialProviders(t *testing.T) {
 		var items []officialProviderItem
 		require.NoError(t, json.Unmarshal([]byte(text), &items))
 
-		// Should contain the 10 default official providers
-		assert.Len(t, items, 10)
+		// Should contain all the default official providers
+		assert.Len(t, items, len(official.DefaultProviders()))
 
 		// Verify they are sorted alphabetically
 		names := make([]string, len(items))

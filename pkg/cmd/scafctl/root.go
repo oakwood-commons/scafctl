@@ -179,7 +179,7 @@ type RootOptions struct {
 
 	// OfficialProviders overrides the default official provider registry used
 	// for auto-resolution. When nil and DisableOfficialProviders is false,
-	// the default registry (all 10 extracted first-party providers) is used.
+	// the default registry (all first-party providers) is used.
 	// Embedders can supply a custom registry via official.NewRegistryFrom to
 	// extend or replace the default set.
 	OfficialProviders *official.Registry

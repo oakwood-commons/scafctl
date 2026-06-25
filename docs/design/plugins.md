@@ -337,13 +337,13 @@ settings:
 
 ### Official Provider Auto-Resolution
 
-scafctl maintains a hardcoded registry of 10 official providers distributed as
+scafctl maintains a hardcoded registry of official providers distributed as
 external plugins. When a solution references one of these providers and it is
 not already registered (via `bundle.plugins` or a local plugin), scafctl
 transparently fetches the provider from the official catalog at runtime.
 
 **Official providers**: `directory`, `env`, `exec`, `git`, `github`, `hcl`,
-`identity`, `metadata`, `secret`, `sleep`
+`identity`, `kubeconfig`, `metadata`, `secret`, `sleep`
 
 **Resolution flow**:
 

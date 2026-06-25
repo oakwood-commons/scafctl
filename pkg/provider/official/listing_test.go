@@ -44,7 +44,7 @@ func TestListItems_DefaultRegistry(t *testing.T) {
 	ctx := WithRegistry(context.Background(), reg)
 
 	items := ListItems(ctx)
-	assert.Len(t, items, 10)
+	assert.Len(t, items, len(DefaultProviders()))
 
 	for _, item := range items {
 		assert.Equal(t, "official", item.Source)
