@@ -235,5 +235,6 @@ type ProviderTransform struct {
 type ProviderValidation struct {
 	Provider string               `json:"provider" yaml:"provider" doc:"Provider name" example:"validation" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
 	Inputs   map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
+	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Rule-level condition; the rule is skipped when this evaluates to false"`
 	Message  *ValueRef            `json:"message,omitempty" yaml:"message,omitempty" doc:"Error message on validation failure"`
 }

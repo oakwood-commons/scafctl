@@ -52,6 +52,46 @@ func ToHclFunc() gotmpl.ExtFunction {
 	}
 }
 
+// ToHclValueFunc returns an ExtFunction that converts a Go object into an HCL
+// value expression.
+//
+// Unlike toHcl (which renders a map as an HCL body of bare attributes and blocks
+// for generating .tf/.tfvars file bodies), toHclValue always renders a valid HCL
+// value expression suitable for the right-hand side of an assignment: scalars
+// become literals, lists become tuples ([...]), maps become object literals
+// ({ k = v, ... }), and lists of objects become tuples of object literals
+// ([{ ... }, ...]).
+//
+// Example usage in a Go template:
+//
+//	labels = {{ .labels | toHclValue }}
+//	bindings = {{ .wifBindings | toHclValue }}
+func ToHclValueFunc() gotmpl.ExtFunction {
+	return gotmpl.ExtFunction{
+		Name:        "toHclValue",
+		Description: "Converts a Go object into an HCL value expression for the right-hand side of an assignment. Scalars become literals, lists become tuples, maps become object literals, and lists of objects become tuples of object literals. Use toHcl instead to generate an HCL file body of bare attributes and blocks.",
+		Custom:      true,
+		Links:       []string{"https://github.com/hashicorp/hcl"},
+		Examples: []gotmpl.Example{
+			{
+				Description: "Convert a map to an HCL object literal",
+				Template:    `labels = {{ dict "env" "prod" "tier" "web" | toHclValue }}`,
+			},
+			{
+				Description: "Convert a list of objects to an HCL tuple of object literals",
+				Template:    `bindings = {{ .wifBindings | toHclValue }}`,
+			},
+			{
+				Description: "Convert a scalar list to an HCL tuple",
+				Template:    `tags = {{ list "web" "prod" | toHclValue }}`,
+			},
+		},
+		Func: template.FuncMap{
+			"toHclValue": ToHclValue,
+		},
+	}
+}
+
 // ToHcl converts a Go object to its HCL string representation.
 //
 // For example:
@@ -87,6 +127,43 @@ func ToHcl(obj any) (string, error) {
 	return buf.String(), nil
 }
 
+// ToHclValue converts a Go object to a valid HCL value expression.
+//
+// Unlike ToHcl, a map is rendered as an inline object literal ({ k = v, ... })
+// rather than a bare body, so the result is always valid on the right-hand side
+// of an HCL assignment.
+//
+// For example:
+//
+//	obj := []any{map[string]any{"ns": "y1"}, map[string]any{"ns": "y2"}}
+//	ToHclValue(obj) // returns: [{ ns = "y1" }, { ns = "y2" }]
+//
+// Parameters:
+//
+//	obj any: The Go object to convert. Supports structs, maps, slices, and primitives.
+//
+// Returns:
+//
+//	string: The HCL value expression for the Go object.
+//	error: An error if the conversion fails.
+func ToHclValue(obj any) (string, error) {
+	if obj == nil {
+		return "null", nil
+	}
+
+	normalized, err := normalize(obj)
+	if err != nil {
+		return "", fmt.Errorf("toHclValue: failed to normalize input: %w", err)
+	}
+
+	var buf strings.Builder
+	if err := writeHclValue(&buf, normalized); err != nil {
+		return "", fmt.Errorf("toHclValue: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
 // normalize converts any Go value to a JSON-friendly representation
 // (map[string]any, []any, or primitives) via JSON round-trip.
 func normalize(obj any) (any, error) {
@@ -104,12 +181,21 @@ func normalize(obj any) (any, error) {
 }
 
 // writeHcl recursively writes HCL-formatted output for a normalized value.
+//
+// A top-level map is rendered as an HCL body (bare attributes and nested
+// blocks), which is the common case for generating .tf/.tfvars file bodies. A
+// top-level list of objects has no key to act as a block label, so it cannot be
+// a valid body; it is rendered as a tuple of object literals ([{ ... }, ...]).
+// To render an arbitrary value as an HCL value expression (for the right-hand
+// side of an assignment), use ToHclValue instead.
 func writeHcl(buf *strings.Builder, value any, indent int) error {
 	switch v := value.(type) {
 	case map[string]any:
 		return writeHclMap(buf, v, indent)
 	case []any:
-		return writeHclList(buf, v, indent)
+		// A keyless top-level list cannot be an HCL body; render it as a value
+		// expression (scalar tuple or tuple of object literals).
+		return writeHclListValue(buf, v)
 	default:
 		// Scalar at top level — emit as a bare HCL literal
 		buf.WriteString(formatHclValue(v))
@@ -157,7 +243,7 @@ func writeHclMap(buf *strings.Builder, m map[string]any, indent int) error {
 			} else {
 				// Simple list becomes an HCL list attribute
 				fmt.Fprintf(buf, "%s%s = ", prefix, key)
-				if err := writeHclListValue(buf, v, indent); err != nil {
+				if err := writeHclListValue(buf, v); err != nil {
 					return err
 				}
 				buf.WriteString("\n")
@@ -172,43 +258,60 @@ func writeHclMap(buf *strings.Builder, m map[string]any, indent int) error {
 	return nil
 }
 
-// writeHclList writes a top-level list. Lists of maps/objects are rendered as
-// blocks; lists of scalars are rendered as a bare HCL array (["a", "b"]).
-func writeHclList(buf *strings.Builder, list []any, indent int) error {
-	if len(list) == 0 {
-		buf.WriteString("[]")
+// writeHclValue writes any normalized value as an HCL value expression: scalars
+// become literals, lists become tuples ([...]), and maps become object literals
+// ({ k = v, ... }). Unlike writeHcl, a map is never rendered as a bare body, so
+// the result is always valid on the right-hand side of an assignment.
+func writeHclValue(buf *strings.Builder, value any) error {
+	switch v := value.(type) {
+	case map[string]any:
+		return writeHclObjectLiteral(buf, v)
+	case []any:
+		return writeHclListValue(buf, v)
+	default:
+		buf.WriteString(formatHclValue(v))
 		return nil
 	}
-
-	if isListOfMaps(list) {
-		for _, item := range list {
-			itemMap, ok := item.(map[string]any)
-			if !ok {
-				return fmt.Errorf("expected map in list of maps, got %T", item)
-			}
-			if err := writeHclMap(buf, itemMap, indent); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// Top-level scalar list — emit as a bare HCL array.
-	return writeHclListValue(buf, list, indent)
 }
 
-// writeHclListValue writes a list value in HCL list syntax: [val1, val2, ...]
-func writeHclListValue(buf *strings.Builder, list []any, _ int) error {
+// writeHclObjectLiteral writes a map as an inline HCL object literal:
+// { key = value, ... }. Keys are sorted for deterministic output.
+func writeHclObjectLiteral(buf *strings.Builder, m map[string]any) error {
+	if len(m) == 0 {
+		buf.WriteString("{}")
+		return nil
+	}
+
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	buf.WriteString("{ ")
+	for i, key := range keys {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		fmt.Fprintf(buf, "%s = ", key)
+		if err := writeHclValue(buf, m[key]); err != nil {
+			return err
+		}
+	}
+	buf.WriteString(" }")
+	return nil
+}
+
+// writeHclListValue writes a list as an HCL tuple: [val1, val2, ...]. Elements
+// may be scalars, nested lists, or maps (rendered as object literals).
+func writeHclListValue(buf *strings.Builder, list []any) error {
 	buf.WriteString("[")
 	for i, item := range list {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		switch item.(type) {
-		case map[string]any:
-			return fmt.Errorf("mixed lists with nested objects are not supported in HCL list syntax; use blocks instead")
-		default:
-			buf.WriteString(formatHclValue(item))
+		if err := writeHclValue(buf, item); err != nil {
+			return err
 		}
 	}
 	buf.WriteString("]")

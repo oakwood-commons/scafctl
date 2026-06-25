@@ -661,6 +661,70 @@ Output:
 
 Both validation errors are reported together rather than failing on the first one.
 
+### Example: Conditional Validation Rule
+
+Each rule in `validate.with` can carry its own `when` condition. When the
+condition evaluates to `false`, that single rule is skipped while the other
+rules still run. The condition can reference `__self` (the resolved value) and
+any other resolver via `_`. This is useful when a rule only applies to certain
+values -- for example, only enforcing a strict pattern in production.
+
+Create a file called `conditional-validation.yaml`:
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conditional-validation
+  version: 1.0.0
+
+spec:
+  resolvers:
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: appName
+          - provider: static
+            inputs:
+              value: my-app
+      validate:
+        with:
+          # Always enforced: lowercase, alphanumeric with hyphens.
+          - provider: validation
+            inputs:
+              match: "^[a-z0-9-]+$"
+              message: "Name must be lowercase alphanumeric with hyphens"
+          # Only enforced in production: must start with "prod-".
+          - provider: validation
+            when:
+              expr: "_.environment == 'production'"
+            inputs:
+              match: "^prod-"
+              message: "Production app names must start with 'prod-'"
+
+    environment:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              key: env
+          - provider: static
+            inputs:
+              value: development
+```
+
+In `development` (the default), the second rule is skipped, so `my-app` passes.
+In `production`, the second rule runs and a name without the `prod-` prefix
+fails. Put the `when` on the individual rule inside `validate.with`, not on the
+`validate` phase as a whole (a phase-level `validate.when` gates every rule at
+once).
+
 ---
 
 ## Conditional Execution
@@ -985,9 +1049,68 @@ Output (body and headers will vary):
   "api_data": {
     "body": "...",
     "headers": { "...": "..." },
-    "statusCode": 200
+    "statusCode": 200,
+    "success": true
   }
 }
+```
+
+The `success` field is `true` for any `2xx` status by default. A non-2xx
+response (for example `404`) does **not** raise an error -- the resolver still
+produces a value with `success: false` so you can branch on it in a transform or
+a downstream resolver.
+
+### Accepting Non-2xx Status Codes
+
+Sometimes a non-2xx status is a normal result. For example, a lookup that
+returns `404` when a resource does not yet exist. Use `acceptableStatusCodes` to
+declare which statuses count as successful. Each entry may be an exact integer
+(`200`), a class shorthand (`"2xx"`), or an inclusive range (`"200-204"`):
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: optional-lookup
+  version: 1.0.0
+
+spec:
+  resolvers:
+    existing:
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://api.example.com/users/maybe-missing
+              method: GET
+              autoParseJson: true
+              acceptableStatusCodes: [200, 404]
+```
+
+With `acceptableStatusCodes` set, a `404` yields `success: true` and the body is
+still returned (and parsed when `autoParseJson` is enabled). Any status outside
+the set -- such as `500` -- fails the source, which lets an `onError: continue`
+policy fall back to the next source:
+
+```yaml
+spec:
+  resolvers:
+    config:
+      type: any
+      resolve:
+        with:
+          # Fails on any status other than 2xx or 404, falling through below.
+          - provider: http
+            onError: continue
+            inputs:
+              url: https://api.example.com/config
+              method: GET
+              autoParseJson: true
+              acceptableStatusCodes: [200, 404]
+          - provider: static
+            inputs:
+              value: { fallback: true }
 ```
 
 ### With Authentication

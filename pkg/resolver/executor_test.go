@@ -1772,6 +1772,67 @@ func TestExecutor_ValidatePhase_WhenWithSelf(t *testing.T) {
 	})
 }
 
+func TestExecutor_ValidatePhase_PerRuleWhen(t *testing.T) {
+	registry := newMockRegistry()
+
+	require.NoError(t, registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	}))
+	require.NoError(t, registry.Register(&mockProvider{
+		name: "validation",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return nil, fmt.Errorf("validation failed: %v", inputs["message"])
+		},
+	}))
+
+	newResolver := func(value string, ruleWhen *Condition) []*Resolver {
+		return []*Resolver{
+			{
+				Name: "myParam",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: value}}},
+					},
+				},
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							When:     ruleWhen,
+							Inputs:   map[string]*ValueRef{"message": {Literal: "rule fired"}},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("rule runs when condition is true", func(t *testing.T) {
+		executor := NewExecutor(registry)
+		when := celexp.Expression(`__self == "prod"`)
+		_, err := executor.Execute(context.Background(), newResolver("prod", &Condition{Expr: &when}), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rule fired")
+	})
+
+	t.Run("rule skipped when condition is false", func(t *testing.T) {
+		executor := NewExecutor(registry)
+		when := celexp.Expression(`__self == "prod"`)
+		_, err := executor.Execute(context.Background(), newResolver("dev", &Condition{Expr: &when}), nil)
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid when condition surfaces an error", func(t *testing.T) {
+		executor := NewExecutor(registry)
+		when := celexp.Expression(`this is not valid cel ((`)
+		_, err := executor.Execute(context.Background(), newResolver("prod", &Condition{Expr: &when}), nil)
+		require.Error(t, err)
+	})
+}
+
 // ─── Write Operation Guard Tests ─────────────────────────────────────────────
 
 // mockWriteClassifierProvider returns a Descriptor with WriteOperations populated.

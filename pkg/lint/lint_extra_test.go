@@ -865,6 +865,133 @@ func TestLintResolvers_MissingFallbackSource_NoResolvePhase(t *testing.T) {
 	}
 }
 
+// ---- parameter-missing-default ----
+
+func filterByRule(findings []*Finding) []*Finding {
+	var out []*Finding
+	for _, f := range findings {
+		if f.RuleName == "parameter-missing-default" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestLintResolvers_ParameterMissingDefault_Fires(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"environment": {
+			Description: "param with no default and no fallback",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"key": {Literal: "environment"},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"environment": true})
+
+	findings := filterByRule(result.Findings)
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Equal(t, "resolvers.environment.resolve", findings[0].Location)
+	assert.Contains(t, findings[0].Message, "no 'default'")
+}
+
+func TestLintResolvers_ParameterMissingDefault_HasDefault(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"environment": {
+			Description: "param with default",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"key":     {Literal: "environment"},
+						"default": {Literal: "development"},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"environment": true})
+
+	assert.Empty(t, filterByRule(result.Findings),
+		"should not warn when the parameter source declares a default")
+}
+
+func TestLintResolvers_ParameterMissingDefault_HasUnconditionalFallback(t *testing.T) {
+	exprCond := celexp.Expression("_.useParam == true")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"environment": {
+			Description: "param with static fallback",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", When: &resolver.Condition{Expr: &exprCond}, Inputs: map[string]*spec.ValueRef{
+						"key": {Literal: "environment"},
+					}},
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: "development"},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"environment": true})
+
+	assert.Empty(t, filterByRule(result.Findings),
+		"should not warn when an unconditional non-parameter fallback exists")
+}
+
+func TestLintResolvers_ParameterMissingDefault_AllConditional(t *testing.T) {
+	exprCond := celexp.Expression("_.useParam == true")
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"environment": {
+			Description: "conditional param only",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", When: &resolver.Condition{Expr: &exprCond}, Inputs: map[string]*spec.ValueRef{
+						"key": {Literal: "environment"},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"environment": true})
+
+	// The all-conditional case is covered by missing-fallback-source; the
+	// parameter-missing-default rule only targets unconditional parameter
+	// sources to avoid duplicate findings.
+	assert.Empty(t, filterByRule(result.Findings),
+		"should not warn for a conditional parameter source (handled by missing-fallback-source)")
+}
+
 // ---- hyphensToCamelCase ----
 
 func TestHyphensToCamelCase(t *testing.T) {

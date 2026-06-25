@@ -1941,16 +1941,54 @@ Output:
 ["repo:a:ref:main", "repo:b:ref:main"]
 ```
 
-A top-level list of maps still renders as repeated HCL blocks, so `toHcl` picks
-the right shape automatically based on the list's element types.
+A keyed list of maps (a list nested under a map key) renders as repeated HCL
+blocks, which is the idiomatic Terraform pattern:
+
+```gotemplate
+{{ dict "ingress" (list (dict "port" 80) (dict "port" 443)) | toHcl }}
+```
+
+```hcl
+ingress {
+  port = 80
+}
+ingress {
+  port = 443
+}
+```
+
+A *keyless* top-level list of maps has no key to act as a block label, so it
+cannot be a valid HCL body. `toHcl` renders it as a tuple of object literals
+instead.
+
+### Rendering HCL Values with toHclValue
+
+`toHcl` generates an HCL *body* (bare attributes and blocks), which is what you
+want when rendering a whole `.tf`/`.tfvars` file. When you need a value on the
+right-hand side of an assignment, use `toHclValue`. It always renders a valid
+HCL value expression: maps become inline object literals and lists of objects
+become tuples of object literals.
+
+```gotemplate
+labels   = {{ dict "env" "prod" "tier" "web" | toHclValue }}
+bindings = {{ list (dict "ns" "y1" "sa" "x1") (dict "ns" "y2" "sa" "x2") | toHclValue }}
+```
+
+Output:
+
+```hcl
+labels   = { env = "prod", tier = "web" }
+bindings = [{ ns = "y1", sa = "x1" }, { ns = "y2", sa = "x2" }]
+```
 
 ### What You Learned
 
-- **`toHcl`** — Converts maps, lists, and primitives into HCL syntax.
-- **Nested structures** — Maps within maps render as nested HCL blocks.
+- **`toHcl`** -- Converts maps, lists, and primitives into an HCL body.
+- **`toHclValue`** -- Renders an HCL value expression for the right-hand side of an assignment (object literals and tuples of objects).
+- **Nested structures** -- Maps within maps render as nested HCL blocks.
 - **Top-level scalar lists** -- Render as a bare HCL array (`["a", "b"]`); empty lists render as `[]`.
-- **Combined with Sprig** — Use `indent` (from Sprig) to properly nest the generated HCL.
-- **Terraform workflows** — Generate provider blocks, resource definitions, and variable files from structured data.
+- **Combined with Sprig** -- Use `indent` (from Sprig) to properly nest the generated HCL.
+- **Terraform workflows** -- Generate provider blocks, resource definitions, and variable files from structured data.
 
 ---
 

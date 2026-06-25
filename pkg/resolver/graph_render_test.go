@@ -525,6 +525,23 @@ func TestExtractDepsFromValidatePhase_WithWhen(t *testing.T) {
 	assert.Contains(t, deps, "invalid")
 }
 
+func TestExtractDepsFromValidatePhase_RuleLevelWhen(t *testing.T) {
+	deps := make(map[string]bool)
+	phase := &ValidatePhase{
+		With: []ProviderValidation{
+			{
+				Provider: "validation",
+				When:     &Condition{Expr: celExpPtr("_.environment == 'prod'")},
+				Inputs: map[string]*ValueRef{
+					"rule": {Expr: celExpPtr("__self != ''")},
+				},
+			},
+		},
+	}
+	extractDepsFromValidatePhase(phase, deps, nil)
+	assert.Contains(t, deps, "environment")
+}
+
 func TestGraph_FindNode_NotFound(t *testing.T) {
 	graph := &Graph{
 		Nodes: []*GraphNode{

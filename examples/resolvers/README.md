@@ -28,6 +28,7 @@ This directory contains practical examples demonstrating various resolver patter
 | [transform-pipeline.yaml](transform-pipeline.yaml) | Multi-step data transformation |
 | [foreach-filter.yaml](foreach-filter.yaml) | ForEach in resolve phase with filter to strip nil results |
 | [validation.yaml](validation.yaml) | Input validation patterns |
+| [validation-conditional-rule.yaml](validation-conditional-rule.yaml) | Rule-level when to skip a validate rule conditionally |
 | [split-resolver-validation.yaml](split-resolver-validation.yaml) | Validate a raw upstream response, then reshape downstream |
 
 ### CEL Expressions
@@ -44,7 +45,7 @@ This directory contains practical examples demonstrating various resolver patter
 
 | Example | Description |
 |---------|-------------|
-| [go-template-extensions.yaml](go-template-extensions.yaml) | Custom extension functions: toHcl, toYaml, fromYaml |
+| [go-template-extensions.yaml](go-template-extensions.yaml) | Custom extension functions: toHcl, toHclValue, toYaml, fromYaml |
 | [go-template-sprig.yaml](go-template-sprig.yaml) | Sprig template functions (strings, type conversion, etc.) |
 | [go-template-ignored-blocks.yaml](go-template-ignored-blocks.yaml) | Using scafctl:ignore blocks to skip template rendering |
 

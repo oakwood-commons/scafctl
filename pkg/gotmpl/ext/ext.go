@@ -72,6 +72,7 @@ func Custom() gotmpl.ExtFunctionList {
 	return gotmpl.ExtFunctionList{
 		// HCL functions
 		hcl.ToHclFunc(),
+		hcl.ToHclValueFunc(),
 
 		// DNS / slugify functions
 		dns.SlugifyFunc(),
