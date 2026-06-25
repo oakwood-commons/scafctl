@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -327,4 +328,321 @@ func TestFindScafctlBinary(t *testing.T) {
 	assert.NotEmpty(t, path)
 	// Should be an absolute path
 	assert.True(t, filepath.IsAbs(path), "binary path should be absolute, got %s", path)
+}
+
+func TestCredHelperFileName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		binaryName string
+		goos       string
+		want       string
+	}{
+		{name: "linux default", binaryName: "scafctl", goos: "linux", want: "docker-credential-scafctl"},
+		{name: "darwin default", binaryName: "scafctl", goos: "darwin", want: "docker-credential-scafctl"},
+		{name: "windows default", binaryName: "scafctl", goos: "windows", want: "docker-credential-scafctl.cmd"},
+		{name: "embedder unix", binaryName: "mycli", goos: "linux", want: "docker-credential-mycli"},
+		{name: "embedder windows", binaryName: "mycli", goos: "windows", want: "docker-credential-mycli.cmd"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, credHelperFileName(tt.binaryName, tt.goos))
+		})
+	}
+}
+
+func TestShimContent(t *testing.T) {
+	t.Parallel()
+
+	const target = "/usr/local/bin/scafctl"
+
+	unix := shimContent(target, "linux")
+	assert.Contains(t, unix, "#!/bin/sh")
+	assert.Contains(t, unix, shimSignature)
+	assert.Contains(t, unix, `exec "`+target+`" credential-helper "$@"`)
+
+	win := shimContent(target, "windows")
+	assert.Contains(t, win, "@echo off")
+	assert.Contains(t, win, shimSignature)
+	assert.Contains(t, win, `"`+target+`" credential-helper %*`)
+	assert.Contains(t, win, "\r\n", "windows shim should use CRLF line endings")
+}
+
+func TestWriteShimAndIsManagedShim(t *testing.T) {
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	shimPath := filepath.Join(dir, "shim.sh")
+
+	require.NoError(t, writeShim(target, shimPath, "linux"))
+
+	data, err := os.ReadFile(shimPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), shimSignature)
+	assert.Contains(t, string(data), target)
+
+	managed, err := isManagedShim(shimPath)
+	require.NoError(t, err)
+	assert.True(t, managed, "generated shim should be recognized as managed")
+
+	// A foreign regular file must not be recognized as a managed shim.
+	foreign := filepath.Join(dir, "foreign")
+	require.NoError(t, os.WriteFile(foreign, []byte("not a shim"), 0o644))
+	managed, err = isManagedShim(foreign)
+	require.NoError(t, err)
+	assert.False(t, managed, "unrelated file should not be a managed shim")
+}
+
+func TestWriteShim_ReplacesManagedShim(t *testing.T) {
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	shimPath := filepath.Join(dir, "shim.sh")
+
+	// A previously generated managed shim may be replaced.
+	require.NoError(t, writeShim(target, shimPath, "linux"))
+	require.NoError(t, writeShim(target, shimPath, "linux"))
+
+	data, err := os.ReadFile(shimPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), shimSignature)
+}
+
+func TestWriteShim_RefusesForeignFile(t *testing.T) {
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	shimPath := filepath.Join(dir, "shim.sh")
+	require.NoError(t, os.WriteFile(shimPath, []byte("user data"), 0o644))
+
+	err = writeShim(target, shimPath, "linux")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a managed shim")
+
+	// The unrelated file must be left untouched.
+	data, err := os.ReadFile(shimPath)
+	require.NoError(t, err)
+	assert.Equal(t, "user data", string(data))
+}
+
+func TestWriteShim_ReplacesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privilege on Windows")
+	}
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	shimPath := filepath.Join(dir, "shim.sh")
+	require.NoError(t, os.Symlink(filepath.FromSlash("/nonexistent"), shimPath))
+
+	require.NoError(t, writeShim(target, shimPath, "linux"))
+
+	data, err := os.ReadFile(shimPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), shimSignature)
+}
+
+func TestWriteShim_NonExecutableTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "does-not-exist")
+	shimPath := filepath.Join(dir, "shim.sh")
+
+	err := writeShim(target, shimPath, "linux")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not executable")
+}
+
+func TestIsManagedShim_MatchesWindowsSignatureLine(t *testing.T) {
+	dir := t.TempDir()
+	shimPath := filepath.Join(dir, "shim.cmd")
+	require.NoError(t, os.WriteFile(shimPath, []byte(shimContent("target.exe", "windows")), 0o644))
+
+	managed, err := isManagedShim(shimPath)
+	require.NoError(t, err)
+	assert.True(t, managed, "generated windows shim should be recognized as managed")
+}
+
+func TestIsManagedShim_RejectsSignatureBeyondHeader(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large")
+
+	// Place the signature far past the bounded header so it must not match.
+	content := strings.Repeat("x", shimHeaderScanBytes+64) + "\n" + shimSignatureLinePOSIX + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	managed, err := isManagedShim(path)
+	require.NoError(t, err)
+	assert.False(t, managed, "signature outside the scanned header must not match")
+}
+
+func TestIsManagedShim_RejectsSubstringWithoutExactLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "incidental")
+
+	// The signature text appears, but never as a standalone comment line.
+	content := "prefix " + shimSignature + " suffix on the same line\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	managed, err := isManagedShim(path)
+	require.NoError(t, err)
+	assert.False(t, managed, "incidental substring must not be treated as a managed shim")
+}
+
+func TestIsManagedShim_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty")
+	require.NoError(t, os.WriteFile(path, nil, 0o644))
+
+	managed, err := isManagedShim(path)
+	require.NoError(t, err)
+	assert.False(t, managed, "empty file is not a managed shim")
+}
+
+func TestIsManagedShim_MissingFile(t *testing.T) {
+	managed, err := isManagedShim(filepath.Join(t.TempDir(), "missing"))
+	require.Error(t, err)
+	assert.False(t, managed)
+}
+
+func TestInstallHelper(t *testing.T) {
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	linkPath := filepath.Join(dir, credHelperFileName("scafctl", runtime.GOOS))
+
+	method, err := installHelper(target, linkPath, runtime.GOOS)
+	require.NoError(t, err)
+
+	if runtime.GOOS == "windows" {
+		assert.Equal(t, "shim", method)
+	} else {
+		assert.Equal(t, "symlink", method)
+	}
+
+	_, err = os.Lstat(linkPath)
+	require.NoError(t, err, "installed helper should exist at %s", linkPath)
+}
+
+func TestInstallHelper_Windows(t *testing.T) {
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	linkPath := filepath.Join(dir, credHelperFileName("scafctl", "windows"))
+
+	method, err := installHelper(target, linkPath, "windows")
+	require.NoError(t, err)
+	assert.Equal(t, "shim", method)
+
+	data, err := os.ReadFile(linkPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), shimSignature)
+	assert.True(t, strings.HasSuffix(linkPath, ".cmd"))
+}
+
+func TestCommandUninstall_RemovesManagedShim(t *testing.T) {
+	target, err := os.Executable()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	shimPath := filepath.Join(dir, credHelperFileName("scafctl", runtime.GOOS))
+	require.NoError(t, writeShim(target, shimPath, runtime.GOOS))
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := commandUninstall(ioStreams, "scafctl")
+	cmd.SetContext(newInstallTestCtx())
+	cmd.SetArgs([]string{"--bin-dir", dir})
+
+	require.NoError(t, cmd.Execute())
+
+	_, statErr := os.Stat(shimPath)
+	assert.True(t, os.IsNotExist(statErr), "managed shim should be removed")
+}
+
+func TestCommandInstall_RunE(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privilege on Windows")
+	}
+	binDir := t.TempDir()
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := commandInstall(ioStreams, "scafctl")
+	cmd.SetContext(newInstallTestCtx())
+	cmd.SetArgs([]string{"--bin-dir", binDir, "--docker"})
+
+	require.NoError(t, cmd.Execute())
+
+	// Helper installed.
+	linkPath := filepath.Join(binDir, credHelperFileName("scafctl", runtime.GOOS))
+	_, err := os.Lstat(linkPath)
+	require.NoError(t, err, "credential helper should be installed at %s", linkPath)
+
+	// Docker config updated with global credsStore.
+	cfg, err := readContainerConfig(filepath.Join(dockerDir, "config.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "scafctl", cfg["credsStore"])
+}
+
+func TestCommandInstall_RunE_Registry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privilege on Windows")
+	}
+	binDir := t.TempDir()
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := commandInstall(ioStreams, "scafctl")
+	cmd.SetContext(newInstallTestCtx())
+	cmd.SetArgs([]string{"--bin-dir", binDir, "--docker", "--registry", "ghcr.io"})
+
+	require.NoError(t, cmd.Execute())
+
+	cfg, err := readContainerConfig(filepath.Join(dockerDir, "config.json"))
+	require.NoError(t, err)
+	credHelpers, ok := cfg["credHelpers"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "scafctl", credHelpers["ghcr.io"])
+}
+
+func TestCommandInstallUninstall_DockerRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privilege on Windows")
+	}
+	binDir := t.TempDir()
+	dockerDir := t.TempDir()
+	t.Setenv("DOCKER_CONFIG", dockerDir)
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	install := commandInstall(ioStreams, "scafctl")
+	install.SetContext(newInstallTestCtx())
+	install.SetArgs([]string{"--bin-dir", binDir, "--docker"})
+	require.NoError(t, install.Execute())
+
+	uninstall := commandUninstall(ioStreams, "scafctl")
+	uninstall.SetContext(newInstallTestCtx())
+	uninstall.SetArgs([]string{"--bin-dir", binDir, "--docker"})
+	require.NoError(t, uninstall.Execute())
+
+	// Helper removed.
+	linkPath := filepath.Join(binDir, credHelperFileName("scafctl", runtime.GOOS))
+	_, statErr := os.Lstat(linkPath)
+	assert.True(t, os.IsNotExist(statErr), "credential helper should be removed")
+
+	// Docker credsStore cleaned.
+	cfg, err := readContainerConfig(filepath.Join(dockerDir, "config.json"))
+	require.NoError(t, err)
+	_, hasCredsStore := cfg["credsStore"]
+	assert.False(t, hasCredsStore, "credsStore should be removed from docker config")
 }
