@@ -1859,7 +1859,16 @@ spec:
 
 ## Getting Tokens for Debugging
 
-The `auth token` command retrieves a valid access token for debugging:
+The `auth token` command retrieves a valid access token for debugging. By
+default it prints the **raw token value** to stdout so it composes cleanly with
+shell scripts, `curl`, and tools like `kubectl`:
+
+> [!IMPORTANT]
+> **Breaking change:** `auth token` now prints the raw token by default. Earlier
+> versions printed a masked table and required `--raw` for the token value. The
+> `--raw` flag is still accepted as an explicit alias. Use `-o json` or
+> `-o yaml` to get the structured metadata object (handler, scope, expiry)
+> instead of the bare token.
 
 {{< tabs "auth-tutorial-cmd-47" >}}
 {{% tab "Bash" %}}
@@ -1896,12 +1905,14 @@ scafctl auth token gcp --scope "https://www.googleapis.com/auth/cloud-platform"
 
 ### Example Output
 
+The default output is the raw token value, ready to pipe or assign:
+
 ```
-Handler   Scope                                       Token                Expires
-entra     https://graph.microsoft.com/.default        eyJ0eXAi...****      2026-02-04 16:30:00
+eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiI...
 ```
 
-The token is masked in table output for security. Use JSON output to get the full token:
+Use JSON (or YAML) output to get the structured metadata object instead of the
+bare token:
 
 {{< tabs "auth-tutorial-cmd-48" >}}
 {{% tab "Bash" %}}
@@ -2056,6 +2067,74 @@ scafctl auth token github --curl
 ```
 {{% /tab %}}
 {{< /tabs >}}
+
+### Kubernetes ExecCredential (kubectl / oc)
+
+Use `--exec-credential` to emit a Kubernetes `ExecCredential` JSON object so
+`scafctl` can act as a [client-go credential plugin][k8s-exec] for `kubectl` and
+`oc`. This lets a cluster reuse the same scafctl-managed identity you already
+logged in with -- no separate kubeconfig token to rotate:
+
+{{< tabs "auth-tutorial-exec-credential" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl auth token entra --scope "<cluster-scope>/.default" --exec-credential
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl auth token entra --scope "<cluster-scope>/.default" --exec-credential
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Output (the `status.token` is consumed by kubectl; `expirationTimestamp` lets
+kubectl cache the token until it expires):
+
+```json
+{
+  "apiVersion": "client.authentication.k8s.io/v1",
+  "kind": "ExecCredential",
+  "status": {
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiI...",
+    "expirationTimestamp": "2026-02-04T16:30:00Z"
+  }
+}
+```
+
+When `kubectl` invokes the plugin it sets the `KUBERNETES_EXEC_INFO`
+environment variable. scafctl **auto-detects** this: if `KUBERNETES_EXEC_INFO`
+is present and you have not requested another render mode (`--raw`, `--curl`,
+`--export`) or an explicit `-o` format, `auth token` emits an `ExecCredential`
+automatically. scafctl also echoes back the `apiVersion` requested in
+`KUBERNETES_EXEC_INFO`, so both `client.authentication.k8s.io/v1` and
+`client.authentication.k8s.io/v1beta1` clients are supported.
+
+Wire it into your kubeconfig under `users[].user.exec`:
+
+```yaml
+users:
+  - name: my-cluster-user
+    user:
+      exec:
+        apiVersion: client.authentication.k8s.io/v1
+        command: scafctl
+        args:
+          - auth
+          - token
+          - entra
+          - --scope
+          - "<cluster-scope>/.default"
+          - --exec-credential
+        # Forwards KUBERNETES_EXEC_INFO so scafctl can echo the apiVersion.
+        provideClusterInfo: true
+        interactiveMode: IfAvailable
+```
+
+For a complete, copy-pasteable walkthrough see the
+[kubectl exec credential example](../../examples/auth/kubectl-exec-credential.md).
+
+[k8s-exec]: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins
 
 ### Decoding the JWT (Header + Payload)
 

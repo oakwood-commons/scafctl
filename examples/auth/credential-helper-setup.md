@@ -58,6 +58,28 @@ Place the symlink in a custom directory:
 scafctl credential-helper install --bin-dir /usr/local/bin --docker
 ```
 
+## How the Helper Is Installed (Unix vs. Windows)
+
+`credential-helper install` makes scafctl discoverable to Docker/Podman as
+`docker-credential-scafctl`. The mechanism differs by platform:
+
+- **Unix (Linux, macOS):** a `docker-credential-scafctl` **symlink** is created
+  in the bin directory pointing at the scafctl binary.
+- **Windows:** symlinks usually require elevation, so scafctl writes an
+  elevation-free **forwarding shim** named `docker-credential-scafctl.cmd`
+  instead. The shim simply forwards to `scafctl credential-helper <verb>`. If a
+  symlink cannot be created on Unix either, scafctl falls back to the same shim.
+
+```powershell
+# Windows
+scafctl credential-helper install --bin-dir "$env:USERPROFILE\bin" --docker
+```
+
+> The bin directory must be on your `PATH` so Docker/Podman can locate the
+> helper. On Windows the `.cmd` extension must be present in `PATHEXT` (it is by
+> default). `scafctl credential-helper uninstall` removes the symlink or the
+> managed shim; it refuses to delete a path it did not create.
+
 ## Direct Protocol Usage
 
 Test the credential helper directly (useful for debugging):
