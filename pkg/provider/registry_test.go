@@ -918,6 +918,105 @@ func TestValidateDescriptor_CapabilityState(t *testing.T) {
 	}
 }
 
+func TestValidateDescriptor_CapabilityKubeconfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		desc    *Descriptor
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "valid kubeconfig capability",
+			desc: &Descriptor{
+				Name:         "kubeconfig",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "Kubeconfig provider",
+				Capabilities: []Capability{CapabilityKubeconfig},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"operation": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{
+					CapabilityKubeconfig: {
+						Type: "object",
+						Properties: map[string]*jsonschema.Schema{
+							"success": {Type: "boolean"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing output schema for kubeconfig",
+			desc: &Descriptor{
+				Name:         "kubeconfig",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "Kubeconfig provider",
+				Capabilities: []Capability{CapabilityKubeconfig},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"operation": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{},
+			},
+			wantErr: true,
+			errMsg:  "missing output schema",
+		},
+		{
+			name: "kubeconfig output schema missing success field",
+			desc: &Descriptor{
+				Name:         "kubeconfig",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Description:  "Kubeconfig provider",
+				Capabilities: []Capability{CapabilityKubeconfig},
+				Schema: &jsonschema.Schema{
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"operation": {Type: "string"},
+					},
+				},
+				OutputSchemas: map[Capability]*jsonschema.Schema{
+					CapabilityKubeconfig: {
+						Type:       "object",
+						Properties: map[string]*jsonschema.Schema{},
+					},
+				},
+			},
+			wantErr: true,
+			errMsg:  "requires output field",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateDescriptor(tt.desc)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestIsCapabilityValid_Kubeconfig(t *testing.T) {
+	t.Parallel()
+	assert.True(t, IsCapabilityValid(CapabilityKubeconfig))
+	assert.True(t, IsCapabilityValid(CapabilityState))
+}
+
 func TestValidateDescriptor_DoesNotMutateCapabilities(t *testing.T) {
 	t.Parallel()
 

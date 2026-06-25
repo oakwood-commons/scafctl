@@ -53,8 +53,8 @@ type Provider struct {
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Human-readable summary of the provider"`
 }
 
-// defaultProviders is the canonical list of all 10 extracted first-party
-// providers. Sorted alphabetically by name.
+// defaultProviders is the canonical list of all first-party providers that the
+// runtime can auto-fetch. Sorted alphabetically by name.
 //
 // DefaultVersion is "latest" so the catalog resolver picks the newest
 // available version. This avoids hard-coding a concrete semver that must
@@ -71,6 +71,7 @@ var defaultProviders = []Provider{
 	{Name: "github", CatalogRef: "github", DefaultVersion: "latest", Description: "Interact with the GitHub API (repos, issues, PRs, releases, and more)"},
 	{Name: "hcl", CatalogRef: "hcl", DefaultVersion: "latest", Description: "Parse and evaluate HCL/Terraform configuration files"},
 	{Name: "identity", CatalogRef: "identity", DefaultVersion: "latest", Description: "Retrieve authenticated identity claims and token metadata"},
+	{Name: "kubeconfig", CatalogRef: "kubeconfig", DefaultVersion: "latest", Description: "Write and manage kubeconfig exec-credential entries and probe cluster auth"},
 	{Name: "metadata", CatalogRef: "metadata", DefaultVersion: "latest", Description: "Access runtime metadata such as OS, architecture, and build info"},
 	{Name: "secret", CatalogRef: "secret", DefaultVersion: "latest", Description: "Store and retrieve encrypted secrets using the local credential store"},
 	{Name: "sleep", CatalogRef: "sleep", DefaultVersion: "latest", Description: "Pause execution for a specified duration"},
@@ -82,7 +83,7 @@ type Registry struct {
 }
 
 // NewRegistry returns the default official provider registry containing
-// all 10 extracted first-party providers.
+// all first-party providers available for auto-fetch.
 func NewRegistry() *Registry {
 	return NewRegistryFrom(defaultProviders)
 }
@@ -107,7 +108,7 @@ func NewRegistryFrom(providers []Provider) *Registry {
 	return &Registry{providers: m}
 }
 
-// DefaultProviders returns a copy of the 10 official provider entries.
+// DefaultProviders returns a copy of the official provider entries.
 // Embedders can append their own entries and pass the result to
 // NewRegistryFrom to extend rather than replace the defaults.
 func DefaultProviders() []Provider {
