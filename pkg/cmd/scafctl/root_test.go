@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -310,4 +311,65 @@ func TestRoot_WithBuiltinAuthHandlers_Execution(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "builtin handler 'internal-idp' should appear in auth handlers output")
+}
+
+func TestRoot_WithClusterResolver(t *testing.T) {
+	t.Parallel()
+	resolver := &kube.MockResolver{}
+	cmd, cleanup := Root(&RootOptions{
+		BinaryName:      "mycli",
+		ClusterResolver: resolver,
+	})
+	defer cleanup()
+	require.NotNil(t, cmd)
+
+	// Verify the command tree was constructed with the option accepted.
+	assert.Equal(t, "mycli", cmd.Use)
+}
+
+func TestRoot_WithClusterResolver_Execution(t *testing.T) {
+	t.Parallel()
+	resolver := &kube.MockResolver{}
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	var captured kube.ClusterResolver
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams:       ioStreams,
+		BinaryName:      "mycli",
+		ClusterResolver: resolver,
+		PreRunHook: func(c *cobra.Command, _ []string) error {
+			captured = kube.ResolverFromContext(c.Context())
+			return nil
+		},
+	})
+	defer cleanup()
+	cmd.SetArgs([]string{"auth", "handlers", "-o", "json"})
+	require.NoError(t, cmd.Execute())
+
+	// The embedder-provided resolver must be attached to the command context.
+	assert.Same(t, resolver, captured)
+}
+
+func TestRoot_WithoutClusterResolver_Execution(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	capturedSet := false
+	var captured kube.ClusterResolver
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams:  ioStreams,
+		BinaryName: "mycli",
+		PreRunHook: func(c *cobra.Command, _ []string) error {
+			captured = kube.ResolverFromContext(c.Context())
+			capturedSet = true
+			return nil
+		},
+	})
+	defer cleanup()
+	cmd.SetArgs([]string{"auth", "handlers", "-o", "json"})
+	require.NoError(t, cmd.Execute())
+
+	// With no resolver configured, the context must not carry one.
+	assert.True(t, capturedSet, "PreRunHook should have run")
+	assert.Nil(t, captured)
 }

@@ -45,6 +45,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -195,6 +196,15 @@ type RootOptions struct {
 	// (config.Plugins.Signatures). Embedders can supply a policy directly
 	// to enforce stricter verification without relying on user config.
 	PluginSignaturePolicy *plugin.SignaturePolicy
+
+	// ClusterResolver resolves Kubernetes/OpenShift cluster names to
+	// connection details. When non-nil it is attached to the command context
+	// so cluster-aware commands can map a positional cluster name to its API
+	// server URL, auth type, and OIDC audience. When nil, those commands fall
+	// back to explicit --server flags and auto-detection. scafctl ships no
+	// cluster data; embedders with a cluster registry provide the
+	// implementation.
+	ClusterResolver kube.ClusterResolver
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -548,6 +558,12 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			}
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
+
+			// Attach the embedder-provided cluster resolver, if any, so
+			// cluster-aware commands can resolve names to connection details.
+			if opts.ClusterResolver != nil {
+				ctx = kube.WithResolver(ctx, opts.ClusterResolver)
+			}
 
 			// ── Resolve global auth profile ──
 			// Precedence: --auth-profile flag > env var > (per-handler config is resolved later)
