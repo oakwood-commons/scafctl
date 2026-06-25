@@ -162,6 +162,29 @@ func (r *Result) addFinding(severity SeverityLevel, category, location, message,
 	r.Findings = append(r.Findings, f)
 }
 
+// parameterProviderName is the name of the built-in parameter provider, whose
+// source fails at runtime when the named CLI parameter is missing and no
+// 'default' input is declared.
+const parameterProviderName = "parameter"
+
+// parameterDefaultInput is the input key the parameter provider treats as a
+// fallback value (presence of the key, regardless of value, counts).
+const parameterDefaultInput = "default"
+
+// isUnconditionalSource reports whether a resolve source always runs -- it has
+// no 'when' condition, or a 'when' that is literally "true".
+func isUnconditionalSource(step resolver.ProviderSource) bool {
+	return step.When == nil || step.When.Expr == nil || strings.TrimSpace(string(*step.When.Expr)) == "true"
+}
+
+// parameterSourceHasDefault reports whether a parameter provider source
+// declares a 'default' input. The parameter provider treats the presence of the
+// 'default' key (any value) as a fallback.
+func parameterSourceHasDefault(step resolver.ProviderSource) bool {
+	_, ok := step.Inputs[parameterDefaultInput]
+	return ok
+}
+
 func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Registry, referencedResolvers map[string]bool) {
 	if sol.Spec.Resolvers == nil {
 		return
@@ -258,6 +281,35 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 						"all resolve sources have 'when' conditions with no unconditional fallback; resolver will fail if no condition is met",
 						"Add a source without a 'when' condition (e.g. a static provider) as a fallback",
 						"missing-fallback-source")
+				}
+			}
+
+			// Warn if the resolver relies on an unconditional 'parameter' source
+			// with no 'default' and has no other unconditional source guaranteed
+			// to produce a value. Such a resolver passes lint but fails at runtime
+			// with "parameter not provided" when the CLI parameter is absent.
+			if len(res.Resolve.With) > 0 {
+				unconditionalParamWithoutDefault := false
+				hasGuaranteedFallback := false
+				for _, step := range res.Resolve.With {
+					if !isUnconditionalSource(step) {
+						continue
+					}
+					if step.Provider == parameterProviderName {
+						if parameterSourceHasDefault(step) {
+							hasGuaranteedFallback = true
+						} else {
+							unconditionalParamWithoutDefault = true
+						}
+					} else {
+						hasGuaranteedFallback = true
+					}
+				}
+				if unconditionalParamWithoutDefault && !hasGuaranteedFallback {
+					result.addFinding(SeverityWarning, "structure", location+".resolve",
+						"resolver depends on a 'parameter' source with no 'default' and no unconditional fallback; it will fail at runtime if the parameter is not supplied",
+						"Add a 'default' to the parameter source, or add an unconditional fallback source (e.g. a static provider)",
+						"parameter-missing-default")
 				}
 			}
 		}

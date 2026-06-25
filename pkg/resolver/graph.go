@@ -598,6 +598,11 @@ func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lo
 
 	// Extract from each validation rule
 	for _, validation := range phase.With {
+		// Extract from the rule-level when condition
+		if validation.When != nil && validation.When.Expr != nil {
+			extractDepsFromExpression(string(*validation.When.Expr), deps)
+		}
+
 		// Try provider-specific extraction first
 		if extractDepsFromProviderInputs(validation.Provider, validation.Inputs, deps, lookup) {
 			// Still extract from message even if provider handled inputs

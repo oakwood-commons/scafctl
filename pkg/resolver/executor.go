@@ -1535,6 +1535,19 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 
 	// Run ALL validation rules and collect failures
 	for i, validation := range phase.With {
+		// Check rule-level when condition (with __self so conditions can
+		// reference the resolved value). A false condition skips the rule.
+		if validation.When != nil {
+			shouldExecute, err := e.evaluateConditionWithSelf(ctx, validation.When, value)
+			if err != nil {
+				return providerCallCount, fmt.Errorf("failed to evaluate validate rule %d when condition: %w", i+1, err)
+			}
+			if !shouldExecute {
+				lgr.V(1).Info("skipping validate rule due to when condition", "rule", i+1)
+				continue
+			}
+		}
+
 		// Execute validation provider with __self set to value being validated
 		_, err := e.executeProviderWithSelf(ctx, validation.Provider, validation.Inputs, value)
 		providerCallCount++

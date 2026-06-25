@@ -311,22 +311,22 @@ key is close to a valid one (a likely typo), a suggestion is included:
 ```bash
 # Typo in key name
 scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 
 # Completely unknown key
 scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Typo in key name
 scafctl run provider http urll=https://example.com
-# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "urll" — did you mean "url"? (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 
 # Completely unknown key
 scafctl run provider http unknown=value
-# Error: provider "http" does not accept input "unknown" (valid inputs: authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
+# Error: provider "http" does not accept input "unknown" (valid inputs: acceptableStatusCodes, authProvider, autoParseJson, body, headers, method, pagination, poll, retry, scope, timeout, url)
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -630,6 +630,7 @@ At the end of the standard help text, you'll see a section like:
 
 ```
 Provider Inputs (http):
+  acceptableStatusCodes  array         Status codes treated as successful (e.g. [200, 404], "2xx", "200-204")
   authProvider   string                Authentication provider to use for this request
   autoParseJson  boolean               When true and the response Content-Type is application/json, automatically parse the body into a structured object
   body           string                Request body for POST/PUT/PATCH requests

@@ -281,6 +281,7 @@ func (p *HTTPProvider) executePaginated(
 	headers map[string]any,
 	pagCfg *paginationConfig,
 	autoParseJSON bool,
+	acc statusAcceptance,
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
@@ -315,6 +316,12 @@ func (p *HTTPProvider) executePaginated(
 			return nil, fmt.Errorf("%s: page %d request failed: %w", ProviderName, pageCount, err)
 		}
 		lastResponse = resp
+
+		// When acceptableStatusCodes is configured, fail on the first page whose
+		// status is not acceptable so the source-level onError policy applies.
+		if acc.configured && !acc.isSuccess(resp.StatusCode) {
+			return nil, fmt.Errorf("%s: page %d response status %d is not in acceptableStatusCodes (%s)", ProviderName, pageCount, resp.StatusCode, acc.describe())
+		}
 
 		// Parse body as JSON for CEL evaluation
 		var bodyData any
@@ -461,7 +468,7 @@ func (p *HTTPProvider) executePaginated(
 	lgr.V(1).Info("pagination finished", "totalPages", pageCount, "totalItems", len(allItems))
 
 	// Build output
-	return p.buildPaginatedOutput(lastResponse, allItems, pageCount, autoParseJSON)
+	return p.buildPaginatedOutput(lastResponse, allItems, pageCount, autoParseJSON, acc)
 }
 
 // doRequest performs a single HTTP request and returns the parsed response.
@@ -933,7 +940,7 @@ func (p *HTTPProvider) evaluateBodyTemplate(
 // structured []any value, matching the behaviour of non-paginated requests with
 // autoParseJson: true. When false (the default) the body is serialized to a
 // JSON string for backward compatibility.
-func (p *HTTPProvider) buildPaginatedOutput(lastResponse *paginatedResponse, items []any, pageCount int, autoParseJSON bool) (*provider.Output, error) {
+func (p *HTTPProvider) buildPaginatedOutput(lastResponse *paginatedResponse, items []any, pageCount int, autoParseJSON bool, acc statusAcceptance) (*provider.Output, error) {
 	var bodyValue any
 	if autoParseJSON {
 		// Return the items as a structured value so downstream CEL expressions
@@ -967,6 +974,7 @@ func (p *HTTPProvider) buildPaginatedOutput(lastResponse *paginatedResponse, ite
 
 	return &provider.Output{
 		Data: map[string]any{
+			fieldSuccess: acc.isSuccess(lastStatusCode),
 			"statusCode": lastStatusCode,
 			"body":       bodyValue,
 			"headers":    lastHeaders,

@@ -133,7 +133,8 @@ All [Sprig v3](http://masterminds.github.io/sprig/) functions are available:
 
 ```gotemplate
 {{cel "_.name.upperAscii()"}}   <!-- Inline CEL evaluation -->
-{{toHcl .config}}               <!-- Convert to HCL format -->
+{{toHcl .config}}               <!-- Convert to HCL body (attributes + blocks) -->
+{{toHclValue .bindings}}        <!-- Convert to HCL value expression (RHS of =) -->
 {{fromYaml .yamlString}}        <!-- Parse YAML string to object -->
 {{toYaml .data}}                <!-- Convert to YAML string -->
 {{slugify .title}}              <!-- URL-safe slug -->

@@ -37,6 +37,7 @@ scafctl run resolver -f examples/providers/http-get.yaml
 |------|-------------|
 | [http-get.yaml](http-get.yaml) | Simple HTTP GET request |
 | [http-autoparse.yaml](http-autoparse.yaml) | Auto-parse JSON responses |
+| [http-acceptable-status.yaml](http-acceptable-status.yaml) | Treat selected non-2xx statuses as successful (acceptableStatusCodes) |
 | [http-empty-body.yaml](http-empty-body.yaml) | Non-JSON and empty response bodies |
 | [http-poll.yaml](http-poll.yaml) | Polling until a condition is met |
 | [http-entra.yaml](http-entra.yaml) | Microsoft Graph API with Entra auth |

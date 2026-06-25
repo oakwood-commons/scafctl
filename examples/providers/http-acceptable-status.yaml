@@ -1,0 +1,73 @@
+# Run: scafctl run solution -f examples/providers/http-acceptable-status.yaml
+# Run: scafctl run resolver -f examples/providers/http-acceptable-status.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-acceptable-status-example
+  displayName: HTTP Acceptable Status Codes Example
+  category: providers
+  tags:
+    - http
+    - provider-example
+  description: |
+    Treat selected non-2xx statuses as successful with acceptableStatusCodes.
+    Each output carries a 'success' flag (true for any 2xx by default). Entries
+    may be exact integers (404), class shorthands ("4xx"), or inclusive ranges
+    ("400-404"). Any status outside the set fails the source, which an
+    onError: continue policy can turn into a fallback.
+
+spec:
+  resolvers:
+    # Default behavior: a 404 is NOT an error, but success is false.
+    defaultStatus:
+      description: A 404 returns without error; success is false (only 2xx is successful)
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/status/404
+              method: GET
+
+    # Exact codes: 404 counts as success alongside 2xx.
+    acceptExact:
+      description: 404 treated as success via an exact acceptableStatusCodes entry
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/status/404
+              method: GET
+              acceptableStatusCodes: [200, 404]
+
+    # Class shorthand: any 4xx counts as success.
+    acceptClass:
+      description: 404 treated as success via the "4xx" class shorthand
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/status/404
+              method: GET
+              acceptableStatusCodes: ["2xx", "4xx"]
+
+    # Strict set + fallback: a 500 is not acceptable, so the source fails and
+    # onError: continue falls through to the static value.
+    strictWithFallback:
+      description: An unacceptable 500 fails the source and falls back to a static value
+      type: any
+      resolve:
+        with:
+          - provider: http
+            onError: continue
+            inputs:
+              url: https://httpbin.org/status/500
+              method: GET
+              acceptableStatusCodes: [200, 404]
+          - provider: static
+            inputs:
+              value: fallback-value
