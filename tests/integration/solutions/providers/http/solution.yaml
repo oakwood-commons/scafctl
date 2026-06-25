@@ -46,6 +46,44 @@ spec:
                 expr: "_.mockBaseUrl + '/api/missing'"
               method: GET
 
+    acceptable404:
+      description: 404 treated as success via acceptableStatusCodes (exact codes)
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/missing'"
+              method: GET
+              autoParseJson: true
+              acceptableStatusCodes: [200, 404]
+
+    acceptable4xxClass:
+      description: 404 treated as success via acceptableStatusCodes (class shorthand)
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/missing'"
+              method: GET
+              acceptableStatusCodes: ["2xx", "4xx"]
+
+    acceptableStrictFallback:
+      description: Unacceptable status fails the source, falling back to a static value
+      resolve:
+        with:
+          - provider: http
+            onError: continue
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/missing'"
+              method: GET
+              acceptableStatusCodes: [200]
+          - provider: static
+            inputs:
+              value: fallback-value
+
     customHeaders:
       description: GET request with custom response headers
       resolve:
@@ -184,6 +222,37 @@ spec:
             message: "Missing endpoint should return 404"
           - expression: __output.notFoundEndpoint.body.contains("not found")
             message: "404 body should contain error message"
+          - expression: __output.notFoundEndpoint.success == false
+            message: "404 is not successful by default (only 2xx)"
+
+      acceptable-status-codes-exact:
+        description: Verify acceptableStatusCodes lets an exact 404 count as success
+        extends: [_base]
+        tags: [acceptableStatusCodes]
+        assertions:
+          - expression: __output.acceptable404.statusCode == 404
+            message: "Endpoint should return 404"
+          - expression: __output.acceptable404.success == true
+            message: "404 should be successful when listed in acceptableStatusCodes"
+          - expression: __output.acceptable404.body.error == "not found"
+            message: "Body should still be parsed when status is acceptable"
+
+      acceptable-status-codes-class:
+        description: Verify acceptableStatusCodes class shorthand (4xx) counts as success
+        extends: [_base]
+        tags: [acceptableStatusCodes]
+        assertions:
+          - expression: __output.acceptable4xxClass.statusCode == 404
+          - expression: __output.acceptable4xxClass.success == true
+            message: "404 should be successful when 4xx is acceptable"
+
+      acceptable-status-codes-fallback:
+        description: Verify an unacceptable status fails the source and falls back
+        extends: [_base]
+        tags: [acceptableStatusCodes]
+        assertions:
+          - expression: '__output.acceptableStrictFallback == "fallback-value"'
+            message: "Unacceptable 404 should fail and fall back to the static value"
 
       custom-response-headers:
         description: Verify custom response headers are returned

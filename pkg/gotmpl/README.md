@@ -615,6 +615,33 @@ Converts a Go object into HCL (HashiCorp Configuration Language) format:
 // ["repo:a:ref:main", "repo:b:ref:main"]
 ```
 
+`toHcl` generates an HCL *body* (bare attributes and blocks), which is what you
+want when rendering a whole `.tf`/`.tfvars` file. For the right-hand side of an
+assignment, use `toHclValue` instead.
+
+##### toHclValue
+
+Converts a Go object into an HCL *value expression* suitable for the right-hand
+side of an assignment. Maps become object literals, and lists of objects become
+tuples of object literals:
+
+```go
+// Maps become inline object literals:
+{{ dict "env" "prod" "tier" "web" | toHclValue }}
+// Output:
+// { env = "prod", tier = "web" }
+
+// Lists of objects become tuples of object literals:
+bindings = {{ list (dict "ns" "y1" "sa" "x1") (dict "ns" "y2" "sa" "x2") | toHclValue }}
+// Output:
+// bindings = [{ ns = "y1", sa = "x1" }, { ns = "y2", sa = "x2" }]
+
+// Scalars and scalar lists render the same as toHcl:
+tags = {{ list "web" "prod" | toHclValue }}
+// Output:
+// tags = ["web", "prod"]
+```
+
 ##### toYaml
 
 Encodes a Go value as a YAML string:

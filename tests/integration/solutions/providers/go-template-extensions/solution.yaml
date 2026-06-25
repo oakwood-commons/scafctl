@@ -333,6 +333,24 @@ spec:
               name: tohcl-empty-list
               template: '{{ list | toHcl }}'
 
+    toHclValueListOfObjects:
+      description: toHclValue renders a list of objects as a tuple of object literals
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-value-list-of-objects
+              template: 'bindings = {{ list (dict "ns" "y1" "sa" "x1") (dict "ns" "y2" "sa" "x2") | toHclValue }}'
+
+    toHclValueObject:
+      description: toHclValue renders a map as an inline HCL object literal
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohcl-value-object
+              template: 'labels = {{ dict "env" "prod" "tier" "web" | toHclValue }}'
+
     # ─────────────────────────────────────────────
     # Custom YAML Functions (toYaml, fromYaml, mustToYaml, mustFromYaml)
     # ─────────────────────────────────────────────
@@ -652,6 +670,22 @@ spec:
         assertions:
           - expression: '__output.toHclEmptyList.contains("[]")'
             message: "Empty list should render as []"
+
+      tohcl-value-list-of-objects:
+        description: Verify toHclValue renders a list of objects as a tuple of object literals
+        extends: [_base]
+        tags: [custom, toHclValue, hcl]
+        assertions:
+          - expression: '__output.toHclValueListOfObjects.contains("[{ ns = \"y1\", sa = \"x1\" }, { ns = \"y2\", sa = \"x2\" }]")'
+            message: "List of objects should render as a tuple of object literals"
+
+      tohcl-value-object:
+        description: Verify toHclValue renders a map as an inline HCL object literal
+        extends: [_base]
+        tags: [custom, toHclValue, hcl]
+        assertions:
+          - expression: '__output.toHclValueObject.contains("{ env = \"prod\", tier = \"web\" }")'
+            message: "Map should render as an inline HCL object literal"
 
       # Custom YAML function tests
       toyaml-simple:

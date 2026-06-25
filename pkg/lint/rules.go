@@ -316,6 +316,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Problem: all sources are conditional\nresolve:\n  with:\n    - provider: http\n      when:\n        expr: '_.authenticated == true'\n    - provider: http\n      when:\n        expr: '_.fallbackEnabled == true'\n\n# Fix: add unconditional fallback\nresolve:\n  with:\n    - provider: http\n      when:\n        expr: '_.authenticated == true'\n    - provider: static\n      inputs:\n        value: default-value",
 		},
 	},
+	"parameter-missing-default": {
+		Rule:        "parameter-missing-default",
+		Severity:    string(SeverityWarning),
+		Category:    "structure",
+		Description: "A resolver depends on an unconditional 'parameter' source that has no 'default', and there is no other unconditional source guaranteed to produce a value.",
+		Why:         "The 'parameter' provider fails at runtime with 'parameter not provided' when the CLI parameter is absent and no 'default' is set. Such a resolver passes lint but fails the moment it runs without the parameter. Adding a 'default' (or an unconditional fallback source) guarantees the resolver always produces a value.",
+		Fix:         "Add a 'default' input to the parameter source, or add an unconditional fallback source (e.g. a static provider) after it in resolve.with.",
+		Examples: []string{
+			"# Problem: parameter source with no default and no fallback\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: environment\n\n# Fix: add a default\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: environment\n        default: development",
+		},
+	},
 	"null-resolver": {
 		Rule:        "null-resolver",
 		Severity:    string(SeverityError),

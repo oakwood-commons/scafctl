@@ -12,9 +12,9 @@ metadata:
     - template
   description: |
     Custom Go template extension functions provided by scafctl. Covers
-    toHcl for HCL generation and toYaml/fromYaml/mustToYaml/mustFromYaml
-    for YAML serialization. The data input merges fields into the root
-    template context.
+    toHcl/toHclValue for HCL generation and toYaml/fromYaml/mustToYaml/
+    mustFromYaml for YAML serialization. The data input merges fields into
+    the root template context.
 
 spec:
   resolvers:
@@ -147,6 +147,61 @@ spec:
                     protocol: "-1"
                     cidr_blocks:
                       - 0.0.0.0/0
+
+    # ─────────────────────────────────────────────
+    # toHclValue - Render an HCL value expression (RHS of an assignment)
+    # ─────────────────────────────────────────────
+    # toHcl renders an HCL *body* (bare attributes and blocks) for a whole
+    # .tf/.tfvars file. toHclValue renders a *value expression* for the
+    # right-hand side of an assignment: maps become inline object literals
+    # and lists of objects become tuples of object literals.
+
+    tohclvalue_object:
+      description: "toHclValue - Map to an inline HCL object literal"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohclvalue-object
+              template: |
+                labels = {{ .labels | toHclValue }}
+              data:
+                labels:
+                  env: prod
+                  tier: web
+
+    tohclvalue_list_of_objects:
+      description: "toHclValue - List of objects to a tuple of object literals"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohclvalue-list-of-objects
+              template: |
+                bindings = {{ .bindings | toHclValue }}
+              data:
+                bindings:
+                  - ns: y1
+                    sa: x1
+                  - ns: y2
+                    sa: x2
+
+    tohclvalue_scalar_list:
+      description: "toHclValue - Scalar list to an HCL tuple"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: tohclvalue-scalar-list
+              template: |
+                tags = {{ .tags | toHclValue }}
+              data:
+                tags:
+                  - web
+                  - prod
 
     # ─────────────────────────────────────────────
     # COMBINED - toHcl with Sprig functions

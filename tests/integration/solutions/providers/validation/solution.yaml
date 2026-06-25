@@ -113,6 +113,31 @@ spec:
               expression: "size(__self) <= 63"
               message: "tmpl: Value '{{.__self}}' exceeds max length"
 
+    # Rule-level when: a validate rule is skipped when its when condition is false
+    conditionalRuleWhen:
+      description: A validate rule with a rule-level when that gates execution
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: prod
+      validate:
+        with:
+          # Runs (when is true) and passes.
+          - provider: validation
+            when:
+              expr: "__self == 'prod'"
+            inputs:
+              match: "^prod$"
+            message: "Production value must be exactly 'prod'"
+          # Skipped (when is false); it would fail if it ever ran.
+          - provider: validation
+            when:
+              expr: "__self == 'dev'"
+            inputs:
+              expression: "false"
+            message: "This rule must never run for non-dev values"
+
   testing:
     config:
       # render-defaults: solution has no workflow.actions section
@@ -171,3 +196,12 @@ spec:
         tags: [dynamic-message]
         assertions:
           - expression: '__output.dynamicTmplMessage == "hello-world"'
+
+      conditional-rule-when:
+        description: Verify a rule-level when=false skips a rule that would otherwise fail
+        extends: [_base]
+        tags: [rule-when]
+        assertions:
+          - expression: '__output.conditionalRuleWhen == "prod"'
+            message: "Resolver should pass because the failing rule is skipped by when"
+

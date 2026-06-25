@@ -301,6 +301,114 @@ func TestHTTPProvider_Execute_500(t *testing.T) {
 	assert.Contains(t, data["body"], "Internal Server Error")
 }
 
+func TestHTTPProvider_Execute_Success_Default2xx(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	output, err := p.Execute(ctx, map[string]any{"url": server.URL})
+	require.NoError(t, err)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, true, data[fieldSuccess])
+	assert.Equal(t, 200, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_Default2xx_NonSuccess(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("nope"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	// Without acceptableStatusCodes a 404 must not error but success is false.
+	output, err := p.Execute(ctx, map[string]any{"url": server.URL})
+	require.NoError(t, err)
+
+	data := output.Data.(map[string]any)
+	assert.Equal(t, false, data[fieldSuccess])
+	assert.Equal(t, 404, data["statusCode"])
+}
+
+func TestHTTPProvider_Execute_AcceptableStatusCodes_Allows404(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	cases := []struct {
+		name    string
+		entries []any
+	}{
+		{name: "exact int", entries: []any{200, 404}},
+		{name: "class shorthand", entries: []any{"2xx", "4xx"}},
+		{name: "range", entries: []any{"400-404"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			output, err := p.Execute(ctx, map[string]any{
+				"url":                      server.URL,
+				fieldAcceptableStatusCodes: tc.entries,
+			})
+			require.NoError(t, err)
+			data := output.Data.(map[string]any)
+			assert.Equal(t, true, data[fieldSuccess])
+			assert.Equal(t, 404, data["statusCode"])
+		})
+	}
+}
+
+func TestHTTPProvider_Execute_AcceptableStatusCodes_ErrorsOnUnacceptable(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"url":                      server.URL,
+		fieldAcceptableStatusCodes: []any{200, "2xx"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not in acceptableStatusCodes")
+}
+
+func TestHTTPProvider_Execute_AcceptableStatusCodes_InvalidConfig(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"url":                      server.URL,
+		fieldAcceptableStatusCodes: []any{"not-a-code"},
+	})
+	require.Error(t, err)
+}
+
 func TestHTTPProvider_Execute_MultipleHeaderValues(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

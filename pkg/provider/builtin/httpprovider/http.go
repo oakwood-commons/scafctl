@@ -30,10 +30,13 @@ const (
 
 // Field name constants for input/output map keys.
 const (
-	fieldURL     = "url"
-	fieldMethod  = "method"
-	fieldHeaders = "headers"
-	fieldBody    = "body"
+	fieldURL                   = "url"
+	fieldMethod                = "method"
+	fieldHeaders               = "headers"
+	fieldBody                  = "body"
+	fieldStatusCode            = "statusCode"
+	fieldSuccess               = "success"
+	fieldAcceptableStatusCodes = "acceptableStatusCodes"
 )
 
 // retryConfig holds retry configuration for HTTP requests.
@@ -254,29 +257,34 @@ func NewHTTPProvider() *HTTPProvider {
 					schemahelper.WithExample("https://graph.microsoft.com/.default"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
 				"autoParseJson": schemahelper.BoolProp("When true and the response Content-Type is application/json, automatically parse the body into a structured object instead of returning it as a raw string. This allows direct field access in downstream CEL expressions (e.g., _.myApi.body.items) without manual parsing."),
+				fieldAcceptableStatusCodes: schemahelper.ArrayProp("Status codes treated as successful. Each entry may be an integer (200), a class shorthand (\"2xx\"), or an inclusive range (\"200-204\"). When set, any response whose status is not acceptable causes the request to fail (which the source-level onError policy can turn into a fallback). When omitted, only 2xx responses are successful and non-2xx responses are returned without error.",
+					schemahelper.WithItems(&jsonschema.Schema{Types: []string{"integer", "string"}}),
+					schemahelper.WithExample([]any{200, 201, "2xx"})),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					fieldBody:    schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
-					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
-					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
-					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
+					fieldSuccess:    schemahelper.BoolProp("Whether the response status is considered successful. When acceptableStatusCodes is set, true only for those codes; otherwise true for any 2xx status."),
+					fieldStatusCode: schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
+					fieldBody:       schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldHeaders:    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					"pages":         schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
+					"totalItems":    schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					fieldBody:    schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
-					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
-					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
-					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
+					fieldSuccess:    schemahelper.BoolProp("Whether the response status is considered successful. When acceptableStatusCodes is set, true only for those codes; otherwise true for any 2xx status."),
+					fieldStatusCode: schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
+					fieldBody:       schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldHeaders:    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					"pages":         schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
+					"totalItems":    schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"success":    schemahelper.BoolProp("Whether the HTTP request completed successfully (2xx status)"),
-					"statusCode": schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
-					fieldBody:    schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
-					fieldHeaders: schemahelper.AnyProp("Response headers (last page when paginating)"),
-					"pages":      schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
-					"totalItems": schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
+					fieldSuccess:    schemahelper.BoolProp("Whether the response status is considered successful. When acceptableStatusCodes is set, true only for those codes; otherwise true for any 2xx status."),
+					fieldStatusCode: schemahelper.IntProp("HTTP response status code (last page when paginating)", schemahelper.WithExample(200)),
+					fieldBody:       schemahelper.AnyProp("Response body. By default (or when the response Content-Type is not JSON, or the body is empty) this is the raw response string; an empty response yields an empty string (\"\"). When autoParseJson is true and the Content-Type is JSON and the body is non-empty, it is the parsed JSON object. When paginating with collectPath, contains the JSON array of all collected items"),
+					fieldHeaders:    schemahelper.AnyProp("Response headers (last page when paginating)"),
+					"pages":         schemahelper.IntProp("Number of pages fetched (only present when pagination is configured)", schemahelper.WithExample(3)),
+					"totalItems":    schemahelper.IntProp("Total number of items collected across all pages (only present when pagination is configured)", schemahelper.WithExample(150)),
 				}),
 				provider.CapabilityState: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
 					"success": schemahelper.BoolProp("Whether the state operation succeeded"),
@@ -325,6 +333,16 @@ inputs:
   url: "https://api.example.com/health"
   method: GET
   timeout: 5`,
+				},
+				{
+					Name:        "Treat additional status codes as successful",
+					Description: "Accept a 404 alongside 2xx responses so a missing resource is a normal result instead of an error. Entries may be integers (200), class shorthands (\"2xx\"), or ranges (\"200-204\"). Any status outside the set fails the request, which an onError fallback can handle.",
+					YAML: `name: lookup-optional
+provider: http
+inputs:
+  url: "https://api.example.com/users/maybe-missing"
+  method: GET
+  acceptableStatusCodes: [200, 404]`,
 				},
 				{
 					Name:        "Request with Entra authentication",
@@ -488,9 +506,10 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	if provider.DryRunFromContext(ctx) {
 		return &provider.Output{
 			Data: map[string]any{
-				"statusCode": 200,
-				fieldBody:    "[DRY-RUN] Request not executed",
-				fieldHeaders: map[string]any{},
+				fieldSuccess:    true,
+				fieldStatusCode: 200,
+				fieldBody:       "[DRY-RUN] Request not executed",
+				fieldHeaders:    map[string]any{},
 			},
 		}, nil
 	}
@@ -575,6 +594,14 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
 	}
 
+	// Parse acceptable status codes. When configured, a response whose status is
+	// not acceptable causes the request to fail; when unconfigured, only 2xx is
+	// treated as successful and non-2xx responses are returned without error.
+	acc, err := parseAcceptableStatusCodes(inputs)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+
 	httpClient := httpc.NewClient(httpcCfg)
 
 	autoParseJSON, _ := inputs["autoParseJson"].(bool)
@@ -584,12 +611,12 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		if pagCfg.BodyTemplate != "" && !methodSupportsBody(method) {
 			return nil, fmt.Errorf("%s: pagination bodyTemplate requires method POST, PUT, or PATCH (got %q)", ProviderName, method)
 		}
-		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg, autoParseJSON)
+		return p.executePaginated(ctx, httpClient, method, urlStr, bodyContent, headers, pagCfg, autoParseJSON, acc)
 	}
 
 	// Build the execute function for potential polling
 	executeFunc := func() (*provider.Output, error) {
-		return p.execute(ctx, httpClient, method, urlStr, bodyContent, headers, autoParseJSON)
+		return p.execute(ctx, httpClient, method, urlStr, bodyContent, headers, autoParseJSON, acc)
 	}
 
 	// If polling is configured, wrap execution in a poll loop
@@ -654,6 +681,7 @@ func (p *HTTPProvider) execute(
 	method, urlStr, bodyContent string,
 	headers map[string]any,
 	autoParseJSON bool,
+	acc statusAcceptance,
 ) (*provider.Output, error) {
 	lgr := logger.FromContext(ctx)
 
@@ -715,6 +743,14 @@ func (p *HTTPProvider) execute(
 
 	lgr.V(1).Info("provider execution completed", "provider", ProviderName, "statusCode", resp.StatusCode)
 
+	// Determine whether the status is acceptable. When acceptableStatusCodes is
+	// configured and the status is not acceptable, fail so the source-level
+	// onError policy can decide whether to fall back or propagate.
+	success := acc.isSuccess(resp.StatusCode)
+	if acc.configured && !success {
+		return nil, fmt.Errorf("%s: response status %d is not in acceptableStatusCodes (%s)", ProviderName, resp.StatusCode, acc.describe())
+	}
+
 	// Determine response body value
 	var bodyValue any = string(respBody)
 	if autoParseJSON && isJSONContentType(resp.Header.Get("Content-Type")) && len(respBody) > 0 {
@@ -727,9 +763,10 @@ func (p *HTTPProvider) execute(
 
 	return &provider.Output{
 		Data: map[string]any{
-			"statusCode": resp.StatusCode,
-			fieldBody:    bodyValue,
-			fieldHeaders: respHeaders,
+			fieldSuccess:    success,
+			fieldStatusCode: resp.StatusCode,
+			fieldBody:       bodyValue,
+			fieldHeaders:    respHeaders,
 		},
 	}, nil
 }

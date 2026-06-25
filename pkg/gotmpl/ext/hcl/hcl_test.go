@@ -251,9 +251,11 @@ func TestToHcl_TopLevelListOfMaps(t *testing.T) {
 		map[string]any{"name": "b"},
 	}
 
+	// A keyless top-level list of objects cannot be a valid HCL body, so toHcl
+	// renders it as a tuple of object literals instead of bare attribute lines.
 	result, err := ToHcl(input)
 	require.NoError(t, err)
-	assert.Equal(t, "name = \"a\"\nname = \"b\"\n", result)
+	assert.Equal(t, `[{ name = "a" }, { name = "b" }]`, result)
 }
 
 func TestToHcl_ComplexExample(t *testing.T) {
@@ -285,6 +287,78 @@ func TestToHclFunc_Metadata(t *testing.T) {
 	assert.NotEmpty(t, fn.Examples)
 	assert.NotEmpty(t, fn.Links)
 	assert.Contains(t, fn.Func, "toHcl")
+}
+
+func TestToHclValueFunc_Metadata(t *testing.T) {
+	fn := ToHclValueFunc()
+	assert.Equal(t, "toHclValue", fn.Name)
+	assert.True(t, fn.Custom)
+	assert.NotEmpty(t, fn.Description)
+	assert.NotEmpty(t, fn.Examples)
+	assert.NotEmpty(t, fn.Links)
+	assert.Contains(t, fn.Func, "toHclValue")
+}
+
+func TestToHclValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    any
+		expected string
+	}{
+		{"nil", nil, "null"},
+		{"string", "hello", `"hello"`},
+		{"bool", true, "true"},
+		{"integer", float64(42), "42"},
+		{"scalar list", []any{"web", "prod"}, `["web", "prod"]`},
+		{"number list", []any{float64(80), float64(443)}, "[80, 443]"},
+		{"empty list", []any{}, "[]"},
+		{"empty map", map[string]any{}, "{}"},
+		{
+			name:     "object literal",
+			input:    map[string]any{"env": "prod", "tier": "web"},
+			expected: `{ env = "prod", tier = "web" }`,
+		},
+		{
+			name: "list of objects",
+			input: []any{
+				map[string]any{"ns": "y1", "sa": "x1"},
+				map[string]any{"ns": "y2", "sa": "x2"},
+			},
+			expected: `[{ ns = "y1", sa = "x1" }, { ns = "y2", sa = "x2" }]`,
+		},
+		{
+			name: "nested object and list",
+			input: map[string]any{
+				"labels": map[string]any{"env": "prod"},
+				"ports":  []any{float64(80), float64(443)},
+			},
+			expected: `{ labels = { env = "prod" }, ports = [80, 443] }`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ToHclValue(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestToHclValue_Struct(t *testing.T) {
+	type binding struct {
+		Namespace string `json:"namespace"`
+		Account   string `json:"account"`
+	}
+
+	input := []any{
+		binding{Namespace: "ns1", Account: "sa1"},
+		binding{Namespace: "ns2", Account: "sa2"},
+	}
+
+	result, err := ToHclValue(input)
+	require.NoError(t, err)
+	assert.Equal(t, `[{ account = "sa1", namespace = "ns1" }, { account = "sa2", namespace = "ns2" }]`, result)
 }
 
 func TestToHcl_StringEscaping(t *testing.T) {
