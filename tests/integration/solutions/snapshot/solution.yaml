@@ -48,9 +48,6 @@ spec:
               value: "secret-api-key-12345"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       snapshot-resolvers:
         description: Verify all resolvers resolve for snapshot

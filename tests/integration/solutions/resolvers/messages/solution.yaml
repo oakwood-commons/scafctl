@@ -61,8 +61,7 @@ spec:
   testing:
     config:
       # resolve-defaults: invalidPortStatic and invalidPortCel have intentional validation failures
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       valid-resolver-succeeds:

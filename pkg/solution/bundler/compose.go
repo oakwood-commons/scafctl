@@ -137,7 +137,9 @@ func Compose(sol *solution.Solution, bundleRoot string, opts ...ComposeOption) (
 					return nil, err
 				}
 
-				mergeTestConfig(merged, part.Spec.Testing.Config)
+				if err := mergeTestConfig(merged, part.Spec.Testing.Config, relPath); err != nil {
+					return nil, err
+				}
 			}
 
 			mergeIncludes(merged, part.Bundle.Include)
@@ -163,7 +165,7 @@ func mergeResolvers(merged *solution.Solution, resolvers map[string]*resolver.Re
 
 	for name, r := range resolvers {
 		if _, exists := merged.Spec.Resolvers[name]; exists {
-			return fmt.Errorf("duplicate resolver %q: defined in both root solution and composed file %s", name, sourceFile)
+			return fmt.Errorf("duplicate resolver %q: already defined (conflict in composed file %s)", name, sourceFile)
 		}
 		merged.Spec.Resolvers[name] = r
 	}
@@ -188,7 +190,7 @@ func mergeWorkflow(merged *solution.Solution, workflow *action.Workflow, sourceF
 		}
 		for name, a := range workflow.Actions {
 			if _, exists := merged.Spec.Workflow.Actions[name]; exists {
-				return fmt.Errorf("duplicate action %q: defined in both root solution and composed file %s", name, sourceFile)
+				return fmt.Errorf("duplicate action %q: already defined (conflict in composed file %s)", name, sourceFile)
 			}
 			merged.Spec.Workflow.Actions[name] = a
 		}
@@ -201,7 +203,7 @@ func mergeWorkflow(merged *solution.Solution, workflow *action.Workflow, sourceF
 		}
 		for name, a := range workflow.Finally {
 			if _, exists := merged.Spec.Workflow.Finally[name]; exists {
-				return fmt.Errorf("duplicate finally action %q: defined in both root solution and composed file %s", name, sourceFile)
+				return fmt.Errorf("duplicate finally action %q: already defined (conflict in composed file %s)", name, sourceFile)
 			}
 			merged.Spec.Workflow.Finally[name] = a
 		}
@@ -245,7 +247,7 @@ func mergeTests(merged *solution.Solution, tests map[string]*soltesting.TestCase
 
 	for name, tc := range tests {
 		if _, exists := merged.Spec.Testing.Cases[name]; exists {
-			return fmt.Errorf("duplicate test %q: defined in both root solution and composed file %s", name, sourceFile)
+			return fmt.Errorf("duplicate test %q: already defined (conflict in composed file %s)", name, sourceFile)
 		}
 		// Set the Name field from the map key
 		tc.Name = name
@@ -260,9 +262,12 @@ func mergeTests(merged *solution.Solution, tests map[string]*soltesting.TestCase
 //   - Env: merged map, last compose file wins on key conflict.
 //   - Setup: appended in compose-file order.
 //   - Cleanup: appended in compose-file order.
-func mergeTestConfig(merged *solution.Solution, tc *soltesting.TestConfig) {
+//   - Files: appended in compose-file order, deduplicated (first-seen-wins).
+//   - Services: appended in compose-file order; duplicate service names across
+//     files are rejected.
+func mergeTestConfig(merged *solution.Solution, tc *soltesting.TestConfig, sourceFile string) error {
 	if tc == nil {
-		return
+		return nil
 	}
 
 	if merged.Spec.Testing == nil {
@@ -304,6 +309,37 @@ func mergeTestConfig(merged *solution.Solution, tc *soltesting.TestConfig) {
 
 	// Cleanup: appended in compose-file order
 	merged.Spec.Testing.Config.Cleanup = append(merged.Spec.Testing.Config.Cleanup, tc.Cleanup...)
+
+	// Files: appended in compose-file order, deduplicated (first-seen-wins)
+	if len(tc.Files) > 0 {
+		existing := make(map[string]bool, len(merged.Spec.Testing.Config.Files))
+		for _, f := range merged.Spec.Testing.Config.Files {
+			existing[f] = true
+		}
+		for _, f := range tc.Files {
+			if !existing[f] {
+				merged.Spec.Testing.Config.Files = append(merged.Spec.Testing.Config.Files, f)
+				existing[f] = true
+			}
+		}
+	}
+
+	// Services: appended in compose-file order; duplicate names rejected
+	if len(tc.Services) > 0 {
+		existing := make(map[string]bool, len(merged.Spec.Testing.Config.Services))
+		for _, s := range merged.Spec.Testing.Config.Services {
+			existing[s.Name] = true
+		}
+		for _, s := range tc.Services {
+			if existing[s.Name] {
+				return fmt.Errorf("duplicate test service %q: already defined (conflict in composed file %s)", s.Name, sourceFile)
+			}
+			merged.Spec.Testing.Config.Services = append(merged.Spec.Testing.Config.Services, s)
+			existing[s.Name] = true
+		}
+	}
+
+	return nil
 }
 
 // deepCopySolution creates a deep copy of a solution by marshaling to YAML and back.

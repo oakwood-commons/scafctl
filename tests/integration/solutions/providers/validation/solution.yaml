@@ -139,10 +139,6 @@ spec:
             message: "This rule must never run for non-dev values"
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for validation provider tests

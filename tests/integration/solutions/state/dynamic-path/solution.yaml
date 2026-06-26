@@ -45,9 +45,8 @@ spec:
 
   testing:
     config:
-      # render-defaults: solution has no workflow.actions section
       # resolve-defaults: dynamic state path requires __params.project
-      skipBuiltins: [render-defaults, resolve-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       # =====================================================================

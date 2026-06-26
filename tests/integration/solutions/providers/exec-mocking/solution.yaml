@@ -53,8 +53,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers use exec provider with commands that require mock services
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       services:
         - name: exec-mock
           type: exec

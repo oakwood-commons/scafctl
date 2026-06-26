@@ -47,7 +47,6 @@ func Scaffold(input *ScaffoldInput) *ScaffoldResult {
 
 	// Always generate builtin-style tests
 	addResolveDefaultsTest(result)
-	addRenderDefaultsTest(result)
 	addLintTest(result)
 
 	// Generate resolver-specific tests
@@ -91,17 +90,6 @@ func addResolveDefaultsTest(result *ScaffoldResult) {
 		Command:     []string{"run", "resolver"},
 		Args:        []string{"-o", "json"},
 		Tags:        []string{"smoke", "resolvers"},
-		ExitCode:    &exitCodeZero,
-	}
-}
-
-// addRenderDefaultsTest adds a test that verifies the solution renders with defaults.
-func addRenderDefaultsTest(result *ScaffoldResult) {
-	exitCodeZero := 0
-	result.Cases["render-defaults"] = &TestCase{
-		Description: "Verify solution renders with default values",
-		Command:     []string{"render", "solution"},
-		Tags:        []string{"smoke", "render"},
 		ExitCode:    &exitCodeZero,
 	}
 }

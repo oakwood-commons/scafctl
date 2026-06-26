@@ -16,9 +16,6 @@ spec:
             inputs: {}
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
     cases:
       resolve-runtime-meta:
         description: Verify runtime metadata resolves with expected fields

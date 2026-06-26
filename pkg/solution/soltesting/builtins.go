@@ -13,7 +13,6 @@ const (
 	BuiltinParse          = "parse"
 	BuiltinLint           = "lint"
 	BuiltinResolveDefault = "resolve-defaults"
-	BuiltinRenderDefault  = "render-defaults"
 )
 
 // BuiltinTests returns the builtin test cases, filtered by testConfig.skipBuiltins.
@@ -67,7 +66,7 @@ func IsBuiltin(name string) bool {
 	return strings.HasPrefix(name, builtinPrefix)
 }
 
-// allBuiltins returns all four builtin test cases in alphabetical order.
+// allBuiltins returns all builtin test cases in alphabetical order.
 func allBuiltins() []*TestCase {
 	exitCodeZero := 0
 	return []*TestCase{
@@ -86,12 +85,6 @@ func allBuiltins() []*TestCase {
 			// by checking if the solution loaded successfully.
 			// The runner sets pass/error based on the parse result.
 			ExitCode: &exitCodeZero,
-		},
-		{
-			Name:        BuiltinName(BuiltinRenderDefault),
-			Description: "Verify solution renders with default values",
-			Command:     []string{"render", "solution"},
-			ExitCode:    &exitCodeZero,
 		},
 		{
 			Name:        BuiltinName(BuiltinResolveDefault),

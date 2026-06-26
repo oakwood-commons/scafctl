@@ -85,7 +85,7 @@ spec:
 
   testing:
     config:
-      skipBuiltins: [render-defaults, resolve-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       resolvers-work:

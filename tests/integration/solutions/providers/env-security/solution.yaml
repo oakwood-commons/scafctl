@@ -32,8 +32,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers intentionally fail to test security
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       env:
         SCAFCTL_SEC_TEST_A: "value-a"
         SCAFCTL_SEC_TEST_B: "value-b"

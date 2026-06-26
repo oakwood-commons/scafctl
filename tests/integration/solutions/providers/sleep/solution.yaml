@@ -19,10 +19,6 @@ spec:
               duration: "100ms"
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for sleep provider tests

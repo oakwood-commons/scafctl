@@ -57,8 +57,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers intentionally fail to test security validation
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       _base:

@@ -53,9 +53,6 @@ spec:
             expr: "'echo deployed to ' + _.deploy_target + ' build=' + _.build_id"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       # =====================================================================
       # First run: state empty, resolvers use defaults, actions run, state saved

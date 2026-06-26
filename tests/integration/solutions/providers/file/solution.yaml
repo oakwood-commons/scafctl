@@ -47,8 +47,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers read fixture files that only exist via test init steps
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       _base:

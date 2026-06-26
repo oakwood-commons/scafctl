@@ -63,8 +63,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers depend on SCAFCTL_SANDBOX_DIR env var and test-created git repo
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       _base:

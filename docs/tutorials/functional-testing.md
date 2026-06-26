@@ -87,9 +87,8 @@ my-solution    run-basic                 PASS     8ms
 ```
 
 > [!NOTE]
-> The builtin tests (`builtin:parse`, `builtin:lint`, `builtin:resolve-defaults`) run automatically.
-> Solutions without a `workflow` section will also see a `builtin:render-defaults` test that fails
-> since `render solution` requires a workflow. This is expected for resolver-only solutions.
+> The builtin tests (`builtin:parse`, `builtin:lint`, `builtin:resolve-defaults`) run automatically
+> for every solution.
 
 Each test specifies a `command` (the scafctl subcommand to run) and one or more
 `assertions` to validate the output. The runner automatically injects
@@ -792,7 +791,7 @@ config:
 config:
   skipBuiltins:
     - resolve-defaults
-    - render-defaults
+    - lint
 ```
 
 ---
@@ -981,6 +980,8 @@ When `testing.config` appears in multiple compose files:
 | `skipBuiltins` (list) | Unioned (deduplicated) |
 | `setup` / `cleanup` | Appended in compose-file order |
 | `env` | Merged map; last compose file wins on key conflict |
+| `files` | Appended in compose-file order, deduplicated (first-seen wins) |
+| `services` | Appended in compose-file order; duplicate service names are rejected with an error |
 
 ---
 
@@ -1272,14 +1273,13 @@ The sandbox copies files relative to the working directory, so test `files` entr
 
 ## Builtin Tests
 
-By default, four builtin tests run for every solution:
+By default, three builtin tests run for every solution:
 
 | Name | Description |
 |------|-------------|
 | `builtin:parse` | Validates YAML parsing |
 | `builtin:lint` | Runs lint rules (warnings OK) |
 | `builtin:resolve-defaults` | Resolves with default parameters |
-| `builtin:render-defaults` | Renders with default parameters |
 
 Builtins run before user-defined tests. Skip all builtins:
 
@@ -1635,7 +1635,6 @@ The command analyzes your solution and generates:
 | Test Category | What It Creates |
 |---------------|-----------------|
 | **Smoke tests** | `resolve-defaults` — verifies all resolvers resolve with defaults |
-| | `render-defaults` — verifies the solution renders with defaults |
 | | `lint` — verifies the solution has no lint errors |
 | **Per-resolver tests** | `resolver-<name>` — verifies each resolver produces non-null output |
 | **Validation failure tests** | `resolver-<name>-invalid` — verifies resolvers with validation rules reject invalid input (`expectFailure: true`) |
@@ -1695,15 +1694,6 @@ testing:
         tags:
             - smoke
             - lint
-        exitCode: 0
-    render-defaults:
-        description: Verify solution renders with default values
-        command:
-            - render
-            - solution
-        tags:
-            - smoke
-            - render
         exitCode: 0
     resolve-defaults:
         description: Verify all resolvers resolve with default values

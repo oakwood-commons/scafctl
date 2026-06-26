@@ -91,9 +91,6 @@ spec:
               value: "base_url-is-standalone"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for __plan tests

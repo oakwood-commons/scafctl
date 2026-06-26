@@ -17,10 +17,6 @@ spec:
               value: Hello from plugin test
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       plugins-help:
         description: Verify plugins help works

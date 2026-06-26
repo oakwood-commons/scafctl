@@ -46,9 +46,6 @@ spec:
               value: "hello-default"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       # =====================================================================
       # State disabled: saved parameters NOT loaded

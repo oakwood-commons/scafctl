@@ -28,9 +28,6 @@ spec:
               expression: '_.greeting + " (nested)"'
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       with-basedir:
         description: Verify solution executes correctly when nested via baseDir

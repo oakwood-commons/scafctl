@@ -42,9 +42,6 @@ spec:
               expression: '"https://" + _.environment + "." + _.region + ".example.com"'
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for input tests

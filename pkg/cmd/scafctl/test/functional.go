@@ -136,7 +136,7 @@ Examples:
 	cCmd.Flags().BoolVar(&opts.UpdateSnapshots, "update-snapshots", false, "Update golden files instead of comparing")
 	cCmd.Flags().BoolVar(&opts.Sequential, "sequential", false, "Run tests sequentially (no concurrency)")
 	cCmd.Flags().IntVarP(&opts.Concurrency, "concurrency", "j", 1, "Maximum number of tests to run in parallel")
-	cCmd.Flags().BoolVar(&opts.SkipBuiltins, "skip-builtins", false, "Skip builtin tests (parse, lint, resolve-defaults, render-defaults)")
+	cCmd.Flags().BoolVar(&opts.SkipBuiltins, "skip-builtins", false, "Skip builtin tests (parse, lint, resolve-defaults)")
 	cCmd.Flags().DurationVar(&opts.TestTimeout, "test-timeout", 0, "Default timeout per test (e.g., 30s, 5m)")
 	cCmd.Flags().DurationVar(&opts.Timeout, "timeout", 0, "Global timeout for all tests (e.g., 10m)")
 	cCmd.Flags().StringArrayVar(&opts.Filter, "filter", nil, "Filter tests by name glob pattern (can be repeated)")

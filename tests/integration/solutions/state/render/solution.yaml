@@ -43,9 +43,6 @@ spec:
               value: "my-label"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       # =====================================================================
       # Render with empty state uses fallback

@@ -43,7 +43,7 @@ spec:
     config:
       # lint: solution intentionally has a resolver cycle
       # resolve-defaults: resolvers cannot be resolved due to the cycle
-      skipBuiltins: [lint, resolve-defaults, render-defaults]
+      skipBuiltins: [lint, resolve-defaults]
 
     cases:
       cycle-detected:

@@ -67,9 +67,6 @@ spec:
               label: "step 1"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       basic-execution:
         description: Verify message provider runs successfully

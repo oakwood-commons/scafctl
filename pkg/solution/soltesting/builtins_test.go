@@ -15,7 +15,7 @@ import (
 
 func TestBuiltinTests_AllReturned(t *testing.T) {
 	builtins := soltesting.BuiltinTests(nil)
-	require.Len(t, builtins, 4)
+	require.Len(t, builtins, 3)
 
 	names := make([]string, len(builtins))
 	for i, b := range builtins {
@@ -24,7 +24,6 @@ func TestBuiltinTests_AllReturned(t *testing.T) {
 	assert.Contains(t, names, "builtin:parse")
 	assert.Contains(t, names, "builtin:lint")
 	assert.Contains(t, names, "builtin:resolve-defaults")
-	assert.Contains(t, names, "builtin:render-defaults")
 }
 
 func TestBuiltinTests_NamesHavePrefix(t *testing.T) {
@@ -50,14 +49,13 @@ func TestBuiltinTests_SkipSpecific(t *testing.T) {
 		},
 	}
 	builtins := soltesting.BuiltinTests(tc)
-	require.Len(t, builtins, 2)
+	require.Len(t, builtins, 1)
 
 	names := make([]string, len(builtins))
 	for i, b := range builtins {
 		names[i] = b.Name
 	}
 	assert.Contains(t, names, "builtin:resolve-defaults")
-	assert.Contains(t, names, "builtin:render-defaults")
 	assert.NotContains(t, names, "builtin:lint")
 	assert.NotContains(t, names, "builtin:parse")
 }
@@ -65,12 +63,12 @@ func TestBuiltinTests_SkipSpecific(t *testing.T) {
 func TestBuiltinTests_DefaultConfig(t *testing.T) {
 	tc := &soltesting.TestConfig{}
 	builtins := soltesting.BuiltinTests(tc)
-	assert.Len(t, builtins, 4)
+	assert.Len(t, builtins, 3)
 }
 
 func TestBuiltinTests_AlphabeticalOrder(t *testing.T) {
 	builtins := soltesting.BuiltinTests(nil)
-	require.Len(t, builtins, 4)
+	require.Len(t, builtins, 3)
 	// Builtins should be in alphabetical order.
 	for i := 1; i < len(builtins); i++ {
 		assert.Less(t, builtins[i-1].Name, builtins[i].Name,
@@ -99,17 +97,6 @@ func TestBuiltinTests_LintHasCommand(t *testing.T) {
 		}
 	}
 	t.Fatal("builtin:lint not found")
-}
-
-func TestBuiltinTests_RenderDefaultsHasCommand(t *testing.T) {
-	builtins := soltesting.BuiltinTests(nil)
-	for _, b := range builtins {
-		if b.Name == "builtin:render-defaults" {
-			assert.Equal(t, []string{"render", "solution"}, b.Command)
-			return
-		}
-	}
-	t.Fatal("builtin:render-defaults not found")
 }
 
 func TestBuiltinTests_ResolveDefaultsHasCommand(t *testing.T) {
