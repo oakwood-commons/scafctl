@@ -11,7 +11,6 @@ package tokenprovider
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -67,15 +66,17 @@ func ExtractPassthroughTokenFromContext(ctx context.Context, provider string) (T
 
 // GetToken is the primary convenience function for consumers. It extracts
 // the registry from context, looks up the named source, and retrieves a token.
+// The lookup consults the registry's fallback resolver, so official handlers
+// that are not yet downloaded are fetched on demand before failing.
 func GetToken(ctx context.Context, provider string, opts RequestOptions) (Token, error) {
 	reg := RegistryFromContext(ctx)
 	if reg == nil {
 		return Token{}, ErrNoRegistry
 	}
 
-	source, ok := reg.Get(provider)
-	if !ok {
-		return Token{}, fmt.Errorf("%w: %s", ErrSourceNotFound, provider)
+	source, err := reg.GetContext(ctx, provider)
+	if err != nil {
+		return Token{}, err
 	}
 
 	return source.GetToken(ctx, opts)

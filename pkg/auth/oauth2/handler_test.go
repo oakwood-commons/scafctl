@@ -273,7 +273,7 @@ func TestHandler_Status_Authenticated(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 	h, store := newTestHandler(t, srv, nil)
-	meta := handlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(1 * time.Hour), Scopes: []string{"read"}}
+	meta := auth.HandlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(1 * time.Hour), Scopes: []string{"read"}}
 	metaBytes, _ := json.Marshal(meta)
 	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider."+secretKeyMetadataSuffix, metaBytes)
 	status, err := h.Status(context.Background())
@@ -286,7 +286,7 @@ func TestHandler_Status_Expired(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 	h, store := newTestHandler(t, srv, nil)
-	meta := handlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(-1 * time.Hour), Scopes: []string{"read"}}
+	meta := auth.HandlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(-1 * time.Hour), Scopes: []string{"read"}}
 	metaBytes, _ := json.Marshal(meta)
 	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider."+secretKeyMetadataSuffix, metaBytes)
 	status, err := h.Status(context.Background())
@@ -860,7 +860,7 @@ func TestWithSecretKeyPrefix(t *testing.T) {
 
 	// Write metadata under the plugin-style prefix
 	pluginPrefix := "scafctl.auth."
-	meta := handlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(1 * time.Hour), Scopes: []string{"read"}}
+	meta := auth.HandlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(1 * time.Hour), Scopes: []string{"read"}}
 	metaBytes, err := json.Marshal(meta)
 	require.NoError(t, err)
 	require.NoError(t, store.Set(context.Background(), pluginPrefix+"test-provider.metadata", metaBytes))
@@ -880,49 +880,6 @@ func TestWithSecretKeyPrefix(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, status.Authenticated)
 	assert.Equal(t, "testuser", status.Claims.Username)
-}
-
-func TestUnmarshalMetadata_PluginFormat(t *testing.T) {
-	// Plugin handler metadata uses different field names
-	pluginJSON := `{
-		"refreshTokenExpiresAt": "2026-08-13T01:13:46Z",
-		"loginFlow": "interactive",
-		"sessionId": "abc123",
-		"tenantId": "tenant1",
-		"clientId": "client1"
-	}`
-	meta, err := unmarshalMetadata([]byte(pluginJSON))
-	require.NoError(t, err)
-	assert.Equal(t, time.Date(2026, 8, 13, 1, 13, 46, 0, time.UTC), meta.ExpiresAt)
-	assert.Equal(t, auth.FlowInteractive, meta.LastLoginFlow)
-}
-
-func TestUnmarshalMetadata_NativeFormat(t *testing.T) {
-	meta := handlerMetadata{
-		Claims:        &auth.Claims{Username: "testuser"},
-		ExpiresAt:     time.Date(2026, 8, 13, 1, 13, 46, 0, time.UTC),
-		Scopes:        []string{"read"},
-		LastLoginFlow: auth.FlowDeviceCode,
-	}
-	data, err := json.Marshal(meta)
-	require.NoError(t, err)
-
-	result, err := unmarshalMetadata(data)
-	require.NoError(t, err)
-	assert.Equal(t, meta.ExpiresAt, result.ExpiresAt)
-	assert.Equal(t, auth.FlowDeviceCode, result.LastLoginFlow)
-	assert.Equal(t, "testuser", result.Claims.Username)
-}
-
-func TestUnmarshalMetadata_EmptyJSON(t *testing.T) {
-	meta, err := unmarshalMetadata([]byte("{}"))
-	require.NoError(t, err)
-	assert.True(t, meta.ExpiresAt.IsZero())
-}
-
-func TestUnmarshalMetadata_InvalidJSON(t *testing.T) {
-	_, err := unmarshalMetadata([]byte("not json"))
-	assert.Error(t, err)
 }
 
 func TestHandler_Status_Reason_NoSecretStore(t *testing.T) {
@@ -959,7 +916,7 @@ func TestHandler_Status_Reason_Expired(t *testing.T) {
 	srv := newTestOAuthServer(t)
 	defer srv.Close()
 	h, store := newTestHandler(t, srv, nil)
-	meta := handlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(-1 * time.Hour)}
+	meta := auth.HandlerMetadata{Claims: &auth.Claims{Username: "testuser"}, ExpiresAt: time.Now().Add(-1 * time.Hour)}
 	metaBytes, _ := json.Marshal(meta)
 	_ = store.Set(context.Background(), secretKeyPrefix+"test-provider.metadata", metaBytes)
 	status, err := h.Status(context.Background())

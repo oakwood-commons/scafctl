@@ -139,6 +139,37 @@ func TestBuild_CLIMode_NilAuthRegistry(t *testing.T) {
 	assert.Equal(t, 0, reg.Len())
 }
 
+func TestBuild_CLIMode_LazyFallbackResolvesOfficialHandler(t *testing.T) {
+	// Simulate an official handler that is not eagerly registered at startup
+	// (not cached) but is resolvable via the auth registry's fallback (the
+	// official-registry download path).
+	authReg := auth.NewRegistry(auth.WithFallbackResolver(
+		func(_ context.Context, name string) (auth.Handler, error) {
+			if name == "github" {
+				return &mockHandler{name: "github", displayName: "GitHub"}, nil
+			}
+			return nil, errors.New("not an official handler")
+		},
+	))
+
+	reg, err := Build(runmode.CLI, authReg, nil)
+	require.NoError(t, err)
+
+	// github is absent from the eager snapshot...
+	_, ok := reg.Get("github")
+	assert.False(t, ok)
+
+	// ...but GetContext resolves it lazily via the auth registry fallback.
+	src, err := reg.GetContext(context.Background(), "github")
+	require.NoError(t, err)
+	assert.Equal(t, "github", src.Name())
+
+	// Unknown handlers still surface a not-found error.
+	_, err = reg.GetContext(context.Background(), "nonexistent")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSourceNotFound)
+}
+
 func TestBuild_APIMode(t *testing.T) {
 	identityReg := NewRegistry()
 	require.NoError(t, identityReg.Register(&mockTokenProvider{name: "entra"}))

@@ -88,7 +88,7 @@ func (c *RemoteCatalog) fetchIndexFromRepo(ctx context.Context, repo *remote.Rep
 	}
 
 	// Fetch the first layer (the JSON index).
-	layerData, err := content.FetchAll(ctx, repo, manifest.Layers[0])
+	layerData, err := fetchLayerContent(ctx, repo, manifest.Layers[0])
 	if err != nil {
 		return nil, fmt.Errorf("fetching catalog index layer: %w", err)
 	}

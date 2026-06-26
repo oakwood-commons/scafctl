@@ -104,7 +104,7 @@ func (c *RemoteCatalog) extractLayerContent(
 		return nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
 	}
 
-	contentData, err := content.FetchAll(ctx, repo, manifest.Layers[0])
+	contentData, err := fetchLayerContent(ctx, repo, manifest.Layers[0])
 	if err != nil {
 		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content layer: %w", err)
 	}

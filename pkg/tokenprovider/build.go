@@ -4,6 +4,7 @@
 package tokenprovider
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -39,6 +40,20 @@ func Build(mode runmode.Mode, authReg *auth.Registry, identityReg *Registry) (*R
 				return nil, fmt.Errorf("registering CLI adapter %q: %w", h.Name(), err)
 			}
 		}
+		// Lazily resolve sources that are not eagerly registered. Official auth
+		// handlers are not built into the core binary; they live in the official
+		// registry and are downloaded on demand. The auth registry's own
+		// fallback resolver fetches and registers them, so consult it here before
+		// failing. Without this, a post-login registry bridge fails with
+		// "source not found" whenever the plugin was not cached at startup
+		// (e.g. headless CI).
+		reg.SetFallback(func(ctx context.Context, name string) (TokenProvider, error) {
+			h, err := authReg.GetContext(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			return NewAuthHandlerAdapter(h), nil
+		})
 	}
 
 	return reg, nil
