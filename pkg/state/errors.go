@@ -38,7 +38,7 @@ type MissingParamsError struct {
 
 func (e *MissingParamsError) Error() string {
 	return fmt.Sprintf(
-		"state backend requires parameters [%s] that were not supplied: %v",
+		"state configuration requires parameters [%s] that were not supplied: %v",
 		strings.Join(e.Missing, ", "), e.Original,
 	)
 }

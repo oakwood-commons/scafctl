@@ -293,13 +293,13 @@ func knownPatterns() []pattern {
 		},
 		{
 			name:  "state-missing-params",
-			regex: regexp.MustCompile(`state backend requires parameters \[([^\]]+)\] that were not supplied`),
+			regex: regexp.MustCompile(`state configuration requires parameters \[([^\]]+)\] that were not supplied`),
 			build: func(m []string, _ string) Explanation {
 				params := m[1]
 				return Explanation{
 					Category:  "state_configuration",
-					Summary:   fmt.Sprintf("State backend needs CLI parameters: %s", params),
-					RootCause: "The state backend path uses __params references in CEL or Go template expressions, but those parameters were not supplied via -r flags",
+					Summary:   fmt.Sprintf("State configuration needs CLI parameters: %s", params),
+					RootCause: "The state configuration uses __params references in CEL or Go template expressions, but those parameters were not supplied via -r flags",
 					Suggestions: []string{
 						fmt.Sprintf("Supply the missing parameters with -r flags: %s", formatParamHints(params)),
 						"State is loaded before resolvers run, so __params (CLI -r flags) are the only data source",

@@ -268,33 +268,42 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 	key := request.GetString("key", "")
 
 	if key != "" {
-		// Delete a single key -- check parameters first, then immutables
-		if _, ok := sd.Parameters[key]; ok {
+		// Delete a single key -- check both maps (mirrors CLI behavior)
+		_, inParams := sd.Parameters[key]
+		_, inImmutables := sd.Immutables[key]
+
+		if !inParams && !inImmutables {
+			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("key %q not found in state", key),
+				WithField("key"),
+				WithRelatedTools("state_list"),
+			), nil
+		}
+
+		if inParams {
 			delete(sd.Parameters, key)
-			if err := state.SaveToFile(path, baseDir, sd); err != nil {
-				return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
-			}
-			return mcp.NewToolResultJSON(map[string]any{
-				"success": true,
-				"message": fmt.Sprintf("deleted parameter %q", key),
-			})
 		}
-
-		if _, ok := sd.Immutables[key]; ok {
+		if inImmutables {
 			delete(sd.Immutables, key)
-			if err := state.SaveToFile(path, baseDir, sd); err != nil {
-				return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
-			}
-			return mcp.NewToolResultJSON(map[string]any{
-				"success": true,
-				"message": fmt.Sprintf("deleted immutable key %q", key),
-			})
 		}
 
-		return newStructuredError(ErrCodeNotFound, fmt.Sprintf("key %q not found in state", key),
-			WithField("key"),
-			WithRelatedTools("state_list"),
-		), nil
+		if err := state.SaveToFile(path, baseDir, sd); err != nil {
+			return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil
+		}
+
+		var msg string
+		switch {
+		case inParams && inImmutables:
+			msg = fmt.Sprintf("deleted parameter and immutable key %q", key)
+		case inImmutables:
+			msg = fmt.Sprintf("deleted immutable key %q", key)
+		default:
+			msg = fmt.Sprintf("deleted parameter %q", key)
+		}
+
+		return mcp.NewToolResultJSON(map[string]any{
+			"success": true,
+			"message": msg,
+		})
 	}
 
 	// Clear all entries
