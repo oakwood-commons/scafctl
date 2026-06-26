@@ -25,6 +25,22 @@ gcp      Google Cloud   available   official  interactive           false
 gitlab   GitLab         installed   custom    interactive           true
 ~~~
 
+## Inspecting a Single Handler
+
+Pass a handler name to show its details (name, display name, source, status,
+login state, supported flows, and capabilities):
+
+~~~bash
+# Show details for one handler
+scafctl auth handlers github
+
+# Machine-readable output
+scafctl auth handlers github -o json
+scafctl auth handlers github -o yaml
+~~~
+
+Handlers that are available but not yet installed print an install hint instead.
+
 ## Pre-Installing a Handler
 
 Download a handler plugin before first use. Useful for:

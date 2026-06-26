@@ -37,7 +37,7 @@ func TestCommandAuth(t *testing.T) {
 	assert.Contains(t, cmdNames, "login <handler>")
 	assert.Contains(t, cmdNames, "logout [handler]")
 	assert.Contains(t, cmdNames, "migrate")
-	assert.Contains(t, cmdNames, "handlers")
+	assert.Contains(t, cmdNames, "handlers [name]")
 	assert.Contains(t, cmdNames, "profile")
 	assert.Contains(t, cmdNames, "status [handler]")
 	assert.Contains(t, cmdNames, "token <handler>")

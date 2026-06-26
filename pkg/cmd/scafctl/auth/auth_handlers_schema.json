@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Auth Handlers",
-  "description": "Schema for authentication handlers with display extensions",
+  "description": "Schema for scafctl authentication handlers with display extensions",
   "type": "array",
 
   "x-kvx-icon": "🔐",
@@ -11,7 +11,7 @@
     "titleField": "displayName",
     "subtitleField": "name",
     "subtitleMaxLines": 1,
-    "badgeFields": ["flows"]
+    "badgeFields": ["status", "source"]
   },
 
   "x-kvx-detail": {
@@ -20,7 +20,17 @@
     "sections": [
       {
         "title": "",
-        "fields": ["name", "displayName"],
+        "fields": ["name", "status"],
+        "layout": "inline"
+      },
+      {
+        "title": "Source",
+        "fields": ["source"],
+        "layout": "inline"
+      },
+      {
+        "title": "Logged In",
+        "fields": ["loggedIn"],
         "layout": "inline"
       },
       {
@@ -32,13 +42,18 @@
         "title": "Capabilities",
         "fields": ["capabilities"],
         "layout": "tags"
+      },
+      {
+        "title": "Installation",
+        "fields": ["hint"],
+        "layout": "paragraph"
       }
     ]
   },
 
   "items": {
     "type": "object",
-    "required": ["name"],
+    "required": ["name", "status"],
     "properties": {
       "name": {
         "type": "string",
@@ -49,6 +64,21 @@
         "type": "string",
         "title": "Display Name",
         "description": "Human-readable handler name"
+      },
+      "status": {
+        "type": "string",
+        "title": "Status",
+        "description": "Installation status (installed, available, not-found)"
+      },
+      "source": {
+        "type": "string",
+        "title": "Source",
+        "description": "Where the handler comes from (built-in, plugin, catalog)"
+      },
+      "loggedIn": {
+        "type": "boolean",
+        "title": "Logged In",
+        "description": "Whether the handler is currently authenticated"
       },
       "flows": {
         "type": "array",
@@ -61,6 +91,11 @@
         "items": { "type": "string" },
         "title": "Capabilities",
         "description": "Handler capabilities"
+      },
+      "hint": {
+        "type": "string",
+        "title": "Installation",
+        "description": "Hint for installing or inspecting the handler"
       }
     }
   }
