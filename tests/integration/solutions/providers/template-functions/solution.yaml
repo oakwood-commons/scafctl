@@ -106,9 +106,6 @@ spec:
               name: cel-inline-test
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
     cases:
       test-slugify:
         description: Verify slugify produces correct slug

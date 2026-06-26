@@ -29,8 +29,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers read local files that must be staged via files:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       _base:

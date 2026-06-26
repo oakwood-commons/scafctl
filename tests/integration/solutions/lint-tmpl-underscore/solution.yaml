@@ -33,7 +33,7 @@ spec:
     config:
       # lint: solution intentionally has tmpl-underscore-prefix lint error
       # resolve-defaults: tmpl value is a literal string (not resolved as template here)
-      skipBuiltins: [lint, resolve-defaults, render-defaults]
+      skipBuiltins: [lint, resolve-defaults]
 
     cases:
       underscore-prefix-detected:

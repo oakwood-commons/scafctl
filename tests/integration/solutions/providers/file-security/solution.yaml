@@ -54,9 +54,6 @@ spec:
             rslvr: safeEntries
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for file security tests

@@ -29,9 +29,6 @@ spec:
               value: world
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       hyphenated-name-detected:
         description: Lint detects hyphenated resolver name

@@ -65,7 +65,7 @@ spec:
     config:
       # lint: solution intentionally triggers transform-shape-mismatch
       # resolve-defaults: http resolver requires network access
-      skipBuiltins: [lint, resolve-defaults, render-defaults]
+      skipBuiltins: [lint, resolve-defaults]
 
     cases:
       flagged-finding-reported:

@@ -232,10 +232,6 @@ spec:
                 items: null
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for go-template provider tests

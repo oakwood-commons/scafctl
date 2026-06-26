@@ -63,7 +63,7 @@ spec:
     config:
       # lint: solution intentionally triggers missing-template-dependency
       # resolve-defaults: render-tree cannot resolve without full deps
-      skipBuiltins: [lint, resolve-defaults, render-defaults]
+      skipBuiltins: [lint, resolve-defaults]
 
     cases:
       missing-deps-detected:

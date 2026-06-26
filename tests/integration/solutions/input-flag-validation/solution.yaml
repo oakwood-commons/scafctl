@@ -19,9 +19,6 @@ spec:
               value: validated
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       resolve-with-auto-inject:
         description: Verify resolver works with auto-injected -f flag

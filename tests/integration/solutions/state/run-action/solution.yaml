@@ -70,9 +70,6 @@ spec:
             expr: "'echo deploy v' + _.version + ' to ' + _.environment"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       # =====================================================================
       # Run specific action with state (first run, no state file)

@@ -58,10 +58,6 @@ spec:
               expression: '_.projectName + "-" + _.language + "-" + _.version'
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base for resolver tests

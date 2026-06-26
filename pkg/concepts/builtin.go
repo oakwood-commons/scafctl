@@ -201,7 +201,7 @@ Rules:
 - Template cases do not need a command field — they exist only for inheritance.`,
 		Examples: []string{
 			"spec:\n  testing:\n    cases:\n      smoke-test:\n        description: Verify basic rendering\n        command: [render, solution]\n        exitCode: 0\n        files: [templates/]\n        assertions:\n          - expression: \"size(__output) > 0\"\n            message: Output should not be empty",
-			"# Template case (not executed, used for inheritance)\nspec:\n  testing:\n    cases:\n      _files-base:\n        files:\n          - templates/.github/copilot-instructions.md.tpl\n          - templates/.github/instructions/terraform-hcl.instructions.md.tpl\n\n      resolve-defaults:\n        extends: [_files-base]\n        command: [run, resolver]\n        args: [-o, json]\n        exitCode: 0\n\n      render-defaults:\n        extends: [_files-base]\n        command: [render, solution]\n        exitCode: 0",
+			"# Template case (not executed, used for inheritance)\nspec:\n  testing:\n    cases:\n      _files-base:\n        files:\n          - templates/.github/copilot-instructions.md.tpl\n          - templates/.github/instructions/terraform-hcl.instructions.md.tpl\n\n      resolve-defaults:\n        extends: [_files-base]\n        command: [run, resolver]\n        args: [-o, json]\n        exitCode: 0\n\n      render-check:\n        extends: [_files-base]\n        command: [render, solution]\n        args: [-r, appName=demo]\n        exitCode: 0",
 		},
 		SeeAlso: []string{"test-sandbox", "test-assertions", "test-scaffold"},
 	},

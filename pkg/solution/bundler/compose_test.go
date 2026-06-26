@@ -539,6 +539,107 @@ spec:
 	assert.Equal(t, "from-b", result.Spec.Testing.Config.Env["SHARED"])
 }
 
+func TestCompose_MergesTestConfig_Files_DedupFirstSeen(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch filepath.ToSlash(path) {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testing:
+    config:
+      files:
+        - shared/a.txt
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testing:
+    config:
+      files:
+        - shared/b.txt
+        - shared/a.txt
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.Testing)
+	require.NotNil(t, result.Spec.Testing.Config)
+	assert.Equal(t, []string{"shared/a.txt", "shared/b.txt"}, result.Spec.Testing.Config.Files)
+}
+
+func TestCompose_MergesTestConfig_Services_Appended(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch filepath.ToSlash(path) {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testing:
+    config:
+      services:
+        - name: svc-a
+          type: http
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testing:
+    config:
+      services:
+        - name: svc-b
+          type: http
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+	require.NotNil(t, result.Spec.Testing)
+	require.NotNil(t, result.Spec.Testing.Config)
+	names := make([]string, len(result.Spec.Testing.Config.Services))
+	for i, s := range result.Spec.Testing.Config.Services {
+		names[i] = s.Name
+	}
+	assert.Equal(t, []string{"svc-a", "svc-b"}, names)
+}
+
+func TestCompose_MergesTestConfig_Services_RejectsDuplicateName(t *testing.T) {
+	sol := baseSolution()
+	sol.Compose = []string{"a.yaml", "b.yaml"}
+	readFile := func(path string) ([]byte, error) {
+		switch filepath.ToSlash(path) {
+		case "/tmp/bundle/a.yaml":
+			return []byte(`
+spec:
+  testing:
+    config:
+      services:
+        - name: svc-shared
+          type: http
+`), nil
+		case "/tmp/bundle/b.yaml":
+			return []byte(`
+spec:
+  testing:
+    config:
+      services:
+        - name: svc-shared
+          type: http
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+	_, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate test service")
+	assert.Contains(t, err.Error(), "svc-shared")
+}
+
 func TestCompose_SolutionWithInlineTests_PreservedAfterCompose(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"extra.yaml"}

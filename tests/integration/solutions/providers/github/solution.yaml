@@ -131,7 +131,7 @@ spec:
 
   testing:
     config:
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       services:
         - name: github-mock
           type: http

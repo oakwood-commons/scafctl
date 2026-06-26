@@ -51,9 +51,6 @@ spec:
               value: "default-mutable"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for immutable state tests

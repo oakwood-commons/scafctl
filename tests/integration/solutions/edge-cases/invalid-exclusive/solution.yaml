@@ -34,8 +34,7 @@ spec:
   testing:
     config:
       # lint: solution has intentionally invalid exclusive declarations (self-ref and missing action refs)
-      # render-defaults: invalid exclusive references cause render to fail
-      skipBuiltins: [lint, render-defaults]
+      skipBuiltins: [lint]
 
     cases:
       lint-rejects-self-reference:

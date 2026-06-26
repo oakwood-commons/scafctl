@@ -90,8 +90,7 @@ spec:
   testing:
     config:
       # resolve-defaults: debugToFile resolver depends on SCAFCTL_SANDBOX_DIR env var
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       _base:

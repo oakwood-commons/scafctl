@@ -36,9 +36,6 @@ spec:
               expression: '_.greeting + " (authenticated)"'
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for mock tests

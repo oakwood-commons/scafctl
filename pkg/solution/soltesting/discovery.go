@@ -191,8 +191,8 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 					if composePart.Spec.Testing.Config != nil {
 						if doc.Spec.Testing.Config == nil {
 							doc.Spec.Testing.Config = composePart.Spec.Testing.Config
-						} else {
-							mergeTestConfig(doc.Spec.Testing.Config, composePart.Spec.Testing.Config)
+						} else if err := mergeTestConfig(doc.Spec.Testing.Config, composePart.Spec.Testing.Config, match); err != nil {
+							return nil, err
 						}
 					}
 				}
@@ -225,7 +225,12 @@ func DiscoverFromFile(filePath string) (*SolutionTests, error) {
 }
 
 // mergeTestConfig merges src into dst following compose merge rules.
-func mergeTestConfig(dst, src *TestConfig) {
+//   - SkipBuiltins: true wins; lists are unioned.
+//   - Setup/Cleanup: appended in compose-file order.
+//   - Env: merged (last compose file wins on key conflict).
+//   - Files: appended in compose-file order, deduplicated (first-seen-wins).
+//   - Services: appended in compose-file order; duplicate names are rejected.
+func mergeTestConfig(dst, src *TestConfig, sourceFile string) error {
 	// SkipBuiltins: true wins; lists are unioned
 	if src.SkipBuiltins.All {
 		dst.SkipBuiltins.All = true
@@ -237,6 +242,7 @@ func mergeTestConfig(dst, src *TestConfig) {
 		for _, n := range src.SkipBuiltins.Names {
 			if !seen[n] {
 				dst.SkipBuiltins.Names = append(dst.SkipBuiltins.Names, n)
+				seen[n] = true
 			}
 		}
 	}
@@ -252,6 +258,34 @@ func mergeTestConfig(dst, src *TestConfig) {
 			dst.Env[k] = v
 		}
 	}
+	// Files: appended in compose-file order, deduplicated (first-seen-wins)
+	if len(src.Files) > 0 {
+		seen := make(map[string]bool, len(dst.Files))
+		for _, f := range dst.Files {
+			seen[f] = true
+		}
+		for _, f := range src.Files {
+			if !seen[f] {
+				dst.Files = append(dst.Files, f)
+				seen[f] = true
+			}
+		}
+	}
+	// Services: appended in compose-file order; duplicate names rejected
+	if len(src.Services) > 0 {
+		seen := make(map[string]bool, len(dst.Services))
+		for _, s := range dst.Services {
+			seen[s.Name] = true
+		}
+		for _, s := range src.Services {
+			if seen[s.Name] {
+				return fmt.Errorf("compose file %q: duplicate test service name %q", sourceFile, s.Name)
+			}
+			dst.Services = append(dst.Services, s)
+			seen[s.Name] = true
+		}
+	}
+	return nil
 }
 
 // FilterTests applies the filter options to the discovered tests.

@@ -48,9 +48,6 @@ spec:
             - "{{ .greeting }}"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       dryrun-resolves-values:
         description: Verify dry-run generates WhatIf messages with real resolver data

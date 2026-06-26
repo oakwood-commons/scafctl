@@ -64,7 +64,6 @@ spec:
     config:
       skipBuiltins:
         - resolve-defaults
-        - render-defaults
         - lint
       env:
         TEST_MODE: "true"

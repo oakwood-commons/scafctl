@@ -5551,6 +5551,167 @@ spec:
 	assert.Contains(t, stdout, "composed-test", "composed test should appear in output")
 }
 
+// TestIntegration_Test_Functional_ComposeFilesMerge verifies that
+// testing.config.files entries from the root solution and a composed file are
+// merged together — both shared files are copied into the test sandbox.
+func TestIntegration_Test_Functional_ComposeFilesMerge(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	testsDir := filepath.Join(tmpDir, "tests")
+	require.NoError(t, os.MkdirAll(testsDir, 0o755))
+
+	// Both files must exist at the solution root so the sandbox can copy them.
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "a.txt"), []byte("from-root"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("from-composed"), 0o644))
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-compose-files
+  version: 1.0.0
+compose:
+  - tests/*.yaml
+spec:
+  resolvers:
+    fileA:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./a.txt
+    fileB:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./b.txt
+  testing:
+    config:
+      # Root contributes a.txt; the composed file contributes b.txt.
+      files:
+        - a.txt
+    cases:
+      _base:
+        description: Base template
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+`
+	// The composed file adds b.txt to testing.config.files and a test that
+	// asserts both files were copied into the sandbox and read successfully.
+	testFileContent := `spec:
+  testing:
+    config:
+      files:
+        - b.txt
+    cases:
+      reads-both-files:
+        description: Both merged shared files are present in the sandbox
+        extends: [_base]
+        assertions:
+          - expression: '__output.fileA.content == "from-root"'
+            message: root file a.txt should be copied into the sandbox
+          - expression: '__output.fileB.content == "from-composed"'
+            message: composed file b.txt should be merged and copied into the sandbox
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testsDir, "extra.yaml"), []byte(testFileContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0 when shared files merge across compose files\nstdout: %s\nstderr: %s", stdout, stderr)
+	assert.Contains(t, stdout, "reads-both-files", "composed test should appear in output")
+}
+
+// TestIntegration_Test_Functional_ComposeDuplicateService verifies that a test
+// service defined with the same name in both the root solution and a composed
+// file is rejected with an error.
+func TestIntegration_Test_Functional_ComposeDuplicateService(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	testsDir := filepath.Join(tmpDir, "tests")
+	require.NoError(t, os.MkdirAll(testsDir, 0o755))
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-compose-dup-service
+  version: 1.0.0
+compose:
+  - tests/*.yaml
+spec:
+  resolvers:
+    msg:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+  testing:
+    config:
+      services:
+        - name: mock-api
+          type: exec
+          execRules:
+            - command: "echo root"
+              stdout: root
+              exitCode: 0
+    cases:
+      _base:
+        description: Base template
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+`
+	// The composed file declares a service with the same name — must be rejected.
+	testFileContent := `spec:
+  testing:
+    config:
+      services:
+        - name: mock-api
+          type: exec
+          execRules:
+            - command: "echo composed"
+              stdout: composed
+              exitCode: 0
+    cases:
+      composed-test:
+        description: Test from composed file
+        extends: [_base]
+        assertions:
+          - expression: '"msg" in __output'
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(testsDir, "smoke.yaml"), []byte(testFileContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"test", "functional",
+		"-f", solutionFile,
+		"--skip-builtins",
+		"--no-color",
+	)
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.NotEqual(t, 0, exitCode, "expected non-zero exit code for duplicate test service name")
+	assert.Contains(t, stderr, "duplicate test service", "error should mention the duplicate test service")
+}
+
 func TestIntegration_Test_Functional_AutoDiscovery(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
@@ -5684,7 +5845,6 @@ spec:
 	assert.Equal(t, 0, exitCode, "expected exit code 0")
 	assert.Contains(t, stdout, "cases:")
 	assert.Contains(t, stdout, "resolve-defaults")
-	assert.Contains(t, stdout, "render-defaults")
 	assert.Contains(t, stdout, "lint")
 	assert.Contains(t, stdout, "resolver-repo")
 	assert.Contains(t, stdout, "resolver-version")

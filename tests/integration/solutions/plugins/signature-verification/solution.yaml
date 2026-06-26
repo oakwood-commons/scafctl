@@ -17,9 +17,6 @@ spec:
               value: Hello from signature test
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       # Verify that the solution runs successfully with default config
       # (signature mode defaults to "off", so no verification occurs).

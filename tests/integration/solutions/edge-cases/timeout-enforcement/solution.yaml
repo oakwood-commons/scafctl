@@ -24,8 +24,7 @@ spec:
   testing:
     config:
       # resolve-defaults: slowResolver deliberately exceeds its timeout
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       timeout-exceeded:

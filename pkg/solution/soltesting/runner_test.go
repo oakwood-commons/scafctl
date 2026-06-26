@@ -466,7 +466,7 @@ func TestRunnerBuiltinParse(t *testing.T) {
 		{
 			SolutionName: "parse-sol",
 			FilePath:     solutionPath,
-			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{Names: []string{"lint", "resolve-defaults", "render-defaults"}}},
+			Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{Names: []string{"lint", "resolve-defaults"}}},
 			Cases:        map[string]*TestCase{},
 		},
 	}

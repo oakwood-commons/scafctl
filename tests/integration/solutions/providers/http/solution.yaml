@@ -147,8 +147,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers depend on MOCK_BASE_URL env var and moc  resolvers
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       services:
         - name: mock-api
           type: http

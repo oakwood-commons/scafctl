@@ -54,9 +54,6 @@ spec:
             expr: "'echo deploy ' + _.app_version + ' to ' + _.deploy_target"
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       # =====================================================================
       # Render with empty state uses resolver defaults

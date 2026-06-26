@@ -123,10 +123,6 @@ spec:
               expression: 'regex.match("^hello", regex.replace(_.dirtyString, "[^a-zA-Z0-9 ]", ""))'
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for regex CEL tests

@@ -338,7 +338,7 @@ config:
 config:
   skipBuiltins:
     - resolve-defaults
-    - render-defaults
+    - lint
 ~~~
 
 | Field | Type | Default | Description |
@@ -370,8 +370,10 @@ When `testing.config` appears in multiple compose files:
 | `setup` | Appended in compose-file order (first file's steps run first). This is a new merge strategy distinct from the existing reject-duplicates and union patterns |
 | `cleanup` | Appended in compose-file order (first file's steps run first) |
 | `env` | Merged map; last compose file wins on key conflict |
+| `files` | Appended in compose-file order, deduplicated (first-seen wins) |
+| `services` | Appended in compose-file order; duplicate service names across files are **rejected** with an error |
 
-Compose-file order affects `testing.config.setup`, `testing.config.cleanup`, and `testing.config.env` merge ordering but does **not** affect test execution order. Tests from all compose files are merged into a single map and executed alphabetically (see [Test Execution Ordering](#test-execution-ordering)).
+Compose-file order affects `testing.config.setup`, `testing.config.cleanup`, `testing.config.env`, `testing.config.files`, and `testing.config.services` merge ordering but does **not** affect test execution order. Tests from all compose files are merged into a single map and executed alphabetically (see [Test Execution Ordering](#test-execution-ordering)).
 
 `spec.testing.cases` entries are merged by name using the **reject-duplicates** strategy (same as resolvers and actions). If two compose files define a test with the same name, the compose merge fails with an error.
 
@@ -641,7 +643,6 @@ Every solution automatically receives builtin tests unless `testing.config.skipB
 | `builtin:parse` | (internal) | Solution YAML parses without errors |
 | `builtin:lint` | `lint` | No lint errors (warnings allowed) |
 | `builtin:resolve-defaults` | `run resolver` | All resolvers resolve with default values |
-| `builtin:render-defaults` | `render solution` | Render succeeds with default values |
 
 Builtins run before user-defined tests. By default, if a builtin fails, user-defined tests still run (they are independent). Use `--fail-fast` to stop remaining tests for that solution on first failure.
 
@@ -875,7 +876,7 @@ This ensures init scripts cannot modify source files.
 
 Tests execute in a deterministic order:
 
-1. **Builtin tests** run first, in alphabetical order (`builtin:lint`, `builtin:parse`, `builtin:render-defaults`, `builtin:resolve-defaults`)
+1. **Builtin tests** run first, in alphabetical order (`builtin:lint`, `builtin:parse`, `builtin:resolve-defaults`)
 2. **User-defined tests** run next, in alphabetical order by test name
 3. **Template tests** (names starting with `_`) are never executed
 
@@ -1058,13 +1059,12 @@ SOLUTION             TEST                        STATUS   DURATION
 terraform-scaffold   builtin:parse               PASS     1ms
 terraform-scaffold   builtin:lint                PASS     45ms
 terraform-scaffold   builtin:resolve-defaults    PASS     18ms
-terraform-scaffold   builtin:render-defaults     PASS     22ms
 terraform-scaffold   renders-dev-defaults        PASS     12ms
 terraform-scaffold   renders-prod-override       PASS     15ms
 terraform-scaffold   rejects-invalid-env         PASS     8ms
 terraform-scaffold   temporarily-disabled        SKIP     -
 
-7 passed, 0 failed, 0 errors, 1 skipped (121ms)
+6 passed, 0 failed, 0 errors, 1 skipped (121ms)
 ~~~
 
 In verbose mode (`-v`), passing tests show assertion counts:
@@ -1365,7 +1365,7 @@ const (
 ### Additions to Existing Types
 
 - `pkg/solution/spec.go`: Has `Testing *soltesting.TestSuite` field on `Spec`. `HasTests()` and `HasTestConfig()` delegate to `Testing.HasCases()` and `Testing.HasConfig()`
-- `pkg/solution/bundler/compose.go`: `composePart` has `Testing *soltesting.TestSuite` field. Compose merges `spec.testing.cases` (by name, reject duplicates) and `spec.testing.config` (`skipBuiltins`: true-wins for bool / union for lists; `env`: merged map, last-file-wins on conflict; `setup`/`cleanup`: appended in compose-file order)
+- `pkg/solution/bundler/compose.go`: `composePart` has `Testing *soltesting.TestSuite` field. Compose merges `spec.testing.cases` (by name, reject duplicates) and `spec.testing.config` (`skipBuiltins`: true-wins for bool / union for lists; `env`: merged map, last-file-wins on conflict; `setup`/`cleanup`: appended in compose-file order; `files`: appended and deduplicated first-seen-wins; `services`: appended with duplicate names rejected)
 - `pkg/solution/bundler/discover.go`: Add `TestInclude` discovery source; scan `spec.testing.cases[*].files` entries
 
 ---
@@ -1493,7 +1493,7 @@ then outputs skeleton test YAML to stdout. Unlike `-o test` (which captures actu
 `test init` generates a starting point before you run anything.
 
 **Generated test categories:**
-- Smoke tests: `resolve-defaults`, `render-defaults`, `lint`
+- Smoke tests: `resolve-defaults`, `lint`
 - Per-resolver tests: `resolver-<name>` with non-null assertions
 - Validation failure tests: `resolver-<name>-invalid` with `expectFailure: true`
 - Per-action tests: `action-<name>` with provider tags
