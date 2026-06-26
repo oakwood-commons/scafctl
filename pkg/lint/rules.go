@@ -11,25 +11,25 @@ import "sort"
 // their knowledge from this registry.
 type RuleMeta struct {
 	// Rule is the kebab-case rule identifier used in Finding.RuleName.
-	Rule string `json:"rule"`
+	Rule string `json:"rule" yaml:"rule"`
 
 	// Severity is one of "error", "warning", or "info".
-	Severity string `json:"severity"`
+	Severity string `json:"severity" yaml:"severity"`
 
 	// Category groups related rules (e.g. "structure", "naming", "provider").
-	Category string `json:"category"`
+	Category string `json:"category" yaml:"category"`
 
 	// Description is a short summary of what the rule checks.
-	Description string `json:"description"`
+	Description string `json:"description" yaml:"description"`
 
 	// Why explains the rationale for the rule.
-	Why string `json:"why"`
+	Why string `json:"why" yaml:"why"`
 
 	// Fix gives concrete instructions for resolving a finding.
-	Fix string `json:"fix"`
+	Fix string `json:"fix" yaml:"fix"`
 
 	// Examples optionally provide sample YAML or commands.
-	Examples []string `json:"examples,omitempty"`
+	Examples []string `json:"examples,omitempty" yaml:"examples,omitempty"`
 }
 
 // KnownRules is the canonical registry of all lint rules.

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/oakwood-commons/kvx/pkg/core"
@@ -115,6 +116,10 @@ type ViewerOptions struct {
 	// Valid values: "auto" (default), "always", "never".
 	// Use "always" when the data is intentionally multi-column regardless of key homogeneity.
 	ColumnarMode string `json:"columnarMode,omitempty" yaml:"columnarMode,omitempty" doc:"Columnar rendering mode: auto, always, never" example:"always" maxLength:"10"`
+
+	// ArrayStyle controls how array indices are displayed in list rendering.
+	// Valid values: "index" (default), "numbered", "bullet", "none".
+	ArrayStyle string `json:"arrayStyle,omitempty" yaml:"arrayStyle,omitempty" doc:"Array index style for list rendering: index, numbered, bullet, none" example:"bullet" maxLength:"10"`
 }
 
 // DefaultViewerOptions returns sensible defaults.
@@ -228,6 +233,12 @@ func WithColumnarMode(mode string) Option {
 	return func(o *ViewerOptions) { o.ColumnarMode = mode }
 }
 
+// WithArrayStyle sets the array index display style for list rendering.
+// Valid values: "index" (default), "numbered", "bullet", "none".
+func WithArrayStyle(style string) Option {
+	return func(o *ViewerOptions) { o.ArrayStyle = style }
+}
+
 // WithContext sets the context for CEL expression evaluation.
 // This enables context-dependent features like debug.out when Writer is in context.
 func WithContext(ctx context.Context) Option {
@@ -311,15 +322,16 @@ func renderTable(root any, options *ViewerOptions) error {
 		root = normalizeSliceKeys(root)
 	}
 	output := tui.RenderTable(root, tui.TableOptions{
-		AppName:      options.AppName,
-		Path:         "_",
-		Bordered:     true,
-		Width:        options.Width,
-		NoColor:      options.NoColor,
-		ColumnOrder:  options.ColumnOrder,
-		ColumnHints:  hints,
-		ColumnarMode: options.ColumnarMode,
-		Schema:       resolveDisplaySchema(options.DisplaySchemaJSON),
+		AppName:       options.AppName,
+		Path:          "_",
+		Bordered:      true,
+		Width:         options.Width,
+		NoColor:       options.NoColor,
+		ColumnOrder:   options.ColumnOrder,
+		ColumnHints:   hints,
+		ColumnarMode:  options.ColumnarMode,
+		HiddenColumns: hiddenColumnsFromHints(hints),
+		Schema:        resolveDisplaySchema(options.DisplaySchemaJSON),
 	})
 	fmt.Fprint(options.Out, output)
 	return nil
@@ -355,9 +367,30 @@ func resolveColumnHints(schemaJSON []byte, programmatic map[string]tui.ColumnHin
 
 // renderList outputs data as a key-value list (non-interactive).
 func renderList(root any, options *ViewerOptions) error {
-	output := tui.RenderList(root, options.NoColor)
+	hints := resolveColumnHints(options.SchemaJSON, options.ColumnHints)
+	output := tui.RenderList(root, tui.ListOptions{
+		NoColor:       options.NoColor,
+		ArrayStyle:    options.ArrayStyle,
+		HiddenColumns: hiddenColumnsFromHints(hints),
+		ColumnOrder:   options.ColumnOrder,
+	})
 	fmt.Fprint(options.Out, output)
 	return nil
+}
+
+// hiddenColumnsFromHints extracts column names marked as Hidden from a ColumnHint map.
+func hiddenColumnsFromHints(hints map[string]tui.ColumnHint) []string {
+	if len(hints) == 0 {
+		return nil
+	}
+	var hidden []string
+	for k, v := range hints {
+		if v.Hidden {
+			hidden = append(hidden, k)
+		}
+	}
+	slices.Sort(hidden)
+	return hidden
 }
 
 // resolveDisplaySchema parses a DisplaySchemaJSON document and returns the
@@ -442,13 +475,13 @@ func RenderTable(data any, opts tui.TableOptions) (string, error) {
 
 // RenderList renders data as a non-interactive list string.
 // This is useful when you need the list output as a string rather than writing to a stream.
-func RenderList(data any, noColor bool) (string, error) {
+func RenderList(data any, opts tui.ListOptions) (string, error) {
 	root, err := core.LoadObject(data)
 	if err != nil {
 		return "", fmt.Errorf("failed to load data: %w", err)
 	}
 
-	return tui.RenderList(root, noColor), nil
+	return tui.RenderList(root, opts), nil
 }
 
 // Snapshot renders a non-interactive snapshot of the TUI and returns it as a string.

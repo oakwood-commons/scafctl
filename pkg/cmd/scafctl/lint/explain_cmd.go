@@ -5,12 +5,15 @@ package lint
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -18,6 +21,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed lint_explain_schema.json
+var lintExplainSchemaJSON []byte
 
 // ExplainOptions holds options for the lint explain command.
 type ExplainOptions struct {
@@ -76,6 +82,9 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 	return cCmd
 }
 
+// explainColumnOrder controls field display order in KVX visual output.
+var explainColumnOrder = []string{"rule", "severity", "category", "description", "why", "fix", "examples"}
+
 // Run executes the lint explain command.
 func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
 	if o.BinaryName == "" {
@@ -94,38 +103,54 @@ func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	// Handle structured output formats
-	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
+	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.CliParams.BinaryName+" lint explain"),
+		kvx.WithOutputDisplaySchemaJSON(lintExplainSchemaJSON),
+		kvx.WithOutputColumnOrder(explainColumnOrder),
+	)
+
+	// For structured formats (JSON/YAML/CSV/TOML), emit the full RuleMeta.
 	if kvx.IsStructuredFormat(outputOpts.Format) {
 		return outputOpts.Write(rule)
 	}
 
-	// Table output
-	w.Infof("Rule: %s\n", rule.Rule)
-	w.Plain("")
-	w.Plainf("Severity:    %s\n", rule.Severity)
-	w.Plainf("Category:    %s\n", rule.Category)
-	w.Plainf("Description: %s\n", rule.Description)
-	w.Plain("")
+	// For interactive mode, wrap in an array and use the rules list schema
+	// so the TUI enters list view and the user can drill into the detail view.
+	if o.KvxOutputFlags.Interactive {
+		interactiveOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+			kvx.WithIOStreams(o.IOStreams),
+			kvx.WithOutputContext(ctx),
+			kvx.WithOutputNoColor(o.CliParams.NoColor),
+			kvx.WithOutputAppName(o.CliParams.BinaryName+" lint explain"),
+			kvx.WithOutputDisplaySchemaJSON(lintRulesSchemaJSON),
+		)
+		return interactiveOpts.Write([]any{projectRule(rule)})
+	}
 
+	// For visual formats (auto/table/list), project to a map omitting empty fields.
+	return outputOpts.Write(projectRule(rule))
+}
+
+// projectRule converts a RuleMeta to a map with only non-empty fields for
+// visual rendering. Examples are formatted as a numbered list.
+func projectRule(rule pkglint.RuleMeta) map[string]any {
+	m := map[string]any{
+		"rule":        rule.Rule,
+		"severity":    rule.Severity,
+		"category":    rule.Category,
+		"description": rule.Description,
+	}
 	if rule.Why != "" {
-		w.Infof("Why:")
-		w.Plainf("  %s\n", rule.Why)
-		w.Plain("")
+		m["why"] = rule.Why
 	}
-
 	if rule.Fix != "" {
-		w.Infof("Fix:")
-		w.Plainf("  %s\n", rule.Fix)
-		w.Plain("")
+		m["fix"] = rule.Fix
 	}
-
 	if len(rule.Examples) > 0 {
-		w.Infof("Examples that trigger this rule:")
-		for _, ex := range rule.Examples {
-			w.Plainf("  • %s\n", ex)
-		}
+		m["examples"] = strings.Join(rule.Examples, "\n---\n")
 	}
-
-	return nil
+	return m
 }

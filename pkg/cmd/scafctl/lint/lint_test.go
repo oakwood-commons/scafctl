@@ -5,10 +5,14 @@ package lint
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -49,9 +53,11 @@ func TestCommandLint_Flags(t *testing.T) {
 		defVal   string
 	}{
 		{"file", "file", ""},
-		{"output", "output", "table"},
+		{"output", "output", "auto"},
 		{"expression", "expression", ""},
 		{"severity", "severity", "info"},
+		{"interactive", "interactive", "false"},
+		{"where", "where", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -77,6 +83,115 @@ func TestCommandRules(t *testing.T) {
 	require.NotNil(t, cf, "--category flag should exist")
 }
 
+func TestRulesRun_JSONOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RulesOptions{
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+
+	err := opts.Run(ctx)
+	require.NoError(t, err)
+
+	var rules []pkglint.RuleMeta
+	err = json.Unmarshal(outBuf.Bytes(), &rules)
+	require.NoError(t, err, "output should be valid JSON")
+	assert.NotEmpty(t, rules, "should contain at least one rule")
+	assert.NotEmpty(t, rules[0].Rule, "rule name should be populated")
+}
+
+func TestRulesRun_TableOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RulesOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+	}
+
+	err := opts.Run(ctx)
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.NotEmpty(t, output)
+	// KVX table output should contain rule names
+	assert.True(t, strings.Contains(output, "unused-resolver") || strings.Contains(output, "empty-solution"),
+		"table output should contain at least one known rule name")
+}
+
+func TestRulesRun_EmptyResults(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RulesOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+		Severity:  "nonexistent",
+	}
+
+	err := opts.Run(ctx)
+	require.NoError(t, err)
+
+	combined := outBuf.String() + errBuf.String()
+	assert.Contains(t, combined, "No rules match")
+}
+
+func TestRulesRun_EmptyResults_JSON(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RulesOptions{
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		Severity:       "nonexistent",
+	}
+
+	err := opts.Run(ctx)
+	require.NoError(t, err)
+
+	var rules []pkglint.RuleMeta
+	err = json.Unmarshal(outBuf.Bytes(), &rules)
+	require.NoError(t, err, "output should be valid JSON")
+	assert.Empty(t, rules, "should be an empty array")
+}
+
+func TestRulesRun_SeverityFilter(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RulesOptions{
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		Severity:       "error",
+	}
+
+	err := opts.Run(ctx)
+	require.NoError(t, err)
+
+	var rules []pkglint.RuleMeta
+	err = json.Unmarshal(outBuf.Bytes(), &rules)
+	require.NoError(t, err)
+	assert.NotEmpty(t, rules)
+	for _, r := range rules {
+		assert.Equal(t, "error", r.Severity, "all rules should be error severity")
+	}
+}
+
 func TestCommandExplainRule(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
@@ -94,6 +209,250 @@ func TestCommandExplainRule_RequiresArg(t *testing.T) {
 	cmd.SetArgs([]string{})
 	err := cmd.Execute()
 	assert.Error(t, err, "should fail without rule-name argument")
+}
+
+// ── ExplainRun output format tests ───────────────────────────────────────────
+
+func TestExplainRun_JSONOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+
+	err := opts.Run(ctx, "empty-solution")
+	require.NoError(t, err)
+
+	var rule pkglint.RuleMeta
+	err = json.Unmarshal(outBuf.Bytes(), &rule)
+	require.NoError(t, err, "output should be valid JSON")
+	assert.Equal(t, "empty-solution", rule.Rule)
+	assert.Equal(t, "error", rule.Severity)
+	assert.Equal(t, "structure", rule.Category)
+	assert.NotEmpty(t, rule.Description)
+	assert.NotEmpty(t, rule.Why)
+	assert.NotEmpty(t, rule.Fix)
+	assert.NotEmpty(t, rule.Examples)
+}
+
+func TestExplainRun_YAMLOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "yaml"},
+	}
+
+	err := opts.Run(ctx, "empty-solution")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "rule: empty-solution")
+	assert.Contains(t, output, "severity: error")
+	assert.Contains(t, output, "category: structure")
+}
+
+func TestExplainRun_TableOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+	}
+
+	err := opts.Run(ctx, "empty-solution")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "empty-solution")
+	assert.Contains(t, output, "error")
+	assert.Contains(t, output, "structure")
+}
+
+func TestExplainRun_ListOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "list"},
+	}
+
+	err := opts.Run(ctx, "empty-solution")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "empty-solution")
+	assert.Contains(t, output, "error")
+}
+
+func TestExplainRun_CSVOutput(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "csv"},
+	}
+
+	err := opts.Run(ctx, "empty-solution")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.NotEmpty(t, output, "CSV output should not be empty")
+	assert.Contains(t, output, "empty-solution")
+}
+
+func TestExplainRun_UnknownRule(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+
+	err := opts.Run(ctx, "nonexistent-rule")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown rule")
+	assert.Contains(t, err.Error(), "nonexistent-rule")
+}
+
+func TestExplainRun_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	cliParams.BinaryName = "mycli"
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "mycli",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+
+	err := opts.Run(ctx, "nonexistent-rule")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mycli lint rules", "error should reference embedder binary name")
+}
+
+func TestExplainRun_DefaultFormat(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &ExplainOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{}, // default (auto)
+	}
+
+	err := opts.Run(ctx, "empty-solution")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "empty-solution")
+	assert.Contains(t, output, "error")
+	assert.Contains(t, output, "structure")
+}
+
+// ── projectRule tests ────────────────────────────────────────────────────────
+
+func TestProjectRule_IncludesAllFields(t *testing.T) {
+	t.Parallel()
+	rule := pkglint.RuleMeta{
+		Rule:        "test-rule",
+		Severity:    "warning",
+		Category:    "naming",
+		Description: "A test rule",
+		Why:         "Because testing",
+		Fix:         "Fix it",
+		Examples:    []string{"example1", "example2"},
+	}
+
+	m := projectRule(rule)
+	assert.Equal(t, "test-rule", m["rule"])
+	assert.Equal(t, "warning", m["severity"])
+	assert.Equal(t, "naming", m["category"])
+	assert.Equal(t, "A test rule", m["description"])
+	assert.Equal(t, "Because testing", m["why"])
+	assert.Equal(t, "Fix it", m["fix"])
+	assert.Equal(t, "example1\n---\nexample2", m["examples"])
+}
+
+func TestProjectRule_OmitsEmptyFields(t *testing.T) {
+	t.Parallel()
+	rule := pkglint.RuleMeta{
+		Rule:        "minimal-rule",
+		Severity:    "info",
+		Category:    "structure",
+		Description: "Minimal",
+	}
+
+	m := projectRule(rule)
+	assert.Equal(t, "minimal-rule", m["rule"])
+	assert.Equal(t, "info", m["severity"])
+	assert.Equal(t, "structure", m["category"])
+	assert.Equal(t, "Minimal", m["description"])
+	_, hasWhy := m["why"]
+	assert.False(t, hasWhy, "empty why should be omitted")
+	_, hasFix := m["fix"]
+	assert.False(t, hasFix, "empty fix should be omitted")
+	_, hasExamples := m["examples"]
+	assert.False(t, hasExamples, "empty examples should be omitted")
+}
+
+func TestProjectRule_SingleExample(t *testing.T) {
+	t.Parallel()
+	rule := pkglint.RuleMeta{
+		Rule:        "single-ex",
+		Severity:    "error",
+		Category:    "structure",
+		Description: "Has one example",
+		Examples:    []string{"only-one"},
+	}
+
+	m := projectRule(rule)
+	assert.Equal(t, "only-one", m["examples"])
+}
+
+// ── explainColumnHints tests ─────────────────────────────────────────────────
+
+func TestExplainColumnOrder_HasExpectedFields(t *testing.T) {
+	t.Parallel()
+	expected := []string{"rule", "severity", "category", "description", "why", "fix", "examples"}
+	assert.Equal(t, expected, explainColumnOrder)
 }
 
 func BenchmarkCommandLint(b *testing.B) {
@@ -184,12 +543,12 @@ spec:
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	ctx := testContext(ioStreams)
 	opts := &Options{
-		File:       solPath,
-		Output:     "table",
-		Severity:   "info",
-		CliParams:  testCliParams(),
-		IOStreams:  ioStreams,
-		BinaryName: "scafctl",
+		File:           solPath,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
 	}
 	err := runLint(ctx, opts)
 	assert.NoError(t, err)
@@ -215,12 +574,12 @@ spec:
 	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
 	ctx := testContext(ioStreams)
 	opts := &Options{
-		File:       solPath,
-		Output:     "table",
-		Severity:   "info",
-		CliParams:  testCliParams(),
-		IOStreams:  ioStreams,
-		BinaryName: "scafctl",
+		File:           solPath,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
 	}
 	err := runLint(ctx, opts)
 	// The null resolver should trigger lint findings. The error may come from
@@ -255,12 +614,12 @@ spec:
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
 	ctx := testContext(ioStreams)
 	opts := &Options{
-		File:       solPath,
-		Output:     "json",
-		Severity:   "info",
-		CliParams:  testCliParams(),
-		IOStreams:  ioStreams,
-		BinaryName: "scafctl",
+		File:           solPath,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
 	}
 	err := runLint(ctx, opts)
 	assert.NoError(t, err)
@@ -292,12 +651,12 @@ spec:
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	ctx := testContext(ioStreams)
 	opts := &Options{
-		File:       solPath,
-		Output:     "quiet",
-		Severity:   "info",
-		CliParams:  testCliParams(),
-		IOStreams:  ioStreams,
-		BinaryName: "scafctl",
+		File:           solPath,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "quiet"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
 	}
 	err := runLint(ctx, opts)
 	assert.NoError(t, err)
@@ -309,12 +668,12 @@ func TestRunLint_FileNotFound(t *testing.T) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	ctx := testContext(ioStreams)
 	opts := &Options{
-		File:       "/nonexistent/solution.yaml",
-		Output:     "table",
-		Severity:   "info",
-		CliParams:  testCliParams(),
-		IOStreams:  ioStreams,
-		BinaryName: "scafctl",
+		File:           "/nonexistent/solution.yaml",
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+		Severity:       "info",
+		CliParams:      testCliParams(),
+		IOStreams:      ioStreams,
+		BinaryName:     "scafctl",
 	}
 	err := runLint(ctx, opts)
 	assert.Error(t, err)
@@ -336,4 +695,45 @@ func TestFilterBySeverityDelegate(t *testing.T) {
 	result := &pkglint.Result{}
 	filtered := FilterBySeverity(result, "error")
 	require.NotNil(t, filtered)
+}
+
+// ── Display Schema tests ─────────────────────────────────────────────────────
+
+func TestLintSchemaJSON_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(lintSchemaJSON), "lint_schema.json must be valid JSON")
+}
+
+func TestLintSchemaJSON_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(lintSchemaJSON)
+	require.NoError(t, err, "lint_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
+}
+
+func TestLintRulesSchemaJSON_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(lintRulesSchemaJSON), "lint_rules_schema.json must be valid JSON")
+}
+
+func TestLintRulesSchemaJSON_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(lintRulesSchemaJSON)
+	require.NoError(t, err, "lint_rules_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
+}
+
+func TestLintExplainSchemaJSON_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(lintExplainSchemaJSON), "lint_explain_schema.json must be valid JSON")
+}
+
+func TestLintExplainSchemaJSON_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(lintExplainSchemaJSON)
+	require.NoError(t, err, "lint_explain_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
 }
