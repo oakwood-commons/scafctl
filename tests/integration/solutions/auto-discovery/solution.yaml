@@ -17,9 +17,6 @@ spec:
               value: Discovered!
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       lint-auto-discovery:
         description: Verify lint auto-discovers and succeeds

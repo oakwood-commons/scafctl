@@ -151,9 +151,6 @@ spec:
               # Never overwrite existing contributing guide
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       basic-run:
         description: Verify solution runs successfully

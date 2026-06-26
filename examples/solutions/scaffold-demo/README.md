@@ -20,7 +20,6 @@ For this solution, `test init` produces:
 | Test | Description |
 |------|-------------|
 | `lint` | Verify solution has no lint errors |
-| `render-defaults` | Verify solution renders with default values |
 | `resolve-defaults` | Verify all resolvers resolve with default values |
 | `resolver-language` | Verify resolver "language" produces expected output |
 | `resolver-language-invalid` | Verify language validation rejects bad input |

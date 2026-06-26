@@ -53,9 +53,6 @@ spec:
                 }
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       snapshot-creation:
         description: Verify snapshot can be created for diff comparison

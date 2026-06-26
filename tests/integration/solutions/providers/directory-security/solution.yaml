@@ -48,8 +48,7 @@ spec:
   testing:
     config:
       # resolve-defaults: resolvers depend on test setup
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
 
     cases:
       _base:

@@ -373,7 +373,7 @@ spec:
 
   testing:
     config:
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       services:
         - name: mock-github-api
           type: http

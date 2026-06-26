@@ -29,10 +29,6 @@ spec:
               value: "visible-value"
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       sensitive-in-json:
         description: Verify sensitive value is accessible in JSON output

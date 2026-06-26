@@ -17,10 +17,6 @@ spec:
               value: Hello, World!
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       render-basic:
         description: Verify solution renders successfully

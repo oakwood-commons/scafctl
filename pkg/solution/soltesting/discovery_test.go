@@ -440,3 +440,94 @@ spec:
 
 	assert.Equal(t, []string{"data/configs/**", "templates/app/**"}, st.DetectedFiles)
 }
+
+func TestDiscoverFromFile_MergesComposeTestConfigFilesAndServices(t *testing.T) {
+	solutionYAML := `apiVersion: scafctl/v1
+kind: Solution
+metadata:
+  name: compose-config-merge-test
+compose:
+  - extra.yaml
+spec:
+  testing:
+    config:
+      files:
+        - shared/a.txt
+      services:
+        - name: svc-root
+          type: http
+    cases:
+      basic:
+        command: [run, resolver]
+        assertions:
+          - expression: '__exitCode == 0'
+`
+	extraYAML := `apiVersion: scafctl/v1
+kind: Solution
+spec:
+  testing:
+    config:
+      files:
+        - shared/b.txt
+        - shared/a.txt
+      services:
+        - name: svc-extra
+          type: http
+`
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra.yaml"), []byte(extraYAML), 0o644))
+
+	st, err := soltesting.DiscoverFromFile(filepath.Join(dir, "solution.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, st)
+	require.NotNil(t, st.Config)
+
+	// Files appended in compose-file order, deduplicated (first-seen-wins).
+	assert.Equal(t, []string{"shared/a.txt", "shared/b.txt"}, st.Config.Files)
+
+	// Services appended in compose-file order.
+	names := make([]string, len(st.Config.Services))
+	for i, s := range st.Config.Services {
+		names[i] = s.Name
+	}
+	assert.Equal(t, []string{"svc-root", "svc-extra"}, names)
+}
+
+func TestDiscoverFromFile_RejectsDuplicateComposeServiceName(t *testing.T) {
+	solutionYAML := `apiVersion: scafctl/v1
+kind: Solution
+metadata:
+  name: compose-dup-service-test
+compose:
+  - extra.yaml
+spec:
+  testing:
+    config:
+      services:
+        - name: svc-shared
+          type: http
+    cases:
+      basic:
+        command: [run, resolver]
+        assertions:
+          - expression: '__exitCode == 0'
+`
+	extraYAML := `apiVersion: scafctl/v1
+kind: Solution
+spec:
+  testing:
+    config:
+      services:
+        - name: svc-shared
+          type: http
+`
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "extra.yaml"), []byte(extraYAML), 0o644))
+
+	_, err := soltesting.DiscoverFromFile(filepath.Join(dir, "solution.yaml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate test service name")
+	assert.Contains(t, err.Error(), "svc-shared")
+}

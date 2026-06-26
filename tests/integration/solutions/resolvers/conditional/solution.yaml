@@ -77,10 +77,6 @@ spec:
               value: "always-here"
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for conditional resolver tests

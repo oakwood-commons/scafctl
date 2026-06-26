@@ -77,8 +77,7 @@ spec:
   testing:
     config:
       # resolve-defaults: userMissingRaw fails validation by design
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       services:
         - name: mock-api
           type: http

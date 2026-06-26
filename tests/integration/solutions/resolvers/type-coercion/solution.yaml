@@ -72,10 +72,6 @@ spec:
               value: "native"
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for type coercion tests

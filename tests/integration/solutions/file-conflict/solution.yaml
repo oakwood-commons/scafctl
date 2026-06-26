@@ -58,9 +58,6 @@ spec:
           onConflict: append
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       basic-run:
         description: Verify solution workflow actions create files on first run

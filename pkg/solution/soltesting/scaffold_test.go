@@ -18,9 +18,8 @@ func TestScaffold_EmptyInput(t *testing.T) {
 	result := Scaffold(&ScaffoldInput{})
 
 	require.NotNil(t, result)
-	assert.Len(t, result.Cases, 3, "should contain resolve-defaults, render-defaults, and lint")
+	assert.Len(t, result.Cases, 2, "should contain resolve-defaults and lint")
 	assert.Contains(t, result.Cases, "resolve-defaults")
-	assert.Contains(t, result.Cases, "render-defaults")
 	assert.Contains(t, result.Cases, "lint")
 }
 
@@ -61,12 +60,11 @@ func TestScaffold_WithResolvers(t *testing.T) {
 
 	require.NotNil(t, result)
 
-	// 3 base tests + 2 resolver tests + 1 validation failure test = 6
-	assert.Len(t, result.Cases, 6)
+	// 2 base tests + 2 resolver tests + 1 validation failure test = 5
+	assert.Len(t, result.Cases, 5)
 
 	// Base tests
 	assert.Contains(t, result.Cases, "resolve-defaults")
-	assert.Contains(t, result.Cases, "render-defaults")
 	assert.Contains(t, result.Cases, "lint")
 
 	// Resolver tests
@@ -99,8 +97,8 @@ func TestScaffold_WithActions(t *testing.T) {
 
 	require.NotNil(t, result)
 
-	// 3 base tests + 2 action tests = 5
-	assert.Len(t, result.Cases, 5)
+	// 2 base tests + 2 action tests = 4
+	assert.Len(t, result.Cases, 4)
 	assert.Contains(t, result.Cases, "action-build")
 	assert.Contains(t, result.Cases, "action-test")
 

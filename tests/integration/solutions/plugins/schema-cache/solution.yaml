@@ -17,9 +17,6 @@ spec:
               value: schema-cache-test-ok
 
   testing:
-    config:
-      skipBuiltins: [render-defaults]
-
     cases:
       get-provider-cel-schema:
         description: Builtin provider schema is always available

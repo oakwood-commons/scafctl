@@ -15,8 +15,8 @@ Demonstrates functional testing features in scafctl.
 | Multiple templates | `_render-base`, `_resolver-base` |
 | Tags | `tagged-integration`, `render-basic` (smoke), `lint-clean` |
 | Per-test `env` | `env-per-test` |
-| Suite-level `testConfig.env` | `testConfig.env.TEST_MODE` |
-| `testConfig.skipBuiltins` (list) | Skips `resolve-defaults` and `render-defaults` |
+| Suite-level `spec.testing.config.env` | `spec.testing.config.env.TEST_MODE` |
+| `spec.testing.config.skipBuiltins` (list) | Skips `resolve-defaults` and `lint` |
 | Init / Cleanup steps | `init-cleanup` |
 | `expectFailure` | `expect-failure` |
 | Per-test `timeout` | `timeout-test` |

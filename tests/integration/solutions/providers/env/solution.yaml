@@ -39,8 +39,7 @@ spec:
   testing:
     config:
       # resolve-defaults: testInjected resolver reads SCAFCTL_FUNC_TEST_VAR only set by test harness
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [resolve-defaults, render-defaults]
+      skipBuiltins: [resolve-defaults]
       env:
         SCAFCTL_FUNC_TEST_VAR: "global-test-value"
         HOME: "/tmp/test-home"

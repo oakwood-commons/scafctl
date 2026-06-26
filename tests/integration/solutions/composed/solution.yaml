@@ -20,10 +20,6 @@ spec:
               value: composed-test-output
 
   testing:
-    config:
-      # render-defaults: solution has no workflow.actions section
-      skipBuiltins: [render-defaults]
-
     cases:
       _base:
         description: Base template for rendering tests
