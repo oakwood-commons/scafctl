@@ -680,7 +680,7 @@ scafctl lint explain resolver-cycle
 
 ## 11. Missing Template Dependencies
 
-The `missing-template-dependency` rule checks render-tree resolvers that process external template files (`.tpl`, `.tmpl`, `.gotmpl`). If a template file references a resolver name (e.g., `{{ .appName }}`) that isn't in the render-tree resolver's dependency graph, the lint warns you.
+The `missing-template-dependency` rule checks render-tree resolvers that process external template files. If a template file references a resolver name (e.g., `{{ .appName }}`) that isn't in the render-tree resolver's dependency graph, the lint warns you. Discovery is **role-based, not extension-based**: any file reached via `bundle.include` or a directory provider is treated as a go-template source, so references inside non-standard extensions (`.tf`, `.yaml`, and others -- not just `.tpl`/`.tmpl`/`.gotmpl`) are still detected.
 
 ```yaml
 # WARNING: render-tree resolver 'rendered' uses template files that reference

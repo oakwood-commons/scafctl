@@ -1149,8 +1149,13 @@ func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
 
 // collectTemplateFileResolverRefs scans external template files on disk
 // for resolver references. It discovers template files via:
-//  1. bundle.include glob patterns (matching *.tpl, *.tmpl, *.gotmpl files)
+//  1. bundle.include glob patterns
 //  2. directory provider 'path' inputs from resolvers
+//
+// Files are treated as go-template sources by role -- a directory provider
+// renders every file it reads and bundle.include packages files for rendering --
+// so discovery does not filter by extension. Non-template files are skipped
+// naturally when ref extraction fails to parse them.
 //
 // Returns a set of resolver names referenced in external template files.
 func collectTemplateFileResolverRefs(sol *solution.Solution, solutionDir string) map[string]bool {
@@ -1177,6 +1182,12 @@ func collectTemplateFileResolverRefs(sol *solution.Solution, solutionDir string)
 
 // discoverTemplateFiles finds template files on disk from bundle.include patterns
 // and directory provider path inputs. Returns absolute paths.
+//
+// Discovery is role-based: files reached via bundle.include or a directory
+// provider are go-template sources regardless of extension (terraform .tf,
+// Kubernetes .yaml, etc. are routinely rendered as go-templates), so no
+// extension filter is applied. Files that are not valid templates are skipped
+// later when ref extraction fails to parse them.
 func discoverTemplateFiles(sol *solution.Solution, solutionDir string) []string {
 	seen := make(map[string]bool)
 	var files []string
@@ -1189,18 +1200,8 @@ func discoverTemplateFiles(sol *solution.Solution, solutionDir string) []string 
 		files = append(files, absPath)
 	}
 
-	templateExtensions := map[string]bool{
-		".tpl":    true,
-		".tmpl":   true,
-		".gotmpl": true,
-	}
-
-	isTemplateFile := func(path string) bool {
-		ext := filepath.Ext(path)
-		return templateExtensions[ext]
-	}
-
-	// 1. Scan bundle.include patterns for template files.
+	// 1. Scan bundle.include patterns. Every matched file is a candidate
+	// go-template source; the include globs themselves scope what is considered.
 	for _, pattern := range sol.Bundle.Include {
 		absPattern := filepath.Join(solutionDir, pattern)
 		matches, err := doublestar.FilepathGlob(absPattern)
@@ -1208,7 +1209,7 @@ func discoverTemplateFiles(sol *solution.Solution, solutionDir string) []string 
 			continue
 		}
 		for _, match := range matches {
-			if isTemplateFile(match) {
+			if info, statErr := os.Stat(match); statErr == nil && !info.IsDir() {
 				addFile(match)
 			}
 		}
@@ -1241,7 +1242,7 @@ func discoverTemplateFiles(sol *solution.Solution, solutionDir string) []string 
 
 				// Walk the directory for template files, honoring the directory
 				// provider's literal recursive/filterGlob inputs.
-				walkDirectoryProviderTemplates(step, absPath, isTemplateFile, addFile)
+				walkDirectoryProviderTemplates(step, absPath, addFile)
 			}
 		}
 	}
@@ -1278,13 +1279,15 @@ func readDirectoryWalkOptions(step resolver.ProviderSource) directoryWalkOptions
 	return opts
 }
 
-// walkDirectoryProviderTemplates walks absPath collecting template files,
-// honoring the directory provider's literal recursive and filterGlob inputs.
-// When recursive is false, nested directories are skipped. When filterGlob is
-// set, files whose entry name (basename) does not match the glob are skipped --
-// matching the directory provider, which filters on entry names rather than the
-// full relative path; an invalid glob is ignored so discovery stays best-effort.
-func walkDirectoryProviderTemplates(step resolver.ProviderSource, absPath string, isTemplateFile func(string) bool, addFile func(string)) {
+// walkDirectoryProviderTemplates walks absPath collecting the files the
+// directory provider would render, honoring its literal recursive and
+// filterGlob inputs. When recursive is false, nested directories are skipped.
+// When filterGlob is set, files whose entry name (basename) does not match the
+// glob are skipped -- matching the directory provider, which filters on entry
+// names rather than the full relative path; an invalid glob is ignored so
+// discovery stays best-effort. No extension filter is applied: every rendered
+// file is a go-template source by role.
+func walkDirectoryProviderTemplates(step resolver.ProviderSource, absPath string, addFile func(string)) {
 	opts := readDirectoryWalkOptions(step)
 	_ = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error { //nolint:errcheck // best-effort scan
 		if err != nil {
@@ -1302,9 +1305,7 @@ func walkDirectoryProviderTemplates(step resolver.ProviderSource, absPath string
 				return nil
 			}
 		}
-		if isTemplateFile(path) {
-			addFile(path)
-		}
+		addFile(path)
 		return nil
 	})
 }
@@ -1501,17 +1502,8 @@ func discoverTemplateFilesFromResolver(sol *solution.Solution, resolverName, sol
 			absPath = filepath.Join(solutionDir, absPath)
 		}
 
-		templateExtensions := map[string]bool{
-			".tpl":    true,
-			".tmpl":   true,
-			".gotmpl": true,
-		}
-		isTemplateFile := func(path string) bool {
-			return templateExtensions[filepath.Ext(path)]
-		}
-
 		var files []string
-		walkDirectoryProviderTemplates(step, absPath, isTemplateFile, func(path string) {
+		walkDirectoryProviderTemplates(step, absPath, func(path string) {
 			files = append(files, path)
 		})
 		return files

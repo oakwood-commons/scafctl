@@ -1,0 +1,88 @@
+# Run: scafctl run solution -f examples/solutions/template-nonstandard-ext/solution.yaml
+#
+# After running: cat ./output/main.tf
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-nonstandard-ext
+  displayName: Rendering Non-Standard Template Extensions
+  category: solutions
+  tags:
+    - solution
+    - template
+  description: |
+    Template rendering is role-based, not extension-based. A file reached via a
+    directory provider (or bundle.include) is a Go-template source regardless of
+    its extension -- Terraform .tf, Kubernetes .yaml, and others render just like
+    .tpl/.tmpl/.gotmpl. This also means the `missing-template-dependency` lint
+    rule discovers resolver references inside non-.tpl files, so run
+    `scafctl lint -f ...` to see those references validated against dependsOn.
+
+bundle:
+  include:
+    - "templates/**"
+
+spec:
+  resolvers:
+    appName:
+      description: Application name referenced inside templates/main.tf
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    region:
+      description: Region referenced inside templates/main.tf
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-east-1
+
+    # Read the .tf template files (selected by extension via filterGlob). They
+    # have no .tpl suffix but are still Go-template sources by role.
+    templateFiles:
+      description: Read .tf template files from disk, including their content
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tf"
+              includeContent: true
+
+    # Batch-render the .tf templates. The template files reference appName and
+    # region; passing them as render data makes those references resolve. The
+    # data expr auto-infers dependencies on appName and region, which are the
+    # same references the missing-template-dependency lint rule discovers inside
+    # the .tf files.
+    rendered:
+      description: Render the .tf templates with resolver values
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                expr: '{"appName": _.appName, "region": _.region}'
+
+  workflow:
+    actions:
+      write-rendered-files:
+        description: Write the rendered .tf files under ./output
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: rendered

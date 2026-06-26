@@ -1,0 +1,100 @@
+# Run: scafctl run resolver -f null-coercion.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: null-coercion
+  displayName: Null Coercion to Zero Values
+  category: resolvers
+  tags:
+    - resolver-example
+  description: |
+    When a resolver declares a `type`, a null value coerces to that type's
+    zero value instead of failing. This is the common case of consuming an
+    absent/optional upstream field (e.g. a missing GraphQL or JSON field that
+    decodes to null) -- the typed resolver degrades gracefully rather than
+    erroring: "" / 0 / 0.0 / false / [] / {}.
+
+spec:
+  resolvers:
+    # Simulates an upstream API response where optional fields are absent
+    # (null). In real solutions this comes from an http/graphql provider.
+    upstream:
+      description: Upstream object with optional fields left null
+      type: object
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-service
+                replicas: null
+                featureFlags: null
+                metadata: null
+                enabled: null
+
+    # Each typed resolver pulls a null optional field. The declared type
+    # coerces the null to its zero value.
+
+    serviceName:
+      description: Present field passes through unchanged
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.upstream.name"
+
+    replicas:
+      description: Null int coerces to 0
+      type: int
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.upstream.replicas"
+
+    featureFlags:
+      description: Null array coerces to an empty array
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.upstream.featureFlags"
+
+    metadata:
+      description: Null object coerces to an empty object
+      type: object
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.upstream.metadata"
+
+    enabled:
+      description: Null bool coerces to false
+      type: bool
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.upstream.enabled"
+
+    # Downstream consumer: the coerced zero values are safe to use directly --
+    # no nil checks needed because every typed field has a concrete zero value.
+    summary:
+      description: Build a normalized config from the coerced (zero) values
+      type: object
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                {
+                  "serviceName": _.serviceName,
+                  "replicas": _.replicas,
+                  "featureFlags": _.featureFlags,
+                  "metadata": _.metadata,
+                  "enabled": _.enabled,
+                }

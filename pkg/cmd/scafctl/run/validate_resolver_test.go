@@ -55,6 +55,38 @@ spec:
               message: "name must be Alice"
 `
 
+// dependentOfFailingValidationSolution has a resolver (greeting) that depends on
+// a resolver (name) which fails its validation rule. Under `run resolver` the
+// dependent must still execute and read the produced value.
+const dependentOfFailingValidationSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: validation-dependents-test
+  version: 1.0.0
+spec:
+  resolvers:
+    name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Bob"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^Alice$"
+              message: "name must be Alice"
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: '"Hello " + _.name'
+`
+
 func newResolverOptions(t *testing.T, solutionPath string, stdout, stderr *bytes.Buffer) *ResolverOptions {
 	t.Helper()
 	streams := &terminal.IOStreams{In: nil, Out: stdout, ErrOut: stderr}
@@ -88,6 +120,25 @@ func TestResolverOptions_Run_ValidationNonFatalByDefault(t *testing.T) {
 
 	require.NoError(t, err, "validation failure must be non-fatal by default (exit 0)")
 	assert.Contains(t, stdout.String(), "Bob", "resolved value must still be shown")
+	assert.Contains(t, stderr.String(), "failed validation", "diagnostics must be rendered to stderr")
+}
+
+func TestResolverOptions_Run_ValidationFailureDoesNotSkipDependents(t *testing.T) {
+	t.Parallel()
+
+	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(dependentOfFailingValidationSolution), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	opts := newResolverOptions(t, solutionPath, &stdout, &stderr)
+
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	err := opts.Run(ctx)
+
+	require.NoError(t, err, "validation failure must be non-fatal by default (exit 0)")
+	assert.Contains(t, stdout.String(), "Bob", "the validation-failed resolver's value must still be shown")
+	assert.Contains(t, stdout.String(), "Hello Bob",
+		"a dependent must still execute and read the validation-failed resolver's value")
 	assert.Contains(t, stderr.String(), "failed validation", "diagnostics must be rendered to stderr")
 }
 

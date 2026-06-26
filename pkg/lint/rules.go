@@ -468,10 +468,10 @@ var KnownRules = map[string]RuleMeta{
 		Severity:    string(SeverityWarning),
 		Category:    "dependency",
 		Description: "A go-template render-tree resolver reads external template files that reference resolvers not listed in its dependsOn and not otherwise reachable in its dependency graph.",
-		Why:         "When a go-template render-tree step renders external .tpl files, the DAG cannot auto-detect which resolver names are used inside those files. Missing dependencies cause 'map has no entry for key' runtime errors because the template executes before its data dependencies are resolved.",
+		Why:         "When a go-template render-tree step renders external template files, the DAG cannot auto-detect which resolver names are used inside those files. Discovery is role-based, not extension-based: any file reached via bundle.include or a directory provider is treated as a go-template source (e.g. .tpl, .tmpl, .gotmpl, but also .tf, .yaml, or any other extension), so references inside non-standard extensions are still detected. Missing dependencies cause 'map has no entry for key' runtime errors because the template executes before its data dependencies are resolved.",
 		Fix:         "Add the missing resolver names to the dependsOn list of the render-tree resolver, or of the resolver that consumes the rendered output.",
 		Examples: []string{
-			"# Template file (templates/main.tpl) uses {{ .appName }} and {{ .region }}\n# Ensure both are in dependsOn:\nresolvers:\n  rendered:\n    dependsOn: [appName, region, templateSource]\n    resolve:\n      with:\n        - provider: go-template\n          inputs:\n            operation: render-tree\n            entries:\n              rslvr: templateSource\n            data:\n              rslvr: _",
+			"# Template file (templates/main.tf) uses {{ .appName }} and {{ .region }}\n# Ensure both are in dependsOn:\nresolvers:\n  rendered:\n    dependsOn: [appName, region, templateSource]\n    resolve:\n      with:\n        - provider: go-template\n          inputs:\n            operation: render-tree\n            entries:\n              rslvr: templateSource\n            data:\n              rslvr: _",
 		},
 	},
 	"resolver-cycle": {
