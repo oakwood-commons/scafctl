@@ -6292,8 +6292,8 @@ func TestIntegration_LintRules_List(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "rules")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "RULE")
-	assert.Contains(t, stdout, "SEVERITY")
+	assert.Contains(t, stdout, "Rule")
+	assert.Contains(t, stdout, "Severity")
 }
 
 func TestIntegration_LintRules_FilterSeverity(t *testing.T) {
@@ -6321,7 +6321,7 @@ func TestIntegration_LintExplain_KnownRule(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "lint", "explain", "missing-description")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "missing-description")
-	assert.Contains(t, stdout, "Severity")
+	assert.Contains(t, stdout, "severity")
 }
 
 func TestIntegration_LintExplain_UnknownRule(t *testing.T) {

@@ -700,7 +700,11 @@ func (o *OutputOptions) writeText(data any) error {
 	if cols := countDataColumns(outputData); cols > 0 {
 		width := o.terminalWidth()
 		if o.ColumnarMode != tui.ColumnarModeAlways && (width/(cols+1) < minColumnWidth || (piped && hasNestedValues(outputData))) {
-			output := tui.RenderList(outputData, true)
+			output := tui.RenderList(outputData, tui.ListOptions{
+				NoColor:       true,
+				ColumnOrder:   o.ColumnOrder,
+				HiddenColumns: hiddenColumnsFromHints(hints),
+			})
 			fmt.Fprint(o.IOStreams.Out, output)
 			return nil
 		}
@@ -714,11 +718,12 @@ func (o *OutputOptions) writeText(data any) error {
 	}
 
 	output := tui.RenderTable(outputData, tui.TableOptions{
-		Bordered:     false,
-		NoColor:      true,
-		ColumnOrder:  o.ColumnOrder,
-		ColumnHints:  hints,
-		ColumnarMode: o.ColumnarMode,
+		Bordered:      false,
+		NoColor:       true,
+		ColumnOrder:   o.ColumnOrder,
+		ColumnHints:   hints,
+		ColumnarMode:  o.ColumnarMode,
+		HiddenColumns: hiddenColumnsFromHints(hints),
 	})
 
 	// When piped on Windows the console defaults to OEM/CP437 encoding,

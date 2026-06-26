@@ -655,7 +655,7 @@ func TestRenderList(t *testing.T) {
 		"name":    "scafctl",
 		"version": "1.0.0",
 	}
-	result, err := RenderList(data, true)
+	result, err := RenderList(data, tui.ListOptions{NoColor: true})
 	assert.NoError(t, err)
 	assert.Contains(t, result, "scafctl")
 }

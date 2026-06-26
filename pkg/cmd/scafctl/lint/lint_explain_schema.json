@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scafctl Lint Rule Detail",
+  "description": "Schema for a single scafctl lint rule with display extensions",
+  "type": "object",
+
+  "x-kvx-icon": "📋",
+
+  "x-kvx-detail": {
+    "titleField": "rule",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["rule", "severity", "category"],
+        "layout": "inline"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Why",
+        "fields": ["why"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "How to Fix",
+        "fields": ["fix"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Examples",
+        "fields": ["examples"],
+        "layout": "paragraph"
+      }
+    ]
+  },
+
+  "properties": {
+    "rule": {
+      "type": "string",
+      "title": "Rule",
+      "description": "Kebab-case rule identifier"
+    },
+    "severity": {
+      "type": "string",
+      "title": "Severity",
+      "description": "Rule severity level (error, warning, info)"
+    },
+    "category": {
+      "type": "string",
+      "title": "Category",
+      "description": "Rule category (e.g., structure, naming, provider)"
+    },
+    "description": {
+      "type": "string",
+      "title": "Description",
+      "description": "Short summary of what the rule checks"
+    },
+    "why": {
+      "type": "string",
+      "title": "Why",
+      "description": "Rationale for the rule"
+    },
+    "fix": {
+      "type": "string",
+      "title": "Fix",
+      "description": "Concrete instructions for resolving a finding"
+    },
+    "examples": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Examples",
+      "description": "Sample YAML or commands that trigger the rule"
+    }
+  }
+}

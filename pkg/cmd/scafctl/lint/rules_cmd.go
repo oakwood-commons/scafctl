@@ -5,11 +5,13 @@ package lint
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -18,6 +20,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed lint_rules_schema.json
+var lintRulesSchemaJSON []byte
 
 // RulesOptions holds options for the lint rules command.
 type RulesOptions struct {
@@ -85,6 +90,14 @@ func CommandRules(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 	return cCmd
 }
 
+// rulesColumnHints controls column display widths and priorities for table output.
+var rulesColumnHints = map[string]tui.ColumnHint{
+	"rule":        {MaxWidth: 25, Priority: 10, DisplayName: "Rule"},
+	"severity":    {MaxWidth: 8, Priority: 9, DisplayName: "Severity"},
+	"category":    {MaxWidth: 15, Priority: 8, DisplayName: "Category"},
+	"description": {DisplayName: "Description", Flex: true},
+}
+
 // Run executes the lint rules command.
 func (o *RulesOptions) Run(ctx context.Context) error {
 	w := writer.FromContext(ctx)
@@ -118,42 +131,64 @@ func (o *RulesOptions) Run(ctx context.Context) error {
 		rules = filtered
 	}
 
-	// Handle structured output formats
-	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
-	if kvx.IsStructuredFormat(outputOpts.Format) {
-		return outputOpts.Write(rules)
-	}
+	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.CliParams.BinaryName+" lint rules"),
+		kvx.WithOutputDisplaySchemaJSON(lintRulesSchemaJSON),
+		kvx.WithOutputColumnOrder([]string{"rule", "severity", "category", "description"}),
+		kvx.WithOutputColumnHints(rulesColumnHints),
+	)
 
-	// Table output
 	if len(rules) == 0 {
+		if outputOpts.Format == kvx.OutputFormatQuiet {
+			return nil
+		}
+		if kvx.IsStructuredFormat(outputOpts.Format) {
+			return outputOpts.Write([]RuleMeta{})
+		}
 		w.Infof("No rules match the specified filters.")
 		return nil
 	}
 
-	// Find max lengths for alignment
-	maxRule := 0
-	maxSev := 0
-	maxCat := 0
-	for _, r := range rules {
-		if len(r.Rule) > maxRule {
-			maxRule = len(r.Rule)
-		}
-		if len(r.Severity) > maxSev {
-			maxSev = len(r.Severity)
-		}
-		if len(r.Category) > maxCat {
-			maxCat = len(r.Category)
+	// For structured formats (json/yaml), emit the full RuleMeta with all
+	// fields (why, fix, examples). For interactive mode, project with
+	// examples joined as a string for rich detail views. For visual formats
+	// (table/list), project to the four visible columns so KVX renders a
+	// columnar table instead of falling back to key-value list mode.
+	if kvx.IsStructuredFormat(outputOpts.Format) {
+		return outputOpts.Write(rules)
+	}
+	if o.KvxOutputFlags.Interactive {
+		return outputOpts.Write(projectRulesInteractive(rules))
+	}
+	return outputOpts.Write(projectRules(rules))
+}
+
+// projectRulesInteractive converts rules to maps with all fields for the
+// interactive detail view. Examples are joined into a single string so the
+// TUI renders them as formatted text rather than a raw JSON array.
+func projectRulesInteractive(rules []RuleMeta) []any {
+	rows := make([]any, len(rules))
+	for i, r := range rules {
+		rows[i] = projectRule(r)
+	}
+	return rows
+}
+
+// projectRules converts rules to maps with only the four table-visible columns.
+// This keeps the field count low so KVX renders a columnar table instead of
+// falling back to key-value list view.
+func projectRules(rules []RuleMeta) []any {
+	rows := make([]any, len(rules))
+	for i, r := range rules {
+		rows[i] = map[string]any{
+			"rule":        r.Rule,
+			"severity":    r.Severity,
+			"category":    r.Category,
+			"description": r.Description,
 		}
 	}
-
-	w.Infof("Lint Rules (%d)\n", len(rules))
-	w.Plain("")
-	w.Plainf("%-*s  %-*s  %-*s  %s\n", maxRule, "RULE", maxSev, "SEVERITY", maxCat, "CATEGORY", "DESCRIPTION")
-	w.Plainf("%-*s  %-*s  %-*s  %s\n", maxRule, strings.Repeat("─", maxRule), maxSev, strings.Repeat("─", maxSev), maxCat, strings.Repeat("─", maxCat), strings.Repeat("─", 40))
-
-	for _, r := range rules {
-		w.Plainf("%-*s  %-*s  %-*s  %s\n", maxRule, r.Rule, maxSev, r.Severity, maxCat, r.Category, r.Description)
-	}
-
-	return nil
+	return rows
 }
