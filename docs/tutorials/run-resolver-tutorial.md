@@ -459,6 +459,8 @@ Output:
 Resolvers execute through three ordered phases: **resolve -> transform -> validate**. You can skip phases to inspect intermediate values, or rely on the non-fatal validation behavior described below to see resolved values even when validation fails.
 
 > **Validation is non-fatal in `run resolver`.** Because `run resolver` is an inspection and troubleshooting command, validation failures never withhold the produced values. The resolved values are still printed, validation diagnostics are written to stderr, and the command exits `0`. To make validation failures exit non-zero (for example, in CI), pass `--fail-on-validation`. To gate on validation as the primary intent, use the dedicated [`scafctl validate resolver`](#validate-resolver) command, which presets fatal validation.
+>
+> **Dependents keep running too.** Because a resolver that fails only a validation rule still produces a usable value, its dependent resolvers continue to execute and read that value -- they are not skipped. (Resolve and transform failures remain fatal: dependents of those are skipped because no value was produced.)
 
 Create a file called `phases-demo.yaml`. This example resolves a port number, transforms it by adding `8000`, then validates the result is within the valid port range. The input value of `60000` is intentionally too high -- after the transform, the result (`68000`) exceeds the valid range:
 

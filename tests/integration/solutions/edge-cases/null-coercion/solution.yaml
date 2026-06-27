@@ -1,0 +1,138 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-null-coercion
+  version: 1.0.0
+  description: |
+    Tests that a null value coerces to the zero value of a resolver's declared
+    type instead of failing coercion. This mirrors a typed field that receives
+    a null from an upstream provider (e.g. an absent/optional GraphQL or JSON
+    field decoded into a protobuf null) -- it must degrade gracefully to the
+    type's zero value. Each resolver transforms to CEL null, then relies on the
+    declared type to coerce the null to its zero value.
+
+spec:
+  resolvers:
+    nullToString:
+      description: Null coerces to the empty string
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "null"
+
+    nullToInt:
+      description: Null coerces to zero
+      type: int
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: 42
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "null"
+
+    nullToBool:
+      description: Null coerces to false
+      type: bool
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: true
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "null"
+
+    nullToArray:
+      description: Null coerces to an empty array
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ["seed"]
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "null"
+
+    nullToObject:
+      description: Null coerces to an empty object
+      type: object
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                seed: value
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: "null"
+
+  testing:
+    cases:
+      null-to-string:
+        description: A null value on a string resolver coerces to the empty string
+        command: [run, resolver]
+        args: ["nullToString", "-o", "json"]
+        tags: [edge-case, coercion, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.nullToString == ""'
+            message: "Null must coerce to the empty string"
+
+      null-to-int:
+        description: A null value on an int resolver coerces to zero
+        command: [run, resolver]
+        args: ["nullToInt", "-o", "json"]
+        tags: [edge-case, coercion]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: "__output.nullToInt == 0"
+            message: "Null must coerce to zero"
+
+      null-to-bool:
+        description: A null value on a bool resolver coerces to false
+        command: [run, resolver]
+        args: ["nullToBool", "-o", "json"]
+        tags: [edge-case, coercion]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: "__output.nullToBool == false"
+            message: "Null must coerce to false"
+
+      null-to-array:
+        description: A null value on an array resolver coerces to an empty array
+        command: [run, resolver]
+        args: ["nullToArray", "-o", "json"]
+        tags: [edge-case, coercion]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: "__output.nullToArray.size() == 0"
+            message: "Null must coerce to an empty array"
+
+      null-to-object:
+        description: A null value on an object resolver coerces to an empty object
+        command: [run, resolver]
+        args: ["nullToObject", "-o", "json"]
+        tags: [edge-case, coercion]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: "__output.nullToObject.size() == 0"
+            message: "Null must coerce to an empty object"

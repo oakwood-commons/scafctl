@@ -1210,6 +1210,93 @@ func TestCollectTemplateFileResolverRefs_DirectoryProvider(t *testing.T) {
 	assert.True(t, refs["userName"], "should find userName reference from directory provider path")
 }
 
+func TestCollectTemplateFileResolverRefs_NonTplExtensions(t *testing.T) {
+	// Terraform templates (.tf/.tfvars) and Kubernetes manifests (.yaml) are
+	// rendered through the go-template provider but do not use a .tpl extension.
+	// Discovery is role-based, so their resolver references must still be found.
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "terraform")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	tfContent := `resource "azuread_application" "app" {
+  display_name = "{{ .appName }}"
+{{ if .spnInPlatformAppsGroup }}  owners = [data.azuread_service_principal.spn.object_id]{{ end }}
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "app.tf"), []byte(tfContent), 0o644))
+
+	tfvarsContent := `region = "{{ .region }}"`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "vars.tfvars"), []byte(tfvarsContent), 0o644))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path": {Literal: "terraform"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectTemplateFileResolverRefs(sol, tmpDir)
+	assert.True(t, refs["appName"], "should find appName reference in a .tf template")
+	assert.True(t, refs["spnInPlatformAppsGroup"], "should find resolver referenced only in a .tf template")
+	assert.True(t, refs["region"], "should find region reference in a .tfvars template")
+}
+
+func TestCollectTemplateFileResolverRefs_BundleNonTplExtension(t *testing.T) {
+	// A bundle.include'd .yaml template (no .tpl extension) must still be scanned.
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "manifests")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	content := "metadata:\n  name: {{ .appName }}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "deployment.yaml"), []byte(content), 0o644))
+
+	sol := &solution.Solution{}
+	sol.Bundle = solution.Bundle{
+		Include: []string{"manifests/**/*.yaml"},
+	}
+
+	refs := collectTemplateFileResolverRefs(sol, tmpDir)
+	assert.True(t, refs["appName"], "should find appName reference in a bundle-included .yaml template")
+}
+
+func TestCollectTemplateFileResolverRefs_SkipsNonTemplateFiles(t *testing.T) {
+	// Binary/non-template files reached via a directory provider must be skipped
+	// gracefully (no panic, no spurious references) rather than crashing the scan.
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "assets")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "logo.png"), []byte{0x89, 0x50, 0x4e, 0x47, 0x00, 0x01}, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "valid.tpl"), []byte(`{{ .appName }}`), 0o644))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path": {Literal: "assets"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	refs := collectTemplateFileResolverRefs(sol, tmpDir)
+	assert.True(t, refs["appName"], "should still find references in valid templates")
+}
+
 // ---- missing-template-dependency ----
 
 func TestLintTemplateFileDependencies_MissingDep(t *testing.T) {

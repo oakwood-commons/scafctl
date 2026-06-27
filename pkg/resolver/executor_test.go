@@ -653,6 +653,15 @@ func TestExecutor_Execute_WithValidateAll(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	err = registry.Register(&mockProvider{
+		name: "resolveError",
+		executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+			// Simulate a resolve-phase failure (no usable value produced)
+			return nil, fmt.Errorf("resolve failed: %v", inputs["message"])
+		},
+	})
+	require.NoError(t, err)
+
 	t.Run("collects all errors", func(t *testing.T) {
 		executor := NewExecutor(registry, WithValidateAll(true))
 
@@ -773,6 +782,103 @@ func TestExecutor_Execute_WithValidateAll(t *testing.T) {
 		require.ErrorAs(t, err, &aggErr)
 		assert.Equal(t, 1, len(aggErr.Errors), "should have one error (parent)")
 		assert.Equal(t, 1, aggErr.SkippedCount, "should skip child resolver")
+		assert.Contains(t, aggErr.SkippedNames, "child")
+	})
+
+	t.Run("non-fatal validation keeps dependents running", func(t *testing.T) {
+		executor := NewExecutor(registry, WithNonFatalValidation(true))
+
+		resolvers := []*Resolver{
+			{
+				Name: "parent",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs:   map[string]*ValueRef{"value": {Literal: "parent-value"}},
+						},
+					},
+				},
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							Inputs:   map[string]*ValueRef{"message": {Literal: "parent validation failed"}},
+						},
+					},
+				},
+			},
+			{
+				Name: "child",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs: map[string]*ValueRef{
+								"value": {Resolver: stringPtr("parent")},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		ctx, err := executor.Execute(ctx, resolvers, nil)
+
+		// The validation failure is still surfaced as an aggregated diagnostic...
+		require.Error(t, err)
+		var aggErr *AggregatedExecutionError
+		require.ErrorAs(t, err, &aggErr)
+		assert.Equal(t, 1, len(aggErr.Errors), "only the parent validation failure is recorded")
+		assert.Equal(t, 0, aggErr.SkippedCount, "child must not be skipped for a validation-only failure")
+		assert.NotContains(t, aggErr.SkippedNames, "child")
+
+		// ...but the child still ran and read the parent's emitted value.
+		result, _ := FromContext(ctx)
+		require.NotNil(t, result)
+		value, ok := result.Get("child")
+		require.True(t, ok, "child resolver must have executed")
+		assert.Equal(t, "parent-value", value)
+	})
+
+	t.Run("non-fatal validation still skips dependents of resolve failures", func(t *testing.T) {
+		executor := NewExecutor(registry, WithNonFatalValidation(true))
+
+		resolvers := []*Resolver{
+			{
+				Name: "parent",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "resolveError",
+							Inputs:   map[string]*ValueRef{"message": {Literal: "boom"}},
+						},
+					},
+				},
+			},
+			{
+				Name: "child",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider: "static",
+							Inputs: map[string]*ValueRef{
+								"value": {Resolver: stringPtr("parent")},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		_, err := executor.Execute(ctx, resolvers, nil)
+
+		require.Error(t, err)
+		var aggErr *AggregatedExecutionError
+		require.ErrorAs(t, err, &aggErr)
+		assert.Equal(t, 1, aggErr.SkippedCount, "child must be skipped when the parent's resolve fails")
 		assert.Contains(t, aggErr.SkippedNames, "child")
 	})
 

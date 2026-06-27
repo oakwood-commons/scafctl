@@ -271,8 +271,14 @@ func Resolvers(
 	if cfg.MaxValueSize > 0 {
 		executorOpts = append(executorOpts, resolver.WithMaxValueSize(cfg.MaxValueSize))
 	}
-	if cfg.ValidateAll || cfg.NonFatalValidation {
+	if cfg.ValidateAll {
 		executorOpts = append(executorOpts, resolver.WithValidateAll(true))
+	}
+	// Non-fatal validation continues past failures and collects all errors like
+	// validate-all, but a resolver that fails only a validation rule still
+	// produces a usable value, so its dependents keep running and can read it.
+	if cfg.NonFatalValidation {
+		executorOpts = append(executorOpts, resolver.WithNonFatalValidation(true))
 	}
 	if cfg.SkipValidation {
 		executorOpts = append(executorOpts, resolver.WithSkipValidation(true))

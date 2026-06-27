@@ -499,8 +499,14 @@ func (o *sharedResolverOptions) executeResolvers(
 	if progressCallback != nil {
 		executorOpts = append(executorOpts, resolver.WithProgressCallback(progressCallback))
 	}
-	if resolverCfg.ValidateAll || o.nonFatalValidation {
+	if resolverCfg.ValidateAll {
 		executorOpts = append(executorOpts, resolver.WithValidateAll(true))
+	}
+	// Non-fatal validation (used by `run resolver`) continues execution and
+	// collects all errors like validate-all, but keeps dependents of a
+	// validation-only failure running so the data layer stays fully inspectable.
+	if o.nonFatalValidation {
+		executorOpts = append(executorOpts, resolver.WithNonFatalValidation(true))
 	}
 	if o.SkipValidation {
 		executorOpts = append(executorOpts, resolver.WithSkipValidation(true))

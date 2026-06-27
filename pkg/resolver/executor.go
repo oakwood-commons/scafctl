@@ -55,17 +55,18 @@ type ProgressCallback interface {
 
 // Executor executes resolvers in phases with concurrency control
 type Executor struct {
-	registry         RegistryInterface
-	timeout          time.Duration
-	maxConcurrency   int              // Max concurrent resolvers per phase (0 = unlimited)
-	phaseTimeout     time.Duration    // Max time per phase
-	warnValueSize    int64            // Warn when value exceeds this size in bytes (0 = disabled)
-	maxValueSize     int64            // Fail when value exceeds this size in bytes (0 = disabled)
-	progressCallback ProgressCallback // Optional callback for progress events
-	validateAll      bool             // Continue execution and collect all errors instead of stopping at first
-	skipValidation   bool             // Skip the validation phase of all resolvers
-	skipTransform    bool             // Skip the transform and validation phases of all resolvers
-	mockedResolvers  map[string]any   // Pre-populated resolver values that skip execution
+	registry           RegistryInterface
+	timeout            time.Duration
+	maxConcurrency     int              // Max concurrent resolvers per phase (0 = unlimited)
+	phaseTimeout       time.Duration    // Max time per phase
+	warnValueSize      int64            // Warn when value exceeds this size in bytes (0 = disabled)
+	maxValueSize       int64            // Fail when value exceeds this size in bytes (0 = disabled)
+	progressCallback   ProgressCallback // Optional callback for progress events
+	validateAll        bool             // Continue execution and collect all errors instead of stopping at first
+	nonFatalValidation bool             // Treat validation failures as non-fatal: collect them but do not skip dependents
+	skipValidation     bool             // Skip the validation phase of all resolvers
+	skipTransform      bool             // Skip the transform and validation phases of all resolvers
+	mockedResolvers    map[string]any   // Pre-populated resolver values that skip execution
 }
 
 // ExecutorOption is a functional option for configuring the Executor
@@ -123,6 +124,18 @@ func WithProgressCallback(callback ProgressCallback) ExecutorOption {
 func WithValidateAll(enabled bool) ExecutorOption {
 	return func(e *Executor) {
 		e.validateAll = enabled
+	}
+}
+
+// WithNonFatalValidation treats validation-rule failures as non-fatal: execution
+// continues and all errors are collected (like validate-all), but a resolver
+// that fails only a validation rule still produces a usable value, so its
+// dependents are NOT skipped. Resolve and transform failures remain fatal and
+// still skip dependents. This powers `run resolver`, which must surface a full,
+// inspectable view of the data layer even when business-rule validations fail.
+func WithNonFatalValidation(enabled bool) ExecutorOption {
+	return func(e *Executor) {
+		e.nonFatalValidation = enabled
 	}
 }
 
@@ -276,10 +289,12 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 		lgr.V(1).Info("injected mocked resolver value", "resolver", name)
 	}
 
-	// Track failed resolvers for validate-all mode
-	var failedResolvers sync.Map // key: resolver name, value: true
+	// Track failed resolvers for validate-all / non-fatal-validation mode. The
+	// stored value classifies why the resolver failed so dependents are only
+	// skipped when the dependency produced no usable value.
+	var failedResolvers sync.Map // key: resolver name, value: resolverFailureKind
 	var aggregatedError *AggregatedExecutionError
-	if e.validateAll {
+	if e.collectErrors() {
 		aggregatedError = &AggregatedExecutionError{}
 	}
 
@@ -304,28 +319,67 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 
 		phaseErr := e.executePhase(ctx, phase, &failedResolvers, depsMap, aggregatedError)
 		if phaseErr != nil {
-			if !e.validateAll {
+			if !e.collectErrors() {
 				phaseWrapErr := fmt.Errorf("phase %d failed: %w", phase.Phase, phaseErr)
 				span.RecordError(phaseWrapErr)
 				span.SetStatus(codes.Error, phaseWrapErr.Error())
 				return ctx, phaseWrapErr
 			}
-			// In validate-all mode, continue to next phase
-			lgr.V(1).Info("phase had errors but continuing in validate-all mode",
+			// In collect-errors mode, continue to next phase
+			lgr.V(1).Info("phase had errors but continuing in collect-errors mode",
 				"phase", phase.Phase)
 		}
 	}
 
 	lgr.V(1).Info("resolver execution complete", "total_phases", len(buildResult.Phases))
 
-	// In validate-all mode, return aggregated error if there were any failures
-	if e.validateAll && aggregatedError != nil && aggregatedError.HasErrors() {
+	// In collect-errors mode, return aggregated error if there were any failures
+	if e.collectErrors() && aggregatedError != nil && aggregatedError.HasErrors() {
 		span.RecordError(aggregatedError)
 		span.SetStatus(codes.Error, aggregatedError.Error())
 		return ctx, aggregatedError
 	}
 
 	return ctx, nil
+}
+
+// collectErrors reports whether the executor should continue past resolver
+// failures and aggregate every error rather than stopping at the first. This is
+// enabled by both validate-all mode and non-fatal-validation mode.
+func (e *Executor) collectErrors() bool {
+	return e.validateAll || e.nonFatalValidation
+}
+
+// resolverFailureKind classifies why a resolver failed so the executor can
+// decide whether dependent resolvers must be skipped.
+type resolverFailureKind int
+
+const (
+	// failureFatal means the resolver produced no usable value (resolve,
+	// transform, coercion, timeout, or size failure). Dependents cannot run.
+	failureFatal resolverFailureKind = iota
+	// failureValidation means the resolver produced a value but a validation
+	// rule failed. Dependents can still read the value, so they are only skipped
+	// when validation failures are treated as fatal.
+	failureValidation
+)
+
+// classifyFailure maps a resolver execution error to a failure kind. Validation
+// rule failures (which still emit the resolved value) are distinguished from
+// resolve/transform failures (which do not).
+func classifyFailure(err error) resolverFailureKind {
+	if err == nil {
+		return failureFatal
+	}
+	var aggVal *AggregatedValidationError
+	if errors.As(err, &aggVal) {
+		return failureValidation
+	}
+	var execErr *ExecutionError
+	if errors.As(err, &execErr) && execErr.Phase == "validate" {
+		return failureValidation
+	}
+	return failureFatal
 }
 
 // executePhase executes all resolvers in a phase concurrently with optional concurrency limit.
@@ -363,22 +417,30 @@ func (e *Executor) executePhase(ctx context.Context, phase *PhaseGroup, failedRe
 		go func(r *Resolver) {
 			defer wg.Done()
 
-			// In validate-all mode, check if any dependencies have failed
-			if e.validateAll && failedResolvers != nil {
+			// In collect-errors mode, check if any dependencies have failed.
+			if e.collectErrors() && failedResolvers != nil {
 				deps := depsMap[r.Name]
 				for _, depName := range deps {
-					if _, failed := failedResolvers.Load(depName); failed {
-						lgr.V(1).Info("skipping resolver due to failed dependency",
-							"resolver", r.Name,
-							"failedDependency", depName)
-						if e.progressCallback != nil {
-							e.progressCallback.OnResolverSkipped(r.Name)
-						}
-						// Mark this resolver as failed too (since it couldn't run)
-						failedResolvers.Store(r.Name, true)
-						resultChan <- resolverResult{resolverName: r.Name, depSkipped: true}
-						return
+					v, failed := failedResolvers.Load(depName)
+					if !failed {
+						continue
 					}
+					// A dependency that only failed a validation rule still
+					// produced a usable value; in non-fatal-validation mode its
+					// dependents must still run and read that value.
+					if kind, _ := v.(resolverFailureKind); kind == failureValidation && e.nonFatalValidation {
+						continue
+					}
+					lgr.V(1).Info("skipping resolver due to failed dependency",
+						"resolver", r.Name,
+						"failedDependency", depName)
+					if e.progressCallback != nil {
+						e.progressCallback.OnResolverSkipped(r.Name)
+					}
+					// Mark this resolver as failed too (it produced no value).
+					failedResolvers.Store(r.Name, failureFatal)
+					resultChan <- resolverResult{resolverName: r.Name, depSkipped: true}
+					return
 				}
 			}
 
@@ -393,7 +455,7 @@ func (e *Executor) executePhase(ctx context.Context, phase *PhaseGroup, failedRe
 					}
 					err := fmt.Errorf("resolver %q: phase timeout before execution", r.Name)
 					if failedResolvers != nil {
-						failedResolvers.Store(r.Name, true)
+						failedResolvers.Store(r.Name, failureFatal)
 					}
 					resultChan <- resolverResult{resolverName: r.Name, err: err}
 					return
@@ -407,7 +469,7 @@ func (e *Executor) executePhase(ctx context.Context, phase *PhaseGroup, failedRe
 				}
 				err := fmt.Errorf("resolver %q: phase timeout", r.Name)
 				if failedResolvers != nil {
-					failedResolvers.Store(r.Name, true)
+					failedResolvers.Store(r.Name, failureFatal)
 				}
 				resultChan <- resolverResult{resolverName: r.Name, err: err}
 				return
@@ -422,7 +484,7 @@ func (e *Executor) executePhase(ctx context.Context, phase *PhaseGroup, failedRe
 					e.progressCallback.OnResolverFailed(r.Name, err)
 				}
 				if failedResolvers != nil {
-					failedResolvers.Store(r.Name, true)
+					failedResolvers.Store(r.Name, classifyFailure(err))
 				}
 				resultChan <- resolverResult{resolverName: r.Name, err: fmt.Errorf("resolver %q failed: %w", r.Name, err)}
 			case skipped:

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Type represents the type of a resolved value.
@@ -30,17 +32,21 @@ const (
 // CoerceType attempts to coerce a value to the specified type.
 // Returns the coerced value or an error if coercion is not possible.
 func CoerceType(value any, targetType Type) (any, error) {
-	// Nil values pass through for all types
-	if value == nil {
-		return nil, nil
-	}
-
 	// Handle type aliases first
 	targetType = normalizeType(targetType)
 
-	// Any type accepts anything
+	// Any type accepts anything (including nil/null) unchanged.
 	if targetType == TypeAny || targetType == "" {
 		return value, nil
+	}
+
+	// Null values -- Go nil, the protobuf NullValue enum, or a *structpb.Value
+	// holding null -- coerce to the target type's zero value. A typed field
+	// receiving null (e.g. an absent/optional upstream GraphQL field) is a normal
+	// case and must degrade gracefully to the zero value rather than failing
+	// coercion.
+	if isNullValue(value) {
+		return zeroValueForType(targetType), nil
 	}
 
 	switch targetType {
@@ -64,6 +70,56 @@ func CoerceType(value any, targetType Type) (any, error) {
 		return value, nil
 	default:
 		return nil, fmt.Errorf("unknown type: %s", targetType)
+	}
+}
+
+// isNullValue reports whether value represents a null/absent value. It treats
+// Go nil, the protobuf NullValue enum, and a *structpb.Value holding null as
+// equivalent so values arriving from providers (e.g. JSON null decoded into
+// structpb) coerce consistently.
+func isNullValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch v := value.(type) {
+	case structpb.NullValue:
+		return true
+	case *structpb.Value:
+		if v == nil {
+			return true
+		}
+		_, ok := v.GetKind().(*structpb.Value_NullValue)
+		return ok
+	}
+	return false
+}
+
+// zeroValueForType returns the zero value for a coercion target type. Scalar
+// types return their Go zero value; collection types return empty (non-nil)
+// containers so downstream templates and CEL expressions can operate on them
+// without nil dereferences. TypeAny and the empty type return nil.
+func zeroValueForType(t Type) any {
+	switch t {
+	case TypeString:
+		return ""
+	case TypeInt:
+		return 0
+	case TypeFloat:
+		return float64(0)
+	case TypeBool:
+		return false
+	case TypeArray:
+		return []any{}
+	case TypeObject:
+		return map[string]any{}
+	case TypeTime:
+		return time.Time{}
+	case TypeDuration:
+		return time.Duration(0)
+	case TypeAny:
+		return nil
+	default:
+		return nil
 	}
 }
 
