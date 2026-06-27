@@ -10,17 +10,57 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// TestCoerceType_NilValues tests that nil values pass through for all types
+// TestCoerceType_NilValues tests that null values coerce to the target type's
+// zero value (TypeAny passes through unchanged as nil).
 func TestCoerceType_NilValues(t *testing.T) {
-	types := []Type{TypeString, TypeInt, TypeFloat, TypeBool, TypeArray, TypeTime, TypeDuration, TypeAny}
+	tests := []struct {
+		targetType Type
+		expected   any
+	}{
+		{TypeString, ""},
+		{TypeInt, 0},
+		{TypeFloat, float64(0)},
+		{TypeBool, false},
+		{TypeArray, []any{}},
+		{TypeTime, time.Time{}},
+		{TypeDuration, time.Duration(0)},
+		{TypeAny, nil},
+	}
 
-	for _, targetType := range types {
-		t.Run(string(targetType), func(t *testing.T) {
-			result, err := CoerceType(nil, targetType)
+	for _, tt := range tests {
+		t.Run(string(tt.targetType), func(t *testing.T) {
+			result, err := CoerceType(nil, tt.targetType)
 			require.NoError(t, err)
-			assert.Nil(t, result)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCoerceType_ProtobufNull verifies a structpb NullValue coerces to the
+// target type's zero value rather than crashing the resolver run.
+func TestCoerceType_ProtobufNull(t *testing.T) {
+	tests := []struct {
+		targetType Type
+		expected   any
+	}{
+		{TypeString, ""},
+		{TypeInt, 0},
+		{TypeBool, false},
+		{TypeArray, []any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.targetType), func(t *testing.T) {
+			result, err := CoerceType(structpb.NullValue_NULL_VALUE, tt.targetType)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+
+			result, err = CoerceType(structpb.NewNullValue(), tt.targetType)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

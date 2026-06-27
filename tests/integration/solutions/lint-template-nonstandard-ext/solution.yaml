@@ -1,0 +1,82 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-template-nonstandard-ext
+  version: 1.0.0
+  description: |
+    Verifies template-file resolver-reference discovery is role-based, not
+    extension-based. A render-tree resolver reads non-.tpl template files
+    (Terraform .tf here) selected by the directory provider's filterGlob.
+    Those files are go-template sources by role, so the
+    missing-template-dependency lint rule must still detect resolver
+    references inside them even though the extension is not .tpl/.tmpl/.gotmpl.
+
+bundle:
+  include:
+    - "templates/**"
+
+spec:
+  resolvers:
+    appName:
+      description: Application name (referenced by main.tf but not depended on)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    templateFiles:
+      description: Read .tf template files from disk
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tf"
+              includeContent: true
+
+    # This render-tree resolver only depends on templateFiles. The template
+    # file templates/main.tf references {{ .appName }}, which is NOT in this
+    # resolver's dependency graph -- the lint rule must flag it even though the
+    # file is a .tf, not a .tpl.
+    rendered:
+      description: Render .tf templates (missing dependency on appName)
+      dependsOn: [templateFiles]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: templateFiles
+
+  testing:
+    config:
+      # lint: solution intentionally triggers missing-template-dependency
+      # resolve-defaults: render-tree cannot resolve without full deps
+      skipBuiltins: [lint, resolve-defaults]
+
+    cases:
+      nonstandard-ext-detected:
+        description: Lint discovers resolver references in non-.tpl (.tf) template files
+        command: [lint]
+        args: ["-o", "json"]
+        files: ["templates/**"]
+        tags: [lint, missing-template-dependency]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Missing template dependency is warning-level, should not cause non-zero exit"
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "missing-template-dependency" &&
+                f.message.contains("appName"))
+            message: "Should detect appName reference inside main.tf"
+          - expression: >
+              __output.findings.exists(f,
+                f.ruleName == "missing-template-dependency" && f.severity == "warning")
+            message: "Missing template dependency should be warning severity"

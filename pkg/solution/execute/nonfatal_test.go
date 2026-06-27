@@ -118,6 +118,63 @@ func TestResolvers_NonFatalValidation(t *testing.T) {
 	})
 }
 
+const validationFailureWithDependentSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: valdep
+  version: 0.0.1
+spec:
+  resolvers:
+    name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Bob"
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              match: "^Alice$"
+            message: "name must be Alice"
+    greeting:
+      dependsOn: [name]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ignored
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '"Hello " + _.name'
+`
+
+func TestResolvers_NonFatalValidation_DependentsKeepRunning(t *testing.T) {
+	ctx := context.Background()
+	reg, err := builtin.DefaultRegistry(ctx)
+	require.NoError(t, err)
+
+	solFile := writeSolution(t, validationFailureWithDependentSolution)
+	sol, err := inspect.LoadSolution(ctx, solFile)
+	require.NoError(t, err)
+
+	cfg := ResolverExecutionConfig{
+		Timeout:            ResolverExecutionConfigFromContext(ctx).Timeout,
+		PhaseTimeout:       ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+		NonFatalValidation: true,
+	}
+
+	result, err := Resolvers(ctx, sol, nil, reg, cfg)
+	require.NoError(t, err, "non-fatal mode must not return an error on validation failure")
+	require.NotNil(t, result)
+	assert.Equal(t, "Bob", result.Data["name"], "partial value must still be returned")
+	assert.Equal(t, "Hello Bob", result.Data["greeting"],
+		"dependent of a validation-only failure must still resolve using the upstream value")
+}
+
 const resolvePhaseFailureSolution = `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:

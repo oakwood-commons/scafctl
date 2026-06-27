@@ -193,6 +193,7 @@ When a type is explicitly declared, scafctl will attempt to coerce the resolved 
 - This means transform steps can work with raw provider types (e.g., `map[string]interface{}`) and reshape them freely — only the final output must match the declared type.
 - **Array coercion**: Non-array values are wrapped in a single-element array. Already-arrays pass through unchanged. This is useful when a field can accept either a single value or multiple values.
 - **Object coercion**: Accepts any map with string keys. Rejects non-map values (strings, ints, arrays, etc.) with a clear error.
+- **Null coercion**: A null value (whether a Go `nil` or a provider-emitted JSON/CEL null) coerces to the declared type's **zero value** instead of failing -- `""` for `string`, `0` for `int`, `0.0` for `float`, `false` for `bool`, an empty array for `array`, and an empty object for `object`. This lets a typed resolver consume an absent/optional upstream field (e.g. a missing GraphQL or JSON field) and degrade gracefully. A `type: any` (or untyped) resolver leaves null unchanged.
 
 ### Type Validation
 

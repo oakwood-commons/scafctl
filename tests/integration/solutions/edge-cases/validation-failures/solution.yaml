@@ -65,6 +65,23 @@ spec:
               notMatch: "\\s"
             message: "Value must not contain spaces"
 
+    dependentOfInvalid:
+      description: >
+        Depends on invalidRegex, which fails validation only. Because
+        validation is non-fatal in `run resolver`, invalidRegex still produces
+        a usable value, so this dependent must still resolve.
+      dependsOn: [invalidRegex]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ignored
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.invalidRegex + "-derived"'
+
   testing:
     config:
       # resolve-defaults: resolvers have intentional validation failures by design
@@ -102,6 +119,19 @@ spec:
             message: "Partial value must still be shown despite validation failure"
           - expression: '__stderr.contains("failed validation")'
             message: "Validation diagnostics must appear on stderr"
+
+      dependent-of-validation-failure-still-runs:
+        description: >
+          A dependent of a validation-only failure still resolves -- non-fatal
+          validation keeps dependents running because the upstream value is usable.
+        command: [run, resolver]
+        args: ["dependentOfInvalid", "-o", "json"]
+        tags: [edge-case, validation]
+        assertions:
+          - expression: __exitCode == 0
+            message: "run resolver must be non-fatal by default"
+          - expression: '__output.dependentOfInvalid == "BAD_VALUE!-derived"'
+            message: "Dependent of a validation-only failure must still resolve using the upstream value"
 
       expression-failure:
         description: Verify CEL expression validation failure exits non-zero with --fail-on-validation
