@@ -32,16 +32,12 @@ const (
 
 	// CapabilityState signals that a provider can act as a state persistence backend.
 	// Providers with this capability handle load/save/delete operations for solution state.
-	// This capability is defined in scafctl (not the SDK) because state is an application-level
-	// concern that external plugin providers can also implement.
-	CapabilityState Capability = "state"
+	CapabilityState = sdkprovider.CapabilityState
 
 	// CapabilityKubeconfig signals that a provider can perform kubeconfig and cluster
 	// operations (write/remove kubeconfig entries, detect auth type, check reachability,
 	// whoami). Providers with this capability dispatch on an "operation" input field.
-	// This capability is defined in scafctl (not the SDK) because kubeconfig wiring is an
-	// application-level concern that external plugin providers can also implement.
-	CapabilityKubeconfig Capability = "kubeconfig"
+	CapabilityKubeconfig = sdkprovider.CapabilityKubeconfig
 )
 
 // Contact represents maintainer contact information.
@@ -53,79 +49,25 @@ type Link = sdkprovider.Link
 // Example represents a usage example for a provider.
 type Example = sdkprovider.Example
 
+// OperationDescriptor is re-exported from the SDK so host code can describe and
+// round-trip per-operation metadata (including write classification).
+type OperationDescriptor = sdkprovider.OperationDescriptor
+
 // ValidateDescriptor validates that a Descriptor meets all requirements.
-// It extends the SDK validation with scafctl-specific capabilities (e.g., CapabilityState).
+// It delegates directly to the SDK validator, which understands all capabilities
+// including scafctl-host capabilities (CapabilityState, CapabilityKubeconfig).
+// A shallow copy is passed so the caller's top-level fields are never reassigned;
+// note this does not deep-copy nested maps/slices (e.g. OutputSchemas), which
+// remain shared. The SDK validator is read-only and does not mutate them.
 func ValidateDescriptor(desc *Descriptor) error {
-	// Temporarily strip scafctl-specific capabilities before calling the SDK validator,
-	// then validate them locally. This avoids "unknown capability" errors from the SDK.
-	var localCaps []Capability
-	var sdkCaps []Capability
-	for _, cap := range desc.Capabilities {
-		if isScafctlCapability(cap) {
-			localCaps = append(localCaps, cap)
-		} else {
-			sdkCaps = append(sdkCaps, cap)
-		}
+	if desc == nil {
+		return fmt.Errorf("descriptor is nil")
 	}
-
-	// Validate SDK-known capabilities via the SDK validator using a shallow
-	// copy so we never mutate the caller's descriptor (avoids data races if
-	// registration ever runs concurrently).
-	if len(sdkCaps) > 0 {
-		sdkDesc := *desc
-		sdkDesc.Capabilities = sdkCaps
-		if err := sdkprovider.ValidateDescriptor(&sdkDesc); err != nil {
-			return err
-		}
-	} else if desc.OutputSchemas == nil {
-		// Even without SDK capabilities, enforce the same baseline descriptor
-		// requirements that the SDK validator normally checks.
-		return fmt.Errorf("descriptor must define OutputSchemas")
-	}
-
-	// Validate scafctl-specific capabilities locally
-	for _, cap := range localCaps {
-		schema, exists := desc.OutputSchemas[cap]
-		if !exists {
-			return fmt.Errorf("missing output schema for capability %q", cap)
-		}
-		requiredFields := scafctlCapabilityRequiredFields(cap)
-		for fieldName, expectedType := range requiredFields {
-			if schema == nil || schema.Properties == nil {
-				return fmt.Errorf("capability %q requires output field %q", cap, fieldName)
-			}
-			prop, found := schema.Properties[fieldName]
-			if !found || prop == nil {
-				return fmt.Errorf("capability %q requires output field %q", cap, fieldName)
-			}
-			if prop.Type != expectedType {
-				return fmt.Errorf("capability %q field %q must be type %q, got %q", cap, fieldName, expectedType, prop.Type)
-			}
-		}
-	}
-
-	return nil
+	sdkDesc := *desc
+	return sdkprovider.ValidateDescriptor(&sdkDesc)
 }
 
-// isScafctlCapability reports whether the capability is a scafctl-defined capability
-// (not known to the SDK) that requires local validation.
-func isScafctlCapability(c Capability) bool {
-	return c == CapabilityState || c == CapabilityKubeconfig
-}
-
-// scafctlCapabilityRequiredFields returns the required output fields for a
-// scafctl-defined capability. Every scafctl capability must report a boolean
-// "success" field so callers can detect operation outcome uniformly.
-func scafctlCapabilityRequiredFields(_ Capability) map[string]string {
-	return map[string]string{
-		"success": "boolean",
-	}
-}
-
-// IsCapabilityValid checks if the capability is valid, including scafctl-specific capabilities.
+// IsCapabilityValid reports whether the capability is recognized by the SDK.
 func IsCapabilityValid(c Capability) bool {
-	if isScafctlCapability(c) {
-		return true
-	}
 	return c.IsValid()
 }

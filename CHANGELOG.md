@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(auth)* [**breaking**] Drop the legacy OAuth token-metadata compatibility shim when bumping scafctl-plugin-sdk to v0.11.0. Credentials persisted by earlier versions (which carried fields such as `refreshTokenExpiresAt` / `loginFlow`) no longer deserialize, so a one-time re-login is required after upgrading.
 - *(state)* Add `saveOverrides` field to state backend for save-time-only input resolution, enabling patterns like loading from `main` and saving to a resolver-derived feature branch
 - *(lint)* Add `resolver-cycle` rule (error) to detect circular dependencies in the resolver dependency graph
 - *(lint)* Add `missing-template-dependency` rule (warning) to detect render-tree resolvers missing template file dependencies

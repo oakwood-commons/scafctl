@@ -633,6 +633,96 @@ func TestSchemaRoundTrip_Lossless(t *testing.T) {
 	assert.Len(t, statusProp.Enum, 2)
 }
 
+// TestOperationsRoundTrip_Lossless verifies that WriteOperations and the rich
+// Operations metadata survive the descriptorToProto -> protoToDescriptor round
+// trip, and that write classification (the security-relevant part) is preserved
+// for plugin-backed providers -- including when an operation is classified only
+// via Operations[].IsWrite with a nil WriteOperations list.
+func TestOperationsRoundTrip_Lossless(t *testing.T) {
+	t.Run("legacy WriteOperations list", func(t *testing.T) {
+		original := &provider.Descriptor{
+			Name:            "ops-legacy",
+			APIVersion:      "v1",
+			Version:         semver.MustParse("1.0.0"),
+			Capabilities:    []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+			WriteOperations: []string{"create_issue", "delete_issue"},
+		}
+
+		desc, err := protoToDescriptor(descriptorToProto(original))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"create_issue", "delete_issue"}, desc.WriteOperations)
+		assert.True(t, desc.IsWriteOperation("create_issue"))
+		assert.False(t, desc.IsWriteOperation("get_issue"))
+	})
+
+	t.Run("rich Operations metadata with nil WriteOperations", func(t *testing.T) {
+		original := &provider.Descriptor{
+			Name:         "ops-rich",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("1.0.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom, provider.CapabilityAction},
+			Operations: []provider.OperationDescriptor{
+				{
+					Name:         "get_issue",
+					DisplayName:  "Get Issue",
+					Description:  "Reads an issue",
+					Capabilities: []provider.Capability{provider.CapabilityFrom},
+					IsWrite:      false,
+					Tags:         []string{"read"},
+					InputSchema: &jsonschema.Schema{
+						Type:       "object",
+						Properties: map[string]*jsonschema.Schema{"id": {Type: "string"}},
+					},
+				},
+				{
+					Name:               "create_issue",
+					DisplayName:        "Create Issue",
+					Description:        "Creates an issue",
+					Capabilities:       []provider.Capability{provider.CapabilityAction},
+					IsWrite:            true,
+					Tags:               []string{"write"},
+					IsDeprecated:       true,
+					DeprecationMessage: "use create_issue_v2",
+					OutputSchema: &jsonschema.Schema{
+						Type:       "object",
+						Properties: map[string]*jsonschema.Schema{"number": {Type: "integer"}},
+					},
+					Examples: []provider.Example{{Name: "basic", Description: "create one", YAML: "kind: from"}},
+				},
+			},
+		}
+
+		protoDesc := descriptorToProto(original)
+		require.Len(t, protoDesc.Operations, 2)
+
+		desc, err := protoToDescriptor(protoDesc)
+		require.NoError(t, err)
+		require.Len(t, desc.Operations, 2)
+
+		// Write classification derived from Operations must survive.
+		assert.Nil(t, desc.WriteOperations)
+		assert.True(t, desc.IsWriteOperation("create_issue"))
+		assert.False(t, desc.IsWriteOperation("get_issue"))
+
+		// Rich metadata fidelity.
+		createOp := desc.Operations[1]
+		assert.Equal(t, "create_issue", createOp.Name)
+		assert.Equal(t, "Create Issue", createOp.DisplayName)
+		assert.True(t, createOp.IsWrite)
+		assert.True(t, createOp.IsDeprecated)
+		assert.Equal(t, "use create_issue_v2", createOp.DeprecationMessage)
+		assert.Equal(t, []provider.Capability{provider.CapabilityAction}, createOp.Capabilities)
+		require.NotNil(t, createOp.OutputSchema)
+		assert.Contains(t, createOp.OutputSchema.Properties, "number")
+		require.Len(t, createOp.Examples, 1)
+		assert.Equal(t, "basic", createOp.Examples[0].Name)
+
+		readOp := desc.Operations[0]
+		require.NotNil(t, readOp.InputSchema)
+		assert.Contains(t, readOp.InputSchema.Properties, "id")
+	})
+}
+
 // TestSchemaRoundTrip_StructuredFallback verifies that the structured
 // Parameter fields work correctly when raw JSON is not available (e.g.,
 // talking to an older plugin).
