@@ -559,7 +559,7 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 	}
 
 	// Fetch content layer with digest verification
-	contentData, err := content.FetchAll(ctx, repo, manifest.Layers[0])
+	contentData, err := fetchLayerContent(ctx, repo, manifest.Layers[0])
 	if err != nil {
 		return nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
 	}
@@ -640,7 +640,7 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 	}
 
 	// Fetch content layer with digest verification
-	contentData, err := content.FetchAll(ctx, repo, manifest.Layers[0])
+	contentData, err := fetchLayerContent(ctx, repo, manifest.Layers[0])
 	if err != nil {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
 	}
@@ -651,14 +651,14 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 		switch manifest.Layers[1].MediaType {
 		case MediaTypeSolutionBundle:
 			// Version 1: single tar layer
-			bundleData, err = content.FetchAll(ctx, repo, manifest.Layers[1])
+			bundleData, err = fetchLayerContent(ctx, repo, manifest.Layers[1])
 			if err != nil {
 				return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch bundle: %w", err)
 			}
 		case MediaTypeSolutionBundleManifest:
 			// Version 2: deduplicated — reassemble into a v1-compatible tar
 			fetchBlob := func(desc ocispec.Descriptor) ([]byte, error) {
-				return content.FetchAll(ctx, repo, desc)
+				return fetchLayerContent(ctx, repo, desc)
 			}
 			bundleData, err = reassembleDedupBundle(manifest, fetchBlob)
 			if err != nil {

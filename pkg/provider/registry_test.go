@@ -697,6 +697,12 @@ func TestValidateDescriptor(t *testing.T) {
 	}
 }
 
+func TestValidateDescriptor_Nil(t *testing.T) {
+	err := ValidateDescriptor(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "descriptor is nil")
+}
+
 func TestRegistry_MarkKnown(t *testing.T) {
 	t.Run("marks new name as known", func(t *testing.T) {
 		r := NewRegistry()

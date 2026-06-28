@@ -7,3 +7,7 @@ import sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
 
 // Claims represents normalized identity claims from any auth handler.
 type Claims = sdkauth.Claims
+
+// HandlerMetadata is the canonical persisted metadata for an auth session,
+// shared by core and all plugin auth handlers.
+type HandlerMetadata = sdkauth.HandlerMetadata

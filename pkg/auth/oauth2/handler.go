@@ -443,41 +443,6 @@ type tokenResponse struct {
 	Scope        string `json:"scope"`
 }
 
-type handlerMetadata struct {
-	Claims        *auth.Claims `json:"claims"`
-	ExpiresAt     time.Time    `json:"expiresAt"`
-	Scopes        []string     `json:"scopes"`
-	LastLoginFlow auth.Flow    `json:"lastLoginFlow,omitempty"`
-}
-
-// unmarshalMetadata deserializes metadata JSON, handling field name differences
-// between the generic oauth2 handler and plugin auth handlers.
-// Plugin handlers use "refreshTokenExpiresAt" (vs "expiresAt") and
-// "loginFlow" (vs "lastLoginFlow").
-func unmarshalMetadata(data []byte) (*handlerMetadata, error) {
-	var meta handlerMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, err
-	}
-
-	// If ExpiresAt is zero, try the plugin handler's field name.
-	if meta.ExpiresAt.IsZero() {
-		var compat struct {
-			RefreshTokenExpiresAt time.Time `json:"refreshTokenExpiresAt"`
-			LoginFlow             auth.Flow `json:"loginFlow"`
-		}
-		if err := json.Unmarshal(data, &compat); err == nil {
-			if !compat.RefreshTokenExpiresAt.IsZero() {
-				meta.ExpiresAt = compat.RefreshTokenExpiresAt
-			}
-			if meta.LastLoginFlow == "" && compat.LoginFlow != "" {
-				meta.LastLoginFlow = compat.LoginFlow
-			}
-		}
-	}
-	return &meta, nil
-}
-
 type exchangeResult struct {
 	Token    string `json:"token"`
 	Username string `json:"username,omitempty"`
@@ -902,7 +867,7 @@ func (h *Handler) storeTokens(ctx context.Context, resp *tokenResponse, claims *
 			return fmt.Errorf("store refresh token: %w", err)
 		}
 	}
-	meta := &handlerMetadata{Claims: claims, ExpiresAt: expiresAt, Scopes: scopes, LastLoginFlow: flow}
+	meta := &auth.HandlerMetadata{Claims: claims, ExpiresAt: expiresAt, Scopes: scopes, LastLoginFlow: flow}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
@@ -960,12 +925,16 @@ func (h *Handler) loadDerivedToken(ctx context.Context) (*auth.Token, error) {
 	return &token, nil
 }
 
-func (h *Handler) loadMetadata(ctx context.Context) (*handlerMetadata, error) {
+func (h *Handler) loadMetadata(ctx context.Context) (*auth.HandlerMetadata, error) {
 	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, secretKeyMetadataSuffix))
 	if err != nil {
 		return nil, err
 	}
-	return unmarshalMetadata(data)
+	var meta auth.HandlerMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
 // ---------- refresh ----------

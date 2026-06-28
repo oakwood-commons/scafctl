@@ -1115,10 +1115,16 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 		Deprecated:             desc.IsDeprecated,
 		Beta:                   desc.Beta,
 		HasExtractDependencies: desc.ExtractDependencies != nil,
+		WriteOperations:        desc.WriteOperations,
 	}
 
 	for i, cap := range desc.Capabilities {
 		protoDesc.Capabilities[i] = string(cap)
+	}
+
+	// Convert rich per-operation metadata (write classification, schemas, etc.)
+	for i := range desc.Operations {
+		protoDesc.Operations = append(protoDesc.Operations, operationDescriptorToProto(desc.Operations[i]))
 	}
 
 	// Convert links
@@ -1177,6 +1183,93 @@ func descriptorToProto(desc *provider.Descriptor) *proto.ProviderDescriptor {
 	return protoDesc
 }
 
+// operationDescriptorToProto converts a provider.OperationDescriptor to its proto
+// representation. Operation input/output schemas are serialized as raw JSON bytes,
+// mirroring the lossless schema handling used for the provider descriptor.
+func operationDescriptorToProto(op provider.OperationDescriptor) *proto.OperationDescriptor {
+	protoOp := &proto.OperationDescriptor{
+		Name:               op.Name,
+		DisplayName:        op.DisplayName,
+		Description:        op.Description,
+		IsWrite:            op.IsWrite,
+		Tags:               op.Tags,
+		Deprecated:         op.IsDeprecated,
+		DeprecationMessage: op.DeprecationMessage,
+	}
+
+	if len(op.Capabilities) > 0 {
+		protoOp.Capabilities = make([]string, len(op.Capabilities))
+		for i, c := range op.Capabilities {
+			protoOp.Capabilities[i] = string(c)
+		}
+	}
+
+	if op.InputSchema != nil {
+		if raw, err := json.Marshal(op.InputSchema); err == nil {
+			protoOp.InputSchema = raw
+		}
+	}
+	if op.OutputSchema != nil {
+		if raw, err := json.Marshal(op.OutputSchema); err == nil {
+			protoOp.OutputSchema = raw
+		}
+	}
+
+	for _, ex := range op.Examples {
+		protoOp.Examples = append(protoOp.Examples, &proto.Example{
+			Name:        ex.Name,
+			Description: ex.Description,
+			Yaml:        ex.YAML,
+		})
+	}
+
+	return protoOp
+}
+
+// protoToOperationDescriptor converts a proto.OperationDescriptor back to the
+// provider representation, deserializing schemas from raw JSON bytes.
+func protoToOperationDescriptor(protoOp *proto.OperationDescriptor) provider.OperationDescriptor {
+	op := provider.OperationDescriptor{
+		Name:               protoOp.Name,
+		DisplayName:        protoOp.DisplayName,
+		Description:        protoOp.Description,
+		IsWrite:            protoOp.IsWrite,
+		Tags:               protoOp.Tags,
+		IsDeprecated:       protoOp.Deprecated,
+		DeprecationMessage: protoOp.DeprecationMessage,
+	}
+
+	if len(protoOp.Capabilities) > 0 {
+		op.Capabilities = make([]provider.Capability, len(protoOp.Capabilities))
+		for i, c := range protoOp.Capabilities {
+			op.Capabilities[i] = provider.Capability(c)
+		}
+	}
+
+	if len(protoOp.InputSchema) > 0 {
+		var schema jsonschema.Schema
+		if err := json.Unmarshal(protoOp.InputSchema, &schema); err == nil {
+			op.InputSchema = &schema
+		}
+	}
+	if len(protoOp.OutputSchema) > 0 {
+		var schema jsonschema.Schema
+		if err := json.Unmarshal(protoOp.OutputSchema, &schema); err == nil {
+			op.OutputSchema = &schema
+		}
+	}
+
+	for _, ex := range protoOp.Examples {
+		op.Examples = append(op.Examples, provider.Example{
+			Name:        ex.Name,
+			Description: ex.Description,
+			YAML:        ex.Yaml,
+		})
+	}
+
+	return op
+}
+
 // protoToDescriptor converts proto.ProviderDescriptor to provider.Descriptor
 func protoToDescriptor(protoDesc *proto.ProviderDescriptor) (*provider.Descriptor, error) {
 	var version *semver.Version
@@ -1200,10 +1293,19 @@ func protoToDescriptor(protoDesc *proto.ProviderDescriptor) (*provider.Descripto
 		Icon:            protoDesc.Icon,
 		IsDeprecated:    protoDesc.Deprecated,
 		Beta:            protoDesc.Beta,
+		WriteOperations: protoDesc.WriteOperations,
 	}
 
 	for i, cap := range protoDesc.Capabilities {
 		desc.Capabilities[i] = provider.Capability(cap)
+	}
+
+	// Convert rich per-operation metadata.
+	for _, protoOp := range protoDesc.Operations {
+		if protoOp == nil {
+			continue
+		}
+		desc.Operations = append(desc.Operations, protoToOperationDescriptor(protoOp))
 	}
 
 	// Convert links
