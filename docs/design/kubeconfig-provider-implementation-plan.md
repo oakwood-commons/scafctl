@@ -151,7 +151,7 @@ signature. The manager marshals typed structs to maps (JSON round-trip, like
 
 | operation          | Inputs (key fields)                                                                                                   | Output (Data fields)                          |
 |--------------------|---------------------------------------------------------------------------------------------------------------------|-----------------------------------------------|
-| `kubeconfig_write` | `server`, `audience`, `cluster_name`, `context_name`, `user_name`, `kubeconfig_path`, `exec_command`, `exec_args`, `insecure_skip_tls`, `set_current_context` | `success`, `context_name`, `kubeconfig_path`  |
+| `kubeconfig_write` | `server`, `audience`, `cluster_name`, `context_name`, `user_name`, `kubeconfig_path`, `exec_command`, `exec_args`, `ca_data`, `interactive_mode`, `install_hint`, `provide_cluster_info`, `insecure_skip_tls`, `set_current_context` | `success`, `context_name`, `kubeconfig_path`  |
 | `kubeconfig_remove`| `cluster_name`, `context_name`, `user_name`, `kubeconfig_path`                                                        | `success`, `removed`                          |
 | `current_server`   | `kubeconfig_path`, `context_name`                                                                                    | `server`                                      |
 | `detect_auth_type` | `server`, `insecure_skip_tls`                                                                                        | `auth_type` (auto/oauth/oidc), `oidc_issuer`, `oauth_endpoint` |
@@ -172,6 +172,15 @@ Contract notes:
   never caches it.
 - `kubeconfig_path` empty means "resolve `KUBECONFIG` env or `~/.kube/config`"
   inside the plugin via `clientcmd` loading rules.
+- `ca_data` is a PEM-encoded cluster CA bundle. When set, the written cluster
+  entry pins the API server to this CA instead of falling back to
+  `insecure_skip_tls`.
+- `interactive_mode`, `install_hint`, and `provide_cluster_info` map to the
+  kubeconfig exec block (`client.authentication.k8s.io`): `interactive_mode`
+  (`Never`/`IfAvailable`/`Always`) controls whether kubectl may run the exec
+  credential plugin interactively, `install_hint` is the message kubectl shows
+  when the exec command is missing from `PATH`, and `provide_cluster_info` asks
+  kubectl to pass cluster details to the plugin via `KUBERNETES_EXEC_INFO`.
 
 ## 5. Module / repo layout
 

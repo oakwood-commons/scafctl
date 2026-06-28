@@ -51,6 +51,7 @@ func TestClusterInfo_Validate(t *testing.T) {
 				ConsoleURL:      "https://console.example.com",
 				AuthType:        AuthTypeOIDC,
 				OIDCAudience:    "client-id",
+				DefaultHandler:  "entra",
 				InsecureSkipTLS: true,
 			},
 		},

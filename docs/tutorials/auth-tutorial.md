@@ -2136,6 +2136,111 @@ For a complete, copy-pasteable walkthrough see the
 
 [k8s-exec]: https://kubernetes.io/docs/reference/access-authn-authz/authentication/#client-go-credential-plugins
 
+### One-Step Cluster Login (`kube login` / `kube logout`)
+
+The `--exec-credential` wiring above is manual: you edit kubeconfig yourself. The
+`kube login` and `kube logout` commands automate that setup. `kube login` runs
+your auth handler, then writes the cluster, user (with the `exec` block), and
+context entries for you. `kube logout` reverses it and clears the cached
+credentials.
+
+Two inputs play distinct roles. The handler is the **credential source** (which
+identity provider authenticates you, for example `entra`). The cluster argument
+(resolved through your cluster resolver) or `--server` selects the **cluster**
+you connect to and supplies its API server and OIDC audience. The handler says
+_who you are_, the cluster says _where you connect_.
+
+When your cluster resolver records a default handler for a cluster, you can omit
+`--handler` entirely and just name the cluster; pass `--handler` only to override
+that default or when targeting a bare `--server` with no resolver.
+
+Target a cluster known to your cluster resolver, or point
+at an API server directly:
+
+{{< tabs "auth-tutorial-kube-login" >}}
+{{% tab "Bash" %}}
+```bash
+# Resolver-backed: cluster name resolves to API server, audience, and handler
+scafctl kube login prod
+
+# Override the resolver's default handler
+scafctl kube login prod --handler entra
+
+# Explicit API server, no resolver required (handler must be named)
+scafctl kube login --handler entra \
+  --server https://api.example.com:6443 \
+  --cluster-name prod --context prod --user prod --current
+
+# Reuse the identity automatically on every kubectl/oc call
+kubectl --context prod get pods
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Resolver-backed: cluster name resolves to API server, audience, and handler
+scafctl kube login prod
+
+# Override the resolver's default handler
+scafctl kube login prod --handler entra
+
+# Explicit API server, no resolver required (handler must be named)
+scafctl kube login --handler entra `
+  --server https://api.example.com:6443 `
+  --cluster-name prod --context prod --user prod --current
+
+# Reuse the identity automatically on every kubectl/oc call
+kubectl --context prod get pods
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Common `kube login` flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--handler` | Auth handler to authenticate with. Optional when the resolver supplies a default for the cluster. |
+| `--server` | API server URL when no resolver is configured. |
+| `--audience` | OIDC audience the minted token must target. |
+| `--profile` | Auth profile baked into the exec args (for example `work`). |
+| `--current` | Set the new context as the current context. |
+| `--verify` | Confirm the authenticated identity via a post-login whoami (requires the kubeconfig provider). |
+| `--kubeconfig` | Target kubeconfig file (defaults to `KUBECONFIG` or `~/.kube/config`). |
+
+When the kubeconfig provider plugin is unavailable, `kube login` falls back to
+writing a minimal static kubeconfig directly, so the workflow still works
+offline.
+
+`kube logout` removes the managed kubeconfig entry. When you pass `--handler`, it
+revokes that handler's cached credentials (unless `--keep-credentials` is set).
+Without `--handler` it revokes the cluster's resolver-supplied default handler on
+a best-effort basis -- if no default handler can be resolved, it removes only the
+kubeconfig entry. Use `--keep-credentials` to skip credential revocation entirely:
+
+{{< tabs "auth-tutorial-kube-logout" >}}
+{{% tab "Bash" %}}
+```bash
+# Remove the kubeconfig entry and revoke cached credentials
+scafctl kube logout prod --handler entra
+
+# Remove only the kubeconfig entry, keep credentials for other clusters
+scafctl kube logout prod --keep-credentials
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Remove the kubeconfig entry and revoke cached credentials
+scafctl kube logout prod --handler entra
+
+# Remove only the kubeconfig entry, keep credentials for other clusters
+scafctl kube logout prod --keep-credentials
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Both commands support structured output (`-o json`, `-o yaml`) for automation.
+For a complete walkthrough see the
+[Kubernetes login / logout example](../../examples/auth/kube-login.md).
+
 ### Decoding the JWT (Header + Payload)
 
 Use `--decode` to inspect the full JWT structure -- both the **header** and the **payload** -- without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:

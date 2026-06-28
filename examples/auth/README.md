@@ -223,6 +223,15 @@ scafctl auto-detects `KUBERNETES_EXEC_INFO` and emits the envelope even without
 the flag. See [kubectl-exec-credential.md](kubectl-exec-credential.md) for the
 full kubeconfig wiring.
 
+To automate the kubeconfig setup, use `scafctl kube login`, which runs the handler
+login and writes the cluster/user/context entries for you:
+
+```bash
+scafctl kube login prod --handler oidc --current
+```
+
+See [kube-login.md](kube-login.md) for the full login/logout workflow.
+
 > Note: `auth token` prints the **raw token by default**; `--raw` remains an
 > explicit alias. Use `-o json`/`-o yaml` for the structured metadata object.
 
@@ -281,5 +290,6 @@ scafctl auth handlers remove entra
 
 - [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) -- full walkthrough
 - [kubectl Exec Credential](kubectl-exec-credential.md) -- use scafctl as a Kubernetes credential plugin
+- [Kubernetes login / logout](kube-login.md) -- automate kubeconfig setup with `scafctl kube login`
 - [HTTP Provider with Entra](../providers/http-entra.yaml) -- example HTTP call with Entra auth
 - [GitHub API Provider](../providers/github-api.yaml) -- example GitHub API call
