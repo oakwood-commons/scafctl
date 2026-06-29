@@ -76,6 +76,17 @@ type ClusterInfo struct {
 	// for OIDC clusters. Ignored for non-OIDC clusters.
 	OIDCAudience string `json:"oidcAudience,omitempty" yaml:"oidcAudience,omitempty" doc:"Client ID/audience the minted token must target for OIDC clusters" maxLength:"512" example:"my-cluster-client-id"`
 
+	// DefaultHandler is the auth handler used to authenticate to this cluster
+	// when the caller does not pass an explicit --handler. Optional; empty means
+	// the caller must supply a handler. Embedders set it from their cluster
+	// registry so users can run "login <cluster>" without naming a handler.
+	DefaultHandler string `json:"defaultHandler,omitempty" yaml:"defaultHandler,omitempty" doc:"Auth handler used when no explicit handler is supplied" maxLength:"253" example:"entra"`
+
+	// CAData is the PEM-encoded cluster certificate authority bundle. When set,
+	// login pins the API server to this CA instead of falling back to
+	// InsecureSkipTLS. Embedders supply it from their cluster registry.
+	CAData string `json:"caData,omitempty" yaml:"caData,omitempty" doc:"PEM-encoded cluster CA bundle; preferred over insecureSkipTLS" maxLength:"1048576"`
+
 	// InsecureSkipTLS disables API server TLS verification. Use only for
 	// development clusters with self-signed certificates.
 	InsecureSkipTLS bool `json:"insecureSkipTLS,omitempty" yaml:"insecureSkipTLS,omitempty" doc:"Disable API server TLS verification (development only)"`

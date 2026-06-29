@@ -49,6 +49,24 @@ const (
 // inputOperation is the input field that selects the operation to perform.
 const inputOperation = "operation"
 
+// InteractiveMode values control whether kubectl may run the exec credential
+// plugin interactively. They mirror client-go's
+// ExecConfig.InteractiveMode (client.authentication.k8s.io). Handlers that can
+// refresh silently use Never; handlers that require a re-login on expiry (for
+// example implicit-grant OAuth) use IfAvailable so kubectl only prompts when a
+// terminal is attached.
+const (
+	// InteractiveModeNever never runs the plugin interactively.
+	InteractiveModeNever = "Never"
+
+	// InteractiveModeIfAvailable runs the plugin interactively only when stdin
+	// is a terminal.
+	InteractiveModeIfAvailable = "IfAvailable"
+
+	// InteractiveModeAlways always runs the plugin interactively.
+	InteractiveModeAlways = "Always"
+)
+
 // Sentinel errors returned by the manager.
 var (
 	// ErrProviderUnavailable indicates the kubeconfig provider could not be
@@ -93,6 +111,25 @@ type WriteInput struct {
 	// ExecArgs are the static arguments for the kubeconfig exec block.
 	ExecArgs []string `json:"exec_args,omitempty" yaml:"exec_args,omitempty" doc:"Static arguments for the kubeconfig exec block" maxItems:"100"`
 
+	// CAData is the PEM-encoded cluster certificate authority bundle. When set,
+	// it is preferred over InsecureSkipTLS so the API server's certificate is
+	// verified.
+	CAData string `json:"ca_data,omitempty" yaml:"ca_data,omitempty" doc:"PEM-encoded cluster CA bundle; preferred over insecure_skip_tls" maxLength:"1048576"`
+
+	// InteractiveMode controls whether kubectl may run the exec credential
+	// plugin interactively (Never, IfAvailable, or Always). Empty defaults to
+	// IfAvailable inside the provider.
+	InteractiveMode string `json:"interactive_mode,omitempty" yaml:"interactive_mode,omitempty" doc:"Exec plugin interactive mode (Never, IfAvailable, Always)" enum:"Never,IfAvailable,Always" example:"IfAvailable"`
+
+	// InstallHint is the message kubectl shows when the exec command is missing
+	// from PATH. Empty omits the hint.
+	InstallHint string `json:"install_hint,omitempty" yaml:"install_hint,omitempty" doc:"Message kubectl shows when the exec command is missing from PATH" maxLength:"4096"`
+
+	// ProvideClusterInfo asks kubectl to pass cluster details to the plugin via
+	// KUBERNETES_EXEC_INFO. It is false when the server is baked into the exec
+	// args.
+	ProvideClusterInfo bool `json:"provide_cluster_info,omitempty" yaml:"provide_cluster_info,omitempty" doc:"Pass cluster details to the plugin via KUBERNETES_EXEC_INFO"`
+
 	// InsecureSkipTLS disables API server TLS verification (development only).
 	InsecureSkipTLS bool `json:"insecure_skip_tls,omitempty" yaml:"insecure_skip_tls,omitempty" doc:"Disable API server TLS verification (development only)"`
 
@@ -102,16 +139,20 @@ type WriteInput struct {
 
 func (in WriteInput) toInputs() map[string]any {
 	return map[string]any{
-		"server":              in.Server,
-		"audience":            in.Audience,
-		"cluster_name":        in.ClusterName,
-		"context_name":        in.ContextName,
-		"user_name":           in.UserName,
-		"kubeconfig_path":     in.KubeconfigPath,
-		"exec_command":        in.ExecCommand,
-		"exec_args":           in.ExecArgs,
-		"insecure_skip_tls":   in.InsecureSkipTLS,
-		"set_current_context": in.SetCurrentContext,
+		"server":               in.Server,
+		"audience":             in.Audience,
+		"cluster_name":         in.ClusterName,
+		"context_name":         in.ContextName,
+		"user_name":            in.UserName,
+		"kubeconfig_path":      in.KubeconfigPath,
+		"exec_command":         in.ExecCommand,
+		"exec_args":            in.ExecArgs,
+		"ca_data":              in.CAData,
+		"interactive_mode":     in.InteractiveMode,
+		"install_hint":         in.InstallHint,
+		"provide_cluster_info": in.ProvideClusterInfo,
+		"insecure_skip_tls":    in.InsecureSkipTLS,
+		"set_current_context":  in.SetCurrentContext,
 	}
 }
 
@@ -256,6 +297,11 @@ type WhoamiInput struct {
 	// Audience is the OIDC audience the token targets.
 	Audience string `json:"audience,omitempty" yaml:"audience,omitempty" doc:"OIDC audience the token targets" maxLength:"512"`
 
+	// CAData is the PEM-encoded cluster certificate authority bundle. When set,
+	// it is preferred over InsecureSkipTLS so the SelfSubjectReview call verifies
+	// the API server's certificate against a private CA.
+	CAData string `json:"ca_data,omitempty" yaml:"ca_data,omitempty" doc:"PEM-encoded cluster CA bundle; preferred over insecure_skip_tls" maxLength:"1048576"`
+
 	// InsecureSkipTLS disables TLS verification (development only).
 	InsecureSkipTLS bool `json:"insecure_skip_tls,omitempty" yaml:"insecure_skip_tls,omitempty" doc:"Disable TLS verification (development only)"`
 }
@@ -265,6 +311,7 @@ func (in WhoamiInput) toInputs() map[string]any {
 		"server":            in.Server,
 		"token":             in.Token,
 		"audience":          in.Audience,
+		"ca_data":           in.CAData,
 		"insecure_skip_tls": in.InsecureSkipTLS,
 	}
 }
