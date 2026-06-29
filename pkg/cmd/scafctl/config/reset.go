@@ -147,7 +147,6 @@ func (o *ResetOptions) Run(ctx context.Context) error {
 		}{
 			{"cache", paths.CacheDir()},
 			{"data", paths.DataDir()},
-			{"state", paths.StateDir()},
 		}
 
 		for _, d := range dirs {

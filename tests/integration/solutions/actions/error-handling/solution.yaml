@@ -28,9 +28,16 @@ spec:
           command: "echo success"
 
       nonZeroExit:
-        description: Action with non-zero exit code (exec provider returns error)
+        description: Action with non-zero exit code detected via resultSchema
         provider: exec
         onError: continue
+        resultSchema:
+          type: object
+          properties:
+            exitCode:
+              type: integer
+              enum: [0]
+        resultSchemaMode: error
         inputs:
           command: "sh -c 'exit 1'"
 

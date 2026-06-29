@@ -4,12 +4,19 @@
 package run
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/state"
+	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,4 +78,69 @@ func TestAutoResolveProviderByName_FetcherFails(t *testing.T) {
 func TestLoadLockPlugins_MissingFile(t *testing.T) {
 	result := loadLockPlugins("/nonexistent/path/solution.yaml")
 	assert.Nil(t, result)
+}
+
+func TestBuildParamFlagHint(t *testing.T) {
+	tests := []struct {
+		name   string
+		params []string
+		want   string
+	}{
+		{
+			name:   "single param",
+			params: []string{"env"},
+			want:   "-r env=<value>",
+		},
+		{
+			name:   "multiple params",
+			params: []string{"env", "region"},
+			want:   "-r env=<value> -r region=<value>",
+		},
+		{
+			name:   "empty params",
+			params: []string{},
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildParamFlagHint(tt.params)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHandleStateLoadError_MissingParams(t *testing.T) {
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+	opts := &sharedResolverOptions{}
+
+	missingErr := &state.MissingParamsError{
+		Missing:  []string{"env", "region"},
+		Original: errors.New("CEL eval failed"),
+	}
+
+	err := opts.handleStateLoadError(ctx, missingErr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing required parameters [env, region]")
+	assert.Contains(t, err.Error(), "-r env=<value>")
+	assert.Contains(t, err.Error(), "-r region=<value>")
+	assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err))
+}
+
+func TestHandleStateLoadError_GenericError(t *testing.T) {
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+	opts := &sharedResolverOptions{}
+
+	genericErr := errors.New("disk full")
+
+	err := opts.handleStateLoadError(ctx, genericErr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "state load: disk full")
+	assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err))
 }

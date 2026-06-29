@@ -68,42 +68,32 @@ func AllPaths() []PathInfo {
 			Description: "HTTP response cache",
 			XDGVariable: "XDG_CACHE_HOME",
 		},
-		{
-			Name:        "State",
-			Path:        StateDir(),
-			Description: "State data (logs, history)",
-			XDGVariable: "XDG_STATE_HOME",
-		},
 	}
 }
 
 // IllustrativePaths returns illustrative default paths for a given platform.
 // These are the XDG defaults when no environment variables are set.
 func IllustrativePaths(platform string) []PathInfo {
-	var configHome, dataHome, cacheHome, stateHome string
+	var configHome, dataHome, cacheHome string
 
 	switch platform {
 	case "linux":
 		configHome = "~/.config"
 		dataHome = "~/.local/share"
 		cacheHome = "~/.cache"
-		stateHome = "~/.local/state"
 	case "darwin":
 		configHome = "~/.config"
 		dataHome = "~/.local/share"
 		cacheHome = "~/.cache"
-		stateHome = "~/.local/state"
 	case "windows":
 		configHome = "%LOCALAPPDATA%"
 		dataHome = "%LOCALAPPDATA%"
 		cacheHome = "%LOCALAPPDATA%\\cache"
-		stateHome = "%LOCALAPPDATA%"
 	default:
 		// Fallback to Linux-style paths
 		configHome = "~/.config"
 		dataHome = "~/.local/share"
 		cacheHome = "~/.cache"
-		stateHome = "~/.local/state"
 	}
 
 	// Use appropriate path separator
@@ -154,12 +144,6 @@ func IllustrativePaths(platform string) []PathInfo {
 			Path:        join(cacheHome, name, "http-cache"),
 			Description: "HTTP response cache",
 			XDGVariable: "XDG_CACHE_HOME",
-		},
-		{
-			Name:        "State",
-			Path:        join(stateHome, name),
-			Description: "State data (logs, history)",
-			XDGVariable: "XDG_STATE_HOME",
 		},
 	}
 }

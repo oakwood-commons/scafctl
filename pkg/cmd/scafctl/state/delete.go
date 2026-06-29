@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -35,7 +34,14 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			sd, err := state.LoadFromFile(path, paths.StateDir())
+			cwd, err := os.Getwd()
+			if err != nil {
+				err := fmt.Errorf("cannot determine working directory: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
+			sd, err := state.LoadFromFile(path, cwd)
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
@@ -43,7 +49,7 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			}
 
 			// Verify the file actually exists (LoadFromFile returns empty for non-existent).
-			resolved, resolveErr := state.ResolveStatePath(path, paths.StateDir())
+			resolved, resolveErr := state.ResolveStatePath(path, cwd)
 			if resolveErr != nil {
 				w.Errorf("%v", resolveErr)
 				return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
@@ -54,42 +60,50 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			// Check parameters first
-			if _, ok := sd.Parameters[key]; ok {
+			// Check where the key exists
+			_, inParams := sd.Parameters[key]
+			_, inImmutables := sd.Immutables[key]
+
+			if !inParams && !inImmutables {
+				err := fmt.Errorf("key %q not found in state", key)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// If the key is in immutables, require --force
+			if inImmutables && !force {
+				err := fmt.Errorf("key %q is immutable; deleting it will cause the next run to generate a new value. Use --force to confirm", key)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Delete from both maps in one pass
+			if inParams {
 				delete(sd.Parameters, key)
-				if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
-					err := fmt.Errorf("failed to save state: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-				w.Successf("Deleted parameter %q\n", key)
-				return nil
 			}
-
-			// Check immutables
-			if _, ok := sd.Immutables[key]; ok {
-				if !force {
-					err := fmt.Errorf("key %q is immutable; deleting it will cause the next run to generate a new value. Use --force to confirm", key)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.InvalidInput)
-				}
+			if inImmutables {
 				delete(sd.Immutables, key)
-				if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
-					err := fmt.Errorf("failed to save state: %w", err)
-					w.Errorf("%v", err)
-					return exitcode.WithCode(err, exitcode.GeneralError)
-				}
-				w.Successf("Deleted immutable key %q\n", key)
-				return nil
 			}
 
-			err = fmt.Errorf("key %q not found in state", key)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
+			if err := state.SaveToFile(path, cwd, sd); err != nil {
+				err := fmt.Errorf("failed to save state: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
+			switch {
+			case inParams && inImmutables:
+				w.Successf("Deleted parameter and immutable key %q\n", key)
+			case inImmutables:
+				w.Successf("Deleted immutable key %q\n", key)
+			default:
+				w.Successf("Deleted parameter %q\n", key)
+			}
+			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to state directory)")
+	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to working directory or absolute)")
 	cmd.Flags().StringVar(&key, "key", "", "Key to delete")
 	cmd.Flags().BoolVar(&force, "force", false, "Force deletion of immutable keys")
 	_ = cmd.MarkFlagRequired("path")

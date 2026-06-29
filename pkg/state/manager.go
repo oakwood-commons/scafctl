@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -67,6 +68,12 @@ func (m *Manager) Load(ctx context.Context, params map[string]any, command Comma
 	// Evaluate enabled -- no resolver data at load time, only CLI params
 	enabled, err := m.evaluateEnabled(ctx, nil, params)
 	if err != nil {
+		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
+			return nil, &MissingParamsError{
+				Missing:  missing,
+				Original: fmt.Errorf("state: evaluate enabled: %w", err),
+			}
+		}
 		return nil, fmt.Errorf("state: evaluate enabled: %w", err)
 	}
 	if !enabled {
@@ -76,6 +83,12 @@ func (m *Manager) Load(ctx context.Context, params map[string]any, command Comma
 	// Resolve backend inputs -- no resolver data at load time, only CLI params
 	backendInputs, err := m.resolveBackendInputs(ctx, nil, params)
 	if err != nil {
+		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
+			return nil, &MissingParamsError{
+				Missing:  missing,
+				Original: fmt.Errorf("state: resolve backend inputs: %w", err),
+			}
+		}
 		return nil, fmt.Errorf("state: resolve backend inputs: %w", err)
 	}
 
@@ -394,4 +407,109 @@ func structToMap(v any) (map[string]any, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+// RequiredParams extracts the __params keys referenced by the state
+// configuration. These are the CLI parameters (-r flags) that must be supplied
+// for the state backend to resolve its inputs at load time.
+//
+// It inspects Enabled and Backend.Inputs ValueRefs for:
+//   - CEL expressions: uses Expression.GetVariablesWithPrefix("__params.")
+//   - Go templates: uses GetGoTemplateReferences() and filters for .__params.*
+//
+// Literal and resolver-ref ValueRefs are skipped (they don't use __params).
+// SaveOverrides are also skipped (they are only evaluated at save time).
+//
+// Returns a deduplicated, sorted list of parameter names (e.g., ["app_name", "project"]).
+// Errors during parsing are silently ignored (best-effort extraction).
+func RequiredParams(ctx context.Context, config *Config) []string {
+	if config == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+
+	// Extract from Enabled
+	extractParamRefs(ctx, config.Enabled, seen)
+
+	// Extract from Backend.Inputs
+	for _, vr := range config.Backend.Inputs {
+		extractParamRefs(ctx, vr, seen)
+	}
+
+	// SaveOverrides are skipped: they are evaluated at save time only
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0, len(seen))
+	for k := range seen {
+		result = append(result, k)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// MissingParams returns the subset of RequiredParams that are absent from the
+// supplied params map. Returns nil if all required params are present.
+func MissingParams(ctx context.Context, config *Config, params map[string]any) []string {
+	required := RequiredParams(ctx, config)
+	if len(required) == 0 {
+		return nil
+	}
+
+	var missing []string
+	for _, key := range required {
+		if _, ok := params[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
+	return missing
+}
+
+// extractParamRefs extracts __params references from a single ValueRef.
+func extractParamRefs(ctx context.Context, vr *spec.ValueRef, seen map[string]struct{}) {
+	if vr == nil {
+		return
+	}
+
+	// CEL expression: use GetVariablesWithPrefix("__params.")
+	if vr.Expr != nil {
+		vars, err := vr.Expr.GetVariablesWithPrefix(ctx, "__params.")
+		if err == nil {
+			for _, v := range vars {
+				seen[v] = struct{}{}
+			}
+		}
+	}
+
+	// Go template: extract references and filter for .__params.*
+	if vr.Tmpl != nil {
+		refs, err := gotmpl.GetGoTemplateReferences(string(*vr.Tmpl), "", "")
+		if err == nil {
+			for _, ref := range refs {
+				// Paths look like ".__params.project" — strip the ".__params." prefix
+				const prefix = ".__params."
+				if len(ref.Path) > len(prefix) && ref.Path[:len(prefix)] == prefix {
+					key := ref.Path[len(prefix):]
+					// Handle nested access: take only the first segment
+					if idx := indexOf(key, '.'); idx >= 0 {
+						key = key[:idx]
+					}
+					seen[key] = struct{}{}
+				}
+			}
+		}
+	}
+}
+
+// indexOf returns the index of the first occurrence of sep in s, or -1.
+func indexOf(s string, sep byte) int {
+	for i := range s {
+		if s[i] == sep {
+			return i
+		}
+	}
+	return -1
 }

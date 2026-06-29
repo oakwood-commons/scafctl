@@ -10,7 +10,6 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -48,8 +47,15 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
+			cwd, err := os.Getwd()
+			if err != nil {
+				err := fmt.Errorf("cannot determine working directory: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
 			// Resolve and verify the file exists before loading.
-			resolved, err := state.ResolveStatePath(opts.Path, paths.StateDir())
+			resolved, err := state.ResolveStatePath(opts.Path, cwd)
 			if err != nil {
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -60,7 +66,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return exitcode.WithCode(err, exitcode.FileNotFound)
 			}
 
-			sd, err := state.LoadFromFile(opts.Path, paths.StateDir())
+			sd, err := state.LoadFromFile(opts.Path, cwd)
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
@@ -70,7 +76,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			totalEntries := len(sd.Parameters) + len(sd.Immutables)
 			if totalEntries == 0 {
 				if !cliParams.IsQuiet {
-					w.Warning("No state entries found")
+					w.Warning("State file is empty \u2014 no parameters or immutables stored")
 				}
 				return nil
 			}
@@ -122,7 +128,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to state directory)")
+	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
 	_ = cmd.MarkFlagRequired("path")
 
 	return cmd
