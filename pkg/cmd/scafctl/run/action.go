@@ -385,7 +385,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		cmdInfo := buildCommandInfo("run action", params)
 		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
 		if loadErr != nil {
-			return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
+			return o.handleStateLoadError(ctx, loadErr)
 		}
 		if !loadResult.Skipped {
 			ctx = loadResult.Ctx

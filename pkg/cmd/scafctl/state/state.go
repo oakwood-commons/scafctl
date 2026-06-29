@@ -25,12 +25,8 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			State files store resolver values across solution executions. They are
 			created automatically when a solution has a state block with a file backend.
 
-			State files are stored under the XDG state directory:
-			  - Linux/macOS: ~/.local/state/scafctl/
-			  - Windows:     %LOCALAPPDATA%\scafctl\state\
-
-			The --path flag specifies the state file relative to the state directory.
-			Use an absolute path to reference files outside the state directory.
+			The --path flag specifies the state file relative to the current working
+			directory. Use an absolute path to reference files in other locations.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/state"
 )
 
-// executeStateLoad loads state from a JSON file in the XDG state directory.
+// executeStateLoad loads state from a JSON file at the given absolute path.
 func (p *FileProvider) executeStateLoad(absPath string) (*provider.Output, error) {
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		// First run -- return empty state

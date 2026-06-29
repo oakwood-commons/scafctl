@@ -217,24 +217,6 @@ func TestCatalogDir(t *testing.T) {
 	})
 }
 
-func TestStateDir(t *testing.T) {
-	t.Run("returns path containing app name", func(t *testing.T) {
-		path := StateDir()
-		assert.Contains(t, path, AppName())
-		assert.True(t, filepath.IsAbs(path), "path should be absolute")
-	})
-
-	t.Run("respects XDG_STATE_HOME", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		t.Setenv("XDG_STATE_HOME", tmpDir)
-		xdg.Reload()
-		defer xdg.Reload()
-
-		path := StateDir()
-		assert.Equal(t, filepath.Join(tmpDir, AppName()), path)
-	})
-}
-
 func TestRuntimeDir(t *testing.T) {
 	t.Run("returns path containing app name", func(t *testing.T) {
 		path := RuntimeDir()

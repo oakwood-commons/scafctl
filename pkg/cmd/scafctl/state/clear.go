@@ -9,7 +9,6 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -37,7 +36,7 @@ func CommandClear(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 		},
 	}
 
-	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to state directory or absolute)")
+	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
 	cmd.Flags().StringVar(&opts.Action, "action", "", "Clear fingerprints for a specific action only")
 	cmd.Flags().BoolVar(&opts.FingerprintsOnly, "fingerprints-only", false, "Clear only fingerprint entries, keep parameters and immutables")
 	_ = cmd.MarkFlagRequired("path")
@@ -54,7 +53,14 @@ func runClear(cmd *cobra.Command, opts *clearOptions) error {
 	}
 
 	// Resolve and verify the file exists.
-	resolved, resolveErr := state.ResolveStatePath(opts.Path, paths.StateDir())
+	cwd, err := os.Getwd()
+	if err != nil {
+		err := fmt.Errorf("cannot determine working directory: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	resolved, resolveErr := state.ResolveStatePath(opts.Path, cwd)
 	if resolveErr != nil {
 		w.Errorf("%v", resolveErr)
 		return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
@@ -65,7 +71,7 @@ func runClear(cmd *cobra.Command, opts *clearOptions) error {
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
-	sd, err := state.LoadFromFile(opts.Path, paths.StateDir())
+	sd, err := state.LoadFromFile(opts.Path, cwd)
 	if err != nil {
 		err := fmt.Errorf("failed to load state: %w", err)
 		w.Errorf("%v", err)
@@ -74,7 +80,7 @@ func runClear(cmd *cobra.Command, opts *clearOptions) error {
 
 	count := clearEntries(sd, opts)
 
-	if err := state.SaveToFile(opts.Path, paths.StateDir(), sd); err != nil {
+	if err := state.SaveToFile(opts.Path, cwd, sd); err != nil {
 		err := fmt.Errorf("failed to save state: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)

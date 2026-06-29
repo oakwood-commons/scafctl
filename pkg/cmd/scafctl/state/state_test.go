@@ -6,6 +6,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,6 +34,19 @@ func seedState(t *testing.T, path string) {
 	sd := state.NewData()
 	sd.Parameters["env"] = "prod"
 	sd.Parameters["count"] = float64(42)
+	require.NoError(t, state.SaveToFile(path, "", sd))
+}
+
+func seedStateWithImmutable(t *testing.T, path string) {
+	t.Helper()
+	sd := state.NewData()
+	sd.Parameters["env"] = "prod"
+	sd.Parameters["project_id"] = "abc-123"
+	sd.Immutables["project_id"] = &state.ImmutableEntry{
+		Value:     "abc-123",
+		Type:      "string",
+		CreatedAt: time.Now(),
+	}
 	require.NoError(t, state.SaveToFile(path, "", sd))
 }
 
@@ -73,7 +87,7 @@ func TestCommandList_EmptyState(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "No state entries found")
+	assert.Contains(t, buf.String(), "State file is empty")
 }
 
 func TestCommandList_WithEntries(t *testing.T) {
@@ -316,6 +330,108 @@ func TestCommandDelete_NotFound(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, buf.String(), "not found")
+}
+
+func TestCommandDelete_ImmutableWithoutForce(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+	seedStateWithImmutable(t, path)
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandDelete(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "project_id"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), "immutable")
+	assert.Contains(t, buf.String(), "--force")
+
+	// Verify neither map was modified
+	sd, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	assert.Contains(t, sd.Parameters, "project_id")
+	assert.Contains(t, sd.Immutables, "project_id")
+}
+
+func TestCommandDelete_ImmutableWithForce(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+	seedStateWithImmutable(t, path)
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandDelete(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "project_id", "--force"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Deleted parameter and immutable key")
+
+	// Verify key is gone from both maps
+	sd, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	assert.NotContains(t, sd.Parameters, "project_id")
+	assert.NotContains(t, sd.Immutables, "project_id")
+	// Other parameters should be untouched
+	assert.Contains(t, sd.Parameters, "env")
+}
+
+func TestCommandDelete_ImmutableOnlyWithForce(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+
+	// Seed state with key only in immutables, not in parameters
+	sd := state.NewData()
+	sd.Immutables["generated_id"] = &state.ImmutableEntry{
+		Value:     "xyz-789",
+		Type:      "string",
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, state.SaveToFile(path, "", sd))
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandDelete(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "generated_id", "--force"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Deleted immutable key")
+
+	// Verify key is gone
+	loaded, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	assert.NotContains(t, loaded.Immutables, "generated_id")
+}
+
+func TestCommandDelete_SaveError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.json")
+	seedState(t, path)
+
+	// Make directory read-only so SaveToFile fails
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Skip("cannot restrict permissions on this platform")
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	// Verify the restriction is actually enforced (e.g. not running as root)
+	probe := filepath.Join(dir, ".probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err == nil {
+		os.Remove(probe)
+		t.Skip("filesystem does not enforce permission restrictions")
+	}
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandDelete(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "env"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), "failed to save state")
 }
 
 // ── Clear tests ───────────────────────────────────────────────────────────────

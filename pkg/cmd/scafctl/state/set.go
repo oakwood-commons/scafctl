@@ -5,11 +5,11 @@ package state
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -38,7 +38,14 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			sd, err := state.LoadFromFile(path, paths.StateDir())
+			cwd, err := os.Getwd()
+			if err != nil {
+				err := fmt.Errorf("cannot determine working directory: %w", err)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.GeneralError)
+			}
+
+			sd, err := state.LoadFromFile(path, cwd)
 			if err != nil {
 				err := fmt.Errorf("failed to load state: %w", err)
 				w.Errorf("%v", err)
@@ -68,7 +75,7 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 				sd.Parameters[key] = coerced
 			}
 
-			if err := state.SaveToFile(path, paths.StateDir(), sd); err != nil {
+			if err := state.SaveToFile(path, cwd, sd); err != nil {
 				err := fmt.Errorf("failed to save state: %w", err)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.GeneralError)
@@ -79,7 +86,7 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 		},
 	}
 
-	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to state directory)")
+	cmd.Flags().StringVar(&path, "path", "", "State file path (relative to working directory or absolute)")
 	cmd.Flags().StringVar(&key, "key", "", "Key to set")
 	cmd.Flags().StringVar(&value, "value", "", "Value to store")
 	cmd.Flags().StringVar(&valueType, "type", "string", "Value type (string, int, bool, etc.)")

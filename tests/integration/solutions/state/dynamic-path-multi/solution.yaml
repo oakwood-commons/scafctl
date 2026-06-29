@@ -1,0 +1,152 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-dynamic-path-multi
+  version: 1.0.0
+  description: |
+    Functional tests for dynamic state backend path with multiple __params.
+    Verifies that missing parameter detection works correctly when the state
+    path references multiple CLI parameters and when partial params are supplied.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path:
+        tmpl: "state/{{ .__params.org }}/{{ .__params.env }}/{{ .__params.app }}.json"
+
+spec:
+  resolvers:
+    org:
+      description: Organization name
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "org"
+          - provider: static
+            inputs:
+              value: "default-org"
+
+    env:
+      description: Environment name
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "env"
+          - provider: static
+            inputs:
+              value: "default-env"
+
+    app:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app"
+          - provider: static
+            inputs:
+              value: "default-app"
+
+    config_value:
+      description: A value resolved from parameter or default
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "config_value"
+          - provider: static
+            inputs:
+              value: "default-config"
+
+  testing:
+    config:
+      # render-defaults: solution has no workflow.actions section
+      # resolve-defaults: dynamic state path requires __params
+      skipBuiltins: [render-defaults, resolve-defaults]
+
+    cases:
+      # =====================================================================
+      # All params supplied -- success
+      # =====================================================================
+      all-params-supplied:
+        description: All three path params supplied, state resolves successfully
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "org=acme", "-r", "env=prod", "-r", "app=api"]
+        tags: [state, dynamic-path, multi-param, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.config_value == "default-config"
+
+      # =====================================================================
+      # No params supplied -- all three listed in error
+      # =====================================================================
+      no-params-all-missing:
+        description: No params supplied, error lists all three missing parameters
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [state, dynamic-path, multi-param, error-handling]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("missing required parameters")
+          - expression: __stderr.contains("app")
+          - expression: __stderr.contains("env")
+          - expression: __stderr.contains("org")
+
+      # =====================================================================
+      # Partial params -- only missing ones listed
+      # =====================================================================
+      partial-params-one-missing:
+        description: Two of three params supplied, error lists only the missing one
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "org=acme", "-r", "env=prod"]
+        # Missing: app
+        tags: [state, dynamic-path, multi-param, error-handling]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("missing required parameters")
+          - expression: __stderr.contains("app")
+          - expression: "!__stderr.contains(\"-r org\")"
+            message: "org was supplied, should not appear in hint"
+          - expression: "!__stderr.contains(\"-r env\")"
+            message: "env was supplied, should not appear in hint"
+
+      partial-params-two-missing:
+        description: One of three params supplied, error lists the two missing ones
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "org=acme"]
+        # Missing: app, env
+        tags: [state, dynamic-path, multi-param, error-handling]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: __stderr.contains("missing required parameters")
+          - expression: __stderr.contains("app")
+          - expression: __stderr.contains("env")
+          - expression: "!__stderr.contains(\"-r org\")"
+            message: "org was supplied, should not appear in hint"
+
+      # =====================================================================
+      # Pre-seeded state at multi-segment path is loaded
+      # =====================================================================
+      preseeded-multi-path:
+        description: Pre-seeded state at multi-segment template-derived path is loaded
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "org=acme", "-r", "env=staging", "-r", "app=web"]
+        tags: [state, dynamic-path, multi-param]
+        init:
+          - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state/acme/staging"
+          - command: >-
+              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-dynamic-path-multi","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"staging-config"},"immutables":{},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state/acme/staging/web.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.config_value == "staging-config"
+            message: "Should load state from multi-segment dynamic path"

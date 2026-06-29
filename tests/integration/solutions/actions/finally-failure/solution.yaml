@@ -12,9 +12,16 @@ spec:
   workflow:
     actions:
       failing-action:
-        description: Main action that exits non-zero
+        description: Main action that exits non-zero detected via resultSchema
         provider: exec
         onError: continue
+        resultSchema:
+          type: object
+          properties:
+            exitCode:
+              type: integer
+              enum: [0]
+        resultSchemaMode: error
         inputs:
           command: "sh -c 'exit 1'"
 

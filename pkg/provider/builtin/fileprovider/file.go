@@ -359,7 +359,7 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 
 	relativeTo, _ := inputs["relativeTo"].(string)
 
-	// State operations use the XDG state directory, not CWD-relative paths
+	// State operations use the solution directory for path resolution, not CWD-relative paths
 	if strings.HasPrefix(operation, "state_") {
 		return p.dispatchStateOperation(ctx, operation, inputs)
 	}

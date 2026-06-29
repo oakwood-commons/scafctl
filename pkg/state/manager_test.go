@@ -968,3 +968,182 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 		assert.False(t, hasBranch)
 	})
 }
+
+func TestRequiredParams(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil config", func(t *testing.T) {
+		result := RequiredParams(ctx, nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("literal only", func(t *testing.T) {
+		cfg := &Config{
+			Enabled: literalValueRef(true),
+			Backend: Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": literalValueRef("fixed-path.json"),
+				},
+			},
+		}
+		result := RequiredParams(ctx, cfg)
+		assert.Nil(t, result)
+	})
+
+	t.Run("CEL expression", func(t *testing.T) {
+		expr := celexp.Expression("'state/' + __params.app_name + '.json'")
+		cfg := &Config{
+			Backend: Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Expr: &expr},
+				},
+			},
+		}
+		result := RequiredParams(ctx, cfg)
+		assert.Equal(t, []string{"app_name"}, result)
+	})
+
+	t.Run("Go template", func(t *testing.T) {
+		tmpl := gotmpl.GoTemplatingContent("dynamic/{{ .__params.project }}.json")
+		cfg := &Config{
+			Backend: Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Tmpl: &tmpl},
+				},
+			},
+		}
+		result := RequiredParams(ctx, cfg)
+		assert.Equal(t, []string{"project"}, result)
+	})
+
+	t.Run("enabled field extraction", func(t *testing.T) {
+		expr := celexp.Expression("__params.state_enabled == true")
+		cfg := &Config{
+			Enabled: &spec.ValueRef{Expr: &expr},
+			Backend: Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": literalValueRef("fixed.json"),
+				},
+			},
+		}
+		result := RequiredParams(ctx, cfg)
+		assert.Equal(t, []string{"state_enabled"}, result)
+	})
+
+	t.Run("mixed CEL and template deduplicated", func(t *testing.T) {
+		expr := celexp.Expression("__params.project + '/state.json'")
+		tmpl := gotmpl.GoTemplatingContent("{{ .__params.project }}/{{ .__params.env }}.json")
+		cfg := &Config{
+			Backend: Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path":   {Expr: &expr},
+					"backup": {Tmpl: &tmpl},
+				},
+			},
+		}
+		result := RequiredParams(ctx, cfg)
+		assert.Equal(t, []string{"env", "project"}, result)
+	})
+
+	t.Run("saveOverrides excluded", func(t *testing.T) {
+		expr := celexp.Expression("__params.save_branch")
+		cfg := &Config{
+			Backend: Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": literalValueRef("fixed.json"),
+				},
+				SaveOverrides: map[string]*spec.ValueRef{
+					"branch": {Expr: &expr},
+				},
+			},
+		}
+		result := RequiredParams(ctx, cfg)
+		assert.Nil(t, result)
+	})
+}
+
+func TestMissingParams(t *testing.T) {
+	ctx := context.Background()
+
+	tmpl := gotmpl.GoTemplatingContent("dynamic/{{ .__params.project }}.json")
+	cfg := &Config{
+		Backend: Backend{
+			Provider: "file",
+			Inputs: map[string]*spec.ValueRef{
+				"path": {Tmpl: &tmpl},
+			},
+		},
+	}
+
+	t.Run("all present", func(t *testing.T) {
+		params := map[string]any{"project": "alpha"}
+		result := MissingParams(ctx, cfg, params)
+		assert.Nil(t, result)
+	})
+
+	t.Run("some missing", func(t *testing.T) {
+		params := map[string]any{"other": "value"}
+		result := MissingParams(ctx, cfg, params)
+		assert.Equal(t, []string{"project"}, result)
+	})
+
+	t.Run("none supplied", func(t *testing.T) {
+		result := MissingParams(ctx, cfg, nil)
+		assert.Equal(t, []string{"project"}, result)
+	})
+
+	t.Run("empty params map", func(t *testing.T) {
+		result := MissingParams(ctx, cfg, map[string]any{})
+		assert.Equal(t, []string{"project"}, result)
+	})
+}
+
+func TestLoad_MissingParamsError(t *testing.T) {
+	tmpl := gotmpl.GoTemplatingContent("dynamic/{{ .__params.project }}.json")
+	cfg := &Config{
+		Enabled: literalValueRef(true),
+		Backend: Backend{
+			Provider: "mock-state",
+			Inputs: map[string]*spec.ValueRef{
+				"path": {Tmpl: &tmpl},
+			},
+		},
+	}
+
+	backend := &mockBackendProvider{}
+	reg := newTestRegistry(t, backend)
+	mgr := NewManager(cfg, reg, "test-version")
+
+	t.Run("returns MissingParamsError when params missing", func(t *testing.T) {
+		// No params supplied -- template will fail on .__params.project
+		_, err := mgr.Load(context.Background(), map[string]any{}, CommandInfo{Subcommand: "run resolver"})
+		assert.Error(t, err)
+
+		var missingErr *MissingParamsError
+		assert.ErrorAs(t, err, &missingErr)
+		assert.Equal(t, []string{"project"}, missingErr.Missing)
+		assert.NotNil(t, missingErr.Original)
+	})
+
+	t.Run("unwrap returns original", func(t *testing.T) {
+		_, err := mgr.Load(context.Background(), map[string]any{}, CommandInfo{Subcommand: "run resolver"})
+		assert.Error(t, err)
+
+		var missingErr *MissingParamsError
+		assert.ErrorAs(t, err, &missingErr)
+		assert.Contains(t, missingErr.Unwrap().Error(), "resolve backend inputs")
+	})
+
+	t.Run("no error when params supplied", func(t *testing.T) {
+		params := map[string]any{"project": "alpha"}
+		result, err := mgr.Load(context.Background(), params, CommandInfo{Subcommand: "run resolver"})
+		assert.NoError(t, err)
+		assert.False(t, result.Skipped)
+	})
+}

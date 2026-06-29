@@ -285,7 +285,7 @@ Solution identity (name, version) is already in `metadata` and does not need to 
 
 The built-in `file` provider backend resolves relative state paths against the solution file's parent directory (via `provider.SolutionDirectoryFromContext`). This keeps state files co-located with the solution that owns them. Absolute paths are used as-is.
 
-CLI state commands (`scafctl state list`, `get`, `set`, `delete`, `clear`) resolve relative `--path` values against the XDG state directory (`$XDG_STATE_HOME/scafctl/`, i.e. `~/.local/state/scafctl/` on macOS).
+CLI state commands (`scafctl state list`, `get`, `set`, `delete`, `clear`) resolve relative `--path` values against the current working directory.
 
 ---
 
@@ -637,7 +637,7 @@ A `scafctl state` command group provides manual state management, mirroring the 
 | `scafctl state delete --path <file> --key <key>` | Delete a key |
 | `scafctl state clear --path <file>` | Clear all values |
 
-- `--path` is relative to the XDG state directory (`paths.StateDir()`) for CLI commands
+- `--path` is relative to the current working directory for CLI commands
 - `list` and `get` support `-o table/json/yaml/quiet` via `kvx.OutputOptions`
 
 ---
