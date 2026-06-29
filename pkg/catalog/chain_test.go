@@ -522,12 +522,12 @@ func TestNewRemoteCatalog_WithAuthHandlerNoCredStore(t *testing.T) {
 	t.Parallel()
 
 	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
-		Name:         "test",
-		Registry:     "registry.example.io",
-		Repository:   "",
-		AuthProvider: "test-handler",
-		AuthScope:    "",
-		Logger:       logr.Discard(),
+		Name:        "test",
+		Registry:    "registry.example.io",
+		Repository:  "",
+		AuthHandler: auth.NewMockHandler("test-handler"),
+		AuthScope:   "",
+		Logger:      logr.Discard(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cat)
@@ -545,7 +545,7 @@ func TestNewRemoteCatalog_WithAuthHandlerAndCredStore(t *testing.T) {
 		Name:            "test",
 		Registry:        "registry.example.io",
 		Repository:      "",
-		AuthProvider:    "test-handler",
+		AuthHandler:     auth.NewMockHandler("test-handler"),
 		CredentialStore: credStore,
 		Logger:          logr.Discard(),
 	})

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-plugin"
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
 	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -210,10 +211,13 @@ func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetToke
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
 	}
 	tokenReq := TokenRequest{
-		Scope:        req.Scope,
-		MinValidFor:  time.Duration(req.MinValidForSeconds) * time.Second,
-		ForceRefresh: req.ForceRefresh,
-		Hostname:     req.Hostname,
+		Scope:         req.Scope,
+		MinValidFor:   time.Duration(req.MinValidForSeconds) * time.Second,
+		ForceRefresh:  req.ForceRefresh,
+		ServerContext: sdkauth.ServerContext(req.ServerContext),
+		Caller:        sdkauth.CallerType(req.Caller),
+		Assertion:     req.Assertion,
+		Hostname:      req.Hostname,
 	}
 	token, err := s.Impl.GetToken(ctx, req.HandlerName, tokenReq)
 	if err != nil {
@@ -430,6 +434,9 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 		ForceRefresh:       req.ForceRefresh,
 		Profile:            auth.ProfileFromContext(ctx),
 		Hostname:           req.Hostname,
+		ServerContext:      string(req.ServerContext),
+		Caller:             string(req.Caller),
+		Assertion:          req.Assertion,
 	})
 	if err != nil {
 		return nil, err
@@ -532,6 +539,25 @@ func (c *AuthHandlerGRPCClient) StopAuthHandler(ctx context.Context, handlerName
 	}
 	if resp.Error != "" {
 		return fmt.Errorf("stop auth handler failed: %s", resp.Error)
+	}
+	return nil
+}
+
+// ActivateServerMode sends server-mode settings to the plugin. When settings
+// is nil the plugin stays in CLI mode. When non-nil the bytes are passed as-is
+// to the plugin's ActivateServerMode RPC which unmarshals and validates them.
+func (c *AuthHandlerGRPCClient) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
+	resp, err := c.client.ActivateServerMode(ctx, &proto.ActivateServerModeRequest{
+		Settings: settings,
+	})
+	if err != nil {
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return nil
+		}
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("activate server mode failed: %s", resp.Error)
 	}
 	return nil
 }

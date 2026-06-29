@@ -346,17 +346,17 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	authProvider := resolveAuthProvider(ctx, registry, "")
+	authHandler := resolveAuthHandler(ctx, registry, "")
 	authScope := resolveAuthScopeForRegistry(ctx, registry)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            registry,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthProvider:    authProvider,
+		AuthHandler:     authHandler,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,
@@ -490,18 +490,18 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 	discoveryStrategy := resolveDiscoveryStrategy(ctx, opts.Catalog)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:              opts.Catalog,
 		Registry:          registry,
 		Repository:        repository,
 		CredentialStore:   credStore,
-		AuthProvider:      authProvider,
+		AuthHandler:       authHandler,
 		AuthScope:         authScope,
 		DiscoveryStrategy: discoveryStrategy,
 		Insecure:          opts.Insecure,

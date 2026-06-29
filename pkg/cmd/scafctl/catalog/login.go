@@ -226,7 +226,7 @@ func runAuthHandlerLogin(ctx context.Context, w *writer.Writer, opts *LoginOptio
 	}
 
 	// Bridge auth handler token to registry credentials
-	username, password, err := catalog.BridgeAuthToRegistry(ctx, handlerName, opts.Registry, scope)
+	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, opts.Registry, scope)
 	if err != nil {
 		err = fmt.Errorf("failed to bridge auth to registry: %w", err)
 		w.Errorf("%v", err)

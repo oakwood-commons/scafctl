@@ -11,30 +11,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/runmode"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mockTokenProvider implements tokenprovider.TokenProvider for tests.
-type mockTokenProvider struct {
-	name  string
-	token tokenprovider.Token
-	err   error
-}
-
-func (m *mockTokenProvider) Name() string { return m.name }
-func (m *mockTokenProvider) GetToken(_ context.Context, _ tokenprovider.RequestOptions) (tokenprovider.Token, error) {
-	return m.token, m.err
-}
-
-// newBridgeTestCtx creates a context with a tokenprovider registry containing
-// the given mock source registered under its Name().
-func newBridgeTestCtx(src tokenprovider.TokenProvider) context.Context {
-	reg := tokenprovider.NewRegistry()
-	_ = reg.Register(src)
-	return tokenprovider.WithRegistry(context.Background(), reg)
-}
 
 func TestBridgeAuthToRegistry(t *testing.T) {
 	tests := []struct {
@@ -127,10 +106,9 @@ func TestBridgeAuthToRegistry(t *testing.T) {
 			}
 			registry := auth.NewRegistry()
 			registry.Register(mock)
-			ctx := newBridgeTestCtx(tokenprovider.NewAuthHandlerAdapter(mock))
-			ctx = auth.WithRegistry(ctx, registry)
+			ctx := auth.WithRegistry(context.Background(), registry)
 
-			username, password, err := BridgeAuthToRegistry(ctx, tt.handlerName, tt.registryHost, tt.scope)
+			username, password, err := BridgeAuthToRegistry(ctx, mock, tt.registryHost, tt.scope)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -149,17 +127,26 @@ func TestBridgeAuthToRegistry_TokenError(t *testing.T) {
 	mock.GetTokenErr = auth.ErrNotAuthenticated
 	registry := auth.NewRegistry()
 	registry.Register(mock)
-	ctx := newBridgeTestCtx(tokenprovider.NewAuthHandlerAdapter(mock))
-	ctx = auth.WithRegistry(ctx, registry)
-	_, _, err := BridgeAuthToRegistry(ctx, "github", "ghcr.io", "")
+	ctx := auth.WithRegistry(context.Background(), registry)
+	_, _, err := BridgeAuthToRegistry(ctx, mock, "ghcr.io", "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, auth.ErrNotAuthenticated)
 }
 
-func TestBridgeAuthToRegistry_NoRegistry(t *testing.T) {
-	// No tokenprovider registry in context at all.
-	_, _, err := BridgeAuthToRegistry(context.Background(), "github", "ghcr.io", "")
+func TestBridgeAuthToRegistry_NoHandler(t *testing.T) {
+	// Nil handler should error gracefully without panic.
+	_, _, err := BridgeAuthToRegistry(context.Background(), nil, "ghcr.io", "")
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth handler is nil")
+}
+
+func TestBridgeAuthToRegistry_EmptyToken(t *testing.T) {
+	// Handler returning empty token should error.
+	mock := auth.NewMockHandler("missing")
+	mock.GetTokenResult = &auth.Token{AccessToken: "", TokenType: "Bearer"}
+	_, _, err := BridgeAuthToRegistry(context.Background(), mock, "ghcr.io", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty token")
 }
 
 func TestBridgeAuthToRegistry_APIMode(t *testing.T) {
@@ -180,17 +167,15 @@ func TestBridgeAuthToRegistry_APIMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			src := &mockTokenProvider{
-				name:  tt.provider,
-				token: tokenprovider.Token{AccessToken: "api-token", TokenType: "Bearer"},
-			}
-			reg := tokenprovider.NewRegistry()
-			_ = reg.Register(src)
-			// API mode context — deliberately no auth.Registry to prove it's never accessed.
-			ctx := runmode.WithMode(tokenprovider.WithRegistry(context.Background(), reg), runmode.API)
+			mock := auth.NewMockHandler(tt.provider)
+			mock.GetTokenResult = &auth.Token{AccessToken: "api-token", TokenType: "Bearer"}
+			registry := auth.NewRegistry()
+			registry.Register(mock)
+			// API mode context — no claims needed, should use default username.
+			ctx := runmode.WithMode(auth.WithRegistry(context.Background(), registry), runmode.API)
 
 			assert.NotPanics(t, func() {
-				username, password, err := BridgeAuthToRegistry(ctx, tt.provider, "registry.example.com", "")
+				username, password, err := BridgeAuthToRegistry(ctx, mock, "registry.example.com", "")
 				require.NoError(t, err)
 				assert.Equal(t, tt.wantUsername, username)
 				assert.Equal(t, "api-token", password)
@@ -269,19 +254,20 @@ func BenchmarkInferAuthHandler(b *testing.B) {
 }
 
 func BenchmarkBridgeAuthToRegistry(b *testing.B) {
-	src := &mockTokenProvider{
-		name: "github",
-		token: tokenprovider.Token{
-			AccessToken: "ghs_abc123",
-			ExpiresAt:   time.Now().Add(time.Hour),
-			TokenType:   "Bearer",
-		},
+	mock := auth.NewMockHandler("github")
+	mock.GetTokenResult = &auth.Token{
+		AccessToken: "ghs_abc123",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		TokenType:   "Bearer",
 	}
-	ctx := newBridgeTestCtx(src)
+	mock.StatusResult = &auth.Status{Authenticated: true, Claims: &auth.Claims{Username: "bench-user"}}
+	registry := auth.NewRegistry()
+	_ = registry.Register(mock)
+	ctx := auth.WithRegistry(context.Background(), registry)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _ = BridgeAuthToRegistry(ctx, "github", "ghcr.io", "")
+		_, _, _ = BridgeAuthToRegistry(ctx, mock, "ghcr.io", "")
 	}
 }
 

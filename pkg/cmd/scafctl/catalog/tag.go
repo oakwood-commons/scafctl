@@ -191,7 +191,7 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 	}
 
 	// Resolve auth provider for automatic token bridging
-	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
 	// Create remote catalog
@@ -200,7 +200,7 @@ func runTagRemote(ctx context.Context, opts *TagOptions, ref catalog.Reference) 
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthProvider:    authProvider,
+		AuthHandler:     authHandler,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,

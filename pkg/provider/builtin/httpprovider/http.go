@@ -14,13 +14,14 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider/callerscope"
 )
 
 const (
@@ -550,34 +551,9 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
 
 	if authProvider != "" {
-		tokenOpts := tokenprovider.RequestOptions{
-			Scope:       scope,
-			MinValidFor: timeoutDuration + 60*time.Second,
-			Caller:      callerscope.RequesterCaller,
-		}
-
-		// In API mode, check passthrough tokens forwarded from the request context.
-		token, found := tokenprovider.ExtractPassthroughTokenFromContext(ctx, authProvider)
-		if !found {
-			var err error
-			token, err = tokenprovider.GetToken(ctx, authProvider, tokenOpts)
-			if err != nil {
-				return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
-			}
-
-			// Only wire 401 refresh when the token came from a refreshable source.
-			httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
-				t, err := tokenprovider.GetToken(unauthCtx, authProvider, tokenprovider.RequestOptions{
-					Scope:        tokenOpts.Scope,
-					MinValidFor:  tokenOpts.MinValidFor,
-					Caller:       tokenOpts.Caller,
-					ForceRefresh: true,
-				})
-				if err != nil {
-					return "", err
-				}
-				return fmt.Sprintf("%s %s", t.TokenType, t.AccessToken), nil
-			}
+		token, err := getToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
+		if err != nil {
+			return nil, err
 		}
 		headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
 	}
@@ -625,6 +601,50 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	return executeFunc()
+}
+
+func handlerToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+	authRegistry := auth.RegistryFromContext(ctx)
+	if authRegistry == nil {
+		return nil, fmt.Errorf("%s: no auth registry in context for provider %q", ProviderName, authProvider)
+	}
+	handler, err := authRegistry.Get(authProvider)
+	if err != nil {
+		return nil, fmt.Errorf("%s: auth provider %q not found: %w", ProviderName, authProvider, err)
+	}
+
+	requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+	if scope == "" && requiresScope {
+		return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+	}
+	if scope != "" && !requiresScope {
+		scope = ""
+	}
+
+	tokenOpts := auth.TokenOptions{
+		Scope:       scope,
+		MinValidFor: timeoutDuration + 60*time.Second,
+	}
+
+	tokenOpts = tokenOptionChain(ctx, authProvider, tokenOpts, withServerContext, withAssertion, withCallerType)
+
+	token, err := handler.GetToken(ctx, tokenOpts)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
+	}
+
+	// Only wire 401 refresh when the token came from a refreshable source.
+	httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
+		refreshOpts := tokenOpts
+		refreshOpts.ForceRefresh = true
+		t, refreshErr := handler.GetToken(unauthCtx, refreshOpts)
+		if refreshErr != nil {
+			return "", refreshErr
+		}
+		return fmt.Sprintf("%s %s", t.TokenType, t.AccessToken), nil
+	}
+
+	return token, nil
 }
 
 // buildHTTPClientConfig translates provider timeout and retry config into an httpc.ClientConfig.
@@ -776,4 +796,89 @@ func isJSONContentType(contentType string) bool {
 	ct := strings.ToLower(strings.TrimSpace(contentType))
 	return strings.HasPrefix(ct, "application/json") ||
 		strings.HasSuffix(ct, "+json")
+}
+
+func extractHeaderToken(ctx context.Context, authProvider string) (bool, string) {
+	canonicalProvider := http.CanonicalHeaderKey(authProvider)
+	headerTokens := middleware.TokensFromContext(ctx)
+	if headerTokens == nil {
+		return false, ""
+	}
+
+	token, ok := headerTokens[canonicalProvider]
+	if !ok {
+		return false, ""
+	}
+	return true, token
+}
+
+func getToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+	// First, check if the token is provided in the request headers (e.g., via middleware).
+	if ok, token := extractHeaderToken(ctx, authProvider); ok {
+		if token == "" {
+			return nil, fmt.Errorf("%s: authProvider %q token is empty in request headers", ProviderName, authProvider)
+		}
+		return &auth.Token{AccessToken: token, TokenType: "Bearer"}, nil
+	}
+	// If not in headers, obtain the token from the auth provider.
+	return handlerToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
+}
+
+func getAssertion(ctx context.Context, authProvider string) string {
+	if authProvider != middleware.OIDCProviderFromContext(ctx) {
+		return ""
+	}
+	middlewareAssertion := middleware.AccessTokenFromContext(ctx)
+	return middlewareAssertion
+}
+
+func determineCallerIdentity(ctx context.Context, authProvider string) sdkauth.CallerType {
+	if authProvider != middleware.OIDCProviderFromContext(ctx) {
+		return ""
+	}
+	claims := middleware.ClaimsFromContext(ctx)
+	if claims == nil {
+		return ""
+	}
+	callerType := claims.CallerType()
+
+	switch callerType {
+	case middleware.IdentityTypeApp:
+		return sdkauth.CallerMachine
+	case middleware.IdentityTypeUser:
+		return sdkauth.CallerUser
+	case middleware.IdentityTypeUnknown:
+		return sdkauth.CallerUser
+	}
+	return sdkauth.CallerUser
+}
+
+type tokenOptionFunc func(context.Context, string, auth.TokenOptions) auth.TokenOptions
+
+func withAssertion(ctx context.Context, authProvider string, opts auth.TokenOptions) auth.TokenOptions {
+	assertions := getAssertion(ctx, authProvider)
+	if assertions != "" {
+		opts.Assertion = assertions
+	}
+	return opts
+}
+
+func withCallerType(ctx context.Context, authProvider string, opts auth.TokenOptions) auth.TokenOptions {
+	callerType := determineCallerIdentity(ctx, authProvider)
+	if callerType != "" {
+		opts.Caller = callerType
+	}
+	return opts
+}
+
+func withServerContext(_ context.Context, _ string, opts auth.TokenOptions) auth.TokenOptions {
+	opts.ServerContext = auth.Delegate
+	return opts
+}
+
+func tokenOptionChain(ctx context.Context, authProvider string, opts auth.TokenOptions, f ...tokenOptionFunc) auth.TokenOptions {
+	for _, fn := range f {
+		opts = fn(ctx, authProvider, opts)
+	}
+	return opts
 }

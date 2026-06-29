@@ -23,8 +23,9 @@ import (
 type contextKey string
 
 const (
-	claimsContextKey      contextKey = "auth_claims"
-	accessTokenContextKey contextKey = "access_token"
+	claimsContextKey       contextKey = "auth_claims"
+	accessTokenContextKey  contextKey = "access_token"
+	oidcProviderContextKey contextKey = "oidc_provider"
 )
 
 // AuthClaims holds the validated JWT claims extracted from an Entra OIDC token.
@@ -42,14 +43,22 @@ type AuthClaims struct {
 	ExpiresAt int64    `json:"exp"`
 }
 
-// CallerType returns "app" for service principal tokens (idtyp=app) and
-// "user" for all other callers. Per Entra spec, the idtyp claim is absent
+type IdentityType int
+
+const (
+	IdentityTypeUnknown IdentityType = iota
+	IdentityTypeUser
+	IdentityTypeApp
+)
+
+// CallerType returns IdentityTypeApp for service principal tokens (idtyp=app) and
+// IdentityTypeUser for all other callers. Per Entra spec, the idtyp claim is absent
 // for user tokens and set to "app" for application/service principal tokens.
-func (c *AuthClaims) CallerType() string {
+func (c *AuthClaims) CallerType() IdentityType {
 	if c.IDType == "app" {
-		return "app"
+		return IdentityTypeApp
 	}
-	return "user"
+	return IdentityTypeUser
 }
 
 // ClaimsFromContext extracts auth claims from the request context.
@@ -220,6 +229,7 @@ func newOIDCAuthMiddleware(jwksURL, issuer, clientID string, lgr logr.Logger) fu
 
 			ctx := context.WithValue(r.Context(), claimsContextKey, claims)
 			ctx = context.WithValue(ctx, accessTokenContextKey, tokenStr)
+			ctx = WithOIDCProvider(ctx, "entra")
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -347,4 +357,16 @@ func claimStringSlice(claims jwt.MapClaims, key string) []string {
 		}
 	}
 	return result
+}
+
+// WithOIDCProvider stores the name of the OIDC provider that authenticated the request.
+func WithOIDCProvider(ctx context.Context, provider string) context.Context {
+	return context.WithValue(ctx, oidcProviderContextKey, provider)
+}
+
+// OIDCProviderFromContext returns the OIDC provider name that authenticated the
+// inbound request, or "" if no OIDC middleware authenticated it.
+func OIDCProviderFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(oidcProviderContextKey).(string)
+	return v
 }

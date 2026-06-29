@@ -572,10 +572,11 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 		}
 		remoteResolver := catalog.NewRemoteSolutionResolver(catalog.RemoteSolutionResolverConfig{
 			CredentialStore: credStore,
-			AuthProviderFunc: func(registry string) string {
+			AuthHandlerFunc: func(registry string) auth.Handler {
 				cfg := config.FromContext(ctx)
 
 				// Check catalog config for an explicit authProvider matching this registry.
+				var handlerName string
 				if cfg != nil {
 					for _, cat := range cfg.Catalogs {
 						if cat.URL == "" || cat.AuthProvider == "" {
@@ -583,17 +584,30 @@ func NewDefaultGetter(ctx context.Context, noCache bool) get.Interface {
 						}
 						host, _ := catalog.ParseCatalogURL(cat.URL)
 						if host == registry {
-							return cat.AuthProvider
+							handlerName = cat.AuthProvider
+							break
 						}
 					}
 				}
 
 				// Fall back to inference from registry host.
-				var customHandlers []config.CustomOAuth2Config
-				if cfg != nil {
-					customHandlers = cfg.Auth.CustomOAuth2
+				if handlerName == "" {
+					var customHandlers []config.CustomOAuth2Config
+					if cfg != nil {
+						customHandlers = cfg.Auth.CustomOAuth2
+					}
+					handlerName = catalog.InferAuthHandler(registry, customHandlers)
 				}
-				return catalog.InferAuthHandler(registry, customHandlers)
+
+				if handlerName == "" {
+					return nil
+				}
+				handler, err := auth.GetHandler(ctx, handlerName)
+				if err != nil {
+					lgr.V(1).Info("failed to resolve auth handler for registry", "handler", handlerName, "registry", registry, "error", err)
+					return nil
+				}
+				return handler
 			},
 			AuthScopeFunc: func(registry string) string {
 				cfg := config.FromContext(ctx)

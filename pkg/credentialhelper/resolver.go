@@ -16,7 +16,7 @@ import (
 
 // AuthTokenResolver resolves fresh registry credentials by inferring
 // the auth handler for a registry host, resolving the active profile,
-// and acquiring a fresh token via BridgeAuthToRegistry.
+// and acquiring a fresh token directly from the handler.
 type AuthTokenResolver struct {
 	registry       *auth.Registry
 	customHandlers []config.CustomOAuth2Config
@@ -79,7 +79,6 @@ func (r *AuthTokenResolver) Resolve(ctx context.Context, serverURL string) (*Cre
 	if err != nil {
 		return nil, fmt.Errorf("auth handler %q not available: %w", handlerName, err)
 	}
-	_ = handler // validated existence; BridgeAuthToRegistry uses provider name via tokenprovider
 
 	// Resolve profile and inject into context.
 	profile := auth.ResolveActiveProfile(ctx, handlerName)
@@ -88,22 +87,24 @@ func (r *AuthTokenResolver) Resolve(ctx context.Context, serverURL string) (*Cre
 	}
 
 	scope := catalog.InferDefaultScope(host)
-	username, password, err := catalog.BridgeAuthToRegistry(ctx, handlerName, host, scope)
+	token, err := handler.GetToken(ctx, auth.TokenOptions{Scope: scope})
 	if err != nil {
-		// A handler was inferred but no usable token could be acquired. Surface
-		// a typed error so the credential-helper get command can emit an
-		// actionable "run <binary> auth login <handler>" message.
 		return nil, &ReauthRequiredError{
 			Handler:   handlerName,
 			ServerURL: serverURL,
-			Err:       fmt.Errorf("bridge auth for %q: %w", serverURL, err),
+			Err:       fmt.Errorf("get token for %q: %w", serverURL, err),
 		}
+	}
+
+	username, err := catalog.RegistryUsername(ctx, handler, serverURL)
+	if err != nil {
+		return nil, fmt.Errorf("get registry username for %q: %w", serverURL, err)
 	}
 
 	return &Credential{
 		ServerURL: serverURL,
 		Username:  username,
-		Secret:    password,
+		Secret:    token.AccessToken,
 	}, nil
 }
 
