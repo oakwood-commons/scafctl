@@ -25,15 +25,15 @@ var (
 )
 
 // MissingParamsError is returned when state load fails because the state
-// backend configuration references __params keys that were not supplied via
+// configuration references __params keys that were not supplied via
 // CLI -r flags. It wraps the original evaluation error and includes the list
 // of missing parameter names so callers can produce actionable messages.
 type MissingParamsError struct {
 	// Missing is the sorted list of __params keys not found in the supplied params.
-	Missing []string `json:"missing" yaml:"missing" doc:"Parameter names required by state backend"`
+	Missing []string `json:"missing" yaml:"missing" doc:"Parameter names required by state configuration"`
 
 	// Original is the underlying evaluation error.
-	Original error `json:"-" yaml:"-"`
+	Original error `json:"-" yaml:"-" doc:"Underlying evaluation error"`
 }
 
 func (e *MissingParamsError) Error() string {
