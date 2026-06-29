@@ -26,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
 	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
+	kubecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/kube"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
@@ -877,6 +878,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddCommand(withGroup(groupConfig, secretscmd.CommandSecrets(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, statecmd.CommandState(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, authcmd.CommandAuth(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupConfig, kubecmd.CommandKube(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, cachecmd.CommandCache(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupConfig, credhelpercmd.CommandCredentialHelper(cliParams, ioStreams, binaryName)))
 

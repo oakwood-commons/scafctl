@@ -2109,6 +2109,44 @@ func TestIntegration_AuthLoginGCPInvalidFlow(t *testing.T) {
 	)
 }
 
+func TestIntegration_LoginHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--handler")
+	assert.Contains(t, stdout, "--server")
+	assert.Contains(t, stdout, "--verify")
+	assert.Contains(t, stdout, "kubeconfig")
+}
+
+func TestIntegration_LoginMissingHandler(t *testing.T) {
+	t.Parallel()
+	// No --handler and no cluster resolver configured, so no default handler is
+	// available: login fails asking for a handler.
+	_, stderr, exitCode := runScafctl(t, "kube", "login", "prod", "--server", "https://api.example.com:6443")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "auth handler is required")
+}
+
+func TestIntegration_LogoutHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "logout", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--keep-credentials")
+	assert.Contains(t, stdout, "kubeconfig")
+}
+
+func TestIntegration_LogoutNoCluster(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "kube", "logout")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "cluster name is required")
+}
+
 func TestIntegration_AuthStatusGCP(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "auth", "status", "gcp")

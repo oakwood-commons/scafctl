@@ -16,24 +16,49 @@ import (
 func TestWriteInput_ToInputs(t *testing.T) {
 	t.Parallel()
 	in := WriteInput{
-		Server:            "https://api.example.com:6443",
-		Audience:          "aud",
-		ClusterName:       "prod",
-		ContextName:       "ctx",
-		UserName:          "user",
-		KubeconfigPath:    "/tmp/kubeconfig",
-		ExecCommand:       "scafctl",
-		ExecArgs:          []string{"auth", "token"},
-		InsecureSkipTLS:   true,
-		SetCurrentContext: true,
+		Server:             "https://api.example.com:6443",
+		Audience:           "aud",
+		ClusterName:        "prod",
+		ContextName:        "ctx",
+		UserName:           "user",
+		KubeconfigPath:     "/tmp/kubeconfig",
+		ExecCommand:        "scafctl",
+		ExecArgs:           []string{"auth", "token"},
+		CAData:             "-----BEGIN CERTIFICATE-----",
+		InteractiveMode:    InteractiveModeIfAvailable,
+		InstallHint:        "install scafctl",
+		ProvideClusterInfo: true,
+		InsecureSkipTLS:    true,
+		SetCurrentContext:  true,
 	}
 	got := in.toInputs()
 	assert.Equal(t, "https://api.example.com:6443", got["server"])
 	assert.Equal(t, "prod", got["cluster_name"])
 	assert.Equal(t, "scafctl", got["exec_command"])
 	assert.Equal(t, []string{"auth", "token"}, got["exec_args"])
+	assert.Equal(t, "-----BEGIN CERTIFICATE-----", got["ca_data"])
+	assert.Equal(t, InteractiveModeIfAvailable, got["interactive_mode"])
+	assert.Equal(t, "install scafctl", got["install_hint"])
+	assert.Equal(t, true, got["provide_cluster_info"])
 	assert.Equal(t, true, got["insecure_skip_tls"])
 	assert.Equal(t, true, got["set_current_context"])
+}
+
+func TestWhoamiInput_ToInputs(t *testing.T) {
+	t.Parallel()
+	in := WhoamiInput{
+		Server:          "https://api.example.com:6443",
+		Token:           "tok",
+		Audience:        "aud",
+		CAData:          "-----BEGIN CERTIFICATE-----",
+		InsecureSkipTLS: true,
+	}
+	got := in.toInputs()
+	assert.Equal(t, "https://api.example.com:6443", got["server"])
+	assert.Equal(t, "tok", got["token"])
+	assert.Equal(t, "aud", got["audience"])
+	assert.Equal(t, "-----BEGIN CERTIFICATE-----", got["ca_data"])
+	assert.Equal(t, true, got["insecure_skip_tls"])
 }
 
 func TestDecodeOutput_MapPath(t *testing.T) {
