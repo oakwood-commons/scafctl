@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 // MockAuthHandlerPlugin implements AuthHandlerPlugin for testing.
@@ -848,6 +849,83 @@ func TestAuthHandlerWrapper_Login_NoDeviceCodeCallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "sp@corp.com", result.Claims.Email)
+}
+
+func TestAuthHandlerWrapper_Login_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	var gotReq LoginRequest
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, req LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+			gotReq = req
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName: "openshift",
+		info:        AuthHandlerInfo{Name: "openshift"},
+	}
+
+	_, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow:     auth.FlowServicePrincipal,
+		Hostname: "cluster-a",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "cluster-a", gotReq.Hostname, "hostname from LoginOptions must reach the plugin LoginRequest")
+}
+
+// mockLoginServerStream is a minimal grpc.ServerStreamingServer used to drive
+// AuthHandlerGRPCServer.Login in unit tests. It records sent messages.
+type mockLoginServerStream struct {
+	grpc.ServerStreamingServer[proto.LoginStreamMessage]
+	ctx      context.Context
+	messages []*proto.LoginStreamMessage
+}
+
+func (s *mockLoginServerStream) Send(m *proto.LoginStreamMessage) error {
+	s.messages = append(s.messages, m)
+	return nil
+}
+
+func (s *mockLoginServerStream) Context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
+
+func TestAuthHandlerGRPCServer_Login_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	var gotReq LoginRequest
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, req LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+			gotReq = req
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+	stream := &mockLoginServerStream{}
+
+	err := server.Login(&proto.LoginRequest{
+		HandlerName: "openshift",
+		Hostname:    "cluster-a",
+		Flow:        string(auth.FlowServicePrincipal),
+	}, stream)
+	require.NoError(t, err)
+	assert.Equal(t, "cluster-a", gotReq.Hostname, "hostname from proto LoginRequest must reach the handler")
+	require.NotEmpty(t, stream.messages, "server must send a result message")
 }
 
 func TestAuthHandlerWrapper_Login_MaliciousPluginIgnoresCancellation(t *testing.T) {

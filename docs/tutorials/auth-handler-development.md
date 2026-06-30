@@ -106,7 +106,7 @@ type TokenPurger interface {
 | `scopes_on_login` | `auth.CapScopesOnLogin` | Handler accepts scopes during login |
 | `scopes_on_token_request` | `auth.CapScopesOnTokenRequest` | Handler accepts scopes on each token request |
 | `tenant_id` | `auth.CapTenantID` | Handler uses a tenant ID (multi-tenant IDPs) |
-| `hostname` | `auth.CapHostname` | Handler supports hostname-based routing |
+| `hostname` | `auth.CapHostname` | Handler supports hostname-based routing (the `--hostname` flag value is forwarded to the handler via `LoginOptions.Hostname`) |
 | `federated_token` | `auth.CapFederatedToken` | Handler supports federated token exchange |
 
 ### Identity Types
@@ -121,7 +121,7 @@ type TokenPurger interface {
 
 | Type | Fields | Purpose |
 |------|--------|---------|
-| `LoginOptions` | `TenantID`, `Scopes`, `Flow`, `Timeout`, `DeviceCodeCallback` | Input to `Login()` |
+| `LoginOptions` | `TenantID`, `Hostname`, `Scopes`, `Flow`, `Timeout`, `DeviceCodeCallback` | Input to `Login()` |
 | `TokenOptions` | `Scope`, `MinValidFor`, `ForceRefresh` | Input to `GetToken()` / `InjectAuth()` |
 | `Result` | `Claims`, `ExpiresAt` | Output from `Login()` |
 | `Status` | `Authenticated`, `Claims`, `ExpiresAt`, `LastRefresh`, `TenantID`, `IdentityType`, `ClientID`, `TokenFile`, `Scopes` | Output from `Status()` |

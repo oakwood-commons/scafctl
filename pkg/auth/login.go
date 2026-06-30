@@ -80,8 +80,11 @@ type PreLoginResult struct {
 //   - flow: the selected auth flow
 //   - force: if true, force logout and proceed
 //   - skipIfAuthenticated: if true and already authenticated, return PreLoginSkip
+//   - hostname: the explicitly requested host (empty if none). For host-aware
+//     handlers, a non-empty hostname bypasses the already-authenticated check so
+//     the user can log in to a different host without --force.
 //   - skipCheckFlows: flows for which no auth-status check is needed (e.g., FlowPAT)
-func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipIfAuthenticated bool, skipCheckFlows ...Flow) (*PreLoginResult, error) {
+func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipIfAuthenticated bool, hostname string, skipCheckFlows ...Flow) (*PreLoginResult, error) {
 	// Force re-auth: log out first.
 	if force {
 		_ = handler.Logout(ctx) // best-effort
@@ -93,6 +96,14 @@ func PreLoginCheck(ctx context.Context, handler Handler, flow Flow, force, skipI
 		if flow == skipFlow {
 			return &PreLoginResult{Action: PreLoginProceed}, nil
 		}
+	}
+
+	// When an explicit hostname is requested for a host-aware handler, the
+	// generic Status() check cannot tell which host the cached credentials
+	// belong to. Proceed with login so per-host handlers (e.g. OpenShift) can
+	// authenticate to a different host without requiring --force.
+	if hostname != "" && HasCapability(handler.Capabilities(), CapHostname) {
+		return &PreLoginResult{Action: PreLoginProceed}, nil
 	}
 
 	// Check current auth status

@@ -6,6 +6,7 @@
 package diskcache
 
 import (
+	"errors"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -55,12 +56,7 @@ func atomicRename(src, dst string) error {
 // caused by brief file locks from antivirus, search indexers, or
 // backup software and are likely to resolve on retry.
 func isTransientError(err error) bool {
-	switch err {
-	case windows.ERROR_SHARING_VIOLATION,
-		windows.ERROR_LOCK_VIOLATION,
-		windows.ERROR_ACCESS_DENIED:
-		return true
-	default:
-		return false
-	}
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
+		errors.Is(err, windows.ERROR_LOCK_VIOLATION) ||
+		errors.Is(err, windows.ERROR_ACCESS_DENIED)
 }

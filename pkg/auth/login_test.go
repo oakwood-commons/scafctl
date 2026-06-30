@@ -80,7 +80,7 @@ func TestPreLoginCheck_Force(t *testing.T) {
 		Claims:        &Claims{Name: "Test User"},
 	}
 
-	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, true, false)
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, true, false, "")
 	require.NoError(t, err)
 	assert.Equal(t, PreLoginProceed, result.Action)
 	assert.Equal(t, 1, handler.LogoutCalls) // force should trigger logout
@@ -89,7 +89,7 @@ func TestPreLoginCheck_Force(t *testing.T) {
 func TestPreLoginCheck_SkipCheckFlow(t *testing.T) {
 	handler := NewMockHandler("test")
 
-	result, err := PreLoginCheck(context.Background(), handler, FlowPAT, false, false, FlowPAT)
+	result, err := PreLoginCheck(context.Background(), handler, FlowPAT, false, false, "", FlowPAT)
 	require.NoError(t, err)
 	assert.Equal(t, PreLoginProceed, result.Action)
 	assert.Equal(t, 0, handler.StatusCalls) // status should not be checked
@@ -99,7 +99,7 @@ func TestPreLoginCheck_NotAuthenticated(t *testing.T) {
 	handler := NewMockHandler("test")
 	handler.StatusResult = &Status{Authenticated: false}
 
-	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false)
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "")
 	require.NoError(t, err)
 	assert.Equal(t, PreLoginProceed, result.Action)
 }
@@ -111,7 +111,7 @@ func TestPreLoginCheck_AlreadyAuthenticated_Skip(t *testing.T) {
 		Claims:        &Claims{Name: "Test User", Email: "test@example.com"},
 	}
 
-	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, true)
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, true, "")
 	require.NoError(t, err)
 	assert.Equal(t, PreLoginSkip, result.Action)
 	assert.NotEmpty(t, result.Identity)
@@ -124,7 +124,7 @@ func TestPreLoginCheck_AlreadyAuthenticated_NoSkip(t *testing.T) {
 		Claims:        &Claims{Name: "Test User"},
 	}
 
-	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false)
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "")
 	require.NoError(t, err)
 	assert.Equal(t, PreLoginAlreadyAuthenticated, result.Action)
 	assert.NotEmpty(t, result.Identity)
@@ -134,9 +134,37 @@ func TestPreLoginCheck_StatusError(t *testing.T) {
 	handler := NewMockHandler("test")
 	handler.StatusErr = assert.AnError
 
-	_, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false)
+	_, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to check auth status")
+}
+
+func TestPreLoginCheck_HostnameBypassesAlreadyAuthenticated(t *testing.T) {
+	handler := NewMockHandler("test")
+	handler.CapabilitiesValue = []Capability{CapHostname}
+	handler.StatusResult = &Status{
+		Authenticated: true,
+		Claims:        &Claims{Name: "Test User"},
+	}
+
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "other-host.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, PreLoginProceed, result.Action)
+	assert.Equal(t, 0, handler.StatusCalls) // host-aware bypass skips the status check
+}
+
+func TestPreLoginCheck_HostnameIgnoredWithoutCapability(t *testing.T) {
+	handler := NewMockHandler("test")
+	// Handler does not advertise CapHostname, so hostname must not bypass the check.
+	handler.StatusResult = &Status{
+		Authenticated: true,
+		Claims:        &Claims{Name: "Test User"},
+	}
+
+	result, err := PreLoginCheck(context.Background(), handler, FlowInteractive, false, false, "other-host.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, PreLoginAlreadyAuthenticated, result.Action)
+	assert.Equal(t, 1, handler.StatusCalls) // non-host-aware handler still checks status
 }
 
 func BenchmarkDetectFlow(b *testing.B) {
