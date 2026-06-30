@@ -199,6 +199,39 @@ func TestAuthHandlerGRPCClient_Login_Success(t *testing.T) {
 	assert.Equal(t, now.Add(time.Hour).Unix(), resp.ExpiresAt.Unix())
 }
 
+func TestAuthHandlerGRPCClient_Login_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Truncate(time.Second)
+	var gotReq *proto.LoginRequest
+	mock := &mockAuthHandlerServiceClient{
+		loginFunc: func(_ context.Context, req *proto.LoginRequest) (grpc.ServerStreamingClient[proto.LoginStreamMessage], error) {
+			gotReq = req
+			return &mockLoginStreamClient{
+				messages: []*proto.LoginStreamMessage{
+					{
+						Payload: &proto.LoginStreamMessage_Result{
+							Result: &proto.LoginResult{
+								Claims:        &proto.Claims{Email: "user@example.com"},
+								ExpiresAtUnix: now.Add(time.Hour).Unix(),
+							},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.Login(context.Background(), "openshift", LoginRequest{
+		Hostname: "pd1020",
+		Flow:     auth.FlowServicePrincipal,
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, gotReq)
+	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname must be mapped onto the proto LoginRequest")
+}
+
 func TestAuthHandlerGRPCClient_Login_WithDeviceCodePrompt(t *testing.T) {
 	t.Parallel()
 
