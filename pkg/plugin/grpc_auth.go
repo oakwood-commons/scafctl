@@ -149,6 +149,7 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 
 	loginReq := LoginRequest{
 		TenantID: req.HandlerName, // will be overridden below
+		Hostname: req.Hostname,
 		Scopes:   req.Scopes,
 		Flow:     auth.Flow(req.Flow),
 		Timeout:  time.Duration(req.TimeoutSeconds) * time.Second,
@@ -349,6 +350,7 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 	stream, err := c.client.Login(ctx, &proto.LoginRequest{
 		HandlerName:    handlerName,
 		TenantId:       req.TenantID,
+		Hostname:       req.Hostname,
 		Scopes:         req.Scopes,
 		Flow:           string(req.Flow),
 		TimeoutSeconds: int64(req.Timeout / time.Second),

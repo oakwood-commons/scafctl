@@ -203,6 +203,11 @@ Behavior:
 - Credentials are stored securely
 - Supports GitHub Enterprise Server via `--hostname`
 
+> The `--hostname` flag is also forwarded to plugin auth handlers that declare
+> the `hostname` capability (`auth.CapHostname`). The value arrives in
+> `LoginOptions.Hostname`, letting a single handler route logins across many
+> hosts (for example, per-cluster OpenShift authentication).
+
 ### GitHub PAT Flow (CI/CD)
 
 ~~~bash
