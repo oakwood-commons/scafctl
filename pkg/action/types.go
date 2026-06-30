@@ -105,9 +105,17 @@ type Action struct {
 	// If false, the action is skipped with SkipReasonCondition.
 	When *spec.Condition `json:"when,omitempty" yaml:"when,omitempty" doc:"Condition for execution (skipped if false)"`
 
+	// ContinueOnError controls whether a failure of this action allows the
+	// workflow to continue. It accepts a boolean or a CEL expression evaluated
+	// with the structured error bound as __error. Truthy continues the workflow;
+	// falsy stops it. Overrides the deprecated OnError field.
+	ContinueOnError *spec.Condition `json:"continueOnError,omitempty" yaml:"continueOnError,omitempty" doc:"Whether to continue the workflow when this action fails. Accepts a boolean or a CEL expression evaluated with the error bound as __error. Overrides the deprecated onError field."`
+
 	// OnError defines behavior when this action fails.
 	// Default is "fail" which stops workflow execution.
-	OnError spec.OnErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Error handling behavior" maxLength:"16" example:"fail" default:"fail"`
+	//
+	// Deprecated: use ContinueOnError instead.
+	OnError spec.OnErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" deprecated:"true" deprecatedReplacement:"continueOnError" doc:"DEPRECATED: use continueOnError instead. Error handling behavior (continue, fail)" maxLength:"16" example:"fail" default:"fail"`
 
 	// Timeout limits how long the action can run.
 	// If exceeded, the action fails with StatusTimeout.
@@ -352,6 +360,11 @@ type ActionResult struct {
 
 	// Error contains the error message if Status is StatusFailed or StatusTimeout.
 	Error string `json:"error,omitempty" yaml:"error,omitempty" doc:"Error message (if failed)" maxLength:"4096" example:"command exited with code 1"`
+
+	// Attempts is the number of execution attempts performed (including retries).
+	// It is 1 for actions without retry, or the final attempt count when retry
+	// is configured. Used to build the __error context for continueOnError.
+	Attempts int `json:"attempts,omitempty" yaml:"attempts,omitempty" doc:"Number of execution attempts performed (including retries)" maximum:"100" example:"1"`
 
 	// Streamed indicates the provider already wrote its output to the terminal.
 	// When true, the CLI output layer should not re-print the action's results.

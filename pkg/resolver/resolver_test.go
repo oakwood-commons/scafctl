@@ -383,6 +383,72 @@ func TestCondition_UnmarshalJSON(t *testing.T) {
 	}
 }
 
+func TestCondition_UnmarshalYAML_ExpressionAlias(t *testing.T) {
+	t.Parallel()
+
+	t.Run("expression alias", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := yaml.Unmarshal([]byte("expression: \"_.env == 'prod'\""), &cond)
+		require.NoError(t, err)
+		require.NotNil(t, cond.Expr)
+		assert.Equal(t, "_.env == 'prod'", string(*cond.Expr))
+	})
+
+	t.Run("both expr and expression rejected", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := yaml.Unmarshal([]byte("expr: \"a\"\nexpression: \"b\""), &cond)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not both")
+	})
+
+	t.Run("null is unset", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := yaml.Unmarshal([]byte("null"), &cond)
+		require.NoError(t, err)
+		assert.Nil(t, cond.Expr)
+	})
+
+	t.Run("object missing expr and expression", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := yaml.Unmarshal([]byte("other: value"), &cond)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing")
+	})
+}
+
+func TestCondition_UnmarshalJSON_ExpressionAlias(t *testing.T) {
+	t.Parallel()
+
+	t.Run("expression alias", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := json.Unmarshal([]byte(`{"expression": "_.env == 'prod'"}`), &cond)
+		require.NoError(t, err)
+		require.NotNil(t, cond.Expr)
+		assert.Equal(t, "_.env == 'prod'", string(*cond.Expr))
+	})
+
+	t.Run("both expr and expression rejected", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := json.Unmarshal([]byte(`{"expr": "a", "expression": "b"}`), &cond)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not both")
+	})
+
+	t.Run("null is unset", func(t *testing.T) {
+		t.Parallel()
+		var cond Condition
+		err := json.Unmarshal([]byte(`null`), &cond)
+		require.NoError(t, err)
+		assert.Nil(t, cond.Expr)
+	})
+}
+
 func TestCondition_UnmarshalYAML_InResolver(t *testing.T) {
 	t.Parallel()
 

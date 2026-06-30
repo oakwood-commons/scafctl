@@ -24,7 +24,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: env
           - provider: static
@@ -37,7 +37,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: region
           - provider: static

@@ -49,6 +49,11 @@ const (
 	// Example: __plan["myResolver"].phase
 	VarPlan = "__plan"
 
+	// VarError is the variable name for the error text bound in failure contexts.
+	// Available as __error in messages.error and continueOnError conditions.
+	// Example: __error.contains("timeout")
+	VarError = "__error"
+
 	// VarParams is the variable name for CLI parameters passed via -r flags.
 	// Available in state backend input expressions so that dynamic backend
 	// configuration (paths, URLs) can reference runtime values explicitly.

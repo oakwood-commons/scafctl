@@ -113,7 +113,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: user_name
           - provider: static
@@ -281,7 +281,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: env
           - provider: static
@@ -293,7 +293,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: port
           - provider: static
@@ -384,7 +384,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: input
           - provider: static
@@ -517,7 +517,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: port
           - provider: static
@@ -593,7 +593,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: email
           - provider: static
@@ -685,7 +685,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: appName
           - provider: static
@@ -711,7 +711,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: env
           - provider: static
@@ -749,7 +749,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: env
           - provider: static
@@ -938,9 +938,56 @@ Output:
 }
 ```
 
-**onError Options** (resolve phase):
-- `continue` (default): Try the next source in the list. The resolve phase acts as an implicit fallback chain.
-- `fail`: Stop execution immediately and return the error without trying remaining sources.
+**Controlling fallback with `continueOnError`** (resolve phase):
+
+The resolve phase falls through to the next source by default. Use
+`continueOnError` to control this explicitly. It accepts a boolean or a CEL
+condition (truthy recovers, falsy fails):
+
+- `continueOnError: true` (resolve default): Try the next source in the list.
+  The resolve phase acts as an implicit fallback chain.
+- `continueOnError: false`: Stop execution immediately and return the error
+  without trying remaining sources.
+
+> The legacy `onError` enum (`continue`/`fail`) is **deprecated** but still
+> works. Migrate `onError: continue` to `continueOnError: true` and
+> `onError: fail` to `continueOnError: false`. When both are set,
+> `continueOnError` wins and the linter reports an error.
+
+### Conditional Recovery with `continueOnError`
+
+A boolean `continueOnError` is unconditional: it either always recovers or
+always fails. Pass a CEL condition instead to recover only for *specific*
+errors and fail for everything else. The condition is evaluated when the source
+(or transform step) fails, with the error text bound as `__error`:
+
+- If the condition is truthy, the error is recovered (resolve: try the next
+  source; transform: skip the step and keep the current value).
+- If the condition is falsy, the resolver fails.
+
+```yaml
+spec:
+  resolvers:
+    config:
+      type: any
+      resolve:
+        with:
+          # Recover only on transient timeouts; fail fast on anything else
+          # (auth errors, bad config, etc.) instead of silently falling back.
+          - provider: http
+            inputs:
+              url: https://config.example.com/settings
+              timeout: 5s
+            continueOnError: __error.contains("timeout")
+          - provider: static
+            inputs:
+              value:
+                debug: false
+```
+
+Inside `continueOnError` the error text is available as the top-level variable
+`__error` (the same way `__self` is exposed in transform/validate conditions).
+The condition must evaluate to a boolean.
 
 ### Custom Error Messages
 
@@ -1090,7 +1137,7 @@ spec:
 
 With `acceptableStatusCodes` set, a `404` yields `success: true` and the body is
 still returned (and parsed when `autoParseJson` is enabled). Any status outside
-the set -- such as `500` -- fails the source, which lets an `onError: continue`
+the set -- such as `500` -- fails the source, which lets a `continueOnError: true`
 policy fall back to the next source:
 
 ```yaml
@@ -1102,7 +1149,7 @@ spec:
         with:
           # Fails on any status other than 2xx or 404, falling through below.
           - provider: http
-            onError: continue
+            continueOnError: true
             inputs:
               url: https://api.example.com/config
               method: GET
@@ -1188,7 +1235,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: env
           - provider: static
@@ -1295,7 +1342,7 @@ spec:
       resolve:
         with:
           - provider: http
-            onError: continue
+            continueOnError: true
             inputs:
               url: https://features.example.com/api/flags
           - provider: static
@@ -1364,7 +1411,7 @@ spec:
       resolve:
         with:
           # In practice, use env or file providers here
-          # with onError: continue to fall through
+          # with continueOnError: true to fall through
           - provider: static
             inputs:
               value: "default-dev-password"

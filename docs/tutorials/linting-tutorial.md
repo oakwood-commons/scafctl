@@ -221,6 +221,121 @@ scafctl lint explain missing-description -o json
 {{% /tab %}}
 {{< /tabs >}}
 
+### Example: Catching `.orValue()` on a Concrete Value
+
+Some rules catch subtle bugs that pass a plain syntax check but fail at runtime.
+The `orvalue-on-non-optional` rule (severity: error) flags `.orValue(...)` calls on
+a provably non-optional receiver, such as a plain identifier or a field-access chain:
+
+```yaml
+# Triggers orvalue-on-non-optional: __self is concrete, not optional.
+transform:
+  with:
+    - provider: cel
+      inputs:
+        expression: '__self.orValue([])'
+```
+
+`orValue()` only has an overload on CEL optional types, so calling it on a concrete
+value has no matching overload and fails at runtime even though the expression parses.
+This commonly happens when an optional marker (`.?`) is dropped during editing. Fix it
+by making the receiver optional, or by removing `.orValue(...)` and supplying the
+fallback another way:
+
+```yaml
+# Fixed: optional access makes orValue() apply.
+transform:
+  with:
+    - provider: cel
+      inputs:
+        expression: '_.?items.orValue([])'
+```
+
+Explain the rule for full guidance:
+
+{{< tabs "linting-tutorial-cmd-orvalue" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl lint explain orvalue-on-non-optional
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain orvalue-on-non-optional
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+### Example: Catching Deprecated Fields
+
+The linter also flags fields that have been superseded by a newer field. The
+`deprecated-field` rule (severity: warning) reports each deprecated field still
+in use and names its replacement, while `deprecated-field-conflict` (severity:
+error) fires when both the deprecated field and its replacement are set on the
+same object.
+
+For example, the `onError` enum on resolver sources, transforms, and actions is
+deprecated in favor of `continueOnError`:
+
+```yaml
+# Triggers deprecated-field: onError is deprecated, use continueOnError.
+resolve:
+  with:
+    - provider: http
+      onError: continue
+      inputs:
+        url: https://config.example.com/settings
+    - provider: static
+      inputs:
+        value: { debug: false }
+```
+
+Migrate `onError: continue` to `continueOnError: true` and `onError: fail` to
+`continueOnError: false`:
+
+```yaml
+# Fixed: continueOnError replaces the deprecated onError enum.
+resolve:
+  with:
+    - provider: http
+      continueOnError: true
+      inputs:
+        url: https://config.example.com/settings
+    - provider: static
+      inputs:
+        value: { debug: false }
+```
+
+Setting both at once triggers the `deprecated-field-conflict` error. At runtime
+`continueOnError` wins and the deprecated `onError` is silently ignored, so the
+linter forces you to remove one:
+
+```yaml
+# Triggers deprecated-field-conflict: remove onError, keep continueOnError.
+- provider: http
+  onError: continue
+  continueOnError: true
+  inputs:
+    url: https://config.example.com/settings
+```
+
+Explain either rule for full guidance:
+
+{{< tabs "linting-tutorial-cmd-deprecated" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl lint explain deprecated-field
+scafctl lint explain deprecated-field-conflict
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint explain deprecated-field
+scafctl lint explain deprecated-field-conflict
+```
+{{% /tab %}}
+{{< /tabs >}}
+
 ## 4. Linting in CI/CD
 
 ### GitHub Actions Example

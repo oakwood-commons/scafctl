@@ -13,6 +13,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -378,6 +379,118 @@ func TestExecutor_Execute_OnErrorContinue(t *testing.T) {
 	assert.Equal(t, ExecutionPartialSuccess, result.FinalStatus)
 	assert.Contains(t, result.FailedActions, "fail-action")
 	assert.Equal(t, StatusSucceeded, result.Actions["success-action"].Status)
+}
+
+func TestExecutor_Execute_ContinueOnErrorDecisionErrorSurfaced(t *testing.T) {
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			return nil, errors.New("intentional failure")
+		},
+	})
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	// continueOnError evaluates to a non-boolean, so the decision itself
+	// errors. That decision error must be surfaced rather than swallowed.
+	badExpr := celexp.Expression(`"not-a-bool"`)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"fail-action": {
+				Provider:        "test-provider",
+				ContinueOnError: &spec.Condition{Expr: &badExpr},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "fail-action"},
+				},
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+
+	require.Error(t, err)
+	assert.Equal(t, ExecutionFailed, result.FinalStatus)
+	// The original action error must remain visible...
+	assert.ErrorContains(t, err, "intentional failure")
+	// ...and the continueOnError decision error must be surfaced too.
+	assert.ErrorContains(t, err, "continueOnError condition must evaluate to boolean")
+}
+
+// TestExecutor_Execute_ContinueOnErrorSucceededActionNotGated guards against a
+// regression where the phase-level continuation check consulted
+// continueOnError for actions that did NOT fail. A successful action whose
+// continueOnError expression references __error would fail to evaluate (the
+// variable is unbound) and wrongly abort subsequent phases. Successful actions
+// must be ignored by the continuation check.
+func TestExecutor_Execute_ContinueOnErrorSucceededActionNotGated(t *testing.T) {
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(ctx context.Context, input any) (*provider.Output, error) {
+			inputs, _ := input.(map[string]any)
+			name, _ := inputs["name"].(string)
+			if name == "slow" {
+				// Block until the action times out.
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(5 * time.Second):
+					return &provider.Output{Data: map[string]any{"done": true}}, nil
+				}
+			}
+			return &provider.Output{Data: map[string]any{"done": true}}, nil
+		},
+	})
+
+	executor := NewExecutor(WithRegistry(registry))
+
+	timeout := duration.New(50 * time.Millisecond)
+	// "slow" times out but tolerates it; "fast" succeeds but its
+	// continueOnError references __error, which is only valid when the action
+	// actually failed.
+	tolerate := celexp.Expression("true")
+	refError := celexp.Expression(`__error.message != ""`)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"slow": {
+				Provider:        "test-provider",
+				Timeout:         &timeout,
+				ContinueOnError: &spec.Condition{Expr: &tolerate},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "slow"},
+				},
+			},
+			"fast": {
+				Provider:        "test-provider",
+				ContinueOnError: &spec.Condition{Expr: &refError},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "fast"},
+				},
+			},
+			"downstream": {
+				Provider:  "test-provider",
+				DependsOn: []string{"fast"},
+				Inputs: map[string]*spec.ValueRef{
+					"name": {Literal: "downstream"},
+				},
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+
+	// "slow" timed out, "fast" succeeded, and because "fast" did not fail its
+	// continueOnError must not be consulted -- so the downstream phase runs.
+	assert.Equal(t, StatusTimeout, result.Actions["slow"].Status)
+	assert.Equal(t, StatusSucceeded, result.Actions["fast"].Status)
+	assert.Equal(t, StatusSucceeded, result.Actions["downstream"].Status)
 }
 
 func TestExecutor_Execute_DependencyFailure(t *testing.T) {

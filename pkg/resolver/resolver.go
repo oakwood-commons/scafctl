@@ -4,6 +4,7 @@
 package resolver
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -45,6 +46,8 @@ const (
 //   - String shorthand: when: "_.environment == 'prod'"
 //   - Boolean literal:  when: true / when: false
 //   - Object form:      when: { expr: "_.environment == 'prod'" }
+//   - Expression alias: when: { expression: "_.environment == 'prod'" }
+//   - Null:             when: null (treated as unset, nil Expr)
 type Condition struct {
 	Expr *celexp.Expression `json:"expr" yaml:"expr" doc:"CEL expression that must evaluate to boolean" example:"_.environment == 'prod'"`
 }
@@ -61,6 +64,10 @@ func (c *Condition) UnmarshalYAML(unmarshal func(any) error) error {
 	}
 
 	switch v := raw.(type) {
+	case nil:
+		// Null -> zero-value Condition (nil Expr), consistent with spec.Condition.
+		c.Expr = nil
+		return nil
 	case string:
 		expr := celexp.Expression(v)
 		c.Expr = &expr
@@ -76,20 +83,30 @@ func (c *Condition) UnmarshalYAML(unmarshal func(any) error) error {
 		c.Expr = &expr
 		return nil
 	case map[string]any:
-		// Object form: extract "expr" field
-		exprVal, ok := v["expr"]
-		if !ok {
-			return fmt.Errorf("invalid condition object: missing \"expr\" field (valid forms: string, bool, or {expr: \"...\"})")
+		// Object form: extract "expr" or its "expression" alias.
+		exprVal, hasExpr := v["expr"]
+		expressionVal, hasExpression := v["expression"]
+		if hasExpr && hasExpression {
+			return fmt.Errorf("invalid condition object: specify either \"expr\" or \"expression\", not both")
 		}
-		exprStr, ok := exprVal.(string)
+		if !hasExpr && !hasExpression {
+			return fmt.Errorf("invalid condition object: missing \"expr\" field (valid forms: string, bool, or {expr: \"...\"} / {expression: \"...\"})")
+		}
+		val := exprVal
+		key := "expr"
+		if hasExpression {
+			val = expressionVal
+			key = "expression"
+		}
+		exprStr, ok := val.(string)
 		if !ok {
-			return fmt.Errorf("invalid condition object: \"expr\" must be a string, got %T", exprVal)
+			return fmt.Errorf("invalid condition object: \"%s\" must be a string, got %T", key, val)
 		}
 		expr := celexp.Expression(exprStr)
 		c.Expr = &expr
 		return nil
 	default:
-		return fmt.Errorf("invalid condition: expected string, bool, or {expr: \"...\"} object, got %T", raw)
+		return fmt.Errorf("invalid condition: expected string, bool, or {expr: \"...\"} / {expression: \"...\"} object, got %T", raw)
 	}
 }
 
@@ -98,6 +115,12 @@ func (c *Condition) UnmarshalYAML(unmarshal func(any) error) error {
 //   - bool   → converted to literal "true" or "false" CEL expression
 //   - object → standard {expr: "..."} form
 func (c *Condition) UnmarshalJSON(data []byte) error {
+	// Null -> zero-value Condition (nil Expr), consistent with spec.Condition.
+	if string(bytes.TrimSpace(data)) == "null" {
+		c.Expr = nil
+		return nil
+	}
+
 	// Try string first
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
@@ -120,16 +143,25 @@ func (c *Condition) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	// Try object form {expr: "..."}
-	type conditionAlias Condition
-	var obj conditionAlias
+	// Try object form {expr: "..."} or its {expression: "..."} alias.
+	var obj struct {
+		Expr       *celexp.Expression `json:"expr"`
+		Expression *celexp.Expression `json:"expression"`
+	}
 	if err := json.Unmarshal(data, &obj); err != nil {
-		return fmt.Errorf("invalid condition: expected string, bool, or {\"expr\": \"...\"} object: %w", err)
+		return fmt.Errorf("invalid condition: expected string, bool, or {\"expr\": \"...\"} / {\"expression\": \"...\"} object: %w", err)
 	}
-	if obj.Expr == nil {
-		return fmt.Errorf("invalid condition object: missing \"expr\" field (valid forms: string, bool, or {\"expr\": \"...\"})")
+	if obj.Expr != nil && obj.Expression != nil {
+		return fmt.Errorf("invalid condition object: specify either \"expr\" or \"expression\", not both")
 	}
-	*c = Condition(obj)
+	expr := obj.Expr
+	if obj.Expression != nil {
+		expr = obj.Expression
+	}
+	if expr == nil {
+		return fmt.Errorf("invalid condition object: missing \"expr\" field (valid forms: string, bool, or {\"expr\": \"...\"} / {\"expression\": \"...\"})")
+	}
+	c.Expr = expr
 	return nil
 }
 
@@ -215,20 +247,22 @@ type ValidatePhase struct {
 
 // ProviderSource represents a single source in the resolve phase
 type ProviderSource struct {
-	Provider string               `json:"provider" yaml:"provider" doc:"Provider name" example:"parameter" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
-	Inputs   map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
-	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Source-level condition"`
-	OnError  ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Behavior when provider fails (continue, fail). Defaults to continue (fallback chain semantics). Use fail to stop on first error." example:"continue" default:"continue"`
-	ForEach  *ForEachClause       `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iterate over array, executing provider for each element. Requires forEach.in (no __self in resolve phase)."`
+	Provider        string               `json:"provider" yaml:"provider" doc:"Provider name" example:"parameter" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	Inputs          map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
+	When            *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Source-level condition"`
+	ContinueOnError *Condition           `json:"continueOnError,omitempty" yaml:"continueOnError,omitempty" doc:"Whether to continue (recover) when the provider fails. Accepts a boolean or a CEL expression evaluated with the error text bound as __error. Truthy skips this source and continues the fallback chain; falsy fails the resolver. Overrides the deprecated onError field."`
+	OnError         ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" deprecated:"true" deprecatedReplacement:"continueOnError" doc:"DEPRECATED: use continueOnError instead. Behavior when provider fails (continue, fail). Defaults to continue (fallback chain semantics). Use fail to stop on first error." example:"continue" default:"continue"`
+	ForEach         *ForEachClause       `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iterate over array, executing provider for each element. Requires forEach.in (no __self in resolve phase)."`
 }
 
 // ProviderTransform represents a single transform step
 type ProviderTransform struct {
-	Provider string               `json:"provider" yaml:"provider" doc:"Provider name" example:"cel" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
-	Inputs   map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
-	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Step-level condition"`
-	OnError  ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Behavior when provider fails (continue, fail)" example:"fail" default:"fail"`
-	ForEach  *ForEachClause       `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iterate over array, executing provider for each element"`
+	Provider        string               `json:"provider" yaml:"provider" doc:"Provider name" example:"cel" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	Inputs          map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
+	When            *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Step-level condition"`
+	ContinueOnError *Condition           `json:"continueOnError,omitempty" yaml:"continueOnError,omitempty" doc:"Whether to continue (recover) when the provider fails. Accepts a boolean or a CEL expression evaluated with the error text bound as __error. Truthy skips this step and keeps the current value; falsy fails the resolver. Overrides the deprecated onError field."`
+	OnError         ErrorBehavior        `json:"onError,omitempty" yaml:"onError,omitempty" deprecated:"true" deprecatedReplacement:"continueOnError" doc:"DEPRECATED: use continueOnError instead. Behavior when provider fails (continue, fail)" example:"fail" default:"fail"`
+	ForEach         *ForEachClause       `json:"forEach,omitempty" yaml:"forEach,omitempty" doc:"Iterate over array, executing provider for each element"`
 }
 
 // ProviderValidation represents a single validation rule

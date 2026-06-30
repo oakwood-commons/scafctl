@@ -230,6 +230,19 @@ func (c *Context) MarkStreamed(name string) {
 	}
 }
 
+// RecordAttempts stores the number of execution attempts performed for an
+// action. It is recorded after retry completes so the continue-on-error
+// decision (and any later re-evaluation) can build an __error context with the
+// real attempt count instead of a hard-coded placeholder.
+func (c *Context) RecordAttempts(name string, attempts int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if existing, ok := c.actions[name]; ok {
+		existing.Attempts = attempts
+	}
+}
+
 // MarkFailed marks an action as failed with an error message.
 func (c *Context) MarkFailed(name, errMsg string) {
 	c.mu.Lock()

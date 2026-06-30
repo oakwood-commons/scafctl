@@ -1,0 +1,80 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-param-keys
+  version: 1.0.0
+  description: |
+    Functional tests for the parameter provider "keys" alias list.
+    Verifies first-match-wins ordering across alias names, default
+    fallback when no alias is provided, and that every alias name is
+    accepted by CLI parameter-key validation.
+
+spec:
+  resolvers:
+    environment:
+      description: Target environment, accepted under several alias names
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              keys: [environment, e, env]
+              default: dev
+
+  testing:
+    cases:
+      _base:
+        description: Base template
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, parameter, keys]
+        assertions:
+          - expression: __exitCode == 0
+
+      default-when-no-alias:
+        description: Falls back to default when no alias is provided
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: '__output.environment == "dev"'
+            message: "Should use the default value"
+
+      primary-key-accepted:
+        description: The primary alias name resolves
+        extends: [_base]
+        args: ["-o", "json", "-r", "environment=prod"]
+        assertions:
+          - expression: '__output.environment == "prod"'
+
+      secondary-alias-accepted:
+        description: A secondary alias name resolves and is a valid key
+        extends: [_base]
+        args: ["-o", "json", "-r", "e=staging"]
+        assertions:
+          - expression: '__output.environment == "staging"'
+            message: "Alias 'e' should be accepted and resolve"
+
+      third-alias-accepted:
+        description: A third alias name resolves and is a valid key
+        extends: [_base]
+        args: ["-o", "json", "-r", "env=qa"]
+        assertions:
+          - expression: '__output.environment == "qa"'
+
+      first-match-wins:
+        description: When multiple aliases are provided, the earliest in the list wins
+        extends: [_base]
+        args: ["-o", "json", "-r", "e=staging", "-r", "environment=prod"]
+        assertions:
+          - expression: '__output.environment == "prod"'
+            message: "Primary 'environment' precedes 'e' in the keys list"
+
+      unknown-key-rejected:
+        description: A name not in the keys list is rejected by validation
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "zzzzz=value"]
+        tags: [resolver, parameter, keys, negative]
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("does not accept input")'
+            message: "Names outside the keys list are not accepted"

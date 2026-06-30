@@ -99,8 +99,13 @@ type RenderedAction struct {
 	// Can be a boolean (already evaluated) or a DeferredValue (requires runtime evaluation).
 	When any `json:"when,omitempty" yaml:"when,omitempty" doc:"Execution condition (bool or deferred)"`
 
+	// ContinueOnError contains the continue-on-error condition.
+	ContinueOnError any `json:"continueOnError,omitempty" yaml:"continueOnError,omitempty" doc:"Continue-on-error condition (bool or expression)"`
+
 	// OnError defines behavior when this action fails.
-	OnError string `json:"onError,omitempty" yaml:"onError,omitempty" doc:"Error handling behavior" example:"fail"`
+	//
+	// Deprecated: use ContinueOnError instead.
+	OnError string `json:"onError,omitempty" yaml:"onError,omitempty" doc:"DEPRECATED: use continueOnError. Error handling behavior" example:"fail"`
 
 	// Timeout is the maximum execution duration as a string.
 	Timeout string `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Max duration" example:"30s"`
@@ -283,6 +288,11 @@ func renderAction(action *ExpandedAction) *RenderedAction {
 		rendered.When = renderCondition(action.When)
 	}
 
+	// Render continueOnError
+	if action.ContinueOnError != nil {
+		rendered.ContinueOnError = renderCondition(action.ContinueOnError)
+	}
+
 	// Render onError
 	if action.OnError != "" {
 		rendered.OnError = string(action.OnError)
@@ -380,9 +390,7 @@ func renderForEachMetadata(action *ExpandedAction) *RenderedForEachMetadata {
 	// Include forEach clause settings if available from the original action
 	if action.ForEach != nil {
 		rendered.Concurrency = action.ForEach.Concurrency
-		if action.ForEach.OnError != "" {
-			rendered.OnError = string(action.ForEach.OnError)
-		}
+		rendered.OnError = string(action.ForEach.EffectiveOnError())
 	}
 
 	return rendered

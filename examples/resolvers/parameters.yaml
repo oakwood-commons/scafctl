@@ -56,7 +56,7 @@ spec:
               default: false
 
     # String parameter using fallback chain (alternative pattern)
-    # Use onError: continue + static provider when you need a dynamic
+    # Use continueOnError: true + static provider when you need a dynamic
     # fallback (e.g. a ValueRef or expression) instead of a literal default.
     region:
       description: Deployment region from CLI or fallback chain
@@ -64,13 +64,31 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: region
           - provider: static
             inputs:
               value: "us-east-1"
-    
+
+    # Parameter with alias keys (first-match-wins)
+    # "keys" accepts the same logical parameter under several flag names.
+    # Names are tried in declared order, so when more than one alias is
+    # passed the earliest one in the list wins.
+    #   scafctl run resolver -f parameters.yaml -r environment=prod
+    #   scafctl run resolver -f parameters.yaml -r e=staging
+    #   scafctl run resolver -f parameters.yaml -r env=qa
+    environment:
+      description: Target environment (accepts environment, e, or env)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              keys: [environment, e, env]
+              default: dev
+
+
     # Computed greeting using parameters
     greeting:
       description: Final greeting message

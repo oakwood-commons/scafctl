@@ -1,0 +1,186 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-action-continue-on-error
+  version: 1.0.0
+  description: |
+    Functional tests for action-level and forEach continueOnError.
+    A truthy continueOnError (boolean or a CEL condition evaluated with the
+    structured error bound as __error) lets the workflow proceed past a failed
+    action; a falsy condition stops it. The deprecated onError enum is also
+    exercised to confirm it still works for back-compat, and forEach
+    continueOnError is verified through the rendered EffectiveOnError value.
+
+spec:
+  resolvers:
+    # Gates the non-recovering action so the default run stays green while a
+    # dedicated negative case (-r failHard=true) exercises the failure path.
+    failHard:
+      description: Whether to include the non-recovering action
+      resolve:
+        with:
+          - provider: parameter
+            continueOnError: true
+            inputs:
+              key: failHard
+          - provider: static
+            inputs:
+              value: false
+
+    targets:
+      description: forEach targets
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - alpha
+                - bravo
+                - gamma
+
+  workflow:
+    actions:
+      independent:
+        description: Independent action that always succeeds
+        provider: exec
+        inputs:
+          command: "echo independent-ok"
+
+      boolContinue:
+        description: Failing action recovered by a boolean continueOnError
+        provider: exec
+        continueOnError: true
+        inputs:
+          command: "sh -c 'exit 1'"
+
+      celRecover:
+        description: Failing action recovered by a CEL continueOnError using __error
+        provider: exec
+        # __error.attempt carries the real attempt count (1 here, since no retry
+        # is configured), so this condition reliably recovers while still
+        # exercising the __error binding.
+        continueOnError: '__error.attempt == 1'
+        inputs:
+          command: "sh -c 'exit 1'"
+
+      deprecatedContinue:
+        description: Failing action recovered by the deprecated onError enum
+        provider: exec
+        onError: continue
+        inputs:
+          command: "sh -c 'exit 1'"
+
+      foreachContinue:
+        description: forEach action carrying a continueOnError clause
+        provider: exec
+        forEach:
+          in:
+            expr: "_.targets"
+          continueOnError: true
+        inputs:
+          command:
+            expr: "'echo deploying ' + __item"
+
+      foreachCelRecover:
+        description: forEach whose failing iterations recover via a CEL continueOnError
+        provider: exec
+        forEach:
+          in:
+            expr: "_.targets"
+          # Every iteration fails; the CEL condition recovers each one using the
+          # per-iteration __item/__error context wired through at runtime.
+          continueOnError: '__item != "" && __error.attempt == 1'
+        inputs:
+          command:
+            expr: "'sh -c \"echo ' + __item + ' >&2; exit 1\"'"
+
+      hardFail:
+        description: Failing action whose continueOnError never matches (aborts)
+        provider: exec
+        when:
+          expr: "_.failHard == true"
+        continueOnError: '__error.attempt == 99'
+        inputs:
+          command: "sh -c 'exit 1'"
+
+  testing:
+    cases:
+      _run-base:
+        description: Base template for run tests (default run excludes hardFail)
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [action, continueonerror]
+        assertions:
+          - expression: __exitCode == 0
+
+      _render-base:
+        description: Base template for render tests
+        command: [render, solution]
+        args: ["-o", "json"]
+        tags: [action, continueonerror, render]
+        assertions:
+          - expression: __exitCode == 0
+
+      workflow-continues:
+        description: Recovered failures do not abort the workflow
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.actions["independent"].status == "succeeded"
+            message: "Independent action should still run and succeed"
+          - expression: __output.status == "partial-success"
+            message: "Overall status should be partial-success when actions recover"
+
+      bool-continue-recovers:
+        description: Boolean continueOnError recovers a failed action
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["boolContinue"].status == "failed"
+            message: "Recovered action keeps a failed status but does not abort"
+
+      cel-continue-recovers:
+        description: CEL continueOnError using __error recovers a failed action
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["celRecover"].status == "failed"
+            message: "Matching __error condition should recover without aborting"
+
+      deprecated-onerror-recovers:
+        description: Deprecated onError continue still recovers a failed action
+        extends: [_run-base]
+        tags: [deprecated]
+        assertions:
+          - expression: __output.actions["deprecatedContinue"].status == "failed"
+            message: "Deprecated onError: continue should still recover"
+
+      foreach-continue-effective:
+        description: forEach continueOnError maps to the effective continue behavior
+        extends: [_render-base]
+        assertions:
+          - expression: >
+              __output.actions.exists(k,
+                __output.actions[k].forEach.expandedFrom == "foreachContinue" &&
+                __output.actions[k].forEach.onError == "continue")
+            message: "forEach continueOnError: true should render as onError continue"
+
+      foreach-cel-continue-recovers:
+        description: A CEL forEach continueOnError recovers every failed iteration
+        extends: [_run-base]
+        assertions:
+          - expression: __output.actions["foreachCelRecover[0]"].status == "failed"
+            message: "Failed forEach iteration keeps a failed status"
+          - expression: __output.actions["foreachCelRecover[2]"].status == "failed"
+            message: "All failed forEach iterations keep a failed status"
+          - expression: __output.status == "partial-success"
+            message: "A matching CEL forEach continueOnError must not abort the workflow"
+
+      non-matching-fails:
+        description: A non-matching continueOnError aborts the workflow
+        command: [run, solution]
+        args: ["-o", "json", "-r", "failHard=true"]
+        tags: [action, continueonerror, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Non-matching continueOnError should fail the workflow"

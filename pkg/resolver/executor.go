@@ -890,6 +890,60 @@ func (e *Executor) evaluateConditionWithSelf(ctx context.Context, cond *Conditio
 	return boolResult, nil
 }
 
+// evaluateContinueCondition evaluates a continueOnError condition with the
+// failing error bound as the top-level __error variable (matching how __self and
+// __plan are exposed to other condition evaluators). It returns true when the
+// condition is truthy, meaning execution should continue (the error is recovered).
+func (e *Executor) evaluateContinueCondition(ctx context.Context, cond *Condition, srcErr error) (bool, error) {
+	if cond == nil || cond.Expr == nil {
+		return false, nil
+	}
+
+	resolverCtx, _ := FromContext(ctx)
+	data := resolverCtx.ToMap()
+
+	additionalVars := map[string]any{
+		celexp.VarError: srcErr.Error(),
+	}
+	if plan, ok := data[celexp.VarPlan]; ok {
+		additionalVars[celexp.VarPlan] = plan
+		delete(data, celexp.VarPlan)
+	}
+
+	result, err := celexp.EvaluateExpression(ctx, string(*cond.Expr), data, additionalVars)
+	if err != nil {
+		return false, fmt.Errorf("continueOnError condition evaluation failed: %w", err)
+	}
+
+	boolResult, ok := result.(bool)
+	if !ok {
+		return false, fmt.Errorf("continueOnError condition must evaluate to boolean, got %T", result)
+	}
+	return boolResult, nil
+}
+
+// effectiveShouldFail decides whether a failing source/transform step should fail
+// the resolver.
+//   - When continueOnError is set it wins: the step is recovered (continue) when
+//     the condition is truthy, otherwise the resolver fails.
+//   - Otherwise baseFail decides. baseFail is derived from the deprecated onError
+//     enum or the phase default.
+//
+// A condition evaluation error always fails the resolver.
+func (e *Executor) effectiveShouldFail(ctx context.Context, continueOnError *Condition, srcErr error, baseFail bool) (bool, error) {
+	// A nil condition, or a non-nil condition with no expression (e.g. from
+	// `continueOnError: null`), is treated as unset: fall back to baseFail
+	// instead of forcing a hard failure.
+	if continueOnError == nil || continueOnError.Expr == nil {
+		return baseFail, nil
+	}
+	cont, err := e.evaluateContinueCondition(ctx, continueOnError, srcErr)
+	if err != nil {
+		return true, err
+	}
+	return !cont, nil
+}
+
 // executeResolvePhase executes the resolve phase with provider fallback chain
 func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase) (any, int, error) {
 	if phase == nil {
@@ -951,7 +1005,11 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 					"source", i+1,
 					logKeyProvider, source.Provider,
 					"error", err)
-				if source.OnError == ErrorBehaviorFail {
+				shouldFail, decideErr := e.effectiveShouldFail(ctx, source.ContinueOnError, err, source.OnError == ErrorBehaviorFail)
+				if decideErr != nil {
+					return nil, providerCallCount, fmt.Errorf("source %d (%s) forEach: %w", i+1, source.Provider, decideErr)
+				}
+				if shouldFail {
 					return nil, providerCallCount, fmt.Errorf("source %d (%s) forEach failed: %w", i+1, source.Provider, err)
 				}
 				lastErr = err
@@ -978,12 +1036,19 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 
 			lastErr = err
 
-			// Handle error behavior: resolve phase defaults to continue (fallback chain)
-			if source.OnError == ErrorBehaviorFail {
+			// Handle error behavior: resolve phase defaults to continue (fallback
+			// chain). continueOnError, when set, refines this: recover (try the next
+			// source) only when the condition is truthy for the thrown error; otherwise
+			// fail the resolver.
+			shouldFail, decideErr := e.effectiveShouldFail(ctx, source.ContinueOnError, err, source.OnError == ErrorBehaviorFail)
+			if decideErr != nil {
+				return nil, providerCallCount, fmt.Errorf("source %d (%s): %w", i+1, source.Provider, decideErr)
+			}
+			if shouldFail {
 				return nil, providerCallCount, fmt.Errorf("source %d (%s) failed: %w", i+1, source.Provider, err)
 			}
 
-			continue // Default: try next source
+			continue // Try next source
 		}
 
 		// Success - check until condition with __self set to current value
@@ -1044,7 +1109,11 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			transformed, calls, err := e.executeForEachTransform(ctx, &transform, currentValue, i)
 			providerCallCount += calls
 			if err != nil {
-				if transform.OnError == ErrorBehaviorContinue {
+				shouldFail, decideErr := e.effectiveShouldFail(ctx, transform.ContinueOnError, err, transform.OnError != ErrorBehaviorContinue)
+				if decideErr != nil {
+					return currentValue, providerCallCount, fmt.Errorf("step %d (%s) forEach: %w", i+1, transform.Provider, decideErr)
+				}
+				if !shouldFail {
 					lgr.V(1).Info("forEach transform failed, continuing",
 						logKeyStep, i+1,
 						logKeyProvider, transform.Provider,
@@ -1094,8 +1163,14 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			// Track failed attempt
 			e.trackFailedAttempt(resolverCtx, transform.Provider, "transform", err, attemptDuration, string(transform.OnError), i)
 
-			// Handle error behavior
-			if transform.OnError == ErrorBehaviorContinue {
+			// Handle error behavior. Transform defaults to fail; continueOnError, when
+			// set, refines this: recover (skip this step, keep the current value) only
+			// when the condition is truthy for the thrown error; otherwise fail.
+			shouldFail, decideErr := e.effectiveShouldFail(ctx, transform.ContinueOnError, err, transform.OnError != ErrorBehaviorContinue)
+			if decideErr != nil {
+				return currentValue, providerCallCount, fmt.Errorf("step %d (%s): %w", i+1, transform.Provider, decideErr)
+			}
+			if !shouldFail {
 				continue // Skip this transform, keep current value
 			}
 
@@ -1820,7 +1895,7 @@ func resolveCustomErrorMessage(ctx context.Context, r *Resolver, originalErr err
 	// Pass __error as the self parameter so it's available as __self in CEL/templates,
 	// and also add it to resolverData so it's available as _.__error or _["__error"].
 	errorMsg := originalErr.Error()
-	resolverData["__error"] = errorMsg
+	resolverData[celexp.VarError] = errorMsg
 
 	resolved, err := r.Messages.Error.Resolve(ctx, resolverData, errorMsg)
 	if err != nil {

@@ -24,7 +24,7 @@ spec:
           # Try remote feature flag service first
           # (This will fail in the example, demonstrating fallback)
           - provider: http
-            onError: continue
+            continueOnError: true
             inputs:
               url: https://features.example.com/api/v1/flags
               method: GET

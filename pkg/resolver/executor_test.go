@@ -632,6 +632,225 @@ func TestExecutor_Execute_OnErrorContinue(t *testing.T) {
 	assert.Equal(t, 2, callCount) // Both providers should be called
 }
 
+func TestExecutor_Execute_ContinueOnError(t *testing.T) {
+	// failing provider returns a configurable error message based on the "msg"
+	// input; the "ok" provider always succeeds and echoes its "value" input.
+	newReg := func() *mockRegistry {
+		registry := newMockRegistry()
+		require.NoError(t, registry.Register(&mockProvider{
+			name: "failing",
+			executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+				msg, _ := inputs["msg"].(string)
+				return nil, fmt.Errorf("%s", msg)
+			},
+		}))
+		require.NoError(t, registry.Register(&mockProvider{
+			name: "ok",
+			executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+				return &provider.Output{Data: inputs["value"]}, nil
+			},
+		}))
+		return registry
+	}
+
+	t.Run("resolve: matching continueOnError recovers to next source", func(t *testing.T) {
+		executor := NewExecutor(newReg())
+		resolvers := []*Resolver{
+			{
+				Name: "r",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider:        "failing",
+							Inputs:          map[string]*ValueRef{"msg": {Literal: "timeout contacting host"}},
+							ContinueOnError: &Condition{Expr: celExpPtr(`__error.contains("timeout")`)},
+						},
+						{
+							Provider: "ok",
+							Inputs:   map[string]*ValueRef{"value": {Literal: "recovered"}},
+						},
+					},
+				},
+			},
+		}
+
+		ctx, err := executor.Execute(context.Background(), resolvers, nil)
+		require.NoError(t, err)
+		result, _ := FromContext(ctx)
+		value, ok := result.Get("r")
+		require.True(t, ok)
+		assert.Equal(t, "recovered", value)
+	})
+
+	t.Run("resolve: non-matching continueOnError fails the resolver", func(t *testing.T) {
+		executor := NewExecutor(newReg())
+		resolvers := []*Resolver{
+			{
+				Name: "r",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider:        "failing",
+							Inputs:          map[string]*ValueRef{"msg": {Literal: "fatal misconfiguration"}},
+							ContinueOnError: &Condition{Expr: celExpPtr(`__error.contains("timeout")`)},
+						},
+						{
+							Provider: "ok",
+							Inputs:   map[string]*ValueRef{"value": {Literal: "should-not-be-used"}},
+						},
+					},
+				},
+			},
+		}
+
+		ctx, err := executor.Execute(context.Background(), resolvers, nil)
+		require.Error(t, err)
+		result, _ := FromContext(ctx)
+		execResult, ok := result.GetResult("r")
+		require.True(t, ok)
+		assert.Equal(t, ExecutionStatusFailed, execResult.Status)
+	})
+
+	t.Run("transform: matching continueOnError keeps current value", func(t *testing.T) {
+		executor := NewExecutor(newReg())
+		resolvers := []*Resolver{
+			{
+				Name: "r",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{Provider: "ok", Inputs: map[string]*ValueRef{"value": {Literal: "base"}}},
+					},
+				},
+				Transform: &TransformPhase{
+					With: []ProviderTransform{
+						{
+							Provider:        "failing",
+							Inputs:          map[string]*ValueRef{"msg": {Literal: "timeout during transform"}},
+							ContinueOnError: &Condition{Expr: celExpPtr(`__error.contains("timeout")`)},
+						},
+					},
+				},
+			},
+		}
+
+		ctx, err := executor.Execute(context.Background(), resolvers, nil)
+		require.NoError(t, err)
+		result, _ := FromContext(ctx)
+		value, ok := result.Get("r")
+		require.True(t, ok)
+		assert.Equal(t, "base", value)
+	})
+
+	t.Run("transform: non-matching continueOnError fails the resolver", func(t *testing.T) {
+		executor := NewExecutor(newReg())
+		resolvers := []*Resolver{
+			{
+				Name: "r",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{Provider: "ok", Inputs: map[string]*ValueRef{"value": {Literal: "base"}}},
+					},
+				},
+				Transform: &TransformPhase{
+					With: []ProviderTransform{
+						{
+							Provider:        "failing",
+							Inputs:          map[string]*ValueRef{"msg": {Literal: "fatal during transform"}},
+							ContinueOnError: &Condition{Expr: celExpPtr(`__error.contains("timeout")`)},
+						},
+					},
+				},
+			},
+		}
+
+		ctx, err := executor.Execute(context.Background(), resolvers, nil)
+		require.Error(t, err)
+		result, _ := FromContext(ctx)
+		execResult, ok := result.GetResult("r")
+		require.True(t, ok)
+		assert.Equal(t, ExecutionStatusFailed, execResult.Status)
+	})
+}
+
+func TestExecutor_Execute_ContinueOnError_NilExprIsUnset(t *testing.T) {
+	newReg := func() *mockRegistry {
+		registry := newMockRegistry()
+		require.NoError(t, registry.Register(&mockProvider{
+			name: "failing",
+			executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+				msg, _ := inputs["msg"].(string)
+				return nil, fmt.Errorf("%s", msg)
+			},
+		}))
+		require.NoError(t, registry.Register(&mockProvider{
+			name: "ok",
+			executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+				return &provider.Output{Data: inputs["value"]}, nil
+			},
+		}))
+		return registry
+	}
+
+	t.Run("resolve: nil-expr continueOnError falls back to phase default (continue)", func(t *testing.T) {
+		executor := NewExecutor(newReg())
+		resolvers := []*Resolver{
+			{
+				Name: "r",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{
+							Provider:        "failing",
+							Inputs:          map[string]*ValueRef{"msg": {Literal: "boom"}},
+							ContinueOnError: &Condition{}, // non-nil, nil Expr -> unset
+						},
+						{
+							Provider: "ok",
+							Inputs:   map[string]*ValueRef{"value": {Literal: "recovered"}},
+						},
+					},
+				},
+			},
+		}
+
+		ctx, err := executor.Execute(context.Background(), resolvers, nil)
+		require.NoError(t, err)
+		result, _ := FromContext(ctx)
+		value, ok := result.Get("r")
+		require.True(t, ok)
+		assert.Equal(t, "recovered", value)
+	})
+
+	t.Run("transform: nil-expr continueOnError falls back to phase default (fail)", func(t *testing.T) {
+		executor := NewExecutor(newReg())
+		resolvers := []*Resolver{
+			{
+				Name: "r",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{
+						{Provider: "ok", Inputs: map[string]*ValueRef{"value": {Literal: "base"}}},
+					},
+				},
+				Transform: &TransformPhase{
+					With: []ProviderTransform{
+						{
+							Provider:        "failing",
+							Inputs:          map[string]*ValueRef{"msg": {Literal: "boom"}},
+							ContinueOnError: &Condition{}, // non-nil, nil Expr -> unset
+						},
+					},
+				},
+			},
+		}
+
+		ctx, err := executor.Execute(context.Background(), resolvers, nil)
+		require.Error(t, err)
+		result, _ := FromContext(ctx)
+		execResult, ok := result.GetResult("r")
+		require.True(t, ok)
+		assert.Equal(t, ExecutionStatusFailed, execResult.Status)
+	})
+}
+
 func TestExecutor_Execute_WithValidateAll(t *testing.T) {
 	registry := newMockRegistry()
 

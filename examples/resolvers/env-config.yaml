@@ -23,7 +23,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: env
           - provider: static

@@ -12,7 +12,7 @@ This directory contains example action configurations demonstrating the Actions 
 | [action-alias.yaml](action-alias.yaml) | Action aliases for shorter expression references |
 | [foreach-deploy.yaml](foreach-deploy.yaml) | ForEach expansion for deploying to multiple targets |
 | [exclusive-actions.yaml](exclusive-actions.yaml) | Mutual exclusion for actions that share a resource |
-| [error-handling.yaml](error-handling.yaml) | Error handling with onError: continue |
+| [error-handling.yaml](error-handling.yaml) | Error handling with continueOnError: true |
 | [retry-backoff.yaml](retry-backoff.yaml) | Retry with exponential backoff |
 | [conditional-retry.yaml](conditional-retry.yaml) | Conditional retry with retryIf expressions |
 | [conditional-execution.yaml](conditional-execution.yaml) | When conditions for conditional execution |
@@ -122,7 +122,7 @@ workflow:
   actions:
     optional-step:
       provider: exec
-      onError: continue
+      continueOnError: true
       inputs:
         command: "optional-command.sh"
 ```

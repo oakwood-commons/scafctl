@@ -15,8 +15,8 @@ metadata:
     Treat selected non-2xx statuses as successful with acceptableStatusCodes.
     Each output carries a 'success' flag (true for any 2xx by default). Entries
     may be exact integers (404), class shorthands ("4xx"), or inclusive ranges
-    ("400-404"). Any status outside the set fails the source, which an
-    onError: continue policy can turn into a fallback.
+    ("400-404"). Any status outside the set fails the source, which a
+    continueOnError: true policy can turn into a fallback.
 
 spec:
   resolvers:
@@ -56,14 +56,14 @@ spec:
               acceptableStatusCodes: ["2xx", "4xx"]
 
     # Strict set + fallback: a 500 is not acceptable, so the source fails and
-    # onError: continue falls through to the static value.
+    # continueOnError: true falls through to the static value.
     strictWithFallback:
       description: An unacceptable 500 fails the source and falls back to a static value
       type: any
       resolve:
         with:
           - provider: http
-            onError: continue
+            continueOnError: true
             inputs:
               url: https://httpbin.org/status/500
               method: GET

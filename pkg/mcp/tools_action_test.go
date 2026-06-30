@@ -169,4 +169,51 @@ spec:
 		text := result.Content[0].(mcp.TextContent).Text
 		assert.Contains(t, text, "nonexistent")
 	})
+
+	t.Run("surfaces continueOnError in preview", func(t *testing.T) {
+		dir := t.TempDir()
+		solFile := filepath.Join(dir, "solution.yaml")
+		err := os.WriteFile(solFile, []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: continue-on-error
+  version: "1.0.0"
+spec:
+  resolvers:
+    val:
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'x'"
+  workflow:
+    actions:
+      optional:
+        provider: message
+        continueOnError: '__error.message.contains("boom")'
+        inputs:
+          message: "optional"
+`), 0o644)
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_action"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewAction(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError, "unexpected error: %v", result.Content)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+		actions := output["actions"].([]any)
+		require.NotEmpty(t, actions)
+		first := actions[0].(map[string]any)
+		assert.Equal(t, `__error.message.contains("boom")`, first["continueOnError"],
+			"preview should surface the continueOnError condition")
+	})
 }

@@ -312,7 +312,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		executor := NewRetryExecutor(&RetryConfig{MaxAttempts: 3})
 
 		calls := 0
-		output, err := executor.ExecuteWithRetry(
+		output, attempts, err := executor.ExecuteWithRetry(
 			context.Background(),
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -325,6 +325,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "success", output.Data)
 		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
 	})
 
 	t.Run("success on second attempt", func(t *testing.T) {
@@ -335,7 +336,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		})
 
 		calls := 0
-		output, err := executor.ExecuteWithRetry(
+		output, attempts, err := executor.ExecuteWithRetry(
 			context.Background(),
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -351,6 +352,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "success", output.Data)
 		assert.Equal(t, 2, calls)
+		assert.Equal(t, 2, attempts)
 	})
 
 	t.Run("all attempts fail", func(t *testing.T) {
@@ -361,7 +363,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		})
 
 		calls := 0
-		output, err := executor.ExecuteWithRetry(
+		output, attempts, err := executor.ExecuteWithRetry(
 			context.Background(),
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -374,6 +376,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, output)
 		assert.Equal(t, 3, calls)
+		assert.Equal(t, 3, attempts)
 		assert.Contains(t, err.Error(), "failed after 3 attempt(s)")
 		assert.Contains(t, err.Error(), "persistent error")
 	})
@@ -382,7 +385,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		executor := NewRetryExecutor(nil)
 
 		calls := 0
-		output, err := executor.ExecuteWithRetry(
+		output, attempts, err := executor.ExecuteWithRetry(
 			context.Background(),
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -395,6 +398,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, output)
 		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, attempts)
 	})
 
 	t.Run("cancelled during retry delay", func(t *testing.T) {
@@ -412,7 +416,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 			cancel()
 		}()
 
-		output, err := executor.ExecuteWithRetry(
+		output, _, err := executor.ExecuteWithRetry(
 			ctx,
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -434,7 +438,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		output, err := executor.ExecuteWithRetry(
+		output, _, err := executor.ExecuteWithRetry(
 			ctx,
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -472,7 +476,7 @@ func TestRetryExecutor_ExecuteWithRetry(t *testing.T) {
 		}
 
 		calls := 0
-		_, _ = executor.ExecuteWithRetry(
+		_, _, _ = executor.ExecuteWithRetry(
 			context.Background(),
 			"my-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -788,7 +792,7 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 		executor := NewRetryExecutor(config)
 
 		calls := 0
-		_, err := executor.ExecuteWithRetry(
+		_, attempts, err := executor.ExecuteWithRetry(
 			context.Background(),
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -801,6 +805,7 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Equal(t, 1, calls) // Should only try once, no retries
+		assert.Equal(t, 1, attempts)
 	})
 
 	t.Run("retries when retryIf returns true then succeeds", func(t *testing.T) {
@@ -814,7 +819,7 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 		executor := NewRetryExecutor(config)
 
 		calls := 0
-		output, err := executor.ExecuteWithRetry(
+		output, attempts, err := executor.ExecuteWithRetry(
 			context.Background(),
 			"test-action",
 			func(_ context.Context) (*provider.Output, error) {
@@ -830,5 +835,6 @@ func TestRetryExecutor_ExecuteWithRetry_WithRetryIf(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "success", output.Data)
 		assert.Equal(t, 3, calls) // 2 failures + 1 success
+		assert.Equal(t, 3, attempts)
 	})
 }
