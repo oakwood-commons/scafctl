@@ -303,9 +303,9 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 						flow = auth.FlowWorkloadIdentity
 					}
 				}
-				loginErr = loginWithFlowDetection(ctx, w, cliParams.BinaryName, handler, handlerName, flow, tenantID, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.FlowDeviceCode)
+				loginErr = loginWithFlowDetection(ctx, w, cliParams.BinaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.FlowDeviceCode)
 			default:
-				loginErr = loginWithFlowDetection(ctx, w, cliParams.BinaryName, handler, handlerName, flow, tenantID, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.Flow(""))
+				loginErr = loginWithFlowDetection(ctx, w, cliParams.BinaryName, handler, handlerName, flow, tenantID, hostname, callbackPort, timeout, scopes, force, skipIfAuthenticated, auth.Flow(""))
 			}
 
 			if loginErr != nil {
@@ -389,7 +389,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 // FlowDetector interface for flow auto-detection. Handlers are resolved from
 // the registry (as plugins or built-in oauth2). Handler-specific credential
 // detection is delegated to the FlowDetector interface on the handler.
-func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, handlerName string, flow auth.Flow, tenantID string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool, defaultFlow auth.Flow) error {
+func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, handlerName string, flow auth.Flow, tenantID, hostname string, callbackPort int, timeout time.Duration, scopes []string, force, skipIfAuthenticated bool, defaultFlow auth.Flow) error {
 	// Use FlowDetector for auto-detection when no flow is explicitly set
 	if flow == "" {
 		if detector, ok := handler.(auth.FlowDetector); ok {
@@ -413,7 +413,7 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 	}
 
 	// Pre-login check; skip for non-interactive flows.
-	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated,
+	preLogin, err := auth.PreLoginCheck(ctx, handler, flow, force, skipIfAuthenticated, hostname,
 		auth.FlowServicePrincipal, auth.FlowWorkloadIdentity, auth.FlowPAT, auth.FlowClientCredentials, auth.FlowMetadata)
 	if err != nil {
 		w.Errorf("%v", err)
@@ -431,13 +431,13 @@ func loginWithFlowDetection(ctx context.Context, w *writer.Writer, binaryName st
 		return nil
 	}
 
-	return executeLogin(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes)
+	return executeLogin(ctx, w, binaryName, handler, flow, tenantID, hostname, callbackPort, timeout, scopes)
 }
 
 // executeLogin runs the common login logic for any auth handler.
 // For device-code flows on a terminal, it uses the kvx status screen TUI.
 // All other flows (and non-terminal output) use plain text output.
-func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, flow auth.Flow, tenantID string, callbackPort int, timeout time.Duration, scopes []string) error {
+func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, handler auth.Handler, flow auth.Flow, tenantID, hostname string, callbackPort int, timeout time.Duration, scopes []string) error {
 	// Set up cancellation handling
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -460,15 +460,16 @@ func executeLogin(ctx context.Context, w *writer.Writer, binaryName string, hand
 	if skvx.IsTerminal(ioStreams.Out) {
 		switch flow {
 		case auth.FlowDeviceCode:
-			return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
+			return executeLoginWithStatusTUI(ctx, w, binaryName, handler, flow, tenantID, hostname, callbackPort, timeout, scopes, ioStreams)
 		case auth.FlowInteractive, auth.FlowGcloudADC, auth.FlowGitHubApp, "":
-			return executeLoginWithBrowserTUI(ctx, w, binaryName, handler, flow, tenantID, callbackPort, timeout, scopes, ioStreams)
+			return executeLoginWithBrowserTUI(ctx, w, binaryName, handler, flow, tenantID, hostname, callbackPort, timeout, scopes, ioStreams)
 		}
 	}
 
 	// Plain-text login path (non-terminal, or non-device-code flows).
 	loginOpts := auth.LoginOptions{
 		TenantID:     tenantID,
+		Hostname:     hostname,
 		Scopes:       scopes,
 		Flow:         flow,
 		Timeout:      timeout,
@@ -512,6 +513,7 @@ func executeLoginWithStatusTUI(
 	handler auth.Handler,
 	flow auth.Flow,
 	tenantID string,
+	hostname string,
 	callbackPort int,
 	timeout time.Duration,
 	scopes []string,
@@ -532,6 +534,7 @@ func executeLoginWithStatusTUI(
 
 	loginOpts := auth.LoginOptions{
 		TenantID:     tenantID,
+		Hostname:     hostname,
 		Scopes:       scopes,
 		Flow:         flow,
 		Timeout:      timeout,
@@ -672,6 +675,7 @@ func executeLoginWithBrowserTUI(
 	handler auth.Handler,
 	flow auth.Flow,
 	tenantID string,
+	hostname string,
 	callbackPort int,
 	timeout time.Duration,
 	scopes []string,
@@ -692,6 +696,7 @@ func executeLoginWithBrowserTUI(
 
 	loginOpts := auth.LoginOptions{
 		TenantID:     tenantID,
+		Hostname:     hostname,
 		Scopes:       scopes,
 		Flow:         flow,
 		Timeout:      timeout,

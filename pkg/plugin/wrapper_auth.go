@@ -117,6 +117,7 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 
 	req := LoginRequest{
 		TenantID: opts.TenantID,
+		Hostname: opts.Hostname,
 		Scopes:   opts.Scopes,
 		Flow:     opts.Flow,
 		Timeout:  opts.Timeout,
