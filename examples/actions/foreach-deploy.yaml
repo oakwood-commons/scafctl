@@ -62,7 +62,7 @@ spec:
           # Optional: limit concurrent deployments
           concurrency: 2
           # Optional: continue deploying to remaining targets if one fails
-          onError: continue
+          continueOnError: true
         inputs:
           target:
             # __item is the current array element

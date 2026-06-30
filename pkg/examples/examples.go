@@ -251,7 +251,7 @@ func DescriptionFromPath(exPath string) string {
 		"actions/sequential-chain.yaml":         "Actions executed sequentially using dependsOn",
 		"actions/parallel-with-deps.yaml":       "Parallel actions with dependency ordering",
 		"actions/conditional-execution.yaml":    "Actions with conditional execution (when clauses)",
-		"actions/error-handling.yaml":           "Error handling with onError behavior",
+		"actions/error-handling.yaml":           "Error handling with continueOnError",
 		"actions/finally-cleanup.yaml":          "Finally block for cleanup actions",
 		"actions/foreach-deploy.yaml":           "ForEach iteration over collections",
 		"actions/retry-backoff.yaml":            "Retry with exponential backoff",
@@ -276,6 +276,7 @@ func DescriptionFromPath(exPath string) string {
 		"resolvers/feature-flags.yaml":       "Feature flag resolver pattern",
 		"resolvers/identity.yaml":            "Identity/auth resolver pattern",
 		"resolvers/secrets.yaml":             "Secrets resolver pattern",
+		"resolvers/error-recovery.yaml":      "Conditional error recovery with continueOnError",
 
 		// Providers
 		"providers/static-hello.yaml":                "Static provider — simple static string value",

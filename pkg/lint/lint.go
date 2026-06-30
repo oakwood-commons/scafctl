@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -30,6 +31,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/walk"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -113,6 +115,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintImmutableResolvers(sol, result)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
+	lintDeprecatedFields(sol, result)
 
 	// Apply suppression directives parsed from inline YAML comments.
 	suppressions := ParseDirectives(sol.RawContent(), filePath).WithSourceMap(result.sourceMap)
@@ -1004,11 +1007,14 @@ func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *
 		inputLoc := fmt.Sprintf("%s.inputs.%s", location, key)
 
 		if val.Expr != nil && string(*val.Expr) != "" {
-			if err := validateCELSyntax(string(*val.Expr)); err != nil {
+			ast, err := parseCELForLint(string(*val.Expr))
+			if err != nil {
 				result.addFinding(SeverityError, "expression", inputLoc,
 					fmt.Sprintf("invalid CEL expression: %v", err),
 					"Fix the expression syntax",
 					"invalid-expression")
+			} else {
+				lintOrValueOnConcrete(ast, inputLoc, result)
 			}
 		}
 
@@ -1061,20 +1067,172 @@ func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 	}
 }
 
-// validateCELSyntax checks if a CEL expression is syntactically valid.
-// The env enables cel.OptionalTypes() so that optional access syntax
-// (_.?name, _[?"name"]) parses successfully, matching the env used by the
-// reference collector and runtime evaluation in pkg/celexp.
-func validateCELSyntax(expr string) error {
-	env, err := cel.NewEnv(cel.OptionalTypes())
+// celLintEnv holds the shared CEL environment used for all lint-time parsing.
+// It enables cel.OptionalTypes() so optional access syntax (_.?name, _[?"name"])
+// parses successfully, matching the env used by the reference collector and
+// runtime evaluation in pkg/celexp. The env is immutable and safe for
+// concurrent use, so it is built once and reused across every expression
+// instead of being rebuilt per call.
+var (
+	celLintEnv     *cel.Env
+	celLintEnvErr  error
+	celLintEnvOnce sync.Once
+)
+
+// lintCELEnv returns the shared lint CEL environment, building it on first use.
+func lintCELEnv() (*cel.Env, error) {
+	celLintEnvOnce.Do(func() {
+		celLintEnv, celLintEnvErr = cel.NewEnv(cel.OptionalTypes())
+	})
+	return celLintEnv, celLintEnvErr
+}
+
+// parseCELForLint parses expr with the shared lint env and returns the parsed
+// AST. This is the single parse used for both syntax validation and the
+// orValue-on-concrete check, so callers must not re-parse the same expression.
+func parseCELForLint(expr string) (*cel.Ast, error) {
+	env, err := lintCELEnv()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, issues := env.Parse(expr)
+	ast, issues := env.Parse(expr)
 	if issues != nil && issues.Err() != nil {
-		return issues.Err()
+		return nil, issues.Err()
 	}
-	return nil
+	return ast, nil
+}
+
+// validateCELSyntax checks if a CEL expression is syntactically valid.
+// It delegates to parseCELForLint and discards the AST, for callers that only
+// need a syntax check (e.g. when conditions) without the orValue analysis.
+func validateCELSyntax(expr string) error {
+	_, err := parseCELForLint(expr)
+	return err
+}
+
+// lintOrValueOnConcrete flags CEL expressions that call .orValue(...) on a
+// provably-concrete (non-optional) receiver. In CEL, orValue() only has an
+// overload on optional types, so calling it on a concrete value (e.g.
+// __self.orValue([]) or _.field.orValue("")) errors at runtime. The check is
+// deliberately conservative: it only flags receivers it can prove are concrete
+// (plain identifiers, plain field-access chains, and literals). Anything that
+// could produce an optional -- optional access (_.?name, _[?"name"]),
+// optional.of/none/ofNonZeroValue, or any function-call result -- is left
+// alone, so every finding is a guaranteed runtime failure with no false
+// positives.
+//
+// It accepts the already-parsed AST (produced by parseCELForLint) so the
+// expression is parsed exactly once per lint run rather than re-parsed here.
+func lintOrValueOnConcrete(ast *cel.Ast, location string, result *Result) {
+	parsedExpr, err := cel.AstToParsedExpr(ast)
+	if err != nil {
+		return
+	}
+
+	seen := make(map[string]struct{})
+	for _, receiver := range findConcreteOrValueReceivers(parsedExpr.GetExpr()) {
+		if _, dup := seen[receiver]; dup {
+			continue
+		}
+		seen[receiver] = struct{}{}
+		result.addFinding(SeverityError, "expression", location,
+			fmt.Sprintf("'.orValue(...)' is called on non-optional value '%s'; orValue() only has an overload on optional types and will error at runtime", receiver),
+			orValueSuggestion(receiver),
+			"orvalue-on-non-optional")
+	}
+}
+
+// orValueSuggestion builds remediation guidance for an orValue()-on-concrete
+// finding. When the receiver is a plain "_."-rooted field access, it suggests
+// the equivalent optional-access form derived from that field. For any other
+// receiver (e.g. "__self", "__parent", or a literal) the "_.?" form cannot be
+// mechanically derived, so it falls back to generic guidance instead of
+// emitting an invalid example like "_.?__self".
+func orValueSuggestion(receiver string) string {
+	if field := strings.TrimPrefix(receiver, "_."); field != receiver && field != "" {
+		return fmt.Sprintf("Use optional access so the receiver is optional (e.g. '_.?%s'), or drop '.orValue(...)' and provide a fallback another way", field)
+	}
+	return "Use optional access so the receiver is optional (e.g. '_.?name' or '_[?\"name\"]'), or drop '.orValue(...)' and provide a fallback another way"
+}
+
+// findConcreteOrValueReceivers walks a parsed CEL expression and returns a
+// rendered description of every receiver on which orValue() is called when that
+// receiver is provably concrete.
+func findConcreteOrValueReceivers(expr *exprpb.Expr) []string {
+	if expr == nil {
+		return nil
+	}
+
+	var offenders []string
+	switch expr.GetExprKind().(type) {
+	case *exprpb.Expr_CallExpr:
+		call := expr.GetCallExpr()
+		if call.GetFunction() == "orValue" && call.GetTarget() != nil && isProvablyConcrete(call.GetTarget()) {
+			offenders = append(offenders, renderConcrete(call.GetTarget()))
+		}
+		// Recurse into target and args to catch nested expressions.
+		if call.GetTarget() != nil {
+			offenders = append(offenders, findConcreteOrValueReceivers(call.GetTarget())...)
+		}
+		for _, arg := range call.GetArgs() {
+			offenders = append(offenders, findConcreteOrValueReceivers(arg)...)
+		}
+	case *exprpb.Expr_SelectExpr:
+		offenders = append(offenders, findConcreteOrValueReceivers(expr.GetSelectExpr().GetOperand())...)
+	case *exprpb.Expr_ListExpr:
+		for _, el := range expr.GetListExpr().GetElements() {
+			offenders = append(offenders, findConcreteOrValueReceivers(el)...)
+		}
+	case *exprpb.Expr_StructExpr:
+		for _, entry := range expr.GetStructExpr().GetEntries() {
+			offenders = append(offenders, findConcreteOrValueReceivers(entry.GetValue())...)
+		}
+	case *exprpb.Expr_ComprehensionExpr:
+		comp := expr.GetComprehensionExpr()
+		offenders = append(offenders, findConcreteOrValueReceivers(comp.GetIterRange())...)
+		offenders = append(offenders, findConcreteOrValueReceivers(comp.GetAccuInit())...)
+		offenders = append(offenders, findConcreteOrValueReceivers(comp.GetLoopCondition())...)
+		offenders = append(offenders, findConcreteOrValueReceivers(comp.GetLoopStep())...)
+		offenders = append(offenders, findConcreteOrValueReceivers(comp.GetResult())...)
+	}
+	return offenders
+}
+
+// isProvablyConcrete reports whether an expression is guaranteed to be a
+// non-optional (concrete) value. Only literals, plain identifiers, and plain
+// field-access chains rooted at an identifier or literal qualify. Any call
+// (including optional access operators like _?._ and _[?_], optional.of, and a
+// prior orValue) is treated as not provably concrete so the check never flags
+// a value that might legitimately be optional.
+func isProvablyConcrete(expr *exprpb.Expr) bool {
+	switch expr.GetExprKind().(type) {
+	case *exprpb.Expr_ConstExpr:
+		return true
+	case *exprpb.Expr_IdentExpr:
+		return true
+	case *exprpb.Expr_SelectExpr:
+		// A regular field access is concrete only when its operand is concrete.
+		// (Optional select a.?b is parsed as a CallExpr, not a SelectExpr.)
+		return isProvablyConcrete(expr.GetSelectExpr().GetOperand())
+	default:
+		return false
+	}
+}
+
+// renderConcrete renders a provably-concrete expression back to a readable
+// source-like string for diagnostics (e.g. "_.config.host", "__self").
+func renderConcrete(expr *exprpb.Expr) string {
+	switch expr.GetExprKind().(type) {
+	case *exprpb.Expr_IdentExpr:
+		return expr.GetIdentExpr().GetName()
+	case *exprpb.Expr_SelectExpr:
+		sel := expr.GetSelectExpr()
+		return renderConcrete(sel.GetOperand()) + "." + sel.GetField()
+	case *exprpb.Expr_ConstExpr:
+		return "<literal>"
+	default:
+		return "<expr>"
+	}
 }
 
 // hyphensToCamelCase converts a hyphenated name to camelCase.

@@ -72,6 +72,14 @@ type FieldInfo struct {
 	// Deprecated from the "deprecated" tag
 	Deprecated bool `json:"deprecated,omitempty" yaml:"deprecated,omitempty"`
 
+	// DeprecatedReplacement from the "deprecatedReplacement" tag names the
+	// field that supersedes this one.
+	DeprecatedReplacement string `json:"deprecatedReplacement,omitempty" yaml:"deprecatedReplacement,omitempty"`
+
+	// DeprecatedMessage from the "deprecatedMessage" tag provides additional
+	// migration guidance.
+	DeprecatedMessage string `json:"deprecatedMessage,omitempty" yaml:"deprecatedMessage,omitempty"`
+
 	// Omitempty indicates if the field has omitempty in json tag
 	Omitempty bool `json:"omitempty,omitempty" yaml:"omitempty,omitempty"`
 
@@ -337,6 +345,8 @@ func introspectFieldWithSeen(f reflect.StructField, depth int, seen map[reflect.
 	if dep := f.Tag.Get("deprecated"); dep == "true" {
 		info.Deprecated = true
 	}
+	info.DeprecatedReplacement = f.Tag.Get("deprecatedReplacement")
+	info.DeprecatedMessage = f.Tag.Get("deprecatedMessage")
 
 	// Omitempty from json tag
 	jsonTag := f.Tag.Get("json")

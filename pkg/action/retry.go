@@ -191,19 +191,22 @@ type RetryCallback interface {
 // - callback: Optional callback for retry events (can be nil)
 //
 // Returns the output from a successful execution or the last error if all attempts fail.
+// The returned int is the number of attempts actually performed, which callers
+// use to build an accurate __error context (attempt/maxAttempts) for
+// continueOnError decisions made after the action ultimately fails.
 func (r *RetryExecutor) ExecuteWithRetry(
 	ctx context.Context,
 	actionName string,
 	execute ExecuteFunc,
 	callback RetryCallback,
-) (*provider.Output, error) {
+) (*provider.Output, int, error) {
 	maxAttempts := r.MaxAttempts()
 	var lastErr error
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Check for cancellation before each attempt
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("execution cancelled: %w", ctx.Err())
+			return nil, attempt - 1, fmt.Errorf("execution cancelled: %w", ctx.Err())
 		}
 
 		// If this is a retry (not the first attempt), wait and notify callback
@@ -219,7 +222,7 @@ func (r *RetryExecutor) ExecuteWithRetry(
 			if delay > 0 {
 				select {
 				case <-ctx.Done():
-					return nil, fmt.Errorf("execution cancelled during retry delay: %w", ctx.Err())
+					return nil, attempt - 1, fmt.Errorf("execution cancelled during retry delay: %w", ctx.Err())
 				case <-time.After(delay):
 					// Continue with retry
 				}
@@ -229,7 +232,7 @@ func (r *RetryExecutor) ExecuteWithRetry(
 		// Execute the action
 		output, err := execute(ctx)
 		if err == nil {
-			return output, nil
+			return output, attempt, nil
 		}
 
 		lastErr = err
@@ -238,15 +241,15 @@ func (r *RetryExecutor) ExecuteWithRetry(
 		shouldRetry, retryErr := r.ShouldRetry(ctx, err, attempt)
 		if retryErr != nil {
 			// Expression evaluation failed - fail the action with both errors
-			return nil, fmt.Errorf("action failed and retryIf evaluation failed: %w (original error: %w)", retryErr, err)
+			return nil, attempt, fmt.Errorf("action failed and retryIf evaluation failed: %w (original error: %w)", retryErr, err)
 		}
 		if !shouldRetry {
 			// Return actual attempt count, not maxAttempts
-			return nil, fmt.Errorf("action failed after %d attempt(s): %w", attempt, lastErr)
+			return nil, attempt, fmt.Errorf("action failed after %d attempt(s): %w", attempt, lastErr)
 		}
 	}
 
-	return nil, fmt.Errorf("action failed after %d attempt(s): %w", maxAttempts, lastErr)
+	return nil, maxAttempts, fmt.Errorf("action failed after %d attempt(s): %w", maxAttempts, lastErr)
 }
 
 // RetryResult contains information about a retry execution.

@@ -21,6 +21,59 @@ Always add JSON/YAML tags. Use [Huma validation tags](https://huma.rocks/feature
 | `expr` | `Expression` | `pkg/celexp` |
 | `tmpl` | `GoTemplatingContent` | `pkg/gotmpl` |
 
+## Deprecating a Field
+
+scafctl has a reusable, struct-tag-driven deprecation mechanism. Deprecating a
+spec field requires no per-field lint code -- you tag the old field, keep it
+working, and add the replacement. The worked example is the resolver/action
+`onError` enum being superseded by `continueOnError`.
+
+Follow these steps:
+
+1. Tag the OLD field as deprecated and name its replacement:
+
+~~~go
+OnError ErrorBehavior `json:"onError,omitempty" yaml:"onError,omitempty" deprecated:"true" deprecatedReplacement:"continueOnError" doc:"DEPRECATED: use continueOnError instead. ..."`
+~~~
+
+   - `deprecated:"true"` -- required; marks the field deprecated.
+   - `deprecatedReplacement:"<newYamlKey>"` -- the replacement's YAML key; drives
+     lint messaging and the schema `[DEPRECATED] (use <replacement>)` marker.
+   - `deprecatedMessage:"<extra guidance>"` -- optional free-form note appended to
+     the lint warning.
+
+2. Keep the old field fully functional (parse + translate) for at least one major
+   version. Never delete a field in the same release you deprecate it. Provide a
+   translation path (e.g. `onError: continue` -> `continueOnError: true`,
+   `onError: fail` -> `continueOnError: false`) and document the mapping in the
+   new field's `doc` tag.
+
+3. Add the NEW field. If it is a `*Condition`, do NOT add an `example` tag (Huma
+   validates examples against the object schema and a scalar like `true` will
+   panic schema generation).
+
+4. The plumbing is automatic:
+   - `pkg/schema/introspect.go` reads the tags into `FieldInfo`.
+   - `pkg/schema/format.go` renders `[DEPRECATED] (use <replacement>)`.
+   - Huma emits `deprecated: true` in the JSON schema from the `deprecated` tag.
+   - The generic `deprecated-field` lint rule (`pkg/lint/deprecated.go`) emits a
+     WARNING when the old field is set. Add a traversal call there for the new
+     struct location if it is not already walked (resolvers, workflow actions,
+     and forEach are covered).
+
+5. If the old and new fields are mutually exclusive, the `deprecated-field-conflict`
+   rule emits an ERROR when both are set on the same object (runtime: the new
+   field wins). This is the default behavior of `emitDeprecated`.
+
+6. Escalate by SEMVER, not wall-clock time: warn now -> error in the next major ->
+   remove in the major after that. CI can opt into strict mode by treating lint
+   warnings as failures.
+
+7. Migrate first-party docs and examples to the new field, but keep ONE example of
+   the deprecated field to demonstrate the warning, and keep a test asserting the
+   old field still works and warns. Cross-reference the `deprecated-field` rule's
+   explain text so `explain_lint_rule` and these instructions tell the same story.
+
 ## Error Handling
 
 Always wrap errors with context:

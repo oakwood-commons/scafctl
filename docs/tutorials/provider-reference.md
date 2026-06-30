@@ -2115,7 +2115,12 @@ Access CLI parameters passed via `-r` flags.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `key` | string | ✅ | Parameter name |
+| `key` | string | ❌ | Parameter name (exact match). Provide either `key` or `keys`; `key` takes precedence over `keys` when both are set. |
+| `keys` | array of string | ❌ | Ordered list of parameter names (aliases) for a single logical parameter. The first name provided via CLI wins. Evaluated after `key`. |
+| `default` | any | ❌ | Value returned when the parameter is not provided. |
+| `type` | string | ❌ | Set to `string` to return the value verbatim and suppress type inference. |
+
+At least one of `key` or `keys` must be provided.
 
 ### Output
 
@@ -2137,6 +2142,17 @@ resolve:
     - provider: static
       inputs:
         value: "dev"  # Default if not provided
+```
+
+```yaml
+# Accept the same parameter under any of several flag names (aliases).
+# Whichever of -r environment / -r e / -r env was provided wins.
+resolve:
+  with:
+    - provider: parameter
+      inputs:
+        keys: [environment, e, env]
+        default: dev
 ```
 
 Usage:

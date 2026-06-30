@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -78,6 +79,72 @@ func TestAutoResolveProviderByName_FetcherFails(t *testing.T) {
 func TestLoadLockPlugins_MissingFile(t *testing.T) {
 	result := loadLockPlugins("/nonexistent/path/solution.yaml")
 	assert.Nil(t, result)
+}
+
+func TestExtractParameterKeys(t *testing.T) {
+	strRef := func(s string) *resolver.ValueRef { return &resolver.ValueRef{Literal: s} }
+	listRef := func(items ...any) *resolver.ValueRef { return &resolver.ValueRef{Literal: items} }
+
+	tests := []struct {
+		name      string
+		resolvers []*resolver.Resolver
+		want      []string
+	}{
+		{
+			name: "single key input",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"key": strRef("name")}},
+				}},
+			}},
+			want: []string{"name"},
+		},
+		{
+			name: "keys alias list",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"keys": listRef("environment", "e", "env")}},
+				}},
+			}},
+			want: []string{"environment", "e", "env"},
+		},
+		{
+			name: "key and keys combined with dedup",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+						"key":  strRef("environment"),
+						"keys": listRef("environment", "e"),
+					}},
+				}},
+			}},
+			want: []string{"environment", "e"},
+		},
+		{
+			name: "non-parameter providers ignored",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*resolver.ValueRef{"key": strRef("ignored")}},
+				}},
+			}},
+			want: nil,
+		},
+		{
+			name: "non-string keys entries skipped",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"keys": listRef("env", 42, "region")}},
+				}},
+			}},
+			want: []string{"env", "region"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractParameterKeys(tt.resolvers)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestBuildParamFlagHint(t *testing.T) {

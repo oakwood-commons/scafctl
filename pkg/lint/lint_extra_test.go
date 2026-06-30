@@ -109,6 +109,108 @@ func TestValidateCELSyntax_Invalid(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// ---- lintOrValueOnConcrete (orvalue-on-non-optional) ----
+
+func collectOrValueFindings(expr string) *Result {
+	result := &Result{}
+	ast, err := parseCELForLint(expr)
+	if err != nil {
+		return result
+	}
+	lintOrValueOnConcrete(ast, "test.location", result)
+	return result
+}
+
+func TestLintOrValueOnConcrete_FlagsConcreteReceivers(t *testing.T) {
+	cases := []struct {
+		name string
+		expr string
+		want string // substring expected in the message
+	}{
+		{"plain ident", `__self.orValue([])`, "__self"},
+		{"field access", `_.field.orValue("")`, "_.field"},
+		{"nested field access", `_.config.host.orValue("")`, "_.config.host"},
+		{"literal receiver", `"x".orValue("")`, "<literal>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := collectOrValueFindings(tc.expr)
+			require.Len(t, result.Findings, 1)
+			f := result.Findings[0]
+			assert.Equal(t, SeverityError, f.Severity)
+			assert.Equal(t, "orvalue-on-non-optional", f.RuleName)
+			assert.Equal(t, "expression", f.Category)
+			assert.Contains(t, f.Message, tc.want)
+		})
+	}
+}
+
+func TestLintOrValueOnConcrete_AllowsOptionalReceivers(t *testing.T) {
+	cases := []string{
+		`_.?field.orValue("")`,
+		`_[?"field"].orValue("")`,
+		`_.?config.host.orValue("")`,
+		`optional.of("x").orValue("")`,
+		`optional.ofNonZeroValue(_.field).orValue("")`,
+		// Result of another call is not provably concrete.
+		`_.field.split(",").orValue([])`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			result := collectOrValueFindings(expr)
+			assert.Empty(t, result.Findings, "expected no findings for %q", expr)
+		})
+	}
+}
+
+func TestLintOrValueOnConcrete_NoOrValueCall(t *testing.T) {
+	result := collectOrValueFindings(`_.field + "x"`)
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintOrValueOnConcrete_FlagsNestedOccurrence(t *testing.T) {
+	// orValue on a concrete receiver buried inside a larger expression.
+	result := collectOrValueFindings(`[1, 2, _.field.orValue("")]`)
+	require.Len(t, result.Findings, 1)
+	assert.Contains(t, result.Findings[0].Message, "_.field")
+}
+
+func TestLintOrValueOnConcrete_DeduplicatesSameReceiver(t *testing.T) {
+	result := collectOrValueFindings(`_.field.orValue("") + _.field.orValue("x")`)
+	assert.Len(t, result.Findings, 1)
+}
+
+func TestLintOrValueOnConcrete_IgnoresSyntaxErrors(t *testing.T) {
+	// Invalid syntax must not panic and must produce no findings (callers
+	// run validateCELSyntax first and skip this check on parse failure).
+	result := collectOrValueFindings(`1 +++ %%%`)
+	assert.Empty(t, result.Findings)
+}
+
+func TestOrValueSuggestion(t *testing.T) {
+	cases := []struct {
+		name        string
+		receiver    string
+		wantExample string // substring expected in the suggestion
+	}{
+		{"underscore-rooted field", "_.field", "'_.?field'"},
+		{"underscore-rooted nested", "_.config.host", "'_.?config.host'"},
+		{"self receiver", "__self", "'_.?name'"},
+		{"parent receiver", "__parent", "'_.?name'"},
+		{"literal receiver", "<literal>", "'_.?name'"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := orValueSuggestion(tc.receiver)
+			assert.Contains(t, got, tc.wantExample)
+			// Never emit an invalid example that splices a non-"_."-rooted
+			// receiver in after "_.?".
+			assert.NotContains(t, got, "_.?__")
+			assert.NotContains(t, got, "_.?<literal>")
+		})
+	}
+}
+
 // ---- validateTemplateSyntax ----
 
 func TestValidateTemplateSyntax_Valid(t *testing.T) {

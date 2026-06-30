@@ -35,6 +35,28 @@ type RuleMeta struct {
 // KnownRules is the canonical registry of all lint rules.
 // Every addFinding call in lint.go MUST use a key from this map.
 var KnownRules = map[string]RuleMeta{
+	"deprecated-field": {
+		Rule:        "deprecated-field",
+		Severity:    string(SeverityWarning),
+		Category:    "deprecation",
+		Description: "A field that has been marked deprecated is used. The solution still works, but the field will be removed in a future major version.",
+		Why:         "Deprecated fields are retained for backward compatibility but should be migrated to their replacement. Keeping them increases the risk of breakage when the field is eventually removed.",
+		Fix:         "Replace the deprecated field with the suggested replacement field. Run get_solution_schema to see the replacement, or check the field's [DEPRECATED] marker.",
+		Examples: []string{
+			"# Deprecated:\n- provider: http\n  onError: continue\n\n# Replacement:\n- provider: http\n  continueOnError: true",
+		},
+	},
+	"deprecated-field-conflict": {
+		Rule:        "deprecated-field-conflict",
+		Severity:    string(SeverityError),
+		Category:    "deprecation",
+		Description: "Both a deprecated field and its replacement are set on the same object.",
+		Why:         "When both are present the replacement takes precedence at runtime and the deprecated field is silently ignored, which is confusing and error-prone.",
+		Fix:         "Remove the deprecated field and keep only its replacement.",
+		Examples: []string{
+			"# Conflict (remove onError):\n- provider: http\n  onError: continue\n  continueOnError: true",
+		},
+	},
 	"empty-solution": {
 		Rule:        "empty-solution",
 		Severity:    string(SeverityError),
@@ -89,6 +111,14 @@ var KnownRules = map[string]RuleMeta{
 		Description: "A CEL expression (in a 'when' clause or 'expr' input) has a syntax error and cannot be parsed.",
 		Why:         "Invalid CEL expressions will cause runtime failures. Common issues include missing quotes around strings, unbalanced parentheses, and using unknown functions.",
 		Fix:         "Use validate_expression with type 'cel' to check the expression syntax. Use list_cel_functions to see available functions. Use evaluate_cel to test the expression with sample data.",
+	},
+	"orvalue-on-non-optional": {
+		Rule:        "orvalue-on-non-optional",
+		Severity:    string(SeverityError),
+		Category:    "expression",
+		Description: "A CEL expression calls '.orValue(...)' on a provably non-optional (concrete) value, such as '__self.orValue([])' or '_.field.orValue(\"\")'.",
+		Why:         "orValue() only has an overload on CEL optional types. Calling it on a concrete value (a plain identifier or field-access chain) has no matching overload and fails at runtime, even though the expression parses and lints for syntax. This commonly happens when an optional marker ('.?') is dropped during editing or conversion.",
+		Fix:         "Make the receiver optional so orValue() applies (e.g. '_.?field.orValue(\"\")' or '_[?\"field\"].orValue(\"\")'), or remove '.orValue(...)' and supply the fallback another way (e.g. a ternary or a separate resolver source).",
 	},
 	"invalid-template": {
 		Rule:        "invalid-template",

@@ -784,13 +784,14 @@ func parseQuotedString(s string) string {
 func validateForEach(action *Action, section string, errs *AggregatedValidationError) {
 	forEach := action.ForEach
 
-	// Rule 13: forEach.onError must be valid
+	// Rule 13: forEach.onError must be valid (deprecated field, still validated for back-compat)
+	//nolint:staticcheck // validating the deprecated field while it remains supported
 	if forEach.OnError != "" && !forEach.OnError.IsValid() {
 		errs.AddError(&ValidationError{
 			Section:    section,
 			ActionName: action.Name,
 			Field:      "forEach.onError",
-			Message:    fmt.Sprintf("forEach.onError must be 'fail' or 'continue', got %q", forEach.OnError),
+			Message:    fmt.Sprintf("forEach.onError must be 'fail' or 'continue', got %q", forEach.OnError), //nolint:staticcheck // validating the deprecated field while it remains supported
 		})
 	}
 

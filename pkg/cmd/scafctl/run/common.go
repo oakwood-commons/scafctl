@@ -969,11 +969,18 @@ func (o *sharedResolverOptions) handleStateLoadError(ctx context.Context, loadEr
 
 // extractParameterKeys collects the CLI parameter keys accepted by a set of resolvers.
 // It scans all resolve-phase provider sources for the "parameter" provider and
-// extracts the literal "key" input value, which is the actual name the user
-// must pass via -r key=value.
+// extracts the literal "key" input value plus every entry in the "keys" alias
+// list, which together are the names the user may pass via -r key=value.
 func extractParameterKeys(resolvers []*resolver.Resolver) []string {
 	seen := make(map[string]bool)
 	var keys []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		keys = append(keys, name)
+	}
 	for _, r := range resolvers {
 		if r.Resolve == nil {
 			continue
@@ -982,13 +989,19 @@ func extractParameterKeys(resolvers []*resolver.Resolver) []string {
 			if src.Provider != "parameter" {
 				continue
 			}
-			keyRef, ok := src.Inputs["key"]
-			if !ok || keyRef == nil || keyRef.Literal == nil {
-				continue
+			if keyRef, ok := src.Inputs["key"]; ok && keyRef != nil {
+				if s, ok := keyRef.Literal.(string); ok {
+					add(s)
+				}
 			}
-			if s, ok := keyRef.Literal.(string); ok && s != "" && !seen[s] {
-				seen[s] = true
-				keys = append(keys, s)
+			if keysRef, ok := src.Inputs["keys"]; ok && keysRef != nil {
+				if list, ok := keysRef.Literal.([]any); ok {
+					for _, item := range list {
+						if s, ok := item.(string); ok {
+							add(s)
+						}
+					}
+				}
 			}
 		}
 	}

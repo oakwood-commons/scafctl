@@ -1,0 +1,151 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-continueonerror
+  version: 1.0.0
+  description: |
+    Functional tests for continueOnError conditional error recovery on
+    resolver sources and transforms. The failing error text is bound to
+    the top-level __error variable. A truthy condition recovers
+    (source skipped / transform value kept); a falsy condition fails the
+    resolver, overriding the phase default behavior. The deprecated onError
+    field is also exercised to confirm it still works for back-compat.
+
+spec:
+  resolvers:
+    # Source-level: condition matches the real error -> recover to fallback.
+    sourceRecover:
+      description: Recoverable source error falls through to the static fallback
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./missing-source-file.txt
+            continueOnError: '__error.contains("file does not exist")'
+          - provider: static
+            inputs:
+              value: "recovered-fallback"
+
+    # Source-level: condition does not match -> resolver fails, even though
+    # the resolve phase would normally fall through to the next source.
+    sourceFail:
+      description: Non-matching source error fails the resolver
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./missing-source-file.txt
+            continueOnError: '__error.contains("timeout")'
+          - provider: static
+            inputs:
+              value: "should-not-be-reached"
+
+    # Transform-level: condition matches -> keep the upstream value.
+    transformRecover:
+      description: Recoverable transform error keeps the current value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "base-value"
+      transform:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./missing-transform-file.txt
+            continueOnError: '__error.contains("file does not exist")'
+
+    # Transform-level: condition does not match -> resolver fails, overriding
+    # the transform default (the transform default is fail anyway, but this
+    # documents that continueOnError takes precedence when set).
+    transformFail:
+      description: Non-matching transform error fails the resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "base-value"
+      transform:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./missing-transform-file.txt
+            continueOnError: '__error.contains("timeout")'
+
+    # Deprecated onError field still works: onError: continue recovers the
+    # source to the fallback (back-compat path).
+    deprecatedOnError:
+      description: Deprecated onError still recovers the source to the fallback
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./missing-source-file.txt
+            onError: continue
+          - provider: static
+            inputs:
+              value: "deprecated-fallback"
+
+  testing:
+    config:
+      # sourceFail and transformFail intentionally fail to resolve.
+      skipBuiltins: [resolve-defaults]
+
+    cases:
+      source-recover:
+        description: Matching continueOnError recovers the source to the fallback
+        command: [run, resolver, sourceRecover]
+        args: ["-o", "json"]
+        tags: [resolver, continueonerror, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.sourceRecover == "recovered-fallback"'
+            message: "Matching condition should skip the failed source"
+
+      source-fail:
+        description: Non-matching continueOnError fails the resolver
+        command: [run, resolver, sourceFail]
+        args: ["-o", "json"]
+        tags: [resolver, continueonerror, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("file does not exist")'
+            message: "Original error should surface when the condition does not match"
+
+      transform-recover:
+        description: Matching continueOnError keeps the upstream transform value
+        command: [run, resolver, transformRecover]
+        args: ["-o", "json"]
+        tags: [resolver, continueonerror]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.transformRecover == "base-value"'
+            message: "Matching condition should keep the current value"
+
+      transform-fail:
+        description: Non-matching continueOnError fails the resolver in transform
+        command: [run, resolver, transformFail]
+        args: ["-o", "json"]
+        tags: [resolver, continueonerror, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+          - expression: '__stderr.contains("file does not exist")'
+            message: "Original transform error should surface on no match"
+
+      deprecated-onerror:
+        description: Deprecated onError continue still recovers the source
+        command: [run, resolver, deprecatedOnError]
+        args: ["-o", "json"]
+        tags: [resolver, continueonerror, deprecated]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.deprecatedOnError == "deprecated-fallback"'
+            message: "Deprecated onError: continue should still skip the failed source"

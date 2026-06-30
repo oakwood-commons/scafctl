@@ -164,6 +164,7 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		ForEach            *forEachPreview     `json:"forEach,omitempty"`
 		Retry              *retryPreview       `json:"retry,omitempty"`
 		Timeout            string              `json:"timeout,omitempty"`
+		ContinueOnError    string              `json:"continueOnError,omitempty"`
 		OnError            string              `json:"onError,omitempty"`
 		Exclusive          []string            `json:"exclusive,omitempty"`
 		SourcePos          *sourcepos.Position `json:"sourcePos,omitempty"`
@@ -230,8 +231,12 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 		if ea.Timeout != nil {
 			preview.Timeout = ea.Timeout.String()
 		}
+		if ea.ContinueOnError != nil && ea.ContinueOnError.Expr != nil {
+			preview.ContinueOnError = string(*ea.ContinueOnError.Expr)
+		}
+		//nolint:staticcheck // surfacing the deprecated field in the preview while it remains supported
 		if ea.OnError != "" {
-			preview.OnError = string(ea.OnError)
+			preview.OnError = string(ea.OnError) //nolint:staticcheck // surfacing the deprecated field in the preview while it remains supported
 		}
 		if ea.Retry != nil {
 			preview.Retry = &retryPreview{
