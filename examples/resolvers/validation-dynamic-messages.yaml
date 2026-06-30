@@ -27,7 +27,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: name
           - provider: static
@@ -51,7 +51,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: port
           - provider: static

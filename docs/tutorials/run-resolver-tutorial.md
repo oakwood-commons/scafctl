@@ -1182,7 +1182,7 @@ Output:
 
 The parameter provider supports an optional `default` input that provides a
 fallback value when the parameter is not passed via `-r` flags. This is simpler
-than using a multi-step fallback chain with `onError: continue` and a `static`
+than using a multi-step fallback chain with `continueOnError: true` and a `static`
 provider.
 
 Create a file called `param-default-demo.yaml`:

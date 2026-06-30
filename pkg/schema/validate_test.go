@@ -86,6 +86,97 @@ func TestValidateSolutionAgainstSchema(t *testing.T) {
 	})
 }
 
+func TestValidateSolutionAgainstSchema_ConditionShorthand(t *testing.T) {
+	// Conditions (when, until, continueOnError) support a CEL string, a boolean
+	// literal, or the object form using either an "expr" or "expression" key.
+	// All forms must validate against the generated schema.
+	conditionForms := map[string]any{
+		"string":            "1 == 1",
+		"bool":              true,
+		"object":            map[string]any{"expr": "1 == 1"},
+		"object expression": map[string]any{"expression": "1 == 1"},
+	}
+
+	for name, cond := range conditionForms {
+		t.Run("source when "+name, func(t *testing.T) {
+			resetSolutionSchemaOnce()
+			data := conditionSolution(map[string]any{"when": cond})
+			violations, err := ValidateSolutionAgainstSchema(data)
+			require.NoError(t, err)
+			assert.Empty(t, violations, "%s when shorthand should validate", name)
+		})
+
+		t.Run("source continueOnError "+name, func(t *testing.T) {
+			resetSolutionSchemaOnce()
+			data := conditionSolution(map[string]any{"continueOnError": cond})
+			violations, err := ValidateSolutionAgainstSchema(data)
+			require.NoError(t, err)
+			assert.Empty(t, violations, "%s continueOnError shorthand should validate", name)
+		})
+	}
+
+	t.Run("invalid condition type is flagged", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		// An array is not a valid condition form.
+		data := conditionSolution(map[string]any{"when": []any{"1 == 1"}})
+		violations, err := ValidateSolutionAgainstSchema(data)
+		require.NoError(t, err)
+		assert.NotEmpty(t, violations, "array condition should produce violations")
+	})
+
+	t.Run("empty string condition is flagged", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		// Condition.UnmarshalYAML rejects empty strings, so the schema must too.
+		data := conditionSolution(map[string]any{"when": ""})
+		violations, err := ValidateSolutionAgainstSchema(data)
+		require.NoError(t, err)
+		assert.NotEmpty(t, violations, "empty string condition should produce violations")
+	})
+
+	t.Run("both expr and expression keys are flagged", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		// The runtime Condition unmarshallers reject specifying both keys, so
+		// the schema must reject it too.
+		data := conditionSolution(map[string]any{
+			"when": map[string]any{"expr": "1 == 1", "expression": "1 == 1"},
+		})
+		violations, err := ValidateSolutionAgainstSchema(data)
+		require.NoError(t, err)
+		assert.NotEmpty(t, violations, "specifying both expr and expression should produce violations")
+	})
+}
+
+// conditionSolution builds a minimal solution whose single source carries the
+// supplied extra keys (e.g., a when or continueOnError condition).
+func conditionSolution(sourceExtra map[string]any) map[string]any {
+	source := map[string]any{
+		"provider": "static",
+		"inputs":   map[string]any{"value": "hi"},
+	}
+	for k, v := range sourceExtra {
+		source[k] = v
+	}
+	return map[string]any{
+		"apiVersion": "scafctl.io/v1",
+		"kind":       "Solution",
+		"metadata": map[string]any{
+			"name":    "test-solution",
+			"version": "1.0.0",
+		},
+		"spec": map[string]any{
+			"resolvers": map[string]any{
+				"a": map[string]any{
+					"name":        "a",
+					"description": "d",
+					"resolve": map[string]any{
+						"with": []any{source},
+					},
+				},
+			},
+		},
+	}
+}
+
 func TestJsonPointerToDotPath(t *testing.T) {
 	tests := []struct {
 		pointer  string

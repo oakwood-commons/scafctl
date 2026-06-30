@@ -170,7 +170,7 @@ spec:
           destination: {expr: "_.output_path"}
         dependsOn: []
         when: "_.enabled"         # CEL condition
-        onError: fail             # fail | continue
+        continueOnError: false    # bool or CEL (truthy continues, falsy fails); replaces deprecated onError
         timeout: 30s
         exclusive: [other-write]  # Mutual exclusion
         retry:

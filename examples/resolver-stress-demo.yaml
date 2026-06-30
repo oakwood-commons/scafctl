@@ -18,12 +18,12 @@
 # | Resolve        | when (phase-level)           | team_email                                   |
 # | Resolve        | until (stop condition)       | team_email                                   |
 # | Resolve        | source-level when            | team_email                                   |
-# | Resolve        | source-level onError         | team_email                                   |
+# | Resolve        | source-level continueOnError | team_email                                   |
 # | Resolve        | multiple sources (fallback)  | team_email                                   |
 # |----------------|------------------------------|----------------------------------------------|
 # | Transform      | when (phase-level)           | log_level                                    |
 # | Transform      | step-level when              | log_level                                    |
-# | Transform      | step-level onError           | log_level                                    |
+# | Transform      | step-level continueOnError   | log_level                                    |
 # | Transform      | __self reference             | cost_center                                  |
 # | Transform      | forEach item/index aliases   | dns_records                                  |
 # | Transform      | forEach concurrency          | service_endpoints                            |
@@ -169,7 +169,7 @@ spec:
             inputs:
               value: platform-engineering
 
-    # 7b. Optional team email (demonstrates resolve.when, until, multiple sources, source-level when/onError)
+    # 7b. Optional team email (demonstrates resolve.when, until, multiple sources, source-level when/continueOnError)
     team_email:
       description: Team contact email with fallback chain
       displayName: Team Email
@@ -186,12 +186,12 @@ spec:
               expr: "has(_.team_id)"  # Only try if team_id exists
             inputs:
               value: null  # Simulates parameter not provided
-            onError: continue  # Continue to next source on failure
+            continueOnError: true  # Continue to next source on failure
           # Source 2: Try environment variable
           - provider: static
             inputs:
               value: null  # Simulates env var not set
-            onError: continue
+            continueOnError: true
           # Source 3: Compute from team_id (final fallback)
           - provider: cel
             inputs:
@@ -247,7 +247,7 @@ spec:
               expression: "__self >= 1 && __self <= 100"
               message: "Replica count must be between 1 and 100"
 
-    # 11. Log level (demonstrates transform.when, step-level when, onError)
+    # 11. Log level (demonstrates transform.when, step-level when, continueOnError)
     log_level:
       description: Default logging level
       type: string
@@ -271,7 +271,7 @@ spec:
               expr: "_.environment == 'production'"
             inputs:
               expression: "'prod-' + __self"
-            onError: continue  # Continue even if this step fails
+            continueOnError: true  # Continue even if this step fails
       validate:
         with:
           - provider: validation
@@ -1152,11 +1152,11 @@ spec:
                     'resolve_when_phase_condition',
                     'resolve_until_stop_condition',
                     'source_level_when',
-                    'source_level_onError_continue',
+                    'source_level_continueOnError',
                     'multiple_source_fallback_chain',
                     'transform_when_phase_condition',
                     'transform_step_when',
-                    'transform_step_onError',
+                    'transform_step_continueOnError',
                     'validation_match_and_notMatch',
                     'multiple_validations_per_resolver',
                     'dynamic_message_tmpl',

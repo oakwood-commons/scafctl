@@ -1,0 +1,57 @@
+# Run: scafctl run resolver -f examples/resolvers/error-recovery.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: conditional-error-recovery
+  displayName: Conditional Error Recovery
+  category: resolvers
+  tags:
+    - resolver-example
+    - error-handling
+  description: |
+    Demonstrates continueOnError, a CEL condition evaluated when a source or
+    transform step fails. The failing error text is bound to the top-level
+    __error variable. When the condition is truthy, the error is recovered
+    (the source is skipped / the current value is kept); otherwise the
+    resolver fails. continueOnError replaces the deprecated onError field
+    and takes precedence when both are set.
+
+spec:
+  resolvers:
+    # Source-level recovery: a missing optional config file is an expected,
+    # recoverable condition, so we fall through to the static default. Any
+    # other read failure (e.g. permissions) would NOT match and would fail
+    # the resolver instead of silently falling back.
+    optionalConfig:
+      description: Optional config file with a safe default
+      type: string
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./this-config-does-not-exist.txt
+            continueOnError: '__error.contains("file does not exist")'
+          - provider: static
+            inputs:
+              value: "default-config"
+
+    # Transform-level recovery: keep the upstream value when an enrichment
+    # step fails for a known, tolerable reason. Transforms default to
+    # failing, so without continueOnError this failure would abort.
+    enriched:
+      description: Value with best-effort enrichment
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "base-value"
+      transform:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./optional-enrichment-data.txt
+            continueOnError: '__error.contains("file does not exist")'

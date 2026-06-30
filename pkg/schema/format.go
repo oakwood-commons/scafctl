@@ -138,6 +138,9 @@ func (f *Formatter) formatFields(fields []FieldInfo, depth int) {
 		deprecatedStr := ""
 		if field.Deprecated {
 			deprecatedStr = " [DEPRECATED]"
+			if field.DeprecatedReplacement != "" {
+				deprecatedStr += " (use " + field.DeprecatedReplacement + ")"
+			}
 		}
 
 		// Field line

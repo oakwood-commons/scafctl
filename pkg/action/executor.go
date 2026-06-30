@@ -5,6 +5,7 @@ package action
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -383,7 +384,30 @@ func (e *Executor) executePhases(ctx context.Context, graph *Graph, phases [][]s
 			allContinue := true
 			for _, name := range phase {
 				action := graph.Actions[name]
-				if action != nil && action.OnError.OrDefault() != spec.OnErrorContinue {
+				if action == nil {
+					continue
+				}
+				var actionErr error
+				attempts := 1
+				if ar, ok := e.actionContext.GetResult(name); ok && ar.Error != "" {
+					actionErr = errors.New(ar.Error)
+					if ar.Attempts > 0 {
+						attempts = ar.Attempts
+					}
+				}
+				// Only consult continueOnError for actions that actually failed.
+				// A successful action must not gate workflow continuation, and
+				// evaluating a continueOnError expression that references __error
+				// would fail with an undefined-variable error.
+				if actionErr == nil {
+					continue
+				}
+				// Reuse the action's recorded attempt count (and its configured
+				// maxAttempts) so this re-check matches the decision executeAction
+				// already made, including expressions that read __error.attempt.
+				maxAttempts := NewRetryExecutor(action.Retry).MaxAttempts()
+				cont, decideErr := e.actionShouldContinue(ctx, action, actionErr, attempts, maxAttempts)
+				if decideErr != nil || !cont {
 					allContinue = false
 					break
 				}
@@ -405,6 +429,76 @@ func (e *Executor) executePhases(ctx context.Context, graph *Graph, phases [][]s
 	}
 
 	return nil
+}
+
+// actionShouldContinue reports whether a failed action should allow the workflow
+// to continue. The effective continue-on-error policy is resolved by
+// effectiveOnErrorPolicy: for forEach iterations the loop-level
+// forEach.continueOnError/onError take precedence; otherwise the action-level
+// fields apply. When the policy is a CEL expression it is evaluated with the
+// structured error bound as __error (carrying the real attempt/maxAttempts) and,
+// for forEach iterations, the iteration variables (__item/__index plus any
+// configured aliases). A truthy result continues the workflow.
+func (e *Executor) actionShouldContinue(ctx context.Context, action *ExpandedAction, actionErr error, attempt, maxAttempts int) (bool, error) {
+	cond, fallback := effectiveOnErrorPolicy(action)
+	if cond != nil && cond.Expr != nil {
+		additionalVars := e.continueOnErrorVars(action, actionErr, attempt, maxAttempts)
+		result, evalErr := celexp.EvaluateExpression(ctx, string(*cond.Expr), e.resolverData, additionalVars)
+		if evalErr != nil {
+			return false, fmt.Errorf("continueOnError condition evaluation failed: %w", evalErr)
+		}
+		cont, ok := result.(bool)
+		if !ok {
+			return false, fmt.Errorf("continueOnError condition must evaluate to boolean, got %T", result)
+		}
+		return cont, nil
+	}
+	return fallback.OrDefault() == spec.OnErrorContinue, nil
+}
+
+// effectiveOnErrorPolicy resolves the continue-on-error condition and deprecated
+// onError fallback that govern a failed action. For a forEach iteration the
+// loop-level policy wins when the forEach clause sets either continueOnError or
+// the deprecated onError, because the user attached the error policy to the
+// loop; it falls back to the action-level fields only when the loop specifies
+// neither. For a non-forEach action the action-level fields always apply.
+func effectiveOnErrorPolicy(action *ExpandedAction) (*spec.Condition, spec.OnErrorBehavior) {
+	if action.IsForEachIteration() && action.ForEach != nil {
+		fe := action.ForEach
+		//nolint:staticcheck // deprecated onError still supported for back-compat
+		if fe.ContinueOnError != nil || fe.OnError != "" {
+			//nolint:staticcheck // deprecated onError still supported for back-compat
+			return fe.ContinueOnError, fe.OnError
+		}
+	}
+	//nolint:staticcheck // deprecated onError still supported for back-compat
+	return action.ContinueOnError, action.OnError
+}
+
+// continueOnErrorVars builds the additional CEL variables for a continueOnError
+// expression: the structured __error context (with the real attempt count) and,
+// for forEach iterations, the iteration variables (__item/__index and any
+// configured aliases) so the expression can branch on the failing item.
+func (e *Executor) continueOnErrorVars(action *ExpandedAction, actionErr error, attempt, maxAttempts int) map[string]any {
+	vars := make(map[string]any, 4)
+	if actionErr != nil {
+		errCtx := NewErrorContext(actionErr, attempt, maxAttempts)
+		vars[celexp.VarError] = errCtx.ToMap()
+	}
+	if action.IsForEachIteration() && action.ForEachMetadata != nil {
+		meta := action.ForEachMetadata
+		vars[celexp.VarItem] = meta.Item
+		vars[celexp.VarIndex] = meta.Index
+		if action.ForEach != nil {
+			if action.ForEach.Item != "" {
+				vars[action.ForEach.Item] = meta.Item
+			}
+			if action.ForEach.Index != "" {
+				vars[action.ForEach.Index] = meta.Index
+			}
+		}
+	}
+	return vars
 }
 
 // executePhase executes all actions in a phase with concurrency control.
@@ -632,7 +726,9 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		retryCallback = &progressRetryAdapter{callback: e.progressCallback, actionName: actionName}
 	}
 
-	output, err := retryExecutor.ExecuteWithRetry(actionCtx, actionName, execFunc, retryCallback)
+	output, attempts, err := retryExecutor.ExecuteWithRetry(actionCtx, actionName, execFunc, retryCallback)
+	maxAttempts := retryExecutor.MaxAttempts()
+	e.actionContext.RecordAttempts(actionName, attempts)
 
 	// Handle results
 	if actionCtx.Err() == context.DeadlineExceeded {
@@ -653,7 +749,13 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 
 		// Check if we should continue on error
-		if action.OnError.OrDefault() == spec.OnErrorContinue {
+		cont, decideErr := e.actionShouldContinue(ctx, action, err, attempts, maxAttempts)
+		if decideErr != nil {
+			// An invalid continueOnError expression/config is itself a failure;
+			// surface it (and record it on the span) instead of masking it
+			// behind the original action error.
+			err = errors.Join(err, decideErr)
+		} else if cont {
 			return nil
 		}
 		span.RecordError(err)
@@ -684,7 +786,13 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 					if e.progressCallback != nil {
 						e.progressCallback.OnActionFailed(actionName, validationErr)
 					}
-					if action.OnError.OrDefault() == spec.OnErrorContinue {
+					cont, decideErr := e.actionShouldContinue(ctx, action, validationErr, attempts, maxAttempts)
+					if decideErr != nil {
+						// Surface an invalid continueOnError expression/config
+						// rather than masking it behind the schema failure.
+						return errors.Join(fmt.Errorf("result schema validation failed: %w", validationErr), decideErr)
+					}
+					if cont {
 						return nil
 					}
 					return fmt.Errorf("result schema validation failed: %w", validationErr)

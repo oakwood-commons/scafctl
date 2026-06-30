@@ -150,6 +150,17 @@ spec:
             inputs:
               expression: "_.bad_provider + _.guarded"
 
+    # orvalue-on-non-optional (concrete receiver, missing optional marker)
+    bad_orvalue:
+      type: string
+      description: Calls orValue on a concrete (non-optional) value
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: '__self.orValue("fallback")'
+
     # transform-shape-mismatch (transform accesses __self.body but static fallback returns [])
     shape_mismatch:
       description: Resolver with mismatched transform shape
@@ -182,8 +193,7 @@ spec:
         - empty_validate
         - loose_schema
         - no_desc
-        - conditional_only
-        - shape_mismatch
+        - bad_orvalue
       resolve:
         with:
           - provider: static

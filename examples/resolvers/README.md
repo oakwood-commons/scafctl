@@ -83,5 +83,5 @@ Use these examples as templates for your own solutions. Key things to remember:
 1. **Start simple** -- begin with static values and add complexity
 2. **Use types** -- explicitly declare types for better error messages
 3. **Validate inputs** -- add validation rules for critical values
-4. **Handle errors** -- use `onError: continue` for fallbacks
+4. **Handle errors** -- use `continueOnError: true` for fallbacks
 5. **Mark sensitive data** -- use `sensitive: true` to redact secrets in table output (JSON/YAML reveal values for machine consumption; use `--show-sensitive` to reveal in all formats)

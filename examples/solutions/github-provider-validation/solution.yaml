@@ -216,7 +216,7 @@ spec:
         description: Create a test label
         displayName: Create Label
         provider: github
-        onError: continue
+        continueOnError: true
         inputs:
           operation: create_label
           owner: {rslvr: org}
@@ -229,7 +229,7 @@ spec:
         description: Create a test milestone
         displayName: Create Milestone
         provider: github
-        onError: continue
+        continueOnError: true
         inputs:
           operation: create_milestone
           owner: {rslvr: org}
@@ -256,7 +256,7 @@ spec:
         description: Set custom properties on the repository
         displayName: Set Custom Properties
         provider: github
-        onError: continue
+        continueOnError: true
         inputs:
           operation: set_custom_properties
           owner: {rslvr: org}
@@ -299,7 +299,7 @@ spec:
         displayName: Cleanup Label
         provider: github
         dependsOn: [update-label]
-        onError: continue
+        continueOnError: true
         inputs:
           operation: delete_label
           owner: {rslvr: org}
@@ -327,7 +327,7 @@ spec:
         displayName: Restore Custom Properties
         provider: github
         dependsOn: [set-custom-properties]
-        onError: continue
+        continueOnError: true
         inputs:
           operation: set_custom_properties
           owner: {rslvr: org}
@@ -483,7 +483,7 @@ spec:
         displayName: Close PR
         provider: github
         dependsOn: [find-validation-pr]
-        onError: continue
+        continueOnError: true
         when: {expr: "size(__actions['find-validation-pr'].results.result) > 0"}
         inputs:
           operation: close_pull_request
@@ -496,7 +496,7 @@ spec:
         displayName: Delete Branch
         provider: github
         dependsOn: [close-validation-pr]
-        onError: continue
+        continueOnError: true
         inputs:
           operation: delete_branch
           owner: {rslvr: org}

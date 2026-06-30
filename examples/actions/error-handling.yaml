@@ -9,7 +9,7 @@ metadata:
   tags:
     - action-example
     - workflow
-  description: Error handling with onError continue
+  description: Error handling with continueOnError
 
 spec:
   resolvers:
@@ -36,7 +36,7 @@ spec:
         displayName: Optional Cleanup
         provider: exec
         # Continue workflow even if this fails
-        onError: continue
+        continueOnError: true
         inputs:
           # This command will fail (exit code 1)
           command: "echo 'Attempting optional cleanup...' && exit 1"
@@ -50,7 +50,7 @@ spec:
         inputs:
           command: "echo 'Running required setup...'"
 
-      # Demonstrate forEach with onError: continue
+      # Demonstrate forEach with continueOnError
       health-checks:
         description: Run health checks
         displayName: Health Checks
@@ -61,7 +61,7 @@ spec:
           in:
             expr: "_.checks"
           # Continue checking other services if one fails
-          onError: continue
+          continueOnError: true
         inputs:
           name:
             expr: "__item.name"

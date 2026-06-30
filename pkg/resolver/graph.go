@@ -463,6 +463,11 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 			extractDepsFromExpression(string(*source.When.Expr), deps)
 		}
 
+		// Extract from continueOnError condition
+		if source.ContinueOnError != nil && source.ContinueOnError.Expr != nil {
+			extractDepsFromExpression(string(*source.ContinueOnError.Expr), deps)
+		}
+
 		// Extract from forEach.In (if using forEach with custom source)
 		if source.ForEach != nil && source.ForEach.In != nil {
 			extractDepsFromValueRef(source.ForEach.In, deps)
@@ -561,6 +566,11 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 		// Extract from when condition
 		if transform.When != nil && transform.When.Expr != nil {
 			extractDepsFromExpression(string(*transform.When.Expr), deps)
+		}
+
+		// Extract from continueOnError condition
+		if transform.ContinueOnError != nil && transform.ContinueOnError.Expr != nil {
+			extractDepsFromExpression(string(*transform.ContinueOnError.Expr), deps)
 		}
 
 		// Extract from forEach.In (if using forEach with custom source)

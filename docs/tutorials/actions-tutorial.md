@@ -227,7 +227,7 @@ spec:
       resolve:
         with:
           - provider: parameter
-            onError: continue
+            continueOnError: true
             inputs:
               key: environment
           - provider: static
@@ -368,7 +368,7 @@ spec:
           in:
             expr: "_.targets"
           concurrency: 2
-          onError: continue
+          continueOnError: true
         inputs:
           command:
             expr: "'echo Deploying ' + _.version + ' to ' + __item"
@@ -414,13 +414,21 @@ The `deploy` action expands into three iterations -- one per target. With `concu
 | `item` | Alias for `__item` (e.g., `item: server` lets you use `server` instead) |
 | `index` | Alias for `__index` |
 | `concurrency` | Max parallel iterations (default: unlimited) |
-| `onError` | `fail` (default) or `continue` — controls behavior when an iteration fails |
+| `continueOnError` | bool or CEL condition — truthy continues when an iteration fails, falsy fails (replaces deprecated `onError`) |
 
 ---
 
 ## Error Handling
 
-By default, if an action fails the entire workflow stops. Use `onError: continue` to allow the workflow to proceed past failures.
+By default, if an action fails the entire workflow stops. Use
+`continueOnError: true` to allow the workflow to proceed past failures. The
+field also accepts a CEL condition (evaluated with the error bound as
+`__error`) to recover only for specific errors.
+
+> The legacy `onError` enum (`continue`/`fail`) is **deprecated** but still
+> works. Migrate `onError: continue` to `continueOnError: true` and
+> `onError: fail` to `continueOnError: false`. When both are set,
+> `continueOnError` wins and the linter reports an error.
 
 Create a file called `error-handling-demo.yaml`:
 
@@ -439,7 +447,7 @@ spec:
       optional-cleanup:
         description: Optional cleanup that might fail
         provider: exec
-        onError: continue
+        continueOnError: true
         inputs:
           command: "echo 'Attempting optional cleanup...' && exit 1"
 
@@ -476,9 +484,9 @@ Running required setup...
 Doing main work...
 ```
 
-The `optional-cleanup` action fails (`exit 1`), but because `onError: continue` is set, the workflow continues. The `main-work` action still runs.
+The `optional-cleanup` action fails (`exit 1`), but because `continueOnError: true` is set, the workflow continues. The `main-work` action still runs.
 
-Without `onError: continue`, the workflow would stop at `optional-cleanup` and `main-work` would be skipped.
+Without `continueOnError: true`, the workflow would stop at `optional-cleanup` and `main-work` would be skipped.
 
 ---
 
@@ -1279,17 +1287,17 @@ actions:
     timeout: 1h
 ```
 
-### 4. Use OnError Wisely
+### 4. Use ContinueOnError Wisely
 
 ```yaml
 actions:
   # Critical operations should fail fast
   database-migration:
-    onError: fail
-  
+    continueOnError: false
+
   # Optional operations can continue
   send-notification:
-    onError: continue
+    continueOnError: true
 ```
 
 ### 5. Leverage ForEach for Parallelism

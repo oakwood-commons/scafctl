@@ -71,7 +71,7 @@ func FromForEachClause(clause *spec.ForEachClause, progressCallback RetryObserve
 	}
 	return NewForEachExecutor(
 		WithForEachConcurrency(clause.Concurrency),
-		WithForEachOnError(clause.OnError),
+		WithForEachOnError(clause.EffectiveOnError()),
 		WithForEachProgressCallback(progressCallback),
 	)
 }

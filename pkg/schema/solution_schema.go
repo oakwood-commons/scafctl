@@ -194,6 +194,67 @@ func patchSchema(doc map[string]any) {
 	patchSkipValue(defs)
 	patchMapKeyNames(defs)
 	patchJSONSchemaType(defs)
+	patchCondition(defs)
+}
+
+// patchCondition replaces every "*Condition" $def with a schema that accepts
+// all forms supported by Condition.UnmarshalYAML: a non-empty CEL expression
+// string, a boolean literal, or the explicit object form using either an
+// "expr" or "expression" key. Huma only reflects the object form's "expr"
+// field from the struct, which causes false-positive schema violations on the
+// string and boolean shorthands (and on the "expression" alias) used by when,
+// until, and continueOnError. Empty strings are excluded because
+// Condition.UnmarshalYAML rejects them.
+func patchCondition(defs map[string]any) {
+	for key := range defs {
+		if !strings.HasSuffix(key, "Condition") {
+			continue
+		}
+		objectForm, ok := defs[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		defs[key] = map[string]any{
+			"description": "A condition: a non-empty CEL expression string, a boolean " +
+				"literal, or an object {expr: \"...\"} (\"expression\" is also accepted).",
+			"anyOf": []any{
+				map[string]any{"type": "string", "minLength": 1},
+				map[string]any{"type": "boolean"},
+				conditionObjectSchema(objectForm),
+			},
+		}
+	}
+}
+
+// conditionObjectSchema returns the object form for a Condition, extending the
+// Huma-reflected schema (which only exposes "expr") to also accept the
+// "expression" key alias supported by Condition.UnmarshalYAML. Either key
+// satisfies the requirement, matching the runtime which accepts one or the
+// other (but not both).
+func conditionObjectSchema(objectForm map[string]any) map[string]any {
+	props, ok := objectForm["properties"].(map[string]any)
+	if !ok {
+		return objectForm
+	}
+	exprSchema, ok := props["expr"]
+	if !ok {
+		return objectForm
+	}
+	if _, exists := props["expression"]; !exists {
+		props["expression"] = exprSchema
+	}
+	// Replace the reflected "required: [expr]" with a constraint that accepts
+	// either the "expr" or "expression" key, but not both (the runtime
+	// Condition unmarshallers reject specifying both keys).
+	delete(objectForm, "required")
+	objectForm["anyOf"] = []any{
+		map[string]any{"required": []any{"expr"}},
+		map[string]any{"required": []any{"expression"}},
+	}
+	objectForm["not"] = map[string]any{
+		"required": []any{"expr", "expression"},
+	}
+	return objectForm
 }
 
 // patchMapKeyNames removes "name" from the required list for types where

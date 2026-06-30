@@ -132,7 +132,7 @@ spec:
           - init
         timeout: 5m
         # Linting issues shouldn't block deployment
-        onError: continue
+        continueOnError: true
         inputs:
           command: "echo 'Running linters...'"
 
@@ -199,7 +199,7 @@ spec:
           in:
             expr: "_.targets"
           concurrency: 2
-          onError: continue
+          continueOnError: true
         timeout: 10m
         retry:
           maxAttempts: 3

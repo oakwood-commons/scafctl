@@ -507,7 +507,7 @@ func (s *Server) handleAddActionPrompt(_ context.Context, request mcp.GetPromptR
 	featureHints = append(featureHints, "dependsOn: explicit ordering for same-section actions. If inputs or when already reference __actions.<name> within the same section, that dependency is auto-inferred and dependsOn is optional (still required for ordering without a data dependency)")
 	featureHints = append(featureHints, "dependsOn in workflow.finally: can only reference other finally actions—never actions in workflow.actions. To read results from a main action in finally, use __actions.<name> in inputs or when; the reference appears in crossSectionRefs on the rendered graph (informational only—cross-section ordering is guaranteed structurally)")
 	featureHints = append(featureHints, "when: CEL expression for conditional execution")
-	featureHints = append(featureHints, "onError: 'fail' (default) or 'continue'")
+	featureHints = append(featureHints, "continueOnError: bool or CEL expression (error bound as __error) — truthy continues the workflow when this action fails, falsy stops it. Replaces the deprecated onError enum ('fail'/'continue'); continueOnError wins when both are set")
 	featureHints = append(featureHints, "retry: { maxAttempts, backoff: fixed|linear|exponential, initialDelay, maxDelay }")
 	featureHints = append(featureHints, "forEach: { in: <ValueRef>, item: 'item', index: 'index', concurrency: N }")
 	featureHints = append(featureHints, "timeout: duration string (e.g., '30s', '5m')")

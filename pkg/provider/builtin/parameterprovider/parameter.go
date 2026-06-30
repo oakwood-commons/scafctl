@@ -100,11 +100,16 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 			Capabilities: []provider.Capability{
 				provider.CapabilityFrom,
 			},
-			Schema: schemahelper.ObjectSchema([]string{"key"}, map[string]*jsonschema.Schema{
-				"key": schemahelper.StringProp("Name of the parameter to retrieve (exact match)",
+			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
+				"key": schemahelper.StringProp("Name of the parameter to retrieve (exact match). Provide either key or keys; key takes precedence over keys when both are set.",
 					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
 					schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_.\-]*$`),
 					schemahelper.WithExample("env")),
+				"keys": schemahelper.ArrayProp("Ordered list of parameter names (aliases) for a single logical parameter. The first name that was provided via CLI wins. Evaluated after key. Use this to accept a parameter under any of several flag names (e.g. environment, e, env).",
+					schemahelper.WithItems(schemahelper.StringProp("Parameter name (exact match)",
+						schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
+						schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_.\-]*$`))),
+					schemahelper.WithMaxItems(50)),
 				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
 					schemahelper.WithExample("fallback")),
 				"type": schemahelper.StringProp("Force the parameter value to be returned verbatim as a string, suppressing automatic type inference (boolean, number, JSON, CSV, file://, http://). The only supported value is \"string\".",
@@ -132,6 +137,14 @@ inputs:
 					YAML: `provider: parameter
 inputs:
   key: env
+  default: development`,
+				},
+				{
+					Name:        "Accept a parameter under any of several names (aliases)",
+					Description: "Resolve a single logical parameter from the first provided alias (first-match-wins), falling back to a default",
+					YAML: `provider: parameter
+inputs:
+  keys: [environment, e, env]
   default: development`,
 				},
 				{
@@ -193,9 +206,15 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 
 	lgr.V(1).Info("executing provider", "provider", ProviderName)
 
-	key, ok := inputs["key"].(string)
-	if !ok || key == "" {
-		return nil, fmt.Errorf("%s: key is required and must be a string", ProviderName)
+	// Build the ordered list of parameter names to look up. "key" (when set)
+	// takes precedence, followed by each name in "keys" in declared order.
+	// Duplicates are removed so a name is only attempted once.
+	candidates, err := candidateKeys(inputs)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("%s: at least one non-empty parameter name is required (provide key or keys)", ProviderName)
 	}
 
 	// Determine whether the caller wants to suppress type coercion and keep
@@ -210,16 +229,17 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(key, forceString)
+		return p.executeDryRun(candidates[0], forceString)
 	}
 
-	// Look up the parameter
-	rawValue, exists := params[key]
+	// Look up the parameter, trying each candidate name in order. The first
+	// name that was provided via CLI wins (first-match-wins).
+	matchedKey, rawValue, exists := firstProvided(candidates, params)
 	if !exists {
 		if def, hasDefault := inputs["default"]; hasDefault {
 			parsedDefault, err := p.resolveValue(ctx, def, forceString)
 			if err != nil {
-				return nil, fmt.Errorf("%s: failed to parse default for parameter %q: %w", ProviderName, key, err)
+				return nil, fmt.Errorf("%s: failed to parse default for parameter %q: %w", ProviderName, candidates[0], err)
 			}
 			lgr.V(1).Info("provider completed", "provider", ProviderName)
 			return &provider.Output{
@@ -230,13 +250,13 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 				},
 			}, nil
 		}
-		return nil, fmt.Errorf("%s: parameter %q not provided", ProviderName, key)
+		return nil, fmt.Errorf("%s: parameter %q not provided", ProviderName, candidates[0])
 	}
 
 	// Parse the value according to precedence rules
 	parsedValue, err := p.resolveValue(ctx, rawValue, forceString)
 	if err != nil {
-		return nil, fmt.Errorf("%s: failed to parse parameter %q: %w", ProviderName, key, err)
+		return nil, fmt.Errorf("%s: failed to parse parameter %q: %w", ProviderName, matchedKey, err)
 	}
 
 	lgr.V(1).Info("provider completed", "provider", ProviderName)
@@ -422,4 +442,66 @@ func wantsStringType(inputs map[string]any) bool {
 		return false
 	}
 	return t == TypeString
+}
+
+// candidateKeys returns the ordered list of parameter names to look up for a
+// single logical parameter. "key" (when a non-empty string) comes first,
+// followed by each name in "keys" in declared order. Duplicates are removed so
+// each name is attempted at most once. An error is returned when "key" or
+// "keys" is present but not the expected type.
+func candidateKeys(inputs map[string]any) ([]string, error) {
+	seen := make(map[string]struct{})
+	candidates := make([]string, 0, 4)
+
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, dup := seen[name]; dup {
+			return
+		}
+		seen[name] = struct{}{}
+		candidates = append(candidates, name)
+	}
+
+	if raw, present := inputs["key"]; present {
+		key, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: key must be a string, got %T", ProviderName, raw)
+		}
+		add(key)
+	}
+
+	if raw, present := inputs["keys"]; present {
+		switch list := raw.(type) {
+		case []string:
+			for _, name := range list {
+				add(name)
+			}
+		case []any:
+			for i, item := range list {
+				name, ok := item.(string)
+				if !ok {
+					return nil, fmt.Errorf("%s: keys[%d] must be a string, got %T", ProviderName, i, item)
+				}
+				add(name)
+			}
+		default:
+			return nil, fmt.Errorf("%s: keys must be a list of strings, got %T", ProviderName, raw)
+		}
+	}
+
+	return candidates, nil
+}
+
+// firstProvided returns the first candidate name that exists in params, along
+// with its raw value. The returned name is the one that matched, enabling
+// accurate error messages.
+func firstProvided(candidates []string, params map[string]any) (string, any, bool) {
+	for _, name := range candidates {
+		if v, exists := params[name]; exists {
+			return name, v, true
+		}
+	}
+	return "", nil, false
 }

@@ -89,7 +89,135 @@ func TestParameterProvider_Execute_NoKey(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "key is required")
+	assert.Contains(t, err.Error(), "at least one non-empty parameter name is required")
+}
+
+func TestParameterProvider_Execute_Keys_FirstMatchWins(t *testing.T) {
+	tests := []struct {
+		name     string
+		inputs   map[string]any
+		params   map[string]any
+		expected any
+		exists   bool
+	}{
+		{
+			name:     "first alias provided wins",
+			inputs:   map[string]any{"keys": []any{"environment", "e", "env"}},
+			params:   map[string]any{"environment": "prod"},
+			expected: "prod",
+			exists:   true,
+		},
+		{
+			name:     "earlier alias wins over later when both provided",
+			inputs:   map[string]any{"keys": []any{"environment", "e", "env"}},
+			params:   map[string]any{"e": "qa", "env": "dev"},
+			expected: "qa",
+			exists:   true,
+		},
+		{
+			name:     "later alias used when earlier absent",
+			inputs:   map[string]any{"keys": []any{"environment", "e", "env"}},
+			params:   map[string]any{"env": "dev"},
+			expected: "dev",
+			exists:   true,
+		},
+		{
+			name:     "keys accepts []string from coerced array inputs",
+			inputs:   map[string]any{"keys": []string{"environment", "e", "env"}},
+			params:   map[string]any{"e": "qa"},
+			expected: "qa",
+			exists:   true,
+		},
+		{
+			name:     "key takes precedence over keys",
+			inputs:   map[string]any{"key": "appName", "keys": []any{"app_name"}},
+			params:   map[string]any{"appName": "alpha", "app_name": "beta"},
+			expected: "alpha",
+			exists:   true,
+		},
+		{
+			name:     "falls through to key alias when primary absent",
+			inputs:   map[string]any{"key": "appName", "keys": []any{"app_name"}},
+			params:   map[string]any{"app_name": "beta"},
+			expected: "beta",
+			exists:   true,
+		},
+		{
+			name:     "default used when no alias provided",
+			inputs:   map[string]any{"keys": []any{"environment", "e", "env"}, "default": "development"},
+			params:   map[string]any{},
+			expected: "development",
+			exists:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), tt.params)
+
+			output, err := p.Execute(ctx, tt.inputs)
+
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.expected, output.Data)
+			assert.Equal(t, tt.exists, output.Metadata["exists"])
+		})
+	}
+}
+
+func TestParameterProvider_Execute_Keys_NoneProvided_NoDefault(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"keys": []any{"environment", "env"},
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "not provided")
+	// Error references the first candidate name.
+	assert.Contains(t, err.Error(), "environment")
+}
+
+func TestParameterProvider_Execute_Keys_InvalidType(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	tests := []struct {
+		name   string
+		inputs map[string]any
+	}{
+		{"keys not a list", map[string]any{"keys": "environment"}},
+		{"keys element not a string", map[string]any{"keys": []any{"env", 42}}},
+		{"key not a string", map[string]any{"key": 42}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := p.Execute(ctx, tt.inputs)
+			assert.Error(t, err)
+			assert.Nil(t, output)
+		})
+	}
+}
+
+func TestParameterProvider_Execute_Keys_DuplicatesDeduped(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"env": "prod",
+	})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "env",
+		"keys": []any{"env", "environment"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "prod", output.Data)
+	assert.Equal(t, true, output.Metadata["exists"])
 }
 
 func TestParameterProvider_Execute_ForceString(t *testing.T) {
@@ -447,9 +575,12 @@ func TestParameterProvider_Descriptor(t *testing.T) {
 	assert.Equal(t, "CLI Parameters", desc.DisplayName)
 	assert.Contains(t, desc.Capabilities, provider.CapabilityFrom)
 
-	// Check schema
+	// Check schema: neither key nor keys is required at the schema level
+	// (Execute enforces that at least one is provided), so a parameter can be
+	// declared with a single key or an alias list.
 	assert.Contains(t, desc.Schema.Properties, "key")
-	assert.Contains(t, desc.Schema.Required, "key")
+	assert.NotContains(t, desc.Schema.Required, "key")
+	assert.Contains(t, desc.Schema.Properties, "keys")
 	assert.Contains(t, desc.Schema.Properties, "default")
 	assert.NotContains(t, desc.Schema.Required, "default")
 }
