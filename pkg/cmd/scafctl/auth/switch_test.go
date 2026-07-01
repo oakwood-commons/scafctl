@@ -30,6 +30,9 @@ func TestCommandSwitch_NoArgs(t *testing.T) {
 
 func TestCommandSwitch_UnknownHandler(t *testing.T) {
 	ctx, _ := newTestContext(t)
+	ctx = appconfig.WithConfig(ctx, &appconfig.Config{
+		Settings: appconfig.Settings{DisableThirdPartyAuthHandlers: true},
+	})
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
 

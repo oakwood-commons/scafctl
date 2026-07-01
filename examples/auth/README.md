@@ -330,6 +330,18 @@ scafctl auth handlers remove github
 scafctl auth handlers remove entra
 ```
 
+Third-party handlers published to a configured catalog resolve by name too --
+no allowlist entry needed:
+
+```bash
+scafctl catalog list --kind auth-handler   # shows: openshift
+scafctl auth handlers install openshift
+scafctl auth login openshift
+```
+
+Pin the artifact and declare trust via `auth.handlers.<name>` -- see
+[third-party-handler-config.yaml](third-party-handler-config.yaml).
+
 ---
 
 ## Related
@@ -337,5 +349,6 @@ scafctl auth handlers remove entra
 - [Auth Tutorial](../../docs/tutorials/auth-tutorial.md) -- full walkthrough
 - [kubectl Exec Credential](kubectl-exec-credential.md) -- use scafctl as a Kubernetes credential plugin
 - [Kubernetes login / logout](kube-login.md) -- automate kubeconfig setup with `scafctl kube login`
+- [Third-party handler config](third-party-handler-config.yaml) -- pin a catalog auth handler and declare its trust domains
 - [HTTP Provider with Entra](../providers/http-entra.yaml) -- example HTTP call with Entra auth
 - [GitHub API Provider](../providers/github-api.yaml) -- example GitHub API call

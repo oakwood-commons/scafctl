@@ -98,6 +98,18 @@ auth:
     - "github.com"
 ~~~
 
+Third-party (non-official) handlers do **not** inherit the hardcoded official
+trust domains, so declare their device-code verification domains explicitly
+under the per-handler namespace:
+
+~~~yaml
+auth:
+  handlers:
+    openshift:
+      trustedVerificationDomains:
+        - "sso.openshift.example.com"
+~~~
+
 ## Telemetry
 
 The plugin auth system includes OpenTelemetry instrumentation:

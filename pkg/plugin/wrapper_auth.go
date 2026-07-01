@@ -41,9 +41,14 @@ type AuthHandlerWrapper struct {
 	handlerName    string
 	info           AuthHandlerInfo
 	trustedDomains []string
-	startupLatency time.Duration
-	hostCfg        hostConfig // host-level config (Quiet, NoColor, BinaryName)
-	mu             sync.RWMutex
+	// requireTrustedDomains, when true, makes device-code verification fail
+	// closed if no trusted domains are configured (instead of allowing any
+	// HTTPS URL). Set for non-official handlers, which do not carry hardcoded
+	// trust domains.
+	requireTrustedDomains bool
+	startupLatency        time.Duration
+	hostCfg               hostConfig // host-level config (Quiet, NoColor, BinaryName)
+	mu                    sync.RWMutex
 }
 
 // hostConfig stores host-level ProviderConfig fields so ApplyOverrides
@@ -76,6 +81,17 @@ func (w *AuthHandlerWrapper) SetTrustedDomains(domains []string) {
 	}
 	w.trustedDomains = make([]string, len(domains))
 	copy(w.trustedDomains, domains)
+}
+
+// SetRequireTrustedDomains controls whether device-code verification fails
+// closed when no trusted domains are configured. Set true for non-official
+// handlers so a catalog-resolved third-party handler cannot display arbitrary
+// verification URLs without explicitly configured
+// auth.handlers.<name>.trustedVerificationDomains.
+func (w *AuthHandlerWrapper) SetRequireTrustedDomains(require bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.requireTrustedDomains = require
 }
 
 // Name implements auth.Handler.
@@ -133,11 +149,23 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	w.mu.RLock()
 	trustedSnapshot := make([]string, len(w.trustedDomains))
 	copy(trustedSnapshot, w.trustedDomains)
+	requireTrust := w.requireTrustedDomains
 	w.mu.RUnlock()
 
 	var deviceCodeCb func(DeviceCodePrompt)
 	if opts.DeviceCodeCallback != nil {
 		deviceCodeCb = func(prompt DeviceCodePrompt) {
+			// Fail closed for non-official handlers with no configured trust:
+			// an empty trusted list would otherwise allow any HTTPS URL.
+			if requireTrust && len(trustedSnapshot) == 0 {
+				err := fmt.Errorf("device code verification blocked: handler %q has no configured trusted domains; set auth.handlers.%s.trustedVerificationDomains",
+					w.handlerName, w.handlerName)
+				lgr.Error(err, "device code prompt blocked -- terminating login",
+					"handler", w.handlerName,
+					"uri", prompt.VerificationURI)
+				cancelCause(err)
+				return
+			}
 			if err := ValidateVerificationURI(prompt.VerificationURI, trustedSnapshot); err != nil {
 				lgr.Error(err, "device code prompt blocked -- terminating login",
 					"handler", w.handlerName,
@@ -351,8 +379,10 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 	// Resolve trusted verification domains from context sources.
 	officialReg := authofficial.RegistryFromContext(ctx)
 	var cfgDomains []string
+	var handlerCfgs map[string]config.HandlerConfig
 	if appCfg := config.FromContext(ctx); appCfg != nil {
 		cfgDomains = appCfg.Auth.TrustedVerificationDomains
+		handlerCfgs = appCfg.Auth.Handlers
 	}
 
 	var registered []string
@@ -368,10 +398,20 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 
 		wrapper := NewAuthHandlerWrapper(client, info)
 
-		// Set trusted domains: merge per-handler official domains + global config domains.
-		trusted := buildTrustedDomains(info.Name, officialReg, cfgDomains)
+		// Set trusted domains: merge per-handler official domains + global config
+		// domains + per-handler config domains. Non-official handlers do not
+		// inherit the hardcoded official domains; their trust comes from config.
+		trusted := buildTrustedDomains(info.Name, officialReg, cfgDomains, handlerCfgs[info.Name].TrustedVerificationDomains)
 		if len(trusted) > 0 {
 			wrapper.SetTrustedDomains(trusted)
+		}
+
+		// Fail closed on device-code verification for non-official handlers: a
+		// catalog-resolved third-party handler must not display arbitrary
+		// verification URLs without configured trusted domains. Official
+		// handlers carry hardcoded trust domains and are exempt.
+		if officialReg == nil || !officialReg.Has(info.Name) {
+			wrapper.SetRequireTrustedDomains(true)
 		}
 
 		if err := registry.Register(wrapper); err != nil {
@@ -424,8 +464,11 @@ func propagateStartupLatency(ctx context.Context, registry *auth.Registry, clien
 	}
 }
 
-// buildTrustedDomains merges per-handler official domains with global config domains.
-func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry, cfgDomains []string) []string {
+// buildTrustedDomains merges per-handler official domains with global config
+// domains and per-handler config domains. Non-official handlers match no
+// official entry, so their trust derives solely from config (global +
+// per-handler) — they never inherit the hardcoded official domains.
+func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry, cfgDomains, handlerDomains []string) []string {
 	var domains []string
 
 	if officialReg != nil {
@@ -435,6 +478,7 @@ func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry,
 	}
 
 	domains = append(domains, cfgDomains...)
+	domains = append(domains, handlerDomains...)
 	return domains
 }
 
