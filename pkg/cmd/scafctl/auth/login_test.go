@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -47,6 +48,11 @@ func configureAuthAndTokenRegistry(t *testing.T, ctx context.Context, mock *auth
 
 func TestCommandLogin_UnknownHandler(t *testing.T) {
 	ctx, _ := newTestContext(t)
+	// With third-party catalog resolution disabled, an unknown (non-official)
+	// handler name is rejected up front instead of being fetched from a catalog.
+	ctx = config.WithConfig(ctx, &config.Config{
+		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+	})
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
 

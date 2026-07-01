@@ -1035,6 +1035,95 @@ func TestAuthHandlerWrapper_Login_DeviceCodeEmptyTrustedDomains(t *testing.T) {
 	assert.Equal(t, "https://any-provider.example.com/device", gotURI)
 }
 
+func TestAuthHandlerWrapper_Login_RequireTrustedDomainsFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	// A non-official handler with requireTrustedDomains set and no configured
+	// trusted domains must fail closed instead of allowing any HTTPS URL.
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			if cb != nil {
+				cb(DeviceCodePrompt{
+					UserCode:        "ABCD-9999",
+					VerificationURI: "https://any-provider.example.com/device",
+					Message:         "Enter code",
+				})
+			}
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@any.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName:           "openshift",
+		info:                  AuthHandlerInfo{Name: "openshift"},
+		trustedDomains:        nil, // empty
+		requireTrustedDomains: true,
+	}
+
+	called := false
+	_, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowDeviceCode,
+		DeviceCodeCallback: func(_, _, _ string) {
+			called = true
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no configured trusted domains")
+	assert.Contains(t, err.Error(), "openshift")
+	assert.False(t, called, "device code callback must not be invoked when blocked")
+}
+
+func TestAuthHandlerWrapper_Login_RequireTrustedDomainsWithConfig(t *testing.T) {
+	t.Parallel()
+
+	// A non-official handler with requireTrustedDomains set AND configured
+	// trusted domains validates against them normally.
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, _ LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error) {
+			if cb != nil {
+				cb(DeviceCodePrompt{
+					UserCode:        "ABCD-9999",
+					VerificationURI: "https://sso.openshift.example.com/device",
+					Message:         "Enter code",
+				})
+			}
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@any.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName:           "openshift",
+		info:                  AuthHandlerInfo{Name: "openshift"},
+		trustedDomains:        []string{"sso.openshift.example.com"},
+		requireTrustedDomains: true,
+	}
+
+	var gotURI string
+	result, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow: auth.FlowDeviceCode,
+		DeviceCodeCallback: func(_, uri, _ string) {
+			gotURI = uri
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "user@any.com", result.Claims.Email)
+	assert.Equal(t, "https://sso.openshift.example.com/device", gotURI)
+}
+
 // ── RegisterAuthHandlerPlugins tests ─────────────────────────────────────────
 
 func TestRegisterAuthHandlerPlugins_EmptyDirs(t *testing.T) {

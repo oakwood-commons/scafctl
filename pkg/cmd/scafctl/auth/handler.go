@@ -10,7 +10,9 @@ import (
 	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 )
 
 // handlerContextKey is used for test injection of handlers.
@@ -87,6 +89,19 @@ func listKnownHandlers(ctx context.Context) []string {
 		}
 	}
 
+	// Config-pinned third-party handlers (auth.handlers.<name>.plugin) are also
+	// lazily resolvable and should surface in completions and error hints --
+	// but only when policy actually allows resolving them. handlerdep.IsKnown
+	// honors settings.disableThirdPartyAuthHandlers, so pins are omitted when
+	// third-party resolution is disabled.
+	if appCfg := config.FromContext(ctx); appCfg != nil {
+		for name, hc := range appCfg.Auth.Handlers {
+			if hc.Plugin != nil && handlerdep.IsKnown(ctx, name) {
+				seen[name] = struct{}{}
+			}
+		}
+	}
+
 	if len(seen) == 0 {
 		return nil
 	}
@@ -126,8 +141,10 @@ func listUnconfiguredOfficialHandlers(ctx context.Context) []string {
 	return unconfigured
 }
 
-// isHandlerRegistered checks if a handler name is registered or known to the
-// official auth handler registry (i.e., resolvable via the lazy fallback).
+// isHandlerRegistered checks if a handler name is registered or known to be
+// lazily resolvable (official allowlist or a config pin under
+// auth.handlers.<name>.plugin). It does not probe catalogs, so a bare catalog
+// name is not reported as known here.
 func isHandlerRegistered(ctx context.Context, name string) bool {
 	// Test-injected handlers match any name (since tests inject a single mock)
 	if h := handlerFromContext(ctx); h != nil {
@@ -138,21 +155,34 @@ func isHandlerRegistered(ctx context.Context, name string) bool {
 		return true
 	}
 
-	if official := authofficial.RegistryFromContext(ctx); official != nil && official.Has(name) {
-		return true
-	}
-
-	return false
+	// Official handlers and config-pinned third-party handlers are lazily
+	// resolvable via the registry fallback.
+	return handlerdep.IsKnown(ctx, name)
 }
 
-// validateHandlerName checks if a handler name is valid and returns a formatted error if not.
+// validateHandlerName checks if a handler name is plausibly resolvable and
+// returns a formatted error if not. A name that is registered, official, or
+// config-pinned passes immediately. Any other non-empty name is deferred to
+// getHandler, which performs the authoritative existence check by resolving the
+// handler against configured catalogs via the registry fallback. Only an empty
+// name or a name that policy forbids (e.g. third-party resolution disabled) is
+// rejected here.
 func validateHandlerName(ctx context.Context, handlerName string) error {
+	if handlerName == "" {
+		return fmt.Errorf("auth handler name is required")
+	}
 	if isHandlerRegistered(ctx, handlerName) {
 		return nil
 	}
-	handlers := listKnownHandlers(ctx)
-	if len(handlers) == 0 {
-		return fmt.Errorf("unknown auth handler: %s (no handlers registered)", handlerName)
+	// Not eagerly known. Defer to getHandler unless policy forbids resolving
+	// this name (handlerdep.Resolve returns an error when the matching
+	// official/third-party resolution is disabled).
+	if _, _, err := handlerdep.Resolve(ctx, handlerName); err != nil {
+		handlers := listKnownHandlers(ctx)
+		if len(handlers) == 0 {
+			return fmt.Errorf("unknown auth handler: %s: %w", handlerName, err)
+		}
+		return fmt.Errorf("unknown auth handler: %s (registered: %v): %w", handlerName, handlers, err)
 	}
-	return fmt.Errorf("unknown auth handler: %s (registered: %v)", handlerName, handlers)
+	return nil
 }

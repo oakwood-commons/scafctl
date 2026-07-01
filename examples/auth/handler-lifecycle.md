@@ -4,6 +4,10 @@ Official auth handlers (github, gcp, entra) are delivered as plugin binaries.
 They are downloaded automatically on first use, but you can manage them
 explicitly for air-gapped environments, debugging, or disk cleanup.
 
+Third-party auth handlers published to a configured catalog are resolved the
+same way -- by name -- with no official-allowlist gate. See
+[Third-Party Handlers](#third-party-handlers) below.
+
 ## Listing Handlers
 
 ~~~bash
@@ -40,6 +44,42 @@ scafctl auth handlers install entra
 # Force re-download (replaces cached binary)
 scafctl auth handlers install entra --force
 ~~~
+
+## Third-Party Handlers
+
+A non-official auth handler published to a configured catalog resolves by name,
+just like the official trio -- there is no allowlist to add it to.
+
+~~~bash
+# Publish a third-party handler into a catalog
+scafctl build plugin --name openshift --kind auth-handler --version 0.1.0 \
+  --platform darwin/arm64=./dist/scafctl-plugin-auth-openshift
+
+# It is now resolvable by name
+scafctl catalog list --kind auth-handler   # shows: openshift
+scafctl auth handlers install openshift
+scafctl auth login openshift
+scafctl kube login prod --handler openshift
+~~~
+
+To pin the exact artifact and declare trust (third-party handlers do not inherit
+the official device-code verification domains), use the per-handler config
+namespace -- see [third-party-handler-config.yaml](third-party-handler-config.yaml):
+
+~~~yaml
+auth:
+  handlers:
+    openshift:
+      plugin:
+        ref: openshift-auth
+        version: "^0.1.0"
+      trustedVerificationDomains:
+        - sso.openshift.example.com
+~~~
+
+Locked-down deployments can enforce an official-only policy with
+`settings.disableThirdPartyAuthHandlers: true`, which rejects any non-official
+handler name even if present in a catalog.
 
 ## Removing a Handler
 

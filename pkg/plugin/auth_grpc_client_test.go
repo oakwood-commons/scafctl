@@ -1158,7 +1158,7 @@ func TestConfigureAndRegisterAuthHandlers_ConfigureError(t *testing.T) {
 func TestBuildTrustedDomains_NilRegistry(t *testing.T) {
 	t.Parallel()
 
-	domains := buildTrustedDomains("github", nil, nil)
+	domains := buildTrustedDomains("github", nil, nil, nil)
 	assert.Empty(t, domains)
 }
 
@@ -1169,14 +1169,14 @@ func TestBuildTrustedDomains_OfficialOnly(t *testing.T) {
 		{Name: "github", CatalogRef: "github", TrustedVerificationDomains: []string{"github.com"}},
 	})
 
-	domains := buildTrustedDomains("github", reg, nil)
+	domains := buildTrustedDomains("github", reg, nil, nil)
 	assert.Equal(t, []string{"github.com"}, domains)
 }
 
 func TestBuildTrustedDomains_ConfigOnly(t *testing.T) {
 	t.Parallel()
 
-	domains := buildTrustedDomains("github", nil, []string{"ghes.corp.example.com"})
+	domains := buildTrustedDomains("github", nil, []string{"ghes.corp.example.com"}, nil)
 	assert.Equal(t, []string{"ghes.corp.example.com"}, domains)
 }
 
@@ -1190,7 +1190,7 @@ func TestBuildTrustedDomains_Merged(t *testing.T) {
 	})
 	cfgDomains := []string{"my-idp.corp.example.com"}
 
-	domains := buildTrustedDomains("entra", reg, cfgDomains)
+	domains := buildTrustedDomains("entra", reg, cfgDomains, nil)
 	assert.Equal(t, []string{"login.microsoftonline.com", "login.microsoft.com", "my-idp.corp.example.com"}, domains)
 }
 
@@ -1203,8 +1203,34 @@ func TestBuildTrustedDomains_UnknownHandler(t *testing.T) {
 	cfgDomains := []string{"custom.example.com"}
 
 	// Handler not in registry — only config domains returned.
-	domains := buildTrustedDomains("unknown-handler", reg, cfgDomains)
+	domains := buildTrustedDomains("unknown-handler", reg, cfgDomains, nil)
 	assert.Equal(t, []string{"custom.example.com"}, domains)
+}
+
+func TestBuildTrustedDomains_PerHandlerDomains(t *testing.T) {
+	t.Parallel()
+
+	reg := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "github", CatalogRef: "github", TrustedVerificationDomains: []string{"github.com"}},
+	})
+
+	// A non-official handler inherits no official domains; its trust comes from
+	// global config plus per-handler config domains.
+	domains := buildTrustedDomains("openshift", reg, []string{"global.example.com"}, []string{"sso.openshift.example.com"})
+	assert.Equal(t, []string{"global.example.com", "sso.openshift.example.com"}, domains)
+}
+
+func TestBuildTrustedDomains_PerHandlerNoOfficialInheritance(t *testing.T) {
+	t.Parallel()
+
+	reg := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "github", CatalogRef: "github", TrustedVerificationDomains: []string{"github.com"}},
+	})
+
+	// Non-official handler with no config domains gets nothing — it must not
+	// silently inherit the official github.com domain.
+	domains := buildTrustedDomains("openshift", reg, nil, nil)
+	assert.Empty(t, domains)
 }
 
 func TestConfigureAndRegisterAuthHandlers_SetsTrustedDomains(t *testing.T) {

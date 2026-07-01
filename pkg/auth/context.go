@@ -33,7 +33,10 @@ func GetHandler(ctx context.Context, name string) (Handler, error) {
 		return nil, fmt.Errorf("%w: no auth registry in context", ErrHandlerNotFound)
 	}
 	handlerName, _ := ParseProfileKey(name)
-	return registry.Get(handlerName)
+	// Use GetContext so a catalog fetch triggered by the fallback resolver
+	// (e.g. during 'kube login' or 'auth token --exec-credential') honors the
+	// caller's timeout and cancellation instead of running uncancellable.
+	return registry.GetContext(ctx, handlerName)
 }
 
 // HasHandler checks if an auth handler exists in the context's registry.

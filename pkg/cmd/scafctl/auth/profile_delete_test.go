@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,9 @@ func TestCommandProfileDelete_NoArgs(t *testing.T) {
 
 func TestCommandProfileDelete_UnknownHandler(t *testing.T) {
 	ctx, _ := newTestContext(t)
+	ctx = config.WithConfig(ctx, &config.Config{
+		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+	})
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
 

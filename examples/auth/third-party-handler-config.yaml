@@ -1,0 +1,49 @@
+# Example: Third-party (non-official) auth handler configuration
+#
+# This config shows how to use an auth handler that is NOT one of the official
+# handlers (entra, github, gcp). Third-party handlers published to a configured
+# catalog resolve by name -- there is no allowlist to add them to.
+#
+# Usage:
+#   # Publish the handler into a catalog (once):
+#   scafctl build plugin --name openshift --kind auth-handler --version 0.1.0 \
+#     --platform darwin/arm64=./dist/scafctl-plugin-auth-openshift
+#
+#   # Then use it by name, exactly like an official handler:
+#   scafctl auth handlers install openshift
+#   scafctl auth login openshift
+#   scafctl kube login prod --handler openshift
+#
+# Precedence when resolving a handler name:
+#   1. auth.handlers.<name>.plugin  (this config pin)
+#   2. official allowlist           (entra, github, gcp)
+#   3. bare catalog artifact name
+
+auth:
+  handlers:
+    # The key is the handler name you pass on the CLI (e.g. "openshift").
+    openshift:
+      # Optional: pin the exact catalog artifact backing this handler.
+      # Omit this block to resolve the bare handler name at "latest".
+      plugin:
+        # Catalog artifact name. Defaults to the handler name ("openshift").
+        ref: openshift-auth
+        # Semver constraint or "latest". Defaults to "latest".
+        version: "^0.1.0"
+
+      # REQUIRED for third-party device-code flows: trusted verification
+      # domains. Third-party handlers do NOT inherit the hardcoded official
+      # trust domains, so the device-code verification URL is only accepted if
+      # its host matches one of these (or a global auth.trustedVerificationDomains
+      # entry).
+      trustedVerificationDomains:
+        - sso.openshift.example.com
+
+  # Global trusted domains apply to every handler, official or third-party.
+  trustedVerificationDomains:
+    - login.example.com
+
+settings:
+  # Optional lockdown: reject any non-official handler name even if present in a
+  # catalog. Leave false (the default) to allow catalog-by-name resolution.
+  disableThirdPartyAuthHandlers: false

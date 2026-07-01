@@ -34,20 +34,69 @@ scafctl provides built-in auth handlers for common identity providers:
 | `github` | ✅ Implemented | GitHub OAuth (Device Code + PAT) |
 | `gcp` | ✅ Implemented | Google Cloud Platform (ADC, Service Account, Metadata, Workload Identity, gcloud ADC, Impersonation) |
 
-**External Auth Handlers** can be distributed via the catalog for custom identity providers:
+**External (third-party) Auth Handlers** are distributed via the catalog as
+`auth-handler` artifacts and resolved by name, exactly like providers:
 
 ```bash
-# Push an auth handler to the catalog
-scafctl catalog push okta-handler@1.0.0 --catalog ghcr.io/myorg
+# Publish a third-party auth handler to a catalog
+scafctl build plugin --name openshift --kind auth-handler --version 0.1.0 \
+  --platform darwin/arm64=./dist/scafctl-plugin-auth-openshift
 
-# Pull an auth handler
-scafctl catalog pull ghcr.io/myorg/auth-handlers/okta-handler@1.0.0
-
-# The handler is then available for use
-scafctl auth login okta
+# Resolve and use it by name -- no allowlist gate
+scafctl auth handlers install openshift
+scafctl auth login openshift
+scafctl kube login prod --handler openshift
 ```
 
-External auth handlers use the same go-plugin mechanism as providers. See [Plugins](plugins.md) for architecture details.
+External auth handlers use the same go-plugin mechanism as providers. See
+[Plugins](plugins.md) for architecture details.
+
+### Auth Handler Resolution
+
+When a handler name is requested (via `auth login`, `auth token`,
+`auth handlers install`, `kube login --handler`, or the `kubectl`/`oc`
+exec-credential helper), scafctl resolves it by name in this order:
+
+1. **Config pin** -- if `auth.handlers.<name>.plugin` is set, its catalog
+   artifact `ref`/`version` is used.
+2. **Official allowlist** -- `entra`, `github`, and `gcp` resolve to their
+   first-party catalog artifacts. The official list is a convenience and trust
+   anchor, **not** a hard gate.
+3. **Bare catalog name** -- any other name is resolved directly against the
+   configured catalogs as an `auth-handler` artifact.
+
+Resolution is lazy: the plugin is fetched and started only when a handler is
+actually requested, so commands that never touch auth (e.g. `catalog tag`,
+`version`) incur no network I/O. All entry points funnel through the auth
+registry, so `kube login` and the exec-credential token path resolve third-party
+handlers the same way as `auth login`.
+
+Two settings gate resolution for locked-down embedders:
+
+| Setting | Effect |
+|---------|--------|
+| `settings.disableOfficialAuthHandlers` | Blocks auto-resolution of the official trio (`entra`, `github`, `gcp`), including by bare catalog name. |
+| `settings.disableThirdPartyAuthHandlers` | Blocks resolution of every non-official handler. Only the official trio resolves; all other names -- config-pinned (`auth.handlers.<name>.plugin`) and bare catalog names alike -- are rejected even if present in a catalog. |
+
+### Pinning a Third-Party Handler
+
+To pin the exact catalog artifact and declare trust for a third-party handler,
+use the `auth.handlers.<name>` namespace:
+
+```yaml
+auth:
+  handlers:
+    openshift:
+      # Pin the catalog artifact (ref defaults to the handler name, version to "latest").
+      plugin:
+        ref: openshift-auth
+        version: "^0.1.0"
+      # Third-party handlers do NOT inherit the hardcoded official trust
+      # domains; declare their device-code verification domains here.
+      trustedVerificationDomains:
+        - sso.openshift.example.com
+```
+
 
 ---
 

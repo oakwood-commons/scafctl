@@ -10,6 +10,7 @@ import (
 
 	"github.com/adrg/xdg"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -19,19 +20,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommandHandlersInstall_NoOfficialRegistry(t *testing.T) {
+func TestCommandHandlersInstall_ThirdPartyDisabledNoOfficial(t *testing.T) {
 	ctx, buf := newTestContext(t)
+	// Third-party catalog resolution disabled: a non-official (bare) name
+	// cannot be resolved and install is rejected by policy.
+	ctx = config.WithConfig(ctx, &config.Config{
+		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+	})
 
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
 
 	cmd := commandHandlersInstall(cliParams, ioStreams)
 	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{"github"})
+	cmd.SetArgs([]string{"openshift"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "official auth handler registry not available")
+	assert.Contains(t, err.Error(), "openshift")
+	assert.Contains(t, err.Error(), "disabled")
 }
 
 func TestCommandHandlersInstall_UnknownHandler(t *testing.T) {
@@ -41,6 +48,11 @@ func TestCommandHandlersInstall_UnknownHandler(t *testing.T) {
 		{Name: "github", CatalogRef: "github"},
 	})
 	ctx = authofficial.WithRegistry(ctx, officialReg)
+	// With third-party resolution disabled, a non-official name is rejected
+	// before any catalog fetch.
+	ctx = config.WithConfig(ctx, &config.Config{
+		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+	})
 
 	cliParams := settings.NewCliParams()
 	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
@@ -51,8 +63,8 @@ func TestCommandHandlersInstall_UnknownHandler(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown auth handler")
 	assert.Contains(t, err.Error(), "nonexistent")
+	assert.Contains(t, err.Error(), "disabled")
 }
 
 func TestCommandHandlersInstall_AlreadyCached(t *testing.T) {
