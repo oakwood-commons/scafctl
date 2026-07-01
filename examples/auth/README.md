@@ -262,6 +262,52 @@ scafctl auth logout entra --force
 
 ---
 
+## Host-Aware Login and Hostname Aliases
+
+Some auth handlers (those that advertise the `hostname` capability, e.g. an
+OpenShift/Kubernetes handler) accept a `--hostname` selector at login. The host
+resolves that selector into a concrete endpoint URL **before** authenticating,
+using per-handler configuration under `auth.handlers.<name>.hostname`.
+
+Resolution precedence (first match wins):
+
+1. **Concrete URL** -- if `--hostname` is already a URL (`https://...`), it is
+   used as-is.
+2. **Static alias** -- a `hostname.aliases` entry mapping the selector to a URL.
+3. **Dynamic resolver** -- `hostname.resolver` fetches a live inventory and
+   normalizes it into `{name, url}` entries via a CEL transform.
+4. Otherwise login fails with the list of available selectors.
+
+### Managing static aliases
+
+```bash
+# Add or update an alias
+scafctl auth alias set openshift prod https://api.prod.example.com:6443
+
+# List a handler's aliases
+scafctl auth alias list openshift
+scafctl auth alias list openshift -o json
+
+# Remove an alias
+scafctl auth alias remove openshift prod
+
+# Log in using the alias
+scafctl auth login openshift --hostname prod
+```
+
+Aliases are stored in your main `config.yaml` under
+`auth.handlers.<handler>.hostname.aliases`. Only handlers that declare the
+`hostname` capability accept aliases.
+
+### Dynamic hostname resolution
+
+For fleets with many clusters, configure a resolver that fetches the endpoint
+inventory at login time and caches it for a TTL. See
+[hostname-resolution.md](hostname-resolution.md) for a full walkthrough
+(including an authenticated inventory endpoint and the CEL transform contract).
+
+---
+
 ## Handler Lifecycle Management
 
 Official auth handler plugins are downloaded automatically on first use.

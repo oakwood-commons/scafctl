@@ -30,6 +30,7 @@ This tutorial walks you through setting up and using authentication in scafctl. 
    - [GCP Service Account Key](#gcp-service-account-key-authentication-cicd)
    - [GCP Workload Identity Federation](#gcp-workload-identity-federation)
    - [GCP Metadata Server](#gcp-metadata-server-gcegkecloud-run)
+   - [Host-Aware Login: Hostname Aliases and Dynamic Resolution](#host-aware-login-hostname-aliases-and-dynamic-resolution)
 3. [Checking Auth Status](#checking-auth-status)
 4. [Listing and Sorting Cached Tokens](#listing-and-sorting-cached-tokens)
 5. [Using Auth in HTTP Providers](#using-auth-in-http-providers)
@@ -871,6 +872,93 @@ Invoke-RestMethod "$issuer/.well-known/openid-configuration"
 ```
 {{% /tab %}}
 {{< /tabs >}}
+
+---
+
+## Host-Aware Login: Hostname Aliases and Dynamic Resolution
+
+Handlers that advertise the `hostname` capability accept a `--hostname <selector>`
+argument at login. Instead of memorizing a long API server URL, you log in with a
+short selector (e.g. `prod`) and the scafctl host resolves it into a concrete
+endpoint URL **before** delegating to the handler.
+
+Resolution is host-side and shape-blind: the core never hardcodes any
+organization's inventory format. For a given `--hostname <selector>`, the host
+resolves in this order (first match wins):
+
+1. **Concrete URL** -- if the selector already parses as an `http`/`https` URL,
+   it is forwarded unchanged.
+2. **Static alias** -- a `hostname.aliases` entry mapping selector to URL.
+3. **Dynamic resolver** -- `hostname.resolver` fetches an inventory and
+   normalizes it into `{name, url}` entries; the selector is matched by `name`.
+4. Otherwise, login fails and lists the available selectors.
+
+### Static aliases
+
+Manage aliases with the `auth alias` command. They are written to your
+`config.yaml` under `auth.handlers.<handler>.hostname.aliases`:
+
+```bash
+scafctl auth alias set openshift prod https://api.prod.example.com:6443
+scafctl auth alias set openshift stg  https://api.stg.example.com:6443
+scafctl auth alias list openshift
+scafctl auth alias remove openshift stg
+scafctl auth login openshift --hostname prod
+```
+
+Equivalent config:
+
+```yaml
+auth:
+  handlers:
+    openshift:
+      hostname:
+        aliases:
+          prod: https://api.prod.example.com:6443
+          stg: https://api.stg.example.com:6443
+```
+
+Only handlers that declare the `hostname` capability accept aliases; `auth alias set`
+fails fast otherwise.
+
+### Dynamic resolution
+
+When a fleet has too many endpoints to alias by hand, configure a resolver. At
+login time the host performs an HTTPS GET, runs a CEL transform to normalize the
+response into a list of `{name, url}` entries, and caches the result for the
+configured TTL:
+
+```yaml
+auth:
+  handlers:
+    openshift:
+      hostname:
+        resolver:
+          source:
+            url: https://clusters.example.com/inventory
+            # Optional: inject a bearer token from another auth handler.
+            authProvider: entra
+            authScope: api://fleet-inventory/.default
+          # CEL transform: normalize the fetched JSON (bound to `_`) into a
+          # list of {name, url} objects. Filter out anything not usable.
+          transform: |
+            _.map(k, _[k].status != "deleted", {
+              "name": k,
+              "url": _[k].apiServerURL,
+            })
+          ttl: 1h
+```
+
+The transform must return a list of objects, each with a non-empty `name` and
+`url`; any other shape fails with a clear "transform shape" error. Entries may
+also carry optional per-cluster OIDC metadata (`audience`, `authType`, `caData`,
+`consoleUrl`, `insecureSkipTls`) so a single inventory can drive both
+`auth login --hostname` and `kube login`.
+
+For the full transform contract, caching behavior, authenticated inventory
+endpoints, and troubleshooting, see the
+[hostname resolution example](../../examples/auth/hostname-resolution.md) and the
+[hostname resolution design doc](../design/hostname-resolution.md).
 
 ---
 

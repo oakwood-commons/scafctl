@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -228,6 +230,25 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				err := fmt.Errorf("--hostname is not supported by the %q auth handler", handlerName)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// Resolve a hostname selector (static alias or dynamic inventory)
+			// into a concrete endpoint URL before login. Returns the value
+			// unchanged when it is already a URL or when the handler has no
+			// hostname config, so plain-hostname handlers are unaffected.
+			if hostname != "" {
+				resolved, rErr := hostnameresolver.Resolve(ctx, handlerName, hostname)
+				if rErr != nil {
+					w.Errorf("%v", rErr)
+					code := exitcode.GeneralError
+					if errors.Is(rErr, hostnameresolver.ErrSelectorNotFound) ||
+						errors.Is(rErr, hostnameresolver.ErrResolverLoop) ||
+						errors.Is(rErr, hostnameresolver.ErrTransformShape) {
+						code = exitcode.InvalidInput
+					}
+					return exitcode.WithCode(rErr, code)
+				}
+				hostname = resolved
 			}
 			if federatedToken != "" && !auth.HasCapability(caps, auth.CapFederatedToken) {
 				err := fmt.Errorf("--federated-token is not supported by the %q auth handler", handlerName)
