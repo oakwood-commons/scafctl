@@ -425,7 +425,7 @@ func TestHandler_ReturnsCachedInstance(t *testing.T) {
 
 func TestNewServer_PluginPoolRequiresRegistry(t *testing.T) {
 	reg := provider.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard())
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
 	defer pool.Shutdown()
 
 	t.Run("pool without registry returns error", func(t *testing.T) {

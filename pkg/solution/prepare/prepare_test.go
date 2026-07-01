@@ -1671,3 +1671,136 @@ func TestSignaturePolicyFromConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderPoolDeps_BundleProvidersOnly(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{}
+	sol.Bundle.Plugins = []solution.PluginDependency{
+		{Name: "custom-a", Kind: solution.PluginKindProvider},
+		{Name: "custom-b", Kind: solution.PluginKindProvider},
+		{Name: "some-auth", Kind: solution.PluginKindAuthHandler},
+	}
+
+	deps := providerPoolDeps(sol, &prepareConfig{})
+
+	names := depNames(deps)
+	assert.ElementsMatch(t, []string{"custom-a", "custom-b"}, names,
+		"only provider-kind bundle plugins are pool deps; auth handlers excluded")
+}
+
+func TestProviderPoolDeps_IncludesReferencedOfficialProviders(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "github"}},
+					},
+				},
+			},
+		},
+	}
+	cfg := &prepareConfig{officialProviders: official.NewRegistry()}
+
+	deps := providerPoolDeps(sol, cfg)
+
+	names := depNames(deps)
+	assert.Contains(t, names, "github", "referenced official provider must be a pool dep")
+}
+
+func TestProviderPoolDeps_OmitsNonOfficialReferences(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "not-official"}},
+					},
+				},
+			},
+		},
+	}
+	cfg := &prepareConfig{officialProviders: official.NewRegistry()}
+
+	deps := providerPoolDeps(sol, cfg)
+
+	assert.Empty(t, deps, "unknown/non-official referenced providers are not pool deps")
+}
+
+func TestProviderPoolDeps_DedupsBundleAndOfficial(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "github"}},
+					},
+				},
+			},
+		},
+	}
+	sol.Bundle.Plugins = []solution.PluginDependency{
+		{Name: "github", Kind: solution.PluginKindProvider},
+	}
+	cfg := &prepareConfig{officialProviders: official.NewRegistry()}
+
+	deps := providerPoolDeps(sol, cfg)
+
+	assert.Len(t, deps, 1, "a provider present in both bundle and official set appears once")
+	assert.Equal(t, "github", deps[0].Name)
+}
+
+func TestProviderPoolDeps_NilOfficialRegistry(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"r": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "github"}},
+					},
+				},
+			},
+		},
+	}
+	sol.Bundle.Plugins = []solution.PluginDependency{
+		{Name: "custom", Kind: solution.PluginKindProvider},
+	}
+
+	deps := providerPoolDeps(sol, &prepareConfig{})
+
+	names := depNames(deps)
+	assert.Equal(t, []string{"custom"}, names,
+		"with no official registry, only bundle providers are pool deps")
+}
+
+func depNames(deps []solution.PluginDependency) []string {
+	names := make([]string, len(deps))
+	for i, d := range deps {
+		names[i] = d.Name
+	}
+	return names
+}
+
+func TestRegisterBundleAuthHandlers_NoAuthHandlers(t *testing.T) {
+	t.Parallel()
+
+	// A bundle with only provider-kind plugins (or none) declares no auth
+	// handlers, so the function returns early without touching the fetcher.
+	sol := &solution.Solution{}
+	sol.Bundle.Plugins = []solution.PluginDependency{
+		{Name: "custom-provider", Kind: solution.PluginKindProvider},
+	}
+
+	clients, err := registerBundleAuthHandlers(context.Background(), sol, &prepareConfig{})
+	require.NoError(t, err)
+	assert.Nil(t, clients, "no auth-handler plugins means no clients and no fetch")
+}

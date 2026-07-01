@@ -689,7 +689,7 @@ func TestEnsureProvider(t *testing.T) {
 		// The official registry is always auto-injected; known providers
 		// proceed to the pool load stage which fails without a fetcher.
 		reg := provider.NewRegistry()
-		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 		defer pool.Shutdown()
 
 		srv, err := NewServer(
@@ -708,7 +708,7 @@ func TestEnsureProvider(t *testing.T) {
 	t.Run("returns error for unknown provider", func(t *testing.T) {
 		reg := provider.NewRegistry()
 		officialReg := official.NewRegistry()
-		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 		defer pool.Shutdown()
 
 		ctx := official.WithRegistry(context.Background(), officialReg)
@@ -729,7 +729,7 @@ func TestEnsureProvider(t *testing.T) {
 	t.Run("returns error when pool has no fetcher", func(t *testing.T) {
 		reg := provider.NewRegistry()
 		officialReg := official.NewRegistry()
-		pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 		defer pool.Shutdown()
 
 		ctx := official.WithRegistry(context.Background(), officialReg)
@@ -922,7 +922,7 @@ func TestHandleRunProvider_AutoResolve_PoolError(t *testing.T) {
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
 	ctx := official.WithRegistry(context.Background(), officialReg)
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	srv, err := NewServer(
@@ -954,7 +954,7 @@ func TestHandleRunProvider_AutoResolve_RegistryMiss(t *testing.T) {
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
 	ctx := official.WithRegistry(context.Background(), officialReg)
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	// Adopt a mock client so EnsureAndAcquire succeeds
@@ -990,7 +990,7 @@ func TestHandleGetProviderSchema_AutoResolve_RegistryMiss(t *testing.T) {
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
 	ctx := official.WithRegistry(context.Background(), officialReg)
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	// Adopt so EnsureAndAcquire succeeds
@@ -1026,7 +1026,7 @@ func TestHandleGetProviderOutputShape_AutoResolve_RegistryMiss(t *testing.T) {
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
 	ctx := official.WithRegistry(context.Background(), officialReg)
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	// Adopt so EnsureAndAcquire succeeds
@@ -1178,7 +1178,7 @@ func TestServerClose_IsNoOp(t *testing.T) {
 
 func TestServerClose_WithExternalPool(t *testing.T) {
 	reg := provider.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 
 	srv, err := NewServer(
 		WithServerRegistry(reg),

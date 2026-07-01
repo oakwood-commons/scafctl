@@ -1896,7 +1896,7 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.PoolOption) *httpt
 	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
 
-	pool := plugin.NewPool(nil, reg, logr.Discard(), poolOpts...)
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), poolOpts...)
 	t.Cleanup(pool.Shutdown)
 
 	srv, err := api.NewServer(
@@ -1998,7 +1998,7 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 	reg := provider.NewRegistry()
 	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0), plugin.WithMaxPlugins(1))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0), plugin.WithMaxPlugins(1))
 	t.Cleanup(pool.Shutdown)
 
 	// Adopt a nil client to fill the single slot
@@ -2069,7 +2069,7 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	reg := provider.NewRegistry()
 	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 
-	pool := plugin.NewPool(fetcher, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), fetcher, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	t.Cleanup(pool.Shutdown)
 
 	srv, err := api.NewServer(

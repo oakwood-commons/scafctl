@@ -236,6 +236,6 @@ func buildMCPPluginPool(ctx context.Context, cfg *config.Config, reg *provider.R
 	if cfg != nil && cfg.Plugins.GRPCMaxMessageSize > 0 {
 		poolOpts = append(poolOpts, plugin.WithClientOptions(plugin.WithGRPCMaxMessageSize(cfg.Plugins.GRPCMaxMessageSize)))
 	}
-	pool := plugin.NewPool(pluginFetcher, reg, *lgr, poolOpts...)
+	pool := plugin.NewPool(ctx, pluginFetcher, reg, *lgr, poolOpts...)
 	return pool, ctx
 }

@@ -230,7 +230,7 @@ func TestEnsureAPIProvider_NilPool(t *testing.T) {
 
 func TestEnsureAPIProvider_NilOfficialProviders(t *testing.T) {
 	reg := provider.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	hctx := &api.HandlerContext{
@@ -245,7 +245,7 @@ func TestEnsureAPIProvider_NilOfficialProviders(t *testing.T) {
 func TestEnsureAPIProvider_UnknownProvider(t *testing.T) {
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	hctx := &api.HandlerContext{
@@ -261,7 +261,7 @@ func TestEnsureAPIProvider_UnknownProvider(t *testing.T) {
 func TestEnsureAPIProvider_NoFetcher(t *testing.T) {
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	hctx := &api.HandlerContext{
@@ -285,7 +285,7 @@ func TestEnsureAPIProvider_RegistryMiss(t *testing.T) {
 	// Mark the name as known in the pool's registry so Ensure passes
 	poolReg.MarkKnown("exec")
 
-	pool := plugin.NewPool(nil, poolReg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, poolReg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	hctx := &api.HandlerContext{
@@ -303,7 +303,7 @@ func TestGetProvider_AutoResolve_Fallback(t *testing.T) {
 	_, testAPI := humatest.New(t)
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	var shutting int32
@@ -326,7 +326,7 @@ func TestGetProviderSchema_AutoResolve_Fallback(t *testing.T) {
 	_, testAPI := humatest.New(t)
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	var shutting int32
@@ -367,7 +367,7 @@ func TestEnsureAPIProvider_Success(t *testing.T) {
 	// handler's registry, ensureAPIProvider should return the provider.
 	reg := newRegistryWithProvider(t, "exec")
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	// Adopt a mock client so EnsureAndAcquire succeeds
@@ -394,7 +394,7 @@ func TestGetProvider_AutoResolve_Adopted(t *testing.T) {
 	_, testAPI := humatest.New(t)
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	// Adopt entry but do NOT register provider — simulates post-spawn
@@ -425,7 +425,7 @@ func TestGetProviderSchema_AutoResolve_Adopted(t *testing.T) {
 	_, testAPI := humatest.New(t)
 	reg := provider.NewRegistry()
 	officialReg := official.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	dep := solution.PluginDependency{Name: "exec", Kind: solution.PluginKindProvider}

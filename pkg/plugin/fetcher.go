@@ -723,6 +723,14 @@ func RegisterFetchedAuthHandlerPlugins(ctx context.Context, registry *auth.Regis
 		}
 
 		registered := configureAndRegisterAuthHandlers(ctx, registry, client, handlers, cfg)
+		if len(registered) == 0 {
+			// This plugin registered no new handlers -- every name it exposes
+			// was already present in the registry. Kill the just-started process
+			// immediately so long-lived servers that prepare the same bundle
+			// repeatedly do not leak plugin subprocesses.
+			client.Kill()
+			continue
+		}
 		propagateStartupLatency(ctx, registry, client, registered)
 
 		clients = append(clients, client)

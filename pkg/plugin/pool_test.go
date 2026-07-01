@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +23,7 @@ import (
 
 func TestNewPool(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard())
+	p := NewPool(context.Background(), nil, reg, logr.Discard())
 	defer p.Shutdown()
 
 	assert.NotNil(t, p)
@@ -31,7 +33,7 @@ func TestNewPool(t *testing.T) {
 
 func TestNewPool_Options(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(10*time.Minute),
 		WithMaxPlugins(100),
 		WithHealthCheckInterval(time.Minute),
@@ -46,7 +48,7 @@ func TestNewPool_Options(t *testing.T) {
 func TestNewPool_WithClientOptions(t *testing.T) {
 	reg := provider.NewRegistry()
 	opt1 := WithSanitizedEnv()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithClientOptions(opt1),
 	)
@@ -59,7 +61,7 @@ func TestNewPool_WithClientOptions_Multiple(t *testing.T) {
 	reg := provider.NewRegistry()
 	opt1 := WithSanitizedEnv()
 	opt2 := WithSanitizedEnv()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithClientOptions(opt1, opt2),
 	)
@@ -72,19 +74,19 @@ func TestNewPool_WithSanitizeEnv(t *testing.T) {
 	reg := provider.NewRegistry()
 
 	t.Run("defaults to true", func(t *testing.T) {
-		p := NewPool(nil, reg, logr.Discard())
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
 		defer p.Shutdown()
 		assert.True(t, p.SanitizeEnv())
 	})
 
 	t.Run("can be disabled", func(t *testing.T) {
-		p := NewPool(nil, reg, logr.Discard(), WithSanitizeEnv(false))
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithSanitizeEnv(false))
 		defer p.Shutdown()
 		assert.False(t, p.SanitizeEnv())
 	})
 
 	t.Run("can be explicitly enabled", func(t *testing.T) {
-		p := NewPool(nil, reg, logr.Discard(), WithSanitizeEnv(true))
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithSanitizeEnv(true))
 		defer p.Shutdown()
 		assert.True(t, p.SanitizeEnv())
 	})
@@ -150,7 +152,7 @@ func TestBuildSpawnClientOpts(t *testing.T) {
 
 func TestPool_Adopt(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	mockClient := &Client{name: "test-plugin", path: "/fake/path"}
@@ -169,7 +171,7 @@ func TestPool_Adopt(t *testing.T) {
 
 func TestPool_Adopt_ClosedPool(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	p.Shutdown()
 
 	mockClient := &Client{name: "test-plugin", path: "/fake/path"}
@@ -187,7 +189,7 @@ func TestPool_Ensure_AlreadyRegistered(t *testing.T) {
 	reg := provider.NewRegistry()
 	reg.MarkKnown("existing-provider")
 
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	deps := []solution.PluginDependency{
@@ -205,7 +207,7 @@ func TestPool_Ensure_AlreadyRegistered(t *testing.T) {
 
 func TestPool_Ensure_ClosedPool(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	p.Shutdown()
 
 	deps := []solution.PluginDependency{
@@ -218,7 +220,7 @@ func TestPool_Ensure_ClosedPool(t *testing.T) {
 
 func TestPool_Ensure_PoolFull(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0), WithMaxPlugins(1))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0), WithMaxPlugins(1))
 	defer p.Shutdown()
 
 	// Adopt one plugin to fill the pool
@@ -235,7 +237,7 @@ func TestPool_Ensure_PoolFull(t *testing.T) {
 
 func TestPool_Ensure_NilFetcher(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	deps := []solution.PluginDependency{
@@ -249,7 +251,7 @@ func TestPool_Ensure_NilFetcher(t *testing.T) {
 
 func TestPool_Ensure_SkipsNonProvider(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	deps := []solution.PluginDependency{
@@ -267,7 +269,7 @@ func TestPool_Ensure_SkipsNonProvider(t *testing.T) {
 func TestPool_Ensure_ConcurrentSamePlugin(t *testing.T) {
 	reg := provider.NewRegistry()
 	// Pre-adopt a plugin so Ensure is a no-op wait
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	mockClient := &Client{name: "shared", path: "/fake"}
@@ -293,7 +295,7 @@ func TestPool_Ensure_ConcurrentSamePlugin(t *testing.T) {
 
 func TestPool_Ensure_ContextCancelled(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// Create an entry stuck in entryStarting state
@@ -318,7 +320,7 @@ func TestPool_Ensure_ContextCancelled(t *testing.T) {
 
 func TestPool_AcquireRelease(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	mockClient := &Client{name: "acq", path: "/fake"}
@@ -339,7 +341,7 @@ func TestPool_AcquireRelease(t *testing.T) {
 
 func TestPool_Acquire_NotFound(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	ok := p.Acquire("nonexistent")
@@ -348,7 +350,7 @@ func TestPool_Acquire_NotFound(t *testing.T) {
 
 func TestPool_Acquire_Dead(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	ready := make(chan struct{})
@@ -368,7 +370,7 @@ func TestPool_Acquire_Dead(t *testing.T) {
 
 func TestPool_Release_NotFound(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// Should not panic
@@ -377,7 +379,7 @@ func TestPool_Release_NotFound(t *testing.T) {
 
 func TestPool_markDead_AlreadyDead(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	entry := &poolEntry{
@@ -394,7 +396,7 @@ func TestPool_markDead_AlreadyDead(t *testing.T) {
 
 func TestPool_markDead_ReadyNoClient(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	entry := &poolEntry{
@@ -416,7 +418,7 @@ func TestPool_markDead_ReadyNoClient(t *testing.T) {
 
 func TestPool_markDead_ReadyWithClient(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// Use a client with nil pluginClient and nil plugin — Kill is a no-op
@@ -455,7 +457,7 @@ func TestPoolEntry_failWith(t *testing.T) {
 
 func TestPool_Ping_NotFound(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	ok := p.Ping(context.Background(), "nonexistent")
@@ -464,7 +466,7 @@ func TestPool_Ping_NotFound(t *testing.T) {
 
 func TestPool_Ping_Dead(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	ready := make(chan struct{})
@@ -484,7 +486,7 @@ func TestPool_Ping_Dead(t *testing.T) {
 
 func TestPool_Stats(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// Empty pool
@@ -540,7 +542,7 @@ func TestPool_Evict_IdleEntries(t *testing.T) {
 	clock := func() time.Time { return now }
 
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(5*time.Minute),
 		withClock(clock),
 	)
@@ -575,7 +577,7 @@ func TestPool_Evict_SkipsActiveEntries(t *testing.T) {
 	clock := func() time.Time { return now }
 
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(5*time.Minute),
 		withClock(clock),
 	)
@@ -605,7 +607,7 @@ func TestPool_Evict_SkipsActiveEntries(t *testing.T) {
 
 func TestPool_Evict_DeadEntries(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(5*time.Minute),
 	)
 	defer p.Shutdown()
@@ -632,7 +634,7 @@ func TestPool_Evict_DeadEntries(t *testing.T) {
 
 func TestPool_Shutdown(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 
 	mockClient := &Client{name: "shutdown-test", path: "/fake"}
 	dep := solution.PluginDependency{Name: "shutdown-test", Kind: solution.PluginKindProvider}
@@ -648,7 +650,7 @@ func TestPool_Shutdown(t *testing.T) {
 
 func TestPool_Shutdown_Idempotent(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 
 	// Should not panic when called multiple times
 	p.Shutdown()
@@ -656,9 +658,48 @@ func TestPool_Shutdown_Idempotent(t *testing.T) {
 	p.Shutdown()
 }
 
+func TestPool_Shutdown_UnregistersProviders(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	// Register a real provider wrapper into the shared registry so the pool
+	// entry has something to unregister on shutdown.
+	mock := &MockProviderPlugin{
+		providers: []string{"test-provider"},
+		descriptors: map[string]*provider.Descriptor{
+			"test-provider": {
+				Name:         "test-provider",
+				DisplayName:  "Test Provider",
+				Description:  "A test provider",
+				APIVersion:   "v1",
+				Version:      semver.MustParse("1.0.0"),
+				Category:     "test",
+				Capabilities: []provider.Capability{provider.CapabilityFrom},
+				Schema:       schemahelper.ObjectSchema(nil, nil),
+			},
+		},
+	}
+	wrapper, err := NewProviderWrapper(&Client{plugin: mock, name: "test-provider"}, "test-provider")
+	require.NoError(t, err)
+	require.NoError(t, reg.Register(wrapper))
+	require.True(t, reg.Has("test-provider"))
+
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
+	mockClient := &Client{name: "test-provider", path: "/fake"}
+	dep := solution.PluginDependency{Name: "test-provider", Kind: solution.PluginKindProvider}
+	p.Adopt("test-provider", mockClient, dep, []string{"test-provider"})
+
+	p.Shutdown()
+
+	assert.False(t, reg.Has("test-provider"),
+		"Shutdown must unregister providers so the registry does not outlive the pool with dead-backed wrappers")
+	p.mu.Lock()
+	assert.Empty(t, p.entries)
+	p.mu.Unlock()
+}
+
 func BenchmarkPool_Ensure_HotPath(b *testing.B) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	mockClient := &Client{name: "bench", path: "/fake"}
@@ -677,7 +718,7 @@ func BenchmarkPool_Ensure_HotPath(b *testing.B) {
 
 func BenchmarkPool_Stats(b *testing.B) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// Populate with 20 entries
@@ -704,7 +745,7 @@ func BenchmarkPool_Stats(b *testing.B) {
 
 func BenchmarkPool_AcquireRelease(b *testing.B) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	mockClient := &Client{name: "bench-ar", path: "/fake"}
@@ -723,7 +764,7 @@ func BenchmarkPool_AcquireRelease(b *testing.B) {
 
 func TestPool_Ensure_ExternalDisabled(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithDisableExternal(true),
 	)
@@ -739,7 +780,7 @@ func TestPool_Ensure_ExternalDisabled(t *testing.T) {
 
 func TestPool_Ensure_ExternalDisabled_AdoptedBypasses(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithDisableExternal(true),
 	)
@@ -756,7 +797,7 @@ func TestPool_Ensure_ExternalDisabled_AdoptedBypasses(t *testing.T) {
 
 func TestPool_Ensure_AllowedPlugins_Rejected(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithAllowedPlugins([]string{"safe-plugin", "another-safe"}),
 	)
@@ -773,7 +814,7 @@ func TestPool_Ensure_AllowedPlugins_Rejected(t *testing.T) {
 func TestPool_Ensure_AllowedPlugins_Permitted(t *testing.T) {
 	reg := provider.NewRegistry()
 	// Use nil fetcher — plugin is allowed but will fail at fetch stage
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithAllowedPlugins([]string{"safe-plugin"}),
 	)
@@ -792,7 +833,7 @@ func TestPool_Ensure_AllowedPlugins_Permitted(t *testing.T) {
 
 func TestPool_Ensure_AllowedPlugins_Empty_AllowsAll(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithAllowedPlugins([]string{}), // empty = no restriction
 	)
@@ -810,7 +851,7 @@ func TestPool_Ensure_AllowedPlugins_Empty_AllowsAll(t *testing.T) {
 
 func TestPool_Ensure_AllowedPlugins_AdoptedBypasses(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithAllowedPlugins([]string{"only-this"}),
 	)
@@ -827,7 +868,7 @@ func TestPool_Ensure_AllowedPlugins_AdoptedBypasses(t *testing.T) {
 
 func TestWithAllowedPlugins_Nil(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithAllowedPlugins(nil),
 	)
@@ -838,7 +879,7 @@ func TestWithAllowedPlugins_Nil(t *testing.T) {
 
 func TestWithDisableExternal(t *testing.T) {
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(),
+	p := NewPool(context.Background(), nil, reg, logr.Discard(),
 		WithIdleTimeout(0),
 		WithDisableExternal(true),
 	)
@@ -873,7 +914,7 @@ func TestPoolErrorHTTPStatus(t *testing.T) {
 func TestPool_EnsureAndAcquire_Adopted(t *testing.T) {
 	t.Parallel()
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	mockClient := &Client{name: "adopted-plugin", path: "/fake"}
@@ -898,7 +939,7 @@ func TestPool_EnsureAndAcquire_Adopted(t *testing.T) {
 func TestPool_EnsureAndAcquire_Error(t *testing.T) {
 	t.Parallel()
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// No fetcher — Ensure will fail
@@ -914,7 +955,7 @@ func TestPool_EnsureAndAcquire_Error(t *testing.T) {
 func TestPool_EnsureOne_RemovesDeadEntry(t *testing.T) {
 	t.Parallel()
 	reg := provider.NewRegistry()
-	p := NewPool(nil, reg, logr.Discard(), WithIdleTimeout(0))
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
 	defer p.Shutdown()
 
 	// Inject a dead entry directly
@@ -952,4 +993,165 @@ func TestPoolEntry_RegisteredProviders(t *testing.T) {
 		registeredProviders: []string{"exec", "git", "directory"},
 	}
 	assert.Equal(t, []string{"exec", "git", "directory"}, entry.registeredProviders)
+}
+
+// TestPool_markDead_DefersKillWhileReferenced is a regression test for the race
+// where a plugin was torn down (client killed) while a request still held a
+// reference, causing "grpc: the client connection is closing". Teardown must be
+// deferred until the final Release drains the last reference.
+func TestPool_markDead_DefersKillWhileReferenced(t *testing.T) {
+	reg := provider.NewRegistry()
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
+	defer p.Shutdown()
+
+	client := &Client{name: "busy", path: "/fake"}
+	dep := solution.PluginDependency{Name: "busy", Kind: solution.PluginKindProvider}
+	p.Adopt("busy", client, dep, nil)
+
+	// Acquire a reference (simulating an in-flight request).
+	require.True(t, p.Acquire("busy"))
+
+	p.mu.Lock()
+	entry := p.entries["busy"]
+	p.mu.Unlock()
+
+	// Mark dead while referenced: the kill must be deferred.
+	p.markDead("busy", entry, errors.New("health probe failed"))
+
+	entry.mu.Lock()
+	assert.Equal(t, entryDead, entry.state)
+	assert.True(t, entry.pendingKill, "kill should be deferred while referenced")
+	assert.NotNil(t, entry.client, "client must be retained until the last release")
+	entry.mu.Unlock()
+
+	// Releasing the last reference finalizes the deferred kill.
+	p.Release("busy")
+
+	entry.mu.Lock()
+	assert.False(t, entry.pendingKill)
+	assert.Nil(t, entry.client, "client must be cleared after the final release kills it")
+	entry.mu.Unlock()
+}
+
+// TestPool_markDead_KillsImmediatelyWhenUnreferenced verifies the common path:
+// when no request holds a reference, teardown kills the client immediately.
+func TestPool_markDead_KillsImmediatelyWhenUnreferenced(t *testing.T) {
+	reg := provider.NewRegistry()
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
+	defer p.Shutdown()
+
+	client := &Client{name: "idle", path: "/fake"}
+	dep := solution.PluginDependency{Name: "idle", Kind: solution.PluginKindProvider}
+	p.Adopt("idle", client, dep, nil)
+
+	p.mu.Lock()
+	entry := p.entries["idle"]
+	p.mu.Unlock()
+
+	p.markDead("idle", entry, errors.New("boom"))
+
+	entry.mu.Lock()
+	assert.Equal(t, entryDead, entry.state)
+	assert.False(t, entry.pendingKill)
+	assert.Nil(t, entry.client, "unreferenced client should be killed and cleared immediately")
+	entry.mu.Unlock()
+}
+
+// TestPool_Evict_SkipsReferencedDeadEntry verifies that a dead entry still in
+// use is not evicted from the map (so its final Release can finalize teardown),
+// and is removed once unreferenced.
+func TestPool_Evict_SkipsReferencedDeadEntry(t *testing.T) {
+	reg := provider.NewRegistry()
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
+	defer p.Shutdown()
+
+	ready := make(chan struct{})
+	close(ready)
+	entry := &poolEntry{
+		state:    entryDead,
+		client:   &Client{name: "d", path: "/fake"},
+		dep:      solution.PluginDependency{Name: "d", Kind: solution.PluginKindProvider},
+		ready:    ready,
+		refCount: 1,
+	}
+	p.mu.Lock()
+	p.entries["d"] = entry
+	p.mu.Unlock()
+
+	p.evict()
+	p.mu.Lock()
+	_, exists := p.entries["d"]
+	p.mu.Unlock()
+	assert.True(t, exists, "referenced dead entry must not be evicted")
+
+	// Drain the reference; now eviction removes it.
+	p.Release("d")
+	p.evict()
+	p.mu.Lock()
+	_, exists = p.entries["d"]
+	p.mu.Unlock()
+	assert.False(t, exists, "unreferenced dead entry should be evicted")
+}
+
+// TestPool_EnsureAndAcquire_AtomicAcquire verifies EnsureAndAcquire takes a
+// reference on a ready (adopted) provider atomically with readiness validation
+// and that the returned release drains it.
+func TestPool_EnsureAndAcquire_AtomicAcquire(t *testing.T) {
+	reg := provider.NewRegistry()
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(0))
+	defer p.Shutdown()
+
+	dep := solution.PluginDependency{Name: "ad", Kind: solution.PluginKindProvider}
+	p.Adopt("ad", &Client{name: "ad", path: "/fake"}, dep, nil)
+
+	release, err := p.EnsureAndAcquire(context.Background(), []solution.PluginDependency{dep})
+	require.NoError(t, err)
+	require.NotNil(t, release)
+
+	p.mu.Lock()
+	entry := p.entries["ad"]
+	p.mu.Unlock()
+	assert.Equal(t, int32(1), atomic.LoadInt32(&entry.refCount))
+
+	release()
+	assert.Equal(t, int32(0), atomic.LoadInt32(&entry.refCount))
+}
+
+// TestPool_Shutdown_CancelsLifetimeContext verifies Shutdown cancels the
+// pool-lifetime context so background spawns and the eviction loop stop.
+func TestPool_Shutdown_CancelsLifetimeContext(t *testing.T) {
+	reg := provider.NewRegistry()
+	p := NewPool(context.Background(), nil, reg, logr.Discard(), WithIdleTimeout(time.Minute))
+
+	poolCtx := p.ctx
+	require.NotNil(t, poolCtx)
+	select {
+	case <-poolCtx.Done():
+		t.Fatal("pool context should be live before shutdown")
+	default:
+	}
+
+	p.Shutdown()
+
+	select {
+	case <-poolCtx.Done():
+		// expected
+	default:
+		t.Fatal("pool context should be cancelled after shutdown")
+	}
+}
+
+// TestNewPool_NilContextDefaultsToBackground verifies a nil context does not
+// panic and yields a live pool context.
+func TestNewPool_NilContextDefaultsToBackground(t *testing.T) {
+	reg := provider.NewRegistry()
+	p := NewPool(nil, nil, reg, logr.Discard(), WithIdleTimeout(0)) //nolint:staticcheck // intentionally testing nil ctx
+	defer p.Shutdown()
+
+	require.NotNil(t, p.ctx)
+	select {
+	case <-p.ctx.Done():
+		t.Fatal("pool context should be live")
+	default:
+	}
 }
