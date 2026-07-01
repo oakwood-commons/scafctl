@@ -2057,6 +2057,56 @@ func TestIntegration_AuthListHelp(t *testing.T) {
 	assert.Contains(t, stdout, "refresh")
 }
 
+func TestIntegration_AuthAliasHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "alias", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "set")
+	assert.Contains(t, stdout, "list")
+	assert.Contains(t, stdout, "remove")
+}
+
+func TestIntegration_AuthLoginHelp_ShowsHostname(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// The --hostname flag drives host-aware login (alias / dynamic resolution).
+	assert.Contains(t, stdout, "--hostname")
+}
+
+func TestIntegration_AuthAliasList_Seeded(t *testing.T) {
+	t.Parallel()
+	// 'auth alias list' reads config directly and does not require a live
+	// handler, so a seeded config file exercises the full read + render path.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	seed := `auth:
+  handlers:
+    openshift:
+      hostname:
+        aliases:
+          prod: https://api.prod.example.com:6443
+          stg: https://api.stg.example.com:6443
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(seed), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "--config", configPath, "auth", "alias", "list", "openshift", "-o", "json")
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items))
+	require.Len(t, items, 2)
+
+	bySelector := map[string]string{}
+	for _, it := range items {
+		bySelector[fmt.Sprint(it["selector"])] = fmt.Sprint(it["url"])
+	}
+	assert.Equal(t, "https://api.prod.example.com:6443", bySelector["prod"])
+	assert.Equal(t, "https://api.stg.example.com:6443", bySelector["stg"])
+}
+
 func TestIntegration_AuthTokenHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "auth", "token", "--help")

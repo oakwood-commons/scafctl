@@ -66,6 +66,52 @@ Action execution: timeouts, grace period, concurrency.
 ### `catalogs`
 List of registered catalogs (filesystem, http, oci).
 
+### `auth.handlers`
+Per-handler configuration namespaces keyed by handler name (e.g. `openshift`).
+The reserved `hostname` block (aliases + dynamic resolver) is consumed by the
+host to resolve `--hostname` selectors at login; every other key is forwarded
+opaquely to the handler plugin. See
+[Host-Aware Login](../auth/hostname-resolution.md) for the full walkthrough.
+
+```yaml
+auth:
+  handlers:
+    openshift:
+      hostname:
+        aliases:
+          prod: https://api.prod.example.com:6443
+      # Any other keys are passed through to the handler plugin unchanged.
+      apiTimeout: 30s
+```
+
+## Drop-in Config Directory (`config.d`)
+
+In addition to the main `config.yaml`, scafctl merges any `*.yaml`/`*.yml`
+fragments placed in a `config.d/` directory next to it. This lets tooling,
+provisioners, or teams layer configuration without editing the user's main file.
+
+```text
+~/.config/scafctl/
+  config.yaml          # user config (highest file precedence)
+  config.d/
+    10-catalogs.yaml   # merged first
+    20-telemetry.yaml  # merged after 10-*, overrides it
+```
+
+Precedence, lowest to highest:
+
+1. Built-in defaults
+2. Embedder base config (when scafctl is embedded in another CLI)
+3. `config.d/*.yaml` fragments, in lexical filename order
+4. `config.yaml` (the user's main file)
+5. Environment variables (`SCAFCTL_*`)
+6. Command-line flags
+
+Maps are deep-merged across layers; arrays (such as `catalogs`) are replaced
+wholesale by the highest-precedence layer that defines them. A missing
+`config.d` directory is not an error; a malformed fragment fails the load with
+the offending filename.
+
 ## Environment Variables
 
 All config values can be overridden via environment variables:

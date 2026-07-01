@@ -70,6 +70,19 @@ func isKnownKey(key string, knownKeys map[string]bool) bool {
 		}
 	}
 
+	// Check open-namespace map wildcards (e.g. "catalogs.*.metadata.*",
+	// "auth.handlers.*"). Maps hold arbitrary user-defined keys, so any key
+	// under such a prefix is allowed rather than flagged as a typo.
+	for known := range knownKeys {
+		if !strings.HasSuffix(known, ".*") {
+			continue
+		}
+		prefix := strings.TrimSuffix(known, "*") // retains trailing "."
+		if strings.HasPrefix(normalizedKey, prefix) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -169,8 +182,10 @@ func extractKeys(t reflect.Type, prefix string, keys map[string]bool) {
 
 		// Handle maps (only add the key itself, not nested paths for arbitrary keys)
 		if fieldType.Kind() == reflect.Map {
-			// For maps, we just register the map key itself
-			// Users can put arbitrary keys in maps like "metadata"
+			// Maps hold arbitrary user-defined keys (e.g. metadata,
+			// auth.handlers, profiles). Register an open-namespace wildcard so
+			// sub-keys are recognized rather than flagged as unknown.
+			keys[fullKey+".*"] = true
 			continue
 		}
 
