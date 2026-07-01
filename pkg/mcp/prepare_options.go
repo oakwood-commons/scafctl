@@ -27,6 +27,15 @@ func (s *Server) prepareOptions(ctx context.Context, extra ...prepare.Option) []
 		prepare.WithRegistry(s.registry),
 	}
 
+	// In server mode, delegate provider plugin lifecycle to the shared pool so
+	// plugin processes survive across tool calls. Without this, prepare would
+	// fetch, register, and kill plugin clients on every call, leaving dead-backed
+	// provider wrappers in the shared registry that break subsequent calls with
+	// "grpc: the client connection is closing".
+	if s.pluginPool != nil {
+		opts = append(opts, prepare.WithPluginPool(s.pluginPool))
+	}
+
 	// Wire plugin auto-fetch so that bundle.plugins declarations and official
 	// plugin providers trigger automatic download from configured catalogs.
 	if fetcher, err := prepare.BuildPluginFetcher(ctx); err == nil {

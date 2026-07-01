@@ -92,7 +92,7 @@ func TestServer_WithPluginClients_Shutdown(t *testing.T) {
 
 func TestServer_WithPluginPool_Shutdown(t *testing.T) {
 	reg := provider.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 
 	srv, err := NewServer(WithServerPluginPool(pool))
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestServer_WithPluginPool_Shutdown(t *testing.T) {
 
 func TestServer_HandlerCtx_PluginPool(t *testing.T) {
 	reg := provider.NewRegistry()
-	pool := plugin.NewPool(nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0))
 	defer pool.Shutdown()
 
 	srv, err := NewServer(WithServerPluginPool(pool), WithServerRegistry(reg))

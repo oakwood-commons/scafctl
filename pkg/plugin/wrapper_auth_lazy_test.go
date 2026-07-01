@@ -364,3 +364,37 @@ func TestLazyAuthHandlerWrapper_SetContext_IgnoresBackgroundContext(t *testing.T
 	lazy.SetContext(context.Background())
 	assert.Nil(t, lazy.baseCtx)
 }
+
+// TestLazyAuthHandlerWrapper_SetContext_StripsCancellation is a regression test
+// ensuring the captured base context retains values but is detached from the
+// caller's cancellation. A transient request context must not later invalidate
+// long-lived metadata calls on a shared, lazily-initialized auth handler.
+func TestLazyAuthHandlerWrapper_SetContext_StripsCancellation(t *testing.T) {
+	type ctxKey struct{}
+	base := context.WithValue(context.Background(), ctxKey{}, "kept")
+	cancelCtx, cancel := context.WithCancel(base)
+
+	lazy := &LazyAuthHandlerWrapper{
+		name:        "github",
+		displayName: "github",
+		initFn: func(_ context.Context) (*AuthHandlerWrapper, error) {
+			return nil, errors.New("init fails for test")
+		},
+	}
+	lazy.SetContext(cancelCtx)
+
+	// Cancel the original request context.
+	cancel()
+
+	stored := lazy.getBaseCtx()
+	require.NotNil(t, stored)
+	// Value is preserved...
+	assert.Equal(t, "kept", stored.Value(ctxKey{}))
+	// ...but cancellation is not propagated.
+	assert.NoError(t, stored.Err(), "captured context must not be cancelled by the caller")
+	select {
+	case <-stored.Done():
+		t.Fatal("captured context should not be done after caller cancellation")
+	default:
+	}
+}

@@ -462,7 +462,7 @@ func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fe
 	if cfg.Plugins.GRPCMaxMessageSize > 0 {
 		poolOpts = append(poolOpts, plugin.WithClientOptions(plugin.WithGRPCMaxMessageSize(cfg.Plugins.GRPCMaxMessageSize)))
 	}
-	pool := plugin.NewPool(fetcher, reg, *lgr, poolOpts...)
+	pool := plugin.NewPool(ctx, fetcher, reg, *lgr, poolOpts...)
 	for _, c := range preloaded {
 		// Query the client for provider names it registered so the pool can
 		// unregister them on eviction/death.

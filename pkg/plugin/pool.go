@@ -70,6 +70,12 @@ type poolEntry struct {
 	ready chan struct{}
 	// err holds any error from the spawn attempt (only valid after ready is closed).
 	err error
+	// pendingKill is set when teardown was requested (eviction or death) while
+	// the entry still had active references (refCount > 0). The client's
+	// providers are unregistered immediately so no new lookups resolve to it,
+	// but the process Kill is deferred until the final Release drains the last
+	// reference. This prevents tearing down a plugin mid-request.
+	pendingKill bool
 }
 
 // poolOptions holds Pool configuration.
@@ -77,6 +83,7 @@ type poolOptions struct {
 	idleTimeout     time.Duration
 	maxPlugins      int
 	healthInterval  time.Duration
+	spawnTimeout    time.Duration    // bounds the whole spawn (fetch+handshake+configure)
 	clock           func() time.Time // for testing
 	allowedPlugins  map[string]bool  // nil means allow all
 	disableExternal bool             // reject all non-adopted plugins
@@ -90,6 +97,7 @@ func defaultPoolOptions() poolOptions {
 		idleTimeout:    5 * time.Minute,
 		maxPlugins:     50,
 		healthInterval: 30 * time.Second,
+		spawnTimeout:   2 * time.Minute,
 		clock:          time.Now,
 		sanitizeEnv:    true,
 	}
@@ -118,6 +126,15 @@ func WithMaxPlugins(n int) PoolOption {
 // detected when a caller invokes Ping or when a request fails.
 func WithHealthCheckInterval(d time.Duration) PoolOption {
 	return func(o *poolOptions) { o.healthInterval = d }
+}
+
+// WithSpawnTimeout bounds the entire spawn sequence for a single plugin --
+// fetch, process start, gRPC handshake, provider registration, and configure.
+// Spawns run under the pool-lifetime context (not the caller's request
+// context), so this timeout is the only bound on how long a lazy load may take.
+// Zero disables the bound (spawn is limited only by pool shutdown).
+func WithSpawnTimeout(d time.Duration) PoolOption {
+	return func(o *poolOptions) { o.spawnTimeout = d }
 }
 
 // withClock overrides the time source (for testing).
@@ -178,6 +195,14 @@ type PoolStats struct {
 //
 // Official providers pre-loaded at startup can be added via Adopt; external
 // plugins declared in bundle.plugins are loaded on-demand via Ensure.
+//
+// The pool owns a lifetime context (derived from the context passed to
+// NewPool). All long-lived plugin setup -- fetching binaries, starting
+// processes, registering provider wrappers, and configuring them -- runs under
+// this context, NOT the per-request context that happened to trigger the lazy
+// load. This ensures a registered wrapper is never backed by a client whose
+// initialization context died with a transient request. Per-request contexts
+// scope only per-operation Execute/ExecuteStream calls.
 type Pool struct {
 	mu       sync.Mutex
 	entries  map[string]*poolEntry // keyed by plugin name
@@ -189,15 +214,33 @@ type Pool struct {
 	stopOnce sync.Once
 	stop     chan struct{}
 	logger   logr.Logger
+
+	// ctx is the pool-lifetime context; cancel tears it down on Shutdown.
+	// Long-lived plugin setup (spawn) derives its context from ctx so request
+	// cancellation cannot invalidate a registered wrapper.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewPool creates a plugin pool backed by the given fetcher and registry.
 // The fetcher may be nil if only Adopt (pre-loaded) plugins are used.
-func NewPool(fetcher *Fetcher, registry *provider.Registry, logger logr.Logger, opts ...PoolOption) *Pool {
+//
+// ctx is the pool-lifetime context: it governs the background eviction loop and
+// all long-lived plugin initialization. Pass a long-lived context (e.g. the
+// server context) so plugin loads survive individual requests; the pool
+// cancels its derived child context on Shutdown. A nil ctx defaults to
+// context.Background().
+func NewPool(ctx context.Context, fetcher *Fetcher, registry *provider.Registry, logger logr.Logger, opts ...PoolOption) *Pool {
 	o := defaultPoolOptions()
 	for _, opt := range opts {
 		opt(&o)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// cancel is retained in p.cancel and invoked by Shutdown; gosec cannot see
+	// the deferred ownership transfer across the struct field.
+	poolCtx, cancel := context.WithCancel(ctx) //nolint:gosec // G118: cancel stored in p.cancel, called by Shutdown
 	p := &Pool{
 		entries:  make(map[string]*poolEntry),
 		fetcher:  fetcher,
@@ -205,6 +248,8 @@ func NewPool(fetcher *Fetcher, registry *provider.Registry, logger logr.Logger, 
 		opts:     o,
 		stop:     make(chan struct{}),
 		logger:   logger,
+		ctx:      poolCtx,
+		cancel:   cancel,
 	}
 	if o.idleTimeout > 0 {
 		go p.evictionLoop()
@@ -241,7 +286,7 @@ func (p *Pool) Ensure(ctx context.Context, deps []solution.PluginDependency) err
 		if dep.Kind != solution.PluginKindProvider {
 			continue
 		}
-		if err := p.ensureOne(ctx, dep); err != nil {
+		if _, err := p.ensureOne(ctx, dep, false); err != nil {
 			return err
 		}
 	}
@@ -252,17 +297,25 @@ func (p *Pool) Ensure(ctx context.Context, deps []solution.PluginDependency) err
 // (increments their refcounts), preventing idle eviction for the duration
 // of the caller's work. Returns a release function that must be called when
 // the caller is done using the plugins (typically via defer).
+//
+// Acquisition happens atomically with readiness validation (under the entry
+// lock), closing the window where a just-readied plugin could be evicted or
+// torn down before the caller records its reference.
 func (p *Pool) EnsureAndAcquire(ctx context.Context, deps []solution.PluginDependency) (release func(), err error) {
-	if err := p.Ensure(ctx, deps); err != nil {
-		return nil, err
-	}
-
 	var acquired []string
 	for _, dep := range deps {
 		if dep.Kind != solution.PluginKindProvider {
 			continue
 		}
-		if p.Acquire(dep.Name) {
+		ok, eErr := p.ensureOne(ctx, dep, true)
+		if eErr != nil {
+			// Release anything already acquired before returning the error.
+			for _, name := range acquired {
+				p.Release(name)
+			}
+			return nil, eErr
+		}
+		if ok {
 			acquired = append(acquired, dep.Name)
 		}
 	}
@@ -274,55 +327,51 @@ func (p *Pool) EnsureAndAcquire(ctx context.Context, deps []solution.PluginDepen
 	}, nil
 }
 
-// ensureOne handles a single plugin dependency.
-func (p *Pool) ensureOne(ctx context.Context, dep solution.PluginDependency) error {
+// ensureOne handles a single plugin dependency. When acquire is true, a
+// reference is atomically taken on the ready entry (under the entry lock) so
+// eviction cannot tear it down before the caller records the reference; the
+// returned bool reports whether a reference was actually taken (false for
+// builtins/pre-registered providers that are not pool-managed).
+func (p *Pool) ensureOne(ctx context.Context, dep solution.PluginDependency, acquire bool) (bool, error) {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		return ErrPoolClosed
+		return false, ErrPoolClosed
 	}
 
 	// Already in pool (pre-loaded or previously loaded)?
 	if entry, ok := p.entries[dep.Name]; ok {
 		p.mu.Unlock()
-		err := p.waitAndValidate(ctx, entry)
-		if err != nil {
-			// Remove dead entries so the plugin can be re-spawned on retry.
-			p.mu.Lock()
-			if entry.state == entryDead {
-				p.unregisterEntry(entry)
-				delete(p.entries, dep.Name)
-			}
-			p.mu.Unlock()
-		}
-		return err
+		return p.waitForEntry(ctx, dep.Name, entry, acquire)
 	}
 
 	// Check if already registered (builtin or pre-loaded without Adopt)
 	if p.registry.Has(dep.Name) {
 		p.mu.Unlock()
-		return nil
+		return false, nil
 	}
 
 	// Security: reject if external plugins are disabled entirely.
 	if p.opts.disableExternal {
 		p.mu.Unlock()
-		return fmt.Errorf("plugin %q: %w", dep.Name, ErrExternalDisabled)
+		return false, fmt.Errorf("plugin %q: %w", dep.Name, ErrExternalDisabled)
 	}
 
 	// Security: reject if allowlist is configured and plugin is not on it.
 	if p.opts.allowedPlugins != nil && !p.opts.allowedPlugins[dep.Name] {
 		p.mu.Unlock()
-		return fmt.Errorf("plugin %q: %w", dep.Name, ErrPluginNotAllowed)
+		return false, fmt.Errorf("plugin %q: %w", dep.Name, ErrPluginNotAllowed)
 	}
 
 	// Capacity check
 	if p.opts.maxPlugins > 0 && len(p.entries) >= p.opts.maxPlugins {
 		p.mu.Unlock()
-		return fmt.Errorf("plugin %q: %w", dep.Name, ErrPoolFull)
+		return false, fmt.Errorf("plugin %q: %w", dep.Name, ErrPoolFull)
 	}
 
-	// Create a placeholder entry; we'll spawn outside the lock.
+	// Create a placeholder entry; the spawn runs in the background under the
+	// pool-lifetime context (not the caller's request context) so a cancelled
+	// or short-lived request cannot invalidate a registered plugin wrapper.
 	entry := &poolEntry{
 		state: entryStarting,
 		dep:   dep,
@@ -331,26 +380,59 @@ func (p *Pool) ensureOne(ctx context.Context, dep solution.PluginDependency) err
 	p.entries[dep.Name] = entry
 	p.mu.Unlock()
 
-	// Spawn the plugin (may take time: fetch + exec + gRPC handshake).
-	p.spawn(ctx, entry)
+	spawnCtx, cancel := p.newSpawnContext()
+	go p.spawn(spawnCtx, entry, cancel)
 
-	if entry.err != nil {
-		// Remove failed entry
-		p.mu.Lock()
-		delete(p.entries, dep.Name)
-		p.mu.Unlock()
-		return fmt.Errorf("plugin %q: %w", dep.Name, entry.err)
-	}
-	return nil
+	return p.waitForEntry(ctx, dep.Name, entry, acquire)
 }
 
-// waitAndValidate waits for an entry to become ready and checks health.
-func (p *Pool) waitAndValidate(ctx context.Context, entry *poolEntry) error {
+// waitForEntry waits for an entry to become ready (bounded by the caller's
+// context), optionally acquiring a reference, and removes the entry if the
+// spawn failed so a later Ensure can retry. A context cancellation leaves the
+// entry intact -- the background spawn continues under the pool context.
+func (p *Pool) waitForEntry(ctx context.Context, name string, entry *poolEntry, acquire bool) (bool, error) {
+	acquired, err := p.waitAndValidate(ctx, entry, acquire)
+	if err != nil {
+		p.mu.Lock()
+		entry.mu.Lock()
+		dead := entry.state == entryDead
+		refs := atomic.LoadInt32(&entry.refCount)
+		entry.mu.Unlock()
+		// Only remove entries that genuinely failed and are unreferenced.
+		// Referenced dead entries stay in the map so their final Release can
+		// finalize the deferred teardown.
+		if dead && refs == 0 {
+			delete(p.entries, name)
+			p.mu.Unlock()
+			p.teardownEntry(entry)
+		} else {
+			p.mu.Unlock()
+		}
+	}
+	return acquired, err
+}
+
+// newSpawnContext derives a context for a background spawn from the pool
+// lifetime context, bounded by the configured spawn timeout. It is fully
+// decoupled from any request context so request cancellation cannot abort a
+// plugin load in progress; the pool context (cancelled on Shutdown) and the
+// spawn timeout are the only bounds.
+func (p *Pool) newSpawnContext() (context.Context, context.CancelFunc) {
+	if p.opts.spawnTimeout > 0 {
+		return context.WithTimeout(p.ctx, p.opts.spawnTimeout)
+	}
+	return context.WithCancel(p.ctx)
+}
+
+// waitAndValidate waits for an entry to become ready and checks health. When
+// acquire is true and the entry is ready, a reference is taken under the entry
+// lock (atomic with the readiness check) and the returned bool is true.
+func (p *Pool) waitAndValidate(ctx context.Context, entry *poolEntry, acquire bool) (bool, error) {
 	// Wait for entry to be ready (handles concurrent Ensure for same plugin).
 	select {
 	case <-entry.ready:
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 
 	entry.mu.Lock()
@@ -358,12 +440,16 @@ func (p *Pool) waitAndValidate(ctx context.Context, entry *poolEntry) error {
 
 	if entry.state == entryDead {
 		// Dead entries will be re-spawned on next Ensure after eviction.
-		return fmt.Errorf("plugin %q is dead: %w", entry.dep.Name, entry.err)
+		return false, fmt.Errorf("plugin %q is dead: %w", entry.dep.Name, entry.err)
 	}
 
 	// Touch last-used time
 	entry.lastUsed = p.opts.clock()
-	return nil
+	if acquire {
+		atomic.AddInt32(&entry.refCount, 1)
+		return true, nil
+	}
+	return false, nil
 }
 
 // buildSpawnClientOpts builds the ClientOption slice used when spawning a
@@ -383,8 +469,11 @@ func buildSpawnClientOpts(sanitize bool, extraOpts []ClientOption) []ClientOptio
 	return opts
 }
 
-// spawn fetches and starts a plugin, updating the entry state.
-func (p *Pool) spawn(ctx context.Context, entry *poolEntry) {
+// spawn fetches and starts a plugin, updating the entry state. It runs in a
+// background goroutine under a pool-derived context; cancel releases that
+// context when the spawn completes.
+func (p *Pool) spawn(ctx context.Context, entry *poolEntry, cancel context.CancelFunc) {
+	defer cancel()
 	defer close(entry.ready)
 
 	if p.fetcher == nil {
@@ -494,7 +583,9 @@ func (p *Pool) Acquire(name string) bool {
 	return true
 }
 
-// Release decrements the reference count for a plugin.
+// Release decrements the reference count for a plugin. If this drains the last
+// reference on an entry whose teardown was deferred (pendingKill), the client is
+// killed now.
 func (p *Pool) Release(name string) {
 	p.mu.Lock()
 	entry, ok := p.entries[name]
@@ -502,7 +593,18 @@ func (p *Pool) Release(name string) {
 	if !ok {
 		return
 	}
-	atomic.AddInt32(&entry.refCount, -1)
+	entry.mu.Lock()
+	newCount := atomic.AddInt32(&entry.refCount, -1)
+	var client *Client
+	if newCount <= 0 && entry.pendingKill {
+		client = entry.client
+		entry.client = nil
+		entry.pendingKill = false
+	}
+	entry.mu.Unlock()
+	if client != nil {
+		client.Kill()
+	}
 }
 
 // Ping checks if a plugin is alive by issuing a lightweight RPC.
@@ -532,6 +634,8 @@ func (p *Pool) Ping(ctx context.Context, name string) bool {
 }
 
 // markDead transitions an entry to dead state and unregisters its providers.
+// The underlying client is killed immediately if unreferenced, or deferred to
+// the final Release if requests are still in flight.
 func (p *Pool) markDead(name string, entry *poolEntry, reason error) {
 	entry.mu.Lock()
 	if entry.state == entryDead {
@@ -540,32 +644,46 @@ func (p *Pool) markDead(name string, entry *poolEntry, reason error) {
 	}
 	entry.state = entryDead
 	entry.err = reason
-	client := entry.client
-	registered := entry.registeredProviders
 	entry.mu.Unlock()
 
-	for _, pName := range registered {
-		p.registry.Unregister(pName)
-	}
-	if client != nil {
-		client.Kill()
-	}
-
+	p.teardownEntry(entry)
 	p.logger.V(0).Info("plugin marked dead", "plugin", name, "reason", reason)
 }
 
-// unregisterEntry unregisters tracked providers and kills the client.
-func (p *Pool) unregisterEntry(entry *poolEntry) {
+// teardownEntry unregisters an entry's providers from the shared registry so no
+// new lookups resolve to it, then tears down the client. If the entry still has
+// active references (refCount > 0), the process Kill is deferred: pendingKill is
+// set and the final Release performs the Kill. Otherwise the client is killed
+// immediately. Safe to call multiple times.
+func (p *Pool) teardownEntry(entry *poolEntry) {
 	entry.mu.Lock()
 	registered := entry.registeredProviders
+	entry.registeredProviders = nil
 	client := entry.client
-	entry.mu.Unlock()
-
-	for _, pName := range registered {
-		p.registry.Unregister(pName)
+	if client == nil {
+		entry.mu.Unlock()
+		p.unregisterProviders(registered)
+		return
 	}
-	if client != nil {
-		client.Kill()
+	if atomic.LoadInt32(&entry.refCount) > 0 {
+		// Deferred teardown: keep the client so the last Release can kill it,
+		// but stop new lookups by unregistering providers now.
+		entry.pendingKill = true
+		entry.mu.Unlock()
+		p.unregisterProviders(registered)
+		return
+	}
+	// No references: safe to kill now. Clear the client to prevent double-kill.
+	entry.client = nil
+	entry.mu.Unlock()
+	p.unregisterProviders(registered)
+	client.Kill()
+}
+
+// unregisterProviders removes the given provider names from the shared registry.
+func (p *Pool) unregisterProviders(names []string) {
+	for _, pName := range names {
+		p.registry.Unregister(pName)
 	}
 }
 
@@ -578,51 +696,46 @@ func (p *Pool) evictionLoop() {
 		select {
 		case <-p.stop:
 			return
+		case <-p.ctx.Done():
+			return
 		case <-ticker.C:
 			p.evict()
 		}
 	}
 }
 
-// evict removes idle and dead entries.
+// evict removes idle and dead entries that have no active references. Entries
+// still in use (refCount > 0) are left in place; their teardown is handled by
+// the final Release.
 func (p *Pool) evict() {
 	now := p.opts.clock()
 	p.mu.Lock()
-	var toEvict []string
+	var names []string
+	var entries []*poolEntry
 	for name, entry := range p.entries {
 		entry.mu.Lock()
+		refs := atomic.LoadInt32(&entry.refCount)
 		idle := entry.state == entryReady &&
-			atomic.LoadInt32(&entry.refCount) == 0 &&
+			refs == 0 &&
 			p.opts.idleTimeout > 0 &&
 			now.Sub(entry.lastUsed) > p.opts.idleTimeout
-		dead := entry.state == entryDead
+		dead := entry.state == entryDead && refs == 0
 		entry.mu.Unlock()
 
 		if idle || dead {
-			toEvict = append(toEvict, name)
+			names = append(names, name)
+			entries = append(entries, entry)
 		}
+	}
+	for _, name := range names {
+		delete(p.entries, name)
+		p.evicted++
 	}
 	p.mu.Unlock()
 
-	for _, name := range toEvict {
-		p.mu.Lock()
-		entry, ok := p.entries[name]
-		if !ok {
-			p.mu.Unlock()
-			continue
-		}
-		delete(p.entries, name)
-		p.evicted++
-		p.mu.Unlock()
-
-		entry.mu.Lock()
-		client := entry.client
-		entry.mu.Unlock()
-
-		if client != nil {
-			p.unregisterEntry(entry)
-		}
-		p.logger.V(1).Info("evicted plugin from pool", "plugin", name)
+	for i, entry := range entries {
+		p.teardownEntry(entry)
+		p.logger.V(1).Info("evicted plugin from pool", "plugin", names[i])
 	}
 }
 
@@ -670,6 +783,9 @@ func (p *Pool) ClientOptsLen() int {
 func (p *Pool) Shutdown() {
 	p.stopOnce.Do(func() {
 		close(p.stop)
+		if p.cancel != nil {
+			p.cancel()
+		}
 	})
 
 	p.mu.Lock()
@@ -683,8 +799,14 @@ func (p *Pool) Shutdown() {
 
 	for _, entry := range entries {
 		entry.mu.Lock()
+		registered := entry.registeredProviders
+		entry.registeredProviders = nil
 		client := entry.client
+		entry.client = nil
 		entry.mu.Unlock()
+		// Unregister providers before killing so the shared registry is not
+		// left holding dead-backed wrappers if it outlives the pool.
+		p.unregisterProviders(registered)
 		if client != nil {
 			client.Kill()
 		}

@@ -146,13 +146,16 @@ func (l *LazyAuthHandlerWrapper) init(ctx context.Context) (*AuthHandlerWrapper,
 }
 
 // storeBaseCtx captures the first non-background context for use by metadata
-// methods that lack a context parameter.
+// methods that lack a context parameter. The captured context is stripped of
+// cancellation via context.WithoutCancel so that a transient request context
+// cannot later invalidate long-lived metadata calls on this handler; only
+// values (e.g. host service identifiers) are retained.
 func (l *LazyAuthHandlerWrapper) storeBaseCtx(ctx context.Context) {
 	if ctx != nil && ctx != context.Background() && ctx != context.TODO() {
 		l.baseCtxMu.Lock()
 		defer l.baseCtxMu.Unlock()
 		if !l.baseCtxSet {
-			l.baseCtx = ctx
+			l.baseCtx = context.WithoutCancel(ctx)
 			l.baseCtxSet = true
 		}
 	}
