@@ -8,8 +8,12 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
@@ -1009,4 +1013,88 @@ func TestCachedVersionSatisfies(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// ── RegisterFetchedAuthHandlerPlugins subprocess-lifecycle tests ──────────────
+
+var (
+	testAuthPluginOnce sync.Once
+	testAuthPluginPath string
+	testAuthPluginErr  error
+)
+
+// buildTestAuthHandlerPlugin compiles the minimal auth-handler fixture in
+// testdata/authhandler and returns its path. The binary is built once and
+// reused across tests.
+func buildTestAuthHandlerPlugin(t *testing.T) string {
+	t.Helper()
+	testAuthPluginOnce.Do(func() {
+		binName := "scafctl-plugin-test-auth"
+		if runtime.GOOS == "windows" {
+			binName += ".exe"
+		}
+		tmpDir, err := os.MkdirTemp("", "scafctl-test-authhandler-*")
+		if err != nil {
+			testAuthPluginErr = err
+			return
+		}
+		binPath := filepath.Join(tmpDir, binName)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "go", "build", "-o", binPath, ".")
+		cmd.Dir = filepath.Join("testdata", "authhandler")
+		if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
+			testAuthPluginErr = fmt.Errorf("building test auth handler plugin: %w\n%s", buildErr, out)
+			return
+		}
+		testAuthPluginPath = binPath
+	})
+	require.NoError(t, testAuthPluginErr)
+	require.NotEmpty(t, testAuthPluginPath, "test auth handler plugin build failed")
+	return testAuthPluginPath
+}
+
+func TestRegisterFetchedAuthHandlerPlugins_RegistersAndKeepsClient(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping auth handler plugin test in short mode (requires go build)")
+	}
+	binPath := buildTestAuthHandlerPlugin(t)
+
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+	results := []FetchResult{
+		{Name: "test-auth", Kind: solution.PluginKindAuthHandler, Path: binPath},
+	}
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, results, nil)
+	require.NoError(t, err)
+	require.Len(t, clients, 1, "handler with a new name must be registered and its client kept alive")
+	t.Cleanup(func() {
+		for _, c := range clients {
+			c.Kill()
+		}
+	})
+	assert.True(t, reg.Has("test-auth"))
+}
+
+func TestRegisterFetchedAuthHandlerPlugins_KillsClientWhenNoNewHandlers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping auth handler plugin test in short mode (requires go build)")
+	}
+	binPath := buildTestAuthHandlerPlugin(t)
+
+	ctx := context.Background()
+	reg := auth.NewRegistry()
+	// Pre-register a handler with the same name the plugin exposes so the
+	// plugin registers zero new handlers on load.
+	require.NoError(t, reg.Register(auth.NewMockHandler("test-auth")))
+
+	results := []FetchResult{
+		{Name: "test-auth", Kind: solution.PluginKindAuthHandler, Path: binPath},
+	}
+
+	clients, err := RegisterFetchedAuthHandlerPlugins(ctx, reg, results, nil)
+	require.NoError(t, err)
+	assert.Empty(t, clients,
+		"a plugin that registers no new handlers must have its subprocess killed and not be returned")
 }

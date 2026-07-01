@@ -55,6 +55,7 @@ type prepareConfig struct {
 	officialProviders    *official.Registry
 	officialAuthHandlers *authofficial.Registry
 	strict               bool
+	pluginPool           *plugin.Pool
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -173,6 +174,24 @@ func WithOfficialAuthHandlers(r *authofficial.Registry) Option {
 func WithStrict(strict bool) Option {
 	return func(c *prepareConfig) {
 		c.strict = strict
+	}
+}
+
+// WithPluginPool delegates provider plugin lifecycle to a shared, long-lived
+// plugin pool instead of fetching, registering, and killing plugin processes
+// per call. This is the correct mode for long-lived servers (MCP, HTTP API):
+// the pool registers provider wrappers into the shared registry exactly once
+// and keeps the processes alive across requests, while each prepared solution
+// merely acquires a reference for its lifetime and releases (never kills) it on
+// cleanup. This prevents registry poisoning where a per-request Kill would leave
+// dead-backed provider wrappers in a registry shared by future requests.
+//
+// The pool MUST have been constructed with the same provider registry passed
+// via WithRegistry. When nil, prepare falls back to the per-call
+// fetch/register/kill behavior suitable for one-shot CLI invocations.
+func WithPluginPool(p *plugin.Pool) Option {
+	return func(c *prepareConfig) {
+		c.pluginPool = p
 	}
 }
 
@@ -346,77 +365,108 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// so external plugins can apply the same SSRF policy as the host.
 	injectHTTPClientSettings(ctx, cfg.pluginCfg)
 
-	// Auto-fetch and register plugin binaries from catalogs
-	var pluginClients []*plugin.Client
-	if len(sol.Bundle.Plugins) > 0 && cfg.pluginFetcher != nil {
-		fetchResults, fetchErr := cfg.pluginFetcher.FetchPlugins(ctx, sol.Bundle.Plugins, cfg.lockPlugins)
-		if fetchErr != nil {
+	// Provider plugin lifecycle. In pool mode (long-lived servers), the shared
+	// pool owns provider processes: it registers wrappers into the shared
+	// registry once and keeps them alive across requests. We merely acquire a
+	// reference for this prepared solution and release (never kill) on cleanup,
+	// which prevents registry poisoning. In per-call mode (one-shot CLI), we
+	// fetch, register, and kill the plugin processes ourselves.
+	if cfg.pluginPool != nil {
+		deps := providerPoolDeps(sol, cfg)
+		release, ensErr := cfg.pluginPool.EnsureAndAcquire(ctx, deps)
+		if ensErr != nil {
 			cleanup()
-			return nil, fmt.Errorf("auto-fetching plugins: %w", fetchErr)
+			return nil, fmt.Errorf("ensuring provider plugins via pool: %w", ensErr)
+		}
+		origCleanup := cleanup
+		cleanup = func() {
+			release()
+			origCleanup()
 		}
 
-		clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
-		if regErr != nil {
-			cleanup()
-			return nil, fmt.Errorf("registering fetched plugins: %w", regErr)
-		}
-		pluginClients = clients
-
-		// Register auth handler plugins if auth registry is available
-		if cfg.authRegistry != nil {
-			authClients, authRegErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
-			if authRegErr != nil {
+		// Auth handler plugins are not pool-managed. Register any declared in
+		// the bundle into the shared auth registry, but do NOT kill them per
+		// request -- the long-lived server owns their lifetime, and killing them
+		// would poison the shared auth registry for subsequent requests.
+		if cfg.authRegistry != nil && cfg.pluginFetcher != nil && len(sol.Bundle.Plugins) > 0 {
+			if _, ahErr := registerBundleAuthHandlers(ctx, sol, cfg); ahErr != nil {
 				cleanup()
-				return nil, fmt.Errorf("registering fetched auth handler plugins: %w", authRegErr)
+				return nil, ahErr
 			}
-			// Add auth handler client cleanup
-			origCleanup2 := cleanup
+		}
+	} else {
+		// Per-call mode: auto-fetch and register plugin binaries from catalogs.
+		var pluginClients []*plugin.Client
+		if len(sol.Bundle.Plugins) > 0 && cfg.pluginFetcher != nil {
+			fetchResults, fetchErr := cfg.pluginFetcher.FetchPlugins(ctx, sol.Bundle.Plugins, cfg.lockPlugins)
+			if fetchErr != nil {
+				cleanup()
+				return nil, fmt.Errorf("auto-fetching plugins: %w", fetchErr)
+			}
+
+			clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
+			if regErr != nil {
+				cleanup()
+				return nil, fmt.Errorf("registering fetched plugins: %w", regErr)
+			}
+			pluginClients = clients
+
+			// Register auth handler plugins if auth registry is available
+			if cfg.authRegistry != nil {
+				authClients, authRegErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
+				if authRegErr != nil {
+					cleanup()
+					return nil, fmt.Errorf("registering fetched auth handler plugins: %w", authRegErr)
+				}
+				// Add auth handler client cleanup
+				origCleanup2 := cleanup
+				cleanup = func() {
+					for _, c := range authClients {
+						c.Kill()
+					}
+					origCleanup2()
+				}
+			}
+
+			if lgr != nil {
+				for _, r := range fetchResults {
+					src := "catalog"
+					if r.FromCache {
+						src = "cache"
+					}
+					lgr.V(1).Info("plugin loaded",
+						"name", r.Name,
+						"version", r.Version,
+						"source", src)
+				}
+			}
+
+			// Add plugin cleanup to the cleanup chain
+			origCleanup := cleanup
 			cleanup = func() {
-				for _, c := range authClients {
+				for _, c := range pluginClients {
 					c.Kill()
 				}
-				origCleanup2()
+				origCleanup()
 			}
 		}
 
-		if lgr != nil {
-			for _, r := range fetchResults {
-				src := "catalog"
-				if r.FromCache {
-					src = "cache"
+		// Auto-resolve official providers that are referenced in the solution
+		// but not already registered. This runs after the explicit plugin fetch
+		// so that declared bundle.plugins always take precedence.
+		officialClients, officialErr := autoResolveOfficialProviders(ctx, sol, reg, cfg)
+		if officialErr != nil {
+			cleanup()
+			return nil, officialErr
+		}
+		if len(officialClients) > 0 {
+			origCleanup := cleanup
+			cleanup = func() {
+				for _, c := range officialClients {
+					c.Kill()
 				}
-				lgr.V(1).Info("plugin loaded",
-					"name", r.Name,
-					"version", r.Version,
-					"source", src)
+				origCleanup()
 			}
-		}
-
-		// Add plugin cleanup to the cleanup chain
-		origCleanup := cleanup
-		cleanup = func() {
-			for _, c := range pluginClients {
-				c.Kill()
-			}
-			origCleanup()
-		}
-	}
-
-	// Auto-resolve official providers that are referenced in the solution
-	// but not already registered. This runs after the explicit plugin fetch
-	// so that declared bundle.plugins always take precedence.
-	officialClients, officialErr := autoResolveOfficialProviders(ctx, sol, reg, cfg)
-	if officialErr != nil {
-		cleanup()
-		return nil, officialErr
-	}
-	if len(officialClients) > 0 {
-		origCleanup := cleanup
-		cleanup = func() {
-			for _, c := range officialClients {
-				c.Kill()
-			}
-			origCleanup()
 		}
 	}
 
@@ -427,7 +477,10 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		cleanup()
 		return nil, officialAuthErr
 	}
-	if len(officialAuthClients) > 0 {
+	// In pool mode, auth handler clients are owned by the long-lived server and
+	// must not be killed per request (doing so would poison the shared auth
+	// registry). In per-call mode, they are killed on cleanup.
+	if len(officialAuthClients) > 0 && cfg.pluginPool == nil {
 		origCleanup := cleanup
 		cleanup = func() {
 			for _, c := range officialAuthClients {
@@ -743,6 +796,65 @@ func autoResolveOfficialProviders(
 		return nil, fmt.Errorf("registering auto-resolved official providers: %w", regErr)
 	}
 
+	return clients, nil
+}
+
+// providerPoolDeps computes the provider plugin dependencies to acquire from
+// the shared pool for a solution: all provider-kind bundle plugins plus every
+// referenced official provider. Official providers are included whether or not
+// they are already registered so that pool-managed entries get a reference on
+// each request (preventing idle eviction of an in-use provider); the pool
+// deduplicates already-loaded entries internally. Note that a provider already
+// present in the shared registry but not tracked by the pool (e.g. a builtin or
+// one registered outside the pool) returns early from ensureOne without taking
+// a reference. Builtin providers referenced by the solution are intentionally
+// omitted -- they live outside the pool and are never evicted.
+func providerPoolDeps(sol *solution.Solution, cfg *prepareConfig) []solution.PluginDependency {
+	var deps []solution.PluginDependency
+	seen := make(map[string]bool)
+	for _, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindProvider {
+			deps = append(deps, p)
+			seen[p.Name] = true
+		}
+	}
+	if cfg.officialProviders != nil {
+		for _, name := range sol.Spec.ReferencedProviderNames() {
+			if seen[name] {
+				continue
+			}
+			if op, ok := cfg.officialProviders.Get(name); ok {
+				deps = append(deps, op.ToPluginDependency())
+				seen[name] = true
+			}
+		}
+	}
+	return deps
+}
+
+// registerBundleAuthHandlers fetches and registers any auth-handler-kind
+// plugins declared in the solution bundle into the shared auth registry. It is
+// used in pool mode, where the returned clients are owned by the long-lived
+// server and are intentionally NOT killed per request. Returns nil when the
+// bundle declares no auth handler plugins.
+func registerBundleAuthHandlers(ctx context.Context, sol *solution.Solution, cfg *prepareConfig) ([]*plugin.AuthHandlerClient, error) {
+	var authDeps []solution.PluginDependency
+	for _, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindAuthHandler {
+			authDeps = append(authDeps, p)
+		}
+	}
+	if len(authDeps) == 0 {
+		return nil, nil
+	}
+	fetchResults, err := cfg.pluginFetcher.FetchPlugins(ctx, authDeps, cfg.lockPlugins)
+	if err != nil {
+		return nil, fmt.Errorf("auto-fetching auth handler plugins: %w", err)
+	}
+	clients, err := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("registering fetched auth handler plugins: %w", err)
+	}
 	return clients, nil
 }
 
