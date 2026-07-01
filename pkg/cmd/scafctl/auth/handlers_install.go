@@ -9,6 +9,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	authpkg "github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -55,6 +56,13 @@ func commandHandlersInstall(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			if len(args) > 0 {
 				return nil, cobra.ShellCompDirectiveNoFileComp
 			}
+			// Suggest official names plus config-pinned third-party handlers
+			// (auth.handlers.<name>.plugin). listKnownHandlers merges the auth
+			// registry, official registry, and config pins without probing
+			// catalogs.
+			if names := listKnownHandlers(cmd.Context()); len(names) > 0 {
+				return names, cobra.ShellCompDirectiveNoFileComp
+			}
 			reg := authofficial.RegistryFromContext(cmd.Context())
 			if reg == nil {
 				reg = authofficial.NewRegistry()
@@ -65,14 +73,13 @@ func commandHandlersInstall(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			ctx := cmd.Context()
 			name := args[0]
 
-			officialReg := authofficial.RegistryFromContext(ctx)
-			if officialReg == nil {
-				return fmt.Errorf("official auth handler registry not available")
-			}
-
-			entry, ok := officialReg.Get(name)
-			if !ok {
-				return fmt.Errorf("unknown auth handler %q; available: %s", name, strings.Join(officialReg.Names(), ", "))
+			// Resolve the handler name to a plugin dependency: config pin >
+			// official allowlist > bare catalog name. This lets 'handlers install'
+			// fetch third-party handlers published to a configured catalog, not
+			// just the official trio.
+			dep, _, err := handlerdep.Resolve(ctx, name)
+			if err != nil {
+				return fmt.Errorf("cannot install auth handler %q: %w", name, err)
 			}
 
 			// Check if already cached on disk (skip with --force).
@@ -96,8 +103,6 @@ func commandHandlersInstall(cliParams *settings.Run, ioStreams *terminal.IOStrea
 					w.Infof("Downloading auth handler %q from catalog...", name)
 				}
 			}
-
-			dep := entry.ToPluginDependency()
 
 			fetcher, err := solprepare.BuildPluginFetcherWithConfig(ctx, solprepare.PluginFetcherOverrides{
 				NoCache: force,

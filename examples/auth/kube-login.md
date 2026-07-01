@@ -40,6 +40,14 @@ Pass `--handler` to override the resolver's default:
 scafctl kube login prod --handler oidc
 ```
 
+The named handler is resolved by name against your configured catalogs, so a
+third-party handler (for example `openshift`) published to a catalog works the
+same as the official ones -- no allowlist entry required. Pin its artifact and
+trust domains via `auth.handlers.<name>` (see
+[third-party-handler-config.yaml](third-party-handler-config.yaml)). Every
+subsequent `kubectl` / `oc` call mints tokens through the same handler via the
+exec-credential helper.
+
 Or point at an API server directly, without a resolver (name the handler since
 there is no resolver default):
 

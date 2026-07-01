@@ -12,6 +12,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -595,12 +596,14 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			}
 
 			// ── Wire lazy auth handler fallback resolver ──
-			// Instead of eagerly fetching all official auth handlers at startup,
-			// we configure a fallback resolver that fires only when a handler is
+			// Instead of eagerly fetching all auth handlers at startup, we
+			// configure a fallback resolver that fires only when a handler is
 			// actually requested via authRegistry.Get(name). This avoids network
 			// I/O for commands that never use auth handlers (e.g., local catalog
-			// tag, version, help).
-			if !cfg.Settings.DisableOfficialAuthHandlers {
+			// tag, version, help). The resolver handles both official handlers and
+			// third-party handlers resolved by name against configured catalogs;
+			// per-name policy is enforced by handlerdep.Resolve.
+			if !cfg.Settings.DisableOfficialAuthHandlers || !cfg.Settings.DisableThirdPartyAuthHandlers {
 				var cooldownDuration time.Duration
 				if cfg.Plugins.FetchCooldown != "" {
 					if d, parseErr := time.ParseDuration(cfg.Plugins.FetchCooldown); parseErr == nil {
@@ -632,21 +635,20 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 					// Values like the official provider registry are added to
 					// ctx *after* this closure is defined.
 					liveCtx := cCmd.Context()
-					officialReg := authofficial.RegistryFromContext(liveCtx)
-					if officialReg == nil {
-						return nil, fmt.Errorf("no official auth handler registry available")
-					}
-					h, ok := officialReg.Get(name)
-					if !ok {
-						return nil, fmt.Errorf("auth handler %q is not an official handler", name)
+
+					// Resolve the name to a plugin dependency: config pin > official
+					// allowlist > bare catalog name. handlerdep enforces the
+					// official/third-party disable switches per name.
+					dep, source, resolveErr := handlerdep.Resolve(liveCtx, name)
+					if resolveErr != nil {
+						return nil, resolveErr
 					}
 					if cooldown.OnCooldown(name) {
 						return nil, fmt.Errorf("auth handler %q fetch on cooldown", name)
 					}
 
-					lgr.V(0).Info("lazy-resolving official auth handler", "handler", name)
+					lgr.V(0).Info("lazy-resolving auth handler", "handler", name, "source", source.String())
 
-					dep := h.ToPluginDependency()
 					fetcher, fetcherErr := solprepare.BuildPluginFetcher(liveCtx)
 					if fetcherErr != nil {
 						_ = cooldown.RecordFailure(name)

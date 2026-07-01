@@ -119,6 +119,14 @@ type Settings struct {
 	// bundle.plugins. Embedders can set this when their CLI should not
 	// auto-fetch auth handler plugins from the scafctl community catalog.
 	DisableOfficialAuthHandlers bool `json:"disableOfficialAuthHandlers,omitempty" yaml:"disableOfficialAuthHandlers,omitempty" mapstructure:"disableOfficialAuthHandlers" doc:"Disable auto-resolution of official first-party auth handlers"`
+
+	// DisableThirdPartyAuthHandlers prevents catalog-by-name resolution of
+	// non-official auth handlers. When true, only official handlers resolve;
+	// every non-official name -- including config-pinned handlers
+	// (auth.handlers.<name>.plugin) and bare catalog names -- is rejected even
+	// if present in a configured catalog. Locked-down embedders can set this to
+	// enforce an official-only auth handler policy.
+	DisableThirdPartyAuthHandlers bool `json:"disableThirdPartyAuthHandlers,omitempty" yaml:"disableThirdPartyAuthHandlers,omitempty" mapstructure:"disableThirdPartyAuthHandlers" doc:"Disable catalog-by-name resolution of non-official auth handlers"`
 }
 
 // VersionCheckConfig holds version check configuration.
@@ -439,12 +447,35 @@ type HandlerConfig struct {
 	// plugin.
 	Hostname *HostnameConfig `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"Host-side hostname alias/endpoint resolution"`
 
-	// Settings captures every handler-specific key other than "hostname" and is
+	// Plugin optionally pins the catalog artifact for a third-party auth
+	// handler. When set, catalog resolution uses this ref/version instead of
+	// resolving the bare handler name. It is host-consumed and NOT forwarded to
+	// the plugin.
+	Plugin *HandlerPluginConfig `json:"plugin,omitempty" yaml:"plugin,omitempty" mapstructure:"plugin" doc:"Catalog pin for a third-party auth handler plugin"`
+
+	// TrustedVerificationDomains are per-handler trusted device-code
+	// verification domains. For non-official handlers this is the primary trust
+	// source, since third-party handlers do not inherit the hardcoded official
+	// domains. It is host-consumed and NOT forwarded to the plugin.
+	TrustedVerificationDomains []string `json:"trustedVerificationDomains,omitempty" yaml:"trustedVerificationDomains,omitempty" mapstructure:"trustedVerificationDomains" doc:"Per-handler trusted device-code verification domains" maxItems:"50"`
+
+	// Settings captures every handler-specific key other than the host-consumed
+	// fields ("hostname", "plugin", "trustedVerificationDomains") and is
 	// forwarded opaquely to the handler plugin. The host does not interpret it.
 	// Note: viper lowercases all keys, so plugins receive lowercased setting
 	// names. The yaml `,inline` tag ensures passthrough keys survive a
 	// config save round-trip (e.g. when 'auth alias' rewrites the file).
 	Settings map[string]any `json:"-" yaml:",inline" mapstructure:",remain"`
+}
+
+// HandlerPluginConfig pins the catalog artifact backing a third-party auth
+// handler under auth.handlers.<name>.plugin.
+type HandlerPluginConfig struct {
+	// Ref is the catalog artifact name. Defaults to the handler name when empty.
+	Ref string `json:"ref,omitempty" yaml:"ref,omitempty" mapstructure:"ref" doc:"Catalog artifact name (defaults to the handler name)" maxLength:"100"`
+
+	// Version is a semver constraint or "latest". Defaults to "latest" when empty.
+	Version string `json:"version,omitempty" yaml:"version,omitempty" mapstructure:"version" doc:"Version constraint or 'latest' (defaults to 'latest')" maxLength:"50"`
 }
 
 // HostnameConfig configures host-side resolution of a user-supplied hostname

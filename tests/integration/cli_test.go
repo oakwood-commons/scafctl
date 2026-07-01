@@ -2358,10 +2358,15 @@ func TestIntegration_AuthHandlersRemoveHelp(t *testing.T) {
 
 func TestIntegration_AuthHandlersInstallUnknown(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "auth", "handlers", "install", "nonexistent-handler-xyz")
+	// An unknown handler name is no longer rejected against the official
+	// allowlist; it is resolved by name against configured catalogs (issue
+	// #576). With only an empty local catalog configured, resolution fails
+	// cleanly with a not-found error and no network access.
+	env := isolatedCatalogEnv(t)
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "auth", "handlers", "install", "nonexistent-handler-xyz")
 
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "unknown auth handler")
+	assert.Contains(t, stderr, "not found in any catalog")
 }
 
 func TestIntegration_AuthHandlersRemoveNotInstalled(t *testing.T) {
@@ -5102,6 +5107,89 @@ func TestIntegration_BuildPlugin_AuthHandler(t *testing.T) {
 	}
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Built test-auth@1.0.0")
+}
+
+// TestIntegration_AuthHandlersInstall_ThirdPartyFromCatalog verifies the fix
+// for issue #576: a non-official auth handler published to a configured
+// catalog resolves by name instead of being rejected against the hardcoded
+// official allowlist (entra, gcp, github).
+func TestIntegration_AuthHandlersInstall_ThirdPartyFromCatalog(t *testing.T) {
+	t.Parallel()
+	env := isolatedCatalogEnv(t)
+
+	// Build a third-party auth handler into the local catalog for the current
+	// platform (so 'handlers install' can fetch it for this host).
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "scafctl-plugin-auth-openshift")
+	require.NoError(t, os.WriteFile(binPath, []byte("dummy-auth-handler"), 0o755))
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+
+	_, buildErr, buildExit := runScafctlWithEnv(t, env, "build", "plugin",
+		"--name", "openshift",
+		"--kind", "auth-handler",
+		"--version", "0.1.0",
+		"--platform", platform+"="+binPath)
+	require.Equal(t, 0, buildExit, "build plugin failed: %s", buildErr)
+
+	// It is listed as an auth-handler artifact in the local catalog.
+	listOut, _, listExit := runScafctlWithEnv(t, env, "catalog", "list", "--kind", "auth-handler", "-o", "json")
+	require.Equal(t, 0, listExit)
+	assert.Contains(t, listOut, "openshift")
+
+	// 'auth handlers install openshift' must get PAST the official allowlist and
+	// resolve the handler from the catalog, exiting 0. Previously this failed
+	// immediately with 'unknown auth handler "openshift"; available: entra, gcp,
+	// github'.
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "auth", "handlers", "install", "openshift")
+	combined := stdout + stderr
+	require.Equal(t, 0, exitCode,
+		"third-party handler install should succeed; stdout=%s stderr=%s", stdout, stderr)
+	assert.Contains(t, combined, "openshift")
+	assert.NotContains(t, combined, "available: entra, gcp, github",
+		"handler should resolve from catalog, not be rejected by the allowlist")
+	assert.NotContains(t, combined, `unknown auth handler "openshift"`,
+		"handler should resolve from catalog, not be rejected by the allowlist")
+}
+
+// TestIntegration_AuthHandlersInstall_ThirdPartyDisabled verifies that the
+// disableThirdPartyAuthHandlers policy rejects a non-official handler even when
+// present in a configured catalog.
+func TestIntegration_AuthHandlersInstall_ThirdPartyDisabled(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "scafctl")
+	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	configContent := `catalogs:
+  - name: local
+    type: filesystem
+settings:
+  disableOfficialCatalog: true
+  disableThirdPartyAuthHandlers: true
+`
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0o600))
+	env := map[string]string{
+		"XDG_DATA_HOME":   tmpDir,
+		"XDG_CACHE_HOME":  tmpDir,
+		"XDG_CONFIG_HOME": tmpDir,
+	}
+
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "scafctl-plugin-auth-openshift")
+	require.NoError(t, os.WriteFile(binPath, []byte("dummy-auth-handler"), 0o755))
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+
+	_, buildErr, buildExit := runScafctlWithEnv(t, env, "build", "plugin",
+		"--name", "openshift",
+		"--kind", "auth-handler",
+		"--version", "0.1.0",
+		"--platform", platform+"="+binPath)
+	require.Equal(t, 0, buildExit, "build plugin failed: %s", buildErr)
+
+	// Policy blocks resolution of the third-party handler.
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "auth", "handlers", "install", "openshift")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "openshift")
+	assert.Contains(t, stderr, "disabled")
 }
 
 func TestIntegration_BuildPlugin_ForceOverwrite(t *testing.T) {

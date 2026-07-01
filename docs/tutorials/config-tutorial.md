@@ -386,10 +386,15 @@ Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.
 | `action.concurrency` | int | `4` | Max parallel action execution |
 | `plugins.grpcMaxMessageSize` | int | `67108864` | Max gRPC message size in bytes for plugin communication (64 MB default). Increase for very large provider inputs/outputs |
 | `plugins.fetchCooldown` | duration | `5m` | Cooldown between failed plugin auto-fetch retries |
+| `settings.disableOfficialAuthHandlers` | bool | `false` | Disable auto-resolution of the official auth handlers (`entra`, `github`, `gcp`) |
+| `settings.disableThirdPartyAuthHandlers` | bool | `false` | Disable catalog-by-name resolution of non-official auth handlers (official-only policy) |
 | `auth.entra.*` | object | — | Entra (Azure AD) auth handler config |
 | `auth.github.hostname` | string | `github.com` | GitHub hostname (or GHES hostname) |
 | `auth.github.clientId` | string | built-in | OAuth App client ID |
 | `auth.github.defaultScopes` | []string | `[gist, read:org, repo, workflow]` | Default OAuth scopes |
+| `auth.handlers.<name>.plugin.ref` | string | handler name | Catalog artifact name for a pinned third-party auth handler |
+| `auth.handlers.<name>.plugin.version` | string | `latest` | Version constraint for a pinned third-party auth handler |
+| `auth.handlers.<name>.trustedVerificationDomains` | []string | — | Per-handler trusted device-code verification domains (required trust source for third-party handlers) |
 
 ### Config File Location
 
