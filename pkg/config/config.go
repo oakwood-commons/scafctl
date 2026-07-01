@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,11 @@ const (
 
 	// DefaultConfigFileType is the default config file type.
 	DefaultConfigFileType = "yaml"
+
+	// ConfigDirName is the drop-in directory (relative to the config file's
+	// directory) whose *.yaml/*.yml fragments are merged in lexical order
+	// between the embedder base layer and the user's config file.
+	ConfigDirName = "config.d"
 
 	// EnvPrefix is the environment variable prefix.
 	EnvPrefix = "SCAFCTL"
@@ -65,6 +72,13 @@ type Manager struct {
 	baseConfig []byte
 	envPrefix  string
 	config     *Config
+
+	// dropIn holds the merged config.d fragment values (lowercased keys), and
+	// userSettings holds the values read from the user's config file alone. Save
+	// uses them to avoid baking tooling-supplied drop-in values into the user's
+	// config file, which would defeat config.d layering.
+	dropIn       map[string]any
+	userSettings map[string]any
 }
 
 // NewManager creates a new configuration manager.
@@ -113,6 +127,18 @@ func (m *Manager) Load() (*Config, error) {
 		}
 	}
 
+	// Merge drop-in config fragments from the config.d directory (after the
+	// embedder base layer, before the user's config file). Fragments are
+	// merged in lexical filename order, so later files override earlier ones.
+	// Precedence: defaults -> base -> config.d -> config.yaml -> env -> flags.
+	if err := m.mergeConfigDir(filepath.Dir(configPath)); err != nil {
+		return nil, err
+	}
+
+	// Capture the user config file's own values (no defaults, base, config.d, or
+	// env) so Save can distinguish user-owned keys from drop-in values.
+	m.userSettings = readUserSettings(configPath)
+
 	// Read user config file (not an error if it doesn't exist).
 	// MergeInConfig is used unconditionally so that when a base config layer
 	// is present the user file merges on top rather than replacing it.
@@ -149,6 +175,84 @@ func (m *Manager) Load() (*Config, error) {
 
 	m.config = &cfg
 	return &cfg, nil
+}
+
+// mergeConfigDir merges every *.yaml/*.yml fragment in the config.d directory
+// located next to the main config file. Fragments are merged in lexical
+// filename order (later files override earlier ones). A missing config.d
+// directory is not an error; individual fragments that fail to parse are.
+func (m *Manager) mergeConfigDir(baseDir string) error {
+	if baseDir == "" {
+		return nil
+	}
+	dir := filepath.Join(baseDir, ConfigDirName)
+
+	var fragments []string
+	for _, pattern := range []string{"*.yaml", "*.yml"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return fmt.Errorf("failed to scan %s: %w", dir, err)
+		}
+		fragments = append(fragments, matches...)
+	}
+	if len(fragments) == 0 {
+		return nil
+	}
+	sort.Strings(fragments)
+
+	// Track drop-in values (parsed with documented yaml-tag casing) so Save can
+	// identify and skip them, keeping config.d fragments out of the persisted
+	// user config file. Deep-merged in lexical order to mirror the viper merge.
+	dropMap := map[string]any{}
+
+	for _, fragment := range fragments {
+		data, err := os.ReadFile(fragment) //nolint:gosec // path derived from trusted config dir
+		if err != nil {
+			return fmt.Errorf("failed to read config fragment %s: %w", fragment, err)
+		}
+		if err := m.v.MergeConfig(bytes.NewReader(data)); err != nil {
+			return fmt.Errorf("failed to merge config fragment %s: %w", fragment, err)
+		}
+		var fragMap map[string]any
+		if err := yaml.Unmarshal(data, &fragMap); err != nil {
+			return fmt.Errorf("failed to parse config fragment %s: %w", fragment, err)
+		}
+		deepMergeMap(dropMap, fragMap)
+	}
+	m.dropIn = dropMap
+	return nil
+}
+
+// deepMergeMap recursively merges src into dst, with src winning on conflicts.
+// Nested maps are merged; all other values (including slices) are replaced.
+func deepMergeMap(dst, src map[string]any) {
+	for k, v := range src {
+		if sv, ok := v.(map[string]any); ok {
+			if dv, ok := dst[k].(map[string]any); ok {
+				deepMergeMap(dv, sv)
+				continue
+			}
+		}
+		dst[k] = v
+	}
+}
+
+// readUserSettings reads the user's config file alone (excluding defaults, the
+// embedder base layer, config.d, and env vars) and returns its settings map
+// keyed by documented (yaml-tag) names. A missing or unreadable file yields nil.
+func readUserSettings(configPath string) map[string]any {
+	if configPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(configPath) //nolint:gosec // path is the configured config file
+	if err != nil {
+		return nil
+	}
+	var settings map[string]any
+	if err := yaml.Unmarshal(data, &settings); err != nil {
+		return nil
+	}
+	return settings
 }
 
 // setDefaults sets default configuration values.
@@ -458,7 +562,7 @@ func (m *Manager) Save() error {
 	m.v.Set("auth", m.config.Auth)
 	m.v.Set("build", m.config.Build)
 
-	return m.v.WriteConfig()
+	return m.writeConfig(m.v, "")
 }
 
 // SaveAs saves the configuration to a specific path.
@@ -486,7 +590,89 @@ func (m *Manager) SaveAs(path string) error {
 	m.v.Set("auth", m.config.Auth)
 	m.v.Set("build", m.config.Build)
 
-	return m.v.WriteConfigAs(path)
+	return m.writeConfig(m.v, path)
+}
+
+// writeConfig persists the configuration, pruning any values that came solely
+// from the config.d drop-in layer so they are not baked into the user's config
+// file (which would defeat config.d layering). When path is empty the manager's
+// current config file is used. With no drop-in layer present it writes v
+// directly, preserving the original output byte-for-byte.
+func (m *Manager) writeConfig(v *viper.Viper, path string) error {
+	if len(m.dropIn) == 0 {
+		if path == "" {
+			return v.WriteConfig()
+		}
+		return v.WriteConfigAs(path)
+	}
+
+	// Normalize the effective config to documented (yaml-tag) casing so it can
+	// be compared against the fragment/user maps, then drop pure drop-in values.
+	effBytes, err := yaml.Marshal(m.config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config for save: %w", err)
+	}
+	var effMap map[string]any
+	if err := yaml.Unmarshal(effBytes, &effMap); err != nil {
+		return fmt.Errorf("failed to normalize config for save: %w", err)
+	}
+
+	pruned := pruneDropIn(effMap, m.dropIn, m.userSettings)
+	outBytes, err := yaml.Marshal(pruned)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config for save: %w", err)
+	}
+
+	target := path
+	if target == "" {
+		target = v.ConfigFileUsed()
+	}
+	if target == "" {
+		return fmt.Errorf("no config file path available for save")
+	}
+	if err := os.WriteFile(target, outBytes, 0o600); err != nil {
+		return fmt.Errorf("failed to write config file %s: %w", target, err)
+	}
+	return nil
+}
+
+// pruneDropIn returns a copy of effective with keys whose values came solely
+// from the config.d drop-in layer removed. A key is dropped only when its value
+// equals the drop-in value and the user's own config file did not set it; keys
+// the user set, or values that differ from the drop-in, are always kept. Nested
+// maps are pruned recursively.
+func pruneDropIn(effective, dropIn, user map[string]any) map[string]any {
+	out := make(map[string]any, len(effective))
+	for k, v := range effective {
+		dv, inDrop := dropIn[k]
+		if !inDrop {
+			out[k] = v
+			continue
+		}
+
+		uv, inUser := user[k]
+
+		// Recurse into nested maps so partially user-owned subtrees survive.
+		if vm, ok := v.(map[string]any); ok {
+			if dm, ok := dv.(map[string]any); ok {
+				um, _ := uv.(map[string]any)
+				if pruned := pruneDropIn(vm, dm, um); len(pruned) > 0 {
+					out[k] = pruned
+				}
+				continue
+			}
+		}
+
+		if inUser {
+			out[k] = v
+			continue
+		}
+		if reflect.DeepEqual(v, dv) {
+			continue // pure drop-in value; the fragment re-supplies it on load
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // Get returns a configuration value by key.
@@ -618,6 +804,18 @@ func (m *Manager) Config() *Config {
 func (m *Manager) ConfigPath() string {
 	p, _ := m.configPathOrError()
 	return p
+}
+
+// ConfigDir returns the directory containing the config file. This is the
+// anchor for the config.d drop-in directory and for resolving relative paths
+// referenced from configuration. Returns an empty string only when the config
+// path cannot be determined.
+func (m *Manager) ConfigDir() string {
+	p, err := m.configPathOrError()
+	if err != nil || p == "" {
+		return ""
+	}
+	return filepath.Dir(p)
 }
 
 // configPathOrError resolves the config file path, returning an error with the

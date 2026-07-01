@@ -71,6 +71,42 @@ func TestInjectAuthHandlerSettings(t *testing.T) {
 			wantValue: "gcp-client-id",
 		},
 		{
+			name:        "open handler namespace forwarded",
+			handlerName: "openshift",
+			appCfg: &config.Config{
+				Auth: config.GlobalAuthConfig{
+					Handlers: map[string]config.HandlerConfig{
+						"openshift": {
+							Settings: map[string]any{
+								"apitimeout":   float64(30),
+								"cabundlepath": "/etc/ssl/corp.pem",
+							},
+						},
+					},
+				},
+			},
+			wantKey:   "openshift",
+			wantField: "cabundlepath",
+			wantValue: "/etc/ssl/corp.pem",
+		},
+		{
+			name:        "host-consumed hostname block not forwarded",
+			handlerName: "openshift",
+			appCfg: &config.Config{
+				Auth: config.GlobalAuthConfig{
+					Handlers: map[string]config.HandlerConfig{
+						"openshift": {
+							Hostname: &config.HostnameConfig{
+								Aliases: map[string]string{"pd1020": "https://api.example.com:6443"},
+							},
+						},
+					},
+				},
+			},
+			// wantKey empty: a handler with only a hostname block (and no
+			// opaque settings) delivers nothing to the plugin.
+		},
+		{
 			name:        "nil github config skipped",
 			handlerName: "github",
 			appCfg:      &config.Config{},

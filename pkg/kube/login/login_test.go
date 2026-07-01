@@ -251,6 +251,38 @@ func TestLogin_ScopesOnLogin(t *testing.T) {
 	assert.NotContains(t, kc.writeIn.ExecArgs, "--scope")
 }
 
+func TestLogin_HostnameForwardedWhenCapable(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "openshift", caps: []auth.Capability{auth.CapHostname}}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.example.com:6443", handler.loginOpts.Hostname,
+		"resolved API server URL must be forwarded to CapHostname handlers")
+}
+
+func TestLogin_HostnameNotForwardedWithoutCapability(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "plain"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, handler.loginOpts.Hostname,
+		"handlers without CapHostname must not receive the API server URL")
+}
+
 func TestLogin_WriteError(t *testing.T) {
 	t.Parallel()
 

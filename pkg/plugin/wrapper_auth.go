@@ -474,7 +474,15 @@ func injectAuthHandlerSettings(ctx context.Context, handlerName string, cfg *Pro
 		resolved := auth.ResolveGCPConfig(appCfg.Auth.GCP, profile)
 		raw, err = json.Marshal(resolved) //nolint:gosec // G117: intentionally forwarding host config (including clientSecret) to plugin over local gRPC
 	default:
-		return
+		// Open per-handler namespace (auth.handlers.<name>). scafctl core is
+		// shape-blind to these settings: the reserved "hostname" block is
+		// consumed by the host (not here), and every other key is forwarded
+		// opaquely to the handler plugin.
+		handlerCfg, ok := appCfg.Auth.Handlers[handlerName]
+		if !ok || len(handlerCfg.Settings) == 0 {
+			return
+		}
+		raw, err = json.Marshal(handlerCfg.Settings) //nolint:gosec // G117: intentionally forwarding opaque host config to plugin over local gRPC
 	}
 
 	if err != nil || len(raw) == 0 || string(raw) == "{}" {

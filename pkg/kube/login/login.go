@@ -220,6 +220,13 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 	if info.OIDCAudience != "" && auth.HasCapability(handler.Capabilities(), auth.CapScopesOnLogin) {
 		loginOpts.Scopes = []string{info.OIDCAudience}
 	}
+	// Forward the resolved API server URL so the handler knows which cluster to
+	// authenticate against. Handlers that advertise CapHostname (e.g. the
+	// openshift OAuth handler, which discovers the cluster's OAuth server from
+	// this URL) rely on it; handlers without the capability ignore Hostname.
+	if info.APIServerURL != "" && auth.HasCapability(handler.Capabilities(), auth.CapHostname) {
+		loginOpts.Hostname = info.APIServerURL
+	}
 	if _, err := handler.Login(ctx, loginOpts); err != nil {
 		return nil, fmt.Errorf("login with handler %q: %w", handler.Name(), err)
 	}

@@ -414,11 +414,85 @@ type GlobalAuthConfig struct {
 	// CustomOAuth2 contains user-defined OAuth2 auth handlers.
 	CustomOAuth2 []CustomOAuth2Config `json:"customOAuth2,omitempty" yaml:"customOAuth2,omitempty" mapstructure:"customOAuth2" doc:"User-defined OAuth2 auth handlers for any OAuth2 service" maxItems:"20"`
 
+	// Handlers holds per-handler configuration namespaces keyed by handler name
+	// (e.g. "openshift"). The host consumes the reserved "hostname" block for
+	// alias/endpoint resolution; every other key is delivered opaquely to the
+	// handler plugin via its provider Settings. scafctl core is shape-blind to
+	// these passthrough settings.
+	Handlers map[string]HandlerConfig `json:"handlers,omitempty" yaml:"handlers,omitempty" mapstructure:"handlers" doc:"Per-handler configuration namespaces keyed by handler name; the reserved 'hostname' block is host-consumed, all other keys are forwarded opaquely to the handler plugin"`
+
 	// TrustedVerificationDomains are additional domains trusted for device code
 	// verification URIs across all auth handlers. These supplement the hardcoded
 	// per-handler domains from the official auth handler registry. Use this for
 	// org-specific identity providers (e.g., custom GHES hostnames, corporate IDPs).
 	TrustedVerificationDomains []string `json:"trustedVerificationDomains,omitempty" yaml:"trustedVerificationDomains,omitempty" mapstructure:"trustedVerificationDomains" doc:"Additional trusted domains for device code verification URIs" maxItems:"50"`
+}
+
+// HandlerConfig is the per-handler configuration namespace under
+// auth.handlers.<name>. scafctl core is shape-blind to handler settings: the
+// host consumes the reserved Hostname block for alias/endpoint resolution and
+// forwards every other key opaquely to the handler plugin via its provider
+// Settings.
+type HandlerConfig struct {
+	// Hostname configures host-side hostname alias and endpoint resolution for
+	// this handler. It is consumed by the host and is NOT forwarded to the
+	// plugin.
+	Hostname *HostnameConfig `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"Host-side hostname alias/endpoint resolution"`
+
+	// Settings captures every handler-specific key other than "hostname" and is
+	// forwarded opaquely to the handler plugin. The host does not interpret it.
+	// Note: viper lowercases all keys, so plugins receive lowercased setting
+	// names. The yaml `,inline` tag ensures passthrough keys survive a
+	// config save round-trip (e.g. when 'auth alias' rewrites the file).
+	Settings map[string]any `json:"-" yaml:",inline" mapstructure:",remain"`
+}
+
+// HostnameConfig configures host-side resolution of a user-supplied hostname
+// selector into a concrete endpoint for an auth handler. Static Aliases take
+// precedence over the dynamic Resolver.
+type HostnameConfig struct {
+	// Aliases maps a short hostname selector (e.g. "cluster-01") to a concrete
+	// endpoint URL. Static aliases win over the dynamic resolver.
+	Aliases map[string]string `json:"aliases,omitempty" yaml:"aliases,omitempty" mapstructure:"aliases" doc:"Static map of hostname selector to concrete endpoint URL"`
+
+	// Resolver dynamically fetches and normalizes an endpoint inventory at login
+	// time. It is overlaid by Aliases (static wins).
+	Resolver *HostnameResolverConfig `json:"resolver,omitempty" yaml:"resolver,omitempty" mapstructure:"resolver" doc:"Dynamic hostname inventory resolver"`
+}
+
+// HostnameResolverConfig declares where to fetch a hostname inventory and how
+// to normalize it into a list of {name, url} entries. The host runs this
+// in-process at login time and caches the result for TTL.
+type HostnameResolverConfig struct {
+	// Source declares where to fetch the inventory.
+	Source HostnameResolverSource `json:"source,omitempty" yaml:"source,omitempty" mapstructure:"source" doc:"Where to fetch the hostname inventory"`
+
+	// Transform is a CEL expression that normalizes the fetched body into a list
+	// of {name, url} entries. Entries may also carry optional per-cluster OIDC
+	// fields (audience, authType, caData, consoleUrl, insecureSkipTls). The
+	// fetched JSON is available as `_`.
+	Transform string `json:"transform,omitempty" yaml:"transform,omitempty" mapstructure:"transform" doc:"CEL expression normalizing the inventory into a list of {name,url} entries" maxLength:"8192"`
+
+	// TTL caches the resolved inventory for this duration (e.g. "1h"). Empty or
+	// "0" disables caching (re-fetch every login).
+	TTL string `json:"ttl,omitempty" yaml:"ttl,omitempty" mapstructure:"ttl" doc:"Cache duration for the resolved inventory (e.g. 1h); 0 disables caching" maxLength:"32"`
+}
+
+// HostnameResolverSource declares an HTTP endpoint to fetch a hostname
+// inventory from, with optional bearer-token injection via an auth handler.
+type HostnameResolverSource struct {
+	// URL is the inventory endpoint (HTTPS GET returning JSON).
+	URL string `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url" doc:"Inventory endpoint URL (HTTPS GET returning JSON)" maxLength:"2048" example:"https://clusters.example.com"`
+
+	// AuthProvider is the auth handler used to inject a bearer token (e.g.
+	// entra, gcp). Empty means the endpoint is unauthenticated.
+	AuthProvider string `json:"authProvider,omitempty" yaml:"authProvider,omitempty" mapstructure:"authProvider" doc:"Auth handler name for bearer token injection; empty for unauthenticated endpoints" maxLength:"64" example:"entra"`
+
+	// AuthScope is the OAuth scope requested when AuthProvider is set.
+	AuthScope string `json:"authScope,omitempty" yaml:"authScope,omitempty" mapstructure:"authScope" doc:"OAuth scope for the auth provider token request" maxLength:"1024" example:"api://fleet/.default"`
+
+	// Headers are additional static request headers.
+	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty" mapstructure:"headers" doc:"Additional static request headers"`
 }
 
 // EntraAuthConfig contains Entra-specific configuration.
