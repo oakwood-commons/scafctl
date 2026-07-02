@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1303,5 +1304,73 @@ spec:
 		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
 		summary := parsed["summary"].(map[string]any)
 		assert.Equal(t, float64(0), summary["total"])
+	})
+}
+
+func TestBuildTestResultItems(t *testing.T) {
+	relaxed := soltesting.TestResult{
+		Solution:    "sol",
+		Test:        "golden",
+		Status:      soltesting.StatusPass,
+		Relaxed:     true,
+		MaskMatches: map[string]int{"greeting": 1, "uuid": 2},
+	}
+	plain := soltesting.TestResult{
+		Solution: "sol",
+		Test:     "plain",
+		Status:   soltesting.StatusPass,
+		Assertions: []soltesting.AssertionResult{
+			{Type: "contains", Input: "x", Passed: true},
+		},
+	}
+	failed := soltesting.TestResult{
+		Solution: "sol",
+		Test:     "broken",
+		Status:   soltesting.StatusFail,
+		Message:  "assertion failed",
+		Assertions: []soltesting.AssertionResult{
+			{Type: "contains", Input: "y", Passed: false, Message: "missing"},
+		},
+	}
+
+	t.Run("surfaces relaxed and mask matches", func(t *testing.T) {
+		items := buildTestResultItems([]soltesting.TestResult{relaxed}, false)
+		require.Len(t, items, 1)
+		assert.True(t, items[0].Relaxed)
+		assert.Equal(t, map[string]int{"greeting": 1, "uuid": 2}, items[0].MaskMatches)
+	})
+
+	t.Run("omits relaxed fields for non-relaxed results", func(t *testing.T) {
+		items := buildTestResultItems([]soltesting.TestResult{plain}, false)
+		require.Len(t, items, 1)
+		assert.False(t, items[0].Relaxed)
+		assert.Nil(t, items[0].MaskMatches)
+	})
+
+	t.Run("includes assertions only for failures when not verbose", func(t *testing.T) {
+		items := buildTestResultItems([]soltesting.TestResult{plain, failed}, false)
+		require.Len(t, items, 2)
+		assert.Empty(t, items[0].Assertions, "passing test should omit assertions when not verbose")
+		assert.Len(t, items[1].Assertions, 1, "failed test should include assertions")
+	})
+
+	t.Run("includes assertions for all tests when verbose", func(t *testing.T) {
+		items := buildTestResultItems([]soltesting.TestResult{plain, failed}, true)
+		require.Len(t, items, 2)
+		assert.Len(t, items[0].Assertions, 1)
+		assert.Len(t, items[1].Assertions, 1)
+	})
+
+	t.Run("serializes relaxed fields to JSON and omits when empty", func(t *testing.T) {
+		items := buildTestResultItems([]soltesting.TestResult{relaxed, plain}, false)
+		data, err := json.Marshal(items)
+		require.NoError(t, err)
+		var decoded []map[string]any
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		require.Len(t, decoded, 2)
+		assert.Equal(t, true, decoded[0]["relaxed"])
+		assert.Contains(t, decoded[0], "maskMatches")
+		assert.NotContains(t, decoded[1], "relaxed")
+		assert.NotContains(t, decoded[1], "maskMatches")
 	})
 }

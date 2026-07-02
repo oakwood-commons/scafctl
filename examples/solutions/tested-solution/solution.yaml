@@ -290,3 +290,36 @@ spec:
         tags: [integration, slow]
         assertions:
           - expression: __output.projectName == "my-app"
+
+    # =========================================================================
+    # Snapshot Masking
+    # =========================================================================
+
+      snapshot-masked:
+        description: >-
+          Golden-baseline snapshot with configurable masking. The volatile
+          greeting value is normalized to a placeholder so the snapshot stays
+          stable across runs. Built-in presets (timestamp, uuid, sandbox path)
+          are always applied; custom masks and opt-in presets are declared
+          under masks. A relaxed (PASS*) status is reported whenever masks are
+          in effect.
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [snapshot]
+        snapshot: testdata/snapshots/resolver-masked.json
+        # snapshotSource defaults to "stdout" (shown here). Set it to "files" to
+        # snapshot the tree of files a solution writes instead of stdout -- see
+        # tests/integration/solutions/snapshot-masking for a runnable files
+        # example with a path-scoped mask.
+        masks:
+          # Custom mask: normalize the generated greeting to a placeholder.
+          - name: greeting
+            pattern: 'Hello from [^"]+'
+            placeholder: "<GREETING>"
+          # Opt-in preset: normalize email addresses (only fires when the
+          # output contains one). Other opt-in presets: ipv4, mac.
+          - use: email
+          # Disable a built-in preset when a value would otherwise be masked.
+          - use: uuid
+            disabled: true
+

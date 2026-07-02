@@ -79,6 +79,14 @@ const (
 	StatusError Status = "error"
 )
 
+// Snapshot source values.
+const (
+	// SnapshotSourceStdout captures the command's stdout (default).
+	SnapshotSourceStdout = "stdout"
+	// SnapshotSourceFiles captures a manifest of the rendered file tree.
+	SnapshotSourceFiles = "files"
+)
+
 // SkipBuiltinsValue supports both bool and []string via custom UnmarshalYAML.
 // When bool: true skips all builtins, false skips none.
 // When []string: skips only the named builtins (without "builtin:" prefix).
@@ -405,6 +413,15 @@ type TestCase struct {
 	// Snapshot is a relative path to a golden file for normalized comparison.
 	Snapshot string `json:"snapshot,omitempty" yaml:"snapshot,omitempty" doc:"Relative path to a golden file for normalized comparison" maxLength:"500"`
 
+	// SnapshotSource selects what the snapshot captures: "stdout" (default) or
+	// "files" (a deterministic manifest of the rendered file tree).
+	SnapshotSource string `json:"snapshotSource,omitempty" yaml:"snapshotSource,omitempty" doc:"Snapshot capture source: stdout (default) or files" pattern:"^(stdout|files)?$" patternDescription:"Must be one of: stdout, files (or empty for stdout)"`
+
+	// Masks declares additional normalization rules applied before snapshot
+	// comparison so volatile regions (live data, generated IDs) don't break the
+	// golden comparison while surrounding content is still compared exactly.
+	Masks []Mask `json:"masks,omitempty" yaml:"masks,omitempty" doc:"Snapshot normalization masks for volatile regions" maxItems:"100"`
+
 	// InjectFile controls whether the runner auto-injects -f <sandbox-solution-path>.
 	// Default is true. Set to false for commands that don't accept -f.
 	InjectFile *bool `json:"injectFile,omitempty" yaml:"injectFile,omitempty" doc:"When true, auto-inject -f <sandbox-solution-path>"`
@@ -569,6 +586,28 @@ func (tc *TestCase) Validate() error {
 		}
 	}
 
+	// SnapshotSource validation
+	switch tc.SnapshotSource {
+	case "", SnapshotSourceStdout, SnapshotSourceFiles:
+	default:
+		errs = append(errs, fmt.Sprintf("snapshotSource must be one of: %s, %s (or empty)", SnapshotSourceStdout, SnapshotSourceFiles))
+	}
+	if tc.SnapshotSource == SnapshotSourceFiles && tc.Snapshot == "" {
+		errs = append(errs, "snapshotSource 'files' requires snapshot to be set")
+	}
+
+	// Validate each mask
+	for i, m := range tc.Masks {
+		if err := m.Validate(); err != nil {
+			errs = append(errs, fmt.Sprintf("mask[%d]: %s", i, err))
+		}
+		// Path scoping only applies to custom masks. Preset masks (use:) reject
+		// path in Mask.Validate, so skip them here to avoid duplicate errors.
+		if m.Use == "" && m.Path != "" && tc.SnapshotSource != SnapshotSourceFiles {
+			errs = append(errs, fmt.Sprintf("mask[%d]: path scoping requires snapshotSource 'files'", i))
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("test %q validation failed:\n  - %s", tc.Name, strings.Join(errs, "\n  - "))
 	}
@@ -647,6 +686,65 @@ func (a *Assertion) Validate() error {
 	return nil
 }
 
+// Mask is a snapshot normalization rule. It replaces every region matching a
+// pattern with a placeholder before comparison, so volatile values don't break
+// golden comparison while surrounding content is still compared exactly.
+//
+// A mask is one of two forms:
+//   - a reference to a named preset via Use (built-ins: timestamp, uuid,
+//     sandbox — enabled by default; catalog: email, ipv4, mac — opt-in), or
+//   - a custom rule via Pattern + Placeholder.
+//
+// Exactly one form must be used.
+type Mask struct {
+	// Use references a named preset mask to enable (or disable via Disabled).
+	Use string `json:"use,omitempty" yaml:"use,omitempty" doc:"Named preset mask: timestamp, uuid, sandbox, email, ipv4, mac" maxLength:"50"`
+
+	// Name is a label for a custom mask, used in relaxed-status reporting.
+	Name string `json:"name,omitempty" yaml:"name,omitempty" doc:"Label for a custom mask (used in reporting)" maxLength:"50"`
+
+	// Pattern is a regular expression matched against snapshot content.
+	Pattern string `json:"pattern,omitempty" yaml:"pattern,omitempty" doc:"Regex matching volatile regions (custom mask)" maxLength:"1000"`
+
+	// Placeholder is the literal text that replaces each matched region.
+	Placeholder string `json:"placeholder,omitempty" yaml:"placeholder,omitempty" doc:"Replacement text for matched regions (custom mask)" maxLength:"200"`
+
+	// Path optionally scopes the mask to rendered files whose path matches this
+	// doublestar glob. Only meaningful when snapshotSource is "files".
+	Path string `json:"path,omitempty" yaml:"path,omitempty" doc:"Glob limiting the mask to matching rendered files (files source only)" maxLength:"500"`
+
+	// Disabled turns off a built-in preset. Only valid together with Use.
+	Disabled bool `json:"disabled,omitempty" yaml:"disabled,omitempty" doc:"Disable a built-in preset mask (only valid with 'use')"`
+}
+
+// Validate checks that a mask uses exactly one form and that its fields are
+// well-formed.
+func (m *Mask) Validate() error {
+	if m.Use != "" {
+		if m.Pattern != "" || m.Placeholder != "" {
+			return fmt.Errorf("mask with 'use' must not set 'pattern' or 'placeholder'")
+		}
+		if m.Path != "" {
+			return fmt.Errorf("mask with 'use' must not set 'path'; path scoping is only supported for custom masks")
+		}
+		if !IsKnownPreset(m.Use) {
+			return fmt.Errorf("unknown preset mask %q; valid presets: %s", m.Use, strings.Join(PresetNames(), ", "))
+		}
+		return nil
+	}
+
+	if m.Disabled {
+		return fmt.Errorf("'disabled' is only valid together with 'use'")
+	}
+	if m.Pattern == "" || m.Placeholder == "" {
+		return fmt.Errorf("custom mask requires both 'pattern' and 'placeholder'")
+	}
+	if _, err := regexp.Compile(m.Pattern); err != nil {
+		return fmt.Errorf("invalid mask pattern: %w", err)
+	}
+	return nil
+}
+
 // FileInfo represents a file created or modified in the sandbox.
 type FileInfo struct {
 	// Exists is always true for entries in the map (present for consistency).
@@ -691,6 +789,12 @@ type TestResult struct {
 	Stdout string `json:"stdout,omitempty"`
 	// Stderr is the captured stderr from the test command (included on failure).
 	Stderr string `json:"stderr,omitempty"`
+	// Relaxed is true when the test declared snapshot masks, indicating snapshot
+	// fidelity was intentionally loosened for volatile regions.
+	Relaxed bool `json:"relaxed,omitempty"`
+	// MaskMatches records how many regions each mask replaced during snapshot
+	// comparison, keyed by mask name (preset name or custom mask label/pattern).
+	MaskMatches map[string]int `json:"maskMatches,omitempty"`
 }
 
 // AssertionResult captures the outcome of a single assertion.
