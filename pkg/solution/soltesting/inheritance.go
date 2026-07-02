@@ -204,6 +204,12 @@ func mergeTestCase(dst, src *TestCase) {
 	if src.Snapshot != "" {
 		dst.Snapshot = src.Snapshot
 	}
+	if src.SnapshotSource != "" {
+		dst.SnapshotSource = src.SnapshotSource
+	}
+	if len(src.Masks) > 0 {
+		dst.Masks = src.Masks
+	}
 	if src.Retries > 0 {
 		dst.Retries = src.Retries
 	}

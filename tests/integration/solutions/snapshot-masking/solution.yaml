@@ -1,0 +1,92 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: snapshot-masking
+  version: 1.0.0
+  description: |
+    Integration coverage for snapshot masking and the files snapshot source.
+    Exercises custom masks, opt-in presets, disabling a built-in preset, and a
+    path-scoped mask over a rendered file tree. Golden files are generated at
+    test time via --update-snapshots so the committed tree stays minimal.
+
+spec:
+  resolvers:
+    projectName:
+      description: Name of the project being scaffolded
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    contact:
+      description: Owner contact email (masked in snapshots)
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ops@example.com
+
+    greeting:
+      description: Generated greeting rendered into stdout output
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'Hello from ' + _.projectName"
+
+    tfvars:
+      description: Rendered tfvars content written to the file tree
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'owner = ' + _.contact + '\\nname = ' + _.projectName + '\\n'"
+
+  workflow:
+    actions:
+      write-tfvars:
+        description: Write the rendered tfvars file into the sandbox tree
+        provider: file
+        inputs:
+          operation: write
+          path: envs/dev/app.auto.tfvars
+          content:
+            rslvr: tfvars
+
+  testing:
+    config:
+      skipBuiltins: [resolve-defaults, lint]
+
+    cases:
+      # Stdout source: custom mask + opt-in preset + disabled built-in.
+      snapshot-stdout:
+        description: Snapshot resolver JSON with masks (custom, preset, disabled builtin)
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [snapshot, stdout]
+        snapshot: testdata/snapshots/resolver.json
+        masks:
+          - name: greeting
+            pattern: 'Hello from [^"]+'
+            placeholder: "<GREETING>"
+          - use: email
+          - use: uuid
+            disabled: true
+
+      # Files source: path-scoped mask over the rendered file tree.
+      snapshot-files:
+        description: Snapshot the rendered file tree with a path-scoped mask
+        command: [run, solution]
+        tags: [snapshot, files]
+        snapshot: testdata/snapshots/files.txt
+        snapshotSource: files
+        masks:
+          - name: contact
+            pattern: 'ops@\S+'
+            placeholder: "<CONTACT>"
+            path: "envs/**/*.auto.tfvars"

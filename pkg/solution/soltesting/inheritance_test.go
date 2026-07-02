@@ -421,3 +421,37 @@ func TestResolveExtends_BaseDirMerge(t *testing.T) {
 	assert.Equal(t, "myapp", tests["child-inherits"].BaseDir, "child should inherit BaseDir from parent")
 	assert.Equal(t, "otherapp", tests["child-overrides"].BaseDir, "child should override BaseDir")
 }
+
+func TestResolveExtends_SnapshotSourceAndMasksMerge(t *testing.T) {
+	baseMasks := []soltesting.Mask{{Use: "email"}}
+	tests := map[string]*soltesting.TestCase{
+		"_base": {
+			Name:           "_base",
+			Command:        []string{"run", "solution"},
+			Snapshot:       "testdata/base.txt",
+			SnapshotSource: soltesting.SnapshotSourceFiles,
+			Masks:          baseMasks,
+		},
+		"child-inherits": {
+			Name:    "child-inherits",
+			Extends: []string{"_base"},
+		},
+		"child-overrides": {
+			Name:           "child-overrides",
+			Extends:        []string{"_base"},
+			SnapshotSource: soltesting.SnapshotSourceStdout,
+			Masks:          []soltesting.Mask{{Use: "ipv4"}},
+		},
+	}
+
+	require.NoError(t, soltesting.ResolveExtends(tests))
+
+	inh := tests["child-inherits"]
+	assert.Equal(t, soltesting.SnapshotSourceFiles, inh.SnapshotSource, "child should inherit snapshotSource")
+	assert.Equal(t, baseMasks, inh.Masks, "child should inherit masks")
+
+	ovr := tests["child-overrides"]
+	assert.Equal(t, soltesting.SnapshotSourceStdout, ovr.SnapshotSource, "child should override snapshotSource")
+	require.Len(t, ovr.Masks, 1)
+	assert.Equal(t, "ipv4", ovr.Masks[0].Use, "child should override masks (replace, not append)")
+}

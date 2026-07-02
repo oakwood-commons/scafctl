@@ -205,6 +205,63 @@ func TestRunnerPassingTest(t *testing.T) {
 	assert.Equal(t, StatusPass, results[0].Status)
 }
 
+func TestRunnerSnapshotMasksRelaxed(t *testing.T) {
+	tmpDir := t.TempDir()
+	solutionPath := createTestSolution(t, tmpDir, "masked-sol")
+
+	ctx := context.Background()
+	// Command output contains a volatile greeting that the mask normalizes.
+	newRunner := func(update bool) *Runner {
+		return &Runner{
+			IOStreams:       &terminal.IOStreams{Out: os.Stdout, ErrOut: os.Stderr},
+			NewCommand:      mockCommandBuilder("Hello from ci-42", "", 0),
+			UpdateSnapshots: update,
+		}
+	}
+
+	solutions := func() []SolutionTests {
+		return []SolutionTests{
+			{
+				SolutionName: "masked-sol",
+				FilePath:     solutionPath,
+				Config:       &TestConfig{SkipBuiltins: SkipBuiltinsValue{All: true}},
+				Cases: map[string]*TestCase{
+					"masked-test": {
+						Name:     "masked-test",
+						Command:  []string{"run"},
+						Snapshot: "testdata/snapshots/masked.txt",
+						Masks: []Mask{
+							{Name: "greeting", Pattern: `Hello from \S+`, Placeholder: "<GREETING>"},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// First run writes the golden file and reports the relaxed status.
+	updateResults, err := newRunner(true).Run(ctx, solutions())
+	require.NoError(t, err)
+	require.Len(t, updateResults, 1)
+	assert.Equal(t, StatusPass, updateResults[0].Status)
+	assert.True(t, updateResults[0].Relaxed, "declaring masks must mark the result relaxed")
+	assert.Equal(t, 1, updateResults[0].MaskMatches["greeting"])
+
+	// Second run compares against the golden and stays relaxed.
+	compareResults, err := newRunner(false).Run(ctx, solutions())
+	require.NoError(t, err)
+	require.Len(t, compareResults, 1)
+	assert.Equal(t, StatusPass, compareResults[0].Status)
+	assert.True(t, compareResults[0].Relaxed)
+	assert.Equal(t, 1, compareResults[0].MaskMatches["greeting"])
+
+	// The golden file holds the normalized placeholder, not the volatile value.
+	golden, err := os.ReadFile(filepath.Join(tmpDir, "testdata", "snapshots", "masked.txt"))
+	require.NoError(t, err)
+	assert.Contains(t, string(golden), "<GREETING>")
+	assert.NotContains(t, string(golden), "ci-42")
+}
+
 func TestRunnerFailingTest(t *testing.T) {
 	tmpDir := t.TempDir()
 	solutionPath := createTestSolution(t, tmpDir, "failing-sol")
@@ -706,6 +763,30 @@ func TestSummarize(t *testing.T) {
 	assert.Equal(t, 1, s.Errors)
 	assert.Equal(t, 1, s.Skipped)
 	assert.Equal(t, 510*time.Millisecond, s.Duration)
+}
+
+func TestApplyMaskReport(t *testing.T) {
+	t.Run("no masks declared leaves result untouched", func(t *testing.T) {
+		result := TestResult{}
+		applyMaskReport(&result, map[string]int{"greeting": 1}, false)
+		assert.False(t, result.Relaxed, "result must not be relaxed when no masks are declared")
+		assert.Nil(t, result.MaskMatches, "mask counts must not be attached when no masks are declared")
+	})
+
+	t.Run("declared masks mark relaxed and attach counts", func(t *testing.T) {
+		result := TestResult{}
+		counts := map[string]int{"greeting": 1, "email": 2}
+		applyMaskReport(&result, counts, true)
+		assert.True(t, result.Relaxed, "declaring masks must mark the result relaxed")
+		assert.Equal(t, counts, result.MaskMatches)
+	})
+
+	t.Run("declared masks with no matches stay relaxed without counts", func(t *testing.T) {
+		result := TestResult{}
+		applyMaskReport(&result, map[string]int{}, true)
+		assert.True(t, result.Relaxed, "declaring masks must mark the result relaxed even when nothing matched")
+		assert.Nil(t, result.MaskMatches, "empty counts must not be attached")
+	})
 }
 
 func TestReportTableEmpty(t *testing.T) {

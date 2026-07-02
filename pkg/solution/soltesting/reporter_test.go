@@ -46,6 +46,43 @@ func TestReportResults_QuietFormat(t *testing.T) {
 	assert.Empty(t, buf.String(), "quiet format should produce no output")
 }
 
+func TestReportResults_RelaxedStatus(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := newTestOutputOpts(&buf, kvx.OutputFormatTable)
+
+	results := []TestResult{
+		{
+			Solution: "sol-a", Test: "golden", Status: StatusPass,
+			Duration:    10 * time.Millisecond,
+			Relaxed:     true,
+			MaskMatches: map[string]int{"entra-group": 6, "uuid": 2},
+		},
+	}
+
+	err := ReportResults(results, opts, false, time.Second, nil)
+	require.NoError(t, err)
+	output := buf.String()
+	assert.Contains(t, output, "PASS*", "relaxed pass should be marked in the table")
+	assert.Contains(t, output, "Relaxed (snapshot fidelity loosened):")
+	assert.Contains(t, output, "entra-group=6")
+	assert.Contains(t, output, "uuid=2")
+	assert.Contains(t, output, "1 relaxed")
+}
+
+func TestSummarize_CountsRelaxed(t *testing.T) {
+	t.Parallel()
+	results := []TestResult{
+		{Status: StatusPass, Relaxed: true},
+		{Status: StatusPass},
+		{Status: StatusFail},
+	}
+	s := Summarize(results)
+	assert.Equal(t, 2, s.Passed)
+	assert.Equal(t, 1, s.Failed)
+	assert.Equal(t, 1, s.Relaxed)
+}
+
 func TestReportResults_TableFormat_NoProgress(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

@@ -1,0 +1,3 @@
+=== envs/dev/app.auto.tfvars ===
+owner = <CONTACT>
+name = my-app

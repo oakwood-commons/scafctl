@@ -6,6 +6,7 @@ package soltesting
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ type ResultSummary struct {
 	Failed       int           `json:"failed"`
 	Errors       int           `json:"errors"`
 	Skipped      int           `json:"skipped"`
+	Relaxed      int           `json:"relaxed,omitempty"`
 	Total        int           `json:"total"`
 	Duration     time.Duration `json:"duration"`
 	WallDuration time.Duration `json:"wallDuration,omitempty"`
@@ -49,6 +51,9 @@ func Summarize(results []TestResult) ResultSummary {
 			s.Errors++
 		case StatusSkip:
 			s.Skipped++
+		}
+		if r.Relaxed {
+			s.Relaxed++
 		}
 	}
 	return s
@@ -98,6 +103,8 @@ type testResultOutput struct {
 	Assertions   []assertionOutput `json:"assertions,omitempty"`
 	RetryAttempt int               `json:"retryAttempt,omitempty"`
 	SandboxPath  string            `json:"sandboxPath,omitempty"`
+	Relaxed      bool              `json:"relaxed,omitempty"`
+	MaskMatches  map[string]int    `json:"maskMatches,omitempty"`
 }
 
 // assertionOutput is the JSON/YAML representation of an assertion result.
@@ -123,6 +130,8 @@ func buildReportData(results []TestResult, elapsed time.Duration) reportData {
 			Stderr:       r.Stderr,
 			RetryAttempt: r.RetryAttempt,
 			SandboxPath:  r.SandboxPath,
+			Relaxed:      r.Relaxed,
+			MaskMatches:  r.MaskMatches,
 		}
 		for _, a := range r.Assertions {
 			out.Assertions = append(out.Assertions, assertionOutput{
@@ -156,6 +165,7 @@ func reportTable(results []TestResult, w io.Writer, verbose bool, elapsed time.D
 
 	// Always show failure details and summary.
 	reportFailures(results, w, verbose)
+	reportRelaxed(results, w)
 	reportSummaryLine(results, w, elapsed)
 
 	return nil
@@ -183,7 +193,7 @@ func reportTableRows(results []TestResult, w io.Writer, verbose bool) {
 
 	// Rows
 	for _, r := range results {
-		status := statusIcon(r.Status)
+		status := statusLabel(r)
 		dur := format.Duration(r.Duration)
 
 		if verbose {
@@ -239,9 +249,55 @@ func reportSummaryLine(results []TestResult, w io.Writer, elapsed time.Duration)
 	summary := Summarize(results)
 	summary.WallDuration = elapsed
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%d passed, %d failed, %d errors, %d skipped (%s)\n",
-		summary.Passed, summary.Failed, summary.Errors, summary.Skipped,
+	relaxed := ""
+	if summary.Relaxed > 0 {
+		relaxed = fmt.Sprintf(", %d relaxed", summary.Relaxed)
+	}
+	fmt.Fprintf(w, "%d passed, %d failed, %d errors, %d skipped%s (%s)\n",
+		summary.Passed, summary.Failed, summary.Errors, summary.Skipped, relaxed,
 		format.Duration(summary.ElapsedDuration()))
+}
+
+// reportRelaxed lists tests whose snapshot fidelity was loosened via masks,
+// including per-mask replacement counts.
+func reportRelaxed(results []TestResult, w io.Writer) {
+	var relaxed []TestResult
+	for _, r := range results {
+		if r.Relaxed {
+			relaxed = append(relaxed, r)
+		}
+	}
+	if len(relaxed) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Relaxed (snapshot fidelity loosened):")
+	for _, r := range relaxed {
+		if counts := formatMaskCounts(r.MaskMatches); counts != "" {
+			fmt.Fprintf(w, "  %s/%s: %s\n", r.Solution, r.Test, counts)
+		} else {
+			fmt.Fprintf(w, "  %s/%s: no volatile regions matched\n", r.Solution, r.Test)
+		}
+	}
+}
+
+// formatMaskCounts renders per-mask replacement counts in a stable order,
+// e.g. "entra-group=6, uuid=2".
+func formatMaskCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, counts[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // listEntry holds test information for list display.
@@ -348,6 +404,15 @@ func statusIcon(s Status) string {
 	default:
 		return string(s)
 	}
+}
+
+// statusLabel returns the status string for a result, marking relaxed passes
+// with a trailing marker so loosened fidelity is visible in the table.
+func statusLabel(r TestResult) string {
+	if r.Relaxed && r.Status == StatusPass {
+		return "PASS*"
+	}
+	return statusIcon(r.Status)
 }
 
 // formatAssertionCounts returns a string like "(3/5)" showing passed/total assertions.
