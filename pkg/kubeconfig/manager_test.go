@@ -54,6 +54,14 @@ func registryWith(t *testing.T, p provider.Provider) *provider.Registry {
 func TestManager_WriteKubeconfig(t *testing.T) {
 	t.Parallel()
 	mock := NewMockProvider()
+	// Confirm the mock mirrors the real provider by declaring kubeconfig_write
+	// as a write op, so this test exercises the host-side write-operation guard
+	// under CapabilityKubeconfig rather than skipping it. Regression cover for
+	// #579: before the fix the guard only exempted CapabilityAction, so
+	// WriteKubeconfig failed with a read-only mode error even after a
+	// successful login.
+	require.True(t, mock.Descriptor().IsWriteOperation(OperationWrite))
+
 	m := NewManager("scafctl", WithRegistry(registryWith(t, mock)))
 
 	res, err := m.WriteKubeconfig(context.Background(), WriteInput{

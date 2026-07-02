@@ -77,15 +77,30 @@ func validateExecutionMode(ctx context.Context, desc *Descriptor) error {
 	return fmt.Errorf("provider %q does not support capability %q; supported: %v", desc.Name, execMode, desc.Capabilities)
 }
 
-// ValidateWriteOperation checks whether a write operation is being used in a read-only
-// context. Providers with Descriptor.WriteOperations populated declare which operations
-// mutate state; these are only allowed in action (CapabilityAction) context and rejected
-// in resolver resolve (CapabilityFrom) and transform (CapabilityTransform) contexts.
+// isReadOnlyResolverMode reports whether the execution mode is a read-only
+// resolver context in which write operations must be blocked. All other modes
+// (action, state, kubeconfig, authentication) legitimately perform writes and
+// are exempt from the write-operation guard.
+func isReadOnlyResolverMode(mode Capability) bool {
+	switch mode {
+	case CapabilityFrom, CapabilityTransform, CapabilityValidation:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateWriteOperation checks whether a write operation is being used in a
+// read-only resolver context. Providers with Descriptor.WriteOperations
+// populated declare which operations mutate state; these are rejected only in
+// the read-only resolver phases (CapabilityFrom, CapabilityTransform,
+// CapabilityValidation) and permitted in every other mode (CapabilityAction,
+// CapabilityState, CapabilityKubeconfig, CapabilityAuthentication).
 //
 // Semantics follow the SDK convention:
 //   - nil WriteOperations: provider cannot classify (no enforcement)
 //   - empty []string{}: all operations are reads (everything allowed)
-//   - populated: listed operations are blocked outside action context
+//   - populated: listed operations are blocked only in read-only resolver modes
 func ValidateWriteOperation(ctx context.Context, p Provider, resolvedInputs map[string]any) error {
 	desc := p.Descriptor()
 	if desc == nil || desc.WriteOperations == nil {
@@ -93,8 +108,8 @@ func ValidateWriteOperation(ctx context.Context, p Provider, resolvedInputs map[
 	}
 
 	execMode, ok := ExecutionModeFromContext(ctx)
-	if !ok || execMode == CapabilityAction {
-		return nil // writes are allowed in action context
+	if !ok || !isReadOnlyResolverMode(execMode) {
+		return nil // writes are only blocked in read-only resolver modes
 	}
 
 	operation, _ := resolvedInputs["operation"].(string)
