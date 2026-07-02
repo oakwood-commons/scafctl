@@ -318,6 +318,10 @@ You can also manage them explicitly:
 scafctl auth handlers
 scafctl auth handlers -o json
 
+# Show details for a single handler
+scafctl auth handlers github
+scafctl auth handlers github -o yaml
+
 # Pre-install a handler (useful for air-gapped environments)
 scafctl auth handlers install github
 scafctl auth handlers install entra
