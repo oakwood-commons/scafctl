@@ -66,6 +66,10 @@ func (m *MockProvider) Descriptor() *provider.Descriptor {
 		Capabilities: []provider.Capability{
 			provider.CapabilityKubeconfig,
 		},
+		// WriteOperations mirrors the real kubeconfig provider so tests exercise
+		// the host-side write-operation guard (regression coverage for #579:
+		// kubeconfig writes must be permitted under CapabilityKubeconfig).
+		WriteOperations: []string{OperationWrite, OperationRemove},
 		OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 			provider.CapabilityKubeconfig: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
 				"success": schemahelper.BoolProp("Whether the operation succeeded"),

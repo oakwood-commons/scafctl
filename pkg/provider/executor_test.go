@@ -704,11 +704,18 @@ func newMockWriteClassifierProvider(writeOps []string) *mockExecutableProvider {
 	version, _ := semver.NewVersion("1.0.0")
 	return &mockExecutableProvider{
 		descriptor: &Descriptor{
-			Name:            "test-provider",
-			APIVersion:      "v1",
-			Version:         version,
-			Description:     "Mock provider for testing",
-			Capabilities:    []Capability{CapabilityFrom, CapabilityAction, CapabilityTransform},
+			Name:        "test-provider",
+			APIVersion:  "v1",
+			Version:     version,
+			Description: "Mock provider for testing",
+			Capabilities: []Capability{
+				CapabilityFrom,
+				CapabilityAction,
+				CapabilityTransform,
+				CapabilityValidation,
+				CapabilityState,
+				CapabilityKubeconfig,
+			},
 			WriteOperations: writeOps,
 			Schema: schemahelper.ObjectSchema([]string{"operation"}, map[string]*jsonschema.Schema{
 				"operation": schemahelper.StringProp("Operation to perform"),
@@ -805,6 +812,60 @@ func TestValidateWriteOperation_SkipsNonClassifier(t *testing.T) {
 	result, err := executor.Execute(ctx, p, map[string]any{
 		"input1":    "value",
 		"operation": "create_label",
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestValidateWriteOperation_BlocksWriteInValidation(t *testing.T) {
+	t.Parallel()
+
+	p := newMockWriteClassifierProvider([]string{"create_label", "delete_label"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityValidation)
+
+	_, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "create_label",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write operation")
+	assert.Contains(t, err.Error(), "create_label")
+	assert.Contains(t, err.Error(), "workflow action")
+}
+
+func TestValidateWriteOperation_AllowsWriteInKubeconfig(t *testing.T) {
+	t.Parallel()
+
+	// Regression test for #579: kubeconfig writes run under CapabilityKubeconfig
+	// and must not be rejected by the read-only resolver write guard.
+	p := newMockWriteClassifierProvider([]string{"kubeconfig_write", "kubeconfig_remove"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityKubeconfig)
+
+	result, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "kubeconfig_write",
+	})
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestValidateWriteOperation_AllowsWriteInState(t *testing.T) {
+	t.Parallel()
+
+	// Regression test for #579: state backends run save/delete under
+	// CapabilityState and must not be rejected by the write guard.
+	p := newMockWriteClassifierProvider([]string{"state_save", "state_delete"})
+
+	executor := NewExecutor()
+	ctx := WithExecutionMode(context.Background(), CapabilityState)
+
+	result, err := executor.Execute(ctx, p, map[string]any{
+		"operation": "state_save",
 	})
 
 	require.NoError(t, err)
