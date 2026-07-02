@@ -84,6 +84,21 @@ Trade-off: `CapabilityAction` would avoid touching `ValidateDescriptor`, but at
 the cost of weaker typing and discovery. The state precedent settles this in
 favor of a dedicated capability.
 
+### Write-operation guard exemption (issue #579)
+
+The host-side write-operation guard (`provider.ValidateWriteOperation`) rejects
+declared write operations only in the **read-only resolver phases**
+(`CapabilityFrom`, `CapabilityTransform`, `CapabilityValidation`). Write-capable
+capabilities -- `CapabilityKubeconfig`, `CapabilityState`, `CapabilityAction`,
+and `CapabilityAuthentication` -- are exempt, so a provider may classify
+`kubeconfig_write`/`kubeconfig_remove` as write operations without those calls
+being blocked when the manager runs them under `CapabilityKubeconfig`.
+
+Regression note: an earlier guard whitelisted only `CapabilityAction`, which
+blocked `kubeconfig_write` under `CapabilityKubeconfig` and broke `kube login`.
+When adding a new write-capable capability, ensure it is *not* treated as a
+read-only resolver phase by the guard.
+
 ## 3. The host invocation path and the registry/auto-fetch resolution
 
 ### Finding (the flagged risk, resolved)
