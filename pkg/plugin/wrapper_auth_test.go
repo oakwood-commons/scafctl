@@ -519,6 +519,27 @@ func TestAuthHandlerWrapper_GetToken_ResolvesActiveProfile(t *testing.T) {
 	assert.Equal(t, "work", capturedProfile, "should resolve active profile from config")
 }
 
+func TestAuthHandlerWrapper_GetToken_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+	var capturedReq TokenRequest
+	mock := &MockAuthHandlerPlugin{
+		tokenFunc: func(_ context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+			capturedReq = req
+			return &TokenResponse{AccessToken: "tok"}, nil
+		},
+	}
+	client := &AuthHandlerClient{plugin: mock}
+	wrapper := NewAuthHandlerWrapper(client, AuthHandlerInfo{Name: "openshift"})
+
+	// #581: the per-cluster hostname on TokenOptions must reach the plugin
+	// TokenRequest so the handler can select the right cluster's token.
+	_, err := wrapper.GetToken(context.Background(), auth.TokenOptions{
+		Hostname: "https://api.a.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.a.example.com:6443", capturedReq.Hostname)
+}
+
 func TestAuthHandlerWrapper_GetToken_ProfileResolvedSkipsReResolution(t *testing.T) {
 	t.Parallel()
 	var capturedProfile string

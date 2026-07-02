@@ -41,6 +41,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		exportToken  bool
 		execCred     bool
 		profile      string
+		serverURL    string
 	)
 
 	cmd := &cobra.Command{
@@ -189,10 +190,29 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				scope = strings.Join(sorted, " ")
 			}
 
+			// When kubectl/oc invoke this binary as an exec credential plugin
+			// with provideClusterInfo: true, KUBERNETES_EXEC_INFO carries the
+			// target cluster's API server URL. Forward it as the token hostname
+			// so cluster-aware handlers mint the correct per-cluster token.
+			// Gated on CapTokenHostname: older handlers that only advertise
+			// CapHostname (login) would silently ignore the field and return
+			// their default/most-recent token, so we must not rely on it.
+			// An explicit --server overrides the exec-info value so callers can
+			// request a specific cluster's token without kubectl.
+			execInfo := os.Getenv(execcredential.ExecInfoEnv)
+			var tokenHostname string
+			if auth.HasCapability(caps, auth.CapTokenHostname) {
+				tokenHostname = serverURL
+				if tokenHostname == "" {
+					tokenHostname = execcredential.ClusterServerFromExecInfo(execInfo)
+				}
+			}
+
 			token, err := handler.GetToken(ctx, auth.TokenOptions{
 				Scope:        scope,
 				MinValidFor:  minValidFor,
 				ForceRefresh: forceRefresh,
+				Hostname:     tokenHostname,
 			})
 			if err != nil {
 				err = fmt.Errorf("failed to get token: %w", err)
@@ -204,7 +224,6 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			// via --exec-credential, or auto-detected when kubectl invokes this binary
 			// as an exec plugin (KUBERNETES_EXEC_INFO set) and no other render mode or
 			// explicit output format was requested.
-			execInfo := os.Getenv(execcredential.ExecInfoEnv)
 			wantExecCred := execCred
 			if !wantExecCred && execInfo != "" &&
 				!rawToken && !clip && !exportToken && !curl && !decode &&
@@ -351,6 +370,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().BoolVar(&exportToken, "export", false, fmt.Sprintf("Output a shell export statement: eval $(%s auth token ... --export)", cliParams.BinaryName))
 	cmd.Flags().BoolVar(&execCred, "exec-credential", false, "Emit a Kubernetes client-go ExecCredential JSON (for kubectl/oc exec credential plugins; auto-detected when KUBERNETES_EXEC_INFO is set)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
+	cmd.Flags().StringVar(&serverURL, "server", "", "Cluster API server URL selecting which per-cluster token to mint (handlers advertising token_hostname); overrides KUBERNETES_EXEC_INFO")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd

@@ -960,6 +960,37 @@ endpoints, and troubleshooting, see the
 [hostname resolution example](../../examples/auth/hostname-resolution.md) and the
 [hostname resolution design doc](../design/hostname-resolution.md).
 
+### Multi-Cluster Token Routing
+
+`kube login` can wire up several clusters that share one auth handler. Each
+`kube login` writes a kubeconfig exec entry with `provideClusterInfo: true`, so
+`kubectl`/`oc` pass the target cluster's API server URL to the exec helper on
+every credential call. The helper (`auth token --exec-credential`) forwards that
+URL to the handler, which returns the token for that specific cluster -- so two
+contexts backed by the same handler each mint the correct token with no
+re-login.
+
+This routing is active only for handlers that advertise the `token_hostname`
+capability (`auth.CapTokenHostname`). If a handler does not -- for example an
+older handler built before SDK v0.14.0, or one that only advertises the login
+`hostname` capability -- `kube login` prints a warning that logging into
+multiple clusters with it may return the wrong token; rebuild the handler
+against SDK v0.14.0 and advertise `token_hostname` to enable per-cluster
+routing.
+
+To request a specific cluster's token directly (for scripting or debugging,
+without `kubectl` setting `KUBERNETES_EXEC_INFO`), pass the cluster's API server
+URL to `auth token --server`:
+
+```console
+scafctl auth token openshift --server https://api.a.example.com:6443 --raw
+```
+
+`--server` takes precedence over `KUBERNETES_EXEC_INFO` and is honored only for
+handlers that advertise `token_hostname`. The structured `kube login` output
+(`-o json`) also reports a `perClusterTokens` boolean so scripts can detect
+whether the resolved handler supports this routing.
+
 ---
 
 ## GitHub Interactive Flow (Browser OAuth + PKCE)

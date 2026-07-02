@@ -22,6 +22,7 @@ The design is layered by dependency weight so each phase ships independently:
 | 2b | Kubeconfig provider plugin implementation (`client-go`/`clientcmd`) | plugin | Planned |
 | 3 | Thin `kube login` / `kube logout` commands | core (`pkg/kube/login`, `pkg/cmd/scafctl/kube`) | Shipped |
 | 4 | OpenShift OAuth auth-handler plugin | plugin | Planned |
+| 5 | Multi-cluster per-cluster token routing on the exec-credential path | core (`pkg/auth/execcredential`, `pkg/cmd/scafctl/auth`, `pkg/kube/login`) + SDK `CapTokenHostname` | Shipped |
 
 Phases 1-3 add no OpenShift- or vendor-specific code and already deliver
 credential-helper support for any OIDC cluster.
@@ -161,6 +162,46 @@ with no resolver involved.
 - **Phase 4 -- OpenShift OAuth handler plugin.** The one genuinely
   OpenShift-specific credential source: localhost-callback implicit-grant flow,
   plus `ListProjects` / MOTD behind graceful degradation.
+
+## Phase 5: Multi-Cluster Token Routing (Shipped)
+
+A single auth handler can back several clusters. Because the exec-credential
+kubeconfig entry `kube login` writes is otherwise identical for every cluster,
+the exec helper needs a per-invocation discriminator so `kubectl`/`oc` receive
+the correct cluster's token rather than the handler's most-recent one.
+
+The mechanism uses the client-go-idiomatic cluster hint, gated on a dedicated
+capability so mixed-version handlers never misroute silently (see issue #581 and
+the gating decision in #583):
+
+1. **`kube login` sets `provideClusterInfo: true`** on the kubeconfig exec
+   block (`pkg/kube/login`). `kubectl`/`oc` then pass the target cluster's
+   details -- including `spec.cluster.server` -- to the plugin via the
+   `KUBERNETES_EXEC_INFO` environment variable on every credential call. The
+   exec args stay cluster-agnostic (identical for all clusters); the cluster is
+   supplied at call time.
+2. **`auth token --exec-credential` extracts the server** from
+   `KUBERNETES_EXEC_INFO` (`execcredential.ClusterServerFromExecInfo`) and
+   forwards it as `TokenOptions.Hostname`, **only when the handler advertises
+   `auth.CapTokenHostname`**. Handlers that advertise `CapHostname` for login
+   but predate token-path hostname support never receive the field (proto3
+   would silently drop it), so they cannot misroute.
+3. **The host threads `Hostname`** through the in-process handler call and, for
+   plugin handlers, across the gRPC boundary
+   (`plugin.TokenRequest.Hostname` -> `proto.GetTokenRequest.hostname`) on both
+   the client and server mappings.
+4. **The routing key is the raw API server URL.** `kube login` sends
+   `LoginRequest.Hostname = info.APIServerURL`, writes that same value as the
+   kubeconfig `cluster.server`, and client-go echoes it back verbatim in
+   `KUBERNETES_EXEC_INFO`. So the token-time hostname matches the login-time
+   key by construction -- no normalization is required, and the handler stores
+   and retrieves per-cluster tokens under one stable key.
+
+When the resolved handler lacks `CapTokenHostname`, `kube login` emits a warning
+at login time (not token time, where the message would be swallowed inside the
+`kubectl` subprocess) noting that multi-cluster logins with that handler may
+return the wrong token. Single-cluster usage and handlers without the capability
+behave exactly as before.
 
 ## Design Decisions
 
