@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Auth Handler Detail",
+  "description": "Schema for a single scafctl authentication handler with display extensions",
+  "type": "object",
+
+  "x-kvx-icon": "🔐",
+
+  "x-kvx-detail": {
+    "titleField": "displayName",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "status"],
+        "layout": "inline"
+      },
+      {
+        "title": "Source",
+        "fields": ["source"],
+        "layout": "inline"
+      },
+      {
+        "title": "Logged In",
+        "fields": ["loggedIn"],
+        "layout": "inline"
+      },
+      {
+        "title": "Supported Flows",
+        "fields": ["flows"],
+        "layout": "tags"
+      },
+      {
+        "title": "Capabilities",
+        "fields": ["capabilities"],
+        "layout": "tags"
+      },
+      {
+        "title": "Installation",
+        "fields": ["hint"],
+        "layout": "paragraph"
+      }
+    ]
+  },
+
+  "properties": {
+    "name": {
+      "type": "string",
+      "title": "Name",
+      "description": "Handler identifier"
+    },
+    "displayName": {
+      "type": "string",
+      "title": "Display Name",
+      "description": "Human-readable handler name"
+    },
+    "status": {
+      "type": "string",
+      "title": "Status",
+      "description": "Installation status (installed, available, not-found)"
+    },
+    "source": {
+      "type": "string",
+      "title": "Source",
+      "description": "Where the handler comes from (built-in, plugin, catalog)"
+    },
+    "loggedIn": {
+      "type": "boolean",
+      "title": "Logged In",
+      "description": "Whether the handler is currently authenticated"
+    },
+    "flows": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Flows",
+      "description": "Supported authentication flows"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "title": "Capabilities",
+      "description": "Handler capabilities"
+    },
+    "hint": {
+      "type": "string",
+      "title": "Installation",
+      "description": "Hint for installing or inspecting the handler"
+    }
+  }
+}
