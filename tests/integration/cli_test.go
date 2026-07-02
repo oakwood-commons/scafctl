@@ -5426,6 +5426,76 @@ spec:
 	assert.Equal(t, 11, exitCode, "expected exit code 11 for test failure")
 }
 
+func TestIntegration_Test_Functional_SnapshotMasking(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/snapshot-masking/solution.yaml"
+
+	type resultItem struct {
+		Test        string         `json:"test"`
+		Status      string         `json:"status"`
+		Relaxed     bool           `json:"relaxed"`
+		MaskMatches map[string]int `json:"maskMatches"`
+	}
+
+	t.Run("json surfaces relaxed status and mask counts", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlLong(t,
+			"test", "functional",
+			"-f", solution,
+			"--skip-builtins",
+			"--no-color",
+			"-o", "json",
+		)
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+		var report struct {
+			Results []resultItem `json:"results"`
+			Summary struct {
+				Passed  int `json:"passed"`
+				Relaxed int `json:"relaxed"`
+			} `json:"summary"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+		byTest := map[string]resultItem{}
+		for _, r := range report.Results {
+			byTest[r.Test] = r
+		}
+
+		// Stdout source: custom mask + opt-in email preset (uuid disabled).
+		stdoutCase := byTest["snapshot-stdout"]
+		assert.Equal(t, "pass", stdoutCase.Status)
+		assert.True(t, stdoutCase.Relaxed, "masked test should report relaxed")
+		assert.Equal(t, 1, stdoutCase.MaskMatches["greeting"], "custom greeting mask should match once")
+		assert.Equal(t, 2, stdoutCase.MaskMatches["email"], "opt-in email preset should match twice")
+		assert.NotContains(t, stdoutCase.MaskMatches, "uuid", "disabled built-in preset must not appear")
+
+		// Files source: path-scoped custom mask over the rendered tree.
+		filesCase := byTest["snapshot-files"]
+		assert.Equal(t, "pass", filesCase.Status)
+		assert.True(t, filesCase.Relaxed)
+		assert.Equal(t, 1, filesCase.MaskMatches["contact"], "path-scoped contact mask should match once")
+
+		assert.Equal(t, 2, report.Summary.Passed)
+		assert.Equal(t, 2, report.Summary.Relaxed)
+	})
+
+	t.Run("table output shows PASS star and relaxed section", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlLong(t,
+			"test", "functional",
+			"-f", solution,
+			"--skip-builtins",
+			"--no-color",
+		)
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.Contains(t, stdout, "PASS*", "relaxed tests should render PASS* in the table")
+		assert.Contains(t, stdout, "Relaxed (snapshot fidelity loosened):")
+		assert.Contains(t, stdout, "2 relaxed")
+	})
+}
+
 func TestIntegration_Test_List(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

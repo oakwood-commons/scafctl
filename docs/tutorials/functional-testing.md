@@ -389,6 +389,84 @@ On mismatch, a unified diff is displayed:
 
 Snapshots can be used alongside other assertions — all must pass.
 
+### Masking volatile values
+
+The built-in normalizers (`timestamp`, `uuid`, `sandbox`) are always applied.
+When a snapshot contains other volatile values -- live group memberships, project
+IDs, generated tokens -- declare `masks` to normalize them to stable placeholders.
+Each mask is either a **custom** regex or an opt-in **preset**:
+
+```yaml
+cases:
+  golden-render:
+    description: Golden baseline with masked volatile values
+    command: [run, resolver]
+    args: ["-o", "json"]
+    snapshot: testdata/snapshots/resolver-masked.json
+    masks:
+      # Custom mask: normalize a value to a placeholder.
+      - name: greeting
+        pattern: 'Hello from [^"]+'
+        placeholder: "<GREETING>"
+      # Opt-in preset (built-in regex + placeholder).
+      - use: email
+```
+
+Preset masks:
+
+| Preset | Default state | Replaces |
+|--------|---------------|----------|
+| `timestamp` | on (built-in) | ISO-8601 timestamps → `<TIMESTAMP>` |
+| `uuid` | on (built-in) | UUIDs → `<UUID>` |
+| `sandbox` | on (built-in) | Sandbox path → `<SANDBOX>` |
+| `email` | opt-in via `use` | Email addresses → `<EMAIL>` |
+| `ipv4` | opt-in via `use` | IPv4 addresses → `<IPV4>` |
+| `mac` | opt-in via `use` | MAC addresses → `<MAC>` |
+
+Disable a built-in preset with `use` + `disabled: true`:
+
+```yaml
+masks:
+  - use: uuid
+    disabled: true
+```
+
+When any mask is declared, the test reports a **relaxed** status (`PASS*`) and a
+per-mask match count, making it obvious that snapshot fidelity was intentionally
+loosened:
+
+```
+tested-solution  golden-render  PASS*  87ms
+
+Relaxed (snapshot fidelity loosened):
+  tested-solution/golden-render: greeting=1
+```
+
+### Snapshotting rendered files
+
+By default `snapshot` compares command **stdout**. To snapshot the tree of files
+a solution writes (for example rendered `.tf` files with live values embedded),
+set `snapshotSource: files`. The golden file becomes a deterministic manifest of
+every written file (`=== path ===` headers followed by masked content). Masks may
+be scoped to specific files with a `path` glob:
+
+```yaml
+cases:
+  golden-files:
+    description: Golden baseline over rendered files
+    command: [run, solution]
+    snapshot: testdata/snapshots/rendered-tree.txt
+    snapshotSource: files
+    masks:
+      # Scope a mask to matching files only.
+      - name: entra-group
+        pattern: '\[[^\]]*\]'
+        placeholder: "<GROUP>"
+        path: "envs/**/*.auto.tfvars"
+```
+
+A `path` glob is only valid when `snapshotSource: files`.
+
 ### Bundle Include
 
 If your solution uses `bundle.include`, make sure test files are covered:

@@ -273,6 +273,8 @@ cases:
     cleanup: <list[InitStep]>
     assertions: <list[Assertion]>
     snapshot: <string>
+    snapshotSource: <string>  # stdout (default) | files
+    masks: <list[Mask]>
     injectFile: <bool>
     expectFailure: <bool>
     exitCode: <int>
@@ -299,6 +301,8 @@ Each test case is a named entry under `spec.testing.cases`. The maximum number o
 | `cleanup` | `[]InitStep` | No | `[]` | Teardown steps executed after the command, even on failure. See [Cleanup Steps](#cleanup-steps) |
 | `assertions` | `[]Assertion` | Conditional | — | Required unless `snapshot` is set. All assertions are evaluated regardless of prior failures. Max 100 assertions per test |
 | `snapshot` | `string` | No | — | Relative path to a golden file for normalized comparison |
+| `snapshotSource` | `string` | No | `stdout` | What to snapshot: `stdout` (default) compares command output; `files` compares a deterministic manifest of the files the command writes. Requires `snapshot` to be set |
+| `masks` | `[]Mask` | No | `[]` | Additional normalization rules applied before snapshot comparison. Each mask is a custom regex (`pattern` + `placeholder`, optional `name`, optional `path` glob) or an opt-in preset (`use`). Built-in presets (`timestamp`, `uuid`, `sandbox`) are always applied and can be disabled via `use` + `disabled`. Declaring any mask reports a relaxed (`PASS*`) status. Max 100 masks. A `path` glob requires `snapshotSource: files` |
 | `injectFile` | `bool` | No | `true` | When `true` (default), the runner auto-injects `-f <sandbox-solution-path>`. Set to `false` for commands that don't accept `-f` (e.g., `config get`, `auth status`) or for catalog solution tests that use `--catalog` instead. `-f` must never appear in `args` regardless of this setting |
 | `expectFailure` | `bool` | No | `false` | When `true`, the test passes if the command exits non-zero |
 | `exitCode` | `int` | No | — | Exact expected exit code. **Mutually exclusive** with `expectFailure` — setting both is a validation error |
@@ -525,6 +529,8 @@ Test names starting with `_` are **templates** — they are not executed directl
 | `skip` | Child wins if set |
 | `injectFile` | Child wins if set |
 | `snapshot` | Child wins if set |
+| `snapshotSource` | Child wins if set |
+| `masks` | Child wins if set (list replaced, not appended) |
 | `retries` | Child wins if set |
 
 ### Example

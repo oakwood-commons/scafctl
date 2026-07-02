@@ -672,18 +672,40 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 	// Snapshot comparison
 	if tc.Snapshot != "" {
 		snapshotPath := filepath.Join(solutionDir, tc.Snapshot)
+		useFiles := tc.SnapshotSource == SnapshotSourceFiles
+		declared := len(tc.Masks) > 0
 		if r.UpdateSnapshots {
-			if err := UpdateSnapshot(cmdOutput.Stdout, snapshotPath, sandbox.Path()); err != nil {
+			var (
+				counts map[string]int
+				uErr   error
+			)
+			if useFiles {
+				counts, uErr = UpdateFileSnapshot(cmdOutput.Files, snapshotPath, sandbox.Path(), tc.Masks)
+			} else {
+				counts, uErr = UpdateSnapshot(cmdOutput.Stdout, snapshotPath, sandbox.Path(), tc.Masks)
+			}
+			if uErr != nil {
 				result.Status = StatusError
-				result.Message = fmt.Sprintf("snapshot update failed: %s", err)
+				result.Message = fmt.Sprintf("snapshot update failed: %s", uErr)
 				result.Duration = time.Since(start)
 				return result
 			}
+			applyMaskReport(&result, counts, declared)
 		} else {
-			match, diff, err := CompareSnapshot(cmdOutput.Stdout, snapshotPath, sandbox.Path())
-			if err != nil {
+			var (
+				match  bool
+				diff   string
+				counts map[string]int
+				cErr   error
+			)
+			if useFiles {
+				match, diff, counts, cErr = CompareFileSnapshot(cmdOutput.Files, snapshotPath, sandbox.Path(), tc.Masks)
+			} else {
+				match, diff, counts, cErr = CompareSnapshot(cmdOutput.Stdout, snapshotPath, sandbox.Path(), tc.Masks)
+			}
+			if cErr != nil {
 				result.Status = StatusError
-				result.Message = fmt.Sprintf("snapshot comparison failed: %s", err)
+				result.Message = fmt.Sprintf("snapshot comparison failed: %s", cErr)
 				result.Duration = time.Since(start)
 				return result
 			}
@@ -694,6 +716,7 @@ func (r *Runner) executeTest(ctx context.Context, tc *TestCase, st *SolutionTest
 				result.Duration = time.Since(start)
 				return result
 			}
+			applyMaskReport(&result, counts, declared)
 		}
 	}
 
@@ -1053,6 +1076,19 @@ func attachCommandOutput(result *TestResult, cmdOutput *CommandOutput) {
 	}
 	result.Stdout = cmdOutput.Stdout
 	result.Stderr = cmdOutput.Stderr
+}
+
+// applyMaskReport records snapshot mask outcomes on the result. When the test
+// declared masks, the result is marked relaxed (snapshot fidelity was
+// intentionally loosened) and the per-mask replacement counts are attached.
+func applyMaskReport(result *TestResult, counts map[string]int, declared bool) {
+	if !declared {
+		return
+	}
+	result.Relaxed = true
+	if len(counts) > 0 {
+		result.MaskMatches = counts
+	}
 }
 
 // buildEnvMap builds the environment variable map for a test.

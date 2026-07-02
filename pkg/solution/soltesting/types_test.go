@@ -185,6 +185,87 @@ func TestTestCase_Validate_ValidWithSnapshot(t *testing.T) {
 	assert.NoError(t, tc.Validate())
 }
 
+func TestTestCase_Validate_ValidWithMasksAndFileSource(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:           "golden-render",
+		Command:        []string{"scaffold", "solution"},
+		Snapshot:       "testdata/render.txt",
+		SnapshotSource: soltesting.SnapshotSourceFiles,
+		Masks: []soltesting.Mask{
+			{Name: "group", Pattern: `\[[^\]]*\]`, Placeholder: "<GROUP>", Path: "envs/**/*.auto.tfvars"},
+			{Use: "email"},
+		},
+	}
+	assert.NoError(t, tc.Validate())
+}
+
+func TestTestCase_Validate_InvalidSnapshotSource(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:           "bad-source",
+		Command:        []string{"render", "solution"},
+		Snapshot:       "testdata/expected.json",
+		SnapshotSource: "bogus",
+	}
+	err := tc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "snapshotSource must be one of")
+}
+
+func TestTestCase_Validate_FileSourceRequiresSnapshot(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:           "no-snapshot",
+		Command:        []string{"render", "solution"},
+		Assertions:     []soltesting.Assertion{{Contains: "x"}},
+		SnapshotSource: soltesting.SnapshotSourceFiles,
+	}
+	err := tc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires snapshot to be set")
+}
+
+func TestTestCase_Validate_PathMaskRequiresFileSource(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:     "path-mask-stdout",
+		Command:  []string{"render", "solution"},
+		Snapshot: "testdata/expected.json",
+		Masks: []soltesting.Mask{
+			{Name: "g", Pattern: `\d+`, Placeholder: "<N>", Path: "*.tfvars"},
+		},
+	}
+	err := tc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "path scoping requires snapshotSource 'files'")
+}
+
+func TestTestCase_Validate_PresetMaskWithPathNoDuplicateError(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:     "preset-mask-with-path",
+		Command:  []string{"render", "solution"},
+		Snapshot: "testdata/expected.json",
+		Masks: []soltesting.Mask{
+			{Use: "email", Path: "*.tfvars"},
+		},
+	}
+	err := tc.Validate()
+	require.Error(t, err)
+	// Preset masks reject path in Mask.Validate; the generic snapshotSource
+	// check must not also fire for the same mask.
+	assert.Contains(t, err.Error(), "mask with 'use' must not set 'path'")
+	assert.NotContains(t, err.Error(), "path scoping requires snapshotSource 'files'")
+}
+
+func TestTestCase_Validate_InvalidMask(t *testing.T) {
+	tc := &soltesting.TestCase{
+		Name:     "bad-mask",
+		Command:  []string{"render", "solution"},
+		Snapshot: "testdata/expected.json",
+		Masks:    []soltesting.Mask{{Use: "nope"}},
+	}
+	err := tc.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown preset")
+}
+
 func TestTestCase_Validate_InvalidName(t *testing.T) {
 	tests := []struct {
 		name      string

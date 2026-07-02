@@ -45,6 +45,7 @@ type junitTestCase struct {
 	Failure   *junitFailure `xml:"failure,omitempty"`
 	Error     *junitError   `xml:"error,omitempty"`
 	Skipped   *junitSkipped `xml:"skipped,omitempty"`
+	SystemOut string        `xml:"system-out,omitempty"`
 }
 
 // junitFailure records an assertion failure.
@@ -127,6 +128,13 @@ func WriteJUnitReport(results []TestResult, path string) error {
 				}
 			case StatusPass:
 				// No additional elements needed
+			}
+
+			if r.Relaxed {
+				tc.SystemOut = "snapshot fidelity relaxed via masks"
+				if counts := formatMaskCounts(r.MaskMatches); counts != "" {
+					tc.SystemOut += ": " + counts
+				}
 			}
 
 			suite.TestCases = append(suite.TestCases, tc)

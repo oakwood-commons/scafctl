@@ -1,0 +1,6 @@
+{
+  "environment": "dev",
+  "greeting": "<GREETING>",
+  "language": "go",
+  "projectName": "my-app"
+}
