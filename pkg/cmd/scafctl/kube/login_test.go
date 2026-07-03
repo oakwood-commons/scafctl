@@ -136,6 +136,29 @@ func TestCommandLogin_JSONOutput(t *testing.T) {
 	assert.Contains(t, buf.String(), "prod")
 }
 
+func TestCommandLogin_JSONReportsPerClusterTokens(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withMockHandler(t, ctx)
+	mock.CapabilitiesValue = []auth.Capability{auth.CapTokenHostname}
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok"}
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod",
+		"--handler", mockHandlerName,
+		"--server", "https://api.example.com:6443",
+		"--kubeconfig", path,
+		"--output", "json",
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "\"perClusterTokens\"")
+	assert.Contains(t, buf.String(), "true",
+		"a CapTokenHostname handler must report perClusterTokens:true")
+}
+
 func TestCommandLogin_HandlerFromResolverDefault(t *testing.T) {
 	t.Parallel()
 	ctx, buf := newTestContext(t)

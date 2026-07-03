@@ -178,6 +178,12 @@ type Result struct {
 	// UsedFallback reports that the static kubeconfig writer was used because
 	// the kubeconfig provider was unavailable.
 	UsedFallback bool
+
+	// SupportsPerClusterTokens reports whether the auth handler advertises
+	// CapTokenHostname, i.e. it honors a per-cluster hostname on the token path.
+	// When false, logging into multiple clusters with this handler may return
+	// the wrong cluster's token (see issue #581).
+	SupportsPerClusterTokens bool
 }
 
 // Login resolves the cluster, runs the handler login, and writes a kubeconfig
@@ -240,26 +246,31 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 	userName := firstNonEmpty(req.UserName, clusterName)
 
 	writeIn := kubeconfig.WriteInput{
-		Server:             info.APIServerURL,
-		Audience:           info.OIDCAudience,
-		ClusterName:        clusterName,
-		ContextName:        contextName,
-		UserName:           userName,
-		KubeconfigPath:     req.KubeconfigPath,
-		ExecCommand:        binaryName,
-		ExecArgs:           buildExecArgs(handler, info, req.Profile),
-		InteractiveMode:    interactiveModeFor(info.AuthType),
-		InstallHint:        buildInstallHint(binaryName),
-		ProvideClusterInfo: false,
+		Server:          info.APIServerURL,
+		Audience:        info.OIDCAudience,
+		ClusterName:     clusterName,
+		ContextName:     contextName,
+		UserName:        userName,
+		KubeconfigPath:  req.KubeconfigPath,
+		ExecCommand:     binaryName,
+		ExecArgs:        buildExecArgs(handler, info, req.Profile),
+		InteractiveMode: interactiveModeFor(info.AuthType),
+		InstallHint:     buildInstallHint(binaryName),
+		// Ask kubectl/oc to pass the target cluster's details (API server URL)
+		// via KUBERNETES_EXEC_INFO so the exec helper can route per-cluster
+		// tokens. Handlers that do not advertise CapTokenHostname simply ignore
+		// the extra info.
+		ProvideClusterInfo: true,
 		CAData:             info.CAData,
 		InsecureSkipTLS:    info.InsecureSkipTLS,
 		SetCurrentContext:  req.SetCurrentContext,
 	}
 
 	result := &Result{
-		Handler:  handler.Name(),
-		Server:   info.APIServerURL,
-		AuthType: info.AuthType,
+		Handler:                  handler.Name(),
+		Server:                   info.APIServerURL,
+		AuthType:                 info.AuthType,
+		SupportsPerClusterTokens: auth.HasCapability(handler.Capabilities(), auth.CapTokenHostname),
 	}
 
 	writeRes, err := deps.Kubeconfig.WriteKubeconfig(ctx, writeIn)
@@ -338,6 +349,13 @@ func tokenOptionsFor(h Authenticator, info kube.ClusterInfo) auth.TokenOptions {
 	opts := auth.TokenOptions{}
 	if info.OIDCAudience != "" && auth.HasCapability(h.Capabilities(), auth.CapScopesOnTokenRequest) {
 		opts.Scope = info.OIDCAudience
+	}
+	// Route the post-login whoami to the just-authenticated cluster so
+	// cluster-aware handlers return that cluster's token rather than relying on
+	// an implicit "most-recent" default. Mirrors the login-time Hostname and is
+	// gated on CapTokenHostname (see issue #581).
+	if info.APIServerURL != "" && auth.HasCapability(h.Capabilities(), auth.CapTokenHostname) {
+		opts.Hostname = info.APIServerURL
 	}
 	return opts
 }

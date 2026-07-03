@@ -399,6 +399,107 @@ func TestCommandToken_ExecCredentialAutoDetect(t *testing.T) {
 	assert.Equal(t, "auto-detected-token", status["token"])
 }
 
+func TestCommandToken_ExecCredentialForwardsClusterHostname(t *testing.T) {
+	// Regression test for #581: with provideClusterInfo the exec info carries
+	// the target cluster's server, which must be forwarded as the token
+	// hostname so cluster-aware handlers mint the correct per-cluster token.
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{"cluster":{"server":"https://api.a.example.com:6443"}}}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newGitHubMock()
+	mock.CapabilitiesValue = append(mock.CapabilitiesValue, auth.CapTokenHostname)
+	mock.SetToken(&auth.Token{AccessToken: "cluster-a-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github"})
+
+	require.NoError(t, cmd.Execute())
+
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Equal(t, "https://api.a.example.com:6443", mock.GetTokenCalls[0].Hostname,
+		"cluster server must be forwarded as the token hostname for CapTokenHostname handlers")
+}
+
+func TestCommandToken_ExecCredentialHostnameGatedByCapability(t *testing.T) {
+	// A handler that advertises only CapHostname (login) but not
+	// CapTokenHostname must not receive the token hostname: it would silently
+	// ignore it (older SDK) and return its default token, so the host must not
+	// rely on it. See #583.
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{"cluster":{"server":"https://api.a.example.com:6443"}}}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newGitHubMock() // caps: CapScopesOnLogin, CapHostname (no CapTokenHostname)
+	mock.SetToken(&auth.Token{AccessToken: "default-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github"})
+
+	require.NoError(t, cmd.Execute())
+
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Empty(t, mock.GetTokenCalls[0].Hostname,
+		"token hostname must not be forwarded to handlers lacking CapTokenHostname")
+}
+
+func TestCommandToken_ServerFlagSelectsClusterHostname(t *testing.T) {
+	// #581: --server lets callers request a specific cluster's token without
+	// kubectl, and takes precedence over KUBERNETES_EXEC_INFO.
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{"cluster":{"server":"https://api.b.example.com:6443"}}}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newGitHubMock()
+	mock.CapabilitiesValue = append(mock.CapabilitiesValue, auth.CapTokenHostname)
+	mock.SetToken(&auth.Token{AccessToken: "cluster-a-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github", "--server", "https://api.a.example.com:6443", "--raw"})
+
+	require.NoError(t, cmd.Execute())
+
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Equal(t, "https://api.a.example.com:6443", mock.GetTokenCalls[0].Hostname,
+		"--server must override the exec-info cluster server")
+}
+
+func TestCommandToken_ServerFlagGatedByCapability(t *testing.T) {
+	// --server is ignored for handlers that do not advertise CapTokenHostname.
+	ctx, buf := newTestContext(t)
+
+	mock := newGitHubMock() // no CapTokenHostname
+	mock.SetToken(&auth.Token{AccessToken: "default-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)})
+	ctx = withTestHandler(ctx, mock)
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandToken(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"github", "--server", "https://api.a.example.com:6443", "--raw"})
+
+	require.NoError(t, cmd.Execute())
+
+	require.Len(t, mock.GetTokenCalls, 1)
+	assert.Empty(t, mock.GetTokenCalls[0].Hostname)
+}
+
 func TestCommandToken_ExecCredentialEchoesAPIVersion(t *testing.T) {
 	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1beta1","kind":"ExecCredential","spec":{}}`)
 

@@ -132,3 +132,43 @@ func TestAPIVersionFromExecInfo(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterServerFromExecInfo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		execInfo string
+		want     string
+	}{
+		{name: "empty", execInfo: "", want: ""},
+		{name: "invalid json", execInfo: "{not json", want: ""},
+		{
+			name:     "server present",
+			execInfo: `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{"cluster":{"server":"https://api.a.example.com:6443"}}}`,
+			want:     "https://api.a.example.com:6443",
+		},
+		{
+			name:     "no cluster block",
+			execInfo: `{"apiVersion":"client.authentication.k8s.io/v1","spec":{"interactive":true}}`,
+			want:     "",
+		},
+		{
+			name:     "cluster without server",
+			execInfo: `{"spec":{"cluster":{"certificate-authority-data":"abc"}}}`,
+			want:     "",
+		},
+		{
+			name:     "no spec",
+			execInfo: `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential"}`,
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, ClusterServerFromExecInfo(tt.execInfo))
+		})
+	}
+}

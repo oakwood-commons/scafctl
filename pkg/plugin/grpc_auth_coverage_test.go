@@ -323,6 +323,29 @@ func TestAuthHandlerGRPCServer_GetToken(t *testing.T) {
 	assert.Equal(t, "openid", resp.Scope)
 }
 
+func TestAuthHandlerGRPCServer_GetToken_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	// #581: the server must map the proto hostname into the TokenRequest so a
+	// cluster-aware handler served over gRPC selects the correct cluster token.
+	var capturedReq TokenRequest
+	server := &AuthHandlerGRPCServer{
+		Impl: &MockAuthHandlerPlugin{
+			tokenFunc: func(_ context.Context, _ string, req TokenRequest) (*TokenResponse, error) {
+				capturedReq = req
+				return &TokenResponse{AccessToken: "tok", TokenType: "Bearer"}, nil
+			},
+		},
+	}
+
+	_, err := server.GetToken(t.Context(), &proto.GetTokenRequest{
+		HandlerName: "openshift",
+		Hostname:    "https://api.a.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.a.example.com:6443", capturedReq.Hostname)
+}
+
 func TestAuthHandlerGRPCServer_ListCachedTokens(t *testing.T) {
 	t.Parallel()
 

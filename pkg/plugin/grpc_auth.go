@@ -211,6 +211,7 @@ func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetToke
 		Scope:        req.Scope,
 		MinValidFor:  time.Duration(req.MinValidForSeconds) * time.Second,
 		ForceRefresh: req.ForceRefresh,
+		Hostname:     req.Hostname,
 	}
 	token, err := s.Impl.GetToken(ctx, req.HandlerName, tokenReq)
 	if err != nil {
@@ -412,6 +413,7 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 		MinValidForSeconds: int64(req.MinValidFor / time.Second),
 		ForceRefresh:       req.ForceRefresh,
 		Profile:            auth.ProfileFromContext(ctx),
+		Hostname:           req.Hostname,
 	})
 	if err != nil {
 		return nil, err
