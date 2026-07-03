@@ -571,19 +571,38 @@ func TestGoTemplateProvider_Execute_IgnoredBlocks_Empty(t *testing.T) {
 		"name": "test",
 	})
 
-	// Empty/invalid blocks should be silently skipped
-	inputs := map[string]any{
-		"name":     "empty-blocks-test",
-		"template": "Hello, {{.name}}!",
-		"ignoredBlocks": []any{
-			map[string]any{"start": "", "end": ""},
-			map[string]any{"start": "something", "end": ""},
+	// Empty/invalid blocks are rejected: an entry must declare exactly one mode,
+	// and start/end must be set as a pair.
+	tests := []struct {
+		name    string
+		block   map[string]any
+		wantErr string
+	}{
+		{
+			name:    "no mode set",
+			block:   map[string]any{"start": "", "end": ""},
+			wantErr: "no mode set",
+		},
+		{
+			name:    "start without end",
+			block:   map[string]any{"start": "something", "end": ""},
+			wantErr: "'start' and 'end' must both be set",
 		},
 	}
 
-	output, err := p.Execute(ctx, inputs)
-	require.NoError(t, err)
-	assert.Equal(t, "Hello, test!", output.Data)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputs := map[string]any{
+				"name":          "empty-blocks-test",
+				"template":      "Hello, {{.name}}!",
+				"ignoredBlocks": []any{tt.block},
+			}
+
+			_, err := p.Execute(ctx, inputs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestGoTemplateProvider_Execute_IgnoredBlocks_Line(t *testing.T) {
@@ -725,6 +744,266 @@ func TestGoTemplateProvider_Execute_IgnoredBlocks_Line_MixedEntries(t *testing.T
 	assert.Contains(t, result, "${{ secrets.KEY }}")
 	// Block-ignored content preserved
 	assert.Contains(t, result, "for k, v in var.x : k => v")
+}
+
+func TestGoTemplateProvider_Execute_BuiltinFence_StripsMarkers(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "my-app",
+	})
+
+	// The built-in fence requires NO ignoredBlocks declaration and strips markers.
+	inputs := map[string]any{
+		"name": "builtin-fence-test",
+		"template": `name: {{.name}}
+{{/* scafctl:ignore:start */}}
+raw: {{ this.is.not.parsed }}
+{{/* scafctl:ignore:end */}}
+done: {{.name}}`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Template variables rendered
+	assert.Contains(t, result, "name: my-app")
+	assert.Contains(t, result, "done: my-app")
+	// Inner content preserved verbatim
+	assert.Contains(t, result, "raw: {{ this.is.not.parsed }}")
+	// Fence markers stripped from output
+	assert.NotContains(t, result, "scafctl:ignore:start")
+	assert.NotContains(t, result, "scafctl:ignore:end")
+}
+
+func TestGoTemplateProvider_Execute_BuiltinFence_NotShadowedByUserConfig(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "my-app",
+	})
+
+	// A user declares the SAME markers as the built-in fence. Because built-in
+	// configs take priority, the built-in marker stripping must still win -- the
+	// user's start/end entry (which preserves markers) cannot shadow it.
+	inputs := map[string]any{
+		"name": "builtin-fence-shadow-test",
+		"template": `name: {{.name}}
+{{/* scafctl:ignore:start */}}
+raw: {{ this.is.not.parsed }}
+{{/* scafctl:ignore:end */}}
+done: {{.name}}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"start": "{{/* scafctl:ignore:start */}}",
+				"end":   "{{/* scafctl:ignore:end */}}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Template variables rendered
+	assert.Contains(t, result, "name: my-app")
+	assert.Contains(t, result, "done: my-app")
+	// Inner content preserved verbatim
+	assert.Contains(t, result, "raw: {{ this.is.not.parsed }}")
+	// Built-in stripping still wins: markers removed despite the user config.
+	assert.NotContains(t, result, "scafctl:ignore:start")
+	assert.NotContains(t, result, "scafctl:ignore:end")
+}
+
+func TestGoTemplateProvider_Execute_BuiltinLineMarker(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"appName": "my-app",
+	})
+
+	// The built-in '# scafctl:ignore' line marker works with no declaration.
+	inputs := map[string]any{
+		"name": "builtin-line-test",
+		"template": `name: {{.appName}}
+token: ${{ secrets.TOKEN }}  # scafctl:ignore
+tail: {{.appName}}`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "name: my-app")
+	assert.Contains(t, result, "${{ secrets.TOKEN }}")
+	assert.Contains(t, result, "tail: my-app")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Token(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "svc",
+	})
+
+	inputs := map[string]any{
+		"name": "token-test",
+		"template": `service: {{.name}}
+a: ${LITERAL}
+b: ${LITERAL}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"token": "${LITERAL}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "service: svc")
+	// Every occurrence of the token is preserved literally
+	assert.Equal(t, 2, strings.Count(result, "${LITERAL}"))
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Token_MutualExclusion(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	inputs := map[string]any{
+		"name":     "token-mutual-exclusion-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{
+				"token": "${LITERAL}",
+				"line":  "# scafctl:ignore",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_EmptyEntry_Errors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	inputs := map[string]any{
+		"name":     "empty-entry-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no mode set")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_StartWithoutEnd_Errors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	inputs := map[string]any{
+		"name":     "start-without-end-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{
+				"start": "<<<",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'start' and 'end' must both be set")
+}
+
+func TestGoTemplateProvider_Execute_TokenInsideFence_FenceTakesPrecedence(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "svc",
+	})
+
+	// A user-declared token overlaps a built-in fenced region. The fence must
+	// still be recognized (markers stripped, inner content preserved verbatim)
+	// regardless of the token entry's ordering.
+	inputs := map[string]any{
+		"name": "token-in-fence-test",
+		"template": `service: {{.name}}
+{{/* scafctl:ignore:start */}}
+url: ${LITERAL}/api
+{{/* scafctl:ignore:end */}}
+tail: ${LITERAL}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"token": "${LITERAL}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "service: svc")
+	// Fence markers are stripped, inner content preserved.
+	assert.NotContains(t, result, "scafctl:ignore:start")
+	assert.NotContains(t, result, "scafctl:ignore:end")
+	// The literal token is preserved both inside the fence and outside it.
+	assert.Equal(t, 2, strings.Count(result, "${LITERAL}"))
+}
+
+func TestExtractDependencies_ExcludesIgnoredRegions(t *testing.T) {
+	// References inside built-in fenced regions must not be treated as deps.
+	inputs := map[string]any{
+		"template": `real: {{ .realDep }}
+{{/* scafctl:ignore:start */}}
+phantom: {{ .phantomDep }}
+{{/* scafctl:ignore:end */}}
+line: {{ .lineDep }}  # scafctl:ignore`,
+	}
+
+	deps := extractDependencies(inputs)
+
+	assert.Contains(t, deps, "realDep")
+	assert.NotContains(t, deps, "phantomDep")
+	assert.NotContains(t, deps, "lineDep")
 }
 
 // --- render-tree tests ---

@@ -11,8 +11,10 @@ metadata:
     - template
   description: |
     Preserve literal content that conflicts with Go template delimiters
-    using ignoredBlocks. Two modes: start/end for multi-line blocks,
-    or line for single-line markers.
+    using ignoredBlocks. Modes: start/end for multi-line blocks, line for
+    single-line markers, and token for a literal substring. The built-in
+    zero-config fence ({{/* scafctl:ignore:start */}} ... {{/* scafctl:ignore:end */}})
+    and per-line marker (# scafctl:ignore) need no declaration.
 
 spec:
   resolvers:
@@ -84,3 +86,45 @@ spec:
                       - run: echo ${{ github.sha }}  # scafctl:ignore
               ignoredBlocks:
                 - line: "# scafctl:ignore"
+
+    # --- built-in fence: zero-config, markers stripped from output ---
+    builtinFence:
+      description: Uses the always-on built-in fence -- no ignoredBlocks needed
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: builtin-fence
+              template: |
+                app: {{ .appName }}
+                {{/* scafctl:ignore:start */}}
+                raw_block = "${not.parsed.by.go}"
+                {{/* scafctl:ignore:end */}}
+                token: ${{ secrets.TOKEN }}  # scafctl:ignore
+
+    # --- token mode: preserve every occurrence of a literal substring ---
+    literalTokens:
+      description: Preserve a literal token wherever it appears
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: tokens
+              template: |
+                service: {{ .appName }}
+                url: ${LITERAL}/api
+                healthcheck: ${LITERAL}/health
+              ignoredBlocks:
+                - token: "${LITERAL}"

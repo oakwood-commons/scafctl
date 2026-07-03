@@ -1294,7 +1294,7 @@ resolve:
 - `missingKey`: Behavior when a map key is missing: `default`, `zero`, or `error`
 - `leftDelim`, `rightDelim`: Custom delimiters (default: `{{` and `}}`)
 - `data`: Additional data to merge with resolver context
-- `ignoredBlocks`: Blocks to pass through without template processing
+- `ignoredBlocks`: Extra literal pass-through markers (start/end, line, or token). Built-in zero-config markers (`{{/* scafctl:ignore:start */}}`...`{{/* scafctl:ignore:end */}}` and `# scafctl:ignore`) need no declaration
 
 **`render-tree` inputs:**
 - `entries` (required): Array of `{path, content}` objects (typically from the directory provider with `includeContent: true`)
