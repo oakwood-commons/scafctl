@@ -299,6 +299,43 @@ func TestLogin_ProvideClusterInfoAlwaysSet(t *testing.T) {
 		"kube login must set provideClusterInfo so kubectl passes cluster details via KUBERNETES_EXEC_INFO")
 }
 
+func TestLogin_DirectURLDerivesEntryNames(t *testing.T) {
+	t.Parallel()
+
+	// `kube login https://api.example.com:6443` (positional is a concrete URL):
+	// the kubeconfig entries must be named with the derived host, not the raw
+	// URL, which is not a usable entry name and can exceed cluster_name limits.
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Cluster: "https://api.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "api.example.com", kc.writeIn.ClusterName)
+	assert.Equal(t, "api.example.com", kc.writeIn.ContextName)
+	assert.Equal(t, "api.example.com", kc.writeIn.UserName)
+	assert.Equal(t, "https://api.example.com:6443", kc.writeIn.Server)
+}
+
+func TestLogin_ClusterNameFlagOverridesDerivedURLName(t *testing.T) {
+	t.Parallel()
+
+	// An explicit --cluster-name still wins over the host-derived name for the
+	// direct URL form.
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Cluster:     "https://api.example.com:6443",
+		ClusterName: "prod",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "prod", kc.writeIn.ClusterName)
+}
+
 func TestLogin_SupportsPerClusterTokens(t *testing.T) {
 	t.Parallel()
 

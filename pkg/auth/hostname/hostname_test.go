@@ -401,3 +401,66 @@ func TestResolveEntryWith_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSelectorNotFound)
 	assert.Nil(t, got)
 }
+
+func TestDefaultDeps(t *testing.T) {
+	t.Parallel()
+
+	d := DefaultDeps()
+	assert.NotNil(t, d.Fetch, "Fetch default must be set")
+	assert.NotNil(t, d.Token, "Token default must be set")
+	assert.NotNil(t, d.Transform, "Transform default must be set")
+	assert.NotNil(t, d.Cache, "on-disk inventory cache must be set")
+}
+
+func TestResolveInventory(t *testing.T) {
+	t.Parallel()
+
+	rc := &config.HostnameResolverConfig{
+		Source:    config.HostnameResolverSource{URL: "https://clusters.example.com"},
+		Transform: "_",
+		TTL:       "1h",
+	}
+	cache := &fakeCache{}
+	deps := Deps{
+		Fetch: func(context.Context, config.HostnameResolverSource, string) ([]byte, error) {
+			return []byte("{}"), nil
+		},
+		Transform: func(context.Context, string, []byte) ([]Entry, error) {
+			return []Entry{{Name: "pd1020", URL: "https://api.pd:6443"}}, nil
+		},
+		Cache: cache,
+	}
+
+	entries, err := ResolveInventory(context.Background(), rc, "kube", deps)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "pd1020", entries[0].Name)
+	assert.Equal(t, 1, cache.sets, "resolved inventory must be cached")
+}
+
+func TestCachedInventory(t *testing.T) {
+	t.Parallel()
+
+	rc := &config.HostnameResolverConfig{
+		Source:    config.HostnameResolverSource{URL: "https://clusters.example.com"},
+		Transform: "_",
+	}
+
+	t.Run("miss when no cache", func(t *testing.T) {
+		t.Parallel()
+		_, ok := CachedInventory(context.Background(), rc, "kube", Deps{})
+		assert.False(t, ok)
+	})
+
+	t.Run("hit returns cached entries without fetching", func(t *testing.T) {
+		t.Parallel()
+		cache := &fakeCache{store: map[string][]Entry{
+			cacheKey("kube", rc): {{Name: "pd1020", URL: "https://api.pd:6443"}},
+		}}
+		// No Fetch provided: CachedInventory must never call it.
+		entries, ok := CachedInventory(context.Background(), rc, "kube", Deps{Cache: cache})
+		require.True(t, ok)
+		require.Len(t, entries, 1)
+		assert.Equal(t, "pd1020", entries[0].Name)
+	})
+}

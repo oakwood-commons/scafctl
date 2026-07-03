@@ -240,8 +240,15 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 	// Name the kubeconfig entries. Unlike resolveCluster (which derives the
 	// logical identity used to look the cluster up, so req.Cluster wins), the
 	// explicit --cluster-name flag takes precedence here because its sole
-	// purpose is to override the written kubeconfig entry name.
-	clusterName := firstNonEmpty(req.ClusterName, req.Cluster, info.Name)
+	// purpose is to override the written kubeconfig entry name. A positional
+	// that is a concrete API server URL is not a usable entry name (and can
+	// exceed the provider's cluster_name limit), so it is ignored in favor of
+	// the host-derived info.Name.
+	positional := req.Cluster
+	if isConcreteClusterURL(positional) {
+		positional = ""
+	}
+	clusterName := firstNonEmpty(req.ClusterName, positional, info.Name)
 	contextName := firstNonEmpty(req.ContextName, clusterName)
 	userName := firstNonEmpty(req.UserName, clusterName)
 
@@ -257,9 +264,12 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		InteractiveMode: interactiveModeFor(info.AuthType),
 		InstallHint:     buildInstallHint(binaryName),
 		// Ask kubectl/oc to pass the target cluster's details (API server URL)
-		// via KUBERNETES_EXEC_INFO so the exec helper can route per-cluster
-		// tokens. Handlers that do not advertise CapTokenHostname simply ignore
-		// the extra info.
+		// to the exec plugin via KUBERNETES_EXEC_INFO. The exec helper
+		// (auth token --exec-credential) reads that server and forwards it as
+		// TokenOptions.Hostname only for handlers advertising CapTokenHostname;
+		// for handlers without the capability the host withholds it, so they
+		// behave exactly as before. Handlers never read KUBERNETES_EXEC_INFO
+		// directly.
 		ProvideClusterInfo: true,
 		CAData:             info.CAData,
 		InsecureSkipTLS:    info.InsecureSkipTLS,

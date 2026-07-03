@@ -48,6 +48,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
+	"github.com/oakwood-commons/scafctl/pkg/kube/clusterconfig"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -561,10 +562,17 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
-			// Attach the embedder-provided cluster resolver, if any, so
-			// cluster-aware commands can resolve names to connection details.
-			if opts.ClusterResolver != nil {
+			// Attach a cluster resolver so cluster-aware commands can resolve
+			// names to connection details. An embedder-provided resolver wins;
+			// otherwise a config-driven resolver is built from the kube.clusters
+			// config section when it declares any aliases or an inventory.
+			switch {
+			case opts.ClusterResolver != nil:
 				ctx = kube.WithResolver(ctx, opts.ClusterResolver)
+			default:
+				if cr := clusterconfig.New(cfg.Kube.Clusters); cr.Enabled() {
+					ctx = kube.WithResolver(ctx, cr)
+				}
 			}
 
 			// ── Resolve global auth profile ──

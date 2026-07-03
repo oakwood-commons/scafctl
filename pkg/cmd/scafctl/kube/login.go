@@ -76,8 +76,9 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			  # Login, make the new context current, and verify the identity
 			  scafctl kube login prod --current --verify
 		`), settings.CliBinaryName, cliParams.BinaryName),
-		SilenceUsage: true,
-		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage:      true,
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: clusterArgCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)

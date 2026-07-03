@@ -59,8 +59,9 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 			  # Remove the kubeconfig entry but keep cached credentials
 			  scafctl kube logout prod --keep-credentials
 		`), settings.CliBinaryName, cliParams.BinaryName),
-		SilenceUsage: true,
-		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage:      true,
+		Args:              cobra.MaximumNArgs(1),
+		ValidArgsFunction: clusterArgCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)

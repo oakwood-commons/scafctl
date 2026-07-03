@@ -32,6 +32,7 @@ type Config struct {
 	Discovery  DiscoveryConfig  `json:"discovery,omitempty" yaml:"discovery,omitempty" mapstructure:"discovery" doc:"Auto-discovery configuration"`
 	Plugins    PluginsConfig    `json:"plugins,omitempty" yaml:"plugins,omitempty" mapstructure:"plugins" doc:"Plugin management configuration"`
 	MCP        MCPConfig        `json:"mcp,omitempty" yaml:"mcp,omitempty" mapstructure:"mcp" doc:"MCP server configuration"`
+	Kube       KubeConfig       `json:"kube,omitempty" yaml:"kube,omitempty" mapstructure:"kube" doc:"Kubernetes/OpenShift cluster resolution for kube login"`
 }
 
 // DiscoveryStrategy controls how a remote catalog discovers available artifacts.
@@ -524,6 +525,63 @@ type HostnameResolverSource struct {
 
 	// Headers are additional static request headers.
 	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty" mapstructure:"headers" doc:"Additional static request headers"`
+}
+
+// KubeConfig configures Kubernetes / OpenShift cluster resolution for the
+// `kube login` command so a cluster can be resolved by name in the stock
+// binary (no embedder-provided resolver required).
+type KubeConfig struct {
+	// Clusters resolves a cluster selector into connection details (server,
+	// default handler, auth type, audience) via static aliases and/or a
+	// dynamic inventory resolver.
+	Clusters ClusterResolutionConfig `json:"clusters,omitempty" yaml:"clusters,omitempty" mapstructure:"clusters" doc:"Cluster name resolution (static aliases and dynamic inventory)"`
+}
+
+// ClusterResolutionConfig declares how `kube login <cluster>` resolves a
+// cluster selector into connection details. Resolution precedence is: explicit
+// --server/--handler flags, then a concrete URL argument, then a static alias,
+// then the dynamic inventory resolver. Static aliases win over inventory
+// entries of the same name.
+type ClusterResolutionConfig struct {
+	// Aliases maps a short cluster selector (e.g. "lab") to concrete connection
+	// details for one-off clusters that are not part of any inventory. Static
+	// aliases win over the dynamic resolver.
+	Aliases map[string]ClusterAlias `json:"aliases,omitempty" yaml:"aliases,omitempty" mapstructure:"aliases" doc:"Static map of cluster selector to connection details"`
+
+	// Resolver dynamically fetches and normalizes a cluster inventory at login
+	// time. It reuses the hostname inventory contract (source + CEL transform +
+	// ttl); the transform yields entries with name, url, and optional
+	// defaultHandler/authType/audience/caData fields.
+	Resolver *HostnameResolverConfig `json:"resolver,omitempty" yaml:"resolver,omitempty" mapstructure:"resolver" doc:"Dynamic cluster inventory resolver (reuses the hostname inventory contract)"`
+}
+
+// ClusterAlias is a static per-cluster entry for kube login. Only Server is
+// required; the remaining fields populate the corresponding ClusterInfo so a
+// user can run `kube login <alias>` without --server or --handler.
+type ClusterAlias struct {
+	// Server is the cluster API server URL (https://...).
+	Server string `json:"server" yaml:"server" mapstructure:"server" doc:"Cluster API server URL" maxLength:"2048" example:"https://api.lab.example.com:6443"`
+
+	// DefaultHandler is the auth handler used when no explicit --handler is
+	// passed.
+	DefaultHandler string `json:"defaultHandler,omitempty" yaml:"defaultHandler,omitempty" mapstructure:"defaultHandler" doc:"Auth handler used when no explicit --handler is supplied" maxLength:"253" example:"openshift"`
+
+	// AuthType selects the authentication method: "" (auto), "oauth", or "oidc".
+	AuthType string `json:"authType,omitempty" yaml:"authType,omitempty" mapstructure:"authType" doc:"Authentication method: empty (auto), oauth, or oidc" maxLength:"16" example:"oauth"`
+
+	// OIDCAudience is the client ID / audience the minted token must target for
+	// OIDC clusters.
+	OIDCAudience string `json:"oidcAudience,omitempty" yaml:"oidcAudience,omitempty" mapstructure:"oidcAudience" doc:"Client ID/audience for OIDC clusters" maxLength:"512"`
+
+	// CAData is a PEM-encoded CA bundle for the API server (preferred over
+	// InsecureSkipTLS).
+	CAData string `json:"caData,omitempty" yaml:"caData,omitempty" mapstructure:"caData" doc:"PEM-encoded cluster CA bundle; preferred over insecureSkipTls" maxLength:"1048576"`
+
+	// ConsoleURL is an optional web console URL (informational).
+	ConsoleURL string `json:"consoleUrl,omitempty" yaml:"consoleUrl,omitempty" mapstructure:"consoleUrl" doc:"Optional web console URL (informational)" maxLength:"2048"`
+
+	// InsecureSkipTLS disables API server TLS verification (development only).
+	InsecureSkipTLS bool `json:"insecureSkipTls,omitempty" yaml:"insecureSkipTls,omitempty" mapstructure:"insecureSkipTls" doc:"Disable API server TLS verification (development only)"`
 }
 
 // EntraAuthConfig contains Entra-specific configuration.
