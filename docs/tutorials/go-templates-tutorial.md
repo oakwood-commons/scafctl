@@ -2396,6 +2396,32 @@ The AI calls `list_go_template_functions` and returns a curated list of matching
 
 When templates contain syntax that conflicts with Go template delimiters (e.g., Terraform `${}`, Helm double braces, GitHub Actions `${{ }}`, or PromQL), you can preserve those sections literally using `ignoredBlocks`.
 
+### Built-in Markers (Zero Config)
+
+Two markers are recognized automatically -- you do **not** need to declare them in `ignoredBlocks`:
+
+- **Fence:** `{{/* scafctl:ignore:start */}}` ... `{{/* scafctl:ignore:end */}}` -- everything between the markers passes through unchanged, and the markers themselves are **stripped** from the output. Because the markers use Go template comment syntax, the template stays valid even if the feature is unused.
+- **Per-line:** `# scafctl:ignore` -- any line containing this substring is preserved verbatim (the marker stays as a trailing comment).
+
+```yaml
+transform:
+  with:
+    - provider: go-template
+      inputs:
+        name: builtin-markers
+        template: |
+          app: {{ .appName }}
+          {{/* scafctl:ignore:start */}}
+          raw = "${not.parsed.by.go}"
+          {{/* scafctl:ignore:end */}}
+          token: ${{ secrets.TOKEN }}  # scafctl:ignore
+        # No ignoredBlocks needed -- built-in markers are always on.
+```
+
+The rendered output drops the fence markers but keeps the `raw = ...` line and the `${{ secrets.TOKEN }}` line intact.
+
+Use the explicit `ignoredBlocks` modes below when you need **custom** markers or a literal **token**.
+
 ### Start/End Mode (Multi-line)
 
 Define pairs of start/end markers. Content between matched markers passes through without template processing:
@@ -2422,6 +2448,27 @@ transform:
 ```
 
 The markers themselves are preserved in the output. The content between them — including Go template-like syntax, interpolations, and special characters — passes through unchanged.
+
+> [!NOTE]
+> **Custom start/end markers are preserved** in the output (unlike the built-in fence, which strips its markers). Choose markers that are valid comments in the target file format.
+
+### Token Mode (Literal Substring)
+
+When a specific literal substring should always pass through -- wherever it appears -- use `token`. Every occurrence of the exact substring is preserved:
+
+```yaml
+transform:
+  with:
+    - provider: go-template
+      inputs:
+        name: literal-tokens
+        template: |
+          service: {{ .name }}
+          url: ${LITERAL}/api
+          fallback: ${LITERAL}/health
+        ignoredBlocks:
+          - token: "${LITERAL}"
+```
 
 ### Line Mode (Single-line)
 
@@ -2450,7 +2497,7 @@ transform:
 Append the marker as an inline comment on any line that should be ignored. Only those lines are protected — the rest of the template renders normally.
 
 > [!NOTE]
-> **Note:** `line` and `start`/`end` are mutually exclusive within a single entry. Different entries can use different modes.
+> **Note:** `line`, `start`/`end`, and `token` are mutually exclusive within a single entry. Different entries can use different modes.
 
 ### Multiple Ignored Blocks
 

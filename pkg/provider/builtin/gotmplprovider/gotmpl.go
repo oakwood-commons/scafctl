@@ -28,6 +28,19 @@ const (
 	OperationRender = "render"
 	// OperationRenderTree is the batch render operation for directory trees.
 	OperationRenderTree = "render-tree"
+
+	// DefaultRawStart is the built-in, zero-config fence start marker. Content
+	// between DefaultRawStart and DefaultRawEnd is preserved verbatim (never
+	// parsed as a Go template) and the markers themselves are stripped from the
+	// output. It uses Go template comment syntax so the template remains valid
+	// even when the fence is unused. No ignoredBlocks declaration is required.
+	DefaultRawStart = "{{/* scafctl:ignore:start */}}"
+	// DefaultRawEnd is the built-in, zero-config fence end marker. See DefaultRawStart.
+	DefaultRawEnd = "{{/* scafctl:ignore:end */}}"
+	// DefaultRawLine is the built-in, zero-config per-line marker. Any line
+	// containing this substring is preserved verbatim (marker included, as a
+	// harmless trailing comment). No ignoredBlocks declaration is required.
+	DefaultRawLine = "# scafctl:ignore"
 )
 
 // GoTemplateProvider provides data transformation using Go templates
@@ -102,19 +115,22 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
 				"data": schemahelper.AnyProp("Additional data to merge with resolver context. These values are accessible alongside resolver data in the template."),
 				"ignoredBlocks": schemahelper.ArrayProp(
-					"List of literal blocks to preserve without template parsing. Each entry uses EITHER start/end markers (for multi-line blocks) OR a line marker (for single-line matches). Content is passed through unchanged. Useful for templates containing syntax like Terraform for_each or GitHub Actions expressions that conflict with Go template delimiters.",
+					"Additional literal blocks to preserve without template parsing, on top of the always-on built-in markers. Built-in (zero-config) markers are recognized without any declaration: fence '{{/* scafctl:ignore:start */}}' ... '{{/* scafctl:ignore:end */}}' (markers stripped from output) and per-line '# scafctl:ignore'. Use this list to declare EXTRA markers. Each entry uses EXACTLY ONE mode: start/end (multi-line, markers preserved), line (single-line matches), or token (every literal occurrence of a substring). Useful for templates containing syntax like Terraform for_each or GitHub Actions expressions that conflict with Go template delimiters.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A block to exclude from template parsing. Use 'start'+'end' for multi-line ranges, or 'line' for single-line matches. These modes are mutually exclusive.",
+						"A block to exclude from template parsing. Use 'start'+'end' for multi-line ranges, 'line' for single-line matches, or 'token' for every occurrence of a literal substring. These modes are mutually exclusive.",
 						nil,
 						map[string]*jsonschema.Schema{
-							"start": schemahelper.StringProp("Start marker for a multi-line ignored block (e.g., '/*scafctl:ignore:start*/'). Must be paired with 'end'. Mutually exclusive with 'line'.",
+							"start": schemahelper.StringProp("Start marker for a multi-line ignored block (e.g., '/*scafctl:ignore:start*/'). Must be paired with 'end'. Mutually exclusive with 'line' and 'token'.",
 								schemahelper.WithExample("/*scafctl:ignore:start*/"),
 								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
-							"end": schemahelper.StringProp("End marker for a multi-line ignored block (e.g., '/*scafctl:ignore:end*/'). Must be paired with 'start'. Mutually exclusive with 'line'.",
+							"end": schemahelper.StringProp("End marker for a multi-line ignored block (e.g., '/*scafctl:ignore:end*/'). Must be paired with 'start'. Mutually exclusive with 'line' and 'token'.",
 								schemahelper.WithExample("/*scafctl:ignore:end*/"),
 								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
-							"line": schemahelper.StringProp("Marker that identifies lines to ignore individually. Every line containing this substring is preserved literally. Mutually exclusive with 'start'/'end'.",
+							"line": schemahelper.StringProp("Marker that identifies lines to ignore individually. Every line containing this substring is preserved literally. Mutually exclusive with 'start'/'end' and 'token'.",
 								schemahelper.WithExample("# scafctl:ignore"),
+								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
+							"token": schemahelper.StringProp("Literal token to preserve wherever it appears. Every occurrence of this exact substring is passed through unchanged. Mutually exclusive with 'start'/'end' and 'line'.",
+								schemahelper.WithExample("${LITERAL}"),
 								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
 						},
 					)),
@@ -253,6 +269,33 @@ inputs:
     - line: "# scafctl:ignore"`,
 				},
 				{
+					Name:        "Built-in fence (zero-config, markers stripped)",
+					Description: "Preserve a block literally using the always-on built-in fence. No ignoredBlocks declaration is needed, and the fence markers are stripped from the output.",
+					YAML: `name: builtin-fence
+provider: go-template
+inputs:
+  name: terraform-config
+  template: |
+    name = "{{.appName}}"
+    {{/* scafctl:ignore:start */}}
+    for_each = { for k, v in var.items : k => v }
+    {{/* scafctl:ignore:end */}}`,
+				},
+				{
+					Name:        "Token mode (literal substring pass-through)",
+					Description: "Preserve every occurrence of a literal substring without wrapping each in markers. Useful when a placeholder like ${LITERAL} must survive rendering wherever it appears.",
+					YAML: `name: literal-tokens
+provider: go-template
+inputs:
+  name: tokens
+  template: |
+    service: {{.appName}}
+    url: ${LITERAL}/api
+    healthcheck: ${LITERAL}/health
+  ignoredBlocks:
+    - token: "${LITERAL}"`,
+				},
+				{
 					Name:        "Render directory tree of templates",
 					Description: "Batch-render an array of file entries from the directory provider. Combine with the file provider's write-tree operation to write rendered files preserving directory structure.",
 					YAML: `name: rendered-templates
@@ -343,27 +386,14 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 		"rightDelim", rightDelim)
 
 	// Extract ignored blocks for literal pass-through
-	ignoredBlocksCfg := p.parseIgnoredBlocksConfig(inputs)
+	ignoredBlocksCfg := parseIgnoredBlocksConfig(inputs)
 
 	// Validate mutual exclusion for ignored blocks
-	if blocks, ok := inputs["ignoredBlocks"].([]any); ok {
-		for i, block := range blocks {
-			blockMap, ok := block.(map[string]any)
-			if !ok {
-				continue
-			}
-			start, _ := blockMap["start"].(string)
-			end, _ := blockMap["end"].(string)
-			line, _ := blockMap["line"].(string)
-			hasStartEnd := start != "" || end != ""
-			hasLine := line != ""
-			if hasLine && hasStartEnd {
-				return nil, fmt.Errorf("%s: ignoredBlocks[%d]: 'line' and 'start'/'end' are mutually exclusive — use one mode per entry", ProviderName, i)
-			}
-		}
+	if err := validateIgnoredBlocks(inputs); err != nil {
+		return nil, err
 	}
 
-	replacements := p.buildIgnoredBlockReplacements(templateStr, ignoredBlocksCfg)
+	replacements := buildIgnoredBlockReplacements(templateStr, ignoredBlocksCfg)
 
 	// Execute the template
 	result, err := p.service.Execute(ctx, gotmpl.TemplateOptions{
@@ -457,8 +487,13 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		return nil, err
 	}
 
+	// Validate mutual exclusion for ignored blocks
+	if err := validateIgnoredBlocks(inputs); err != nil {
+		return nil, err
+	}
+
 	// Parse ignored blocks configuration (shared with render)
-	ignoredBlocksCfg := p.parseIgnoredBlocksConfig(inputs)
+	ignoredBlocksCfg := parseIgnoredBlocksConfig(inputs)
 
 	// Build base template data from resolver context + additional data
 	baseData := p.buildTemplateData(ctx, inputs)
@@ -507,7 +542,7 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		maps.Copy(templateData, baseData)
 
 		// Build ignored block replacements for this entry's content
-		replacements := p.buildIgnoredBlockReplacements(entryContent, ignoredBlocksCfg)
+		replacements := buildIgnoredBlockReplacements(entryContent, ignoredBlocksCfg)
 
 		// Render the entry content as a Go template
 		entryTemplateName := fmt.Sprintf("%s/%s", templateName, entryPath)
@@ -645,11 +680,71 @@ type ignoredBlockConfig struct {
 	start string
 	end   string
 	line  string
+	token string
+	// stripMarkers indicates the start/end markers should be removed from the
+	// output, restoring only the inner content. Used by the built-in fence.
+	stripMarkers bool
+}
+
+// builtinIgnoredBlockConfigs returns the always-on, zero-config ignored block
+// markers that are recognized without any ignoredBlocks declaration:
+//   - a fence ('{{/* scafctl:ignore:start */}}' ... '{{/* scafctl:ignore:end */}}')
+//     whose markers are stripped from the output, and
+//   - a per-line marker ('# scafctl:ignore') whose line is preserved verbatim.
+func builtinIgnoredBlockConfigs() []ignoredBlockConfig {
+	return []ignoredBlockConfig{
+		{start: DefaultRawStart, end: DefaultRawEnd, stripMarkers: true},
+		{line: DefaultRawLine},
+	}
+}
+
+// validateIgnoredBlocks enforces that each ignoredBlocks entry uses exactly one
+// mode: start/end, line, or token. The modes are mutually exclusive, at least
+// one mode must be set, and start/end must be declared as a pair.
+func validateIgnoredBlocks(inputs map[string]any) error {
+	blocks, ok := inputs["ignoredBlocks"].([]any)
+	if !ok {
+		return nil
+	}
+	for i, block := range blocks {
+		blockMap, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		start, _ := blockMap["start"].(string)
+		end, _ := blockMap["end"].(string)
+		line, _ := blockMap["line"].(string)
+		token, _ := blockMap["token"].(string)
+
+		hasStartEnd := start != "" || end != ""
+		hasLine := line != ""
+		hasToken := token != ""
+
+		modes := 0
+		if hasStartEnd {
+			modes++
+		}
+		if hasLine {
+			modes++
+		}
+		if hasToken {
+			modes++
+		}
+		switch {
+		case modes == 0:
+			return fmt.Errorf("%s: ignoredBlocks[%d]: no mode set -- use exactly one of 'start'/'end', 'line', or 'token'", ProviderName, i)
+		case modes > 1:
+			return fmt.Errorf("%s: ignoredBlocks[%d]: 'start'/'end', 'line', and 'token' are mutually exclusive -- use one mode per entry", ProviderName, i)
+		case hasStartEnd && (start == "" || end == ""):
+			return fmt.Errorf("%s: ignoredBlocks[%d]: 'start' and 'end' must both be set for start/end mode", ProviderName, i)
+		}
+	}
+	return nil
 }
 
 // parseIgnoredBlocksConfig parses the ignoredBlocks input into a config slice without
 // applying it to a specific template string. The actual replacements are built per-entry.
-func (p *GoTemplateProvider) parseIgnoredBlocksConfig(inputs map[string]any) []ignoredBlockConfig {
+func parseIgnoredBlocksConfig(inputs map[string]any) []ignoredBlockConfig {
 	blocks, ok := inputs["ignoredBlocks"].([]any)
 	if !ok {
 		return nil
@@ -665,11 +760,13 @@ func (p *GoTemplateProvider) parseIgnoredBlocksConfig(inputs map[string]any) []i
 		start, _ := blockMap["start"].(string)
 		end, _ := blockMap["end"].(string)
 		line, _ := blockMap["line"].(string)
+		token, _ := blockMap["token"].(string)
 
 		configs = append(configs, ignoredBlockConfig{
 			start: start,
 			end:   end,
 			line:  line,
+			token: token,
 		})
 	}
 
@@ -677,24 +774,31 @@ func (p *GoTemplateProvider) parseIgnoredBlocksConfig(inputs map[string]any) []i
 }
 
 // buildIgnoredBlockReplacements builds gotmpl.Replacement entries for a specific template
-// string based on the parsed ignored block config.
-func (p *GoTemplateProvider) buildIgnoredBlockReplacements(templateStr string, configs []ignoredBlockConfig) []gotmpl.Replacement {
+// string based on the parsed ignored block config. The always-on built-in markers are
+// applied in addition to the user-declared configs.
+//
+// Replacements are emitted in two passes: all start/end (fence) replacements first,
+// then all line/token replacements. Because applyReplacements consumes replacements in
+// order, this guarantees fenced regions are protected before any line/token scan runs,
+// so a token/line entry that overlaps a fence cannot mutate the fenced text and prevent
+// the fence from matching -- regardless of user entry order.
+//
+// Within each pass the always-on built-in markers are emitted before user-declared
+// configs. This preserves the "always-on" contract: a user cannot shadow or override
+// the built-in fence stripping (or the built-in per-line marker) by declaring the same
+// markers in ignoredBlocks, because the built-in replacement is consumed first.
+func buildIgnoredBlockReplacements(templateStr string, configs []ignoredBlockConfig) []gotmpl.Replacement {
 	var replacements []gotmpl.Replacement
 
-	for _, cfg := range configs {
-		hasStartEnd := cfg.start != "" || cfg.end != ""
-		hasLine := cfg.line != ""
+	// Always-on built-in markers first, then user-declared configs, so built-ins
+	// take priority and cannot be shadowed/mutated by user entries.
+	effective := make([]ignoredBlockConfig, 0, len(configs)+2)
+	effective = append(effective, builtinIgnoredBlockConfigs()...)
+	effective = append(effective, configs...)
 
-		if hasLine {
-			for _, templateLine := range strings.Split(templateStr, "\n") {
-				if strings.Contains(templateLine, cfg.line) {
-					replacements = append(replacements, gotmpl.Replacement{Find: templateLine})
-				}
-			}
-			continue
-		}
-
-		if !hasStartEnd || cfg.start == "" || cfg.end == "" {
+	// Pass 1: start/end fence replacements take precedence.
+	for _, cfg := range effective {
+		if cfg.start == "" || cfg.end == "" {
 			continue
 		}
 
@@ -709,9 +813,32 @@ func (p *GoTemplateProvider) buildIgnoredBlockReplacements(templateStr string, c
 			if endIdx < 0 {
 				break
 			}
+			inner := afterStart[:endIdx]
 			fullBlock := remaining[startIdx : startIdx+len(cfg.start)+endIdx+len(cfg.end)]
-			replacements = append(replacements, gotmpl.Replacement{Find: fullBlock})
+			repl := gotmpl.Replacement{Find: fullBlock}
+			if cfg.stripMarkers {
+				// Restore only the inner content, dropping the fence markers.
+				repl.RestoreAs = inner
+			}
+			replacements = append(replacements, repl)
 			remaining = remaining[startIdx+len(cfg.start)+endIdx+len(cfg.end):]
+		}
+	}
+
+	// Pass 2: line/token replacements, applied after fences are protected.
+	for _, cfg := range effective {
+		switch {
+		case cfg.token != "":
+			if strings.Contains(templateStr, cfg.token) {
+				replacements = append(replacements, gotmpl.Replacement{Find: cfg.token})
+			}
+
+		case cfg.line != "":
+			for _, templateLine := range strings.Split(templateStr, "\n") {
+				if strings.Contains(templateLine, cfg.line) {
+					replacements = append(replacements, gotmpl.Replacement{Find: templateLine})
+				}
+			}
 		}
 	}
 
@@ -770,6 +897,14 @@ func extractDependencies(inputs map[string]any) []string {
 	}
 	if rd, ok := inputs["rightDelim"].(string); ok && rd != "" {
 		rightDelim = rd
+	}
+
+	// Strip ignored/raw regions (built-in markers + declared ignoredBlocks)
+	// so that references inside literal pass-through blocks are not mistaken
+	// for resolver dependencies.
+	ignoredCfg := parseIgnoredBlocksConfig(inputs)
+	for _, repl := range buildIgnoredBlockReplacements(templateContent, ignoredCfg) {
+		templateContent = strings.ReplaceAll(templateContent, repl.Find, "")
 	}
 
 	// Use gotmpl package to extract references with the specified delimiters
