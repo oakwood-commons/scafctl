@@ -20,17 +20,29 @@ import (
 func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterInfo, error) {
 	var info kube.ClusterInfo
 
-	if req.Cluster != "" && deps.Resolver != nil {
-		resolved, err := deps.Resolver.Resolve(ctx, req.Cluster)
-		if err != nil {
-			return kube.ClusterInfo{}, fmt.Errorf("resolve cluster %q: %w", req.Cluster, err)
-		}
-		if resolved != nil {
+	// A concrete http(s) URL argument is used directly as the API server (no
+	// resolver required), and is not treated as the logical cluster name.
+	clusterArg := req.Cluster
+	switch {
+	case clusterArg != "" && isConcreteClusterURL(clusterArg):
+		info.APIServerURL = clusterArg
+		clusterArg = ""
+	case clusterArg != "" && deps.Resolver != nil:
+		resolved, err := deps.Resolver.Resolve(ctx, clusterArg)
+		switch {
+		case err != nil && req.Server != "":
+			// An explicit --server supplies the connection details, so a
+			// resolver miss (an unlisted name or an unavailable dynamic
+			// inventory) is non-fatal here: fall back to treating the
+			// positional as a plain cluster name.
+		case err != nil:
+			return kube.ClusterInfo{}, fmt.Errorf("resolve cluster %q: %w", clusterArg, err)
+		case resolved != nil:
 			info = *resolved
 		}
 	}
 	if info.Name == "" {
-		info.Name = firstNonEmpty(req.Cluster, req.ClusterName)
+		info.Name = firstNonEmpty(clusterArg, req.ClusterName)
 	}
 
 	if req.Server != "" {
@@ -76,6 +88,14 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 		return kube.ClusterInfo{}, err
 	}
 	return info, nil
+}
+
+// isConcreteClusterURL reports whether the cluster argument is already an
+// absolute http(s) URL, in which case it is used directly as the API server
+// endpoint rather than resolved by name.
+func isConcreteClusterURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }
 
 // clusterNameFromServer derives a kubeconfig entry name from an API server URL,

@@ -41,8 +41,9 @@ See the [auth tutorial](../tutorials/auth-tutorial.md) for the kubeconfig wiring
 ## Phase 1b: ClusterResolver (Shipped)
 
 The `pkg/kube` package defines a dependency-free extension point that maps a
-cluster name to its connection details. scafctl ships **no** cluster data --
-embedders with a cluster registry provide the implementation.
+cluster name to its connection details. The stock binary can populate it from
+configuration (see Config-Driven Resolution below); embedders with their own
+cluster registry can supply an implementation instead.
 
 ### The Interface
 
@@ -124,6 +125,48 @@ When unset, `kube.ResolverFromContext` returns `nil` and cluster-aware commands
 fall back to an explicit `--server` and auto-detection. Setting a resolver lights
 up positional cluster names, shell completion (via `List`), and OIDC audience
 resolution.
+
+### Config-Driven Resolution (Shipped)
+
+The stock binary resolves clusters by name from the `kube.clusters` config
+section, so users get positional `kube login <cluster>` without an embedder
+resolver. `pkg/kube/clusterconfig` implements `kube.ClusterResolver` backed by
+config and is attached by `RootOptions` when no embedder resolver is supplied
+and `kube.clusters` declares any aliases or an inventory. An embedder-provided
+`ClusterResolver` always wins.
+
+Resolution precedence, highest to lowest:
+
+1. **Explicit flags** -- `--server` / `--handler` override everything.
+2. **Concrete URL argument** -- a `<cluster>` that is already an `http(s)://`
+   URL is used directly as the API server (no inventory required) and is not
+   used as the logical name.
+3. **Static alias** -- a `kube.clusters.aliases.<name>` entry carrying `server`
+   plus optional `defaultHandler`, `authType`, `oidcAudience`, `caData`.
+4. **Dynamic inventory** -- `kube.clusters.resolver` fetches and CEL-transforms
+   a cluster inventory. It reuses the auth hostname inventory engine
+   (`pkg/auth/hostname`: fetch + transform + TTL cache); the transform yields
+   `{name, url}` entries plus the same optional per-cluster fields. Static
+   aliases win over inventory entries of the same name.
+
+~~~yaml
+kube:
+  clusters:
+    aliases:
+      lab:
+        server: https://api.lab.example.com:6443
+        defaultHandler: openshift
+    resolver:
+      source:
+        url: https://clusters.example.com/
+      transform: '_.map(k, {"name": k, "url": _[k].apiServerURL, "defaultHandler": "openshift", "authType": "oauth"})'
+      ttl: 10m
+~~~
+
+Because a fleet transform can stamp the same `defaultHandler` and `authType` on
+every entry, `kube login <cluster>` then needs neither `--server` nor
+`--handler`. One-off users with only a URL or a handful of static aliases keep
+working unchanged.
 
 ### Runtime Model
 
