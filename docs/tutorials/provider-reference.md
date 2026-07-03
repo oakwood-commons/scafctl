@@ -1169,7 +1169,7 @@ Transform data using Go text/template syntax. Supports single-template rendering
 | `leftDelim` | string | ❌ | Left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Right delimiter (default: `}}`) |
 | `data` | any | ❌ | Additional data to merge with resolver context |
-| `ignoredBlocks` | array | ❌ | Blocks to pass through literally without template processing. Each entry uses EITHER `{ start, end }` markers (multi-line) OR `{ line }` marker (single-line). Content is preserved as-is. |
+| `ignoredBlocks` | array | ❌ | Extra literal pass-through markers (on top of the always-on built-ins). Each entry uses EXACTLY ONE mode: `{ start, end }` (multi-line, markers preserved), `{ line }` (single-line), or `{ token }` (every occurrence of a literal). Built-in zero-config markers `{{/* scafctl:ignore:start */}}`...`{{/* scafctl:ignore:end */}}` (markers stripped) and `# scafctl:ignore` (per-line) need no declaration. |
 
 ### Output
 
