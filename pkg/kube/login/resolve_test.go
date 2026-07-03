@@ -54,6 +54,24 @@ func TestResolveCluster_NoResolverUsesFlags(t *testing.T) {
 	assert.Equal(t, "https://api.example.com:6443", info.APIServerURL)
 }
 
+func TestResolveCluster_ConcreteURLArgumentPassthrough(t *testing.T) {
+	t.Parallel()
+
+	// A cluster argument that is already an http(s) URL is used directly as the
+	// API server without consulting the resolver, and is not used as the name.
+	resolver := &kube.MockResolver{ResolveResult: &kube.ClusterInfo{Name: "should-not-run"}}
+	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
+
+	info, err := resolveCluster(context.Background(), deps, Request{
+		Cluster: "https://api.direct.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.direct.example.com:6443", info.APIServerURL)
+	assert.Equal(t, "api.direct.example.com", info.Name,
+		"a URL argument must derive the name from the host, not use the raw URL")
+	assert.Empty(t, resolver.ResolveCalls, "a concrete URL argument must bypass the resolver")
+}
+
 func TestResolveCluster_MissingServer(t *testing.T) {
 	t.Parallel()
 
@@ -144,4 +162,37 @@ func TestResolveCluster_InsecureSkipTLSClearsResolverCAData(t *testing.T) {
 	// explicit insecure flag is honored.
 	assert.True(t, info.InsecureSkipTLS)
 	assert.Empty(t, info.CAData)
+}
+
+func TestResolveCluster_ServerOverrideMakesResolverMissNonFatal(t *testing.T) {
+	t.Parallel()
+
+	// `kube login scratch --server https://... --handler oidc`: the positional
+	// is not a known alias, but the explicit --server supplies the connection,
+	// so the resolver miss must be non-fatal and the positional is used as the
+	// plain cluster name.
+	resolver := &kube.MockResolver{ResolveErr: errors.New("cluster not found")}
+	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
+
+	info, err := resolveCluster(context.Background(), deps, Request{
+		Cluster: "scratch",
+		Server:  "https://api.scratch.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "scratch", info.Name)
+	assert.Equal(t, "https://api.scratch.example.com:6443", info.APIServerURL)
+	assert.Equal(t, []string{"scratch"}, resolver.ResolveCalls)
+}
+
+func TestResolveCluster_ResolverMissFatalWithoutServer(t *testing.T) {
+	t.Parallel()
+
+	// Without an explicit --server, a resolver miss stays fatal so the user is
+	// told the name could not be resolved.
+	resolver := &kube.MockResolver{ResolveErr: errors.New("cluster not found")}
+	deps := Deps{Resolver: resolver, Kubeconfig: &stubKube{}}
+
+	_, err := resolveCluster(context.Background(), deps, Request{Cluster: "scratch"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve cluster \"scratch\"")
 }

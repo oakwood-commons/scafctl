@@ -2183,6 +2183,35 @@ func TestIntegration_LoginMissingHandler(t *testing.T) {
 	assert.Contains(t, stderr, "auth handler is required")
 }
 
+func TestIntegration_LoginResolvesClusterFromConfigAlias(t *testing.T) {
+	t.Parallel()
+	// A kube.clusters static alias supplies the server and default handler, so
+	// `kube login <alias>` resolves without --server or --handler. Login still
+	// fails later (the openshift handler plugin is not installed), but it must
+	// get PAST cluster resolution -- i.e. never hit the "no cluster server
+	// resolved" error.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	seed := `kube:
+  clusters:
+    aliases:
+      lab:
+        server: https://api.lab.example.com:6443
+        defaultHandler: openshift
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(seed), 0o600))
+
+	_, stderr, exitCode := runScafctl(t, "--config", configPath, "kube", "login", "lab")
+
+	// Do not assert on the exit code: the goal is only that cluster resolution
+	// succeeds. Login may fail later (the openshift handler plugin is not
+	// installed) or, in some environments, get further -- either way it must
+	// never hit the "no cluster server resolved" error.
+	_ = exitCode
+	assert.NotContains(t, stderr, "no cluster server resolved",
+		"the config alias must supply the server so resolution succeeds")
+}
+
 func TestIntegration_LogoutHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "kube", "logout", "--help")
