@@ -265,7 +265,7 @@ func TestAuthHandlerGRPCServer_Logout(t *testing.T) {
 	var logoutCalled string
 	server := &AuthHandlerGRPCServer{
 		Impl: &MockAuthHandlerPlugin{
-			logoutFunc: func(_ context.Context, name string) error {
+			logoutFunc: func(_ context.Context, name string, _ LogoutRequest) error {
 				logoutCalled = name
 				return nil
 			},
@@ -283,7 +283,7 @@ func TestAuthHandlerGRPCServer_GetStatus(t *testing.T) {
 
 	server := &AuthHandlerGRPCServer{
 		Impl: &MockAuthHandlerPlugin{
-			statusFunc: func(_ context.Context, _ string) (*auth.Status, error) {
+			statusFunc: func(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 				return &auth.Status{
 					Authenticated: true,
 					Claims:        &auth.Claims{Email: "user@test.com"},

@@ -38,6 +38,12 @@ type TokenRequest = sdkplugin.TokenRequest
 // TokenResponse contains the result of a plugin GetToken call.
 type TokenResponse = sdkplugin.TokenResponse
 
+// StatusRequest contains parameters for a plugin GetStatus call.
+type StatusRequest = sdkplugin.StatusRequest
+
+// LogoutRequest contains parameters for a plugin Logout call.
+type LogoutRequest = sdkplugin.LogoutRequest
+
 // FlowAvailability reports whether a specific auth flow is available based on
 // environment credentials or configuration.
 type FlowAvailability = sdkplugin.FlowAvailability

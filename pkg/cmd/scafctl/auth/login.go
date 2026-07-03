@@ -186,6 +186,14 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 			}
 			handlerName := args[0]
 
+			// Validate the callback port range up front -- it is a static input
+			// constraint independent of the handler. Zero means ephemeral.
+			if callbackPort != 0 && (callbackPort < auth.MinCallbackPort || callbackPort > auth.MaxCallbackPort) {
+				err := fmt.Errorf("--callback-port must be between %d and %d, got %d", auth.MinCallbackPort, auth.MaxCallbackPort, callbackPort)
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			// Resolve effective profile: per-command --profile > global --auth-profile > config activeProfile
 			// Track whether profile was explicitly set (even if normalized to empty/default).
 			profileExplicit := cmd.Flags().Changed("profile")

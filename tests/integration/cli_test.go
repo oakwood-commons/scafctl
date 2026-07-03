@@ -2296,6 +2296,23 @@ func TestIntegration_AuthLoginCallbackPortSupported(t *testing.T) {
 	assert.Contains(t, stdout, "--callback-port")
 }
 
+func TestIntegration_AuthLoginCallbackPortOutOfRange(t *testing.T) {
+	t.Parallel()
+	// The callback-port range is validated as a static input constraint before
+	// any handler resolution, so out-of-range values are rejected regardless of
+	// whether the target handler/plugin is installed.
+	for _, port := range []string{"80", "-1", "70000"} {
+		port := port
+		t.Run(port, func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctl(t, "auth", "login", "entra", "--callback-port", port)
+			assert.NotEqual(t, 0, exitCode)
+			assert.Contains(t, stderr, "--callback-port must be between 1024 and 65535",
+				"expected range validation error, got: %s", stderr)
+		})
+	}
+}
+
 func TestIntegration_AuthLoginGitHubInteractiveFlow(t *testing.T) {
 	t.Parallel()
 	// Verify that --flow is accepted for the login command
