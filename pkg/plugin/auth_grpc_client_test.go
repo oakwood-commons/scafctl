@@ -28,6 +28,8 @@ import (
 type mockAuthHandlerServiceClient struct {
 	proto.AuthHandlerServiceClient
 
+	capturedGetTokenReq *proto.GetTokenRequest
+
 	getAuthHandlersResp      *proto.GetAuthHandlersResponse
 	getAuthHandlersErr       error
 	configureAuthHandlerResp *proto.ConfigureAuthHandlerResponse
@@ -74,7 +76,8 @@ func (m *mockAuthHandlerServiceClient) GetStatus(_ context.Context, _ *proto.Get
 	return m.getStatusResp, m.getStatusErr
 }
 
-func (m *mockAuthHandlerServiceClient) GetToken(_ context.Context, _ *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
+func (m *mockAuthHandlerServiceClient) GetToken(_ context.Context, req *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
+	m.capturedGetTokenReq = req
 	return m.getTokenResp, m.getTokenErr
 }
 
@@ -468,6 +471,24 @@ func TestAuthHandlerGRPCClient_GetToken_Error(t *testing.T) {
 
 	_, err := client.GetToken(context.Background(), "azure", TokenRequest{})
 	require.Error(t, err)
+}
+
+func TestAuthHandlerGRPCClient_GetToken_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	// #581: the per-cluster hostname must cross the gRPC boundary so the remote
+	// handler can select the correct cluster's token.
+	mock := &mockAuthHandlerServiceClient{
+		getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.GetToken(context.Background(), "openshift", TokenRequest{
+		Hostname: "https://api.a.example.com:6443",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, mock.capturedGetTokenReq)
+	assert.Equal(t, "https://api.a.example.com:6443", mock.capturedGetTokenReq.Hostname)
 }
 
 func TestAuthHandlerGRPCClient_ListCachedTokens_Success(t *testing.T) {

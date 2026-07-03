@@ -238,6 +238,7 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 		Scope:        opts.Scope,
 		MinValidFor:  opts.MinValidFor,
 		ForceRefresh: opts.ForceRefresh,
+		Hostname:     opts.Hostname,
 	}
 
 	resp, err := w.client.plugin.GetToken(ctx, w.handlerName, req)

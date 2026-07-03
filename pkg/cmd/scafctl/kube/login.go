@@ -126,6 +126,14 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
+			if !res.SupportsPerClusterTokens {
+				w.WarnStderrf(
+					"handler %q does not support per-cluster token routing; logging into "+
+						"multiple clusters with it may return the wrong token. Upgrade the handler to enable multi-cluster.",
+					res.Handler,
+				)
+			}
+
 			return renderLoginResult(ioStreams, &outputFlags, w, res)
 		},
 	}
@@ -151,17 +159,18 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 // summary.
 func renderLoginResult(ioStreams *terminal.IOStreams, outputFlags *flags.KvxOutputFlags, w *writer.Writer, res *kubelogin.Result) error {
 	row := map[string]any{
-		"context":    res.ContextName,
-		"server":     res.Server,
-		"kubeconfig": res.KubeconfigPath,
-		"authType":   string(res.AuthType),
-		"handler":    res.Handler,
-		"user":       res.Username,
-		"fallback":   res.UsedFallback,
+		"context":          res.ContextName,
+		"server":           res.Server,
+		"kubeconfig":       res.KubeconfigPath,
+		"authType":         string(res.AuthType),
+		"handler":          res.Handler,
+		"user":             res.Username,
+		"fallback":         res.UsedFallback,
+		"perClusterTokens": res.SupportsPerClusterTokens,
 	}
 	opts := flags.ToKvxOutputOptions(outputFlags,
 		skvx.WithIOStreams(ioStreams),
-		skvx.WithOutputColumnOrder([]string{"context", "server", "kubeconfig", "authType", "handler", "user", "fallback"}),
+		skvx.WithOutputColumnOrder([]string{"context", "server", "kubeconfig", "authType", "handler", "user", "fallback", "perClusterTokens"}),
 	)
 	if skvx.IsStructuredFormat(opts.Format) {
 		return opts.Write([]map[string]any{row})
