@@ -14,6 +14,7 @@ const (
 	CapTenantID             = sdkauth.CapTenantID
 	CapHostname             = sdkauth.CapHostname
 	CapTokenHostname        = sdkauth.CapTokenHostname
+	CapInstanceHostname     = sdkauth.CapInstanceHostname
 	CapFederatedToken       = sdkauth.CapFederatedToken
 	CapCallbackPort         = sdkauth.CapCallbackPort
 	CapFlowOverride         = sdkauth.CapFlowOverride

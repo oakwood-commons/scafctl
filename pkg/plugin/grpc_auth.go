@@ -590,6 +590,7 @@ func statusToProto(s *auth.Status) *proto.GetStatusResponse {
 		TokenFile:       s.TokenFile,
 		Scopes:          s.Scopes,
 		Flow:            string(s.Flow),
+		Hostname:        s.Hostname,
 	}
 }
 
@@ -609,6 +610,7 @@ func protoToStatus(resp *proto.GetStatusResponse) *auth.Status {
 		TokenFile:     resp.TokenFile,
 		Scopes:        resp.Scopes,
 		Flow:          auth.Flow(resp.Flow),
+		Hostname:      resp.Hostname,
 	}
 }
 
@@ -654,6 +656,7 @@ func cachedTokenInfoToProto(t *auth.CachedTokenInfo) *proto.CachedTokenInfo {
 		Flow:      string(t.Flow),
 		IsExpired: t.IsExpired,
 		SessionId: t.SessionID,
+		Hostname:  t.Hostname,
 	}
 	if !t.ExpiresAt.IsZero() {
 		p.ExpiresAtUnix = t.ExpiresAt.Unix()
@@ -676,6 +679,7 @@ func protoToCachedTokenInfo(t *proto.CachedTokenInfo) *auth.CachedTokenInfo {
 		Flow:      auth.Flow(t.Flow),
 		IsExpired: t.IsExpired,
 		SessionID: t.SessionId,
+		Hostname:  t.Hostname,
 	}
 	if t.ExpiresAtUnix != 0 {
 		info.ExpiresAt = time.Unix(t.ExpiresAtUnix, 0)

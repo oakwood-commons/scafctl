@@ -181,6 +181,60 @@ func TestLogin_LoginError(t *testing.T) {
 	assert.ErrorIs(t, err, loginErr)
 }
 
+func TestLogin_LoginRunnerUsed(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "oidc", token: &auth.Token{AccessToken: "tok"}}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true, ContextName: "prod"}}
+
+	var (
+		runnerCalls   int
+		runnerHandler Authenticator
+		runnerOpts    auth.LoginOptions
+	)
+	deps := Deps{
+		Handler:    handler,
+		Kubeconfig: kc,
+		LoginRunner: func(_ context.Context, h Authenticator, opts auth.LoginOptions) (*auth.Result, error) {
+			runnerCalls++
+			runnerHandler = h
+			runnerOpts = opts
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+		Timeout:     42 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// The runner is invoked in place of handler.Login and receives the resolved
+	// handler plus the built login options.
+	assert.Equal(t, 1, runnerCalls)
+	assert.Same(t, handler, runnerHandler)
+	assert.Equal(t, 42*time.Second, runnerOpts.Timeout)
+	// handler.Login must not be called directly when a runner is set.
+	assert.Equal(t, auth.LoginOptions{}, handler.loginOpts)
+}
+
+func TestLogin_LoginRunnerError(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("runner boom")
+	deps := Deps{
+		Handler:    &stubAuth{name: "oidc"},
+		Kubeconfig: &stubKube{},
+		LoginRunner: func(_ context.Context, _ Authenticator, _ auth.LoginOptions) (*auth.Result, error) {
+			return nil, runnerErr
+		},
+	}
+	_, err := Login(context.Background(), deps, Request{Server: "https://api.example.com:6443", ClusterName: "prod"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, runnerErr)
+}
+
 func TestLogin_ProviderSuccess(t *testing.T) {
 	t.Parallel()
 

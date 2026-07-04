@@ -175,35 +175,44 @@ func CommandHandlers(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 	return cmd
 }
 
+// authHandlerNameSet returns the sorted union of auth handler names to display:
+// eagerly-registered handlers, official (auto-fetchable) handlers, and
+// locally-installed third-party plugins (e.g. openshift) that resolve lazily by
+// name. Including the last group ensures installed third-party handlers surface
+// in 'auth handlers', completions, and detail lookups.
+func authHandlerNameSet(ctx context.Context) []string {
+	nameSet := make(map[string]struct{})
+	if authReg := authpkg.RegistryFromContext(ctx); authReg != nil {
+		for _, n := range authReg.List() {
+			nameSet[n] = struct{}{}
+		}
+	}
+	if officialReg := authofficial.RegistryFromContext(ctx); officialReg != nil {
+		for _, n := range officialReg.Names() {
+			nameSet[n] = struct{}{}
+		}
+	}
+	for _, n := range installedAuthHandlerNames(ctx, settings.BinaryNameFromContext(ctx)) {
+		nameSet[n] = struct{}{}
+	}
+	names := make([]string, 0, len(nameSet))
+	for n := range nameSet {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // collectHandlerInfo gathers information about all known auth handlers:
 // registered (installed) and official (available for auto-fetch).
 func collectHandlerInfo(ctx context.Context) []map[string]any {
 	authReg := authpkg.RegistryFromContext(ctx)
 	officialReg := authofficial.RegistryFromContext(ctx)
 
-	// Collect all unique handler names from both registries.
-	nameSet := make(map[string]struct{})
-	if authReg != nil {
-		for _, name := range authReg.List() {
-			nameSet[name] = struct{}{}
-		}
-	}
-	if officialReg != nil {
-		for _, name := range officialReg.Names() {
-			nameSet[name] = struct{}{}
-		}
-	}
-
-	names := make([]string, 0, len(nameSet))
-	for name := range nameSet {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
+	names := authHandlerNameSet(ctx)
 	results := make([]map[string]any, 0, len(names))
 	for _, name := range names {
-		result := buildHandlerInfoResult(ctx, name, authReg, officialReg)
-		results = append(results, result)
+		results = append(results, buildHandlerInfoResult(ctx, name, authReg, officialReg))
 	}
 
 	return results
@@ -216,24 +225,7 @@ func collectHandlerInfoInteractive(ctx context.Context) []any {
 	authReg := authpkg.RegistryFromContext(ctx)
 	officialReg := authofficial.RegistryFromContext(ctx)
 
-	nameSet := make(map[string]struct{})
-	if authReg != nil {
-		for _, name := range authReg.List() {
-			nameSet[name] = struct{}{}
-		}
-	}
-	if officialReg != nil {
-		for _, name := range officialReg.Names() {
-			nameSet[name] = struct{}{}
-		}
-	}
-
-	names := make([]string, 0, len(nameSet))
-	for name := range nameSet {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
+	names := authHandlerNameSet(ctx)
 	rows := make([]any, 0, len(names))
 	for _, name := range names {
 		rows = append(rows, buildHandlerInteractiveResult(ctx, name, authReg, officialReg))
@@ -247,14 +239,21 @@ func collectHandlerInfoInteractive(ctx context.Context) []any {
 // arrays; available handlers include an install hint; unknown handlers are
 // marked not-found.
 func buildHandlerInteractiveResult(ctx context.Context, name string, authReg *authpkg.Registry, officialReg *authofficial.Registry) map[string]any {
+	// Registered (built-in or eagerly-loaded plugin).
 	if authReg != nil && authReg.Has(name) {
 		if handler, err := authReg.Get(name); err == nil {
 			return buildHandlerDetailMap(ctx, handler)
 		}
 	}
 
+	// Official handler that is not yet installed: show the install hint.
 	if officialReg != nil && officialReg.Has(name) {
 		return buildAvailableHandlerCard(ctx, name)
+	}
+
+	// Locally-installed third-party handler resolved lazily by name.
+	if handler, err := getHandler(ctx, name); err == nil {
+		return buildHandlerDetailMap(ctx, handler)
 	}
 
 	return map[string]any{
@@ -295,63 +294,60 @@ func buildHandlerInfoResult(ctx context.Context, name string, authReg *authpkg.R
 		"loggedIn":    false,
 	}
 
-	// Check if handler is installed (registered in auth registry).
+	// Registered in the auth registry (built-in or eagerly-loaded plugin).
 	if authReg != nil && authReg.Has(name) {
-		handler, err := authReg.Get(name)
-		if err == nil {
-			result["status"] = "installed"
-			result["displayName"] = handler.DisplayName()
-			switch handler.(type) {
-			case *plugin.AuthHandlerWrapper, *plugin.LazyAuthHandlerWrapper:
-				result["source"] = "plugin"
-			default:
-				result["source"] = "built-in"
-			}
-
-			// Collect supported flows.
-			flows := handler.SupportedFlows()
-			flowNames := make([]string, 0, len(flows))
-			for _, f := range flows {
-				flowNames = append(flowNames, string(f))
-			}
-			result["flows"] = strings.Join(flowNames, ", ")
-
-			// Check authentication status.
-			if status, err := handler.Status(ctx); err == nil {
-				result["loggedIn"] = status.Authenticated
-			}
+		if handler, err := authReg.Get(name); err == nil {
+			populateInstalledHandlerInfo(ctx, result, handler)
 		}
-	} else if officialReg != nil && officialReg.Has(name) {
-		// Handler is in the official registry but not installed yet.
+		return result
+	}
+
+	// Official handler that is not yet installed: mark available without
+	// resolving it (avoids a network fetch just to list).
+	if officialReg != nil && officialReg.Has(name) {
 		result["status"] = "available"
 		result["source"] = "catalog"
 		binName := settings.BinaryNameFromContext(ctx)
 		result["flows"] = "run '" + binName + " auth handlers install " + name + "' to inspect"
+		return result
 	}
 
+	// Locally-installed third-party handler: resolve lazily by name so installed
+	// plugins (e.g. openshift) surface with real status/flows.
+	if handler, err := getHandler(ctx, name); err == nil {
+		populateInstalledHandlerInfo(ctx, result, handler)
+	}
 	return result
+}
+
+// populateInstalledHandlerInfo fills an installed handler's status, source,
+// flows, and loggedIn fields into result.
+func populateInstalledHandlerInfo(ctx context.Context, result map[string]any, handler authpkg.Handler) {
+	result["status"] = "installed"
+	result["displayName"] = handler.DisplayName()
+	switch handler.(type) {
+	case *plugin.AuthHandlerWrapper, *plugin.LazyAuthHandlerWrapper:
+		result["source"] = "plugin"
+	default:
+		result["source"] = "built-in"
+	}
+
+	flows := handler.SupportedFlows()
+	flowNames := make([]string, 0, len(flows))
+	for _, f := range flows {
+		flowNames = append(flowNames, string(f))
+	}
+	result["flows"] = strings.Join(flowNames, ", ")
+
+	if status, err := handler.Status(ctx); err == nil {
+		result["loggedIn"] = status.Authenticated
+	}
 }
 
 // handlerCompletionNames returns the sorted union of installed and available
 // auth handler names for shell completion.
 func handlerCompletionNames(ctx context.Context) []string {
-	nameSet := make(map[string]struct{})
-	if authReg := authpkg.RegistryFromContext(ctx); authReg != nil {
-		for _, n := range authReg.List() {
-			nameSet[n] = struct{}{}
-		}
-	}
-	if officialReg := authofficial.RegistryFromContext(ctx); officialReg != nil {
-		for _, n := range officialReg.Names() {
-			nameSet[n] = struct{}{}
-		}
-	}
-	names := make([]string, 0, len(nameSet))
-	for n := range nameSet {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
+	return authHandlerNameSet(ctx)
 }
 
 // runHandlerDetail shows detailed information about a single auth handler.
@@ -362,36 +358,9 @@ func runHandlerDetail(ctx context.Context, name string, outputFlags *flags.KvxOu
 	authReg := authpkg.RegistryFromContext(ctx)
 	officialReg := authofficial.RegistryFromContext(ctx)
 
-	if authReg != nil && authReg.Has(name) {
-		handler, err := authReg.Get(name)
-		if err != nil {
-			return exitcode.WithCode(fmt.Errorf("failed to load auth handler %q: %w", name, err), exitcode.GeneralError)
-		}
-		detail := buildHandlerDetailMap(ctx, handler)
-
-		// Interactive mode: wrap in an array and reuse the list display schema
-		// so the TUI enters list view and the user can drill into the detail
-		// card. Structured formats fall through to the flat detail map below.
-		if outputFlags.Interactive {
-			interactiveOpts := flags.ToKvxOutputOptions(outputFlags,
-				kvx.WithIOStreams(ioStreams),
-				kvx.WithOutputAppName(cliParams.BinaryName+" auth handlers"),
-				kvx.WithOutputDisplaySchemaJSON(authHandlersDisplaySchema),
-			)
-			if !kvx.IsStructuredFormat(interactiveOpts.Format) {
-				return interactiveOpts.Write([]any{detail})
-			}
-		}
-
-		outputOpts := flags.ToKvxOutputOptions(outputFlags,
-			kvx.WithIOStreams(ioStreams),
-			kvx.WithOutputDisplaySchemaJSON(authHandlerDetailSchema),
-			kvx.WithOutputColumnOrder([]string{"name", "displayName", "source", "status", "loggedIn", "flows", "capabilities"}),
-		)
-		return outputOpts.Write(detail)
-	}
-
-	if officialReg != nil && officialReg.Has(name) {
+	// Official handler that is not yet installed: show the install hint without
+	// resolving it.
+	if officialReg != nil && officialReg.Has(name) && (authReg == nil || !authReg.Has(name)) {
 		// Interactive mode: render a minimal card showing the install hint.
 		if outputFlags.Interactive {
 			interactiveOpts := flags.ToKvxOutputOptions(outputFlags,
@@ -422,7 +391,34 @@ func runHandlerDetail(ctx context.Context, name string, outputFlags *flags.KvxOu
 		return nil
 	}
 
-	return exitcode.WithCode(fmt.Errorf("auth handler %q not found", name), exitcode.FileNotFound)
+	// Registered or locally-installed (third-party) handler: resolve lazily by
+	// name so installed plugins (e.g. openshift) can be inspected here.
+	handler, err := getHandler(ctx, name)
+	if err != nil {
+		return exitcode.WithCode(fmt.Errorf("auth handler %q not found", name), exitcode.FileNotFound)
+	}
+	detail := buildHandlerDetailMap(ctx, handler)
+
+	// Interactive mode: wrap in an array and reuse the list display schema so the
+	// TUI enters list view and the user can drill into the detail card.
+	// Structured formats fall through to the flat detail map below.
+	if outputFlags.Interactive {
+		interactiveOpts := flags.ToKvxOutputOptions(outputFlags,
+			kvx.WithIOStreams(ioStreams),
+			kvx.WithOutputAppName(cliParams.BinaryName+" auth handlers"),
+			kvx.WithOutputDisplaySchemaJSON(authHandlersDisplaySchema),
+		)
+		if !kvx.IsStructuredFormat(interactiveOpts.Format) {
+			return interactiveOpts.Write([]any{detail})
+		}
+	}
+
+	outputOpts := flags.ToKvxOutputOptions(outputFlags,
+		kvx.WithIOStreams(ioStreams),
+		kvx.WithOutputDisplaySchemaJSON(authHandlerDetailSchema),
+		kvx.WithOutputColumnOrder([]string{"name", "displayName", "source", "status", "loggedIn", "flows", "capabilities"}),
+	)
+	return outputOpts.Write(detail)
 }
 
 // buildHandlerDetailMap builds the structured detail representation of an

@@ -4,7 +4,11 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
@@ -16,6 +20,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestAuthHandlerNameSet_EmbedderBinaryName is an embedder-scenario test: a
+// non-default binary name ("cldctl") must scope the installed-plugin scan to the
+// embedder's own plugin cache (so 'auth handlers', completions, and root
+// enumeration surface it), and installed handlers must not leak across binary
+// names.
+func TestAuthHandlerNameSet_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+
+	// The package TestMain isolates xdg.CacheHome, so seeding under the embedder's
+	// binary-name subdir is hermetic. Layout: <cacheDir>/<key>/<ver>/<plat>/<key>.
+	const embedder = "cldctl"
+	cacheDir := settings.PluginCacheDirFor(embedder)
+	platformDir := runtime.GOOS + "-" + runtime.GOARCH
+	pluginDir := filepath.Join(cacheDir, "auth-handler-openshift", "0.1.0", platformDir)
+	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "auth-handler-openshift"), []byte("binary"), 0o600))
+
+	// The embedder's binary name comes from the Run settings in context, exactly
+	// as the root command wires it for embedders like cldctl.
+	embedderCtx := settings.IntoContext(context.Background(), &settings.Run{BinaryName: embedder})
+	assert.Contains(t, authHandlerNameSet(embedderCtx), "openshift",
+		"installed third-party plugin under the embedder's cache must surface")
+
+	// Isolation: the same handler must NOT appear under the default binary name,
+	// since it lives only in the embedder's cache dir.
+	defaultCtx := settings.IntoContext(context.Background(), &settings.Run{BinaryName: "scafctl"})
+	assert.NotContains(t, authHandlerNameSet(defaultCtx), "openshift",
+		"handlers installed under an embedder's cache must not leak into the default binary")
+}
 
 func TestCollectHandlerInfo_EmptyRegistries(t *testing.T) {
 	ctx, _ := newTestContext(t)

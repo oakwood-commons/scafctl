@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/diagnose"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
@@ -23,6 +24,17 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Isolate the plugin cache so tests never pick up the developer's real
+	// installed auth-handler plugins -- listActiveHandlers/installedAuthHandlerNames
+	// scan xdg.CacheHome, and a populated cache would make "no handlers" tests
+	// non-deterministic. Set the env var (not just xdg.CacheHome) so it survives
+	// the xdg.Reload() calls other tests make when overriding XDG_CONFIG_HOME etc.
+	cacheDir, _ := os.MkdirTemp("", "scafctl-auth-test-cache")
+	if cacheDir != "" {
+		_ = os.Setenv("XDG_CACHE_HOME", cacheDir)
+		xdg.Reload()
+	}
+
 	// Replace the clock skew check with a fast, offline stub so tests
 	// don't make real HTTPS calls (~3 s each).
 	clockSkewCheckFunc = func() diagnose.Check {
@@ -33,7 +45,13 @@ func TestMain(m *testing.M) {
 			Message:  "stubbed — no network call",
 		}
 	}
-	os.Exit(m.Run())
+
+	code := m.Run()
+
+	if cacheDir != "" {
+		_ = os.RemoveAll(cacheDir)
+	}
+	os.Exit(code)
 }
 
 func TestCommandDiagnose_Structure(t *testing.T) {

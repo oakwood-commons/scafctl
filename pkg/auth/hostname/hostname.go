@@ -221,6 +221,17 @@ func CachedInventory(ctx context.Context, rc *config.HostnameResolverConfig, han
 	return deps.Cache.Get(ctx, cacheKey(handler, rc))
 }
 
+// AllCachedInventoryEntries returns the union of inventory entries from every
+// resolver cache on disk, ignoring TTL expiry and without evicting anything. It
+// is a display-only, network-free helper for reverse-mapping a cluster URL back
+// to its short selector when the caller does not know which resolver produced
+// the cache -- for example `auth status` labeling a cluster that was resolved
+// via `kube login` under a different cache key. Returns nil when nothing is
+// cached.
+func AllCachedInventoryEntries() []Entry {
+	return newDiskCache().peekAll()
+}
+
 // resolveInventory fetches, transforms, and caches the endpoint inventory.
 func resolveInventory(ctx context.Context, rc *config.HostnameResolverConfig, handler string, deps Deps) ([]Entry, error) {
 	// Loop guard: a resolver must not depend on the handler it resolves.

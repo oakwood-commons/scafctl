@@ -6,6 +6,7 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/execcredential"
+	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -174,8 +176,13 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// Scope is required only for handlers that support per-request scopes
-			if len(scopes) == 0 && auth.HasCapability(caps, auth.CapScopesOnTokenRequest) {
+			// Scope is required for handlers that support per-request scopes,
+			// EXCEPT in exec-credential mode. The kubeconfig exec block encodes
+			// the intended scope (or intentionally none, for handlers like
+			// openshift whose empty-scope token is the held user credential), so
+			// requiring one here would break kubectl/oc for those clusters.
+			execMode := execCred || os.Getenv("KUBERNETES_EXEC_INFO") != ""
+			if len(scopes) == 0 && auth.HasCapability(caps, auth.CapScopesOnTokenRequest) && !execMode {
 				err := fmt.Errorf("--scope is required for the %q auth handler", handlerName)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -206,6 +213,27 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				if tokenHostname == "" {
 					tokenHostname = execcredential.ClusterServerFromExecInfo(execInfo)
 				}
+			}
+
+			// Resolve a hostname selector (static alias or dynamic inventory) into
+			// a concrete endpoint URL before requesting the token, mirroring the
+			// login path. Returns the value unchanged when it is already a URL or
+			// when the handler has no hostname config, so plain-hostname handlers
+			// and exec-info URLs are unaffected. Without this, a bare cluster
+			// selector (e.g. "pd1020") would reach the plugin unresolved and fail.
+			if tokenHostname != "" {
+				resolved, rErr := hostnameresolver.Resolve(ctx, handlerName, tokenHostname)
+				if rErr != nil {
+					w.Errorf("%v", rErr)
+					code := exitcode.GeneralError
+					if errors.Is(rErr, hostnameresolver.ErrSelectorNotFound) ||
+						errors.Is(rErr, hostnameresolver.ErrResolverLoop) ||
+						errors.Is(rErr, hostnameresolver.ErrTransformShape) {
+						code = exitcode.InvalidInput
+					}
+					return exitcode.WithCode(rErr, code)
+				}
+				tokenHostname = resolved
 			}
 
 			token, err := handler.GetToken(ctx, auth.TokenOptions{

@@ -16,6 +16,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/loginui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	kubeapi "github.com/oakwood-commons/scafctl/pkg/kube"
@@ -98,6 +99,18 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				HandlerLookup: func(ctx context.Context, name string) (kubelogin.Authenticator, error) {
 					return auth.GetHandler(ctx, name)
 				},
+			}
+			// Present the shared interactive login TUI (used by 'auth login')
+			// when stdout is a terminal and the output is not structured or
+			// quiet. Piped, non-TTY, -o json/table, or -o quiet output keeps the
+			// plain line-based path.
+			if skvx.IsTerminal(ioStreams.Out) && loginTUIEligibleFormat(outputFlags.Output) {
+				deps.LoginRunner = func(ctx context.Context, h kubelogin.Authenticator, opts auth.LoginOptions) (*auth.Result, error) {
+					if handler, ok := h.(auth.Handler); ok {
+						return loginui.RunLogin(ctx, w, cliParams.BinaryName, handler, opts)
+					}
+					return h.Login(ctx, opts)
+				}
 			}
 			req := kubelogin.Request{
 				Cluster:           cluster,
@@ -186,4 +199,14 @@ func renderLoginResult(ioStreams *terminal.IOStreams, outputFlags *flags.KvxOutp
 		w.Warningf("kubeconfig provider unavailable; wrote a static kubeconfig entry")
 	}
 	return nil
+}
+
+// loginTUIEligibleFormat reports whether the requested output format permits the
+// interactive login TUI. Structured (json/yaml/csv/toml/mermaid) and quiet
+// formats keep the plain line-based path; auto/table/list are eligible. An
+// unrecognized format parses as auto and is treated as eligible. The caller
+// additionally gates on stdout being a terminal.
+func loginTUIEligibleFormat(output string) bool {
+	format, _ := skvx.ParseOutputFormat(output)
+	return !skvx.IsStructuredFormat(format) && !skvx.IsQuietFormat(format)
 }

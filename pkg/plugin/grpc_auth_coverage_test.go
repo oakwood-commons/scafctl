@@ -98,6 +98,7 @@ func TestStatusRoundTrip(t *testing.T) {
 		TokenFile:    "/tmp/token",
 		Scopes:       []string{"openid", "profile"},
 		Flow:         auth.FlowDeviceCode,
+		Hostname:     "cluster.example.com",
 	}
 
 	protoStatus := statusToProto(original)
@@ -117,6 +118,7 @@ func TestStatusRoundTrip(t *testing.T) {
 	assert.Equal(t, original.ExpiresAt.Unix(), roundTripped.ExpiresAt.Unix())
 	assert.Equal(t, original.LastRefresh.Unix(), roundTripped.LastRefresh.Unix())
 	assert.Equal(t, original.Flow, roundTripped.Flow)
+	assert.Equal(t, original.Hostname, roundTripped.Hostname)
 }
 
 // ── tokenResponseToProto / protoToTokenResponse round-trip tests ──────────────
@@ -190,6 +192,7 @@ func TestCachedTokenInfoRoundTrip(t *testing.T) {
 		CachedAt:  now,
 		IsExpired: false,
 		SessionID: "session-xyz",
+		Hostname:  "cluster.example.com",
 	}
 
 	protoInfo := cachedTokenInfoToProto(original)
@@ -207,6 +210,7 @@ func TestCachedTokenInfoRoundTrip(t *testing.T) {
 	assert.Equal(t, original.CachedAt.Unix(), roundTripped.CachedAt.Unix())
 	assert.Equal(t, original.IsExpired, roundTripped.IsExpired)
 	assert.Equal(t, original.SessionID, roundTripped.SessionID)
+	assert.Equal(t, original.Hostname, roundTripped.Hostname)
 }
 
 // ── AuthHandlerGRPCServer conversion tests ────────────────────────────────────

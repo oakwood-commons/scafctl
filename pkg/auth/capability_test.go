@@ -16,6 +16,7 @@ func TestHasCapability(t *testing.T) {
 	assert.True(t, HasCapability(caps, CapTenantID))
 	assert.False(t, HasCapability(caps, CapScopesOnTokenRequest))
 	assert.False(t, HasCapability(caps, CapHostname))
+	assert.False(t, HasCapability(caps, CapInstanceHostname))
 	assert.False(t, HasCapability(caps, CapFederatedToken))
 }
 
@@ -31,8 +32,11 @@ func TestCapabilityConstants(t *testing.T) {
 		CapScopesOnTokenRequest,
 		CapTenantID,
 		CapHostname,
+		CapTokenHostname,
+		CapInstanceHostname,
 		CapFederatedToken,
 		CapCallbackPort,
+		CapFlowOverride,
 	}
 
 	seen := make(map[Capability]bool)
