@@ -5,6 +5,7 @@ package auth
 
 import (
 	"bytes"
+	"strconv"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -130,6 +131,40 @@ func TestCommandLogin_CallbackPortNotSupported(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--callback-port is not supported")
+}
+
+// TestCommandLogin_CallbackPortOutOfRange verifies that --callback-port is
+// rejected when it is outside the valid 1024-65535 range, even when the handler
+// advertises CapCallbackPort.
+func TestCommandLogin_CallbackPortOutOfRange(t *testing.T) {
+	cases := []struct {
+		name string
+		port string
+	}{
+		{"privileged", "80"},
+		{"negative", "-1"},
+		{"above_max", "70000"},
+		{"just_above_max", strconv.Itoa(auth.MaxCallbackPort + 1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, buf := newTestContext(t)
+
+			mock := auth.NewMockHandler("entra")
+			mock.CapabilitiesValue = []auth.Capability{auth.CapCallbackPort}
+			mock.SetNotAuthenticated()
+			ctx = withTestHandler(ctx, mock)
+
+			ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+			cmd := CommandLogin(settings.NewCliParams(), ioStreams, "scafctl/auth")
+			cmd.SetContext(ctx)
+			cmd.SetArgs([]string{"entra", "--callback-port", tc.port})
+
+			err := cmd.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "--callback-port must be between 1024 and 65535")
+		})
+	}
 }
 
 // TestCommandLogin_ImpersonateOnNonGCP verifies that --impersonate-service-account

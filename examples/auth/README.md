@@ -119,6 +119,17 @@ scafctl auth status --warn-within 10m
 scafctl auth status --exit-code --warn-within 15m
 ```
 
+### Per-cluster rows
+
+Handlers that advertise the `instance_hostname` capability keep one cached
+session per cluster, and `auth status` expands into one row per cluster. The
+`profile` column shows the cluster's short selector (from `hostname.aliases` or
+the resolver inventory), otherwise the trimmed host, with `(active)` marking the
+most recently used session. A non-default (named) auth profile is preserved as a
+prefix (`work / prod`); the built-in profile is omitted. See
+[hostname-resolution.md](hostname-resolution.md#per-cluster-status) for details.
+
+
 ---
 
 ## Listing and Sorting Cached Tokens

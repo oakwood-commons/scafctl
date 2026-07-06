@@ -132,6 +132,36 @@ transform: |
   _.filter(c, c.state == "ready").map(c, {"name": c.id, "url": c.endpoint})
 ```
 
+## Per-cluster status
+
+Handlers that advertise the `instance_hostname` capability keep a separate
+cached session per cluster. For those handlers, `auth status` expands into one
+row per cluster instead of a single handler row:
+
+```bash
+scafctl auth status openshift
+```
+
+```
+handler     profile           status         user               expires
+openshift   prod (active)     authenticated  user@example.com   58m
+openshift   api.stg.example.com  authenticated  user@example.com   3h
+```
+
+- The `profile` column shows the cluster label: the reverse-mapped
+  `hostname.aliases`/resolver selector when the cluster URL matches (e.g.
+  `prod`), otherwise the trimmed host (e.g. `api.stg.example.com`).
+- When a **named** auth profile is active (e.g. `work`), it is preserved as a
+  prefix (`work / prod`) so identity and endpoint stay distinguishable; the
+  built-in/default profile is omitted since the alias alone is unambiguous.
+- `(active)` marks the most recently used cluster session.
+- `status` and `expires` are per cluster; an expired session shows `expired`.
+- Output is one row per cluster: if a handler caches several tokens for the same
+  instance (a user login plus minted service-account tokens), they collapse to a
+  single row that reflects the login session.
+
+Non-instance handlers are unaffected and still render a single row.
+
 ## Caching
 
 Resolved inventories are cached on disk under the scafctl cache directory

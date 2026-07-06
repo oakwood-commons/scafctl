@@ -207,3 +207,32 @@ func TestCommandLogin_VerifyFailsWithoutProvider(t *testing.T) {
 	assert.FileExists(t, path, "kubeconfig entry is written even when verification fails")
 	assert.Contains(t, buf.String(), "was written", "user is told the entry was written despite the verify failure")
 }
+
+func TestLoginTUIEligibleFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		output string
+		want   bool
+	}{
+		{output: "", want: true},         // auto
+		{output: "auto", want: true},     // auto
+		{output: "table", want: true},    // human table
+		{output: "list", want: true},     // human list
+		{output: "json", want: false},    // structured
+		{output: "yaml", want: false},    // structured
+		{output: "csv", want: false},     // structured
+		{output: "toml", want: false},    // structured
+		{output: "mermaid", want: false}, // structured
+		{output: "quiet", want: false},   // suppressed
+		{output: "bogus", want: true},    // unrecognized parses as auto
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.output, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, loginTUIEligibleFormat(tt.output),
+				"format %q eligibility", tt.output)
+		})
+	}
+}

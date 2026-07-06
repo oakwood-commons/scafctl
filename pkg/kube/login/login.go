@@ -101,6 +101,14 @@ type Deps struct {
 	// Resolver resolves cluster names to connection details. Optional.
 	Resolver kube.ClusterResolver
 
+	// LoginRunner, when set, performs the interactive handler login. It lets the
+	// caller wrap the login with a progress UI (e.g. the shared kvx status TUI
+	// used by 'auth login'). When nil, handler.Login is called directly. The
+	// returned Result is currently unused by the orchestration; only the error
+	// matters. The CLI populates this with a TUI-capable runner when stdout is a
+	// terminal and the output is not structured.
+	LoginRunner func(ctx context.Context, handler Authenticator, opts auth.LoginOptions) (*auth.Result, error)
+
 	// BinaryName is the host binary baked into the kubeconfig exec command.
 	// Empty falls back to settings.CliBinaryName.
 	BinaryName string
@@ -233,7 +241,13 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 	if info.APIServerURL != "" && auth.HasCapability(handler.Capabilities(), auth.CapHostname) {
 		loginOpts.Hostname = info.APIServerURL
 	}
-	if _, err := handler.Login(ctx, loginOpts); err != nil {
+	loginRun := deps.LoginRunner
+	if loginRun == nil {
+		loginRun = func(ctx context.Context, h Authenticator, opts auth.LoginOptions) (*auth.Result, error) {
+			return h.Login(ctx, opts)
+		}
+	}
+	if _, err := loginRun(ctx, handler, loginOpts); err != nil {
 		return nil, fmt.Errorf("login with handler %q: %w", handler.Name(), err)
 	}
 

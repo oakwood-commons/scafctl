@@ -6,6 +6,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -156,10 +158,21 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 		pathInfos = o.getRealPaths()
 	}
 
+	// Config file sources (real platform only): the config.d fragments and the
+	// user config file that actually feed the merged configuration.
+	var sourceInfos []configSource
+	if !isIllustrative {
+		sourceInfos = o.configSourceInfos()
+	}
+
 	// Handle structured output formats
 	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
 	if kvx.IsStructuredFormat(outputOpts.Format) {
-		return outputOpts.Write(pathInfos)
+		out := pathInfos
+		for _, s := range sourceInfos {
+			out = append(out, s.Info)
+		}
+		return outputOpts.Write(out)
 	}
 
 	// Table output
@@ -191,7 +204,83 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 		w.Plainf("Override paths with XDG environment variables or %s_SECRETS_DIR.\n", settings.SafeEnvPrefix(o.BinaryName))
 	}
 
+	// Show the config sources in merge order so the config.d overlay (where most
+	// real values live) is discoverable, not just the base config file path.
+	if !isIllustrative && len(sourceInfos) > 0 {
+		w.Plain("")
+		w.Infof("Config sources (merge order)")
+		w.Plain("")
+		idx := 1
+		w.Plainf("  %d. %s\n", idx, "built-in defaults")
+		idx++
+		for _, s := range sourceInfos {
+			line := s.Info.Path
+			if !s.Exists {
+				line += "  (not present)"
+			}
+			w.Plainf("  %d. %s\n", idx, line)
+			idx++
+		}
+		w.Plainf("  %d. %s_* environment variables\n", idx, settings.SafeEnvPrefix(o.BinaryName))
+		w.Plain("")
+		w.Plain("Later sources override earlier ones.")
+	}
+
 	return nil
+}
+
+// configSource is a single on-disk config file layer feeding the merged
+// configuration, paired with whether the file currently exists on disk.
+type configSource struct {
+	Info   paths.PathInfo
+	Exists bool
+}
+
+// configSourceInfos returns the on-disk config file sources that feed the merged
+// configuration, in merge order: each config.d fragment (lexical), followed by
+// the user config file. Non-file layers (built-in defaults, any embedder base
+// config, and SCAFCTL_* environment overrides) are surfaced separately by the
+// table output. Returns nil when the config path cannot be resolved.
+func (o *PathsOptions) configSourceInfos() []configSource {
+	configPath, err := paths.ConfigFile()
+	if err != nil {
+		return nil
+	}
+
+	fragments, err := appconfig.DirFragments(filepath.Dir(configPath))
+	if err != nil {
+		return nil
+	}
+
+	sources := make([]configSource, 0, len(fragments)+1)
+	for _, frag := range fragments {
+		// Fragments come from a directory glob, so they exist by construction.
+		sources = append(sources, configSource{
+			Info: paths.PathInfo{
+				Name:        "config.d",
+				Path:        frag,
+				Description: "Drop-in fragment (loaded in merge order)",
+			},
+			Exists: true,
+		})
+	}
+
+	_, statErr := os.Stat(configPath)
+	exists := statErr == nil
+	desc := "User config file"
+	if !exists {
+		desc = "User config file (not present)"
+	}
+	sources = append(sources, configSource{
+		Info: paths.PathInfo{
+			Name:        "config.yaml",
+			Path:        configPath,
+			Description: desc,
+		},
+		Exists: exists,
+	})
+
+	return sources
 }
 
 // getRealPaths returns the actual paths for the current platform.

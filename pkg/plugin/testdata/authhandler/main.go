@@ -39,9 +39,11 @@ func (h *testAuthHandler) Login(_ context.Context, _ string, _ sdkplugin.LoginRe
 	return &sdkplugin.LoginResponse{}, nil
 }
 
-func (h *testAuthHandler) Logout(_ context.Context, _ string) error { return nil }
+func (h *testAuthHandler) Logout(_ context.Context, _ string, _ sdkplugin.LogoutRequest) error {
+	return nil
+}
 
-func (h *testAuthHandler) GetStatus(_ context.Context, _ string) (*auth.Status, error) {
+func (h *testAuthHandler) GetStatus(_ context.Context, _ string, _ sdkplugin.StatusRequest) (*auth.Status, error) {
 	return &auth.Status{}, nil
 }
 

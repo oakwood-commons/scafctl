@@ -176,3 +176,59 @@ func TestManager_Save_KeepsUserOverrideOfFragmentKey(t *testing.T) {
 	assert.Contains(t, string(data), "from-user",
 		"user-owned value that shadows a fragment key must be persisted")
 }
+
+// TestConfigDirFragments verifies the exported discovery helper returns both
+// *.yaml and *.yml fragments in lexical merge order.
+func TestConfigDirFragments(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Create fragments out of order to prove sorting.
+	writeFile(t, filepath.Join(dir, ConfigDirName, "20-b.yml"), "telemetry:\n  serviceName: b\n")
+	writeFile(t, filepath.Join(dir, ConfigDirName, "10-a.yaml"), "telemetry:\n  serviceName: a\n")
+	writeFile(t, filepath.Join(dir, ConfigDirName, "05-c.yaml"), "telemetry:\n  serviceName: c\n")
+	// A non-config extension must be ignored.
+	writeFile(t, filepath.Join(dir, ConfigDirName, "notes.txt"), "ignored\n")
+
+	fragments, err := DirFragments(dir)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		filepath.Join(dir, ConfigDirName, "05-c.yaml"),
+		filepath.Join(dir, ConfigDirName, "10-a.yaml"),
+		filepath.Join(dir, ConfigDirName, "20-b.yml"),
+	}, fragments)
+}
+
+// TestConfigDirFragments_EmptyOrMissing verifies missing directories and an
+// empty baseDir yield no fragments and no error.
+func TestConfigDirFragments_EmptyOrMissing(t *testing.T) {
+	t.Parallel()
+
+	empty, err := DirFragments("")
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+
+	missing, err := DirFragments(t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, missing)
+}
+
+// TestConfigDirFragments_MatchesMergeOrder verifies the helper returns the same
+// ordering the loader relies on: the last fragment wins on conflicting keys.
+func TestConfigDirFragments_MatchesMergeOrder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, configPath, "settings:\n  defaultCatalog: user-catalog\n")
+	writeFile(t, filepath.Join(dir, ConfigDirName, "10-a.yaml"), "telemetry:\n  serviceName: first\n")
+	writeFile(t, filepath.Join(dir, ConfigDirName, "20-b.yaml"), "telemetry:\n  serviceName: second\n")
+
+	fragments, err := DirFragments(dir)
+	require.NoError(t, err)
+	require.Len(t, fragments, 2)
+	// The last fragment in the returned order is the one that wins the merge.
+	cfg, err := NewManager(configPath).Load()
+	require.NoError(t, err)
+	assert.Contains(t, fragments[len(fragments)-1], "20-b.yaml")
+	assert.Equal(t, "second", cfg.Telemetry.ServiceName)
+}

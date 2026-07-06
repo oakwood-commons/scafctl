@@ -177,13 +177,19 @@ func (m *Manager) Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// mergeConfigDir merges every *.yaml/*.yml fragment in the config.d directory
-// located next to the main config file. Fragments are merged in lexical
-// filename order (later files override earlier ones). A missing config.d
-// directory is not an error; individual fragments that fail to parse are.
-func (m *Manager) mergeConfigDir(baseDir string) error {
+// DirFragments returns the config.d fragment file paths located next to
+// the main config file, in the same lexical order the loader merges them.
+// baseDir is the directory containing the config file (i.e. the parent of the
+// config.d directory). Both *.yaml and *.yml fragments are included. A missing
+// or empty config.d directory yields a nil slice and no error.
+//
+// This is the single source of truth for config.d discovery: mergeConfigDir
+// consumes it during load, and the `config paths` command uses it to list the
+// fragments that are actually read. Keeping one implementation prevents the
+// listing from drifting from the merge behavior.
+func DirFragments(baseDir string) ([]string, error) {
 	if baseDir == "" {
-		return nil
+		return nil, nil
 	}
 	dir := filepath.Join(baseDir, ConfigDirName)
 
@@ -191,14 +197,26 @@ func (m *Manager) mergeConfigDir(baseDir string) error {
 	for _, pattern := range []string{"*.yaml", "*.yml"} {
 		matches, err := filepath.Glob(filepath.Join(dir, pattern))
 		if err != nil {
-			return fmt.Errorf("failed to scan %s: %w", dir, err)
+			return nil, fmt.Errorf("failed to scan %s: %w", dir, err)
 		}
 		fragments = append(fragments, matches...)
+	}
+	sort.Strings(fragments)
+	return fragments, nil
+}
+
+// mergeConfigDir merges every *.yaml/*.yml fragment in the config.d directory
+// located next to the main config file. Fragments are merged in lexical
+// filename order (later files override earlier ones). A missing config.d
+// directory is not an error; individual fragments that fail to parse are.
+func (m *Manager) mergeConfigDir(baseDir string) error {
+	fragments, err := DirFragments(baseDir)
+	if err != nil {
+		return err
 	}
 	if len(fragments) == 0 {
 		return nil
 	}
-	sort.Strings(fragments)
 
 	// Track drop-in values (parsed with documented yaml-tag casing) so Save can
 	// identify and skip them, keeping config.d fragments out of the persisted

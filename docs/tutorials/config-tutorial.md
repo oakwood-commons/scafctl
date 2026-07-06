@@ -363,7 +363,25 @@ Cache:       ~/.cache/scafctl
 HTTP Cache:  ~/.cache/scafctl/http-cache
 State:       ~/.local/state/scafctl
 Override paths with XDG environment variables or SCAFCTL_SECRETS_DIR.
+
+ 💡 Config sources (merge order)
+
+  1. built-in defaults
+  2. ~/.config/scafctl/config.d/10-telemetry.yaml
+  3. ~/.config/scafctl/config.d/50-clusters.yaml
+  4. ~/.config/scafctl/config.yaml
+  5. SCAFCTL_* environment variables
+
+Later sources override earlier ones.
 ```
+
+The **Config sources** section lists every layer that feeds the merged
+configuration, in the order they are applied. Later sources override earlier
+ones, so a value in `config.d/50-clusters.yaml` wins over one in
+`10-telemetry.yaml`, and your `config.yaml` wins over both. This makes the
+`config.d/` drop-in directory discoverable -- otherwise it is easy to miss where
+a value like `kube.clusters` is actually set. A missing user config file is
+shown as `(not present)`.
 
 ## Configuration Reference
 

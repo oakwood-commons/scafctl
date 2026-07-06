@@ -11,6 +11,8 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/hostname"
+	"github.com/oakwood-commons/scafctl/pkg/auth/statusrows"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -19,6 +21,31 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+// authListSchema controls table column display for 'auth list'. Columns in the
+// "required" array resist truncation; "deprecated" fields are hidden in table
+// view but still emitted in json/yaml. Property order sets priority tiebreakers.
+var authListSchema = []byte(`{
+	"type": "array",
+	"items": {
+		"type": "object",
+		"required": ["handler", "tokenKind"],
+		"properties": {
+			"handler":         { "type": "string", "title": "Handler", "maxLength": 16 },
+			"cluster":         { "type": "string", "title": "Cluster", "maxLength": 40 },
+			"tokenKind":       { "type": "string", "title": "Kind", "maxLength": 10 },
+			"scope":           { "type": "string", "title": "Scope", "maxLength": 40 },
+			"expiresIn":       { "type": "string", "title": "Expires", "maxLength": 10 },
+			"isExpired":       { "type": "boolean", "title": "Expired" },
+			"tokenType":       { "type": "string", "deprecated": true },
+			"flow":            { "type": "string", "deprecated": true },
+			"sessionId":       { "type": "string", "deprecated": true },
+			"expiresAt":       { "type": "string", "deprecated": true },
+			"cachedAt":        { "type": "string", "deprecated": true },
+			"getTokenCommand": { "type": "string", "deprecated": true }
+		}
+	}
+}`)
 
 // CommandList creates the 'auth list' command.
 // It shows metadata for all cached tokens (refresh and minted access) for the
@@ -130,7 +157,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			handlerNames := listHandlers(ctx)
+			handlerNames := listActiveHandlers(ctx, cliParams.BinaryName)
 
 			// When a specific handler is provided, allow lazy resolution (user
 			// explicitly asked for it). Otherwise only iterate eagerly-registered
@@ -228,6 +255,8 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				kvx.WithOutputContext(ctx),
 				kvx.WithOutputNoColor(cliParams.NoColor),
 				kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
+				kvx.WithOutputColumnOrder([]string{"handler", "cluster", "tokenKind", "scope", "expiresIn", "isExpired"}),
+				kvx.WithOutputSchemaJSON(authListSchema),
 			)
 			outputOpts.IOStreams = ioStreams
 
@@ -259,8 +288,9 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 					continue
 				}
 
+				aliases := statusrows.InstanceAliases(handlerCtx, name)
 				for _, t := range tokens {
-					results = append(results, cachedTokenInfoToMap(t, cliParams.BinaryName))
+					results = append(results, cachedTokenInfoToMap(t, cliParams.BinaryName, aliases))
 				}
 			}
 
@@ -355,11 +385,22 @@ func sortTokenResults(results []map[string]any, field string) error {
 }
 
 // cachedTokenInfoToMap converts a CachedTokenInfo into a map suitable for kvx output.
-func cachedTokenInfoToMap(t *auth.CachedTokenInfo, binaryName string) map[string]any {
+func cachedTokenInfoToMap(t *auth.CachedTokenInfo, binaryName string, aliases map[string]string) map[string]any {
 	row := map[string]any{
 		"handler":   t.Handler,
 		"tokenKind": t.TokenKind,
 		"isExpired": t.IsExpired,
+	}
+
+	// Cluster label for per-instance handlers: reverse-mapped alias/selector when
+	// the token's hostname matches, else the trimmed host. Empty for handlers
+	// whose tokens carry no hostname.
+	if t.Hostname != "" {
+		if label, ok := hostname.AliasForURL(aliases, t.Hostname); ok {
+			row["cluster"] = label
+		} else {
+			row["cluster"] = hostname.DisplayHostFromURL(t.Hostname)
+		}
 	}
 
 	if t.Scope != "" {

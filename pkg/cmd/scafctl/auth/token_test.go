@@ -399,6 +399,55 @@ func TestCommandToken_ExecCredentialAutoDetect(t *testing.T) {
 	assert.Equal(t, "auto-detected-token", status["token"])
 }
 
+// TestCommandToken_ExecCredentialNoScopeForScopeCapableHandler verifies that a
+// handler advertising CapScopesOnTokenRequest may be used in exec-credential
+// mode WITHOUT --scope: the kubeconfig exec block wants the held (empty-scope)
+// user token, so requiring a scope would break kubectl/oc. Regression for the
+// openshift credential-helper flow.
+func TestCommandToken_ExecCredentialNoScopeForScopeCapableHandler(t *testing.T) {
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{}}`)
+
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock() // advertises CapScopesOnTokenRequest
+	mock.SetToken(&auth.Token{AccessToken: "held-user-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(time.Hour)})
+	ctx = withTestHandler(ctx, mock)
+
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandToken(settings.NewCliParams(), ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--exec-credential"}) // no --scope
+
+	require.NoError(t, cmd.Execute())
+
+	ec := decodeExecCredential(t, buf.String())
+	status, ok := ec["status"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "held-user-token", status["token"])
+}
+
+// TestCommandToken_InteractiveNoScopeStillRequiredForScopeCapableHandler
+// verifies the scope-required check is relaxed ONLY in exec-credential mode: an
+// interactive `auth token <handler>` with no --scope for a scope-capable
+// handler still errors early.
+func TestCommandToken_InteractiveNoScopeStillRequiredForScopeCapableHandler(t *testing.T) {
+	t.Setenv("KUBERNETES_EXEC_INFO", "") // ensure exec mode is not auto-detected
+
+	ctx, buf := newTestContext(t)
+
+	mock := newEntraMock() // advertises CapScopesOnTokenRequest
+	ctx = withTestHandler(ctx, mock)
+
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandToken(settings.NewCliParams(), ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra"}) // no --scope, no exec mode
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--scope is required")
+}
+
 func TestCommandToken_ExecCredentialForwardsClusterHostname(t *testing.T) {
 	// Regression test for #581: with provideClusterInfo the exec info carries
 	// the target cluster's server, which must be forwarded as the token

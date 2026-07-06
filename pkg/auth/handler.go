@@ -73,6 +73,7 @@ const (
 	FlowGcloudADC         = sdkauth.FlowGcloudADC
 	FlowGitHubApp         = sdkauth.FlowGitHubApp
 	FlowClientCredentials = sdkauth.FlowClientCredentials
+	FlowOnBehalfOf        = sdkauth.FlowOnBehalfOf
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.

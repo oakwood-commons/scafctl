@@ -235,6 +235,65 @@ func TestAuthHandlerGRPCClient_Login_ForwardsHostname(t *testing.T) {
 	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname must be mapped onto the proto LoginRequest")
 }
 
+func TestAuthHandlerGRPCClient_Login_ForwardsCallbackPort(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Truncate(time.Second)
+	var gotReq *proto.LoginRequest
+	mock := &mockAuthHandlerServiceClient{
+		loginFunc: func(_ context.Context, req *proto.LoginRequest) (grpc.ServerStreamingClient[proto.LoginStreamMessage], error) {
+			gotReq = req
+			return &mockLoginStreamClient{
+				messages: []*proto.LoginStreamMessage{
+					{
+						Payload: &proto.LoginStreamMessage_Result{
+							Result: &proto.LoginResult{
+								Claims:        &proto.Claims{Email: "user@example.com"},
+								ExpiresAtUnix: now.Add(time.Hour).Unix(),
+							},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.Login(context.Background(), "openshift", LoginRequest{
+		CallbackPort: 8400,
+		Flow:         auth.FlowInteractive,
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, gotReq)
+	assert.Equal(t, int32(8400), gotReq.CallbackPort, "callback port must be mapped onto the proto LoginRequest")
+}
+
+func TestCallbackPortToProto(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   int
+		want int32
+	}{
+		{"unset", 0, 0},
+		{"min_valid", 1024, 1024},
+		{"typical", 8400, 8400},
+		{"max_valid", 65535, 65535},
+		{"privileged_clamped", 80, 0},
+		{"negative_clamped", -1, 0},
+		{"above_max_clamped", 70000, 0},
+		{"just_above_max_clamped", auth.MaxCallbackPort + 1, 0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, callbackPortToProto(tc.in))
+		})
+	}
+}
+
 func TestAuthHandlerGRPCClient_Login_WithDeviceCodePrompt(t *testing.T) {
 	t.Parallel()
 
@@ -372,7 +431,7 @@ func TestAuthHandlerGRPCClient_Logout_Success(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	err := client.Logout(context.Background(), "azure")
+	err := client.Logout(context.Background(), "azure", LogoutRequest{})
 	require.NoError(t, err)
 }
 
@@ -384,7 +443,7 @@ func TestAuthHandlerGRPCClient_Logout_Error(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	err := client.Logout(context.Background(), "azure")
+	err := client.Logout(context.Background(), "azure", LogoutRequest{})
 	require.Error(t, err)
 }
 
@@ -410,7 +469,7 @@ func TestAuthHandlerGRPCClient_GetStatus_Success(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	s, err := client.GetStatus(context.Background(), "azure")
+	s, err := client.GetStatus(context.Background(), "azure", StatusRequest{})
 	require.NoError(t, err)
 	assert.True(t, s.Authenticated)
 	assert.Equal(t, "user@example.com", s.Claims.Email)
@@ -427,7 +486,7 @@ func TestAuthHandlerGRPCClient_GetStatus_Error(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	_, err := client.GetStatus(context.Background(), "azure")
+	_, err := client.GetStatus(context.Background(), "azure", StatusRequest{})
 	require.Error(t, err)
 }
 
@@ -830,7 +889,7 @@ func TestAuthHandlerGRPCServer_Logout_Error(t *testing.T) {
 	t.Parallel()
 
 	mock := &MockAuthHandlerPlugin{
-		logoutFunc: func(_ context.Context, _ string) error {
+		logoutFunc: func(_ context.Context, _ string, _ LogoutRequest) error {
 			return fmt.Errorf("logout error")
 		},
 	}
@@ -844,7 +903,7 @@ func TestAuthHandlerGRPCServer_GetStatus_Error(t *testing.T) {
 	t.Parallel()
 
 	mock := &MockAuthHandlerPlugin{
-		statusFunc: func(_ context.Context, _ string) (*auth.Status, error) {
+		statusFunc: func(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 			return nil, fmt.Errorf("status error")
 		},
 	}
@@ -1460,11 +1519,11 @@ func (e *errAuthPlugin) Login(_ context.Context, _ string, _ LoginRequest, _ fun
 	return nil, e.err
 }
 
-func (e *errAuthPlugin) Logout(_ context.Context, _ string) error {
+func (e *errAuthPlugin) Logout(_ context.Context, _ string, _ LogoutRequest) error {
 	return e.err
 }
 
-func (e *errAuthPlugin) GetStatus(_ context.Context, _ string) (*auth.Status, error) {
+func (e *errAuthPlugin) GetStatus(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 	return nil, e.err
 }
 

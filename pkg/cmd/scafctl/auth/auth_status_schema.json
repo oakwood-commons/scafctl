@@ -61,7 +61,7 @@
       "flow":           { "type": "string", "title": "Flow" },
       "user":           { "type": "string", "title": "User", "maxLength": 30 },
       "expiresIn":      { "type": "string", "title": "Expires", "maxLength": 10 },
-      "profile":        { "type": "string", "title": "Profile", "maxLength": 20 },
+      "profile":        { "type": "string", "title": "Profile", "maxLength": 60 },
       "displayName":    { "type": "string", "title": "Display Name" },
       "email":          { "type": "string", "title": "Email" },
       "username":       { "type": "string", "title": "Username" },

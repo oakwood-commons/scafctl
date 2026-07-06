@@ -262,6 +262,10 @@ scafctl auth login entra --callback-port 8400
 This makes the redirect URI `http://localhost:8400`, which must be registered in
 the app registration's **Authentication** settings.
 
+> `--callback-port` must be an unprivileged, in-range TCP port (1024-65535); any
+> other value is rejected. It works for both built-in handlers and plugin auth
+> handlers that advertise the `callback_port` capability.
+
 ### Setting a Timeout
 
 The interactive login flow has a 5-minute default timeout. To extend it:
