@@ -105,7 +105,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			}
 
 			// ── 1. Auth registry ──────────────────────────────────────────────
-			handlerNames := listHandlers(ctx)
+			handlerNames := listActiveHandlers(ctx, cliParams.BinaryName)
 			if len(handlerNames) == 0 {
 				unconfigured := listUnconfiguredOfficialHandlers(ctx)
 				if len(unconfigured) > 0 {

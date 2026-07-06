@@ -15,6 +15,7 @@ import (
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/auth/statusrows"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
@@ -50,7 +51,7 @@ var authStatusSchema = []byte(`{
 			"flow":           { "type": "string", "title": "Flow", "enum": ["device_code", "interactive", "service_principal", "workload_identity", "pat", "gcloud_adc", "github_app", "client_credentials", "token"] },
 			"user":           { "type": "string", "title": "User", "maxLength": 30 },
 			"expiresIn":      { "type": "string", "title": "Expires", "maxLength": 10 },
-			"profile":        { "type": "string", "title": "Profile", "maxLength": 20 },
+			"profile":        { "type": "string", "title": "Profile", "maxLength": 60 },
 			"type":           { "type": "string", "deprecated": true },
 			"displayName":    { "type": "string", "deprecated": true },
 			"email":          { "type": "string", "deprecated": true },
@@ -148,7 +149,7 @@ func CommandStatus(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				ctx = auth.WithProfile(ctx, effectiveProfile)
 			}
 
-			handlers := listHandlers(ctx)
+			handlers := listActiveHandlers(ctx, cliParams.BinaryName)
 			var results []map[string]any
 			var warnings []string
 
@@ -363,8 +364,8 @@ func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers
 	defer span.End()
 
 	type indexedResult struct {
-		index  int
-		result map[string]any
+		index   int
+		results []map[string]any
 	}
 
 	var (
@@ -407,9 +408,10 @@ func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers
 
 			metrics.RecordAuthStatus(handlerCtx, handlerName, time.Since(statusStart).Seconds(), true)
 			result := buildStatusResult(handlerCtx, cliParams, handlerName, handler, st)
+			rows := expandInstanceRows(handlerCtx, handlerName, handler, st, result)
 
 			mu.Lock()
-			indexed = append(indexed, indexedResult{index: i, result: result})
+			indexed = append(indexed, indexedResult{index: i, results: rows})
 			mu.Unlock()
 			return nil
 		})
@@ -425,7 +427,7 @@ func queryHandlerStatuses(ctx context.Context, cliParams *settings.Run, handlers
 
 	results := make([]map[string]any, 0, len(indexed))
 	for _, ir := range indexed {
-		results = append(results, ir.result)
+		results = append(results, ir.results...)
 	}
 
 	return results, warnings
@@ -562,6 +564,77 @@ func buildStatusResult(ctx context.Context, cliParams *settings.Run, handlerName
 	}
 
 	return result
+}
+
+// expandInstanceRows expands a handler's base status row into one row per cached
+// cluster session. The per-cluster selection, dedup, active-session, and cluster
+// labeling decisions live in pkg/auth/statusrows; this adapter renders each
+// selected session as a kvx display row, overloading the "profile" column with
+// "<identity> / <cluster>" (identity omitted for the built-in profile) and
+// marking the active session. Handlers without per-cluster sessions return the
+// single base row unchanged.
+func expandInstanceRows(ctx context.Context, handlerName string, handler auth.Handler, status *auth.Status, base map[string]any) []map[string]any {
+	sessions := statusrows.Expand(ctx, handlerName, handler, status)
+	if len(sessions) == 0 {
+		return []map[string]any{base}
+	}
+
+	// Preserve a *named* auth profile (e.g. "work") alongside the cluster label so
+	// identity and endpoint stay distinguishable when multiple profiles exist.
+	// The built-in/default profile is omitted -- for a single-identity fleet the
+	// cluster alias alone is the meaningful value (no redundant "built-in /").
+	identity, _ := base["profile"].(string)
+	identity = strings.TrimSpace(strings.TrimSuffix(identity, " (active)"))
+	if identity == auth.BuiltinProfileName {
+		identity = ""
+	}
+
+	rows := make([]map[string]any, 0, len(sessions))
+	for _, s := range sessions {
+		row := cloneStatusRow(base)
+
+		clusterLabel := s.ClusterLabel
+		if s.Active {
+			clusterLabel += " (active)"
+		}
+		if identity != "" {
+			row["profile"] = identity + " / " + clusterLabel
+		} else {
+			row["profile"] = clusterLabel
+		}
+
+		tk := s.Token
+		if tk.IsExpired {
+			row["status"] = "expired"
+		} else {
+			row["status"] = "authenticated"
+		}
+		if tk.Flow != "" {
+			row["flow"] = string(tk.Flow)
+		}
+		if isValidExpiryTime(tk.ExpiresAt) {
+			row["expiresAt"] = tk.ExpiresAt.Format(time.RFC3339)
+			row["_expiresAtTime"] = tk.ExpiresAt
+			if timeUntil := time.Until(tk.ExpiresAt); timeUntil > 0 {
+				row["expiresIn"] = humanDuration(timeUntil)
+			} else {
+				row["expiresIn"] = ""
+			}
+		}
+
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// cloneStatusRow makes a shallow copy of a status result row so per-cluster rows
+// do not alias the shared base map.
+func cloneStatusRow(base map[string]any) map[string]any {
+	row := make(map[string]any, len(base))
+	for k, v := range base {
+		row[k] = v
+	}
+	return row
 }
 
 // appendCatalogStatus adds a row for each remote (OCI) catalog from config,

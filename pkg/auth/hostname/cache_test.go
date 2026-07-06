@@ -81,6 +81,49 @@ func TestDiskCache_CorruptFileIsMiss(t *testing.T) {
 	assert.False(t, ok, "corrupt file must be treated as a miss")
 }
 
+func TestDiskCache_PeekAll(t *testing.T) {
+	t.Parallel()
+
+	base := time.Now()
+	current := base
+	c := newTestCache(t, func() time.Time { return current })
+
+	// Two inventories under different keys; one will expire.
+	c.Set(context.Background(), "auth-key", []Entry{{Name: "cluster-c", URL: "https://api.cluster-c.example.com:6443"}}, time.Minute)
+	c.Set(context.Background(), "kube-key", []Entry{{Name: "cluster-a", URL: "https://api.cluster-a.example.com:6443"}}, time.Minute)
+
+	// Advance past expiry: Get would miss + evict, but peekAll ignores TTL.
+	current = base.Add(2 * time.Minute)
+
+	all := c.peekAll()
+	names := make(map[string]string, len(all))
+	for _, e := range all {
+		names[e.Name] = e.URL
+	}
+	assert.Len(t, all, 2, "peekAll returns entries from all cache files, ignoring TTL")
+	assert.Equal(t, "https://api.cluster-c.example.com:6443", names["cluster-c"])
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", names["cluster-a"])
+
+	// peekAll must not evict expired files.
+	_, statErr := os.Stat(c.path("auth-key"))
+	assert.NoError(t, statErr, "peekAll must not delete expired files")
+}
+
+func TestDiskCache_PeekAll_EmptyDir(t *testing.T) {
+	t.Parallel()
+
+	c := newTestCache(t, time.Now)
+	assert.Nil(t, c.peekAll(), "no cache dir yields nil")
+}
+
+func TestAllCachedInventoryEntries_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	// Smoke test: reads the real on-disk cache dir. It must never panic and
+	// returns a slice (possibly nil when nothing is cached in the environment).
+	_ = AllCachedInventoryEntries()
+}
+
 func TestCacheKey_StableAndSensitive(t *testing.T) {
 	t.Parallel()
 

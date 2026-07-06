@@ -13,6 +13,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
 // handlerContextKey is used for test injection of handlers.
@@ -63,6 +66,69 @@ func listHandlers(ctx context.Context) []string {
 		return nil
 	}
 	return registry.List()
+}
+
+// listActiveHandlers returns the handler names to enumerate for root ("no
+// handler") bulk operations (status, list, diagnose): the union of
+// eagerly-registered handlers and locally-installed auth-handler plugins.
+//
+// Unlike listHandlers it also surfaces third-party plugin handlers the user
+// actually uses (e.g. openshift) that are resolved lazily by name and so are not
+// eagerly registered. The installed-plugin cache is a host-owned, handler-
+// agnostic signal that requires no config pin, no fragile credential-file
+// parsing, and no network fetch (only already-cached plugins are included).
+//
+// Policy applies: installed third-party plugins are omitted when
+// settings.disableThirdPartyAuthHandlers is set (official handlers still surface
+// via the eager registry). Results are deduplicated and sorted.
+func listActiveHandlers(ctx context.Context, binaryName string) []string {
+	if h := handlerFromContext(ctx); h != nil {
+		return []string{h.Name()}
+	}
+
+	seen := make(map[string]struct{})
+	if registry := auth.RegistryFromContext(ctx); registry != nil {
+		for _, name := range registry.List() {
+			seen[name] = struct{}{}
+		}
+	}
+
+	for _, name := range installedAuthHandlerNames(ctx, binaryName) {
+		seen[name] = struct{}{}
+	}
+
+	if len(seen) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// installedAuthHandlerNames returns the names of auth-handler plugins present in
+// the local plugin cache (i.e. already fetched/used). This is a host-owned,
+// handler-agnostic, network-free signal for surfacing lazily-resolved
+// third-party handlers (e.g. openshift). It returns nil when third-party
+// resolution is disabled by policy or nothing is cached. Names are not sorted.
+func installedAuthHandlerNames(ctx context.Context, binaryName string) []string {
+	if cfg := config.FromContext(ctx); cfg != nil && cfg.Settings.DisableThirdPartyAuthHandlers {
+		return nil
+	}
+	cache := plugin.NewCache(settings.PluginCacheDirFor(binaryName))
+	cached, err := cache.List()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, p := range cached {
+		if name, kind := plugin.PluginKindFromCacheKey(p.Name); kind == solution.PluginKindAuthHandler && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // listKnownHandlers returns the names of all registered and officially-known

@@ -5,11 +5,15 @@ package auth
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,6 +69,59 @@ func TestListHandlers_WithRegistry(t *testing.T) {
 	assert.Contains(t, handlers, "entra")
 	assert.Contains(t, handlers, "github")
 	assert.Len(t, handlers, 2)
+}
+
+func TestListActiveHandlers_TestHandlerShortCircuit(t *testing.T) {
+	mock := auth.NewMockHandler("openshift")
+	ctx := withTestHandler(context.Background(), mock)
+	assert.Equal(t, []string{"openshift"}, listActiveHandlers(ctx, "scafctl"))
+}
+
+func TestListActiveHandlers_EagerOnlyWhenNoInstalledPlugins(t *testing.T) {
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(auth.NewMockHandler("entra")))
+	require.NoError(t, registry.Register(auth.NewMockHandler("gcp")))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	// A binary name whose plugin cache dir does not exist yields just the eager
+	// handlers (the installed-plugin scan is an empty/graceful miss).
+	got := listActiveHandlers(ctx, "scafctl-test-nonexistent-cache-xyz")
+	assert.Equal(t, []string{"entra", "gcp"}, got)
+}
+
+func TestListActiveHandlers_ThirdPartyDisabledSkipsInstalledScan(t *testing.T) {
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(auth.NewMockHandler("gcp")))
+	ctx := auth.WithRegistry(context.Background(), registry)
+	ctx = config.WithConfig(ctx, &config.Config{
+		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
+	})
+
+	// Even if the local machine has installed plugins under "scafctl", policy
+	// disables the scan, so only the eager handler surfaces.
+	got := listActiveHandlers(ctx, "scafctl")
+	assert.Equal(t, []string{"gcp"}, got)
+}
+
+func TestListActiveHandlers_SurfacesInstalledAuthPlugin(t *testing.T) {
+	t.Parallel()
+
+	// The package TestMain isolates xdg.CacheHome, so seeding under a unique
+	// binary-name subdir is hermetic without mutating any global.
+	// Layout: <cacheDir>/<key>/<ver>/<plat>/<key>.
+	const binaryName = "mycli-surfaces-test"
+	cacheDir := settings.PluginCacheDirFor(binaryName)
+	platformDir := runtime.GOOS + "-" + runtime.GOARCH
+	pluginDir := filepath.Join(cacheDir, "auth-handler-openshift", "0.1.0", platformDir)
+	require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "auth-handler-openshift"), []byte("binary"), 0o600))
+
+	registry := auth.NewRegistry()
+	require.NoError(t, registry.Register(auth.NewMockHandler("gcp")))
+	ctx := auth.WithRegistry(context.Background(), registry)
+
+	got := listActiveHandlers(ctx, binaryName)
+	assert.Equal(t, []string{"gcp", "openshift"}, got, "installed auth plugin surfaces alongside eager handlers, deduped and sorted")
 }
 
 func TestListHandlers_WithTestHandler(t *testing.T) {

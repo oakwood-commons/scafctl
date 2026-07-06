@@ -456,7 +456,7 @@ func TestAuthHandlerWrapper_Status_ResolvesActiveProfile(t *testing.T) {
 	t.Parallel()
 	var capturedProfile string
 	mock := &MockAuthHandlerPlugin{
-		statusFunc: func(ctx context.Context, _ string) (*auth.Status, error) {
+		statusFunc: func(ctx context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 			capturedProfile = auth.ProfileFromContext(ctx)
 			return &auth.Status{Authenticated: true}, nil
 		},
@@ -479,7 +479,7 @@ func TestAuthHandlerWrapper_Status_ExplicitProfileTakesPrecedence(t *testing.T) 
 	t.Parallel()
 	var capturedProfile string
 	mock := &MockAuthHandlerPlugin{
-		statusFunc: func(ctx context.Context, _ string) (*auth.Status, error) {
+		statusFunc: func(ctx context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 			capturedProfile = auth.ProfileFromContext(ctx)
 			return &auth.Status{Authenticated: true}, nil
 		},

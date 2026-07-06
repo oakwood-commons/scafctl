@@ -21,6 +21,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCachedTokenInfoToMap_ClusterLabel(t *testing.T) {
+	t.Parallel()
+
+	aliases := map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"}
+
+	// Hostname matches an alias -> short selector.
+	aliased := cachedTokenInfoToMap(&auth.CachedTokenInfo{
+		Handler:   "openshift",
+		TokenKind: "access",
+		Hostname:  "https://api.cluster-a.example.com:6443",
+	}, "scafctl", aliases)
+	assert.Equal(t, "cluster-a", aliased["cluster"])
+
+	// Hostname without an alias -> trimmed host.
+	unaliased := cachedTokenInfoToMap(&auth.CachedTokenInfo{
+		Handler:  "openshift",
+		Hostname: "https://api.stg.example.com:6443",
+	}, "scafctl", aliases)
+	assert.Equal(t, "api.stg.example.com", unaliased["cluster"])
+
+	// No hostname -> no cluster column.
+	noHost := cachedTokenInfoToMap(&auth.CachedTokenInfo{Handler: "entra", TokenKind: "refresh"}, "scafctl", nil)
+	_, ok := noHost["cluster"]
+	assert.False(t, ok, "handlers without a per-instance hostname have no cluster column")
+}
+
 func TestCommandList_NoTokens(t *testing.T) {
 	ctx, buf := newTestContext(t)
 

@@ -110,7 +110,7 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 
 			var handlerNames []string
 			if all {
-				handlerNames = listHandlers(ctx)
+				handlerNames = listActiveHandlers(ctx, cliParams.BinaryName)
 				if len(handlerNames) == 0 {
 					unconfigured := listUnconfiguredOfficialHandlers(ctx)
 					if len(unconfigured) > 0 {
@@ -156,14 +156,30 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				}
 
 				if !force {
-					// Check if authenticated first; skip logout if not.
-					status, err := handler.Status(ctx)
-					if err != nil {
-						w.Errorf("Failed to check auth status for %s: %v", handlerName, err)
-						hadError = true
-						continue
+					// Decide whether there are credentials to clear. A multi-instance
+					// handler (e.g. one advertising CapInstanceHostname) reports an
+					// unauthenticated -- or even errored -- hostname-less base status
+					// even when individual clusters still hold live sessions, so the
+					// base status alone must not gate logout. When the base status is
+					// not clearly authenticated, consult the cached tokens and clear
+					// them if any exist instead of silently leaving them behind.
+					status, statusErr := handler.Status(ctx)
+					authenticated := statusErr == nil && status.Authenticated
+					if !authenticated {
+						if lister, ok := handler.(auth.TokenLister); ok {
+							if tokens, lerr := lister.ListCachedTokens(ctx); lerr == nil && len(tokens) > 0 {
+								authenticated = true
+							}
+						}
 					}
-					if !status.Authenticated {
+					if !authenticated {
+						// Nothing cached to clear: surface the status error if the
+						// check failed, otherwise report the handler as logged out.
+						if statusErr != nil {
+							w.Errorf("Failed to check auth status for %s: %v", handlerName, statusErr)
+							hadError = true
+							continue
+						}
 						w.Infof("Not currently authenticated with %s.", handler.DisplayName())
 						continue
 					}
