@@ -1,0 +1,129 @@
+# Run: scafctl run resolver -f template-dependency-inference.yaml -o json
+#
+# Demonstrates how scafctl auto-infers a go-template step's resolver
+# dependencies from the template body, and how a `data` input or a `forEach`
+# alias changes whether a bare "{{ .field }}" accessor is treated as a resolver
+# reference or as local template context.
+#
+# A go-template render step's template root namespace is the UNION of:
+#   1. resolver values      -> {{ .resolverName }}
+#   2. the step's data keys -> top-level keys of the `data` input
+#   3. forEach aliases      -> the `item` / `index` names bound by `forEach`
+#
+# Disambiguation rules:
+#   | Accessor                                   | Resolver dependency?          |
+#   |--------------------------------------------|-------------------------------|
+#   | {{ ._.name }}                              | Always (explicit reference).  |
+#   | {{ .field }}, no data input                | Yes (unless a forEach alias). |
+#   | {{ .field }} matching a static data key    | No (local data context).      |
+#   | {{ .field }} with a dynamic data input     | No (keys not statically known)|
+#
+# Inspect the inferred edges with:
+#   scafctl run resolver -f template-dependency-inference.yaml --graph
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-dependency-inference
+  displayName: Template Dependency Inference
+  category: resolvers
+  tags:
+    - resolver-example
+  description: |
+    Shows go-template resolver-dependency inference and how data inputs and
+    forEach aliases disambiguate bare "{{ .field }}" accessors.
+
+spec:
+  resolvers:
+    # Phase 1: plain source values (no dependencies).
+    appName:
+      description: Application name
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: billing
+
+    region:
+      description: Deployment region
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-west-2
+
+    projects:
+      description: Projects to render one manifest per entry
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: dev
+                  bucket: billing-dev
+                - name: prod
+                  bucket: billing-prod
+
+    # Case A: bare accessor, no data input.
+    # "{{ .appName }}" is auto-inferred as a dependency on the appName resolver,
+    # so this step runs in a later phase than appName.
+    greeting:
+      description: Bare accessor becomes a resolver dependency
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render
+              template: "Deploying {{ .appName }}"
+
+    # Case B: data input + explicit resolver reference.
+    # "{{ .app }}" resolves against the data key `app` (NOT a resolver dep).
+    # "{{ ._.region }}" is an explicit resolver reference, so `region` IS a dep.
+    # The data expression also references _.appName, making `appName` a dep too.
+    manifest:
+      description: Data keys are local context; _. forces a resolver reference
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render
+              template: |
+                app    = "{{ .app }}"
+                region = "{{ ._.region }}"
+              data:
+                expr: '{"app": _.appName}'
+
+    # Case C: forEach alias + data keys (in a transform step).
+    # The loop alias `proj` and the data key `appName` are local context, so
+    # neither "{{ .proj.name }}" nor "{{ .appName }}" is inferred as a resolver
+    # dependency. The dependencies come from the CEL references: the resolve
+    # step reads _.projects and the data expression reads _.appName.
+    # (forEach works on both resolve and transform steps; it is shown on a
+    # transform step here.)
+    perProject:
+      description: forEach aliases and data keys are not resolver dependencies
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: _.projects
+      transform:
+        with:
+          - provider: go-template
+            forEach:
+              item: proj
+            inputs:
+              operation: render
+              template: |
+                app    = "{{ .appName }}"
+                name   = "{{ .proj.name }}"
+                bucket = "{{ .proj.bucket }}"
+              data:
+                expr: '{"proj": proj, "appName": _.appName}'

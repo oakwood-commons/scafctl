@@ -2292,6 +2292,16 @@ Hints: The 'range' action received a non-iterable value. Ensure the variable
 - Use `{{ printf "%T" .myField }}` to inspect the type of a value at runtime
 - Check `dependsOn` to ensure all upstream resolvers are resolved before the template runs
 
+> **Dependency inference note:** In a resolver's go-template step, a bare
+> `{{ .field }}` accessor is inferred as a resolver dependency only when the step
+> has no `data` input and `field` is not a `forEach` alias. When a `data` input
+> is present, accessors satisfied by its keys (or by a `forEach` item/index
+> alias) are treated as local context, not resolver dependencies. Use
+> `{{ ._.name }}` to force a resolver reference, reference it via `_.name` in the
+> `data` expression, or add an explicit `dependsOn`. The `template-unknown-accessor`
+> lint rule warns about bare accessors that match no resolver, data key, or
+> alias (likely typos, since they render empty rather than failing).
+
 ---
 
 ## Discovering Available Functions
