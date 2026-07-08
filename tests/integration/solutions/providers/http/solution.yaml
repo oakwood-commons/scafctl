@@ -36,6 +36,32 @@ spec:
               headers:
                 Content-Type: application/json
 
+    postStructured:
+      description: POST an object body serialized to JSON with defaulted Content-Type
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/echo'"
+              method: POST
+              autoParseJson: true
+              body:
+                expr: '{"action": "create", "name": "test-item"}'
+
+    postStructuredArray:
+      description: POST an array body serialized to JSON
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url:
+                expr: "_.mockBaseUrl + '/api/echo'"
+              method: POST
+              autoParseJson: true
+              body:
+                expr: '["alpha", "beta", "gamma"]'
+
     notFoundEndpoint:
       description: GET request to non-existent endpoint
       resolve:
@@ -212,6 +238,26 @@ spec:
             message: "Echo response should contain the posted body content"
           - expression: __output.postData.body.contains("POST")
             message: "Echo response should contain the HTTP method"
+
+      post-structured-object-body:
+        description: Verify an object body is serialized to JSON with a defaulted Content-Type
+        extends: [_base]
+        assertions:
+          - expression: __output.postStructured.body.body.contains("\"action\":\"create\"")
+            message: "Object body should be serialized to compact JSON"
+          - expression: __output.postStructured.body.body.contains("\"name\":\"test-item\"")
+            message: "Serialized JSON should include all fields"
+          - expression: __output.postStructured.body.headers["Content-Type"] == "application/json"
+            message: "Content-Type should default to application/json for a structured body"
+
+      post-structured-array-body:
+        description: Verify an array body is serialized to JSON
+        extends: [_base]
+        assertions:
+          - expression: __output.postStructuredArray.body.body == "[\"alpha\",\"beta\",\"gamma\"]"
+            message: "Array body should be serialized to compact JSON"
+          - expression: __output.postStructuredArray.body.headers["Content-Type"] == "application/json"
+            message: "Content-Type should default to application/json for an array body"
 
       not-found-response:
         description: Verify 404 response from missing endpoint

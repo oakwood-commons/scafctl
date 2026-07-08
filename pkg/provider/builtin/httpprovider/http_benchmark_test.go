@@ -12,6 +12,20 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 )
 
+func BenchmarkSerializeBody(b *testing.B) {
+	body := map[string]any{
+		"query":  "graphQuery",
+		"count":  3,
+		"nested": map[string]any{"a": 1, "b": []any{"x", "y"}},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _, _ = serializeBody(body)
+	}
+}
+
 func BenchmarkHTTPProvider_Execute_DryRun(b *testing.B) {
 	p := NewHTTPProvider()
 

@@ -28,6 +28,11 @@ const (
 	Version      = "1.0.0"
 )
 
+// maxBodyBytes caps the size of a request body (in bytes) after it has been
+// serialized. This applies uniformly to string and structured (object/array)
+// bodies to bound memory use during serialization and request replay.
+const maxBodyBytes = 1048576
+
 // Field name constants for input/output map keys.
 const (
 	fieldURL                   = "url"
@@ -121,6 +126,42 @@ func parseRetryConfig(inputs map[string]any) *retryConfig {
 // shouldRetry and calculateBackoff have been removed — httpc.BuildStatusCodeCheckRetry
 // and httpc.BuildNamedBackoff now provide equivalent logic via retryablehttp.
 
+// serializeBody converts a request body input into the string that is written to
+// the wire. A string is returned verbatim. A nil or absent body yields an empty
+// string. Byte slices (including json.RawMessage) are treated as an already
+// serialized body and returned verbatim so they are not base64-encoded. Any
+// other value (map, slice, etc.) is serialized to compact JSON and reported as
+// structured so the caller can default the Content-Type header.
+func serializeBody(body any) (content string, structured bool, err error) {
+	switch v := body.(type) {
+	case nil:
+		return "", false, nil
+	case string:
+		return v, false, nil
+	case json.RawMessage:
+		return string(v), true, nil
+	case []byte:
+		return string(v), false, nil
+	default:
+		encoded, marshalErr := json.Marshal(v)
+		if marshalErr != nil {
+			return "", false, fmt.Errorf("failed to serialize request body to JSON: %w", marshalErr)
+		}
+		return string(encoded), true, nil
+	}
+}
+
+// hasContentType reports whether the headers map already contains a Content-Type
+// header, matching the key case-insensitively.
+func hasContentType(headers map[string]any) bool {
+	for k := range headers {
+		if strings.EqualFold(k, "Content-Type") {
+			return true
+		}
+	}
+	return false
+}
+
 // HTTPProvider implements the Provider interface for making HTTP requests.
 type HTTPProvider struct {
 	descriptor *provider.Descriptor
@@ -177,8 +218,11 @@ func NewHTTPProvider() *HTTPProvider {
 					schemahelper.WithExample("GET"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
 				fieldHeaders: schemahelper.AnyProp("HTTP headers as key-value pairs"),
-				fieldBody: schemahelper.StringProp("Request body for POST/PUT/PATCH requests",
-					schemahelper.WithMaxLength(*ptrs.IntPtr(1048576))),
+				fieldBody: {
+					Types:       []string{"string", "object", "array"},
+					Description: "Request body for POST/PUT/PATCH requests. A string is sent verbatim. A structured value (object or array) is serialized to JSON, and Content-Type defaults to application/json when not otherwise set.",
+					MaxLength:   ptrs.IntPtr(maxBodyBytes),
+				},
 				"timeout": schemahelper.IntProp("Request timeout in seconds",
 					schemahelper.WithExample(30),
 					schemahelper.WithMaximum(*ptrs.Float64Ptr(300.0))),
@@ -312,6 +356,17 @@ inputs:
   headers:
     Content-Type: "application/json"
   body: '{"name": "John Doe", "email": "john@example.com"}'`,
+				},
+				{
+					Name:        "POST request with a structured JSON body",
+					Description: "Pass an object as the body and let the provider serialize it to JSON. Content-Type defaults to application/json when not set. Use a CEL expression to build the body from resolver values without a separate serializer resolver.",
+					YAML: `name: run-graph-query
+provider: http
+inputs:
+  url: "https://api.example.com/graphql"
+  method: POST
+  body:
+    expr: '{"query": _.graphQuery}'`,
 				},
 				{
 					Name:        "Request with authentication header",
@@ -532,8 +587,15 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 	timeoutDuration := time.Duration(timeout) * time.Second
 
-	// Get body content for potential retries
-	bodyContent, _ := inputs[fieldBody].(string)
+	// Get body content for potential retries. A string body is sent verbatim; a
+	// structured body (object/array) is serialized to JSON.
+	bodyContent, bodyStructured, err := serializeBody(inputs[fieldBody])
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+	if len(bodyContent) > maxBodyBytes {
+		return nil, fmt.Errorf("%s: request body exceeds maximum size of %d bytes (got %d)", ProviderName, maxBodyBytes, len(bodyContent))
+	}
 
 	// Get headers (make a copy to avoid modifying input)
 	headers := make(map[string]any)
@@ -541,6 +603,12 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		for k, v := range h {
 			headers[k] = v
 		}
+	}
+
+	// Default Content-Type to application/json when a structured body was
+	// serialized and the caller did not set a Content-Type header.
+	if bodyStructured && !hasContentType(headers) {
+		headers["Content-Type"] = "application/json"
 	}
 
 	// Build httpc client with timeout and user-supplied retry configuration.
