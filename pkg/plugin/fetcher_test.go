@@ -783,6 +783,28 @@ func TestRegisterCachedPluginVersion_WrongVersion(t *testing.T) {
 	assert.Nil(t, clients)
 }
 
+// TestRegisterCachedPluginVersion_AmbiguousRegistries verifies the ambiguity
+// error from cache.ResolveVersion is surfaced to the caller when the same
+// version exists under multiple catalog registries with differing content.
+func TestRegisterCachedPluginVersion_AmbiguousRegistries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+
+	cacheDir := t.TempDir()
+	cache := NewCache(cacheDir)
+	platform := CurrentPlatform()
+	_, err := cache.Put("test-plugin", "1.0.0", platform, []byte("#!/bin/sh\nexit 0"), WithRegistryHash("0123456789abcdef"))
+	require.NoError(t, err)
+	_, err = cache.Put("test-plugin", "1.0.0", platform, []byte("#!/bin/sh\nexit 1"), WithRegistryHash("fedcba9876543210"))
+	require.NoError(t, err)
+
+	clients, err := RegisterCachedPluginVersion(ctx, "test-plugin", "1.0.0", reg, nil, cacheDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "differing binaries")
+	assert.Nil(t, clients)
+}
+
 func TestPluginCacheName(t *testing.T) {
 	t.Parallel()
 
