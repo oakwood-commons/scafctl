@@ -138,35 +138,8 @@ func (c *Cache) Get(name, version, platform, expectedDigest string, opts ...Cach
 	if c.managed != nil {
 		return c.getManaged(name, version, platform, expectedDigest, o.registryHash)
 	}
-	p := c.binaryPath(name, version, platform, o.registryHash)
-
-	info, err := os.Stat(p)
-	if err != nil || info.IsDir() {
-		// Migration fallback: check legacy path without .exe for existing Windows caches.
-		// Only attempt migration when the new path genuinely doesn't exist (not for
-		// permission errors or other transient failures).
-		if platformIsWindows(platform) && os.IsNotExist(err) {
-			legacy := c.legacyBinaryPath(name, version, platform, o.registryHash)
-			if li, lerr := os.Stat(legacy); lerr == nil && !li.IsDir() {
-				// Rename legacy binary to new .exe path for future lookups.
-				if mkErr := os.MkdirAll(filepath.Dir(p), 0o755); mkErr != nil {
-					return "", false
-				}
-				if os.Rename(legacy, p) == nil {
-					info = li
-				} else {
-					return "", false
-				}
-			} else {
-				return "", false
-			}
-		} else {
-			return "", false
-		}
-	}
-
-	// Verify executable permission (skip on Windows where permission bits are not meaningful)
-	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+	p, ok := c.statCachedBinary(name, version, platform, o.registryHash)
+	if !ok {
 		return "", false
 	}
 
@@ -184,6 +157,191 @@ func (c *Cache) Get(name, version, platform, expectedDigest string, opts ...Cach
 	return p, true
 }
 
+// versionDir identifies a cached version directory and the registry-hash
+// layout it belongs to. registryHash is empty for the flat (no-registry)
+// layout and non-empty for catalog-installed plugins nested under a hash.
+type versionDir struct {
+	version      string
+	registryHash string
+}
+
+// enumerateVersionDirs returns every cached version directory for a plugin
+// name in an unmanaged cache. When registryHash is non-empty, only that
+// registry's versions are returned. When empty, both the flat layout and every
+// registry-hash layout are scanned. A directory whose name matches
+// registryHashPattern is treated as a registry-hash layer; anything else is a
+// direct version directory.
+func (c *Cache) enumerateVersionDirs(name, registryHash string) []versionDir {
+	if registryHash != "" {
+		entries, err := os.ReadDir(filepath.Join(c.dir, name, registryHash))
+		if err != nil {
+			return nil
+		}
+		var dirs []versionDir
+		for _, e := range entries {
+			if e.IsDir() {
+				dirs = append(dirs, versionDir{version: e.Name(), registryHash: registryHash})
+			}
+		}
+		return dirs
+	}
+
+	entries, err := os.ReadDir(filepath.Join(c.dir, name))
+	if err != nil {
+		return nil
+	}
+	var dirs []versionDir
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirName := entry.Name()
+		if registryHashPattern.MatchString(dirName) {
+			// Registry-hash layer — scan its version subdirectories.
+			subEntries, err := os.ReadDir(filepath.Join(c.dir, name, dirName))
+			if err != nil {
+				continue
+			}
+			for _, se := range subEntries {
+				if se.IsDir() {
+					dirs = append(dirs, versionDir{version: se.Name(), registryHash: dirName})
+				}
+			}
+			continue
+		}
+		// Direct version directory (flat, no-registry layout).
+		dirs = append(dirs, versionDir{version: dirName, registryHash: ""})
+	}
+	return dirs
+}
+
+// statCachedBinary resolves and validates the on-disk binary for an exact
+// (name, version, platform, registryHash) tuple in an unmanaged cache. It
+// performs the Windows legacy-path migration and verifies the executable
+// permission bit, but does not perform digest verification. It returns the
+// resolved path and true when a usable binary exists.
+func (c *Cache) statCachedBinary(name, version, platform, registryHash string) (string, bool) {
+	p := c.binaryPath(name, version, platform, registryHash)
+
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() {
+		// Migration fallback: check legacy path without .exe for existing Windows caches.
+		// Only attempt migration when the new path genuinely doesn't exist (not for
+		// permission errors or other transient failures).
+		if !platformIsWindows(platform) || !os.IsNotExist(err) {
+			return "", false
+		}
+		legacy := c.legacyBinaryPath(name, version, platform, registryHash)
+		li, lerr := os.Stat(legacy)
+		if lerr != nil || li.IsDir() {
+			return "", false
+		}
+		// Rename legacy binary to new .exe path for future lookups.
+		if mkErr := os.MkdirAll(filepath.Dir(p), 0o755); mkErr != nil {
+			return "", false
+		}
+		if os.Rename(legacy, p) != nil {
+			return "", false
+		}
+		info = li
+	}
+
+	// Verify executable permission. Skip when the target platform is Windows
+	// (its binaries carry no Unix executable bit) or when the host OS is
+	// Windows (permission bits are not meaningful there). Using the target
+	// platform — not just the host — keeps cross-platform cache inspection
+	// (e.g. validating a windows/amd64 entry on a non-Windows host) correct.
+	if !platformIsWindows(platform) && runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		return "", false
+	}
+
+	return p, true
+}
+
+// ResolveVersion returns the on-disk path to a cached plugin binary for an
+// exact version, searching across both the flat (no-registry) cache layout and
+// every registry-hash layout. This lets callers that do not know a plugin's
+// catalog registry hash still resolve catalog-installed plugins, which live
+// under <name>/<registryHash>/<version>/... rather than the flat
+// <name>/<version>/... layout.
+//
+// When the same version resolves under multiple registry layouts with
+// differing binary contents, the result is ambiguous and an error is returned
+// rather than silently choosing one. Identical binaries (matching digests)
+// resolve to a single match.
+func (c *Cache) ResolveVersion(name, version, platform string) (string, bool, error) {
+	if c.managed != nil {
+		// The managed (API server) cache is keyed per registry namespace and
+		// does not support cross-registry enumeration; fall back to the flat
+		// lookup to preserve existing behavior.
+		path, ok := c.getManaged(name, version, platform, "", "")
+		return path, ok, nil
+	}
+
+	var matches []string
+	// Probe the flat (no-registry) layout directly plus every registry-hash
+	// layer present for this plugin. The flat layout is always probed so a
+	// version that happens to look like a registry hash (16 lowercase hex) is
+	// never misclassified as a registry layer and lost.
+	registryHashes := []string{""}
+	if entries, err := os.ReadDir(filepath.Join(c.dir, name)); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && registryHashPattern.MatchString(e.Name()) {
+				registryHashes = append(registryHashes, e.Name())
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	for _, rh := range registryHashes {
+		if p, ok := c.statCachedBinary(name, version, platform, rh); ok && !seen[p] {
+			seen[p] = true
+			matches = append(matches, p)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", false, nil
+	case 1:
+		return matches[0], true, nil
+	default:
+		identical, err := identicalDigests(matches)
+		if err != nil {
+			return "", false, err
+		}
+		if identical {
+			return matches[0], true, nil
+		}
+		return "", false, fmt.Errorf(
+			"cached plugin %q version %q resolves to %d differing binaries across catalog registries; remove the duplicate cache entries or reinstall from a single catalog",
+			name, version, len(matches),
+		)
+	}
+}
+
+// identicalDigests reports whether all files at the given paths share the same
+// sha256 digest. Fewer than two paths are trivially identical.
+func identicalDigests(paths []string) (bool, error) {
+	if len(paths) < 2 {
+		return true, nil
+	}
+	first, err := fileDigest(paths[0])
+	if err != nil {
+		return false, fmt.Errorf("digesting %s: %w", paths[0], err)
+	}
+	for _, p := range paths[1:] {
+		d, err := fileDigest(p)
+		if err != nil {
+			return false, fmt.Errorf("digesting %s: %w", p, err)
+		}
+		if d != first {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // GetLatestCached returns the path to the newest cached binary for the given
 // name and platform, regardless of version. When WithRegistryHash is provided,
 // only that registry's versions are searched. Otherwise, all versions across
@@ -195,79 +353,14 @@ func (c *Cache) GetLatestCached(name, platform string, opts ...CacheOption) (str
 		return c.getLatestCachedManaged(name, platform, o.registryHash)
 	}
 
-	// Collect version directories to scan.
-	type versionDir struct {
-		version      string
-		registryHash string
-	}
-	var versionDirs []versionDir
-
-	if o.registryHash != "" {
-		// Specific registry hash — scan only that subdir.
-		entries, err := os.ReadDir(filepath.Join(c.dir, name, o.registryHash))
-		if err == nil {
-			for _, e := range entries {
-				if e.IsDir() {
-					versionDirs = append(versionDirs, versionDir{version: e.Name(), registryHash: o.registryHash})
-				}
-			}
-		}
-	} else {
-		// No specific registry hash — scan <name>/ and distinguish hash dirs from version dirs.
-		entries, err := os.ReadDir(filepath.Join(c.dir, name))
-		if err != nil {
-			return "", "", false
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			dirName := entry.Name()
-			if registryHashPattern.MatchString(dirName) {
-				// This is a registry hash dir — scan its version subdirs.
-				subEntries, err := os.ReadDir(filepath.Join(c.dir, name, dirName))
-				if err != nil {
-					continue
-				}
-				for _, se := range subEntries {
-					if se.IsDir() {
-						versionDirs = append(versionDirs, versionDir{version: se.Name(), registryHash: dirName})
-					}
-				}
-			} else {
-				// Not a hash — treat as a direct version dir (no-registry path).
-				versionDirs = append(versionDirs, versionDir{version: dirName, registryHash: ""})
-			}
-		}
-	}
+	versionDirs := c.enumerateVersionDirs(name, o.registryHash)
 
 	var bestSemver *semver.Version
 	var bestVersion string
 	var bestPath string
 	for _, vd := range versionDirs {
-		p := c.binaryPath(name, vd.version, platform, vd.registryHash)
-		info, err := os.Stat(p)
-		if err != nil || info.IsDir() {
-			if platformIsWindows(platform) && os.IsNotExist(err) {
-				legacy := c.legacyBinaryPath(name, vd.version, platform, vd.registryHash)
-				if li, lerr := os.Stat(legacy); lerr == nil && !li.IsDir() {
-					if mkErr := os.MkdirAll(filepath.Dir(p), 0o755); mkErr == nil {
-						if os.Rename(legacy, p) == nil {
-							info = li
-						} else {
-							continue
-						}
-					} else {
-						continue
-					}
-				} else {
-					continue
-				}
-			} else {
-				continue
-			}
-		}
-		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		p, ok := c.statCachedBinary(name, vd.version, platform, vd.registryHash)
+		if !ok {
 			continue
 		}
 		parsed, parseErr := semver.NewVersion(vd.version)

@@ -658,3 +658,143 @@ func TestManagedCache_WarmUpNoOp(t *testing.T) {
 	err := cache.WarmUp()
 	assert.NoError(t, err)
 }
+
+// registryHashA/B are valid 16-hex registry-hash directory names used to
+// exercise the nested (catalog-installed) cache layout.
+const (
+	registryHashA = "0123456789abcdef"
+	registryHashB = "fedcba9876543210"
+)
+
+func TestCache_ResolveVersion_FlatLayout(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	name, version, platform := "flat-plugin", "1.2.3", "linux/amd64"
+
+	want, err := cache.Put(name, version, platform, []byte("flat-binary"))
+	require.NoError(t, err)
+
+	got, ok, err := cache.ResolveVersion(name, version, platform)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+// TestCache_ResolveVersion_NestedLayout is the core #598 regression: a
+// catalog-installed plugin lives under <name>/<registryHash>/<version>/... and
+// must resolve even though the caller does not supply the registry hash. The
+// old Get(name, version, platform, "") lookup missed this.
+func TestCache_ResolveVersion_NestedLayout(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	name, version, platform := "catalog-plugin", "2.0.0", "linux/amd64"
+
+	want, err := cache.Put(name, version, platform, []byte("nested-binary"), WithRegistryHash(registryHashA))
+	require.NoError(t, err)
+
+	// The flat lookup must miss it (proves the layout difference).
+	_, ok := cache.Get(name, version, platform, "")
+	assert.False(t, ok, "flat Get should not find a nested plugin")
+
+	// ResolveVersion must find it across the registry-hash layout.
+	got, ok, err := cache.ResolveVersion(name, version, platform)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func TestCache_ResolveVersion_Missing(t *testing.T) {
+	cache := NewCache(t.TempDir())
+
+	got, ok, err := cache.ResolveVersion("nope", "9.9.9", "linux/amd64")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, got)
+}
+
+// TestCache_ResolveVersion_HexLookingVersion guards against misclassifying a
+// flat cache entry whose version happens to look like a registry hash (16
+// lowercase hex). Such a version must still resolve from the flat layout
+// rather than being treated as a registry-hash directory.
+func TestCache_ResolveVersion_HexLookingVersion(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	name, platform := "hex-plugin", "linux/amd64"
+	version := "0123456789abcdef" // 16 lowercase hex, matches registryHashPattern
+
+	want, err := cache.Put(name, version, platform, []byte("hex-version-binary"))
+	require.NoError(t, err)
+
+	got, ok, err := cache.ResolveVersion(name, version, platform)
+	require.NoError(t, err)
+	assert.True(t, ok, "flat entry with a hash-looking version must resolve")
+	assert.Equal(t, want, got)
+}
+
+func TestCache_ResolveVersion_WrongPlatform(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	name, version := "plat-plugin", "1.0.0"
+
+	_, err := cache.Put(name, version, "linux/amd64", []byte("bin"), WithRegistryHash(registryHashA))
+	require.NoError(t, err)
+
+	_, ok, err := cache.ResolveVersion(name, version, "darwin/arm64")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+// TestCache_ResolveVersion_WindowsTargetOnNonWindowsHost verifies that a
+// windows/amd64 cache entry resolves on a non-Windows host even though its
+// binary lacks the Unix executable bit — the exec-bit check must key off the
+// target platform, not the host GOOS.
+func TestCache_ResolveVersion_WindowsTargetOnNonWindowsHost(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exercises non-Windows host handling of a windows target platform")
+	}
+	cache := NewCache(t.TempDir())
+	name, version, platform := "win-plugin", "1.0.0", "windows/amd64"
+
+	want, err := cache.Put(name, version, platform, []byte("MZ fake-windows-binary"))
+	require.NoError(t, err)
+
+	// Strip the executable bit to mimic a Windows binary stored on a Unix host.
+	require.NoError(t, os.Chmod(want, 0o644))
+
+	got, ok, err := cache.ResolveVersion(name, version, platform)
+	require.NoError(t, err)
+	assert.True(t, ok, "windows target binary must resolve despite missing Unix exec bit")
+	assert.Equal(t, want, got)
+}
+
+func TestCache_ResolveVersion_DuplicateIdenticalAcrossLayouts(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	name, version, platform := "dup-plugin", "1.0.0", "linux/amd64"
+	data := []byte("identical-binary")
+
+	_, err := cache.Put(name, version, platform, data)
+	require.NoError(t, err)
+	_, err = cache.Put(name, version, platform, data, WithRegistryHash(registryHashA))
+	require.NoError(t, err)
+
+	// Same content in two layouts is unambiguous — resolves without error.
+	got, ok, err := cache.ResolveVersion(name, version, platform)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.NotEmpty(t, got)
+}
+
+func TestCache_ResolveVersion_AmbiguousDifferingContent(t *testing.T) {
+	cache := NewCache(t.TempDir())
+	name, version, platform := "ambiguous-plugin", "1.0.0", "linux/amd64"
+
+	_, err := cache.Put(name, version, platform, []byte("binary-from-registry-a"), WithRegistryHash(registryHashA))
+	require.NoError(t, err)
+	_, err = cache.Put(name, version, platform, []byte("binary-from-registry-b"), WithRegistryHash(registryHashB))
+	require.NoError(t, err)
+
+	// Two registries hold the same version with different content — ambiguous.
+	got, ok, err := cache.ResolveVersion(name, version, platform)
+	require.Error(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "differing binaries")
+	// The message must point at an action the user can actually take.
+	assert.Contains(t, err.Error(), "remove the duplicate cache entries")
+}
