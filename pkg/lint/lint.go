@@ -110,6 +110,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
 	lintResolverCycles(sol, result, registry)
+	lintTemplateAccessors(sol, result)
 	lintWorkflow(sol, result, registry)
 	lintState(sol, result, registry)
 	lintImmutableResolvers(sol, result)
@@ -669,6 +670,27 @@ func lintResolverCycles(sol *solution.Solution, result *Result, registry *provid
 			fmt.Sprintf("circular dependency detected: %s", cycleStr),
 			suggestion,
 			"resolver-cycle")
+	}
+}
+
+// lintTemplateAccessors reports root-level Go template accessors ({{ .field }}
+// or {{ ._.name }}) in resolve or transform steps that cannot resolve to any
+// known resolver, data-input key, or forEach alias. Such accessors render empty
+// at runtime (missingkey default) rather than failing, so they are surfaced here
+// as likely typos. Steps whose data input has a dynamic (non-statically-known)
+// key set are not flagged for bare {{ .field }} accessors, avoiding false
+// positives when the root is populated at runtime.
+func lintTemplateAccessors(sol *solution.Solution, result *Result) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+	resolvers := sol.Spec.ResolversToSlice()
+	for _, acc := range resolver.UnresolvedTemplateAccessors(resolvers) {
+		location := fmt.Sprintf("resolvers.%s.%s", acc.Resolver, acc.Step)
+		result.addFinding(SeverityWarning, "template", location,
+			fmt.Sprintf("Go template references root accessor %q but no resolver, data key, or forEach alias with that name is in scope — it renders empty at runtime", acc.Name),
+			fmt.Sprintf("Fix the typo, add a resolver or dependsOn named %q, or provide it via a data input", acc.Name),
+			"template-unknown-accessor")
 	}
 }
 

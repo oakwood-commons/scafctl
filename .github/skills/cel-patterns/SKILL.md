@@ -267,11 +267,26 @@ has(_.config) && has(_.config.database) && has(_.config.database.host)
 | Missing field | `_.missing.field` (runtime error) | `has(_.missing) ? _.missing.field : default` |
 | List on non-list | `_.value.filter(...)` (if scalar) | Check type first or ensure resolver type is `array` |
 
+## Reference Extraction
+
+`pkg/celexp/refs.go` provides static analysis of an expression's AST:
+
+- `RequiredVariables(ctx)` / `GetUnderscoreVariables(ctx)` -- extract variable
+  and `_.` resolver references (used for dependency inference).
+- `MapLiteralKeys(ctx) ([]string, bool)` -- when the expression's top-level node
+  is a **map literal** with constant string keys (e.g.
+  `{"appName": _.appName}`), returns those keys and `true`. Returns `nil, false`
+  for anything else (function calls like `map.merge(...)`, identifiers, lists,
+  or non-string/non-constant keys). This lets a go-template `data:` input's key
+  set be determined statically so bare `{{ .field }}` template accessors are not
+  mis-inferred as resolver dependencies (see the go-template-patterns skill).
+
 ## Key Packages
 
 - `pkg/celexp/`: Expression type, Compile/Eval, EvaluateExpression convenience
 - `pkg/celexp/env/`: CEL environment setup, extension loading, caching
 - `pkg/celexp/ext/`: Custom function registration (regex, arrays, map, guid, time, sort, out)
+- `pkg/celexp/refs.go`: static reference extraction (RequiredVariables, MapLiteralKeys)
 - `pkg/provider/builtin/celprovider/`: CEL provider for transform phase
 
 ## Cost Limits

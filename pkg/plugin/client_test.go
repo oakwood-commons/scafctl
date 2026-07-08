@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	hclog "github.com/hashicorp/go-hclog"
 	hplugin "github.com/hashicorp/go-plugin"
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -208,4 +210,32 @@ func TestNewAuthHandlerClientWithConnector_Success(t *testing.T) {
 func TestNewAuthHandlerClient_MissingBinary(t *testing.T) {
 	_, err := NewAuthHandlerClient(filepath.Join(t.TempDir(), "missing-auth-plugin"))
 	require.Error(t, err)
+}
+
+func TestAuthHandlerClient_ActivateServerMode_Success(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeResp: &proto.ActivateServerModeResponse{},
+	}
+	client := &AuthHandlerClient{
+		plugin: &AuthHandlerGRPCClient{client: mock},
+		name:   "entra",
+	}
+
+	err := client.ActivateServerMode(context.Background(), []byte(`{"tenant_id":"abc"}`))
+	require.NoError(t, err)
+}
+
+func TestAuthHandlerClient_ActivateServerMode_NotGRPCClient(t *testing.T) {
+	t.Parallel()
+
+	client := &AuthHandlerClient{
+		plugin: &MockAuthHandlerPlugin{},
+		name:   "mock-handler",
+	}
+
+	err := client.ActivateServerMode(context.Background(), []byte(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin does not support server mode")
 }

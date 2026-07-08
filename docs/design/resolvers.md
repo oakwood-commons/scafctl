@@ -1550,6 +1550,33 @@ Rules:
 - Independent resolvers (no dependencies on each other) execute concurrently
 - Cycles in the dependency graph are rejected
 
+### Go-Template Dependency Inference
+
+A go-template render step's template root namespace is the **union** of resolver
+values, the step's `data`-input keys, and any `forEach` item/index aliases.
+Auto-inference disambiguates root accessors accordingly:
+
+| Accessor | Inferred as a resolver dependency? |
+|----------|------------------------------------|
+| `{{ ._.name }}` | Always (explicit resolver reference). |
+| `{{ .field }}`, no `data` input | Yes, unless `field` is a `forEach` alias. |
+| `{{ .field }}` matching a statically-known `data` key | No (local data context). |
+| `{{ .field }}` with a dynamic `data` input | No (keys not statically known). |
+| `{{ .__self }}`, `{{ .__item }}`, `{{ .__fan.* }}`, ... | No (internal variables). |
+
+A `data` input's key set is statically known when it is a literal map or a CEL
+**map-literal** expression (`expr: '{"appName": _.appName}'`). Resolver
+references (`rslvr`), templates (`tmpl`), and non-map-literal CEL expressions
+(e.g. `map.merge(...)`) are dynamic, so bare `{{ .field }}` accessors under them
+are treated as data context rather than resolver dependencies.
+
+Because unknown inferred edges are dropped as best-effort ordering hints (rather
+than causing a hard "depends on X but X wasn't present" failure), a bare
+`{{ .field }}` typo renders empty at runtime instead of failing the build. The
+`template-unknown-accessor` lint rule surfaces such accessors as warnings. To
+force a resolver dependency, reference it via `_.name` in the `data` expression,
+use `{{ ._.name }}` in the template, or add an explicit `dependsOn` entry.
+
 ### Explicit Dependencies (dependsOn)
 
 When dependencies cannot be auto-extracted (e.g., templates loaded from files), use `dependsOn`:

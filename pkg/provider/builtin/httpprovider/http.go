@@ -632,6 +632,9 @@ func handlerToken(ctx context.Context, authProvider, scope string, timeoutDurati
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
 	}
+	if token == nil || token.AccessToken == "" {
+		return nil, fmt.Errorf("%s: auth handler %q returned empty token", ProviderName, authProvider)
+	}
 
 	// Only wire 401 refresh when the token came from a refreshable source.
 	httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
@@ -640,6 +643,9 @@ func handlerToken(ctx context.Context, authProvider, scope string, timeoutDurati
 		t, refreshErr := handler.GetToken(unauthCtx, refreshOpts)
 		if refreshErr != nil {
 			return "", refreshErr
+		}
+		if t == nil || t.AccessToken == "" {
+			return "", fmt.Errorf("%s: auth handler %q returned empty token on refresh", ProviderName, authProvider)
 		}
 		return fmt.Sprintf("%s %s", t.TokenType, t.AccessToken), nil
 	}

@@ -532,10 +532,10 @@ func disableNonServerModeHandlers(registry *auth.Registry, cfg *config.Config, l
 	}
 }
 
+// configureAuthServerMode activates server mode on auth handler plugins for API-mode token acquisition.
+// This tells plugins to switch from CLI flows  to server flows
+// and disables non-server-mode handlers.
 func configureAuthServerMode(ctx context.Context, registry *auth.Registry, cfg *config.Config, lgr *logr.Logger) error {
-	// Activate server mode on auth handler plugins for API-mode token acquisition.
-	// This tells plugins to switch from CLI flows (device-code, PAT) to server flows
-	// (client_credentials, WIF, OBO) using the opaque settings from config.
 	if err := activateAuthPluginServerMode(ctx, registry, cfg, lgr); err != nil {
 		return fmt.Errorf("activating auth plugin server mode: %w", err)
 	}

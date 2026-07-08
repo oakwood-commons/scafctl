@@ -2740,6 +2740,25 @@ func TestIntegration_Lint_WarningSeverityFilter(t *testing.T) {
 	assert.Contains(t, stdout, `"infoCount": 0`)
 }
 
+func TestIntegration_Lint_TemplateUnknownAccessor(t *testing.T) {
+	t.Parallel()
+	// The lint-stress-test solution intentionally contains a go-template
+	// resolver with a bare "{{ .projcts }}" accessor that matches no resolver,
+	// data key, or forEach alias. Lint must surface it via the
+	// template-unknown-accessor rule.
+	stdout, _, _ := runScafctl(t, "lint",
+		"-f", "examples/solutions/lint-stress-test/solution.yaml",
+		"-o", "json",
+	)
+
+	assert.Contains(t, stdout, "template-unknown-accessor",
+		"lint should report the unknown template accessor rule")
+	assert.Contains(t, stdout, "projcts",
+		"finding should name the unresolved accessor")
+	assert.Contains(t, stdout, "resolvers.typo_template.resolve",
+		"finding should point at the offending resolver step")
+}
+
 func TestIntegration_Lint_ActionSolution(t *testing.T) {
 	t.Parallel()
 	// Test linting a solution with actions

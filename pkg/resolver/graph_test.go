@@ -1329,7 +1329,7 @@ func TestExtractDepsFromProviderInputs_NilFallback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := make(map[string]bool)
-			used := extractDepsFromProviderInputs("test-provider", inputs, deps, tt.lookup)
+			used := extractDepsFromProviderInputs("test-provider", inputs, nil, deps, tt.lookup)
 			assert.Equal(t, tt.wantUsed, used)
 
 			if tt.wantDeps != nil {
@@ -1343,7 +1343,7 @@ func TestExtractDepsFromProviderInputs_NilFallback(t *testing.T) {
 	}
 }
 
-func TestExtractDepsFromTemplateWithExclusions(t *testing.T) {
+func TestExtractDepsFromTemplateCtx(t *testing.T) {
 	tests := []struct {
 		name    string
 		tmpl    string
@@ -1379,7 +1379,7 @@ func TestExtractDepsFromTemplateWithExclusions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := make(map[string]bool)
-			extractDepsFromTemplateWithExclusions(tt.tmpl, deps, tt.exclude)
+			extractDepsFromTemplateCtx(tt.tmpl, deps, scanCtxFromExclude(tt.exclude))
 
 			wantMap := make(map[string]bool)
 			for _, dep := range tt.want {
@@ -1391,7 +1391,7 @@ func TestExtractDepsFromTemplateWithExclusions(t *testing.T) {
 	}
 }
 
-func TestExtractDataKeys(t *testing.T) {
+func TestBuildTmplScanCtx_DataKeys(t *testing.T) {
 	tests := []struct {
 		name   string
 		inputs map[string]*ValueRef
@@ -1428,7 +1428,201 @@ func TestExtractDataKeys(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractDataKeys(tt.inputs)
+			got := buildTmplScanCtx(tt.inputs, nil).dataKeys
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestValueRefDataScanKeys(t *testing.T) {
+	tests := []struct {
+		name         string
+		ref          *ValueRef
+		wantKeys     map[string]bool
+		wantComplete bool
+	}{
+		{
+			name:         "literal map",
+			ref:          &ValueRef{Literal: map[string]any{"a": 1, "b": 2}},
+			wantKeys:     map[string]bool{"a": true, "b": true},
+			wantComplete: true,
+		},
+		{
+			name:         "literal non-map is dynamic",
+			ref:          &ValueRef{Literal: "scalar"},
+			wantKeys:     nil,
+			wantComplete: false,
+		},
+		{
+			name:         "expr map literal is complete",
+			ref:          &ValueRef{Expr: celExpPtr(`{"appName": _.appName, "env": _.env}`)},
+			wantKeys:     map[string]bool{"appName": true, "env": true},
+			wantComplete: true,
+		},
+		{
+			name:         "expr non-map literal is dynamic",
+			ref:          &ValueRef{Expr: celExpPtr(`map.merge(_.base, _.extra)`)},
+			wantKeys:     nil,
+			wantComplete: false,
+		},
+		{
+			name:         "resolver ref is dynamic",
+			ref:          &ValueRef{Resolver: stringPtr("vars")},
+			wantKeys:     nil,
+			wantComplete: false,
+		},
+		{
+			name:         "tmpl ref is dynamic",
+			ref:          &ValueRef{Tmpl: tmplPtr("{{ .x }}")},
+			wantKeys:     nil,
+			wantComplete: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys, complete := valueRefDataScanKeys(tt.ref)
+			assert.Equal(t, tt.wantComplete, complete)
+			assert.Equal(t, tt.wantKeys, keys)
+		})
+	}
+}
+
+func TestLiteralDataKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+		want map[string]bool
+	}{
+		{
+			name: "plain literal map",
+			data: map[string]any{"a": 1, "b": 2},
+			want: map[string]bool{"a": true, "b": true},
+		},
+		{
+			name: "expr map literal",
+			data: map[string]any{"expr": `{"appName": _.appName}`},
+			want: map[string]bool{"appName": true},
+		},
+		{
+			name: "expr non-map literal is unknown",
+			data: map[string]any{"expr": `map.merge(a, b)`},
+			want: nil,
+		},
+		{
+			name: "rslvr ref is unknown",
+			data: map[string]any{"rslvr": "vars"},
+			want: nil,
+		},
+		{
+			name: "tmpl ref is unknown",
+			data: map[string]any{"tmpl": "{{ .x }}"},
+			want: nil,
+		},
+		{
+			name: "non-map is unknown",
+			data: "scalar",
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, literalDataKeys(tt.data))
+		})
+	}
+}
+
+func TestUnresolvedTemplateAccessors(t *testing.T) {
+	tests := []struct {
+		name      string
+		resolvers []*Resolver
+		want      []TemplateAccessor
+	}{
+		{
+			name: "typo accessor with known data keys is flagged",
+			resolvers: []*Resolver{
+				{Name: "appName"},
+				{
+					Name: "rendered",
+					Resolve: &ResolvePhase{With: []ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `app = "{{ .appNam }}"`},
+							"data":     {Expr: celExpPtr(`{"appName": _.appName}`)},
+						},
+					}}},
+				},
+			},
+			want: []TemplateAccessor{{Resolver: "rendered", Step: "resolve", Name: "appNam"}},
+		},
+		{
+			name: "known resolver reference is not flagged",
+			resolvers: []*Resolver{
+				{Name: "appName"},
+				{
+					Name: "rendered",
+					Resolve: &ResolvePhase{With: []ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ .appName }}`},
+						},
+					}}},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "forEach alias is not flagged",
+			resolvers: []*Resolver{
+				{
+					Name: "rendered",
+					Resolve: &ResolvePhase{With: []ProviderSource{{
+						Provider: "go-template",
+						ForEach:  &ForEachClause{Item: "proj", In: &ValueRef{Resolver: stringPtr("projects")}},
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ .proj.name }}`},
+						},
+					}}},
+				},
+				{Name: "projects"},
+			},
+			want: nil,
+		},
+		{
+			name: "dynamic data input suppresses bare field flagging",
+			resolvers: []*Resolver{
+				{
+					Name: "rendered",
+					Resolve: &ResolvePhase{With: []ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ .anything }}`},
+							"data":     {Resolver: stringPtr("vars")},
+						},
+					}}},
+				},
+				{Name: "vars"},
+			},
+			want: nil,
+		},
+		{
+			name: "transform step accessor is flagged",
+			resolvers: []*Resolver{
+				{
+					Name: "rendered",
+					Transform: &TransformPhase{With: []ProviderTransform{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ .missing }}`},
+						},
+					}}},
+				},
+			},
+			want: []TemplateAccessor{{Resolver: "rendered", Step: "transform", Name: "missing"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UnresolvedTemplateAccessors(tt.resolvers)
 			assert.Equal(t, tt.want, got)
 		})
 	}

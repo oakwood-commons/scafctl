@@ -1180,3 +1180,52 @@ func TestVerboseCredentialSource_Empty(t *testing.T) {
 	verboseCredentialSource(w, rc)
 	assert.Empty(t, errBuf.String(), "should not log when credential source is empty")
 }
+
+func TestResolveAuthHandler_ReturnsHandler(t *testing.T) {
+	t.Parallel()
+
+	mock := auth.NewMockHandler("github")
+	authReg := auth.NewRegistry()
+	_ = authReg.Register(mock) //nolint:errcheck
+
+	ctx := newCatalogTestCtx(t)
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	handler := resolveAuthHandler(ctx, "ghcr.io", "")
+	require.NotNil(t, handler)
+	assert.Equal(t, "github", handler.Name())
+}
+
+func TestResolveAuthHandler_ReturnsNilWhenNoProvider(t *testing.T) {
+	t.Parallel()
+
+	ctx := newCatalogTestCtx(t)
+	// No config, no auth registry — resolveAuthProvider returns ""
+	handler := resolveAuthHandler(ctx, "custom-registry.example.com", "")
+	assert.Nil(t, handler)
+}
+
+func TestResolveAuthHandler_ReturnsNilWhenHandlerNotInRegistry(t *testing.T) {
+	t.Parallel()
+
+	// Config infers "github" for ghcr.io, but registry has no handler registered.
+	authReg := auth.NewRegistry()
+	ctx := newCatalogTestCtx(t)
+	ctx = auth.WithRegistry(ctx, authReg)
+
+	handler := resolveAuthHandler(ctx, "ghcr.io", "")
+	assert.Nil(t, handler, "should return nil when handler not found in registry")
+}
+
+func TestAuthHandlerName_Nil(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "", authHandlerName(nil))
+}
+
+func TestAuthHandlerName_NonNil(t *testing.T) {
+	t.Parallel()
+
+	mock := auth.NewMockHandler("entra")
+	assert.Equal(t, "entra", authHandlerName(mock))
+}
