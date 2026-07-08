@@ -56,7 +56,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
-	"github.com/oakwood-commons/scafctl/pkg/runmode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -66,7 +65,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/spf13/cobra"
 )
 
@@ -755,15 +753,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			} else {
 				lgr.V(1).Info("official provider registry disabled via config")
 			}
-
-			// Build CLI-mode token provider registry for unified token retrieval.
-			// must run after auth registry is fully configured since some token providers
-			tsReg, tsErr := tokenprovider.Build(runmode.CLI, authRegistry, nil)
-			if tsErr != nil {
-				w.ErrorWithExit(fmt.Sprintf("failed to build token provider registry: %v", tsErr))
-				return
-			}
-			ctx = tokenprovider.WithRegistry(ctx, tsReg)
 
 			cCmd.SetContext(ctx)
 

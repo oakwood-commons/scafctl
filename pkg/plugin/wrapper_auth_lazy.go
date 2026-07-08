@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -333,4 +334,12 @@ func (l *LazyAuthHandlerWrapper) DetectAvailableFlows(ctx context.Context) ([]au
 		return nil, err
 	}
 	return w.DetectAvailableFlows(ctx)
+}
+
+func (l *LazyAuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
+	w, err := l.init(ctx)
+	if err != nil {
+		return err
+	}
+	return w.ActivateServerMode(ctx, settings)
 }

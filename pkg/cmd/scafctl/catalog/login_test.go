@@ -16,23 +16,17 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// configureAuthAndTokenRegistry registers the given mock handler in both an
-// auth.Registry and a tokenprovider.Registry, then attaches both to ctx.
-// Use this when tests call code paths that invoke BridgeAuthToRegistry
-// (which needs both registries to resolve tokens and usernames in CLI mode).
-func configureAuthAndTokenRegistry(ctx context.Context, t *testing.T, mock *auth.MockHandler) context.Context {
+// configureAuthRegistry registers the given mock handler in an
+// auth.Registry, then attaches it to ctx.
+func configureAuthRegistry(ctx context.Context, t *testing.T, mock *auth.MockHandler) context.Context {
 	t.Helper()
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mock))
 	ctx = auth.WithRegistry(ctx, registry)
-	tsReg := tokenprovider.NewRegistry()
-	require.NoError(t, tsReg.Register(tokenprovider.NewAuthHandlerAdapter(mock)))
-	ctx = tokenprovider.WithRegistry(ctx, tsReg)
 	return ctx
 }
 
@@ -292,7 +286,7 @@ func TestRunAuthHandlerLogin_WithMockHandler(t *testing.T) {
 		TokenType:   "Bearer",
 	}
 
-	ctx = configureAuthAndTokenRegistry(ctx, t, mock)
+	ctx = configureAuthRegistry(ctx, t, mock)
 
 	w := writerFromCtx(ctx)
 
@@ -359,7 +353,7 @@ func TestRunAuthHandlerLogin_ScopeAutoDetectedFromConfig(t *testing.T) {
 	}
 	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
 
-	ctx = configureAuthAndTokenRegistry(ctx, t, mock)
+	ctx = configureAuthRegistry(ctx, t, mock)
 
 	w := writerFromCtx(ctx)
 
@@ -400,7 +394,7 @@ func TestRunAuthHandlerLogin_ExplicitScopeOverridesConfig(t *testing.T) {
 		TokenType:   "Bearer",
 	}
 	mock.CapabilitiesValue = []auth.Capability{auth.CapScopesOnTokenRequest}
-	ctx = configureAuthAndTokenRegistry(ctx, t, mock)
+	ctx = configureAuthRegistry(ctx, t, mock)
 	w := writerFromCtx(ctx)
 
 	opts := &LoginOptions{

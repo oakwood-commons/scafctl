@@ -5,6 +5,8 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -434,4 +436,272 @@ func TestPluginCacheMaxSize(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// mockServerModeHandler embeds MockHandler and implements auth.ServerMode.
+type mockServerModeHandler struct {
+	*auth.MockHandler
+	ActivateErr   error
+	ActivateCalls []json.RawMessage
+}
+
+func newMockServerModeHandler(name string) *mockServerModeHandler {
+	return &mockServerModeHandler{
+		MockHandler: auth.NewMockHandler(name),
+	}
+}
+
+func (m *mockServerModeHandler) ActivateServerMode(_ context.Context, settings json.RawMessage) error {
+	m.ActivateCalls = append(m.ActivateCalls, settings)
+	return m.ActivateErr
+}
+
+var _ auth.ServerMode = (*mockServerModeHandler)(nil)
+
+func TestActivateAuthPluginServerMode_EmptyAuthPlugins(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	cfg := &config.Config{}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.NoError(t, err)
+}
+
+func TestActivateAuthPluginServerMode_NilRegistry(t *testing.T) {
+	lgr := logr.Discard()
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": map[string]any{"clientId": "abc"},
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), nil, cfg, &lgr)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth registry not available for server-mode activation")
+}
+
+func TestActivateAuthPluginServerMode_HandlerNotFound(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"missing": map[string]any{"clientId": "abc"},
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `auth handler "missing" not found in registry`)
+}
+
+func TestActivateAuthPluginServerMode_HandlerDoesNotSupportServerMode(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	// MockHandler does NOT implement ServerMode.
+	handler := auth.NewMockHandler("basic")
+	require.NoError(t, registry.Register(handler))
+
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"basic": map[string]any{"clientId": "abc"},
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `auth handler "basic" does not support server mode`)
+}
+
+func TestActivateAuthPluginServerMode_NilSettings(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	handler := newMockServerModeHandler("entra")
+	require.NoError(t, registry.Register(handler))
+
+	cfg := &config.Config{}
+	// Key exists but value is nil.
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": nil,
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `auth handler "entra" has no server mode settings configured`)
+}
+
+func TestActivateAuthPluginServerMode_ActivateError(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	handler := newMockServerModeHandler("entra")
+	handler.ActivateErr = errors.New("plugin crashed")
+	require.NoError(t, registry.Register(handler))
+
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": map[string]any{"clientId": "abc", "tenantId": "xyz"},
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `activating server mode on auth handler "entra"`)
+	assert.Contains(t, err.Error(), "plugin crashed")
+}
+
+func TestActivateAuthPluginServerMode_Success(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	handler := newMockServerModeHandler("entra")
+	require.NoError(t, registry.Register(handler))
+
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": map[string]any{"clientId": "abc", "tenantId": "xyz"},
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.NoError(t, err)
+	require.Len(t, handler.ActivateCalls, 1)
+	// Verify settings were passed as marshaled JSON.
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(handler.ActivateCalls[0], &got))
+	assert.Equal(t, "abc", got["clientId"])
+	assert.Equal(t, "xyz", got["tenantId"])
+}
+
+func TestActivateAuthPluginServerMode_MultipleHandlers(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	h1 := newMockServerModeHandler("entra")
+	h2 := newMockServerModeHandler("github")
+	require.NoError(t, registry.Register(h1))
+	require.NoError(t, registry.Register(h2))
+
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra":  map[string]any{"clientId": "abc"},
+		"github": map[string]any{"appId": "123"},
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.NoError(t, err)
+	assert.Len(t, h1.ActivateCalls, 1)
+	assert.Len(t, h2.ActivateCalls, 1)
+}
+
+func TestAuthPluginSettings_NotFound(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{}
+
+	data, err := authPluginSettings(cfg, "missing")
+
+	require.NoError(t, err)
+	assert.Nil(t, data)
+}
+
+func TestAuthPluginSettings_NilValue(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{"entra": nil}
+
+	data, err := authPluginSettings(cfg, "entra")
+
+	require.NoError(t, err)
+	assert.Nil(t, data)
+}
+
+func TestAuthPluginSettings_Success(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": map[string]any{"clientId": "abc"},
+	}
+
+	data, err := authPluginSettings(cfg, "entra")
+
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "abc", got["clientId"])
+}
+
+func TestAuthPluginSettings_UnmarshalableValue(t *testing.T) {
+	cfg := &config.Config{}
+	// A channel cannot be marshaled to JSON.
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": make(chan int),
+	}
+
+	_, err := authPluginSettings(cfg, "entra")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to marshal auth plugin settings")
+}
+
+func TestActivateAuthPluginServerMode_MarshalError(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	handler := newMockServerModeHandler("entra")
+	require.NoError(t, registry.Register(handler))
+
+	cfg := &config.Config{}
+	// A channel cannot be marshaled — triggers the authPluginSettings error path.
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": make(chan int),
+	}
+
+	err := activateAuthPluginServerMode(context.Background(), registry, cfg, &lgr)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `auth handler "entra" settings`)
+}
+
+func TestDisableNonServerModeHandlers(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	activated := newMockServerModeHandler("entra")
+	inactive := auth.NewMockHandler("github")
+	require.NoError(t, registry.Register(activated))
+	require.NoError(t, registry.Register(inactive))
+
+	cfg := &config.Config{}
+	cfg.APIServer.Auth.Handlers = map[string]any{
+		"entra": map[string]any{"clientId": "abc"},
+	}
+
+	disableNonServerModeHandlers(registry, cfg, &lgr)
+
+	// "entra" should still work (not disabled).
+	h, err := registry.Get("entra")
+	require.NoError(t, err)
+	assert.False(t, auth.IsDisabled(h))
+
+	// "github" should be disabled.
+	h2, err := registry.Get("github")
+	require.NoError(t, err)
+	assert.True(t, auth.IsDisabled(h2))
+
+	_, tokenErr := h2.GetToken(context.Background(), auth.TokenOptions{})
+	require.Error(t, tokenErr)
+	assert.ErrorIs(t, tokenErr, auth.ErrHandlerDisabled)
+	assert.Contains(t, tokenErr.Error(), "not configured for server mode")
+}
+
+func TestDisableNonServerModeHandlers_NoAuthHandlers(t *testing.T) {
+	lgr := logr.Discard()
+	registry := auth.NewRegistry()
+	handler := auth.NewMockHandler("github")
+	require.NoError(t, registry.Register(handler))
+
+	cfg := &config.Config{}
+	// No auth handlers configured — all handlers get disabled.
+	cfg.APIServer.Auth.Handlers = nil
+
+	disableNonServerModeHandlers(registry, cfg, &lgr)
+
+	h, err := registry.Get("github")
+	require.NoError(t, err)
+	assert.True(t, auth.IsDisabled(h))
 }

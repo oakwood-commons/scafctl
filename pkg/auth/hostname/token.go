@@ -6,8 +6,7 @@ package hostname
 import (
 	"context"
 
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider/callerscope"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 )
 
 // defaultToken retrieves a bearer token for the given auth provider using
@@ -15,9 +14,12 @@ import (
 // login: if no valid cached token exists, the underlying provider returns an
 // error which the caller maps to ErrNoCredentials.
 func defaultToken(ctx context.Context, provider, scope string) (string, error) {
-	tok, err := tokenprovider.GetToken(ctx, provider, tokenprovider.RequestOptions{
-		Scope:  scope,
-		Caller: callerscope.ServerCaller,
+	handler, err := auth.GetHandler(ctx, provider)
+	if err != nil {
+		return "", err
+	}
+	tok, err := handler.GetToken(ctx, auth.TokenOptions{
+		Scope: scope,
 	})
 	if err != nil {
 		return "", err

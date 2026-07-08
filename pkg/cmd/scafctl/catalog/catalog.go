@@ -163,6 +163,28 @@ func resolveAuthProvider(ctx context.Context, registry, catalogFlag string) stri
 	return handlerName
 }
 
+// resolveAuthHandler resolves the auth handler for a registry. Returns nil if
+// no handler can be resolved (push/pull still works via credential store alone).
+func resolveAuthHandler(ctx context.Context, registry, catalogFlag string) auth.Handler {
+	name := resolveAuthProvider(ctx, registry, catalogFlag)
+	if name == "" {
+		return nil
+	}
+	handler, err := auth.GetHandler(ctx, name)
+	if err != nil {
+		return nil
+	}
+	return handler
+}
+
+// authHandlerName returns the handler name or empty string if nil.
+func authHandlerName(h auth.Handler) string {
+	if h == nil {
+		return ""
+	}
+	return h.Name()
+}
+
 // resolveAuthScope returns the authScope configured for the named catalog, or
 // by matching the registry host against configured catalogs.
 func resolveAuthScope(ctx context.Context, catalogFlag string) string {
@@ -251,7 +273,7 @@ func verboseRemoteInfo(ctx context.Context, w *writer.Writer, registry, reposito
 		handler, err := auth.GetHandler(ctx, provider)
 		if err != nil || handler == nil {
 			w.Verbosef("Auth status: unknown (handler %q not available)", provider)
-			w.Verbose("Credentials: bridged from tokenprovider on-the-fly")
+			w.Verbose("Credentials: bridged from auth handler on-the-fly")
 			return
 		}
 

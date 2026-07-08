@@ -125,7 +125,7 @@ func runAttach(ctx context.Context, opts *AttachOptions) error {
 	}
 
 	// Resolve auth provider for automatic token bridging
-	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
 	// Create remote catalog
@@ -134,7 +134,7 @@ func runAttach(ctx context.Context, opts *AttachOptions) error {
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthProvider:    authProvider,
+		AuthHandler:     authHandler,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,

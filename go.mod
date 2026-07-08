@@ -1,6 +1,6 @@
 module github.com/oakwood-commons/scafctl
 
-go 1.26.4
+go 1.26.5
 
 require (
 	charm.land/bubbletea/v2 v2.0.8
@@ -31,7 +31,6 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/mark3labs/mcp-go v0.55.1
-	github.com/oakwood-commons/go-flight v1.0.1
 	github.com/oakwood-commons/httpc v0.2.0
 	github.com/oakwood-commons/kvx v0.15.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0

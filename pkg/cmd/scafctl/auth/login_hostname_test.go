@@ -37,7 +37,7 @@ func hostnameLoginFixture(t *testing.T, hn *config.HostnameConfig) (context.Cont
 	mock.SetNotAuthenticated()
 	mock.LoginResult = &auth.Result{Claims: &auth.Claims{Email: "user@example.com"}}
 	ctx = withTestHandler(ctx, mock)
-	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
+	ctx = configureAuthRegistry(t, ctx, mock)
 
 	cfg := &config.Config{
 		Auth: config.GlobalAuthConfig{

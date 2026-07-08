@@ -334,17 +334,17 @@ func createIndexRemoteCatalog(ctx context.Context, catalogFlag string, insecure 
 		lgr.V(1).Info("failed to create credential store, using anonymous auth", "error", err.Error())
 	}
 
-	authProvider := resolveAuthProvider(ctx, registry, catalogFlag)
+	authHandler := resolveAuthHandler(ctx, registry, catalogFlag)
 	authScope := resolveAuthScope(ctx, catalogFlag)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
 	return catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
 		Name:            catalogName,
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthProvider:    authProvider,
+		AuthHandler:     authHandler,
 		AuthScope:       authScope,
 		Insecure:        insecure,
 		Logger:          *lgr,

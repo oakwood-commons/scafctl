@@ -581,6 +581,13 @@ func (c *AuthHandlerClient) HostServiceID() uint32 {
 	return 0
 }
 
+func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
+	if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
+		return sm.ActivateServerMode(ctx, settings)
+	}
+	return fmt.Errorf("plugin does not support server mode")
+}
+
 // Kill terminates the plugin process.
 func (c *AuthHandlerClient) Kill() {
 	if c.pluginClient != nil {

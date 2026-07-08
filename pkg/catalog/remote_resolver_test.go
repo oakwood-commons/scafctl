@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,28 +19,28 @@ func TestNewRemoteSolutionResolver(t *testing.T) {
 
 	t.Run("sets all fields from config", func(t *testing.T) {
 		t.Parallel()
-		providerFunc := func(registry string) string { return "" }
+		handlerFunc := func(registry string) auth.Handler { return nil }
 		resolver := NewRemoteSolutionResolver(RemoteSolutionResolverConfig{
-			CredentialStore:  nil,
-			AuthProviderFunc: providerFunc,
-			Insecure:         true,
-			Logger:           logr.Discard(),
+			CredentialStore: nil,
+			AuthHandlerFunc: handlerFunc,
+			Insecure:        true,
+			Logger:          logr.Discard(),
 		})
 
 		require.NotNil(t, resolver)
 		assert.True(t, resolver.insecure)
 		assert.Nil(t, resolver.credStore)
-		assert.NotNil(t, resolver.authProviderFunc)
+		assert.NotNil(t, resolver.authHandlerFunc)
 	})
 
-	t.Run("nil auth provider func is accepted", func(t *testing.T) {
+	t.Run("nil auth handler func is accepted", func(t *testing.T) {
 		t.Parallel()
 		resolver := NewRemoteSolutionResolver(RemoteSolutionResolverConfig{
 			Logger: logr.Discard(),
 		})
 
 		require.NotNil(t, resolver)
-		assert.Nil(t, resolver.authProviderFunc)
+		assert.Nil(t, resolver.authHandlerFunc)
 	})
 }
 
@@ -92,15 +93,16 @@ func TestRemoteSolutionResolver_FetchRemoteSolution_DefaultsToSolutionKind(t *te
 	assert.NotContains(t, err.Error(), "invalid remote reference")
 }
 
-func TestRemoteSolutionResolver_FetchRemoteSolution_WithAuthProviderFunc(t *testing.T) {
+func TestRemoteSolutionResolver_FetchRemoteSolution_WithAuthHandlerFunc(t *testing.T) {
 	t.Parallel()
 
 	called := false
+	mockHandler := auth.NewMockHandler("github")
 	resolver := NewRemoteSolutionResolver(RemoteSolutionResolverConfig{
-		AuthProviderFunc: func(registry string) string {
+		AuthHandlerFunc: func(registry string) auth.Handler {
 			called = true
 			assert.Equal(t, "localhost:9999", registry)
-			return "github"
+			return mockHandler
 		},
 		Insecure: true,
 		Logger:   logr.Discard(),
