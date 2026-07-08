@@ -1,0 +1,69 @@
+# Run: scafctl run resolver -f examples/providers/http-structured-body.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: http-structured-body-example
+  displayName: HTTP Structured JSON Body Example
+  category: providers
+  tags:
+    - http
+    - provider-example
+  description: |
+    The http provider accepts a structured `body` (object or array) and
+    serializes it to compact JSON. When no Content-Type header is set, the
+    provider defaults it to application/json. Passing a structured body lets
+    you build the payload directly from resolver values with a CEL expression,
+    avoiding a separate serializer resolver.
+
+spec:
+  resolvers:
+    # Values that feed the request payload.
+    graphQuery:
+      description: GraphQL query string
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "{ viewer { login } }"
+
+    recordId:
+      description: Record identifier included in the request variables
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: rec-42
+
+    # POST an object body built from a CEL expression. The provider serializes
+    # it to JSON and defaults Content-Type to application/json. httpbin echoes
+    # the request back so you can inspect the serialized json/headers fields.
+    createRecord:
+      description: POST a structured object body (serialized to JSON)
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/post
+              method: POST
+              autoParseJson: true
+              body:
+                expr: '{"query": _.graphQuery, "variables": {"id": _.recordId}}'
+
+    # POST an array body. Arrays are serialized to JSON just like objects.
+    bulkTags:
+      description: POST an array body (serialized to JSON)
+      type: any
+      resolve:
+        with:
+          - provider: http
+            inputs:
+              url: https://httpbin.org/post
+              method: POST
+              autoParseJson: true
+              body:
+                expr: '["alpha", "beta", "gamma"]'
