@@ -14,9 +14,8 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider/callerscope"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 	"oras.land/oras-go/v2/registry/remote/errcode"
@@ -38,7 +37,7 @@ type registryEnumerator interface {
 // Avoids coupling enumerators to RemoteCatalogConfig.
 type enumeratorConfig struct {
 	authHandlerName string
-	authProvider    string
+	authHandler     scafctlauth.Handler
 	authScope       string
 	registry        string
 	repository      string
@@ -356,16 +355,16 @@ func (e *quayEnumerator) enumerate(ctx context.Context) ([]string, error) {
 // gcpEnumerator uses the Artifact Registry REST API to list packages.
 // API: GET https://artifactregistry.googleapis.com/v1/projects/{project}/locations/{location}/repositories/{repo}/packages
 type gcpEnumerator struct {
-	project      string
-	location     string
-	gcpRepo      string // the AR repository name (not the OCI repository path)
-	repository   string // the full OCI repository path (for path construction)
-	authProvider string
-	authScope    string
-	httpClient   *http.Client // HTTP client for API requests; falls back to http.DefaultClient
-	apiBaseURL   string       // override for testing; defaults to gcpDefaultAPIBase
-	insecure     bool
-	logger       logr.Logger
+	project     string
+	location    string
+	gcpRepo     string // the AR repository name (not the OCI repository path)
+	repository  string // the full OCI repository path (for path construction)
+	authHandler scafctlauth.Handler
+	authScope   string
+	httpClient  *http.Client // HTTP client for API requests; falls back to http.DefaultClient
+	apiBaseURL  string       // override for testing; defaults to gcpDefaultAPIBase
+	insecure    bool
+	logger      logr.Logger
 }
 
 // gcpDefaultAPIBase is the production Artifact Registry API endpoint.
@@ -402,16 +401,16 @@ func newGCPEnumerator(cfg enumeratorConfig) (*gcpEnumerator, error) {
 	}
 
 	return &gcpEnumerator{
-		project:      project,
-		location:     location,
-		gcpRepo:      gcpRepo,
-		repository:   cfg.repository,
-		authProvider: cfg.authProvider,
-		authScope:    cfg.authScope,
-		httpClient:   httpClient,
-		apiBaseURL:   gcpDefaultAPIBase,
-		insecure:     cfg.insecure,
-		logger:       cfg.logger,
+		project:     project,
+		location:    location,
+		gcpRepo:     gcpRepo,
+		repository:  cfg.repository,
+		authHandler: cfg.authHandler,
+		authScope:   cfg.authScope,
+		httpClient:  httpClient,
+		apiBaseURL:  gcpDefaultAPIBase,
+		insecure:    cfg.insecure,
+		logger:      cfg.logger,
 	}, nil
 }
 
@@ -442,14 +441,16 @@ func (e *gcpEnumerator) enumerate(ctx context.Context) ([]string, error) {
 }
 
 func (e *gcpEnumerator) getToken(ctx context.Context) (string, error) {
-	if e.authProvider == "" {
-		return "", fmt.Errorf("no auth provider for GCP enumeration: %w", ErrEnumerationNotSupported)
+	if e.authHandler == nil {
+		return "", fmt.Errorf("no auth handler for GCP enumeration: %w", ErrEnumerationNotSupported)
 	}
 
-	token, err := tokenprovider.GetToken(ctx, e.authProvider, tokenprovider.RequestOptions{
-		Scope:  e.authScope,
-		Caller: callerscope.ServerCaller,
-	})
+	opts := scafctlauth.TokenOptions{}
+	if e.authScope != "" {
+		opts.Scope = e.authScope
+	}
+
+	token, err := e.authHandler.GetToken(ctx, opts)
 	if err != nil {
 		return "", fmt.Errorf("getting GCP token: %w", err)
 	}
@@ -559,14 +560,14 @@ func parseLinkHeader(header, baseURL string) string {
 // API: GET https://api.github.com/orgs/{org}/packages?package_type=container
 // This works for public packages without authentication.
 type ghcrEnumerator struct {
-	org          string // GitHub organization (derived from repository field)
-	repository   string // OCI repository path (e.g. "oakwood-commons")
-	client       *auth.Client
-	httpClient   *http.Client
-	apiBaseURL   string // override for testing; defaults to ghcrDefaultAPIBase
-	authProvider string
-	authScope    string
-	logger       logr.Logger
+	org         string // GitHub organization (derived from repository field)
+	repository  string // OCI repository path (e.g. "oakwood-commons")
+	client      *auth.Client
+	httpClient  *http.Client
+	apiBaseURL  string // override for testing; defaults to ghcrDefaultAPIBase
+	authHandler scafctlauth.Handler
+	authScope   string
+	logger      logr.Logger
 }
 
 func (e *ghcrEnumerator) setClient(client *auth.Client) {
@@ -598,14 +599,14 @@ func newGHCREnumerator(cfg enumeratorConfig) (*ghcrEnumerator, error) {
 	}
 
 	return &ghcrEnumerator{
-		org:          org,
-		repository:   cfg.repository,
-		client:       cfg.client,
-		httpClient:   httpClient,
-		apiBaseURL:   ghcrDefaultAPIBase,
-		authProvider: cfg.authProvider,
-		authScope:    cfg.authScope,
-		logger:       cfg.logger,
+		org:         org,
+		repository:  cfg.repository,
+		client:      cfg.client,
+		httpClient:  httpClient,
+		apiBaseURL:  ghcrDefaultAPIBase,
+		authHandler: cfg.authHandler,
+		authScope:   cfg.authScope,
+		logger:      cfg.logger,
 	}, nil
 }
 
@@ -722,11 +723,11 @@ func (e *ghcrEnumerator) retryWithCredentials(ctx context.Context, apiURL string
 	}
 
 	// Fall back to auth handler bridge (e.g. GitHub OAuth token).
-	if e.authProvider != "" {
-		_, password, err := BridgeAuthToRegistry(ctx, e.authProvider, "ghcr.io", e.authScope)
+	if e.authHandler != nil {
+		_, password, err := BridgeAuthToRegistry(ctx, e.authHandler, "ghcr.io", e.authScope)
 		if err == nil && password != "" {
-			e.logger.V(1).Info("retrying GHCR API with auth provider bridge",
-				"provider", e.authProvider)
+			e.logger.V(1).Info("retrying GHCR API with auth handler bridge",
+				"handler", e.authHandler.Name())
 			resp, reqErr := e.doRequest(ctx, apiURL, password)
 			if reqErr != nil {
 				return nil, reqErr
@@ -735,8 +736,8 @@ func (e *ghcrEnumerator) retryWithCredentials(ctx context.Context, apiURL string
 				return resp, nil
 			}
 			resp.Body.Close()
-			e.logger.V(1).Info("auth provider bridge credentials also rejected by GHCR API",
-				"provider", e.authProvider, "status", resp.StatusCode)
+			e.logger.V(1).Info("auth handler bridge credentials also rejected by GHCR API",
+				"handler", e.authHandler.Name(), "status", resp.StatusCode)
 		}
 	}
 

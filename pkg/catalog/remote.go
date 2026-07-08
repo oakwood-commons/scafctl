@@ -19,6 +19,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
+	scafctlauth "github.com/oakwood-commons/scafctl/pkg/auth"
 	config "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/opencontainers/go-digest"
@@ -66,11 +67,10 @@ type RemoteCatalogConfig struct {
 	// CredentialStore provides authentication credentials
 	CredentialStore *CredentialStore
 
-	// AuthProvider is the token provider provider name (e.g. "github", "gcp", "entra").
-	// When set, tokens are acquired via tokenprovider.GetToken(ctx, AuthProvider, ...)
-	// which routes through the appropriate backend based on runtime mode:
-	// CLI adapters in CLI mode, server identity sources in API mode.
-	AuthProvider string
+	// AuthHandler provides dynamic token injection for this catalog.
+	// When set, if the CredentialStore has no credentials for the registry,
+	// the handler's token is bridged to OCI registry credentials.
+	AuthHandler scafctlauth.Handler
 
 	// AuthScope is the OAuth scope for auth handler token requests.
 	AuthScope string
@@ -100,7 +100,7 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		repository:        cfg.Repository,
 		insecure:          cfg.Insecure,
 		discoveryStrategy: cfg.DiscoveryStrategy,
-		authHandlerUsed:   cfg.AuthProvider,
+		authHandlerUsed:   authHandlerName(cfg.AuthHandler),
 	}
 
 	// Create auth client with retry
@@ -109,12 +109,12 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		Cache:  auth.NewCache(),
 	}
 
-	if cfg.AuthProvider != "" {
+	if cfg.AuthHandler != nil {
 		if cfg.CredentialStore != nil {
-			// Composite credential function: try tokenprovider bridge first,
+			// Composite credential function: try auth handler bridge first,
 			// fall back to Docker/native credentials.
 			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
-				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthProvider, host, cfg.AuthScope)
+				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
 				if bridgeErr == nil {
 					// Token source bridge succeeded. Log a warning if Docker
 					// config also has credentials for this host, since those
@@ -122,19 +122,19 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 					if cfg.Logger.V(1).Enabled() {
 						if dockerCred, dockerSource, _ := cfg.CredentialStore.CredentialWithSource(ctx, host); dockerCred != auth.EmptyCredential {
 							cfg.Logger.V(1).Info("authProvider token used; Docker config credentials for this host were skipped",
-								"provider", cfg.AuthProvider,
+								"handler", cfg.AuthHandler.Name(),
 								"host", host,
 								"dockerSource", dockerSource)
 						}
 					}
-					rc.credentialSource.Store(fmt.Sprintf("%s token", cfg.AuthProvider))
+					rc.credentialSource.Store(fmt.Sprintf("%s auth handler token", cfg.AuthHandler.Name()))
 					return auth.Credential{
 						Username: username,
 						Password: password,
 					}, nil
 				}
-				cfg.Logger.V(1).Info("tokenprovider bridge failed, trying credential store",
-					"provider", cfg.AuthProvider,
+				cfg.Logger.V(1).Info("auth handler bridge failed, trying credential store",
+					"handler", cfg.AuthHandler.Name(),
 					"host", host,
 					"error", bridgeErr.Error())
 				// Fall back to credential store (Docker config, native store, etc.)
@@ -146,17 +146,17 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 				return auth.EmptyCredential, nil
 			}
 		} else {
-			// No credential store, use tokenprovider directly
+			// No credential store, use auth handler directly
 			client.Credential = func(ctx context.Context, host string) (auth.Credential, error) {
-				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthProvider, host, cfg.AuthScope)
+				username, password, bridgeErr := BridgeAuthToRegistry(ctx, cfg.AuthHandler, host, cfg.AuthScope)
 				if bridgeErr != nil {
-					cfg.Logger.V(1).Info("tokenprovider bridge failed, using anonymous",
-						"provider", cfg.AuthProvider,
+					cfg.Logger.V(1).Info("auth handler bridge failed, using anonymous",
+						"handler", cfg.AuthHandler.Name(),
 						"host", host,
 						"error", bridgeErr.Error())
 					return auth.EmptyCredential, nil //nolint:nilerr // graceful degradation to anonymous auth
 				}
-				rc.credentialSource.Store(fmt.Sprintf("%s token", cfg.AuthProvider))
+				rc.credentialSource.Store(fmt.Sprintf("%s auth handler token", cfg.AuthHandler.Name()))
 				return auth.Credential{
 					Username: username,
 					Password: password,
@@ -187,8 +187,8 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 	catalogLogger := cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name)
 
 	enumCfg := enumeratorConfig{
-		authHandlerName: cfg.AuthProvider,
-		authProvider:    cfg.AuthProvider,
+		authHandlerName: authHandlerName(cfg.AuthHandler),
+		authHandler:     cfg.AuthHandler,
 		authScope:       cfg.AuthScope,
 		registry:        cfg.Registry,
 		repository:      cfg.Repository,
@@ -202,6 +202,14 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 	rc.enumerator = selectEnumerator(enumCfg)
 
 	return rc, nil
+}
+
+// authHandlerName returns the handler name or empty string if nil.
+func authHandlerName(h scafctlauth.Handler) string {
+	if h == nil {
+		return ""
+	}
+	return h.Name()
 }
 
 // Name returns the catalog identifier.

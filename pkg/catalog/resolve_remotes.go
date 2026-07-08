@@ -40,12 +40,10 @@ func RemoteCatalogsFromContext(ctx context.Context, lgr logr.Logger) []Catalog {
 			continue
 		}
 
-		// Resolve auth provider name for this catalog.
-		var authProvider string
+		var handler auth.Handler
 		if catCfg.AuthProvider != "" {
-			// Verify handler exists in context's auth registry.
-			if h, err := auth.GetHandler(ctx, catCfg.AuthProvider); err == nil && h != nil {
-				authProvider = catCfg.AuthProvider
+			if h, err := auth.GetHandler(ctx, catCfg.AuthProvider); err == nil {
+				handler = h
 			}
 		}
 
@@ -54,7 +52,7 @@ func RemoteCatalogsFromContext(ctx context.Context, lgr logr.Logger) []Catalog {
 			Registry:        registry,
 			Repository:      repository,
 			CredentialStore: credStore,
-			AuthProvider:    authProvider,
+			AuthHandler:     handler,
 			AuthScope:       catCfg.AuthScope,
 			Logger:          lgr,
 		})

@@ -378,7 +378,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				if scope == "" {
 					scope = reg.Scope
 				}
-				if err := bridgeAuthToRegistryPostLogin(ctx, w, handlerName, reg.Host, scope, writeRegistryAuth); err != nil {
+				if err := bridgeAuthToRegistryPostLogin(ctx, w, handler, reg.Host, scope, writeRegistryAuth); err != nil {
 					w.Warningf("Failed to bridge credentials to %s: %v", reg.Host, err)
 					lastBridgeErr = err
 				}
@@ -543,10 +543,10 @@ func parseFlow(flowStr, handlerName string) (auth.Flow, error) {
 
 // bridgeAuthToRegistryPostLogin bridges the authenticated handler's token
 // to OCI registry credentials and stores them in the native credential store.
-func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handlerName, registry, scope string, writeRegistryAuth bool) error {
-	username, password, err := catalog.BridgeAuthToRegistry(ctx, handlerName, registry, scope)
+func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handler auth.Handler, registry, scope string, writeRegistryAuth bool) error {
+	username, password, err := catalog.BridgeAuthToRegistry(ctx, handler, registry, scope)
 	if err != nil {
-		err = fmt.Errorf("failed to bridge %s auth to registry %s: %w", handlerName, registry, err)
+		err = fmt.Errorf("failed to bridge %s auth to registry %s: %w", handler.Name(), registry, err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
@@ -577,13 +577,13 @@ func bridgeAuthToRegistryPostLogin(ctx context.Context, w *writer.Writer, handle
 
 	// Store with handler/profile metadata so auth status can show the source.
 	profile := auth.ProfileFromContext(ctx)
-	if err := nativeStore.SetCredentialWithSource(registry, username, password, containerAuthFile, handlerName, profile); err != nil {
+	if err := nativeStore.SetCredentialWithSource(registry, username, password, containerAuthFile, handler.Name(), profile); err != nil {
 		err = fmt.Errorf("failed to store registry credentials: %w", err)
 		w.Errorf("%v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	w.Verbosef("Registry credentials stored for %s (via %s handler)", registry, handlerName)
+	w.Verbosef("Registry credentials stored for %s (via %s handler)", registry, handler.Name())
 	return nil
 }
 

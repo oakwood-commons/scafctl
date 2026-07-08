@@ -104,6 +104,28 @@ func (r *Registry) Unregister(name string) error {
 	return nil
 }
 
+// Disable replaces the named handler with a disabled wrapper that rejects
+// all token operations. The handler remains visible in List/Has/All but
+// GetToken/InjectAuth/Login return ErrHandlerDisabled.
+// If the handler is already disabled, the reason is updated without double-wrapping.
+func (r *Registry) Disable(name, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	handler, exists := r.handlers[name]
+	if !exists {
+		return fmt.Errorf("%w: %s", ErrHandlerNotFound, name)
+	}
+
+	if dh, ok := handler.(*disabledHandler); ok {
+		dh.reason = reason
+		return nil
+	}
+
+	r.handlers[name] = newDisabledHandler(handler, reason)
+	return nil
+}
+
 // Get retrieves an auth handler by name. If the handler is not found and a
 // fallback resolver is configured, it invokes the resolver to lazily fetch
 // the handler (e.g., by downloading and starting a plugin). Resolved handlers

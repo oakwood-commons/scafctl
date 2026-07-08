@@ -25,10 +25,6 @@ const (
 	TracerAction = TracerRoot + "/action"
 	// TracerMCP is the instrumentation scope for MCP server handling.
 	TracerMCP = TracerRoot + "/mcp"
-	// TracerAuthDelegation is the instrumentation scope for token delegation flows.
-	TracerAuthDelegation = TracerRoot + "/authdelegation"
-	// TracerServerIdentity
-	TracerServerIdentity = TracerRoot + "/serveridentity"
 )
 
 // Tracer returns a named tracer from the global TracerProvider.

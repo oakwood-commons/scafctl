@@ -249,10 +249,13 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 	}
 
 	req := TokenRequest{
-		Scope:        opts.Scope,
-		MinValidFor:  opts.MinValidFor,
-		ForceRefresh: opts.ForceRefresh,
-		Hostname:     opts.Hostname,
+		Scope:         opts.Scope,
+		MinValidFor:   opts.MinValidFor,
+		ForceRefresh:  opts.ForceRefresh,
+		Hostname:      opts.Hostname,
+		ServerContext: opts.ServerContext,
+		Caller:        opts.Caller,
+		Assertion:     opts.Assertion,
 	}
 
 	resp, err := w.client.plugin.GetToken(ctx, w.handlerName, req)
@@ -589,4 +592,8 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 			c.Kill()
 		}
 	}
+}
+
+func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
+	return w.client.ActivateServerMode(ctx, settings)
 }

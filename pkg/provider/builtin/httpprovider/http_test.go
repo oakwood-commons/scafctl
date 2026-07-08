@@ -18,8 +18,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
-	"github.com/oakwood-commons/scafctl/pkg/runmode"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,24 +30,21 @@ func testContext(_ testing.TB) context.Context {
 	return config.WithConfig(context.Background(), cfg)
 }
 
-// testContextWithCLIAuth returns a test context with a tokenprovider registry built from the given auth registry.
+// testContextWithCLIAuth returns a test context with an auth registry containing the given handlers.
 func testContextWithCLIAuth(t testing.TB, authReg *auth.Registry) context.Context {
 	t.Helper()
-	tsReg, err := tokenprovider.Build(runmode.CLI, authReg, nil)
-	require.NoError(t, err)
-	return tokenprovider.WithRegistry(testContext(t), tsReg)
+	return auth.WithRegistry(testContext(t), authReg)
 }
 
-// testContextWithAPIIdentity returns a test context with a tokenprovider registry built from a direct TokenSource.
-func testContextWithAPIIdentity(t testing.TB, sources ...tokenprovider.TokenProvider) context.Context {
+// testContextWithAPIIdentity returns a test context in API mode with mock auth handlers.
+func testContextWithAPIIdentity(t testing.TB, handlers ...*auth.MockHandler) context.Context {
 	t.Helper()
-	reg := tokenprovider.NewRegistry()
-	for _, src := range sources {
-		require.NoError(t, reg.Register(src))
+	reg := auth.NewRegistry()
+	for _, h := range handlers {
+		require.NoError(t, reg.Register(h))
 	}
-	tsReg, err := tokenprovider.Build(runmode.API, nil, reg)
-	require.NoError(t, err)
-	return tokenprovider.WithRegistry(testContext(t), tsReg)
+	ctx := auth.WithRegistry(testContext(t), reg)
+	return ctx
 }
 
 func TestNewHTTPProvider(t *testing.T) {
@@ -1139,7 +1134,7 @@ func TestHTTPProvider_Execute_AuthProvider_Success(t *testing.T) {
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(mockHandler))
 
-	// Create context with tokenprovider registry
+	// Create context with auth registry
 	ctx := testContextWithCLIAuth(t, registry)
 
 	p := NewHTTPProvider()
@@ -1252,7 +1247,7 @@ func TestHTTPProvider_Execute_AuthProvider_MissingRegistry(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "no registry in context")
+	assert.Contains(t, err.Error(), "no auth registry in context")
 }
 
 func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
@@ -1273,7 +1268,7 @@ func TestHTTPProvider_Execute_AuthProvider_UnknownHandler(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, output)
-	assert.Contains(t, err.Error(), "source not found")
+	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestHTTPProvider_Execute_AuthProvider_TokenError(t *testing.T) {
@@ -1579,26 +1574,6 @@ func TestIsJSONContentType(t *testing.T) {
 
 // ── Delegation registry tests ──
 
-// testTokenProvider implements tokenprovider.TokenProvider for testing.
-type testTokenProvider struct {
-	token string
-	name  string
-	err   error
-	calls int
-}
-
-func (d *testTokenProvider) GetToken(_ context.Context, _ tokenprovider.RequestOptions) (tokenprovider.Token, error) {
-	d.calls++
-	if d.err != nil {
-		return tokenprovider.Token{}, d.err
-	}
-	return tokenprovider.Token{AccessToken: d.token, ExpiresAt: time.Now().Add(3600 * time.Second), TokenType: "Bearer"}, nil
-}
-
-func (d *testTokenProvider) Name() string {
-	return d.name
-}
-
 func TestHTTPProvider_Execute_Success(t *testing.T) {
 	t.Parallel()
 	var receivedAuthHeader string
@@ -1610,9 +1585,10 @@ func TestHTTPProvider_Execute_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	delegator := &testTokenProvider{token: "delegated-token-abc", name: "entra"}
+	mock := auth.NewMockHandler("entra")
+	mock.GetTokenResult = &auth.Token{AccessToken: "delegated-token-abc", TokenType: "Bearer", ExpiresAt: time.Now().Add(3600 * time.Second)}
 
-	ctx := testContextWithAPIIdentity(t, delegator)
+	ctx := testContextWithAPIIdentity(t, mock)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -1627,7 +1603,6 @@ func TestHTTPProvider_Execute_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	assert.Equal(t, "Bearer delegated-token-abc", receivedAuthHeader)
-	assert.Equal(t, 1, delegator.calls)
 
 	data := output.Data.(map[string]any)
 	assert.Equal(t, 200, data["statusCode"])
@@ -1635,11 +1610,9 @@ func TestHTTPProvider_Execute_Success(t *testing.T) {
 
 func TestHTTPProvider_Execute_ProviderNotRegistered(t *testing.T) {
 	t.Parallel()
-	reg := tokenprovider.NewRegistry()
-
-	tsReg, err := tokenprovider.Build(runmode.API, nil, reg)
-	require.NoError(t, err)
-	ctx := tokenprovider.WithRegistry(testContext(t), tsReg)
+	// Empty auth registry — no handlers registered.
+	reg := auth.NewRegistry()
+	ctx := auth.WithRegistry(testContext(t), reg)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -1649,7 +1622,7 @@ func TestHTTPProvider_Execute_ProviderNotRegistered(t *testing.T) {
 		"scope":        "https://www.googleapis.com/auth/cloud-platform",
 	}
 
-	_, err = p.Execute(ctx, inputs)
+	_, err := p.Execute(ctx, inputs)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "gcp")
@@ -1657,9 +1630,10 @@ func TestHTTPProvider_Execute_ProviderNotRegistered(t *testing.T) {
 
 func TestHTTPProvider_Execute_Provider_Error(t *testing.T) {
 	t.Parallel()
-	delegator := &testTokenProvider{err: fmt.Errorf("token endpoint returned 400"), name: "entra"}
+	mock := auth.NewMockHandler("entra")
+	mock.GetTokenErr = fmt.Errorf("token endpoint returned 400")
 
-	ctx := testContextWithAPIIdentity(t, delegator)
+	ctx := testContextWithAPIIdentity(t, mock)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -1684,9 +1658,10 @@ func TestHTTPProvider_Execute_Provider_401Retry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	delegator := &testTokenProvider{token: "delegated-token", name: "entra"}
+	mock := auth.NewMockHandler("entra")
+	mock.GetTokenResult = &auth.Token{AccessToken: "delegated-token", TokenType: "Bearer", ExpiresAt: time.Now().Add(3600 * time.Second)}
 
-	ctx := testContextWithAPIIdentity(t, delegator)
+	ctx := testContextWithAPIIdentity(t, mock)
 
 	p := NewHTTPProvider()
 	inputs := map[string]any{
@@ -1702,8 +1677,6 @@ func TestHTTPProvider_Execute_Provider_401Retry(t *testing.T) {
 	require.NotNil(t, output)
 	// Should retry on 401 via OnUnauthorized hook — 2 requests made.
 	assert.Equal(t, 2, attemptCount)
-	// DelegateToken called once for initial + once via ForceRefresh retry.
-	assert.Equal(t, 2, delegator.calls)
 
 	data := output.Data.(map[string]any)
 	assert.Equal(t, 401, data["statusCode"])

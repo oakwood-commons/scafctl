@@ -5,9 +5,11 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -397,4 +399,26 @@ func TestLazyAuthHandlerWrapper_SetContext_StripsCancellation(t *testing.T) {
 		t.Fatal("captured context should not be done after caller cancellation")
 	default:
 	}
+}
+
+func TestLazyAuthHandlerWrapper_ActivateServerMode_DelegatesToWrapper(t *testing.T) {
+	// Create a mock gRPC client that accepts ActivateServerMode.
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeResp: &proto.ActivateServerModeResponse{},
+	}
+	wrapper := &AuthHandlerWrapper{
+		handlerName: "entra",
+		client:      &AuthHandlerClient{plugin: &AuthHandlerGRPCClient{client: mock}},
+	}
+
+	lazy := &LazyAuthHandlerWrapper{
+		name:        "entra",
+		displayName: "entra",
+		initFn: func(_ context.Context) (*AuthHandlerWrapper, error) {
+			return wrapper, nil
+		},
+	}
+
+	err := lazy.ActivateServerMode(context.Background(), json.RawMessage(`{"tenant_id":"abc"}`))
+	require.NoError(t, err)
 }

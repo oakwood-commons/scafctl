@@ -6,6 +6,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,7 +93,6 @@ func TestSelectEnumerator(t *testing.T) {
 
 			cfg := enumeratorConfig{
 				authHandlerName: tc.authHandlerName,
-				authProvider:    tc.authHandlerName,
 				registry:        tc.registry,
 				repository:      tc.repository,
 				client:          &orasauth.Client{},
@@ -517,23 +517,24 @@ func TestGCPEnumerator(t *testing.T) {
 		}))
 		defer server.Close()
 
-		e := &gcpEnumerator{
-			project:      "my-project",
-			location:     "us-central1",
-			gcpRepo:      "my-repo",
-			repository:   "my-project/my-repo",
-			authProvider: "gcp",
-			authScope:    "https://www.googleapis.com/auth/cloud-platform",
-			httpClient:   server.Client(),
-			apiBaseURL:   server.URL,
-			logger:       logr.Discard(),
-		}
 		mockHandler := auth.NewMockHandler("gcp")
 		mockHandler.GetTokenResult = &auth.Token{
 			AccessToken: "gcp-access-token",
 			TokenType:   "Bearer",
 		}
-		ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
+
+		e := &gcpEnumerator{
+			project:     "my-project",
+			location:    "us-central1",
+			gcpRepo:     "my-repo",
+			repository:  "my-project/my-repo",
+			authHandler: mockHandler,
+			authScope:   "https://www.googleapis.com/auth/cloud-platform",
+			httpClient:  server.Client(),
+			apiBaseURL:  server.URL,
+			logger:      logr.Discard(),
+		}
+		ctx := configureAuthRegistry(t, context.Background(), mockHandler)
 
 		repos, err := e.enumerate(ctx)
 		require.NoError(t, err)
@@ -553,23 +554,23 @@ func TestGCPEnumerator(t *testing.T) {
 		}))
 		defer server.Close()
 
-		e := &gcpEnumerator{
-			project:      "my-project",
-			location:     "us-central1",
-			gcpRepo:      "my-repo",
-			repository:   "my-project/my-repo",
-			authProvider: "gcp",
-			httpClient:   server.Client(),
-			apiBaseURL:   server.URL,
-			logger:       logr.Discard(),
-		}
-
 		mockHandler := auth.NewMockHandler("gcp")
 		mockHandler.GetTokenResult = &auth.Token{
 			AccessToken: "gcp-access-token",
 			TokenType:   "Bearer",
 		}
-		ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
+
+		e := &gcpEnumerator{
+			project:     "my-project",
+			location:    "us-central1",
+			gcpRepo:     "my-repo",
+			repository:  "my-project/my-repo",
+			authHandler: mockHandler,
+			httpClient:  server.Client(),
+			apiBaseURL:  server.URL,
+			logger:      logr.Discard(),
+		}
+		ctx := configureAuthRegistry(t, context.Background(), mockHandler)
 
 		_, err := e.enumerate(ctx)
 		require.Error(t, err)
@@ -596,19 +597,22 @@ func TestGCPEnumerator(t *testing.T) {
 	t.Run("auth handler error propagates", func(t *testing.T) {
 		t.Parallel()
 
+		mockHandler := auth.NewMockHandler("gcp")
+		mockHandler.GetTokenErr = fmt.Errorf("auth expired")
+
 		e := &gcpEnumerator{
-			project:      "my-project",
-			location:     "us-central1",
-			gcpRepo:      "my-repo",
-			authProvider: "gcp",
-			httpClient:   http.DefaultClient,
-			apiBaseURL:   gcpDefaultAPIBase,
-			logger:       logr.Discard(),
+			project:     "my-project",
+			location:    "us-central1",
+			gcpRepo:     "my-repo",
+			authHandler: mockHandler,
+			httpClient:  http.DefaultClient,
+			apiBaseURL:  gcpDefaultAPIBase,
+			logger:      logr.Discard(),
 		}
 
 		_, err := e.enumerate(t.Context())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "getting GCP token")
+		assert.Contains(t, err.Error(), "auth expired")
 	})
 }
 
@@ -822,7 +826,6 @@ func typeName(v any) string {
 func BenchmarkSelectEnumerator(b *testing.B) {
 	cfg := enumeratorConfig{
 		authHandlerName: "gcp",
-		authProvider:    "gcp",
 		registry:        "us-central1-docker.pkg.dev",
 		repository:      "my-project/my-repo",
 		client:          &orasauth.Client{},
@@ -1040,6 +1043,11 @@ func TestGHCREnumerator(t *testing.T) {
 		}))
 		defer server.Close()
 
+		// Set up auth registry so BridgeAuthToRegistry can resolve the username in CLI mode.
+		mockHandler := auth.NewMockHandler("github")
+		mockHandler.StatusResult = &auth.Status{Authenticated: true, Claims: &auth.Claims{Username: "testuser"}}
+		mockHandler.GetTokenResult = &auth.Token{AccessToken: "handler_token", TokenType: "Bearer"}
+
 		e := &ghcrEnumerator{
 			org:        "myorg",
 			repository: "myorg",
@@ -1049,17 +1057,13 @@ func TestGHCREnumerator(t *testing.T) {
 				},
 				Client: server.Client(),
 			},
-			httpClient:   server.Client(),
-			apiBaseURL:   server.URL,
-			authProvider: "github",
-			logger:       logr.Discard(),
+			httpClient:  server.Client(),
+			apiBaseURL:  server.URL,
+			authHandler: mockHandler,
+			logger:      logr.Discard(),
 		}
 
-		// Set up auth registry so BridgeAuthToRegistry can resolve the username in CLI mode.
-		mockHandler := auth.NewMockHandler("github")
-		mockHandler.StatusResult = &auth.Status{Authenticated: true, Claims: &auth.Claims{Username: "testuser"}}
-		mockHandler.GetTokenResult = &auth.Token{AccessToken: "handler_token", TokenType: "Bearer"}
-		ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
+		ctx := configureAuthRegistry(t, context.Background(), mockHandler)
 		repos, err := e.enumerate(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"myorg/solutions/private-app"}, repos)

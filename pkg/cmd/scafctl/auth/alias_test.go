@@ -33,7 +33,7 @@ func aliasFixture(t *testing.T, handlerName string, caps ...auth.Capability) con
 	mock := auth.NewMockHandler(handlerName)
 	mock.CapabilitiesValue = caps
 	ctx = withTestHandler(ctx, mock)
-	ctx = configureAuthAndTokenRegistry(t, ctx, mock)
+	ctx = configureAuthRegistry(t, ctx, mock)
 	return ctx
 }
 
