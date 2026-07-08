@@ -136,13 +136,15 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 					)),
 					schemahelper.WithMaxItems(20),
 				),
-				"entries": schemahelper.ArrayProp("Array of file entry objects to render (required for 'render-tree' operation). Each entry must have 'path' (string) and 'content' (string) fields. Typically produced by the directory provider with includeContent: true.",
+				"entries": schemahelper.ArrayProp("Array of file entry objects to render (required for 'render-tree' operation). Each entry must have a 'path' (string) field; 'content' (string) is optional -- entries without string content (e.g., binary files or directories) are skipped with a warning. Each entry may also include an optional 'data' (map) field. Typically produced by the directory provider with includeContent: true.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A file entry with path and content to render as a Go template",
-						[]string{"path", "content"},
+						"A file entry with a required path and optional content to render as a Go template, plus optional per-entry data. Entries without string content are skipped.",
+						[]string{"path"},
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path (preserved in output for downstream use)"),
-							"content": schemahelper.StringProp("File content to render as a Go template"),
+							"content": schemahelper.StringProp("File content to render as a Go template. Optional: entries without string content are skipped with a warning."),
+							"data": schemahelper.ObjectProp("Optional per-entry data map, shallow-merged over the shared top-level 'data' for this entry only. On key conflicts, per-entry values win over shared data, iteration variables, and resolver context. Enables fan-out: one template rendered per entry, each with its own variables and output path, without a separate forEach render resolver.",
+								nil, nil, schemahelper.WithAdditionalProperties(schemahelper.AnyProp("Per-entry data value of any type"))),
 						},
 					))),
 			}),
@@ -309,6 +311,23 @@ inputs:
     appName: my-app
     namespace: production
     replicas: 3`,
+				},
+				{
+					Name:        "Fan-out with per-entry data",
+					Description: "Render one template per collection item, each with its own variables and output path, in a single resolver. Per-entry 'data' is shallow-merged over the shared 'data' and wins on conflicts. Feeds the file provider's write-tree operation unchanged.",
+					YAML: `name: backend-configs
+provider: go-template
+inputs:
+  operation: render-tree
+  data:
+    platformAppName: my-app
+  entries:
+    expr: |
+      _.environments.map(env, {
+        "path":    "envs/" + env.name + "/backend.tf",
+        "content": _.backendTemplate.entries[0].content,
+        "data":    {"environment": env}
+      })`,
 				},
 			},
 		},
@@ -537,9 +556,20 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 			continue
 		}
 
-		// Build per-entry template data: base data + entry content is the template
+		// Build per-entry template data: base data + per-entry data overrides.
 		templateData := make(map[string]any, len(baseData))
 		maps.Copy(templateData, baseData)
+
+		// Merge optional per-entry data (shallow: top-level keys win over shared
+		// data, iteration variables, and resolver context). baseData is left
+		// untouched so entries never leak values into one another.
+		if entryDataRaw, present := entry["data"]; present && entryDataRaw != nil {
+			entryData, ok := entryDataRaw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s: entries[%d].data must be a map when present, got %T (path %q)", ProviderName, i, entryDataRaw, entryPath)
+			}
+			maps.Copy(templateData, entryData)
+		}
 
 		// Build ignored block replacements for this entry's content
 		replacements := buildIgnoredBlockReplacements(entryContent, ignoredBlocksCfg)

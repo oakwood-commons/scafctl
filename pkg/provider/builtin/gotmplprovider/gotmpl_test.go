@@ -1238,6 +1238,169 @@ func TestGoTemplateProvider_RenderTree_DataOverridesResolverContext(t *testing.T
 	assert.Equal(t, "environment: production", results[0]["content"])
 }
 
+func TestGoTemplateProvider_RenderTree_PerEntryDataFanOut(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	// A single shared template rendered once per entry, each with its own data
+	// and its own output path -- the fan-out use case.
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "fan-out",
+		"data": map[string]any{
+			"shared": "S",
+		},
+		"entries": []any{
+			map[string]any{
+				"path":    "envs/dev/backend.tf",
+				"content": "env={{ .env }} shared={{ .shared }}",
+				"data":    map[string]any{"env": "dev"},
+			},
+			map[string]any{
+				"path":    "envs/prod/backend.tf",
+				"content": "env={{ .env }} shared={{ .shared }}",
+				"data":    map[string]any{"env": "prod"},
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	assert.Equal(t, "envs/dev/backend.tf", results[0]["path"])
+	assert.Equal(t, "env=dev shared=S", results[0]["content"])
+
+	assert.Equal(t, "envs/prod/backend.tf", results[1]["path"])
+	assert.Equal(t, "env=prod shared=S", results[1]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataOverridesShared(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "entry-override",
+		"data": map[string]any{
+			"env": "FALLBACK",
+		},
+		"entries": []any{
+			map[string]any{
+				"path":    "a.txt",
+				"content": "env={{ .env }}",
+				"data":    map[string]any{"env": "dev"},
+			},
+			map[string]any{
+				// No per-entry data: falls back to shared data.
+				"path":    "b.txt",
+				"content": "env={{ .env }}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "env=dev", results[0]["content"])
+	assert.Equal(t, "env=FALLBACK", results[1]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataOverridesResolverContext(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"env": "staging",
+	})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "entry-over-resolver",
+		"entries": []any{
+			map[string]any{
+				"path":    "config.yaml",
+				"content": "environment: {{ .env }}",
+				"data":    map[string]any{"env": "production"},
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "environment: production", results[0]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataDoesNotLeakBetweenEntries(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	// The first entry sets a key via per-entry data; the second entry (with no
+	// per-entry data) must not see it -- baseData must remain untouched.
+	inputs := map[string]any{
+		"operation":  "render-tree",
+		"name":       "no-leak",
+		"missingKey": "zero",
+		"entries": []any{
+			map[string]any{
+				"path":    "first.txt",
+				"content": "value={{ .only }}",
+				"data":    map[string]any{"only": "first"},
+			},
+			map[string]any{
+				"path":    "second.txt",
+				"content": "value={{ .only }}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "value=first", results[0]["content"])
+	// Second entry never received the first entry's "only" key.
+	assert.NotContains(t, results[1]["content"], "first")
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataInvalidType(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "bad-data",
+		"entries": []any{
+			map[string]any{
+				"path":    "ok.txt",
+				"content": "hello",
+			},
+			map[string]any{
+				"path":    "bad.txt",
+				"content": "{{ .x }}",
+				"data":    "not-a-map",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entries[1].data must be a map")
+	assert.Contains(t, err.Error(), "bad.txt")
+}
+
 func TestGoTemplateProvider_RenderTree_DryRun(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()

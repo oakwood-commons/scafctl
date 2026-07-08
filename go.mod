@@ -1,6 +1,6 @@
 module github.com/oakwood-commons/scafctl
 
-go 1.26.4
+go 1.26.5
 
 require (
 	charm.land/bubbletea/v2 v2.0.8
