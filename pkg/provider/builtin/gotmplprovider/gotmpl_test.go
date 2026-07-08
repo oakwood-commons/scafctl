@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1561,6 +1562,79 @@ func TestExtractDependencies_DataKeyExclusion(t *testing.T) {
 		for _, d := range deps {
 			assert.NotEqual(t, "config", d)
 			assert.NotEqual(t, "labels", d)
+		}
+	})
+}
+
+func TestExtractDependencies_DepScanContext(t *testing.T) {
+	t.Run("injected context with known data keys excludes them", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .appName }} {{ .other }} {{ ._.token }}",
+			gotmpl.DepScanContextKey: gotmpl.DepScanContext{
+				HasDataInput:     true,
+				DataKeys:         map[string]bool{"appName": true},
+				DataKeysComplete: true,
+			},
+		})
+		assert.Contains(t, deps, "token", "explicit resolver ref is always a dep")
+		assert.Contains(t, deps, "other", "non-data-key field resolves against resolver data")
+		for _, d := range deps {
+			assert.NotEqual(t, "appName", d, "known data key should be excluded")
+		}
+	})
+
+	t.Run("injected context with forEach aliases excludes them", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .proj.name }} {{ .env }}",
+			gotmpl.DepScanContextKey: gotmpl.DepScanContext{
+				Aliases: map[string]bool{"proj": true},
+			},
+		})
+		assert.Contains(t, deps, "env")
+		for _, d := range deps {
+			assert.NotEqual(t, "proj", d, "forEach alias should be excluded")
+		}
+	})
+
+	t.Run("injected context with dynamic data keys skips bare fields", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .anything }} {{ ._.token }}",
+			gotmpl.DepScanContextKey: gotmpl.DepScanContext{
+				HasDataInput:     true,
+				DataKeysComplete: false,
+			},
+		})
+		assert.Contains(t, deps, "token")
+		for _, d := range deps {
+			assert.NotEqual(t, "anything", d, "bare field skipped when data keys are dynamic")
+		}
+	})
+
+	t.Run("falls back to literal data map when context absent", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .config }} {{ .other }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+			},
+		})
+		assert.Contains(t, deps, "other")
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d, "literal data key should be excluded via fallback")
+		}
+	})
+
+	t.Run("valueref-shaped data map is treated as dynamic in fallback", func(t *testing.T) {
+		for _, controlKey := range []string{"expr", "rslvr", "tmpl"} {
+			deps := extractDependencies(map[string]any{
+				"template":               "{{ .appName }} {{ ._.token }}",
+				"data":                   map[string]any{controlKey: "someValue"},
+				gotmpl.DepScanContextKey: nil,
+			})
+			assert.Contains(t, deps, "token", "explicit resolver ref is always a dep (%s)", controlKey)
+			for _, d := range deps {
+				assert.NotEqual(t, controlKey, d, "%s control key must not be a data key", controlKey)
+				assert.NotEqual(t, "appName", d, "bare field skipped for dynamic valueref data (%s)", controlKey)
+			}
 		}
 	})
 }

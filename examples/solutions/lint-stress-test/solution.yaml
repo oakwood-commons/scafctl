@@ -180,6 +180,19 @@ spec:
             inputs:
               expression: '__self.body.items'
 
+    # template-unknown-accessor — bare "{{ .projcts }}" is a typo (no resolver,
+    # data key, or forEach alias named "projcts"); it renders empty at runtime
+    # instead of failing, so it is surfaced as a warning.
+    typo_template:
+      type: string
+      description: Go template references an unknown root accessor
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render
+              template: "Deploying {{ .projcts }}"
+
     # used resolver so not everything is unused
     main_output:
       type: string
@@ -194,6 +207,7 @@ spec:
         - loose_schema
         - no_desc
         - bad_orvalue
+        - typo_template
       resolve:
         with:
           - provider: static

@@ -48,6 +48,64 @@ When used with the directory provider for file generation:
 | `.__fileDir` | Directory containing the file |
 | `.__fileExt` | File extension |
 
+## Dependency Inference (resolver ref vs data context)
+
+A go-template render step's template root namespace is the **union** of three
+sources:
+
+1. **Resolver values** -- every resolved value (`{{ .resolverName }}`).
+2. **`data` input keys** -- top-level keys of the step's `data` input.
+3. **`forEach` aliases** -- the `item` and `index` names bound by a `forEach`
+   clause.
+
+scafctl auto-infers a step's resolver dependencies by scanning the template for
+root accessors. It disambiguates them as follows:
+
+| Accessor | Treated as a resolver dependency? |
+|----------|-----------------------------------|
+| `{{ ._.name }}` | Always -- explicit resolver reference. |
+| `{{ .field }}`, **no** `data` input | Yes, unless `field` is a `forEach` alias. |
+| `{{ .field }}` where `field` is a statically-known `data` key | No -- it is local data context. |
+| `{{ .field }}` with a **dynamic** `data` input (keys not statically known) | No -- assumed to come from `data`. |
+| `{{ .__self }}`, `{{ .__item }}`, `{{ .__fan.* }}` and other `.__` vars | No -- internal/special variables. |
+
+A `data` input's keys are statically known when it is a literal map or a CEL
+**map literal** expression (e.g. `expr: '{"appName": _.appName}'`). A `data`
+input that is a resolver reference (`rslvr`), a template (`tmpl`), or a
+non-map-literal CEL expression (e.g. `map.merge(...)`) is *dynamic* -- its key
+set cannot be determined ahead of time, so bare `{{ .field }}` accessors are
+assumed to be satisfied by `data` and are not inferred as resolver deps.
+
+**Consequence:** when a `data` input is present, a resolver referenced *only*
+via a bare `{{ .field }}` accessor is **not** auto-inferred as a dependency.
+Reference it inside the `data` expression with `_.name`, use `{{ ._.name }}` in
+the template, or add an explicit `dependsOn` entry.
+
+```yaml
+# The forEach alias `proj` and the data keys (projects, appName) are NOT
+# resolver dependencies. `platformAppName`/`appName` become dependencies only
+# because the data expression references them via `_.`.
+resolve:
+  with:
+    - provider: go-template
+      forEach:
+        item: proj
+        in:
+          expr: "_.gcpProjects"
+      inputs:
+        operation: render
+        template: |
+          bucket = "{{ .projects.tfstate_bucket_name }}"
+          app    = "{{ .appName }}"
+        data:
+          expr: '{"projects": proj, "appName": _.appName}'
+```
+
+The `template-unknown-accessor` lint rule warns when a bare `{{ .field }}` or
+`{{ ._.name }}` accessor cannot resolve to any known resolver, data key, or
+forEach alias -- a likely typo, since such accessors render empty at runtime
+rather than failing.
+
 ## Functions
 
 ### Sprig v3 (100+ functions)
