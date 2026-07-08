@@ -167,6 +167,173 @@ func extractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 	return result
 }
 
+// extractStrictDependencies extracts only the "strict" resolver references from a
+// resolver -- those a user stated directly and expects to fail fast on a typo:
+// explicit dependsOn entries, CEL `_.name` references, and direct rslvr: ValueRefs
+// (including rslvr/expr forms nested inside literal maps and arrays).
+//
+// Go-template forms are deliberately excluded: a bare {{ .field }} accessor, a
+// tmpl: ValueRef, or the go-template "template" input are inferred on a
+// best-effort basis and may legitimately reference local template context (a
+// data-input key or a forEach alias) rather than a resolver. BuildPhases uses this
+// set to keep unknown strict references (so genuine typos fail during graph
+// construction) while dropping unknown template-inferred edges.
+//
+// The result is always a subset of ExtractDependencies for the same resolver.
+func extractStrictDependencies(r *Resolver) map[string]bool {
+	deps := make(map[string]bool)
+
+	for _, dep := range r.DependsOn {
+		if dep != "" {
+			deps[dep] = true
+		}
+	}
+
+	if r.When != nil && r.When.Expr != nil {
+		extractDepsFromExpression(string(*r.When.Expr), deps)
+	}
+
+	extractStrictFromResolvePhase(r.Resolve, deps)
+	extractStrictFromTransformPhase(r.Transform, deps)
+	extractStrictFromValidatePhase(r.Validate, deps)
+
+	// A resolver is never a strict dependency of itself.
+	delete(deps, r.Name)
+	return deps
+}
+
+// extractStrictFromResolvePhase collects strict references from a resolve phase.
+func extractStrictFromResolvePhase(phase *ResolvePhase, deps map[string]bool) {
+	if phase == nil {
+		return
+	}
+	if phase.When != nil && phase.When.Expr != nil {
+		extractDepsFromExpression(string(*phase.When.Expr), deps)
+	}
+	if phase.Until != nil && phase.Until.Expr != nil {
+		extractDepsFromExpression(string(*phase.Until.Expr), deps)
+	}
+	for _, source := range phase.With {
+		if source.When != nil && source.When.Expr != nil {
+			extractDepsFromExpression(string(*source.When.Expr), deps)
+		}
+		if source.ContinueOnError != nil && source.ContinueOnError.Expr != nil {
+			extractDepsFromExpression(string(*source.ContinueOnError.Expr), deps)
+		}
+		if source.ForEach != nil && source.ForEach.In != nil {
+			extractStrictFromValueRef(source.ForEach.In, deps)
+		}
+		extractStrictFromInputs(source.Inputs, deps)
+	}
+}
+
+// extractStrictFromTransformPhase collects strict references from a transform phase.
+func extractStrictFromTransformPhase(phase *TransformPhase, deps map[string]bool) {
+	if phase == nil {
+		return
+	}
+	if phase.When != nil && phase.When.Expr != nil {
+		extractDepsFromExpression(string(*phase.When.Expr), deps)
+	}
+	for _, transform := range phase.With {
+		if transform.When != nil && transform.When.Expr != nil {
+			extractDepsFromExpression(string(*transform.When.Expr), deps)
+		}
+		if transform.ContinueOnError != nil && transform.ContinueOnError.Expr != nil {
+			extractDepsFromExpression(string(*transform.ContinueOnError.Expr), deps)
+		}
+		if transform.ForEach != nil && transform.ForEach.In != nil {
+			extractStrictFromValueRef(transform.ForEach.In, deps)
+		}
+		extractStrictFromInputs(transform.Inputs, deps)
+	}
+}
+
+// extractStrictFromValidatePhase collects strict references from a validate phase.
+func extractStrictFromValidatePhase(phase *ValidatePhase, deps map[string]bool) {
+	if phase == nil {
+		return
+	}
+	if phase.When != nil && phase.When.Expr != nil {
+		extractDepsFromExpression(string(*phase.When.Expr), deps)
+	}
+	for _, validation := range phase.With {
+		if validation.When != nil && validation.When.Expr != nil {
+			extractDepsFromExpression(string(*validation.When.Expr), deps)
+		}
+		extractStrictFromInputs(validation.Inputs, deps)
+		extractStrictFromValueRef(validation.Message, deps)
+	}
+}
+
+// extractStrictFromInputs collects strict references from a step's inputs map.
+// The go-template "template" input is skipped because its {{ .field }} accessors
+// are inferred best-effort, not strict references.
+func extractStrictFromInputs(inputs map[string]*ValueRef, deps map[string]bool) {
+	for key, input := range inputs {
+		if key == "template" {
+			continue
+		}
+		extractStrictFromValueRef(input, deps)
+	}
+}
+
+// extractStrictFromValueRef collects only strict references from a ValueRef:
+// direct rslvr references, CEL expressions, and rslvr/expr forms nested inside
+// literal values. tmpl: ValueRefs and {{ .field }} accessors in literal strings
+// are intentionally skipped.
+func extractStrictFromValueRef(ref *ValueRef, deps map[string]bool) {
+	if ref == nil {
+		return
+	}
+	switch {
+	case ref.Resolver != nil:
+		deps[*ref.Resolver] = true
+	case ref.Expr != nil:
+		extractDepsFromExpression(string(*ref.Expr), deps)
+	case ref.Tmpl != nil:
+		// Template ValueRef: inferred best-effort, not a strict reference.
+	case ref.Literal != nil:
+		extractStrictFromLiteral(ref.Literal, deps)
+	}
+}
+
+// extractStrictFromLiteral recursively collects strict references from a literal
+// value: rslvr keys, expr (CEL) keys, and CEL patterns in strings. tmpl keys and
+// {{ .field }} template accessors are skipped.
+func extractStrictFromLiteral(literal any, deps map[string]bool) {
+	switch v := literal.(type) {
+	case string:
+		if strings.Contains(v, "_.") || strings.Contains(v, "_[") {
+			extractDepsFromExpression(v, deps)
+		}
+	case map[string]any:
+		isValueRef := false
+		if rslvr, ok := v["rslvr"].(string); ok {
+			deps[rslvr] = true
+			isValueRef = true
+		}
+		if expr, ok := v["expr"].(string); ok {
+			extractDepsFromExpression(expr, deps)
+			isValueRef = true
+		}
+		if _, ok := v["tmpl"].(string); ok {
+			// Template ValueRef: inferred best-effort, not strict.
+			isValueRef = true
+		}
+		if isValueRef {
+			return
+		}
+		for _, mapVal := range v {
+			extractStrictFromLiteral(mapVal, deps)
+		}
+	case []any:
+		for _, arrVal := range v {
+			extractStrictFromLiteral(arrVal, deps)
+		}
+	}
+}
+
 // extractDepsFromExpression extracts resolver references from CEL expressions
 // Uses the existing GetUnderscoreVariables() method from pkg/celexp/refs.go
 func extractDepsFromExpression(expr string, deps map[string]bool) {
@@ -266,11 +433,7 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 		// Check if the string contains Go template syntax ({{ and }})
 		// This handles cases like go-template provider inputs with {{.resolverName}} patterns
 		if strings.Contains(v, "{{") && strings.Contains(v, "}}") {
-			if len(exclude) > 0 {
-				extractDepsFromTemplateWithExclusions(v, deps, exclude)
-			} else {
-				extractDepsFromTemplate(v, deps)
-			}
+			extractDepsFromTemplateCtx(v, deps, scanCtxFromExclude(exclude))
 		}
 	case map[string]any:
 		// Check if this map represents a nested ValueRef ({rslvr: x}, {expr: "..."}, {tmpl: "..."}).
@@ -289,11 +452,7 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 			isValueRef = true
 		}
 		if tmpl, ok := v["tmpl"].(string); ok {
-			if len(exclude) > 0 {
-				extractDepsFromTemplateWithExclusions(tmpl, deps, exclude)
-			} else {
-				extractDepsFromTemplate(tmpl, deps)
-			}
+			extractDepsFromTemplateCtx(tmpl, deps, scanCtxFromExclude(exclude))
 			isValueRef = true
 		}
 		if isValueRef {
@@ -305,11 +464,8 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 		// This prevents false-positive resolver dependencies when the template
 		// accesses variables provided by the data input (e.g., {{.config}}).
 		var dataKeys map[string]bool
-		if dataMap, ok := v["data"].(map[string]any); ok {
-			dataKeys = make(map[string]bool, len(dataMap))
-			for k := range dataMap {
-				dataKeys[k] = true
-			}
+		if dataVal, ok := v["data"]; ok {
+			dataKeys = literalDataKeys(dataVal)
 		}
 		// Recursively check map values, passing data keys as exclusions
 		// for template strings in the same map
@@ -328,76 +484,160 @@ func extractDepsFromLiteralWithExclusions(literal any, deps, exclude map[string]
 	}
 }
 
-// extractDepsFromTemplate extracts resolver references from Go templates.
-// Uses the gotmpl package's GetReferences function for proper template parsing.
-func extractDepsFromTemplate(tmplContent string, deps map[string]bool) {
-	extractDepsFromTemplateWithExclusions(tmplContent, deps, nil)
+// tmplScanCtx carries the context needed to correctly disambiguate a
+// {{ .field }} template accessor between a resolver reference and a local
+// template-context binding (a data-input key or a forEach loop alias).
+type tmplScanCtx struct {
+	// hasData indicates the step supplies an explicit "data" input.
+	hasData bool
+	// dataKeys is the set of top-level keys the data input provides. Only
+	// meaningful when dataKeysComplete is true.
+	dataKeys map[string]bool
+	// dataKeysComplete indicates dataKeys is an authoritative, complete key set.
+	dataKeysComplete bool
+	// aliases is the set of forEach item/index alias names bound locally.
+	aliases map[string]bool
 }
 
-// extractDepsFromTemplateWithExclusions extracts resolver references from Go templates,
-// skipping any variable names present in the exclude set. This is used when template
-// variables are provided by a sibling data input rather than resolvers.
-func extractDepsFromTemplateWithExclusions(tmplContent string, deps, exclude map[string]bool) {
-	// Use the gotmpl package to properly parse template references
-	refs, err := gotmpl.GetGoTemplateReferences(tmplContent, "", "")
-	if err != nil {
-		// If parsing fails, this is a non-fatal error - the resolver may still be valid
-		return
+// depsInput converts the scan context into the input for the shared
+// gotmpl.ExtractResolverDeps helper.
+func (c tmplScanCtx) depsInput(tmplContent string) gotmpl.ResolverDepsInput {
+	return gotmpl.ResolverDepsInput{
+		Template:         tmplContent,
+		HasDataInput:     c.hasData,
+		DataKeys:         c.dataKeys,
+		DataKeysComplete: c.dataKeysComplete,
+		Aliases:          c.aliases,
 	}
+}
 
-	// Extract resolver names from paths that reference data
-	for _, ref := range refs {
-		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
-		// bodies where dot has been rebound, not to top-level resolvers.
-		if ref.Scoped {
-			continue
+// scanCtxFromExclude bridges the legacy exclude-set model used by the literal
+// extraction path into the richer scan context. A non-empty exclude set implies
+// a known, complete data-key set.
+func scanCtxFromExclude(exclude map[string]bool) tmplScanCtx {
+	if len(exclude) == 0 {
+		return tmplScanCtx{}
+	}
+	return tmplScanCtx{hasData: true, dataKeys: exclude, dataKeysComplete: true}
+}
+
+// extractDepsFromTemplate extracts resolver references from Go templates with no
+// surrounding data context (bare {{ .field }} accessors are resolver deps).
+func extractDepsFromTemplate(tmplContent string, deps map[string]bool) {
+	extractDepsFromTemplateCtx(tmplContent, deps, tmplScanCtx{})
+}
+
+// extractDepsFromTemplateCtx extracts resolver references from a Go template,
+// applying the context-aware disambiguation rules in gotmpl.ExtractResolverDeps.
+func extractDepsFromTemplateCtx(tmplContent string, deps map[string]bool, scan tmplScanCtx) {
+	for _, name := range gotmpl.ExtractResolverDeps(scan.depsInput(tmplContent)) {
+		deps[name] = true
+	}
+}
+
+// buildTmplScanCtx computes the template scan context for a set of provider
+// inputs and an optional forEach clause. The data input's key set is derived
+// from a literal map or a statically analysable CEL map-literal expression;
+// dynamic data inputs (rslvr/tmpl or non-map-literal expressions) yield an
+// incomplete key set, which causes bare {{ .field }} accessors to be treated as
+// local data context rather than resolver dependencies.
+func buildTmplScanCtx(inputs map[string]*ValueRef, forEach *ForEachClause) tmplScanCtx {
+	var scan tmplScanCtx
+	if forEach != nil {
+		aliases := make(map[string]bool, 2)
+		if forEach.Item != "" {
+			aliases[forEach.Item] = true
 		}
-
-		path := ref.Path
-		var varName string
-		// Handle different path patterns from template parsing
-		// The parser returns paths like:
-		// - "._.resolverName" for {{ ._.resolverName }} (ValueRef tmpl pattern)
-		// - ".__self" for {{ .__self }} (special variable)
-		// - ".resolverName" for {{ .resolverName }} (go-template provider pattern)
-		switch {
-		case strings.HasPrefix(path, "._."):
-			// Extract "resolverName" from "._.resolverName"
-			varName = strings.TrimPrefix(path, "._.")
-			// Only take the first segment if there are nested accesses
-			if idx := strings.Index(varName, "."); idx != -1 {
-				varName = varName[:idx]
-			}
-		case strings.HasPrefix(path, ".__"):
-			// Skip special variables like __self, __item, __index - they are not dependencies
-			continue
-		case strings.HasPrefix(path, "._"):
-			// Handle _.resolverName pattern (without leading dot after _.)
-			varName = strings.TrimPrefix(path, "._")
-			// Only take the first segment if there are nested accesses
-			if idx := strings.Index(varName, "."); idx != -1 {
-				varName = varName[:idx]
-			}
-		case strings.HasPrefix(path, "."):
-			// Handle direct root-level access like ".resolverName" used by go-template provider
-			// This pattern is used when resolver data is at the root level of template data
-			varName = strings.TrimPrefix(path, ".")
-			// Only take the first segment if there are nested accesses (e.g., ".config.host" -> "config")
-			if idx := strings.Index(varName, "."); idx != -1 {
-				varName = varName[:idx]
-			}
+		if forEach.Index != "" {
+			aliases[forEach.Index] = true
 		}
-
-		if varName != "" && !exclude[varName] {
-			deps[varName] = true
+		if len(aliases) > 0 {
+			scan.aliases = aliases
 		}
 	}
+	if dataRef, ok := inputs["data"]; ok && dataRef != nil {
+		scan.hasData = true
+		scan.dataKeys, scan.dataKeysComplete = valueRefDataScanKeys(dataRef)
+	}
+	return scan
+}
+
+// valueRefDataScanKeys returns the statically-known top-level key set of a data
+// ValueRef and whether that set is complete. Literal maps and CEL map-literal
+// expressions yield a complete key set; all other forms are dynamic (complete is
+// false, keys nil).
+func valueRefDataScanKeys(dataRef *ValueRef) (map[string]bool, bool) {
+	switch {
+	case dataRef.Literal != nil:
+		m, ok := dataRef.Literal.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		keys := make(map[string]bool, len(m))
+		for k := range m {
+			keys[k] = true
+		}
+		return keys, true
+	case dataRef.Expr != nil:
+		keys, known := celexp.Expression(string(*dataRef.Expr)).MapLiteralKeys(context.TODO())
+		if !known {
+			return nil, false
+		}
+		set := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			set[k] = true
+		}
+		return set, true
+	default:
+		// rslvr / tmpl -> dynamic, keys not statically known.
+		return nil, false
+	}
+}
+
+// literalDataKeys returns the statically-known top-level key set of a data value
+// encountered on the raw-literal extraction path, or nil when the keys cannot be
+// determined. It recognises nested ValueRef shapes ({expr: ...}, {rslvr: ...},
+// {tmpl: ...}) so their control keys are not mistaken for data keys.
+func literalDataKeys(data any) map[string]bool {
+	m, ok := data.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if expr, ok := m["expr"].(string); ok && len(m) == 1 {
+		keys, known := celexp.Expression(expr).MapLiteralKeys(context.TODO())
+		if !known {
+			return nil
+		}
+		set := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			set[k] = true
+		}
+		return set
+	}
+	if _, ok := m["rslvr"]; ok {
+		return nil
+	}
+	if _, ok := m["tmpl"]; ok {
+		return nil
+	}
+	keys := make(map[string]bool, len(m))
+	for k := range m {
+		keys[k] = true
+	}
+	return keys
 }
 
 // extractDepsFromProviderInputs attempts to use a provider's ExtractDependencies function
 // to extract dependencies from inputs. Returns true if the provider handled the extraction,
 // false if generic extraction should be used instead.
-func extractDepsFromProviderInputs(providerName string, inputs map[string]*ValueRef, deps map[string]bool, lookup DescriptorLookup) bool {
+//
+// The forEach clause (when present) contributes item/index alias names that must
+// not be treated as resolver dependencies. Because a provider's
+// ExtractDependencies function receives only the input map, the computed scan
+// context (data keys + forEach aliases) is injected under the reserved
+// gotmpl.DepScanContextKey so template-based providers can disambiguate
+// {{ .field }} accessors.
+func extractDepsFromProviderInputs(providerName string, inputs map[string]*ValueRef, forEach *ForEachClause, deps map[string]bool, lookup DescriptorLookup) bool {
 	if lookup == nil {
 		return false
 	}
@@ -424,6 +664,16 @@ func extractDepsFromProviderInputs(providerName string, inputs map[string]*Value
 		case ref.Tmpl != nil:
 			rawInputs[key] = map[string]any{"tmpl": string(*ref.Tmpl)}
 		}
+	}
+
+	// Inject the template scan context so template-based providers can
+	// disambiguate {{ .field }} accessors from resolver references.
+	scan := buildTmplScanCtx(inputs, forEach)
+	rawInputs[gotmpl.DepScanContextKey] = gotmpl.DepScanContext{
+		HasDataInput:     scan.hasData,
+		DataKeys:         scan.dataKeys,
+		DataKeysComplete: scan.dataKeysComplete,
+		Aliases:          scan.aliases,
 	}
 
 	// Call the provider's ExtractDependencies function.
@@ -474,18 +724,18 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 		}
 
 		// Try provider-specific extraction first
-		if extractDepsFromProviderInputs(source.Provider, source.Inputs, deps, lookup) {
+		if extractDepsFromProviderInputs(source.Provider, source.Inputs, source.ForEach, deps, lookup) {
 			continue
 		}
 
 		// Fall back to generic extraction from inputs.
-		// Collect data keys to exclude from template reference extraction.
-		// When a provider has both a "data" map and a "template" string,
-		// template references matching data keys are local context, not resolver deps.
-		dataKeys := extractDataKeys(source.Inputs)
+		// Compute the template scan context (data keys + forEach aliases) so that
+		// template {{ .field }} accessors are correctly disambiguated from resolver
+		// references.
+		scan := buildTmplScanCtx(source.Inputs, source.ForEach)
 		for key, input := range source.Inputs {
-			if len(dataKeys) > 0 && key == "template" {
-				extractDepsFromValueRefWithExclusions(input, deps, dataKeys)
+			if key == "template" {
+				extractDepsFromValueRefTmpl(input, deps, scan)
 			} else {
 				extractDepsFromValueRef(input, deps)
 			}
@@ -493,58 +743,41 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 	}
 }
 
-// extractDataKeys returns a set of top-level keys from the "data" input if it
-// is a literal map. This allows template references like {{.config}} to be
-// recognized as local context rather than resolver dependencies.
-func extractDataKeys(inputs map[string]*ValueRef) map[string]bool {
-	dataRef, ok := inputs["data"]
-	if !ok || dataRef == nil || dataRef.Literal == nil {
-		return nil
-	}
-	dataMap, ok := dataRef.Literal.(map[string]any)
-	if !ok {
-		return nil
-	}
-	keys := make(map[string]bool, len(dataMap))
-	for k := range dataMap {
-		keys[k] = true
-	}
-	return keys
-}
-
-// extractDepsFromValueRefWithExclusions works like extractDepsFromValueRef but
-// excludes names in the exclude set from being treated as resolver dependencies.
-func extractDepsFromValueRefWithExclusions(ref *ValueRef, deps, exclude map[string]bool) {
+// extractDepsFromValueRefTmpl works like extractDepsFromValueRef but applies the
+// template scan context (data keys + forEach aliases) when the ValueRef resolves
+// to a Go template, so that {{ .field }} accessors are correctly disambiguated
+// from resolver references.
+func extractDepsFromValueRefTmpl(ref *ValueRef, deps map[string]bool, scan tmplScanCtx) {
 	if ref == nil {
 		return
 	}
 
-	// Direct resolver reference - never excluded
+	// Direct resolver reference - always a dependency.
 	if ref.Resolver != nil {
 		deps[*ref.Resolver] = true
 		return
 	}
 
-	// Expression - never excluded (CEL uses _.resolverName, not data keys)
+	// Expression - CEL uses _.resolverName, never data keys.
 	if ref.Expr != nil {
 		extractDepsFromExpression(string(*ref.Expr), deps)
 		return
 	}
 
-	// Template - apply exclusions
+	// Template - apply the scan context.
 	if ref.Tmpl != nil {
-		extractDepsFromTemplateWithExclusions(string(*ref.Tmpl), deps, exclude)
+		extractDepsFromTemplateCtx(string(*ref.Tmpl), deps, scan)
 		return
 	}
 
-	// Literal string with template syntax
+	// Literal string with CEL or template syntax.
 	if ref.Literal != nil {
 		if s, ok := ref.Literal.(string); ok {
 			if strings.Contains(s, "_.") || strings.Contains(s, "_[") {
 				extractDepsFromExpression(s, deps)
 			}
 			if strings.Contains(s, "{{") && strings.Contains(s, "}}") {
-				extractDepsFromTemplateWithExclusions(s, deps, exclude)
+				extractDepsFromTemplateCtx(s, deps, scan)
 			}
 		}
 	}
@@ -579,15 +812,15 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 		}
 
 		// Try provider-specific extraction first
-		if extractDepsFromProviderInputs(transform.Provider, transform.Inputs, deps, lookup) {
+		if extractDepsFromProviderInputs(transform.Provider, transform.Inputs, transform.ForEach, deps, lookup) {
 			continue
 		}
 
 		// Fall back to generic extraction from inputs
-		dataKeys := extractDataKeys(transform.Inputs)
+		scan := buildTmplScanCtx(transform.Inputs, transform.ForEach)
 		for key, input := range transform.Inputs {
-			if len(dataKeys) > 0 && key == "template" {
-				extractDepsFromValueRefWithExclusions(input, deps, dataKeys)
+			if key == "template" {
+				extractDepsFromValueRefTmpl(input, deps, scan)
 			} else {
 				extractDepsFromValueRef(input, deps)
 			}
@@ -614,7 +847,7 @@ func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lo
 		}
 
 		// Try provider-specific extraction first
-		if extractDepsFromProviderInputs(validation.Provider, validation.Inputs, deps, lookup) {
+		if extractDepsFromProviderInputs(validation.Provider, validation.Inputs, nil, deps, lookup) {
 			// Still extract from message even if provider handled inputs
 			extractDepsFromValueRef(validation.Message, deps)
 			continue
@@ -628,6 +861,110 @@ func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lo
 		// Extract from message
 		extractDepsFromValueRef(validation.Message, deps)
 	}
+}
+
+// TemplateAccessor identifies a root-level Go template accessor in a resolver's
+// resolve or transform step that does not resolve to any known resolver after
+// accounting for data-input keys and forEach aliases. These are likely typos:
+// at runtime a bare {{ .field }} accessor to an unknown root renders empty
+// rather than failing, so they are surfaced as advisory findings rather than
+// hard errors.
+type TemplateAccessor struct {
+	// Resolver is the name of the resolver containing the accessor.
+	Resolver string
+	// Step identifies where the accessor was found ("resolve" or "transform").
+	Step string
+	// Name is the unresolved accessor root name.
+	Name string
+}
+
+// UnresolvedTemplateAccessors scans the go-template "template" input of every
+// resolve and transform step for root-level accessors that cannot resolve to any
+// known resolver, data-input key, or forEach alias. A step whose data input has
+// a dynamically-determined key set is skipped for bare {{ .field }} accessors
+// (its root may be populated at runtime); {{ ._.name }} explicit resolver
+// references are always checked. The returned accessors are likely typos and are
+// intended to be surfaced as lint findings.
+func UnresolvedTemplateAccessors(resolvers []*Resolver) []TemplateAccessor {
+	known := make(map[string]bool, len(resolvers))
+	for _, r := range resolvers {
+		if r != nil {
+			known[r.Name] = true
+		}
+	}
+
+	var out []TemplateAccessor
+	for _, r := range resolvers {
+		if r == nil {
+			continue
+		}
+		if r.Resolve != nil {
+			for _, src := range r.Resolve.With {
+				collectUnresolvedAccessors(r.Name, "resolve", src.Inputs, src.ForEach, known, &out)
+			}
+		}
+		if r.Transform != nil {
+			for _, step := range r.Transform.With {
+				collectUnresolvedAccessors(r.Name, "transform", step.Inputs, step.ForEach, known, &out)
+			}
+		}
+	}
+	return out
+}
+
+// collectUnresolvedAccessors appends unresolved template accessors found in a
+// single step's "template" input to out.
+func collectUnresolvedAccessors(resolverName, step string, inputs map[string]*ValueRef, forEach *ForEachClause, known map[string]bool, out *[]TemplateAccessor) {
+	tmpl := templateInputString(inputs)
+	if tmpl == "" {
+		return
+	}
+
+	scan := buildTmplScanCtx(inputs, forEach)
+	in := scan.depsInput(tmpl)
+	in.LeftDelim = literalStringInput(inputs, "leftDelim")
+	in.RightDelim = literalStringInput(inputs, "rightDelim")
+
+	seen := make(map[string]bool)
+	for _, name := range gotmpl.ExtractResolverDeps(in) {
+		if known[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		*out = append(*out, TemplateAccessor{Resolver: resolverName, Step: step, Name: name})
+	}
+}
+
+// templateInputString returns the inline template string from a step's
+// "template" input (whether provided as a tmpl ValueRef or a literal string), or
+// "" when the step has no inline template.
+func templateInputString(inputs map[string]*ValueRef) string {
+	ref, ok := inputs["template"]
+	if !ok || ref == nil {
+		return ""
+	}
+	if ref.Tmpl != nil {
+		return string(*ref.Tmpl)
+	}
+	if ref.Literal != nil {
+		if s, ok := ref.Literal.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// literalStringInput returns the literal string value of the named input, or ""
+// when the input is absent or not a literal string.
+func literalStringInput(inputs map[string]*ValueRef, key string) string {
+	ref, ok := inputs[key]
+	if !ok || ref == nil || ref.Literal == nil {
+		return ""
+	}
+	if s, ok := ref.Literal.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // GraphNode represents a resolver node in the dependency graph

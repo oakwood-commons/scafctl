@@ -92,6 +92,77 @@ func (e Expression) GetUnderscoreVariables(ctx context.Context) ([]string, error
 	return e.GetVariablesWithPrefix(ctx, "_.")
 }
 
+// MapLiteralKeys parses the CEL expression and, if its top-level node is a map
+// literal with constant string keys (e.g. {"a": _.x, "b": proj}), returns the
+// list of those keys and true. For any other expression shape -- a function
+// call such as map.merge(...), an identifier, a map with non-constant or
+// non-string keys, etc. -- it returns nil and false, signalling that the set of
+// keys the expression produces cannot be determined statically.
+//
+// This is used by resolver dependency inference to decide whether a go-template
+// step's `data: {expr: ...}` input has a statically-known key set. When the keys
+// are known, template `{{ .field }}` accessors that match a key are recognised
+// as data-context references rather than resolver dependencies.
+//
+// Example:
+//
+//	keys, ok := celexp.Expression(`{"projects": proj, "app": _.appName}`).MapLiteralKeys(ctx)
+//	// keys == []string{"app", "projects"}, ok == true
+//
+//	keys, ok := celexp.Expression(`map.merge(_.a, _.b)`).MapLiteralKeys(ctx)
+//	// keys == nil, ok == false
+func (e Expression) MapLiteralKeys(ctx context.Context) ([]string, bool) {
+	var env *cel.Env
+	var err error
+	factory := getEnvFactory()
+	if factory != nil {
+		env, err = factory(ctx)
+	} else {
+		env, err = cel.NewEnv(cel.OptionalTypes())
+	}
+	if err != nil {
+		return nil, false
+	}
+
+	parsed, issues := env.Parse(string(e))
+	if issues != nil && issues.Err() != nil {
+		return nil, false
+	}
+
+	parsedExpr, err := cel.AstToParsedExpr(parsed)
+	if err != nil {
+		return nil, false
+	}
+
+	structExpr := parsedExpr.GetExpr().GetStructExpr()
+	if structExpr == nil {
+		// Not a map/struct literal (e.g. a function call or identifier).
+		return nil, false
+	}
+	// A message-construction expression (e.g. Foo{...}) is not a plain map.
+	if structExpr.GetMessageName() != "" {
+		return nil, false
+	}
+
+	entries := structExpr.GetEntries()
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		mapKey := entry.GetMapKey()
+		if mapKey == nil {
+			return nil, false
+		}
+		sv, ok := mapKey.GetConstExpr().GetConstantKind().(*exprpb.Constant_StringValue)
+		if !ok {
+			// Non-constant or non-string key -- keys are not statically known.
+			return nil, false
+		}
+		keys = append(keys, sv.StringValue)
+	}
+
+	sort.Strings(keys)
+	return keys, true
+}
+
 // RequiredVariables parses the CEL expression and returns all variable references
 // found in the expression, regardless of prefix. This extracts ALL top-level identifiers
 // that are not function names or comprehension variables.

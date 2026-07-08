@@ -907,54 +907,73 @@ func extractDependencies(inputs map[string]any) []string {
 		templateContent = strings.ReplaceAll(templateContent, repl.Find, "")
 	}
 
-	// Use gotmpl package to extract references with the specified delimiters
-	refs, err := gotmpl.GetGoTemplateReferences(templateContent, leftDelim, rightDelim)
-	if err != nil {
-		// On parse error, fall back to no dependencies - the error will be caught during execution
-		return deps
-	}
+	// Determine the template scan context (data keys + forEach aliases). Prefer
+	// the context injected by the dependency-graph builder (which can see the
+	// forEach clause and statically analyse CEL data expressions); otherwise
+	// fall back to best-effort local computation from a literal data map.
+	scan := resolveDepScanContext(inputs)
+	scan.Template = templateContent
+	scan.LeftDelim = leftDelim
+	scan.RightDelim = rightDelim
 
-	// Build set of keys provided by the data input so we can exclude them
-	// from resolver dependencies. The data map's keys become top-level
-	// template context variables (e.g., data: {config: ...} provides .config)
-	// and should not be treated as resolver references.
-	dataKeys := make(map[string]bool)
-	if dataMap, ok := inputs["data"].(map[string]any); ok {
-		for k := range dataMap {
-			dataKeys[k] = true
-		}
-	}
-
-	// Extract the first segment of each reference path as the dependency name
-	// e.g., ".config.host" -> "config", "._.name" -> "name"
-	for _, ref := range refs {
-		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
-		// bodies where dot has been rebound, not to top-level resolvers.
-		if ref.Scoped {
-			continue
-		}
-
-		path := ref.Path
-		// Strip leading dot if present
-		path = strings.TrimPrefix(path, ".")
-		// Handle underscore prefix for resolver context (e.g., "_.name" -> "name")
-		path = strings.TrimPrefix(path, "_.")
-		path = strings.TrimPrefix(path, "_")
-
-		// Get first segment (before any dots)
-		if idx := strings.Index(path, "."); idx > 0 {
-			path = path[:idx]
-		}
-
-		// Skip references satisfied by the data input
-		if dataKeys[path] {
-			continue
-		}
-
-		addDep(path)
+	for _, name := range gotmpl.ExtractResolverDeps(scan) {
+		addDep(name)
 	}
 
 	return deps
+}
+
+// resolveDepScanContext builds the resolver-dependency scan context for the
+// inline template. It prefers a DepScanContext injected under
+// gotmpl.DepScanContextKey; when absent, it derives a best-effort context from a
+// literal data map in the inputs.
+func resolveDepScanContext(inputs map[string]any) gotmpl.ResolverDepsInput {
+	if injected, ok := inputs[gotmpl.DepScanContextKey].(gotmpl.DepScanContext); ok {
+		return gotmpl.ResolverDepsInput{
+			HasDataInput:     injected.HasDataInput,
+			DataKeys:         injected.DataKeys,
+			DataKeysComplete: injected.DataKeysComplete,
+			Aliases:          injected.Aliases,
+		}
+	}
+
+	dataMap, hasData := inputs["data"].(map[string]any)
+	if !hasData {
+		return gotmpl.ResolverDepsInput{}
+	}
+	// A ValueRef-shaped data map (e.g. {expr: "..."}, {rslvr: "vars"},
+	// {tmpl: "..."}) does not expose its runtime keys statically, so treat the
+	// key set as dynamic/incomplete rather than mistaking the control key
+	// (expr/rslvr/tmpl) for a data key.
+	if isValueRefShapedData(dataMap) {
+		return gotmpl.ResolverDepsInput{HasDataInput: true, DataKeysComplete: false}
+	}
+	dataKeys := make(map[string]bool, len(dataMap))
+	for k := range dataMap {
+		dataKeys[k] = true
+	}
+	return gotmpl.ResolverDepsInput{
+		HasDataInput:     true,
+		DataKeys:         dataKeys,
+		DataKeysComplete: true,
+	}
+}
+
+// isValueRefShapedData reports whether a raw data map is a ValueRef wrapper
+// (expr/rslvr/tmpl) rather than a literal map of template context keys. Such
+// wrappers resolve to their value at runtime, so their control key must not be
+// treated as a data-context key.
+func isValueRefShapedData(dataMap map[string]any) bool {
+	if _, ok := dataMap["expr"]; ok {
+		return true
+	}
+	if _, ok := dataMap["rslvr"]; ok {
+		return true
+	}
+	if _, ok := dataMap["tmpl"]; ok {
+		return true
+	}
+	return false
 }
 
 // extractCELDeps extracts resolver references from a CEL expression string.

@@ -884,6 +884,253 @@ func TestBuildPhases_StandaloneResolver(t *testing.T) {
 	assert.Len(t, result.Phases[0].Resolvers, 1)
 }
 
+func TestBuildPhases_DropsUnknownInferredDeps(t *testing.T) {
+	// A go-template resolver whose inline template references a bare {{ .field }}
+	// accessor to an unknown root must NOT hard-fail phase building. Such an
+	// inferred edge points at a non-existent resolver and is dropped as a
+	// best-effort ordering hint rather than producing a "depends on X but X
+	// wasn't present" DAG error.
+	resolvers := []*Resolver{
+		{
+			Name: "rendered",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ .doesNotExist }}`},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := BuildPhases(resolvers, nil)
+	require.NoError(t, err)
+	assert.Len(t, result.Phases, 1)
+	assert.Equal(t, 1, result.Phases[0].Phase)
+	assert.Len(t, result.Phases[0].Resolvers, 1)
+}
+
+func TestBuildPhases_KeepsKnownInferredDeps(t *testing.T) {
+	// An inferred edge to an existing resolver is retained and orders the phases.
+	resolvers := []*Resolver{
+		{
+			Name: "rendered",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ ._.appName }}`},
+						},
+					},
+				},
+			},
+		},
+		{Name: "appName"},
+	}
+
+	result, err := BuildPhases(resolvers, nil)
+	require.NoError(t, err)
+	require.Len(t, result.Phases, 2)
+	// appName has no deps -> phase 1; rendered depends on appName -> phase 2.
+	assert.Equal(t, "appName", result.Phases[0].Resolvers[0].Name)
+	assert.Equal(t, "rendered", result.Phases[1].Resolvers[0].Name)
+}
+
+func TestBuildPhases_KeepsUnknownStrictDeps(t *testing.T) {
+	// Unknown targets reached via a *strict* reference -- dependsOn, a CEL
+	// `_.name` reference, or an rslvr: ValueRef -- are almost always typos and
+	// must fail fast during graph construction rather than being silently
+	// dropped. Each subtest wires a single strict reference to a non-existent
+	// resolver and expects BuildPhases to error.
+	tests := []struct {
+		name     string
+		resolver *Resolver
+	}{
+		{
+			name: "dependsOn typo",
+			resolver: &Resolver{
+				Name:      "app",
+				DependsOn: []string{"missing"},
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{Provider: "parameter"}},
+				},
+			},
+		},
+		{
+			name: "cel reference typo",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"expression": {Expr: exprPtr("_.missing")},
+						},
+					}},
+				},
+			},
+		},
+		{
+			name: "rslvr reference typo",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"value": {Resolver: stringPtr("missing")},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := BuildPhases([]*Resolver{tt.resolver}, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "missing")
+		})
+	}
+}
+
+func TestExtractStrictDependencies(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver *Resolver
+		want     []string
+	}{
+		{
+			name: "dependsOn is strict",
+			resolver: &Resolver{
+				Name:      "app",
+				DependsOn: []string{"env", "region"},
+			},
+			want: []string{"env", "region"},
+		},
+		{
+			name: "cel and rslvr refs are strict",
+			resolver: &Resolver{
+				Name: "app",
+				When: &Condition{Expr: exprPtr("_.gate")},
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"value": {Resolver: stringPtr("env")},
+							"expr":  {Expr: exprPtr("_.region")},
+						},
+					}},
+				},
+			},
+			want: []string{"gate", "env", "region"},
+		},
+		{
+			name: "bare template accessor is not strict",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"template": {Literal: `{{ .notStrict }}`},
+						},
+					}},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "tmpl ValueRef is not strict",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"value": {Tmpl: tmplPtr(`{{ .notStrict }}`)},
+						},
+					}},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "rslvr and expr nested in literal map are strict",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: map[string]any{
+								"env":  map[string]any{"rslvr": "region"},
+								"zone": map[string]any{"expr": "_.zone"},
+							}},
+						},
+					}},
+				},
+			},
+			want: []string{"region", "zone"},
+		},
+		{
+			name: "cel string in literal array is strict",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: []any{"_.alpha", "plain-string"}},
+						},
+					}},
+				},
+			},
+			want: []string{"alpha"},
+		},
+		{
+			name: "tmpl nested in literal map is not strict",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*ValueRef{
+							"value": {Literal: map[string]any{
+								"t": map[string]any{"tmpl": "{{ .beta }}"},
+							}},
+						},
+					}},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "self reference is excluded",
+			resolver: &Resolver{
+				Name:      "app",
+				DependsOn: []string{"app", "env"},
+			},
+			want: []string{"env"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractStrictDependencies(tt.resolver)
+			assert.Len(t, got, len(tt.want))
+			for _, dep := range tt.want {
+				assert.True(t, got[dep], "expected strict dep %q", dep)
+			}
+		})
+	}
+}
+
 func TestResolverDagObject_GetDependencyKeys(t *testing.T) {
 	resolver := &Resolver{
 		Name: "test",

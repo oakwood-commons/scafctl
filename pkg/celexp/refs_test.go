@@ -657,6 +657,77 @@ func TestRequiredVariables(t *testing.T) {
 	}
 }
 
+func TestMapLiteralKeys(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+		wantKeys   []string
+		wantOK     bool
+	}{
+		{
+			name:       "simple map literal",
+			expression: `{"appName": _.appName}`,
+			wantKeys:   []string{"appName"},
+			wantOK:     true,
+		},
+		{
+			name:       "multi-key map literal",
+			expression: `{"proj": proj, "appName": _.appName}`,
+			wantKeys:   []string{"appName", "proj"},
+			wantOK:     true,
+		},
+		{
+			name:       "trailing newline tolerated",
+			expression: "{\"appName\": _.appName}\n",
+			wantKeys:   []string{"appName"},
+			wantOK:     true,
+		},
+		{
+			name:       "empty map literal",
+			expression: "{}",
+			wantKeys:   []string{},
+			wantOK:     true,
+		},
+		{
+			name:       "function call is not a map literal",
+			expression: `map.merge({"a": 1}, other)`,
+			wantOK:     false,
+		},
+		{
+			name:       "identifier is not a map literal",
+			expression: "someResolver",
+			wantOK:     false,
+		},
+		{
+			name:       "list is not a map literal",
+			expression: `["a", "b"]`,
+			wantOK:     false,
+		},
+		{
+			name:       "non-string keys not statically known",
+			expression: `{key: "value"}`,
+			wantOK:     false,
+		},
+		{
+			name:       "parse error yields not-ok",
+			expression: `{"a":`,
+			wantOK:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keys, ok := Expression(tt.expression).MapLiteralKeys(context.Background())
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				sort.Strings(keys)
+				want := tt.wantKeys
+				sort.Strings(want)
+				assert.Equal(t, want, keys)
+			}
+		})
+	}
+}
+
 func BenchmarkRequiredVariables_Simple(b *testing.B) {
 	expr := Expression("x + y + z")
 	b.ResetTimer()

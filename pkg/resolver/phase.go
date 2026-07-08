@@ -112,7 +112,31 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, 
 
 	for _, r := range resolvers {
 		resolverMap[r.Name] = r
-		deps[r.Name] = extractDependencies(r, lookup)
+	}
+
+	for _, r := range resolvers {
+		// Partition dependencies by how they were derived. Strict references --
+		// explicit dependsOn entries, CEL `_.name` references, and rslvr: ValueRefs
+		// -- reflect intent a user stated directly, so an unknown target is almost
+		// always a typo and must fail fast during graph construction. Best-effort
+		// template-inferred edges (a go-template {{ .field }} accessor or a forEach
+		// alias) may legitimately reference local template context rather than a
+		// resolver, so an unknown target is dropped rather than failing the build.
+		inferred := extractDependencies(r, lookup)
+		strict := extractStrictDependencies(r)
+		filtered := make([]string, 0, len(inferred))
+		for _, dep := range inferred {
+			if _, ok := resolverMap[dep]; ok {
+				filtered = append(filtered, dep)
+				continue
+			}
+			// Unknown target: keep it only when it came from a strict reference so
+			// dag.Build surfaces the typo. Drop purely template-inferred edges.
+			if strict[dep] {
+				filtered = append(filtered, dep)
+			}
+		}
+		deps[r.Name] = filtered
 	}
 
 	// Build DAG using existing package

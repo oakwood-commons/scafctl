@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1263,6 +1264,71 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 				}
 			} else {
 				assert.Empty(t, findings)
+			}
+		})
+	}
+}
+
+func TestLintTemplateAccessors(t *testing.T) {
+	dataExpr := celexp.Expression(`{"appName": _.appName}`)
+
+	tests := []struct {
+		name      string
+		resolvers map[string]*resolver.Resolver
+		wantNames []string
+	}{
+		{
+			name: "typo accessor with known data keys is flagged",
+			resolvers: map[string]*resolver.Resolver{
+				"appName": {Name: "appName"},
+				"rendered": {
+					Name: "rendered",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"template": {Literal: `app = "{{ .appNam }}"`},
+							"data":     {Expr: &dataExpr},
+						},
+					}}},
+				},
+			},
+			wantNames: []string{"appNam"},
+		},
+		{
+			name: "valid resolver ref is not flagged",
+			resolvers: map[string]*resolver.Resolver{
+				"appName": {Name: "appName"},
+				"rendered": {
+					Name: "rendered",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"template": {Literal: `{{ .appName }}`},
+						},
+					}}},
+				},
+			},
+			wantNames: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sol := &solution.Solution{Spec: solution.Spec{Resolvers: tt.resolvers}}
+			result := &Result{Findings: make([]*Finding, 0)}
+			lintTemplateAccessors(sol, result)
+
+			findings := filterFindingsByRule(result, "template-unknown-accessor")
+			assert.Len(t, findings, len(tt.wantNames))
+			for _, name := range tt.wantNames {
+				found := false
+				for _, f := range findings {
+					assert.Equal(t, SeverityWarning, f.Severity)
+					if strings.Contains(f.Message, name) {
+						found = true
+					}
+				}
+				assert.True(t, found, "expected a finding mentioning %q", name)
 			}
 		})
 	}
