@@ -213,7 +213,7 @@ Returns rendered template output. For `render-tree`, returns an array of rendere
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
 | transform (`render`) | `<rendered text>` | string | Template output as string |
-| transform (`render-tree`) | `[{path, content}]` | array | Array of rendered file entries. Each entry has `path` (string) and `content` (string). |
+| transform (`render-tree`) | `[{path, content}]` | array | Array of rendered file entries. Each entry has `path` (string) and `content` (string). Input entries may include an optional `data` map (shallow-merged over the shared `data`) for per-entry fan-out. |
 
 ### `hcl`
 Varies by operation — parse returns structured data, format/validate return strings.

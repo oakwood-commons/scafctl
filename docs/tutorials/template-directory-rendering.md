@@ -138,6 +138,39 @@ resolvers:
 The output is an array of `{path, content}` where each `content` is now the
 **rendered** result. The `path` is passed through unchanged from the input.
 
+### Per-entry data (fan-out)
+
+Each entry may carry an optional `data` map that is shallow-merged over the
+shared top-level `data` for that entry only. On key conflicts, per-entry values
+win over shared `data`, iteration variables, and resolver context. This turns
+the common "render one template per item, each with its own variables and its
+own output path" pattern into a single resolver -- no separate `forEach` render
+resolver and no manual index-zip:
+
+```yaml
+resolvers:
+  backendConfigs:
+    type: any
+    resolve:
+      with:
+        - provider: go-template
+          inputs:
+            operation: render-tree
+            data:
+              platformAppName: myapp      # shared default (merge base)
+            entries:
+              expr: |
+                _.environments.map(env, {
+                  "path":    "envs/" + env.name + "/backend.tf",
+                  "content": _.backendTemplate.entries[0].content,
+                  "data":    {"environment": env}   # per-entry, wins over shared
+                })
+```
+
+Entries without a `data` field render against the shared `data` alone, so
+existing `render-tree` usage is unaffected. A non-map `data` value fails with a
+clear error naming the entry index and path.
+
 ### Using a Separate Vars Resolver
 
 For cleaner solutions, define variables in their own resolver and reference them:
