@@ -1,0 +1,98 @@
+# Run: scafctl run solution -f examples/solutions/template-fanout/solution.yaml
+#
+# After running: find ./output -type f && cat ./output/envs/dev/backend.tf
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-fanout
+  displayName: Template Fan-Out (per-entry data)
+  category: solutions
+  tags:
+    - solution
+    - template
+    - fan-out
+  description: |
+    Render a single shared template once per collection item, each with its own
+    variables and output path, in a single render-tree resolver. Per-entry
+    `data` is shallow-merged over the shared `data` and wins on key conflicts.
+
+spec:
+  resolvers:
+    # -------------------------------------------------------------------------
+    # The collection to fan out over. One rendered file is produced per item.
+    # -------------------------------------------------------------------------
+    environments:
+      description: Environments to generate a backend config for
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: dev
+                  bucket: tfstate-dev
+                  region: us-east1
+                - name: staging
+                  bucket: tfstate-staging
+                  region: us-east1
+                - name: prod
+                  bucket: tfstate-prod
+                  region: us-central1
+
+    # -------------------------------------------------------------------------
+    # Read the single shared template file. Its content is reused for every
+    # entry in the fan-out below.
+    # -------------------------------------------------------------------------
+    backendTemplate:
+      description: Read the shared Terraform backend template from disk
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    # -------------------------------------------------------------------------
+    # Fan-out: build one entry per environment. Each entry carries its own
+    # `data` (the environment), shallow-merged over the shared `data`.
+    # -------------------------------------------------------------------------
+    rendered:
+      description: One rendered backend config per environment, each with its own path
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              # Shared data: merge base for every entry.
+              data:
+                platformAppName: myapp
+              # Per-entry entries: path + shared content + per-entry data.
+              entries:
+                expr: |
+                  _.environments.map(env, {
+                    "path":    "envs/" + env.name + "/backend.tf",
+                    "content": _.backendTemplate.entries[0].content,
+                    "data":    {"environment": env}
+                  })
+
+  # ===========================================================================
+  # ACTIONS: Write the fanned-out files to disk, preserving each entry's path.
+  # ===========================================================================
+  workflow:
+    actions:
+      write-rendered-files:
+        description: >
+          Write one backend.tf per environment under ./output/envs/<name>/,
+          preserving the path each entry declared in render-tree.
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: rendered

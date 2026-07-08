@@ -49,6 +49,38 @@ spec:
               data:
                 rslvr: vars
 
+    # Per-entry data fan-out: one shared template rendered once per item, each
+    # with its own `data` (shallow-merged over the shared `data`, per-entry wins)
+    # and its own output path -- all in a single render-tree resolver.
+    fanout:
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              # Shared data acts as the merge base for every entry.
+              data:
+                platformAppName: shared-app
+              entries:
+                expr: |
+                  [
+                    {
+                      "path":    "envs/dev/backend.tf",
+                      "content": "app={{ .platformAppName }} env={{ .environment }}",
+                      "data":    {"environment": "dev"}
+                    },
+                    {
+                      "path":    "envs/prod/backend.tf",
+                      "content": "app={{ .platformAppName }} env={{ .environment }}",
+                      "data":    {"platformAppName": "prod-app", "environment": "prod"}
+                    },
+                    {
+                      "path":    "envs/none/backend.tf",
+                      "content": "app={{ .platformAppName }}"
+                    }
+                  ]
+
   workflow:
     actions:
       write-output:
@@ -60,6 +92,15 @@ spec:
             rslvr: rendered
           outputPath: >-
             {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+
+      # Write the per-entry fan-out output, preserving each entry's own path.
+      write-fanout:
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: $OUTPUT_DIR
+          entries:
+            rslvr: fanout
 
   testing:
     config:
@@ -92,3 +133,24 @@ spec:
             message: "Expected 4 rendered entries"
           - expression: '__output.rendered.exists(e, e.content.contains("test-app"))'
             message: "Rendered content should contain the appName variable"
+
+      fanout-per-entry-data:
+        description: Verify per-entry data fan-out merges over and overrides shared data
+        extends: [_base]
+        command: [run, resolver, fanout]
+        assertions:
+          - expression: size(__output.fanout) == 3
+            message: "Expected 3 fanned-out entries"
+          # Entry 0: per-entry data supplies `environment`; `platformAppName`
+          # falls through from the shared data.
+          - expression: '__output.fanout[0].content == "app=shared-app env=dev"'
+            message: "dev entry should merge shared platformAppName with per-entry environment"
+          # Entry 1: per-entry data overrides the shared `platformAppName`.
+          - expression: '__output.fanout[1].content == "app=prod-app env=prod"'
+            message: "prod entry per-entry data should win over shared data"
+          # Entry 2: no per-entry data -- renders against shared data alone.
+          - expression: '__output.fanout[2].content == "app=shared-app"'
+            message: "entry without per-entry data should use shared data unchanged"
+          - expression: '__output.fanout[0].path == "envs/dev/backend.tf"'
+            message: "each entry keeps its own declared output path"
+
