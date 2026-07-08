@@ -633,7 +633,7 @@ Provider Inputs (http):
   acceptableStatusCodes  array         Status codes treated as successful (e.g. [200, 404], "2xx", "200-204")
   authProvider   string                Authentication provider to use for this request
   autoParseJson  boolean               When true and the response Content-Type is application/json, automatically parse the body into a structured object
-  body           string                Request body for POST/PUT/PATCH requests
+  body           any                   Request body for POST/PUT/PATCH requests (string sent verbatim; object/array serialized to JSON)
   headers        any                   HTTP headers as key-value pairs
   method         string                HTTP method
   pagination     object                Pagination configuration for automatically following paginated API responses

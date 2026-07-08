@@ -1451,7 +1451,7 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 | `url` | string | ✅ | URL to request |
 | `method` | string | ❌ | HTTP method (default: `GET`) |
 | `headers` | object | ❌ | HTTP headers |
-| `body` | string | ❌ | Request body |
+| `body` | any | ❌ | Request body. A string is sent verbatim; an object or array is serialized to compact JSON and `Content-Type` defaults to `application/json` when not otherwise set |
 | `timeout` | int | ❌ | Timeout in seconds (max 300) |
 | `retry` | object | ❌ | Retry configuration |
 | `auth` | string | ❌ | Auth provider (e.g., `entra`, `github`) |
@@ -1459,6 +1459,25 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 | `pagination` | object | ❌ | Pagination configuration (see below) |
 | `autoParseJson` | bool | ❌ | Parse response body as JSON when Content-Type is `application/json`. Enables direct field access (e.g., `_.result.body.items`) |
 | `poll` | object | ❌ | Polling configuration — re-execute request until a condition is met (see below) |
+
+### Request body
+
+`body` accepts either a string or a structured value:
+
+- **String** -- sent verbatim. You control the exact bytes and the `Content-Type` header.
+- **Object or array** -- serialized to compact JSON. When you do not set a `Content-Type` header, the provider defaults it to `application/json`. An explicit `Content-Type` (matched case-insensitively) is always preserved.
+
+Passing a structured body lets you build the payload directly from resolver values with a CEL expression, avoiding a separate serializer resolver:
+
+```yaml
+# Object body built from a CEL expression -- serialized to JSON automatically
+provider: http
+inputs:
+  url: https://api.example.com/graphql
+  method: POST
+  body:
+    expr: '{"query": _.graphQuery, "variables": {"id": _.recordId}}'
+```
 
 ### Pagination
 
