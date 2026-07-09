@@ -11,7 +11,7 @@ weight: 15
 
 ## Problem Statement
 
-When a solution is built (`scafctl build solution`) and pushed to a catalog, only the solution YAML file is stored as a single OCI layer. Three categories of dependencies are lost:
+When a solution is built (`scafctl package solution`) and pushed to a catalog, only the solution YAML file is stored as a single OCI layer. Three categories of dependencies are lost:
 
 1. **Local file references** — template files read by the `file` provider, sub-solutions used by the `solution` provider, or other local resources.
 2. **Multi-file solution parts** — solutions split across multiple YAML files (e.g., `resolvers.yaml`, `workflow.yaml`) that compose the complete solution.
@@ -70,7 +70,7 @@ my-solution/
   workflow.yaml        # ← Not included in build
 ```
 
-After `scafctl build solution -f ./solution.yaml && scafctl catalog push ...`, a consumer running `scafctl run solution my-solution@1.0.0` on a different machine will get file-not-found errors for every local reference, and network errors for unavailable catalog dependencies.
+After `scafctl package solution -f ./solution.yaml && scafctl catalog push ...`, a consumer running `scafctl run solution my-solution@1.0.0` on a different machine will get file-not-found errors for every local reference, and network errors for unavailable catalog dependencies.
 
 ---
 
@@ -134,7 +134,7 @@ When no files need bundling, layer 1 is omitted, preserving backward compatibili
 
 ### File Discovery
 
-File discovery happens during `scafctl build solution` and employs two complementary strategies:
+File discovery happens during `scafctl package solution` and employs two complementary strategies:
 
 #### 1. Static Analysis (Automatic)
 
@@ -308,7 +308,7 @@ plugins:
 
 #### Build-Time Plugin Handling
 
-During `scafctl build solution`:
+During `scafctl package solution`:
 1. **Validate** that all `bundle.plugins` entries have valid `name`, `kind`, and `version` fields.
 2. **Record** plugin dependencies in the bundle manifest for auditability.
 3. Plugins are **not vendored** into the bundle — they are binary artifacts executed via gRPC, not YAML content. The lock file records resolved versions and digests.
@@ -340,10 +340,10 @@ The `bundle` section sits at the top level alongside `metadata`, `catalog`, `com
 
 ### Build-Time Behavior
 
-The `scafctl build solution` command gains the following behavior:
+The `scafctl package solution` command gains the following behavior:
 
 ```
-scafctl build solution -f ./my-solution.yaml
+scafctl package solution -f ./my-solution.yaml
 ```
 
 1. **Parse** the solution YAML.
@@ -374,7 +374,7 @@ scafctl build solution -f ./my-solution.yaml
 #### Dry-Run Output
 
 ```bash
-$ scafctl build solution -f ./solution.yaml --dry-run
+$ scafctl package solution -f ./solution.yaml --dry-run
 
 Bundle analysis for ./solution.yaml:
 
@@ -878,7 +878,7 @@ workflow:
 ### Build
 
 ```bash
-$ scafctl build solution -f ./solution.yaml
+$ scafctl package solution -f ./solution.yaml
 
   Composed 2 files into solution
   Bundled 7 files (15.5 KB)
@@ -1337,7 +1337,7 @@ plugins:
 
 ### Implementation Notes
 
-- Reuses catalog resolution logic from `scafctl build`.
+- Reuses catalog resolution logic from `scafctl package`.
 - Version constraint evaluation uses existing semver library.
 - Lock file update is atomic — written to a temp file, then renamed.
 - If `--dependency` specifies a dependency not in the lock file, exit with an error.
@@ -1368,7 +1368,7 @@ plugins:
 - Implement `.scafctlignore` support
 
 ### Phase 3: Build Command Integration
-- Update `scafctl build solution` to compose + discover + package
+- Update `scafctl package solution` to compose + discover + package
 - Update `LocalCatalog.Store` to support multi-layer artifacts
 - Add `--no-bundle`, `--no-vendor`, `--bundle-max-size`, `--dry-run` flags
 - Security validations (path traversal, symlinks, size limits)
@@ -1488,7 +1488,7 @@ build:
   pluginCacheDir: ~/.cache/scafctl/plugins   # Plugin resolution cache
 ```
 
-The `--no-cache` flag on `scafctl build solution` bypasses the cache for a single build.
+The `--no-cache` flag on `scafctl package solution` bypasses the cache for a single build.
 
 Cache can be cleared with `scafctl cache clear --kind build`.
 

@@ -1,4 +1,4 @@
-# Build: cd examples/solutions/catalog-cwd && scafctl build solution -f solution.yaml --version 1.0.0
+# Build: cd examples/solutions/catalog-cwd && scafctl package solution -f solution.yaml --version 1.0.0
 # Run:   mkdir /tmp/my-project && cd /tmp/my-project && scafctl run solution catalog-cwd-demo
 # Run:   scafctl run solution catalog-cwd-demo --output-dir /tmp/output
 

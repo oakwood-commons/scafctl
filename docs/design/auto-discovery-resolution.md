@@ -122,7 +122,7 @@ WARNING: Multiple solution files found (also: taskfile.yaml); using first match
 ### Multiple matches, high-risk command
 
 ~~~
-$ scafctl build solution
+$ scafctl package solution
 Error: multiple solution files found: solution.yaml, taskfile.yaml; use -f/--file to specify which one
 ~~~
 

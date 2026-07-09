@@ -230,7 +230,7 @@ scafctl run solution -f solution.yaml
 scafctl run solution my-solution
 
 # Build a solution to local catalog
-scafctl build solution -f solution.yaml --version 1.0.0
+scafctl package solution -f solution.yaml --version 1.0.0
 
 # List cataloged solutions
 scafctl catalog list
@@ -288,7 +288,7 @@ scafctl run solution -f solution.yaml
 scafctl run solution my-solution
 
 # Build a solution to local catalog
-scafctl build solution -f solution.yaml --version 1.0.0
+scafctl package solution -f solution.yaml --version 1.0.0
 
 # List cataloged solutions
 scafctl catalog list

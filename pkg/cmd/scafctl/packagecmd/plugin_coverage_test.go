@@ -1,13 +1,16 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package build
+package packagecmd
 
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -16,8 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newBuildTestCtx creates a context with a writer and logger for build package tests.
-func newBuildTestCtx(t testing.TB) (context.Context, *bytes.Buffer) {
+// newPackageTestCtx creates a context with a writer and logger for build package tests.
+func newPackageTestCtx(t testing.TB) (context.Context, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer
 	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
@@ -29,14 +32,49 @@ func newBuildTestCtx(t testing.TB) (context.Context, *bytes.Buffer) {
 	return ctx, &buf
 }
 
-// ── CommandBuildPlugin construction tests ─────────────────────────────────────
+// TestRunPackagePlugin_StoreAndForce exercises the full runPackagePlugin store
+// path at the unit level: a successful multi-platform store, the already-exists
+// rejection on a second store without --force, and the force-overwrite path.
+func TestRunPackagePlugin_StoreAndForce(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	xdg.Reload()
+	t.Cleanup(func() { xdg.Reload() })
 
-func TestCommandBuildPlugin(t *testing.T) {
+	binPath := filepath.Join(t.TempDir(), "cov-provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("cov-binary"), 0o755))
+
+	opts := &PluginOptions{
+		Name:      "cov-provider",
+		Kind:      "provider",
+		Version:   "1.0.0",
+		Platforms: []string{"linux/amd64=" + binPath},
+	}
+
+	// First store succeeds.
+	ctx, buf := newPackageTestCtx(t)
+	require.NoError(t, runPackagePlugin(ctx, opts))
+	assert.Contains(t, buf.String(), "Built cov-provider@1.0.0")
+
+	// Second store without --force is rejected because the artifact exists.
+	ctx2, buf2 := newPackageTestCtx(t)
+	require.Error(t, runPackagePlugin(ctx2, opts))
+	assert.Contains(t, buf2.String(), "Use --force to overwrite")
+
+	// With --force the existing artifact is overwritten.
+	opts.Force = true
+	ctx3, _ := newPackageTestCtx(t)
+	require.NoError(t, runPackagePlugin(ctx3, opts))
+}
+
+// ── CommandPackagePlugin construction tests ─────────────────────────────────────
+
+func TestCommandPackagePlugin(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandBuildPlugin(cliParams, ioStreams, "scafctl/build")
+	cmd := CommandPackagePlugin(cliParams, ioStreams, "scafctl/build")
 
 	require.NotNil(t, cmd)
 	assert.Equal(t, "plugin", cmd.Use)
@@ -47,12 +85,12 @@ func TestCommandBuildPlugin(t *testing.T) {
 	assert.True(t, cmd.SilenceUsage)
 }
 
-func TestCommandBuildPlugin_Flags(t *testing.T) {
+func TestCommandPackagePlugin_Flags(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandBuildPlugin(cliParams, ioStreams, "scafctl/build")
+	cmd := CommandPackagePlugin(cliParams, ioStreams, "scafctl/build")
 
 	tests := []struct {
 		flagName string
@@ -74,23 +112,23 @@ func TestCommandBuildPlugin_Flags(t *testing.T) {
 	}
 }
 
-func TestCommandBuildPlugin_DefaultKind(t *testing.T) {
+func TestCommandPackagePlugin_DefaultKind(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandBuildPlugin(cliParams, ioStreams, "scafctl/build")
+	cmd := CommandPackagePlugin(cliParams, ioStreams, "scafctl/build")
 
 	kind, err := cmd.Flags().GetString("kind")
 	require.NoError(t, err)
 	assert.Equal(t, "provider", kind)
 }
 
-// ── runBuildPlugin validation tests ───────────────────────────────────────────
+// ── runPackagePlugin validation tests ───────────────────────────────────────────
 
-func TestRunBuildPlugin_InvalidName_Uppercase(t *testing.T) {
+func TestRunPackagePlugin_InvalidName_Uppercase(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "MyPlugin", // uppercase letters — invalid
@@ -99,14 +137,14 @@ func TestRunBuildPlugin_InvalidName_Uppercase(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid name")
 }
 
-func TestRunBuildPlugin_InvalidName_StartsWithNumber(t *testing.T) {
+func TestRunPackagePlugin_InvalidName_StartsWithNumber(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "1bad-name", // starts with number — invalid
@@ -115,14 +153,14 @@ func TestRunBuildPlugin_InvalidName_StartsWithNumber(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid name")
 }
 
-func TestRunBuildPlugin_InvalidName_Empty(t *testing.T) {
+func TestRunPackagePlugin_InvalidName_Empty(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "", // empty — invalid
@@ -131,14 +169,14 @@ func TestRunBuildPlugin_InvalidName_Empty(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid name")
 }
 
-func TestRunBuildPlugin_InvalidKind(t *testing.T) {
+func TestRunPackagePlugin_InvalidKind(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "my-plugin",
@@ -147,14 +185,14 @@ func TestRunBuildPlugin_InvalidKind(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid kind")
 }
 
-func TestRunBuildPlugin_InvalidKind_Solution(t *testing.T) {
+func TestRunPackagePlugin_InvalidKind_Solution(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "my-plugin",
@@ -163,14 +201,14 @@ func TestRunBuildPlugin_InvalidKind_Solution(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid kind")
 }
 
-func TestRunBuildPlugin_InvalidVersion_NotSemver(t *testing.T) {
+func TestRunPackagePlugin_InvalidVersion_NotSemver(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "my-plugin",
@@ -179,16 +217,16 @@ func TestRunBuildPlugin_InvalidVersion_NotSemver(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	// Error should mention the invalid version
 	errMsg := err.Error()
 	assert.True(t, errMsg != "", "error should not be empty")
 }
 
-func TestRunBuildPlugin_InvalidVersion_Empty(t *testing.T) {
+func TestRunPackagePlugin_InvalidVersion_Empty(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "my-plugin",
@@ -197,13 +235,13 @@ func TestRunBuildPlugin_InvalidVersion_Empty(t *testing.T) {
 		Platforms: []string{"linux/amd64=./bin"},
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 }
 
-func TestRunBuildPlugin_InvalidPlatformFormat(t *testing.T) {
+func TestRunPackagePlugin_InvalidPlatformFormat(t *testing.T) {
 	t.Parallel()
-	ctx, _ := newBuildTestCtx(t)
+	ctx, _ := newPackageTestCtx(t)
 
 	opts := &PluginOptions{
 		Name:      "my-plugin",
@@ -212,19 +250,19 @@ func TestRunBuildPlugin_InvalidPlatformFormat(t *testing.T) {
 		Platforms: []string{"linux/amd64"}, // missing =path portion
 	}
 
-	err := runBuildPlugin(ctx, opts)
+	err := runPackagePlugin(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --platform format")
 }
 
-func TestRunBuildPlugin_ValidKinds(t *testing.T) {
+func TestRunPackagePlugin_ValidKinds(t *testing.T) {
 	t.Parallel()
 
 	validKinds := []string{"provider", "auth-handler"}
 	for _, kind := range validKinds {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
-			ctx, _ := newBuildTestCtx(t)
+			ctx, _ := newPackageTestCtx(t)
 
 			opts := &PluginOptions{
 				Name:      "my-plugin",
@@ -233,7 +271,7 @@ func TestRunBuildPlugin_ValidKinds(t *testing.T) {
 				Platforms: []string{"linux/amd64=/nonexistent/path"}, // will fail at binary read
 			}
 
-			err := runBuildPlugin(ctx, opts)
+			err := runPackagePlugin(ctx, opts)
 			// Name, kind, version are all valid — should fail later at binary read, not at validation
 			if err != nil {
 				errMsg := err.Error()
@@ -248,8 +286,8 @@ func TestRunBuildPlugin_ValidKinds(t *testing.T) {
 
 // ── Benchmarks ────────────────────────────────────────────────────────────────
 
-func BenchmarkRunBuildPlugin_InvalidName(b *testing.B) {
-	ctx, _ := newBuildTestCtx(b)
+func BenchmarkRunPackagePlugin_InvalidName(b *testing.B) {
+	ctx, _ := newPackageTestCtx(b)
 	opts := &PluginOptions{
 		Name:      "MyPlugin",
 		Kind:      "provider",
@@ -259,25 +297,25 @@ func BenchmarkRunBuildPlugin_InvalidName(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_ = runBuildPlugin(ctx, opts)
+		_ = runPackagePlugin(ctx, opts)
 	}
 }
 
-func BenchmarkCommandBuildPlugin_Construction(b *testing.B) {
+func BenchmarkCommandPackagePlugin_Construction(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		CommandBuildPlugin(cliParams, ioStreams, "scafctl/build")
+		CommandPackagePlugin(cliParams, ioStreams, "scafctl/build")
 	}
 }
 
 // ── Helper function Tests ─────────────────────────────────────────────────────
 
-// TestNewBuildTestCtx verifies the test helper sets up context correctly.
-func TestNewBuildTestCtx(t *testing.T) {
-	ctx, buf := newBuildTestCtx(t)
+// TestNewPackageTestCtx verifies the test helper sets up context correctly.
+func TestNewPackageTestCtx(t *testing.T) {
+	ctx, buf := newPackageTestCtx(t)
 	require.NotNil(t, ctx)
 	require.NotNil(t, buf)
 

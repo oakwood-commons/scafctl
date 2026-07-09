@@ -97,7 +97,21 @@ func TestHandleCatalogListPlatforms(t *testing.T) {
 	})
 }
 
-func TestHandleBuildPlugin(t *testing.T) {
+// TestPackagePluginToolRegistration verifies the plugin-packaging tool is
+// registered under the canonical "package_plugin" name and the deprecated
+// "build_plugin" alias, both backed by the same handler.
+func TestPackagePluginToolRegistration(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	tools := srv.mcpServer.ListTools()
+	_, hasPackage := tools["package_plugin"]
+	_, hasBuild := tools["build_plugin"]
+	assert.True(t, hasPackage, "package_plugin should be registered (canonical)")
+	assert.True(t, hasBuild, "build_plugin should remain registered (deprecated alias)")
+}
+
+func TestHandlePackagePlugin(t *testing.T) {
 	t.Run("missing name returns error", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
@@ -109,7 +123,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			"version": "1.0.0",
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 	})
@@ -126,7 +140,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			"version": "1.0.0",
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
@@ -145,7 +159,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			"version": "not-a-version",
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
@@ -164,7 +178,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			"version": "1.0.0",
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
@@ -190,7 +204,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
@@ -212,7 +226,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
@@ -240,7 +254,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		require.False(t, result.IsError, "expected success, got: %+v", result.Content)
 
@@ -277,7 +291,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		require.False(t, result.IsError, "expected success, got: %+v", result.Content)
 
@@ -310,12 +324,12 @@ func TestHandleBuildPlugin(t *testing.T) {
 		}
 
 		// First build
-		result, err := srv.handleBuildPlugin(context.Background(), buildReq)
+		result, err := srv.handlePackagePlugin(context.Background(), buildReq)
 		require.NoError(t, err)
 		require.False(t, result.IsError)
 
 		// Second build without force
-		result, err = srv.handleBuildPlugin(context.Background(), buildReq)
+		result, err = srv.handlePackagePlugin(context.Background(), buildReq)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 		text := result.Content[0].(mcp.TextContent).Text
@@ -344,7 +358,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 		}
 
 		// First build
-		result, err := srv.handleBuildPlugin(context.Background(), buildReq)
+		result, err := srv.handlePackagePlugin(context.Background(), buildReq)
 		require.NoError(t, err)
 		require.False(t, result.IsError)
 
@@ -360,7 +374,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 			"force": true,
 		}
-		result, err = srv.handleBuildPlugin(context.Background(), forceReq)
+		result, err = srv.handlePackagePlugin(context.Background(), forceReq)
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
 	})
@@ -390,7 +404,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), buildReq)
+		result, err := srv.handlePackagePlugin(context.Background(), buildReq)
 		require.NoError(t, err)
 		require.False(t, result.IsError, "build failed: %+v", result.Content)
 
@@ -442,7 +456,7 @@ func TestHandleBuildPlugin(t *testing.T) {
 			},
 		}
 
-		result, err := srv.handleBuildPlugin(context.Background(), request)
+		result, err := srv.handlePackagePlugin(context.Background(), request)
 		require.NoError(t, err)
 		require.False(t, result.IsError, "expected success, got: %+v", result.Content)
 

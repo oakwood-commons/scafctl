@@ -135,7 +135,7 @@ func TestRoot_CommandGroups(t *testing.T) {
 		"get":     "inspect",
 		"explain": "inspect",
 		"new":     "scaffold",
-		"build":   "scaffold",
+		"package": "scaffold",
 		"config":  "config",
 		"auth":    "config",
 		"plugins": "plugin",

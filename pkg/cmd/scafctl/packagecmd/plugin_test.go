@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package build
+package packagecmd
 
 import (
 	"os"
