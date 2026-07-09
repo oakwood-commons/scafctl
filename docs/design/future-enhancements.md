@@ -83,7 +83,7 @@ Additional artifact types beyond solutions, providers, and auth handlers — TBD
 
 ### ✅ Catalog Lock File
 
-**Implemented.** The `solution.lock` file records resolved versions and digests for vendored catalog dependencies and plugin dependencies. Generated during `scafctl build solution`, replayed on subsequent builds for reproducibility. Use `--update-lock` to re-resolve. See `pkg/solution/bundler/lock.go`.
+**Implemented.** The `solution.lock` file records resolved versions and digests for vendored catalog dependencies and plugin dependencies. Generated during `scafctl package solution`, replayed on subsequent builds for reproducibility. Use `--update-lock` to re-resolve. See `pkg/solution/bundler/lock.go`.
 
 ---
 
@@ -200,6 +200,6 @@ Source: [solutions.md](solutions.md)
 
 ### ✅ Plugin Dependencies
 
-**Implemented.** Solutions can declare plugin dependencies in `bundle.plugins` with kind, version constraints, and ValueRef-aware defaults. Vendored during `scafctl build solution` and tracked in `solution.lock`. See `pkg/solution/solution.go` and `pkg/solution/bundler/vendor_plugins.go`.
+**Implemented.** Solutions can declare plugin dependencies in `bundle.plugins` with kind, version constraints, and ValueRef-aware defaults. Vendored during `scafctl package solution` and tracked in `solution.lock`. See `pkg/solution/solution.go` and `pkg/solution/bundler/vendor_plugins.go`.
 
 > **Note:** Dynamic plugin auto-fetching from remote catalogs at runtime (without a prior build step) is not yet implemented. Plugins must be vendored at build time.

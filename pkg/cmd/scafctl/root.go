@@ -17,7 +17,6 @@ import (
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
 	bundlecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/bundle"
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
@@ -32,6 +31,7 @@ import (
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/options"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/packagecmd"
 	pluginscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/plugins"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
@@ -867,7 +867,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 	// Scaffolding Commands — create and package artifacts
 	cCmd.AddCommand(withGroup(groupScaffold, newcmd.CommandNew(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, build.CommandBuild(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, packagecmd.CommandPackage(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupScaffold, bundlecmd.CommandBundle(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupScaffold, vendorcmd.CommandVendor(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupScaffold, catalogcmd.CommandCatalog(cliParams, ioStreams, binaryName)))

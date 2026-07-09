@@ -365,11 +365,11 @@ Clear cached content.
 
 ## Build Cache
 
-The build cache enables incremental builds by fingerprinting all build inputs (solution content, bundled files, plugin versions, and lock file). When inputs haven't changed, subsequent `scafctl build solution` invocations skip the entire build pipeline and return the cached result.
+The build cache enables incremental builds by fingerprinting all build inputs (solution content, bundled files, plugin versions, and lock file). When inputs haven't changed, subsequent `scafctl package solution` invocations skip the entire build pipeline and return the cached result.
 
 ### How It Works
 
-1. During `scafctl build solution`, a SHA-256 fingerprint is computed from all build inputs
+1. During `scafctl package solution`, a SHA-256 fingerprint is computed from all build inputs
 2. If a matching fingerprint exists in the cache, the build returns immediately
 3. After a successful build, the fingerprint and artifact metadata are cached
 
@@ -379,10 +379,10 @@ The build cache enables incremental builds by fingerprinting all build inputs (s
 {{% tab "Bash" %}}
 ```bash
 # Build with cache (default)
-scafctl build solution -f my-solution.yaml
+scafctl package solution -f my-solution.yaml
 
 # Force a full rebuild, bypassing cache
-scafctl build solution -f my-solution.yaml --no-cache
+scafctl package solution -f my-solution.yaml --no-cache
 
 # Clear build cache
 scafctl cache clear --kind build --force
@@ -391,10 +391,10 @@ scafctl cache clear --kind build --force
 {{% tab "PowerShell" %}}
 ```powershell
 # Build with cache (default)
-scafctl build solution -f my-solution.yaml
+scafctl package solution -f my-solution.yaml
 
 # Force a full rebuild, bypassing cache
-scafctl build solution -f my-solution.yaml --no-cache
+scafctl package solution -f my-solution.yaml --no-cache
 
 # Clear build cache
 scafctl cache clear --kind build --force

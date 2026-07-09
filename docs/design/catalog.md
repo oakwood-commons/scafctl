@@ -71,7 +71,7 @@ registry.example.com/
 
 ### Building Artifacts
 
-**Command**: `scafctl build <name>` (analogous to `docker build`)
+**Command**: `scafctl package solution` (analogous to `docker build`; use `package plugin` for plugin artifacts)
 
 **Solution build process**:
 1. Validates solution schema and structure

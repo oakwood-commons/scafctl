@@ -83,10 +83,8 @@ Phases 9–10 of the MCP server design — executing solutions through the MCP s
 - Version constraint checking: `pkg/solution/bundler/plugin.go`
 - Lock file integration
 
-**What's missing:**
-- `build plugin` CLI command (only `build solution` exists)
-
 **What's been implemented:**
+- `package plugin` CLI command for multi-platform artifacts (`pkg/cmd/scafctl/packagecmd/plugin.go`)
 - Dynamic plugin auto-fetching from remote catalogs at runtime (`pkg/plugin/fetcher.go`, `pkg/catalog/plugin_fetcher.go`)
 - Multi-platform support via OCI annotations (`pkg/plugin/platform.go`, `pkg/catalog/plugin_fetcher.go`)
 - Content-addressed plugin cache (`pkg/plugin/cache.go`)
@@ -118,7 +116,7 @@ Phases 9–10 of the MCP server design — executing solutions through the MCP s
 **Divergence from design:**
 - The design tree in `cli-contributing.md` shows `push`, `pull`, `inspect`, `tag`, `save`, `load` as top-level verbs (e.g., `scafctl push solution`). In practice, they live under `scafctl catalog push`. The design tree should be updated to reflect the actual structure, or the commands should be restructured.
 
-> **Note:** The `cli-contributing.md` design tree also references `build plugin`, `push plugin`, `pull plugin`, `inspect plugin`, `tag plugin`, `save plugin` which don't exist. These are blocked on the plugin catalog distribution work above.
+> **Note:** The `cli-contributing.md` design tree also references `push plugin`, `pull plugin`, `inspect plugin`, `tag plugin`, `save plugin` which don't exist (`package plugin` is implemented). These are blocked on the plugin catalog distribution work above.
 
 ---
 

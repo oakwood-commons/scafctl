@@ -15,7 +15,7 @@ echo "darwin-arm64-binary" > dist/my-provider-darwin-arm64
 ## Build Multi-Platform Artifact
 
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name my-provider \
   --kind provider \
   --version 1.0.0 \
@@ -26,7 +26,7 @@ scafctl build plugin \
 ## Build All Supported Platforms
 
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name my-provider \
   --kind provider \
   --version 1.0.0 \
@@ -40,7 +40,7 @@ scafctl build plugin \
 ## Auth Handler Example
 
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name github-auth \
   --kind auth-handler \
   --version 2.0.0 \

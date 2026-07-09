@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package build
+package packagecmd
 
 import (
 	"bytes"
@@ -21,26 +21,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommandBuildSolution_Structure(t *testing.T) {
+func TestCommandPackageSolution_Structure(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := &settings.Run{}
 
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 
 	assert.Equal(t, "solution", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "sol")
 	assert.Contains(t, cmd.Aliases, "s")
-	assert.Contains(t, cmd.Short, "Build a solution")
+	assert.Contains(t, cmd.Short, "Package a solution")
 }
 
-func TestCommandBuildSolution_Flags(t *testing.T) {
+func TestCommandPackageSolution_Flags(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := &settings.Run{}
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 
 	flagTests := []struct {
 		name     string
@@ -76,12 +76,12 @@ func TestCommandBuildSolution_Flags(t *testing.T) {
 	}
 }
 
-func TestCommandBuildSolution_RequiresArgs(t *testing.T) {
+func TestCommandPackageSolution_RequiresArgs(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := &settings.Run{}
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 	cmd.SetArgs([]string{}) // no args
 
 	err := cmd.Execute()
@@ -89,12 +89,12 @@ func TestCommandBuildSolution_RequiresArgs(t *testing.T) {
 	assert.Contains(t, err.Error(), "no solution path provided")
 }
 
-func TestCommandBuildSolution_TagConflictsWithName(t *testing.T) {
+func TestCommandPackageSolution_TagConflictsWithName(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := settings.NewCliParams()
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 	w := writer.New(ioStreams, cliParams)
 	cmd.SetContext(writer.WithWriter(t.Context(), w))
 	cmd.SetArgs([]string{"-f", "solution.yaml", "--tag", "my-sol@1.0.0", "--name", "other"})
@@ -104,12 +104,12 @@ func TestCommandBuildSolution_TagConflictsWithName(t *testing.T) {
 	assert.Contains(t, err.Error(), "--tag cannot be used together")
 }
 
-func TestCommandBuildSolution_TagConflictsWithVersion(t *testing.T) {
+func TestCommandPackageSolution_TagConflictsWithVersion(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := settings.NewCliParams()
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 	w := writer.New(ioStreams, cliParams)
 	cmd.SetContext(writer.WithWriter(t.Context(), w))
 	cmd.SetArgs([]string{"-f", "solution.yaml", "--tag", "my-sol@1.0.0", "--version", "2.0.0"})
@@ -119,19 +119,19 @@ func TestCommandBuildSolution_TagConflictsWithVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "--tag cannot be used together")
 }
 
-func TestCommandBuildSolution_TagShorthand(t *testing.T) {
+func TestCommandPackageSolution_TagShorthand(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := &settings.Run{}
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 
 	f := cmd.Flags().ShorthandLookup("t")
 	require.NotNil(t, f, "shorthand -t should exist")
 	assert.Equal(t, "tag", f.Name)
 }
 
-func TestRunBuildSolution_FileNotFound(t *testing.T) {
+func TestRunPackageSolution_FileNotFound(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -145,11 +145,11 @@ func TestRunBuildSolution_FileNotFound(t *testing.T) {
 		CliParams: settings.NewCliParams(),
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.Error(t, err)
 }
 
-func TestRunBuildSolution_InvalidSolution(t *testing.T) {
+func TestRunPackageSolution_InvalidSolution(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -167,11 +167,11 @@ func TestRunBuildSolution_InvalidSolution(t *testing.T) {
 		CliParams: settings.NewCliParams(),
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.Error(t, err)
 }
 
-func TestRunBuildSolution_NoVersion(t *testing.T) {
+func TestRunPackageSolution_NoVersion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -195,12 +195,12 @@ spec: {}
 		CliParams: settings.NewCliParams(),
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dev version not allowed")
 }
 
-func TestRunBuildSolution_NoVersion_AllowDevVersion(t *testing.T) {
+func TestRunPackageSolution_NoVersion_AllowDevVersion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -227,11 +227,11 @@ spec: {}
 	}
 
 	// With AllowDevVersion + DryRun, the build should proceed past the version check
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
 }
 
-func TestRunBuildSolution_PreflightBlocked(t *testing.T) {
+func TestRunPackageSolution_PreflightBlocked(t *testing.T) {
 	t.Parallel()
 
 	// Create a solution with a version but an empty spec so lint blocks it.
@@ -259,12 +259,12 @@ spec: {}
 		BundleMaxSize: "50MB",
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pre-flight checks failed")
 }
 
-func TestRunBuildSolution_PreflightSkipLint(t *testing.T) {
+func TestRunPackageSolution_PreflightSkipLint(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
@@ -298,13 +298,13 @@ spec: {}
 
 	// With lint and tests skipped, preflight runs but skips both checks.
 	// Subsequent pipeline steps may fail; we only care about the preflight path.
-	_ = runBuildSolution(ctx, opts)
+	_ = runPackageSolution(ctx, opts)
 	output := buf.String()
 	assert.Contains(t, output, "lint: skipped")
 	assert.Contains(t, output, "tests: skipped")
 }
 
-func TestRunBuildSolution_PreflightIgnored(t *testing.T) {
+func TestRunPackageSolution_PreflightIgnored(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", tmpDir)
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
@@ -338,13 +338,13 @@ spec: {}
 
 	// With IgnorePreflight, lint errors become warnings and the build is not blocked.
 	// Subsequent pipeline steps may fail; we only care about the preflight path.
-	_ = runBuildSolution(ctx, opts)
+	_ = runPackageSolution(ctx, opts)
 	output := buf.String()
 	assert.Contains(t, output, "lint:")
 	assert.NotContains(t, output, "build blocked")
 }
 
-func TestRunBuildSolution_DryRunSkipsPreflight(t *testing.T) {
+func TestRunPackageSolution_DryRunSkipsPreflight(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -372,7 +372,7 @@ spec: {}
 	}
 
 	// Dry-run should skip preflight entirely — no lint/tests messages in output.
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
 	output := buf.String()
 	assert.NotContains(t, output, "lint:")
@@ -380,7 +380,7 @@ spec: {}
 	assert.Contains(t, output, "Dry run:")
 }
 
-func TestRunBuildSolution_DevVersionErrorMessage(t *testing.T) {
+func TestRunPackageSolution_DevVersionErrorMessage(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -406,10 +406,10 @@ spec: {}
 		CliParams: cliParams,
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.Error(t, err)
 	// The error message should use the configured binary name, not "scafctl"
-	assert.Contains(t, buf.String(), "mycli build solution --allow-dev-version")
+	assert.Contains(t, buf.String(), "mycli package solution --allow-dev-version")
 }
 
 func TestPrintDryRunOutput_StaticFiles(t *testing.T) {
@@ -572,17 +572,17 @@ func BenchmarkPrintDryRunOutput(b *testing.B) {
 	}
 }
 
-func BenchmarkCommandBuildSolution(b *testing.B) {
+func BenchmarkCommandPackageSolution(b *testing.B) {
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := &settings.Run{}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		CommandBuildSolution(cliParams, ioStreams, "build")
+		CommandPackageSolution(cliParams, ioStreams, "build")
 	}
 }
 
-func TestRunBuildSolution_StdinDryRun(t *testing.T) {
+func TestRunPackageSolution_StdinDryRun(t *testing.T) {
 	t.Parallel()
 
 	content := `apiVersion: scafctl.io/v1
@@ -608,13 +608,13 @@ spec: {}
 		BundleMaxSize: "50MB",
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
 	assert.Contains(t, outBuf.String(), "Dry run:")
 	assert.Contains(t, outBuf.String(), "stdin-solution@1.0.0")
 }
 
-func TestRunBuildSolution_BaseDirOverridesBundleRoot(t *testing.T) {
+func TestRunPackageSolution_BaseDirOverridesBundleRoot(t *testing.T) {
 	t.Parallel()
 
 	// Create solution file in one directory and a separate base-dir
@@ -644,18 +644,18 @@ spec: {}
 		BundleMaxSize: "50MB",
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "Dry run:")
 	assert.Contains(t, buf.String(), "basedir-test@1.0.0")
 }
 
-func TestRunBuildSolution_StdinImpliesNoBundle(t *testing.T) {
+func TestRunPackageSolution_StdinImpliesNoBundle(t *testing.T) {
 	t.Parallel()
 
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	cliParams := settings.NewCliParams()
-	cmd := CommandBuildSolution(cliParams, ioStreams, "build")
+	cmd := CommandPackageSolution(cliParams, ioStreams, "build")
 	w := writer.New(ioStreams, cliParams)
 	ctx := writer.WithWriter(t.Context(), w)
 	cmd.SetContext(ctx)
@@ -711,7 +711,7 @@ func TestRunBuildSolution_DirtyTreeWarns(t *testing.T) {
 		BundleMaxSize: "50MB",
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "dirty")
 }
@@ -758,7 +758,7 @@ func TestRunBuildSolution_AllowDirtyProceeds(t *testing.T) {
 		BundleMaxSize: "50MB",
 	}
 
-	err := runBuildSolution(ctx, opts)
+	err := runPackageSolution(ctx, opts)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "dirty-ok@1.0.0")
 }

@@ -2841,24 +2841,39 @@ spec:
 }
 
 // ============================================================================
-// Build Command Tests
+// Package Command Tests
 // ============================================================================
 
-func TestIntegration_BuildHelp(t *testing.T) {
+func TestIntegration_PackageHelp(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "build", "--help")
+	stdout, _, exitCode := runScafctl(t, "package", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "build")
+	assert.Contains(t, stdout, "package")
 	assert.Contains(t, stdout, "solution")
+	assert.Contains(t, stdout, "plugin")
 }
 
-func TestIntegration_BuildSolutionHelp(t *testing.T) {
+// TestIntegration_BuildAliasStillWorks verifies the deprecated "build" alias
+// continues to resolve to the "package" command group after the rename.
+func TestIntegration_BuildAliasStillWorks(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "build", "solution", "--help")
+	_, _, groupExit := runScafctl(t, "build", "--help")
+	assert.Equal(t, 0, groupExit, "'build' group alias should still work")
+
+	_, _, solExit := runScafctl(t, "build", "solution", "--help")
+	assert.Equal(t, 0, solExit, "'build solution' alias should still work")
+
+	_, _, plugExit := runScafctl(t, "build", "plugin", "--help")
+	assert.Equal(t, 0, plugExit, "'build plugin' alias should still work")
+}
+
+func TestIntegration_PackageSolutionHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "package", "solution", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Build a solution")
+	assert.Contains(t, stdout, "Package a solution")
 	assert.Contains(t, stdout, "--version")
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--force")
@@ -2866,6 +2881,20 @@ func TestIntegration_BuildSolutionHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--no-vendor")
 	assert.Contains(t, stdout, "--bundle-max-size")
 	assert.Contains(t, stdout, "--dry-run")
+}
+
+// TestIntegration_PackageSolution_Canonical verifies the canonical "package
+// solution" command name actually packages a solution into the local catalog
+// (not just that --help resolves).
+func TestIntegration_PackageSolution_Canonical(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+	_, _, exitCode := runScafctlWithEnv(t, env, "package", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	assert.Equal(t, 0, exitCode)
 }
 
 func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
@@ -5172,6 +5201,34 @@ func TestIntegration_BuildPlugin_AuthHandler(t *testing.T) {
 	}
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Built test-auth@1.0.0")
+}
+
+// TestIntegration_PackagePlugin_Canonical verifies the canonical "package
+// plugin" command name packages a multi-platform plugin into the local catalog
+// (the "build plugin" form is covered as an alias elsewhere).
+func TestIntegration_PackagePlugin_Canonical(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	binPath := filepath.Join(tmpDir, "canonical-provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("provider-binary"), 0o755))
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "package", "plugin",
+		"--name", "canonical-provider",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built canonical-provider@1.0.0")
 }
 
 // TestIntegration_AuthHandlersInstall_ThirdPartyFromCatalog verifies the fix

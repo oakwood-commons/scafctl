@@ -474,7 +474,7 @@ bundle:
 | Phase | Behavior |
 | ----- | -------- |
 | **Development** | `files` paths are resolved relative to the solution directory. The runner copies them into the sandbox before init/command execution |
-| **Build** | `scafctl build` auto-discovers files referenced in `spec.testing.cases[*].files` and includes them in the bundle artifact as a `TestInclude` discovery source |
+| **Build** | `scafctl package` auto-discovers files referenced in `spec.testing.cases[*].files` and includes them in the bundle artifact as a `TestInclude` discovery source |
 | **Lint** | `scafctl lint` produces an **error** if test files are not covered by `bundle.include` patterns. Tests must work from remote catalog artifacts |
 | **Bundle extraction** | Test files are extracted alongside solution files when a bundled solution is unpacked |
 
@@ -1200,7 +1200,7 @@ Example `<error>` element:
 
 ### Bundler Discovery
 
-`scafctl build` and the bundler's `DiscoverFiles()` must scan `spec.testing.cases[*].files` entries as an additional discovery source. These are tagged as `TestInclude` to distinguish them from `StaticAnalysis` and `ExplicitInclude` sources.
+`scafctl package` and the bundler's `DiscoverFiles()` must scan `spec.testing.cases[*].files` entries as an additional discovery source. These are tagged as `TestInclude` to distinguish them from `StaticAnalysis` and `ExplicitInclude` sources.
 
 This ensures test files are included in the bundle artifact and available when tests run from a remote catalog.
 
@@ -1423,7 +1423,7 @@ const (
 4. **Self-hosted**: `scafctl test functional --tests-path tests/integration/solutions`
 5. **Taskfile**: `task integration` passes
 6. **Lint**: `golangci-lint run --fix`
-7. **Build integration**: `scafctl build` on a solution with test files produces a bundle that includes them
+7. **Build integration**: `scafctl package` on a solution with test files produces a bundle that includes them
 8. **Concurrency**: Run with `-j 1` and default concurrency to validate both paths
 9. **YAML round-trip**: Unit test verifying `SkipBuiltinsValue` survives `deepCopySolution` YAML marshal/unmarshal
 
@@ -1569,7 +1569,7 @@ The example solution at `examples/solutions/tested-solution/` should include:
 - **Test inheritance**: multi-extends via `extends: [base1, base2]`, applied left-to-right. Template tests prefixed with `_` are not executed
 - **Test tags**: `tags` field for categorization, `--tag` flag for filtering. Match if test has any specified tag
 - **Test name validation**: must match `^[a-zA-Z0-9][a-zA-Z0-9_-]*$` for JUnit/CLI compatibility. Templates match `^_[a-zA-Z0-9][a-zA-Z0-9_-]*$`
-- **Test files in bundle**: `scafctl build` auto-discovers test file references; `scafctl lint` errors if not in `bundle.include`. Required for remote catalog testing
+- **Test files in bundle**: `scafctl package` auto-discovers test file references; `scafctl lint` errors if not in `bundle.include`. Required for remote catalog testing
 - **Parallel by default**: each test has its own sandbox. `--sequential` opt-out for debugging
 - **Fail-fast per-solution**: `--fail-fast` stops remaining tests for the current solution on first failure. Other solutions continue
 - **kvx + JUnit XML reporting**: kvx for consistency; JUnit for CI integration. JUnit distinguishes `<failure>` (assertion) from `<error>` (setup/infrastructure)

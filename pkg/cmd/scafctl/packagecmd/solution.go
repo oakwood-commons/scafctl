@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package build
+package packagecmd
 
 import (
 	"context"
@@ -32,7 +32,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// SolutionOptions holds options for the build solution command.
+// SolutionOptions holds options for the package solution command.
 type SolutionOptions struct {
 	File            string
 	Name            string
@@ -65,8 +65,8 @@ type SolutionOptions struct {
 // bundleResult is a type alias for the shared builder.BuildResult.
 type bundleResult = builder.BuildResult
 
-// CommandBuildSolution creates the build solution command.
-func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+// CommandPackageSolution creates the package solution command.
+func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	options := &SolutionOptions{
 		CliParams: cliParams,
 		IOStreams: ioStreams,
@@ -75,16 +75,16 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	cmd := &cobra.Command{
 		Use:          "solution",
 		Aliases:      []string{"sol", "s"},
-		Short:        "Build a solution into the local catalog",
+		Short:        "Package a solution into the local catalog",
 		SilenceUsage: true,
 		Long: strings.ReplaceAll(heredoc.Doc(`
-			Build a solution file into the local catalog.
+			Package a solution file into the local catalog.
 
 			The solution is packaged as an OCI artifact with the specified name and version.
 			If name is not specified, it is extracted from the solution metadata.
 			If version is not specified, it is extracted from the solution metadata.
 
-			The build process:
+			The packaging process:
 			  1. Composes multi-file solutions (if compose: is set)
 			  2. Discovers local file dependencies via static analysis
 			  3. Expands bundle.include globs
@@ -96,32 +96,32 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 			Use --dry-run to see what would be bundled without storing.
 
 			Examples:
-			  # Build solution using version from metadata (auto-discovery)
-			  scafctl build solution
+			  # Package solution using version from metadata (auto-discovery)
+			  scafctl package solution
 
-			  # Build solution from a specific file
-			  scafctl build solution -f ./my-solution.yaml
+			  # Package solution from a specific file
+			  scafctl package solution -f ./my-solution.yaml
 
-			  # Build with explicit version (overrides metadata)
-			  scafctl build solution -f ./solution.yaml --version 1.0.0
+			  # Package with explicit version (overrides metadata)
+			  scafctl package solution -f ./solution.yaml --version 1.0.0
 
-			  # Build with explicit name
-			  scafctl build solution -f ./solution.yaml --name my-solution --version 1.0.0
+			  # Package with explicit name
+			  scafctl package solution -f ./solution.yaml --name my-solution --version 1.0.0
 
-			  # Build with a tag (shorthand for --name and --version)
-			  scafctl build solution -f ./solution.yaml -t my-solution@1.0.0
+			  # Package with a tag (shorthand for --name and --version)
+			  scafctl package solution -f ./solution.yaml -t my-solution@1.0.0
 
-			  # Build with a full remote reference (for push later)
-			  scafctl build solution -t ghcr.io/myorg/solutions/my-solution@1.0.0
+			  # Package with a full remote reference (for push later)
+			  scafctl package solution -t ghcr.io/myorg/solutions/my-solution@1.0.0
 
 			  # Overwrite existing version
-			  scafctl build solution -f ./solution.yaml --version 1.0.0 --force
+			  scafctl package solution -f ./solution.yaml --version 1.0.0 --force
 
 			  # Preview what would be bundled
-			  scafctl build solution -f ./solution.yaml --dry-run
+			  scafctl package solution -f ./solution.yaml --dry-run
 
-			  # Build without bundling
-			  scafctl build solution -f ./solution.yaml --no-bundle
+			  # Package without bundling
+			  scafctl package solution -f ./solution.yaml --no-bundle
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -156,7 +156,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
 					if remoteRef.Kind != "" && remoteRef.Kind != catalog.ArtifactKindSolution {
-						err := fmt.Errorf("--tag references kind %q but this command builds solutions", remoteRef.Kind)
+						err := fmt.Errorf("--tag references kind %q but this command packages solutions", remoteRef.Kind)
 						if w := writer.FromContext(cmd.Context()); w != nil {
 							w.Errorf("%v", err)
 						}
@@ -175,11 +175,11 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 						}
 						return exitcode.WithCode(err, exitcode.InvalidInput)
 					}
-					// Reject @latest — build requires a concrete version (from
+					// Reject @latest — packaging requires a concrete version (from
 					// metadata or explicit flag). ParseReference normalizes
 					// "latest" to nil, which would silently drop the user's intent.
 					if ref.Version == nil && strings.Contains(options.Tag, "@") {
-						err := fmt.Errorf("--tag %q: 'latest' is not a valid build version; specify a concrete semver", options.Tag)
+						err := fmt.Errorf("--tag %q: 'latest' is not a valid version; specify a concrete semver", options.Tag)
 						if w := writer.FromContext(cmd.Context()); w != nil {
 							w.Errorf("%v", err)
 						}
@@ -223,7 +223,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 				options.NoBundle = true
 			}
 
-			return runBuildSolution(cmd.Context(), options)
+			return runPackageSolution(cmd.Context(), options)
 		},
 	}
 
@@ -251,7 +251,7 @@ func CommandBuildSolution(cliParams *settings.Run, ioStreams *terminal.IOStreams
 	return cmd
 }
 
-func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
+func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -377,7 +377,7 @@ func runBuildSolution(ctx context.Context, opts *SolutionOptions) error {
 		if opts.CliParams != nil && opts.CliParams.BinaryName != "" {
 			binaryName = opts.CliParams.BinaryName
 		}
-		w.Infof("Set metadata.version, pass --version, or use %s build solution --allow-dev-version to build anyway", binaryName)
+		w.Infof("Set metadata.version, pass --version, or use %s package solution --allow-dev-version to package anyway", binaryName)
 		return exitcode.Errorf("dev version not allowed")
 	}
 

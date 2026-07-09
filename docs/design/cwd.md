@@ -103,7 +103,7 @@ All MCP tools that accept file paths support an optional `cwd` parameter. When p
 | `generate_test_scaffold` | `tools_testing.go` |
 | `list_tests` | `tools_testing.go` |
 | `diff_solution` | `tools_diff.go` |
-| `build_plugin` | `tools_catalog_multiplatform.go` |
+| `package_plugin` | `tools_catalog_multiplatform.go` |
 | `extract_resolver_refs` | `tools_refs.go` |
 
 ### Tools without `cwd` (not applicable)
