@@ -11,7 +11,7 @@ import (
 
 const (
 	// SchemaVersionCurrent is the current state file schema version.
-	SchemaVersionCurrent = 1
+	SchemaVersionCurrent = 2
 )
 
 // Config is the solution-level state configuration.
@@ -82,10 +82,11 @@ type Data struct {
 	// When no CLI params are provided, these saved parameters drive replay.
 	Parameters map[string]any `json:"parameters" doc:"Merged parameter set for replay"`
 
-	// Immutables maps resolver names to locked values. Resolvers marked
-	// immutable: true have their resolved values saved here after first execution.
-	// Subsequent runs verify the resolver produces the same value.
-	Immutables map[string]*ImmutableEntry `json:"immutables" doc:"Locked resolver values"`
+	// Resolvers maps resolver names to their persisted outputs. Resolvers marked
+	// persist: true have their value recorded here after each successful run for
+	// later retrieval via the state provider. Resolvers marked immutable: true are
+	// also stored here (with Immutable set) and verified on subsequent runs.
+	Resolvers map[string]*PersistedEntry `json:"resolvers" doc:"Persisted resolver values"`
 
 	// Fingerprints stores file and input hashes for action up-to-date checks.
 	// Keys use the format "__fingerprint:<actionName>:<type>".
@@ -120,16 +121,27 @@ type CommandInfo struct {
 	Parameters map[string]string `json:"parameters" doc:"Key-value pairs from --parameter flags"`
 }
 
-// ImmutableEntry is a locked resolver value persisted in state.
-type ImmutableEntry struct {
-	// Value is the locked resolver value.
-	Value any `json:"value" doc:"Locked resolver value"`
+// PersistedEntry is a resolver value persisted in state. Persist-only entries
+// are overwritten on each run; immutable entries (Immutable set) are locked on
+// first write and verified thereafter.
+type PersistedEntry struct {
+	// Value is the persisted resolver value.
+	Value any `json:"value" doc:"Persisted resolver value"`
 
 	// Type is the resolver's declared type.
 	Type string `json:"type" doc:"Resolver declared type" maxLength:"30" example:"string"`
 
-	// CreatedAt is when the immutable value was first stored.
-	CreatedAt time.Time `json:"createdAt" doc:"When the value was first locked"`
+	// Immutable discriminates immutable entries (locked and verified) from
+	// persist-only entries (overwritten each run).
+	Immutable bool `json:"immutable,omitempty" doc:"Whether the entry is locked and verified across runs"`
+
+	// CreatedAt is when the entry was first stored. For immutable entries this is
+	// the lock time and never changes.
+	CreatedAt time.Time `json:"createdAt" doc:"When the value was first stored"`
+
+	// UpdatedAt is when the entry was last written. For immutable entries it
+	// equals CreatedAt; for persist-only entries it advances each run.
+	UpdatedAt time.Time `json:"updatedAt" doc:"When the value was last written"`
 }
 
 // FingerprintEntry stores a fingerprint hash for action up-to-date checks.
@@ -146,7 +158,7 @@ func NewData() *Data {
 	return &Data{
 		SchemaVersion: SchemaVersionCurrent,
 		Parameters:    make(map[string]any),
-		Immutables:    make(map[string]*ImmutableEntry),
+		Resolvers:     make(map[string]*PersistedEntry),
 		Fingerprints:  make(map[string]*FingerprintEntry),
 		Command: CommandInfo{
 			Parameters: make(map[string]string),

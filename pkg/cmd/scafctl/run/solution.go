@@ -529,6 +529,16 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	resolverElapsed := time.Since(start)
 
+	// State lifecycle: verify immutable resolver values BEFORE any action runs.
+	// A locked-value violation must abort the run before side effects (file
+	// scaffolding, external calls, etc.) occur. New immutables are locked later
+	// by Save, after successful action execution.
+	if stateMgr != nil && stateData != nil {
+		if verifyErr := stateMgr.VerifyImmutables(stateData, resolverCtx, resolvers); verifyErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state: %w", verifyErr), exitcode.GeneralError)
+		}
+	}
+
 	// Build action graph
 	graph, err := action.BuildGraph(ctx, workflow, resolverData, nil)
 	if err != nil {

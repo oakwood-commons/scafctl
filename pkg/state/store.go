@@ -42,8 +42,8 @@ func LoadFromFile(path, baseDir string) (*Data, error) {
 	if sd.Parameters == nil {
 		sd.Parameters = make(map[string]any)
 	}
-	if sd.Immutables == nil {
-		sd.Immutables = make(map[string]*ImmutableEntry)
+	if sd.Resolvers == nil {
+		sd.Resolvers = make(map[string]*PersistedEntry)
 	}
 	if sd.Fingerprints == nil {
 		sd.Fingerprints = make(map[string]*FingerprintEntry)

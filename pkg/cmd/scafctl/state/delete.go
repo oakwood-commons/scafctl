@@ -26,7 +26,7 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 	cmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Delete a state key",
-		Long:  "Remove a specific key from a state file (parameters or immutables).",
+		Long:  "Remove a specific key from a state file (parameters or persisted resolvers).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -62,16 +62,17 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 
 			// Check where the key exists
 			_, inParams := sd.Parameters[key]
-			_, inImmutables := sd.Immutables[key]
+			resEntry, inResolvers := sd.Resolvers[key]
+			isImmutable := inResolvers && resEntry.Immutable
 
-			if !inParams && !inImmutables {
+			if !inParams && !inResolvers {
 				err := fmt.Errorf("key %q not found in state", key)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// If the key is in immutables, require --force
-			if inImmutables && !force {
+			// If the key is immutable, require --force
+			if isImmutable && !force {
 				err := fmt.Errorf("key %q is immutable; deleting it will cause the next run to generate a new value. Use --force to confirm", key)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -81,8 +82,8 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			if inParams {
 				delete(sd.Parameters, key)
 			}
-			if inImmutables {
-				delete(sd.Immutables, key)
+			if inResolvers {
+				delete(sd.Resolvers, key)
 			}
 
 			if err := state.SaveToFile(path, cwd, sd); err != nil {
@@ -92,10 +93,14 @@ func CommandDelete(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comm
 			}
 
 			switch {
-			case inParams && inImmutables:
+			case inParams && isImmutable:
 				w.Successf("Deleted parameter and immutable key %q\n", key)
-			case inImmutables:
+			case inParams && inResolvers:
+				w.Successf("Deleted parameter and persisted key %q\n", key)
+			case isImmutable:
 				w.Successf("Deleted immutable key %q\n", key)
+			case inResolvers:
+				w.Successf("Deleted persisted key %q\n", key)
 			default:
 				w.Successf("Deleted parameter %q\n", key)
 			}

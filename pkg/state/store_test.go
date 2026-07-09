@@ -54,13 +54,13 @@ func TestLoadFromFile_NilMapsNormalized(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "minimal.json")
 	// State file with null maps and no command.parameters
-	content := `{"schemaVersion":1,"metadata":{},"command":{},"parameters":null,"immutables":null,"fingerprints":null}`
+	content := `{"schemaVersion":2,"metadata":{},"command":{},"parameters":null,"resolvers":null,"fingerprints":null}`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	loaded, err := LoadFromFile(path, "")
 	require.NoError(t, err)
 	assert.NotNil(t, loaded.Parameters)
-	assert.NotNil(t, loaded.Immutables)
+	assert.NotNil(t, loaded.Resolvers)
 	assert.NotNil(t, loaded.Fingerprints)
 	assert.NotNil(t, loaded.Command.Parameters)
 	// Should be safe to assign into

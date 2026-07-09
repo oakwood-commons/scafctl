@@ -68,7 +68,7 @@ spec:
         extends: [_base]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-persistence","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"hello-from-state","counter":"99"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-persistence","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"greeting":"hello-from-state","counter":"99"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.greeting == "hello-from-state"

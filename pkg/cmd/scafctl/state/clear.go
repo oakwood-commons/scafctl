@@ -30,7 +30,7 @@ func CommandClear(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 	cmd := &cobra.Command{
 		Use:   "clear",
 		Short: "Clear state values",
-		Long:  "Remove stored parameters, immutables, and fingerprints from a state file, preserving metadata.",
+		Long:  "Remove stored parameters, persisted resolvers, and fingerprints from a state file, preserving metadata.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runClear(cmd, opts)
 		},
@@ -38,7 +38,7 @@ func CommandClear(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Comma
 
 	cmd.Flags().StringVar(&opts.Path, "path", "", "State file path (relative to working directory or absolute)")
 	cmd.Flags().StringVar(&opts.Action, "action", "", "Clear fingerprints for a specific action only")
-	cmd.Flags().BoolVar(&opts.FingerprintsOnly, "fingerprints-only", false, "Clear only fingerprint entries, keep parameters and immutables")
+	cmd.Flags().BoolVar(&opts.FingerprintsOnly, "fingerprints-only", false, "Clear only fingerprint entries, keep parameters and persisted resolvers")
 	_ = cmd.MarkFlagRequired("path")
 	cmd.MarkFlagsMutuallyExclusive("action", "fingerprints-only")
 
@@ -98,7 +98,7 @@ func clearEntries(sd *state.Data, opts *clearOptions) int {
 		return fingerprint.ClearAction(sd, opts.Action)
 	}
 
-	// --fingerprints-only: clear all fingerprints, keep parameters and immutables
+	// --fingerprints-only: clear all fingerprints, keep parameters and persisted resolvers
 	if opts.FingerprintsOnly {
 		count := len(sd.Fingerprints)
 		sd.Fingerprints = make(map[string]*state.FingerprintEntry)
@@ -106,9 +106,9 @@ func clearEntries(sd *state.Data, opts *clearOptions) int {
 	}
 
 	// Default: clear everything
-	count := len(sd.Parameters) + len(sd.Immutables) + len(sd.Fingerprints)
+	count := len(sd.Parameters) + len(sd.Resolvers) + len(sd.Fingerprints)
 	sd.Parameters = make(map[string]any)
-	sd.Immutables = make(map[string]*state.ImmutableEntry)
+	sd.Resolvers = make(map[string]*state.PersistedEntry)
 	sd.Fingerprints = make(map[string]*state.FingerprintEntry)
 	return count
 }

@@ -1,0 +1,216 @@
+# =============================================================================
+# Persisted Resolvers + State Provider -- Integration Test Solution
+# =============================================================================
+# Exercises the two new state capabilities end-to-end:
+#
+#   1. persist: true on a resolver records its resolved value into the state
+#      file after every run (overwritten each time, never locked/verified).
+#   2. The built-in `state` provider reads a previously persisted value out of
+#      the state snapshot loaded at the START of the run -- i.e. the value the
+#      PRIOR run persisted, before the current run overwrites it.
+#
+# Together they reproduce the legacy pattern where one resolver explicitly
+# pulls another resolver's previously saved value.
+#
+# ---------------------------------------------------------------------------
+# Try it yourself (from this directory):
+#
+#   # First run -- no prior state, previous_token falls back to its default ""
+#   scafctl run resolver -f ./solution.yaml -r token=alpha
+#
+#   # Second run -- previous_token now reports "alpha" (the prior run's value),
+#   # current_token reports "bravo" (this run's value)
+#   scafctl run resolver -f ./solution.yaml -r token=bravo
+#
+#   # Inspect what got persisted
+#   scafctl state list --path ./state.json
+#
+#   # Run the full workflow (prints the comparison via the message action)
+#   scafctl run solution -f ./solution.yaml -r token=charlie
+#
+#   # Run the discrete functional tests for this solution
+#   scafctl test functional -f ./solution.yaml -v
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-state-persist-provider
+  version: 1.0.0
+  description: |
+    Functional tests for persisted resolvers (persist: true) and the built-in
+    state provider that reads a prior run's persisted value from the loaded
+    state snapshot.
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+
+spec:
+  resolvers:
+    # -------------------------------------------------------------------------
+    # Persisted resolver -- its value is written to state after each run.
+    # -------------------------------------------------------------------------
+    current_token:
+      description: Token for this run; persisted for the next run to read back
+      type: string
+      persist: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: token
+          - provider: static
+            inputs:
+              value: default-token
+
+    # -------------------------------------------------------------------------
+    # Read-back resolver -- pulls the PRIOR run's persisted current_token.
+    # `key` is a literal string, opaque to the resolver graph, so this creates
+    # NO dependency edge on current_token (and no self-cycle risk).
+    # -------------------------------------------------------------------------
+    previous_token:
+      description: The value current_token persisted on the previous run
+      type: string
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              key: current_token
+              default: ""
+
+    # -------------------------------------------------------------------------
+    # Missing-key lookup -- demonstrates the provider `default` fallback when a
+    # key was never persisted.
+    # -------------------------------------------------------------------------
+    orphan_lookup:
+      description: Reads a key that is never persisted to show the default fallback
+      type: string
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              key: never_persisted_key
+              default: fallback-value
+
+    # -------------------------------------------------------------------------
+    # Summary -- compares this run's value with the prior run's value.
+    # -------------------------------------------------------------------------
+    token_summary:
+      description: Human-readable comparison of current vs previous token
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'current=' + _.current_token + ' previous=' + _.previous_token + ' orphan=' + _.orphan_lookup"
+
+  workflow:
+    actions:
+      show-tokens:
+        description: Display the current and previous token values
+        provider: message
+        inputs:
+          message:
+            expr: "_.token_summary"
+          type: success
+
+  testing:
+    cases:
+      # =====================================================================
+      # First run: no state yet, so the state provider returns its default.
+      # =====================================================================
+      first-run-uses-default:
+        description: With no prior state, previous_token falls back to the provider default
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "token=alpha"]
+        tags: [state, persist, provider, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.current_token == "alpha"
+            message: "current_token should reflect this run's parameter"
+          - expression: __output.previous_token == ""
+            message: "previous_token should be the default when no prior state exists"
+
+      # =====================================================================
+      # Provider returns default for a key that was never persisted.
+      # =====================================================================
+      missing-key-returns-default:
+        description: state provider returns the configured default for an unknown key
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "token=alpha"]
+        tags: [state, provider]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.orphan_lookup == "fallback-value"
+            message: "Unknown key should resolve to the provider default"
+
+      # =====================================================================
+      # Provider reads a value persisted by a prior run (pre-seeded state).
+      # =====================================================================
+      reads-prior-persisted-value:
+        description: state provider reads the current_token value persisted by a prior run
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "token=bravo"]
+        tags: [state, persist, provider]
+        init:
+          - command: >-
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-alpha","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.current_token == "bravo"
+            message: "current_token should reflect this run's parameter"
+          - expression: __output.previous_token == "seeded-alpha"
+            message: "previous_token should be the value persisted by the prior run"
+
+      # =====================================================================
+      # persist: true writes the current value into the state file on save.
+      # =====================================================================
+      persists-current-value-to-state:
+        description: persist writes current_token into the state file after the run
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "token=charlie"]
+        tags: [state, persist]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __files["state.json"].exists
+            message: "State file should be written after a run"
+          - expression: __files["state.json"].content.contains("charlie")
+            message: "Persisted state should contain this run's current_token value"
+          - expression: __files["state.json"].content.contains("current_token")
+            message: "Persisted state should record the current_token resolver"
+
+      # =====================================================================
+      # Full workflow run prints the summary comparison via the message action.
+      # =====================================================================
+      workflow-shows-summary:
+        description: run solution executes the workflow and reports the token summary
+        command: [run, solution]
+        args: ["-r", "token=delta"]
+        tags: [state, workflow]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "current=delta"
+
+      # =====================================================================
+      # Pre-seeded prior value flows through to the workflow summary.
+      # =====================================================================
+      workflow-reports-prior-value:
+        description: workflow summary reports both the current and prior persisted values
+        command: [run, solution]
+        args: ["-r", "token=echo"]
+        tags: [state, workflow, provider]
+        init:
+          - command: >-
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-prior","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "current=echo previous=seeded-prior"

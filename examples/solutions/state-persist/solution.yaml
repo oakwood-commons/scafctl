@@ -1,0 +1,105 @@
+# =============================================================================
+# Persisted Resolvers + State Provider Example
+# =============================================================================
+# Demonstrates two composable capabilities:
+#
+#   1. persist: true on a resolver records its output into the state file after
+#      each run (purely for later retrieval). Unlike immutable, the value is
+#      overwritten every run and is NEVER verified or locked.
+#   2. The built-in `state` provider reads a previously persisted value out of
+#      the state snapshot loaded at the start of the run -- i.e. the value from
+#      the PRIOR run, before the current run overwrites it.
+#
+# Together these reproduce the legacy pattern where one resolver explicitly
+# reads another resolver's previously saved value.
+#
+# Key semantics:
+#   - Every resolver still runs every time (persist does not skip execution).
+#   - Within a run, state.get("current_token") returns the PRIOR run's value,
+#     while _.current_token returns the value produced by the CURRENT run.
+#   - On the first run, no prior value exists, so the state provider returns
+#     its `default`.
+#
+# Usage:
+#   # First run -- previous_token is empty (no prior state yet)
+#   scafctl run resolver -f solution.yaml -r token=alpha
+#
+#   # Second run -- previous_token now shows "alpha" (the prior run's value)
+#   scafctl run resolver -f solution.yaml -r token=bravo
+#
+#   # Inspect persisted state
+#   scafctl state list --path state-persist-demo.json
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-persist-example
+  version: 1.0.0
+  description: Demonstrates persisted resolvers and the state provider
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "state-persist-demo.json"
+
+spec:
+  resolvers:
+    # =========================================================================
+    # Persisted resolver -- value recorded to state after each run
+    # =========================================================================
+    # persist: true records current_token into the state file every run. The
+    # value is overwritten each time (no locking, no verification).
+    current_token:
+      description: Token for this run (persisted for next time)
+      type: string
+      persist: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "token"
+          - provider: static
+            inputs:
+              value: "default-token"
+
+    # =========================================================================
+    # Read-back resolver -- reads the PRIOR run's persisted value
+    # =========================================================================
+    # The `key` input is opaque to the resolver graph, so this does NOT create a
+    # dependency on current_token and there is no self-cycle risk. The value
+    # returned is whatever current_token persisted on the previous run.
+    previous_token:
+      description: The value current_token persisted on the previous run
+      type: string
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              key: current_token
+              default: ""
+
+    # =========================================================================
+    # Summary -- compares this run's value with the prior run's value
+    # =========================================================================
+    token_summary:
+      description: Human-readable comparison of current vs previous token
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'current=' + _.current_token + ' previous=' + _.previous_token"
+
+  workflow:
+    actions:
+      show-tokens:
+        description: Display the current and previous token values
+        provider: message
+        inputs:
+          message:
+            expr: "_.token_summary"
+          type: success

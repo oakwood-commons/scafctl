@@ -144,8 +144,8 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 	// Save the merged parameter set
 	stateData.Parameters = mergedParams
 
-	// Check and save immutable resolver values
-	if err := CheckImmutables(stateData, resolverCtx, resolvers); err != nil {
+	// Record persisted and immutable resolver values
+	if err := PersistResolvers(stateData, resolverCtx, resolvers); err != nil {
 		return err
 	}
 
@@ -199,6 +199,19 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 	}
 
 	return nil
+}
+
+// VerifyImmutables checks that resolved immutable values have not changed
+// relative to previously locked state, WITHOUT mutating state or locking new
+// values. Call it after resolver execution but BEFORE action execution so that
+// a locked-value violation aborts the run before any side effects occur.
+//
+// It is a no-op when state is disabled or no state data is present.
+func (m *Manager) VerifyImmutables(stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver) error {
+	if m.config == nil || stateData == nil {
+		return nil
+	}
+	return VerifyImmutables(stateData, resolverCtx, resolvers)
 }
 
 // SolutionMeta contains solution identity for state metadata.

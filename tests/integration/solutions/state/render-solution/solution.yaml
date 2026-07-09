@@ -80,7 +80,7 @@ spec:
         tags: [state, render]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"prod-cluster","app_version":"3.2.1"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"prod-cluster","app_version":"3.2.1"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/render-state.json
         assertions:
           - expression: __exitCode == 0
@@ -110,7 +110,7 @@ spec:
         tags: [state, render]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"cached-target"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-render-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"render solution","parameters":{}},"parameters":{"target":"cached-target"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/render-state.json
         assertions:
           - expression: __exitCode == 0

@@ -70,7 +70,7 @@ func TestProviderNames(t *testing.T) {
 	names := ProviderNames()
 
 	// Should have all built-in providers
-	expectedCount := 10 // http, cel, file, validation, debug, go-template, message, static, parameter, solution
+	expectedCount := 11 // http, cel, file, validation, debug, go-template, message, static, state, parameter, solution
 	assert.Len(t, names, expectedCount, "should have %d built-in providers", expectedCount)
 
 	// Verify expected names are present
@@ -83,6 +83,7 @@ func TestProviderNames(t *testing.T) {
 		"go-template",
 		"message",
 		"static",
+		"state",
 		"parameter",
 		"solution",
 	}
@@ -143,6 +144,7 @@ func TestAllProvidersRegistered(t *testing.T) {
 		{"go-template", "template"},
 		{"message", "message"},
 		{"static", "static"},
+		{"state", "persist"},
 		{"parameter", "parameter"},
 		{"solution", "solution"},
 	}

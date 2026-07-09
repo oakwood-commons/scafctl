@@ -25,12 +25,13 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 		value     string
 		valueType string
 		immutable bool
+		persist   bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Set a state value",
-		Long:  "Set or update a value in a state file. Defaults to the parameters section. Use --immutable to set an immutable value.",
+		Long:  "Set or update a value in a state file. Defaults to the parameters section. Use --immutable to store a locked value or --persist to store a persisted resolver value.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -52,26 +53,48 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 				return exitcode.WithCode(err, exitcode.GeneralError)
 			}
 
+			if immutable && persist {
+				err := fmt.Errorf("--immutable and --persist are mutually exclusive")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			coerced, coerceErr := coerceValue(value, valueType)
 			if coerceErr != nil {
 				w.Errorf("%v", coerceErr)
 				return exitcode.WithCode(coerceErr, exitcode.InvalidInput)
 			}
 
-			// Block writes to keys that exist in immutables
-			if _, isImmutable := sd.Immutables[key]; isImmutable {
+			// Block writes to keys locked by an immutable entry.
+			if existing, ok := sd.Resolvers[key]; ok && existing.Immutable {
 				err := fmt.Errorf("key %q is immutable; use 'state delete --force --key %s' to remove it first", key, key)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			if immutable {
-				sd.Immutables[key] = &state.ImmutableEntry{
+			now := time.Now().UTC()
+			switch {
+			case immutable:
+				sd.Resolvers[key] = &state.PersistedEntry{
 					Value:     coerced,
 					Type:      valueType,
-					CreatedAt: time.Now().UTC(),
+					Immutable: true,
+					CreatedAt: now,
+					UpdatedAt: now,
 				}
-			} else {
+			case persist:
+				createdAt := now
+				if existing, ok := sd.Resolvers[key]; ok {
+					createdAt = existing.CreatedAt
+				}
+				sd.Resolvers[key] = &state.PersistedEntry{
+					Value:     coerced,
+					Type:      valueType,
+					Immutable: false,
+					CreatedAt: createdAt,
+					UpdatedAt: now,
+				}
+			default:
 				sd.Parameters[key] = coerced
 			}
 
@@ -90,7 +113,8 @@ func CommandSet(_ *settings.Run, _ *terminal.IOStreams, _ string) *cobra.Command
 	cmd.Flags().StringVar(&key, "key", "", "Key to set")
 	cmd.Flags().StringVar(&value, "value", "", "Value to store")
 	cmd.Flags().StringVar(&valueType, "type", "string", "Value type (string, int, bool, etc.)")
-	cmd.Flags().BoolVar(&immutable, "immutable", false, "Store as an immutable value (cannot be overwritten)")
+	cmd.Flags().BoolVar(&immutable, "immutable", false, "Store as an immutable value (locked; cannot be overwritten)")
+	cmd.Flags().BoolVar(&persist, "persist", false, "Store as a persisted resolver value (overwritten on the next run)")
 	_ = cmd.MarkFlagRequired("path")
 	_ = cmd.MarkFlagRequired("key")
 	_ = cmd.MarkFlagRequired("value")

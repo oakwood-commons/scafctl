@@ -39,8 +39,8 @@ func (p *FileProvider) executeStateLoad(absPath string) (*provider.Output, error
 	if stateData.Parameters == nil {
 		stateData.Parameters = make(map[string]any)
 	}
-	if stateData.Immutables == nil {
-		stateData.Immutables = make(map[string]*state.ImmutableEntry)
+	if stateData.Resolvers == nil {
+		stateData.Resolvers = make(map[string]*state.PersistedEntry)
 	}
 	if stateData.Fingerprints == nil {
 		stateData.Fingerprints = make(map[string]*state.FingerprintEntry)

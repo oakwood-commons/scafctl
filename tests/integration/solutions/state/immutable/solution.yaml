@@ -81,7 +81,7 @@ spec:
         extends: [_base]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{"locked_id":{"value":"generated-id-001","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"locked_id":{"value":"generated-id-001","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.locked_id == "generated-id-001"
@@ -95,7 +95,7 @@ spec:
         extends: [_base]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"locked-from-state"},"immutables":{"locked_id":{"value":"locked-from-state","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"locked-from-state"},"resolvers":{"locked_id":{"value":"locked-from-state","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.locked_id == "locked-from-state"
@@ -111,7 +111,7 @@ spec:
         tags: [state, immutable]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"locked-from-state"},"immutables":{"locked_id":{"value":"locked-from-state","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"locked-from-state"},"resolvers":{"locked_id":{"value":"locked-from-state","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode != 0
@@ -128,7 +128,7 @@ spec:
         args: ["-o", "json", "-r", "mutable_value=updated-value"]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"mutable_value":"old-value"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"mutable_value":"old-value"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.mutable_value == "updated-value"
@@ -143,7 +143,7 @@ spec:
         args: ["-o", "json", "-r", "locked_id=permanent-id", "-r", "mutable_value=fresh-value"]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"permanent-id","mutable_value":"old-mutable"},"immutables":{"locked_id":{"value":"permanent-id","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"locked_id":"permanent-id","mutable_value":"old-mutable"},"resolvers":{"locked_id":{"value":"permanent-id","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __output.locked_id == "permanent-id"
