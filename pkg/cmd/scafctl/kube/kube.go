@@ -31,6 +31,8 @@ func CommandKube(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			write a kubeconfig entry.
 			Use 'scafctl kube logout <cluster>' to remove the entry and optionally
 			revoke the handler's cached credentials.
+			Use 'scafctl kube list' to see clusters the resolver knows about, and
+			'scafctl kube status' to inspect the current kubeconfig context.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
 	}
@@ -38,6 +40,8 @@ func CommandKube(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandLogout(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(CommandStatus(cliParams, ioStreams, cmdPath))
 
 	return cmd
 }

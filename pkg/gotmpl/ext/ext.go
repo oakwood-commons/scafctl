@@ -18,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/collections"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/dns"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/hcl"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/host"
 	extyaml "github.com/oakwood-commons/scafctl/pkg/gotmpl/ext/yaml"
 )
 
@@ -77,6 +78,9 @@ func Custom() gotmpl.ExtFunctionList {
 		// DNS / slugify functions
 		dns.SlugifyFunc(),
 		dns.ToDNSStringFunc(),
+
+		// Host path functions (branding-aware config dir)
+		host.ConfigDirFunc(),
 
 		// Collection / list-filtering functions
 		collections.WhereFunc(),

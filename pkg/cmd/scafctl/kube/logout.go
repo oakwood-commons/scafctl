@@ -32,6 +32,7 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 		userName        string
 		kubeconfigPath  string
 		keepCredentials bool
+		all             bool
 		outputFlags     flags.KvxOutputFlags
 	)
 	outputFlags.AppName = cliParams.BinaryName
@@ -74,14 +75,32 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				cluster = args[0]
 			}
 
+			mgr := kubeconfig.NewManager(cliParams.BinaryName)
+			defer func() { _ = mgr.Close() }()
 			deps := kubelogin.Deps{
-				Kubeconfig: kubeconfig.NewManager(cliParams.BinaryName),
+				Kubeconfig: mgr,
 				Resolver:   kubeapi.ResolverFromContext(ctx),
 				BinaryName: cliParams.BinaryName,
 				HandlerLookup: func(ctx context.Context, name string) (kubelogin.Authenticator, error) {
 					return auth.GetHandler(ctx, name)
 				},
 			}
+
+			if all {
+				if cluster != "" {
+					w.Errorf("--all cannot be combined with a cluster argument")
+					return exitcode.WithCode(fmt.Errorf("--all cannot be combined with a cluster argument"), exitcode.InvalidInput)
+				}
+				res, err := kubelogin.LogoutAll(ctx, deps, kubelogin.LogoutAllRequest{
+					KubeconfigPath: kubeconfigPath,
+				})
+				if err != nil {
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
+				}
+				return renderLogoutAllResult(ioStreams, &outputFlags, w, cliParams.BinaryName, res)
+			}
+
 			if handlerName != "" {
 				handler, err := auth.GetHandler(ctx, handlerName)
 				if err != nil {
@@ -127,6 +146,7 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 	cmd.Flags().StringVar(&userName, "user", "", "kubeconfig user entry name (defaults to the cluster name)")
 	cmd.Flags().StringVar(&kubeconfigPath, "kubeconfig", "", "Path to the kubeconfig file (defaults to KUBECONFIG or ~/.kube/config)")
 	cmd.Flags().BoolVar(&keepCredentials, "keep-credentials", false, "Leave the handler's cached credentials in place")
+	cmd.Flags().BoolVar(&all, "all", false, fmt.Sprintf("Remove every %s-managed kubeconfig entry (credentials are left in place)", cliParams.BinaryName))
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd
@@ -154,7 +174,42 @@ func renderLogoutResult(ioStreams *terminal.IOStreams, outputFlags *flags.KvxOut
 		w.Infof("No matching kubeconfig entry found")
 	}
 	if res.UsedFallback {
-		w.Warningf("kubeconfig provider unavailable; edited the kubeconfig directly")
+		w.WarnStderrf("kubeconfig provider unavailable; edited the kubeconfig directly")
 	}
 	return nil
+}
+
+// renderLogoutAllResult writes the outcome of a "logout --all" as structured
+// output or a human summary. binaryName keys the human strings so embedder CLIs
+// never leak the default brand.
+func renderLogoutAllResult(ioStreams *terminal.IOStreams, outputFlags *flags.KvxOutputFlags, w *writer.Writer, binaryName string, res *kubelogin.LogoutAllResult) error {
+	rows := make([]map[string]any, 0, len(res.Removed))
+	for _, ctxName := range res.Removed {
+		rows = append(rows, map[string]any{"context": ctxName, "removed": true})
+	}
+	opts := flags.ToKvxOutputOptions(outputFlags,
+		skvx.WithIOStreams(ioStreams),
+		skvx.WithOutputColumnOrder([]string{"context", "removed"}),
+	)
+	if skvx.IsStructuredFormat(opts.Format) {
+		return opts.Write(rows)
+	}
+
+	if len(res.Removed) == 0 {
+		w.Infof("No %s-managed kubeconfig entries found", binaryName)
+	} else {
+		w.Successf("Removed %d %s-managed kubeconfig entr%s", len(res.Removed), binaryName, plural(len(res.Removed)))
+	}
+	if res.UsedFallback {
+		w.WarnStderrf("kubeconfig provider unavailable; edited the kubeconfig directly")
+	}
+	return nil
+}
+
+// plural returns the pluralizing suffix for count "entry"/"entries".
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }

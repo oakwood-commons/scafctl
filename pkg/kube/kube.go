@@ -82,6 +82,10 @@ type ClusterInfo struct {
 	// registry so users can run "login <cluster>" without naming a handler.
 	DefaultHandler string `json:"defaultHandler,omitempty" yaml:"defaultHandler,omitempty" doc:"Auth handler used when no explicit handler is supplied" maxLength:"253" example:"entra"`
 
+	// Namespace is the default namespace written to the kubeconfig context for
+	// this cluster. Optional; the caller's --namespace flag overrides it.
+	Namespace string `json:"namespace,omitempty" yaml:"namespace,omitempty" doc:"Default namespace written to the kubeconfig context; overridden by --namespace" maxLength:"253" example:"prod"`
+
 	// CAData is the PEM-encoded cluster certificate authority bundle. When set,
 	// login pins the API server to this CA instead of falling back to
 	// InsecureSkipTLS. Embedders supply it from their cluster registry.

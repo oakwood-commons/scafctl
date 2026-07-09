@@ -38,11 +38,13 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		clusterName    string
 		contextName    string
 		userName       string
+		namespace      string
 		kubeconfigPath string
 		profile        string
 		setCurrent     bool
 		insecure       bool
 		verify         bool
+		refresh        bool
 		timeout        time.Duration
 		outputFlags    flags.KvxOutputFlags
 	)
@@ -92,8 +94,10 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				cluster = args[0]
 			}
 
+			mgr := kubeconfig.NewManager(cliParams.BinaryName)
+			defer func() { _ = mgr.Close() }()
 			deps := kubelogin.Deps{
-				Kubeconfig: kubeconfig.NewManager(cliParams.BinaryName),
+				Kubeconfig: mgr,
 				Resolver:   kubeapi.ResolverFromContext(ctx),
 				BinaryName: cliParams.BinaryName,
 				HandlerLookup: func(ctx context.Context, name string) (kubelogin.Authenticator, error) {
@@ -120,11 +124,13 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				ClusterName:       clusterName,
 				ContextName:       contextName,
 				UserName:          userName,
+				Namespace:         namespace,
 				KubeconfigPath:    kubeconfigPath,
 				Profile:           profile,
 				SetCurrentContext: setCurrent,
 				InsecureSkipTLS:   insecure,
 				Verify:            verify,
+				Refresh:           refresh,
 				Timeout:           timeout,
 			}
 
@@ -158,11 +164,13 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "kubeconfig cluster entry name (defaults to the cluster)")
 	cmd.Flags().StringVar(&contextName, "context", "", "kubeconfig context name (defaults to the cluster name)")
 	cmd.Flags().StringVar(&userName, "user", "", "kubeconfig user entry name (defaults to the cluster name)")
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Default namespace set on the written context (overrides the resolved cluster)")
 	cmd.Flags().StringVar(&kubeconfigPath, "kubeconfig", "", "Path to the kubeconfig file (defaults to KUBECONFIG or ~/.kube/config)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Auth profile baked into the exec credential args")
 	cmd.Flags().BoolVar(&setCurrent, "current", false, "Set the new context as the current context")
 	cmd.Flags().BoolVar(&insecure, "insecure-skip-tls-verify", false, "Disable API server TLS verification (development only)")
 	cmd.Flags().BoolVar(&verify, "verify", false, "Verify the authenticated identity via a post-login whoami (requires the kubeconfig provider)")
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "Re-apply resolved cluster details (CA, server, namespace) without a fresh interactive login when a valid token is cached")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Login timeout (e.g. 5m); zero uses the handler default")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
