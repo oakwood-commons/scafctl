@@ -167,7 +167,8 @@ There is no MCP library in `go.mod` today. We would add one:
 | `catalog_list` | `scafctl catalog list` | List catalog entries |
 | `catalog_inspect` | `scafctl catalog inspect` | Inspect artifact metadata (includes multi-platform info) |
 | `catalog_list_platforms` | — | List platforms for a multi-platform plugin artifact |
-| `build_plugin` | `scafctl build plugin` | Build multi-platform plugin into local catalog |
+| `package_plugin` | `scafctl package plugin` | Package multi-platform plugin into local catalog |
+| `build_plugin` | `scafctl build plugin` | Deprecated alias of `package_plugin` (kept for backward compatibility) |
 | `catalog_pull` | `scafctl catalog pull` | Pull a solution from registry |
 | `test_solution` | `scafctl test functional` | Run functional tests |
 | `explain_solution` | `scafctl explain` | Explain a configuration |

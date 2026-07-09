@@ -68,7 +68,7 @@ just like the official trio -- there is no allowlist to add it to.
 
 ~~~bash
 # Publish a third-party handler into a catalog
-scafctl build plugin --name openshift --kind auth-handler --version 0.1.0 \
+scafctl package plugin --name openshift --kind auth-handler --version 0.1.0 \
   --platform darwin/arm64=./dist/scafctl-plugin-auth-openshift
 
 # It is now resolvable by name

@@ -188,7 +188,7 @@ Embedders can override the policy programmatically via `RootOptions.PluginSignat
 
 ## Lock File Integration
 
-When running `scafctl build solution`, signature metadata is captured in the lock file:
+When running `scafctl package solution`, signature metadata is captured in the lock file:
 
 ~~~yaml
 plugins:

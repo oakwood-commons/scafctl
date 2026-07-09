@@ -317,7 +317,7 @@ known file contents to verify hash behavior deterministically.
 | Asset | Location | Content |
 |-------|----------|---------|
 | Design doc | `docs/design/state/fingerprinting.md` (this file) | Architecture, staleness logic, interface contracts |
-| Tutorial | `docs/tutorials/fingerprinting-tutorial.md` | Step-by-step: build solution with sources/generates |
+| Tutorial | `docs/tutorials/fingerprinting-tutorial.md` | Step-by-step: package solution with sources/generates |
 | Example solution | `examples/solutions/fingerprint-build.yaml` | Go build with source tracking |
 | Provider reference update | `docs/tutorials/provider-reference.md` | Note on exec + sources interplay |
 | MCP tool | `pkg/mcp/tools_state.go` | Expose fingerprint entries in state inspection |

@@ -316,7 +316,7 @@ GOOS=windows GOARCH=amd64 go build -o dist/windows-amd64.exe ./cmd/scafctl-plugi
 Store all platform binaries in a single OCI image index:
 
 ~~~bash
-scafctl build plugin \
+scafctl package plugin \
   --name static \
   --kind provider \
   --version 1.0.0 \
@@ -367,7 +367,7 @@ The lock file pins exact versions and binary content digests for reproducible
 builds and supply chain security:
 
 ~~~bash
-scafctl build solution -f auto-fetch-test.yaml --ignore-preflight
+scafctl package solution -f auto-fetch-test.yaml --ignore-preflight
 ~~~
 
 This creates a `solution.lock` file next to the solution with pinned digests:

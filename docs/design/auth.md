@@ -39,7 +39,7 @@ scafctl provides built-in auth handlers for common identity providers:
 
 ```bash
 # Publish a third-party auth handler to a catalog
-scafctl build plugin --name openshift --kind auth-handler --version 0.1.0 \
+scafctl package plugin --name openshift --kind auth-handler --version 0.1.0 \
   --platform darwin/arm64=./dist/scafctl-plugin-auth-openshift
 
 # Resolve and use it by name -- no allowlist gate

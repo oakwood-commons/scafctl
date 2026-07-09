@@ -124,7 +124,7 @@ When multiple solution files exist in a project, scafctl handles them based on c
 | Risk Level | Commands | Behavior |
 |------------|----------|----------|
 | Low | `run solution`, `run resolver`, `lint`, `test`, `render` | Uses first match, prints a warning about other files found |
-| High | `build solution`, `catalog push` | Returns an error, requires `-f` to disambiguate |
+| High | `package solution`, `catalog push` | Returns an error, requires `-f` to disambiguate |
 
 When auto-discovery succeeds, scafctl always prints which file was selected:
 
@@ -361,4 +361,4 @@ scafctl config paths
 
 6. **Combine with `--cwd` for monorepos** -- target a specific project without changing directories.
 
-7. **Avoid multiple solution files** -- if you must have them (e.g., both `solution.yaml` and `taskfile.yaml`), use `-f` with high-risk commands like `build solution` to avoid errors.
+7. **Avoid multiple solution files** -- if you must have them (e.g., both `solution.yaml` and `taskfile.yaml`), use `-f` with high-risk commands like `package solution` to avoid errors.

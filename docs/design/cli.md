@@ -35,7 +35,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `secrets *` | ✅ Implemented | list, get, set, delete, exists, export, import, rotate |
 | `auth *` | ✅ Implemented | login, logout, status, token |
 | `resolver graph` | ❌ Removed | Use `run resolver --graph` instead |
-| `build solution` | ✅ Implemented | Catalog feature |
+| `package solution` | ✅ Implemented | Catalog feature |
 | `catalog list/inspect/delete/prune` | ✅ Implemented | Catalog management |
 | `catalog save/load` | ✅ Implemented | Offline distribution |
 | `eval cel` | ✅ Implemented | Evaluate CEL expressions from CLI |
@@ -462,17 +462,19 @@ scafctl run solution example@1.7.0
 
 > **Status**: ✅ Implemented
 
-Build a solution for the local catalog (analogous to `docker build`):
+Package a solution into the local catalog (analogous to `docker build`):
+
+> Note: `build` is a backward-compatible alias for `package` (e.g. `scafctl build solution` still works).
 
 ~~~bash
-# Build a solution from file
-scafctl build solution -f ./solution.yaml --version 1.0.0
+# Package a solution from file
+scafctl package solution -f ./solution.yaml --version 1.0.0
 
-# Build using version from metadata
-scafctl build solution -f ./solution.yaml
+# Package using version from metadata
+scafctl package solution -f ./solution.yaml
 
 # Overwrite existing version
-scafctl build solution -f ./solution.yaml --version 1.0.0 --force
+scafctl package solution -f ./solution.yaml --version 1.0.0 --force
 ~~~
 
 The build process validates, resolves dependencies, bundles local files, vendors catalog dependencies, and packages artifacts into the local catalog. See [catalog-build-bundling.md](../design/catalog-build-bundling.md) for the full bundling design.
@@ -481,19 +483,19 @@ Additional build flags:
 
 ~~~bash
 # Dry-run: show what would be bundled without building
-scafctl build solution -f ./solution.yaml --dry-run
+scafctl package solution -f ./solution.yaml --dry-run
 
 # Skip file bundling (legacy single-layer artifact)
-scafctl build solution -f ./solution.yaml --no-bundle
+scafctl package solution -f ./solution.yaml --no-bundle
 
 # Skip vendoring catalog dependencies
-scafctl build solution -f ./solution.yaml --no-vendor
+scafctl package solution -f ./solution.yaml --no-vendor
 
 # Set max bundle size
-scafctl build solution -f ./solution.yaml --bundle-max-size 100MB
+scafctl package solution -f ./solution.yaml --bundle-max-size 100MB
 
 # Re-resolve and update the lock file
-scafctl build solution -f ./solution.yaml --update-lock
+scafctl package solution -f ./solution.yaml --update-lock
 ~~~
 
 ### Publishing Artifacts
@@ -1029,7 +1031,7 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl get solution` | get | solution |
 | `scafctl render solution` | render | solution |
 | `scafctl explain solution` | explain | solution |
-| `scafctl build solution` | build | solution |
+| `scafctl package solution` | package | solution |
 | `scafctl new solution` | new | solution |
 | `scafctl push solution` | push | solution |
 | `scafctl pull solution` | pull | solution |
@@ -1104,7 +1106,7 @@ The deciding question: **"Is this a core workflow action the user came here to d
 
 | Category | Pattern | Rationale | scafctl examples |
 |----------|---------|-----------|-----------------|
-| **Core domain operations** | `<verb> <kind>` | The user thinks in terms of *what they want to do*: run, get, render, build. The kind is just a target. | `run solution`, `get provider`, `render solution`, `build solution`, `new solution` |
+| **Core domain operations** | `<verb> <kind>` | The user thinks in terms of *what they want to do*: run, get, render, build. The kind is just a target. | `run solution`, `get provider`, `render solution`, `package solution`, `new solution` |
 | **Infrastructure / services** | `<noun> <action>` | The user thinks in terms of *which subsystem* they need to manage. The subsystem is the anchor; actions within it are secondary. | `config set`, `secrets get`, `auth login`, `catalog list`, `cache clean` |
 | **Standalone utilities** | `<verb>` or `<noun>` | Single-purpose commands that don't need a sub-resource. | `version`, `mcp`, `test` |
 

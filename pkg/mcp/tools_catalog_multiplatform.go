@@ -34,9 +34,10 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 	)
 	s.addTool(listPlatformsTool, s.handleCatalogListPlatforms)
 
-	buildPluginTool := mcp.NewTool("build_plugin",
-		mcp.WithDescription("Build a multi-platform plugin artifact into the local catalog as an OCI image index. Each platform entry maps an OS/architecture pair to a local binary path. Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64. Use this to package cross-compiled plugin binaries for distribution."),
-		mcp.WithTitleAnnotation("Build Plugin"),
+	// Shared input schema + annotations for the plugin-packaging tool. It is
+	// registered under both "package_plugin" (canonical) and "build_plugin"
+	// (deprecated alias) so existing agents keep working.
+	pluginToolOpts := []mcp.ToolOption{
 		mcp.WithToolIcons(toolIcons["plugin"]),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -65,8 +66,25 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 		mcp.WithString("cwd",
 			mcp.Description("Working directory for path resolution. When set, relative platform binary paths resolve against this directory instead of the process CWD."),
 		),
+	}
+
+	packagePluginTool := mcp.NewTool("package_plugin",
+		append([]mcp.ToolOption{
+			mcp.WithDescription("Package a multi-platform plugin artifact into the local catalog as an OCI image index. Each platform entry maps an OS/architecture pair to a local binary path. Supported platforms: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64. Use this to package cross-compiled plugin binaries for distribution."),
+			mcp.WithTitleAnnotation("Package Plugin"),
+		}, pluginToolOpts...)...,
 	)
-	s.addTool(buildPluginTool, s.handleBuildPlugin)
+	s.addTool(packagePluginTool, s.handlePackagePlugin)
+
+	// Deprecated alias of package_plugin, kept for backward compatibility so
+	// existing agent configurations referencing "build_plugin" keep working.
+	buildPluginTool := mcp.NewTool("build_plugin",
+		append([]mcp.ToolOption{
+			mcp.WithDescription("Deprecated alias for 'package_plugin'. Packages a multi-platform plugin artifact into the local catalog as an OCI image index. Prefer 'package_plugin'."),
+			mcp.WithTitleAnnotation("Build Plugin (deprecated)"),
+		}, pluginToolOpts...)...,
+	)
+	s.addTool(buildPluginTool, s.handlePackagePlugin)
 }
 
 // handleCatalogListPlatforms lists platforms for a multi-platform catalog artifact.
@@ -135,8 +153,8 @@ func (s *Server) handleCatalogListPlatforms(_ context.Context, request mcp.CallT
 	return mcp.NewToolResultJSON(result)
 }
 
-// handleBuildPlugin builds a multi-platform plugin into the local catalog.
-func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// handlePackagePlugin packages a multi-platform plugin into the local catalog.
+func (s *Server) handlePackagePlugin(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := request.RequireString("name")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
@@ -252,7 +270,7 @@ func (s *Server) handleBuildPlugin(_ context.Context, request mcp.CallToolReques
 				WithRelatedTools("catalog_list_platforms"),
 			), nil
 		}
-		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to build plugin: %v", err),
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to package plugin: %v", err),
 			WithSuggestion("Check file paths and catalog permissions"),
 		), nil
 	}

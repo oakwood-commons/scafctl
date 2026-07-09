@@ -13,8 +13,8 @@ go build -o echo-plugin main.go
 ## Publishing to the Catalog
 
 ```bash
-# Build into local catalog
-scafctl build provider . --version 1.0.0
+# Package into local catalog
+scafctl package plugin --name echo --kind provider --version 1.0.0 --platform linux/amd64=./echo
 
 # Push to remote registry
 scafctl catalog push echo@1.0.0 --catalog ghcr.io/myorg

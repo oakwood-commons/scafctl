@@ -266,8 +266,8 @@ See the [Authentication Tutorial](docs/tutorials/auth-tutorial.md) for more deta
 The catalog system lets you publish, version, and share solutions using OCI-compatible registries:
 
 ```bash
-# Build a solution into an OCI artifact
-scafctl build solution -f solution.yaml
+# Package a solution into an OCI artifact
+scafctl package solution -f solution.yaml
 
 # Push to a registry
 scafctl catalog push my-solution@1.0.0 --catalog ghcr.io/myorg
@@ -465,7 +465,7 @@ scafctl render solution -f config.yaml -o json
 scafctl render solution -f config.yaml -o yaml
 
 # Build and bundle solutions
-scafctl build solution -f solution.yaml
+scafctl package solution -f solution.yaml
 
 # Catalog operations
 scafctl catalog list

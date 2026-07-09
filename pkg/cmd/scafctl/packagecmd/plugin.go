@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package build
+package packagecmd
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// PluginOptions holds options for the build plugin command.
+// PluginOptions holds options for the package plugin command.
 type PluginOptions struct {
 	Name      string
 	Kind      string // "provider" or "auth-handler"
@@ -31,8 +31,8 @@ type PluginOptions struct {
 	IOStreams *terminal.IOStreams
 }
 
-// CommandBuildPlugin creates the build plugin command.
-func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+// CommandPackagePlugin creates the package plugin command.
+func CommandPackagePlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	options := &PluginOptions{
 		CliParams: cliParams,
 		IOStreams: ioStreams,
@@ -41,10 +41,10 @@ func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 	cmd := &cobra.Command{
 		Use:          "plugin",
 		Aliases:      []string{"plug", "p"},
-		Short:        "Build a multi-platform plugin into the local catalog",
+		Short:        "Package a multi-platform plugin into the local catalog",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
-			Build one or more platform-specific plugin binaries into the local catalog
+			Package one or more platform-specific plugin binaries into the local catalog
 			as an OCI image index (multi-platform artifact).
 
 			Each --platform flag maps a target platform to the local path of the pre-built
@@ -62,13 +62,13 @@ func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 			image index for forward compatibility.
 
 			Examples:
-			  # Build a provider plugin for two platforms
-			  scafctl build plugin --name aws-provider --kind provider --version 1.0.0 \
+			  # Package a provider plugin for two platforms
+			  scafctl package plugin --name aws-provider --kind provider --version 1.0.0 \
 			    --platform linux/amd64=./dist/aws-provider-linux-amd64 \
 			    --platform darwin/arm64=./dist/aws-provider-darwin-arm64
 
-			  # Build an auth handler for all supported platforms
-			  scafctl build plugin --name github-auth --kind auth-handler --version 2.1.0 \
+			  # Package an auth handler for all supported platforms
+			  scafctl package plugin --name github-auth --kind auth-handler --version 2.1.0 \
 			    --platform linux/amd64=./dist/github-auth-linux-amd64 \
 			    --platform linux/arm64=./dist/github-auth-linux-arm64 \
 			    --platform darwin/amd64=./dist/github-auth-darwin-amd64 \
@@ -76,12 +76,12 @@ func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 			    --platform windows/amd64=./dist/github-auth-windows-amd64.exe
 
 			  # Overwrite existing version
-			  scafctl build plugin --name aws-provider --kind provider --version 1.0.0 \
+			  scafctl package plugin --name aws-provider --kind provider --version 1.0.0 \
 			    --platform linux/amd64=./dist/aws-provider --force
 		`),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runBuildPlugin(cmd.Context(), options)
+			return runPackagePlugin(cmd.Context(), options)
 		},
 	}
 
@@ -99,7 +99,7 @@ func CommandBuildPlugin(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 	return cmd
 }
 
-func runBuildPlugin(ctx context.Context, opts *PluginOptions) error {
+func runPackagePlugin(ctx context.Context, opts *PluginOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
