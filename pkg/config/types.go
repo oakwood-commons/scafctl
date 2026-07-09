@@ -32,6 +32,7 @@ type Config struct {
 	Discovery  DiscoveryConfig  `json:"discovery,omitempty" yaml:"discovery,omitempty" mapstructure:"discovery" doc:"Auto-discovery configuration"`
 	Plugins    PluginsConfig    `json:"plugins,omitempty" yaml:"plugins,omitempty" mapstructure:"plugins" doc:"Plugin management configuration"`
 	MCP        MCPConfig        `json:"mcp,omitempty" yaml:"mcp,omitempty" mapstructure:"mcp" doc:"MCP server configuration"`
+	Kube       KubeConfig       `json:"kube,omitempty" yaml:"kube,omitempty" mapstructure:"kube" doc:"Kubernetes/OpenShift cluster resolution for kube login"`
 }
 
 // DiscoveryStrategy controls how a remote catalog discovers available artifacts.
@@ -526,6 +527,63 @@ type HostnameResolverSource struct {
 	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty" mapstructure:"headers" doc:"Additional static request headers"`
 }
 
+// KubeConfig configures Kubernetes / OpenShift cluster resolution for the
+// `kube login` command so a cluster can be resolved by name in the stock
+// binary (no embedder-provided resolver required).
+type KubeConfig struct {
+	// Clusters resolves a cluster selector into connection details (server,
+	// default handler, auth type, audience) via static aliases and/or a
+	// dynamic inventory resolver.
+	Clusters ClusterResolutionConfig `json:"clusters,omitempty" yaml:"clusters,omitempty" mapstructure:"clusters" doc:"Cluster name resolution (static aliases and dynamic inventory)"`
+}
+
+// ClusterResolutionConfig declares how `kube login <cluster>` resolves a
+// cluster selector into connection details. Resolution precedence is: explicit
+// --server/--handler flags, then a concrete URL argument, then a static alias,
+// then the dynamic inventory resolver. Static aliases win over inventory
+// entries of the same name.
+type ClusterResolutionConfig struct {
+	// Aliases maps a short cluster selector (e.g. "lab") to concrete connection
+	// details for one-off clusters that are not part of any inventory. Static
+	// aliases win over the dynamic resolver.
+	Aliases map[string]ClusterAlias `json:"aliases,omitempty" yaml:"aliases,omitempty" mapstructure:"aliases" doc:"Static map of cluster selector to connection details"`
+
+	// Resolver dynamically fetches and normalizes a cluster inventory at login
+	// time. It reuses the hostname inventory contract (source + CEL transform +
+	// ttl); the transform yields entries with name, url, and optional
+	// defaultHandler/authType/audience/caData fields.
+	Resolver *HostnameResolverConfig `json:"resolver,omitempty" yaml:"resolver,omitempty" mapstructure:"resolver" doc:"Dynamic cluster inventory resolver (reuses the hostname inventory contract)"`
+}
+
+// ClusterAlias is a static per-cluster entry for kube login. Only Server is
+// required; the remaining fields populate the corresponding ClusterInfo so a
+// user can run `kube login <alias>` without --server or --handler.
+type ClusterAlias struct {
+	// Server is the cluster API server URL (https://...).
+	Server string `json:"server" yaml:"server" mapstructure:"server" doc:"Cluster API server URL" maxLength:"2048" example:"https://api.lab.example.com:6443"`
+
+	// DefaultHandler is the auth handler used when no explicit --handler is
+	// passed.
+	DefaultHandler string `json:"defaultHandler,omitempty" yaml:"defaultHandler,omitempty" mapstructure:"defaultHandler" doc:"Auth handler used when no explicit --handler is supplied" maxLength:"253" example:"openshift"`
+
+	// AuthType selects the authentication method: "" (auto), "oauth", or "oidc".
+	AuthType string `json:"authType,omitempty" yaml:"authType,omitempty" mapstructure:"authType" doc:"Authentication method: empty (auto), oauth, or oidc" maxLength:"16" example:"oauth"`
+
+	// OIDCAudience is the client ID / audience the minted token must target for
+	// OIDC clusters.
+	OIDCAudience string `json:"oidcAudience,omitempty" yaml:"oidcAudience,omitempty" mapstructure:"oidcAudience" doc:"Client ID/audience for OIDC clusters" maxLength:"512"`
+
+	// CAData is a PEM-encoded CA bundle for the API server (preferred over
+	// InsecureSkipTLS).
+	CAData string `json:"caData,omitempty" yaml:"caData,omitempty" mapstructure:"caData" doc:"PEM-encoded cluster CA bundle; preferred over insecureSkipTls" maxLength:"1048576"`
+
+	// ConsoleURL is an optional web console URL (informational).
+	ConsoleURL string `json:"consoleUrl,omitempty" yaml:"consoleUrl,omitempty" mapstructure:"consoleUrl" doc:"Optional web console URL (informational)" maxLength:"2048"`
+
+	// InsecureSkipTLS disables API server TLS verification (development only).
+	InsecureSkipTLS bool `json:"insecureSkipTls,omitempty" yaml:"insecureSkipTls,omitempty" mapstructure:"insecureSkipTls" doc:"Disable API server TLS verification (development only)"`
+}
+
 // EntraAuthConfig contains Entra-specific configuration.
 type EntraAuthConfig struct {
 	// HTTPClient optionally overrides HTTP settings for Entra auth requests.
@@ -805,7 +863,6 @@ type APIServerConfig struct {
 	CORS             APICORSConfig           `json:"cors,omitempty" yaml:"cors,omitempty" mapstructure:"cors" doc:"CORS configuration"`
 	RateLimit        APIRateLimitConfig      `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty" mapstructure:"rateLimit" doc:"Rate limiting configuration"`
 	Auth             APIAuthConfig           `json:"auth,omitempty" yaml:"auth,omitempty" mapstructure:"auth" doc:"Authentication configuration"`
-	Identity         APIIdentityConfig       `json:"identity,omitempty" yaml:"identity,omitempty" mapstructure:"identity" doc:"Server identity for token delegation"`
 	Compression      APICompressionConfig    `json:"compression,omitempty" yaml:"compression,omitempty" mapstructure:"compression" doc:"Response compression configuration"`
 	OpenAPI          APIOpenAPIConfig        `json:"openAPI,omitempty" yaml:"openAPI,omitempty" mapstructure:"openAPI" doc:"OpenAPI specification configuration (Servers field is wired; Title, Description, and other fields are reserved for future use)"`
 	Profiler         APIProfilerConfig       `json:"profiler,omitempty" yaml:"profiler,omitempty" mapstructure:"profiler" doc:"Profiler configuration (reserved for future use — not yet wired into server setup)"`
@@ -871,6 +928,7 @@ type APIRateLimitEntry struct {
 // APIAuthConfig holds API authentication configuration.
 type APIAuthConfig struct {
 	AzureOIDC APIAzureOIDCConfig `json:"azureOIDC,omitempty" yaml:"azureOIDC,omitempty" mapstructure:"azureOIDC" doc:"Azure AD OIDC configuration"`
+	Handlers  map[string]any     `json:"handlers,omitempty" yaml:"handlers,omitempty" mapstructure:"handlers" doc:"Auth handler plugin server-mode settings keyed by handler name (opaque JSON passed to plugins)"`
 }
 
 // APIAzureOIDCConfig holds Azure AD OIDC configuration.
@@ -878,97 +936,6 @@ type APIAzureOIDCConfig struct {
 	Enabled  bool   `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable Entra OIDC authentication"`
 	TenantID string `json:"tenantId,omitempty" yaml:"tenantId,omitempty" mapstructure:"tenantId" doc:"Azure AD tenant ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
 	ClientID string `json:"clientId,omitempty" yaml:"clientId,omitempty" mapstructure:"clientId" doc:"Azure AD client ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
-}
-
-// APIIdentityConfig holds server identity configuration for token delegation.
-type APIIdentityConfig struct {
-	Entra  *APIEntraIdentityConfig  `json:"entra,omitempty" yaml:"entra,omitempty" mapstructure:"entra" doc:"Azure Entra ID identity for token delegation"`
-	GitHub *APIGitHubIdentityConfig `json:"github,omitempty" yaml:"github,omitempty" mapstructure:"github" doc:"GitHub identity for token delegation"`
-}
-
-// APIEntraIdentityConfig holds Azure Entra ID credential configuration for OBO and client_credentials delegation.
-type APIEntraIdentityConfig struct {
-	TenantID     string                 `json:"tenantId" yaml:"tenantId" mapstructure:"tenantId" doc:"Azure AD tenant ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
-	ClientID     string                 `json:"clientId" yaml:"clientId" mapstructure:"clientId" doc:"Azure AD client ID" maxLength:"36" example:"00000000-0000-0000-0000-000000000000"`
-	Credential   ServerCredentialConfig `json:"credential" yaml:"credential" mapstructure:"credential" doc:"Server credential configuration"`
-	TokenManager *TokenManagerConfig    `json:"tokenManager,omitempty" yaml:"tokenManager,omitempty" mapstructure:"tokenManager" doc:"Token manager configuration (nil = no caching/deduplication)"`
-	AllowedFlows *DelegationFlowsConfig `json:"allowedFlows,omitempty" yaml:"allowedFlows,omitempty" mapstructure:"allowedFlows" doc:"Permitted delegation flows (nil = OBO only, present with empty flows = deny all)"`
-}
-
-// APIGitHubIdentityConfig holds GitHub identity configuration for token delegation.
-type APIGitHubIdentityConfig struct {
-	Credential   GitHubCredentialConfig `json:"credential" yaml:"credential" mapstructure:"credential" doc:"GitHub credential configuration"`
-	Hostname     string                 `json:"hostname,omitempty" yaml:"hostname,omitempty" mapstructure:"hostname" doc:"GitHub hostname (default: github.com, set for GHES)" maxLength:"253" example:"github.com"`
-	TokenManager *TokenManagerConfig    `json:"tokenManager,omitempty" yaml:"tokenManager,omitempty" mapstructure:"tokenManager" doc:"Token manager configuration (nil = no caching/deduplication)"`
-}
-
-// EffectiveHostname returns the configured hostname or the default "github.com".
-func (c *APIGitHubIdentityConfig) EffectiveHostname() string {
-	if c.Hostname != "" {
-		return c.Hostname
-	}
-	return "github.com"
-}
-
-// GitHubCredentialConfig holds the credential source for GitHub identity.
-type GitHubCredentialConfig struct {
-	Type string                     `json:"type" yaml:"type" mapstructure:"type" doc:"GitHub credential type" enum:"app,pat" example:"app" maxLength:"10"`
-	App  *GitHubAppCredentialConfig `json:"app,omitempty" yaml:"app,omitempty" mapstructure:"app" doc:"GitHub App credentials (required when type is app)"`
-	PAT  *GitHubPATCredentialConfig `json:"pat,omitempty" yaml:"pat,omitempty" mapstructure:"pat" doc:"Personal Access Token credentials (required when type is pat)"`
-}
-
-// GitHubPATCredentialConfig holds a GitHub Personal Access Token reference.
-type GitHubPATCredentialConfig struct {
-	Token SecretRef `json:"token" yaml:"token" mapstructure:"token" doc:"Personal Access Token reference (env://VAR or file:///path)" maxLength:"512" example:"env://GITHUB_TOKEN"`
-}
-
-// GitHubAppCredentialConfig holds GitHub App credentials for installation token exchange.
-type GitHubAppCredentialConfig struct {
-	ClientID       string    `json:"clientId" yaml:"clientId" mapstructure:"clientId" doc:"GitHub App Client ID (used as JWT issuer)" maxLength:"50" example:"Iv23li8abc123"`
-	InstallationID int64     `json:"installationId" yaml:"installationId" mapstructure:"installationId" doc:"GitHub App installation ID" maximum:"1000000000" example:"78901234"`
-	PrivateKey     SecretRef `json:"privateKey" yaml:"privateKey" mapstructure:"privateKey" doc:"PEM-encoded RSA private key reference (env://VAR or file:///path)" maxLength:"512" example:"env://GITHUB_APP_PRIVATE_KEY"`
-}
-
-// TokenManagerConfig holds configuration for the token delegation cache manager.
-// A nil pointer on the parent disables caching entirely.
-// A non-nil struct with zero values uses sensible defaults defined in pkg/authdelegation.
-type TokenManagerConfig struct {
-	// CacheSize is the maximum number of cached tokens. Zero uses the package default.
-	CacheSize int `json:"cacheSize,omitempty" yaml:"cacheSize,omitempty" mapstructure:"cacheSize" doc:"LRU cache size (0 = package default)" maximum:"100000"`
-
-	// ExpiryBuffer is the safety margin subtracted from token TTL before caching.
-	// Prevents serving tokens that are about to expire. Use Go duration syntax.
-	ExpiryBuffer string `json:"expiryBuffer,omitempty" yaml:"expiryBuffer,omitempty" mapstructure:"expiryBuffer" doc:"Safety margin before token expiry" maxLength:"20"`
-
-	// CleanupInterval is how often the background goroutine evicts expired entries.
-	// Use Go duration syntax.
-	CleanupInterval string `json:"cleanupInterval,omitempty" yaml:"cleanupInterval,omitempty" mapstructure:"cleanupInterval" doc:"Background eviction interval" maxLength:"20"`
-
-	// ExpiryThreshold is the minimum remaining TTL a token must have to be cached.
-	// Tokens with TTL <= this value are treated as uncacheable. Use Go duration syntax.
-	ExpiryThreshold string `json:"expiryThreshold,omitempty" yaml:"expiryThreshold,omitempty" mapstructure:"expiryThreshold" doc:"Minimum TTL to cache a token" maxLength:"20"`
-
-	// SlowThreshold is how long a follower waits for the leader before retrying independently.
-	// Use Go duration syntax.
-	SlowThreshold string `json:"slowThreshold,omitempty" yaml:"slowThreshold,omitempty" mapstructure:"slowThreshold" doc:"Follower bail-out duration" maxLength:"20"`
-
-	// RetryFollowerOnError controls whether followers retry independently when the leader errors.
-	RetryFollowerOnError *bool `json:"retryFollowerOnError,omitempty" yaml:"retryFollowerOnError,omitempty" mapstructure:"retryFollowerOnError" doc:"Followers retry on leader error"`
-}
-
-// ServerCredentialConfig holds the server's authentication credential for token delegation.
-type ServerCredentialConfig struct {
-	Type         string    `json:"type" yaml:"type" mapstructure:"type" doc:"Server credential type" enum:"wif,secret" example:"secret" maxLength:"10"`
-	ClientSecret SecretRef `json:"clientSecret,omitempty" yaml:"clientSecret,omitempty" mapstructure:"clientSecret" doc:"Secret reference URI (env://VAR_NAME or file:///path)" maxLength:"512" example:"env://SCAFCTL_API_ENTRA_CLIENT_SECRET"`
-	WIFTokenPath string    `json:"wifTokenPath,omitempty" yaml:"wifTokenPath,omitempty" mapstructure:"wifTokenPath" doc:"Path to federated token file (required when type is wif)" maxLength:"512" example:"/var/run/secrets/azure/tokens/federated-token"`
-}
-
-// DelegationFlowsConfig controls which delegation flows the server may use.
-// A nil pointer on the parent means "use defaults (OBO only)".
-// A non-nil struct with empty Flows means "deny all delegation".
-// A non-nil struct with populated Flows means "only permit listed flows".
-type DelegationFlowsConfig struct {
-	Flows []string `json:"flows,omitempty" yaml:"flows,omitempty" mapstructure:"flows" doc:"Permitted delegation flows (obo, client_credentials)" maxItems:"10"`
 }
 
 // SecretRef is a URI-style reference to a secret value.

@@ -91,3 +91,27 @@ func APIVersionFromExecInfo(execInfo string) string {
 	}
 	return parsed.APIVersion
 }
+
+// ClusterServerFromExecInfo extracts spec.cluster.server (the target API server
+// URL) from a KUBERNETES_EXEC_INFO payload. kubectl/oc only populate the cluster
+// block when the kubeconfig exec entry sets provideClusterInfo: true. The
+// returned value is the exact server string from the kubeconfig cluster entry,
+// so it matches the hostname a cluster-aware handler stored at login time and
+// can be used verbatim as a per-cluster token selector. It returns "" when the
+// payload is empty, unparseable, or carries no cluster server.
+func ClusterServerFromExecInfo(execInfo string) string {
+	if execInfo == "" {
+		return ""
+	}
+	var parsed struct {
+		Spec struct {
+			Cluster struct {
+				Server string `json:"server"`
+			} `json:"cluster"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(execInfo), &parsed); err != nil {
+		return ""
+	}
+	return parsed.Spec.Cluster.Server
+}

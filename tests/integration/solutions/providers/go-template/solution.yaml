@@ -200,6 +200,47 @@ spec:
               ignoredBlocks:
                 - line: "# scafctl:ignore"
 
+    # Built-in zero-config fence: markers stripped, inner content preserved
+    builtinFenceTemplate:
+      description: Template using the always-on built-in fence (no ignoredBlocks)
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: builtin-fence
+              template: |
+                name = "{{ .appName }}"
+                {{/* scafctl:ignore:start */}}
+                raw = "${var.project}-${var.env}"
+                {{/* scafctl:ignore:end */}}
+
+    # Token mode: preserve every occurrence of a literal substring
+    ignoredBlocksTokenTemplate:
+      description: Template using token-based literal pass-through
+      dependsOn: [appName]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              name: ignored-blocks-token
+              template: |
+                service: {{ .appName }}
+                url: ${LITERAL}/api
+                health: ${LITERAL}/health
+              ignoredBlocks:
+                - token: "${LITERAL}"
+
     # Test: name input is optional (defaults to "template")
     optionalNameTemplate:
       description: Template without explicit name input
@@ -318,6 +359,32 @@ spec:
             message: "Line with ignore marker should be preserved literally"
           - expression: '__output.ignoredBlocksLineTemplate.contains("echo \"deployed\"")'
             message: "Non-ignored lines should render normally"
+
+      builtin-fence:
+        description: Verify the built-in fence strips markers and preserves inner content
+        extends: [_base]
+        tags: [ignoredBlocks]
+        assertions:
+          - expression: '__output.builtinFenceTemplate.contains("name = \"my-service\"")'
+            message: "Template variables outside the fence should be rendered"
+          - expression: '__output.builtinFenceTemplate.contains("raw = \"${var.project}-${var.env}\"")'
+            message: "Content inside the built-in fence should be preserved literally"
+          - expression: '!__output.builtinFenceTemplate.contains("scafctl:ignore:start")'
+            message: "Built-in fence start marker should be stripped from output"
+          - expression: '!__output.builtinFenceTemplate.contains("scafctl:ignore:end")'
+            message: "Built-in fence end marker should be stripped from output"
+
+      ignored-blocks-token:
+        description: Verify token-based ignoredBlocks preserves every occurrence
+        extends: [_base]
+        tags: [ignoredBlocks]
+        assertions:
+          - expression: '__output.ignoredBlocksTokenTemplate.contains("service: my-service")'
+            message: "Template variables should be rendered"
+          - expression: '__output.ignoredBlocksTokenTemplate.contains("${LITERAL}/api")'
+            message: "First token occurrence should be preserved literally"
+          - expression: '__output.ignoredBlocksTokenTemplate.contains("${LITERAL}/health")'
+            message: "Second token occurrence should be preserved literally"
 
       optional-name:
         description: Verify template works without explicit name input

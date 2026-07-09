@@ -181,6 +181,60 @@ func TestLogin_LoginError(t *testing.T) {
 	assert.ErrorIs(t, err, loginErr)
 }
 
+func TestLogin_LoginRunnerUsed(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "oidc", token: &auth.Token{AccessToken: "tok"}}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true, ContextName: "prod"}}
+
+	var (
+		runnerCalls   int
+		runnerHandler Authenticator
+		runnerOpts    auth.LoginOptions
+	)
+	deps := Deps{
+		Handler:    handler,
+		Kubeconfig: kc,
+		LoginRunner: func(_ context.Context, h Authenticator, opts auth.LoginOptions) (*auth.Result, error) {
+			runnerCalls++
+			runnerHandler = h
+			runnerOpts = opts
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+		Timeout:     42 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// The runner is invoked in place of handler.Login and receives the resolved
+	// handler plus the built login options.
+	assert.Equal(t, 1, runnerCalls)
+	assert.Same(t, handler, runnerHandler)
+	assert.Equal(t, 42*time.Second, runnerOpts.Timeout)
+	// handler.Login must not be called directly when a runner is set.
+	assert.Equal(t, auth.LoginOptions{}, handler.loginOpts)
+}
+
+func TestLogin_LoginRunnerError(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("runner boom")
+	deps := Deps{
+		Handler:    &stubAuth{name: "oidc"},
+		Kubeconfig: &stubKube{},
+		LoginRunner: func(_ context.Context, _ Authenticator, _ auth.LoginOptions) (*auth.Result, error) {
+			return nil, runnerErr
+		},
+	}
+	_, err := Login(context.Background(), deps, Request{Server: "https://api.example.com:6443", ClusterName: "prod"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, runnerErr)
+}
+
 func TestLogin_ProviderSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -281,6 +335,130 @@ func TestLogin_HostnameNotForwardedWithoutCapability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, handler.loginOpts.Hostname,
 		"handlers without CapHostname must not receive the API server URL")
+}
+
+func TestLogin_ProvideClusterInfoAlwaysSet(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "openshift"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+	})
+	require.NoError(t, err)
+	assert.True(t, kc.writeIn.ProvideClusterInfo,
+		"kube login must set provideClusterInfo so kubectl passes cluster details via KUBERNETES_EXEC_INFO")
+}
+
+func TestLogin_DirectURLDerivesEntryNames(t *testing.T) {
+	t.Parallel()
+
+	// `kube login https://api.example.com:6443` (positional is a concrete URL):
+	// the kubeconfig entries must be named with the derived host, not the raw
+	// URL, which is not a usable entry name and can exceed cluster_name limits.
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Cluster: "https://api.example.com:6443",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "api.example.com", kc.writeIn.ClusterName)
+	assert.Equal(t, "api.example.com", kc.writeIn.ContextName)
+	assert.Equal(t, "api.example.com", kc.writeIn.UserName)
+	assert.Equal(t, "https://api.example.com:6443", kc.writeIn.Server)
+}
+
+func TestLogin_ClusterNameFlagOverridesDerivedURLName(t *testing.T) {
+	t.Parallel()
+
+	// An explicit --cluster-name still wins over the host-derived name for the
+	// direct URL form.
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Cluster:     "https://api.example.com:6443",
+		ClusterName: "prod",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "prod", kc.writeIn.ClusterName)
+}
+
+func TestLogin_SupportsPerClusterTokens(t *testing.T) {
+	t.Parallel()
+
+	t.Run("handler with CapTokenHostname", func(t *testing.T) {
+		t.Parallel()
+		handler := &stubAuth{name: "openshift", caps: []auth.Capability{auth.CapTokenHostname}}
+		kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+		res, err := Login(context.Background(), Deps{Handler: handler, Kubeconfig: kc}, Request{
+			Server:      "https://api.example.com:6443",
+			ClusterName: "prod",
+		})
+		require.NoError(t, err)
+		assert.True(t, res.SupportsPerClusterTokens)
+	})
+
+	t.Run("handler without CapTokenHostname", func(t *testing.T) {
+		t.Parallel()
+		handler := &stubAuth{name: "plain", caps: []auth.Capability{auth.CapHostname}}
+		kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+		res, err := Login(context.Background(), Deps{Handler: handler, Kubeconfig: kc}, Request{
+			Server:      "https://api.example.com:6443",
+			ClusterName: "prod",
+		})
+		require.NoError(t, err)
+		assert.False(t, res.SupportsPerClusterTokens,
+			"a handler that advertises only CapHostname (login) must not be reported as per-cluster token capable")
+	})
+}
+
+func TestLogin_WhoamiTokenRoutedByHostname(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CapTokenHostname handler gets the cluster hostname", func(t *testing.T) {
+		t.Parallel()
+		handler := &stubAuth{
+			name:  "openshift",
+			caps:  []auth.Capability{auth.CapTokenHostname},
+			token: &auth.Token{AccessToken: "tok"},
+		}
+		kc := &stubKube{
+			writeRes:  kubeconfig.WriteResult{Success: true},
+			whoamiRes: kubeconfig.WhoamiResult{Success: true},
+		}
+		_, err := Login(context.Background(), Deps{Handler: handler, Kubeconfig: kc}, Request{
+			Server:      "https://api.example.com:6443",
+			ClusterName: "prod",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "https://api.example.com:6443", handler.tokenOpts.Hostname,
+			"post-login whoami must route to the just-authenticated cluster")
+	})
+
+	t.Run("non-capable handler gets no hostname", func(t *testing.T) {
+		t.Parallel()
+		handler := &stubAuth{
+			name:  "plain",
+			token: &auth.Token{AccessToken: "tok"},
+		}
+		kc := &stubKube{
+			writeRes:  kubeconfig.WriteResult{Success: true},
+			whoamiRes: kubeconfig.WhoamiResult{Success: true},
+		}
+		_, err := Login(context.Background(), Deps{Handler: handler, Kubeconfig: kc}, Request{
+			Server:      "https://api.example.com:6443",
+			ClusterName: "prod",
+		})
+		require.NoError(t, err)
+		assert.Empty(t, handler.tokenOpts.Hostname)
+	})
 }
 
 func TestLogin_WriteError(t *testing.T) {

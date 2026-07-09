@@ -22,7 +22,7 @@ func TokenPassthrough(allowedTokenHeaderSuffixes []string) func(http.Handler) ht
 					tokens[strings.TrimPrefix(key, TokenHeaderPrefix)] = token
 				}
 			}
-			ctx := withContextTokens(r.Context(), tokens)
+			ctx := WithContextTokens(r.Context(), tokens)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -68,7 +68,8 @@ func validHeaderFieldName(name string) bool {
 	return true
 }
 
-func withContextTokens(ctx context.Context, tokens map[string]string) context.Context {
+// WithContextTokens stores extracted passthrough tokens in the context.
+func WithContextTokens(ctx context.Context, tokens map[string]string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -5,6 +5,7 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -21,14 +22,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
-	"github.com/oakwood-commons/scafctl/pkg/runmode"
-	sidregistry "github.com/oakwood-commons/scafctl/pkg/serveridentity/registry"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/spf13/cobra"
 )
 
@@ -136,18 +134,9 @@ func runServe(ctx context.Context, opts *Options) error {
 		return fmt.Errorf("initializing provider registry: %w", err)
 	}
 
-	// Build server identity registry for API-mode token retrieval.
-	identityReg, err := sidregistry.TokenProviderRegistry(ctx, &cfg.APIServer, lgr)
-	if err != nil {
-		return fmt.Errorf("building identity registry: %w", err)
+	if err := configureAuthServerMode(ctx, authReg, cfg, lgr); err != nil {
+		return fmt.Errorf("configuring auth server mode: %w", err)
 	}
-	// Build token provider registry for unified token retrieval in API mode.
-	tsReg, err := tokenprovider.Build(runmode.API, nil, identityReg)
-	if err != nil {
-		return fmt.Errorf("building token provider registry: %w", err)
-	}
-
-	ctx = tokenprovider.WithRegistry(ctx, tsReg)
 
 	// Parse plugin allowlist at startup boundary (validates "catalog/plugin" format).
 	var (
@@ -232,8 +221,6 @@ func runServe(ctx context.Context, opts *Options) error {
 		api.WithServerContext(ctx),
 		api.WithServerVersion(settings.VersionInformation.BuildVersion),
 		api.WithServerPluginPool(pluginPool),
-
-		api.WithServerTokenProviderRegistry(tsReg),
 	}
 	if authReg != nil {
 		serverOpts = append(serverOpts, api.WithServerAuthRegistry(authReg))
@@ -476,4 +463,89 @@ func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fe
 		}, providers)
 	}
 	return pool
+}
+
+func authPluginSettings(cfg *config.Config, handlerName string) ([]byte, error) {
+	raw, ok := cfg.APIServer.Auth.Handlers[handlerName]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal auth plugin settings for %q: %w", handlerName, err)
+	}
+	return data, nil
+}
+
+// activateAuthPluginServerMode iterates registered auth handlers and calls
+// ActivateServerMode on each one that has server-mode settings configured
+// in cfg.APIServer.Auth.Handlers. This switches plugins from CLI flows to
+// server flows (client_credentials, WIF, OBO).
+func activateAuthPluginServerMode(ctx context.Context, registry *auth.Registry, cfg *config.Config, lgr *logr.Logger) error {
+	if len(cfg.APIServer.Auth.Handlers) == 0 {
+		return nil
+	}
+
+	if registry == nil {
+		return fmt.Errorf("auth registry not available for server-mode activation")
+	}
+
+	for handlerName := range cfg.APIServer.Auth.Handlers {
+		handler, err := registry.Get(handlerName)
+		if err != nil {
+			return fmt.Errorf("auth handler %q not found in registry: %w", handlerName, err)
+		}
+
+		activator, ok := handler.(auth.ServerMode)
+		if !ok {
+			return fmt.Errorf("auth handler %q does not support server mode", handlerName)
+		}
+
+		settings, err := authPluginSettings(cfg, handlerName)
+		if err != nil {
+			return fmt.Errorf("auth handler %q settings: %w", handlerName, err)
+		}
+		if settings == nil {
+			return fmt.Errorf("auth handler %q has no server mode settings configured", handlerName)
+		}
+
+		if err := activator.ActivateServerMode(ctx, settings); err != nil {
+			return fmt.Errorf("activating server mode on auth handler %q: %w", handlerName, err)
+		}
+		lgr.V(0).Info("activated server mode on auth plugin", "handler", handlerName)
+	}
+
+	return nil
+}
+
+// disableNonServerModeHandlers disables all auth handlers that were not
+// activated in server mode. This prevents CLI-only handlers (device-code,
+// browser-based flows) from being invoked in the non-interactive API server.
+func disableNonServerModeHandlers(registry *auth.Registry, cfg *config.Config, lgr *logr.Logger) {
+	for _, name := range registry.List() {
+		if _, configured := cfg.APIServer.Auth.Handlers[name]; configured {
+			continue
+		}
+		if err := registry.Disable(name, "not configured for server mode"); err == nil {
+			lgr.V(0).Info("disabled auth handler not configured for server mode", "handler", name)
+		}
+	}
+}
+
+// configureAuthServerMode activates server mode on auth handler plugins for API-mode token acquisition.
+// This tells plugins to switch from CLI flows  to server flows
+// and disables non-server-mode handlers.
+func configureAuthServerMode(ctx context.Context, registry *auth.Registry, cfg *config.Config, lgr *logr.Logger) error {
+	if err := activateAuthPluginServerMode(ctx, registry, cfg, lgr); err != nil {
+		return fmt.Errorf("activating auth plugin server mode: %w", err)
+	}
+	if registry != nil {
+		// Disable auth handlers that were not activated in server mode.
+		// In API mode, only handlers with explicit server-mode settings should
+		// be usable — others would fall back to CLI flows (device-code) which
+		// cannot work in a non-interactive server process.
+		disableNonServerModeHandlers(registry, cfg, lgr)
+	}
+
+	return nil
 }

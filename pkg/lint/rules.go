@@ -390,6 +390,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Preferred:\ntmpl: \"Deploying {{ .config.appName }}\"\n\n# Also works (via underscore alias):\ntmpl: \"Deploying {{ ._.config.appName }}\"",
 		},
 	},
+	"template-unknown-accessor": {
+		Rule:        "template-unknown-accessor",
+		Severity:    string(SeverityWarning),
+		Category:    "template",
+		Description: "A resolve/transform Go template references a root-level accessor ('{{ .field }}' or '{{ ._.name }}') that is not a known resolver, data-input key, or forEach alias.",
+		Why:         "Go templates render an unknown root accessor as empty (missingkey default) instead of failing, so a typo silently produces blank output. The template root namespace is the union of resolver values, the step's data-input keys, and any forEach item/index aliases.",
+		Fix:         "Fix the typo, add a resolver (or dependsOn) with that name, or provide the value via a data input. Use '{{ ._.name }}' to force a resolver reference.",
+		Examples: []string{
+			"# Wrong — 'projcts' is a typo (no such resolver/data key):\nprovider: go-template\ninputs:\n  template:\n    tmpl: \"{{ range .projcts }}{{ .name }}{{ end }}\"\n\n# Correct — reference the real resolver 'projects':\nprovider: go-template\ninputs:\n  template:\n    tmpl: \"{{ range .projects }}{{ .name }}{{ end }}\"",
+		},
+	},
 	"missing-state-backend": {
 		Rule:        "missing-state-backend",
 		Severity:    string(SeverityError),

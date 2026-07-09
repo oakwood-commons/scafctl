@@ -136,6 +136,29 @@ func TestCommandLogin_JSONOutput(t *testing.T) {
 	assert.Contains(t, buf.String(), "prod")
 }
 
+func TestCommandLogin_JSONReportsPerClusterTokens(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withMockHandler(t, ctx)
+	mock.CapabilitiesValue = []auth.Capability{auth.CapTokenHostname}
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok"}
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod",
+		"--handler", mockHandlerName,
+		"--server", "https://api.example.com:6443",
+		"--kubeconfig", path,
+		"--output", "json",
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "\"perClusterTokens\"")
+	assert.Contains(t, buf.String(), "true",
+		"a CapTokenHostname handler must report perClusterTokens:true")
+}
+
 func TestCommandLogin_HandlerFromResolverDefault(t *testing.T) {
 	t.Parallel()
 	ctx, buf := newTestContext(t)
@@ -183,4 +206,33 @@ func TestCommandLogin_VerifyFailsWithoutProvider(t *testing.T) {
 	require.Error(t, err)
 	assert.FileExists(t, path, "kubeconfig entry is written even when verification fails")
 	assert.Contains(t, buf.String(), "was written", "user is told the entry was written despite the verify failure")
+}
+
+func TestLoginTUIEligibleFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		output string
+		want   bool
+	}{
+		{output: "", want: true},         // auto
+		{output: "auto", want: true},     // auto
+		{output: "table", want: true},    // human table
+		{output: "list", want: true},     // human list
+		{output: "json", want: false},    // structured
+		{output: "yaml", want: false},    // structured
+		{output: "csv", want: false},     // structured
+		{output: "toml", want: false},    // structured
+		{output: "mermaid", want: false}, // structured
+		{output: "quiet", want: false},   // suppressed
+		{output: "bogus", want: true},    // unrecognized parses as auto
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.output, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, loginTUIEligibleFormat(tt.output),
+				"format %q eligibility", tt.output)
+		})
+	}
 }

@@ -130,17 +130,32 @@ func TestAccessTokenFromContext_Present(t *testing.T) {
 
 func TestAuthClaims_CallerType_User(t *testing.T) {
 	claims := &AuthClaims{IDType: ""}
-	assert.Equal(t, "user", claims.CallerType())
+	assert.Equal(t, IdentityTypeUser, claims.CallerType())
 }
 
 func TestAuthClaims_CallerType_App(t *testing.T) {
 	claims := &AuthClaims{IDType: "app"}
-	assert.Equal(t, "app", claims.CallerType())
+	assert.Equal(t, IdentityTypeApp, claims.CallerType())
 }
 
 func TestAuthClaims_CallerType_UnknownDefaultsToUser(t *testing.T) {
 	claims := &AuthClaims{IDType: "something"}
-	assert.Equal(t, "user", claims.CallerType())
+	assert.Equal(t, IdentityTypeUser, claims.CallerType())
+}
+
+func TestWithOIDCProvider_RoundTrip(t *testing.T) {
+	ctx := WithOIDCProvider(context.Background(), "entra")
+	assert.Equal(t, "entra", OIDCProviderFromContext(ctx))
+}
+
+func TestOIDCProviderFromContext_EmptyContext(t *testing.T) {
+	assert.Equal(t, "", OIDCProviderFromContext(context.Background()))
+}
+
+func TestWithOIDCProvider_OverwritesPrevious(t *testing.T) {
+	ctx := WithOIDCProvider(context.Background(), "entra")
+	ctx = WithOIDCProvider(ctx, "github")
+	assert.Equal(t, "github", OIDCProviderFromContext(ctx))
 }
 
 func BenchmarkAzureOIDCAuth_MissingHeader(b *testing.B) {
@@ -463,7 +478,7 @@ func TestAzureOIDCAuth_StoresClaimsAndTokenInContext(t *testing.T) {
 	assert.Equal(t, tenant, capturedClaims.TenantID)
 	assert.Equal(t, "obj-789", capturedClaims.ObjectID)
 	assert.Equal(t, "app", capturedClaims.IDType)
-	assert.Equal(t, "app", capturedClaims.CallerType())
+	assert.Equal(t, IdentityTypeApp, capturedClaims.CallerType())
 	assert.Equal(t, []string{"admin", "reader"}, capturedClaims.Roles)
 
 	// Verify access token stored correctly.

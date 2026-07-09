@@ -119,7 +119,7 @@ All plugin binaries are verified against a SHA-256 digest before execution. This
 
 ```
 plugin my-plugin@1.0.0: no digest available for verification;
-run 'scafctl build solution' to generate a lock file with pinned digests
+run 'scafctl package solution' to generate a lock file with pinned digests
 ```
 
 Always use lock files in production:
@@ -128,7 +128,7 @@ Always use lock files in production:
 {{% tab "Bash" %}}
 ```bash
 # Generate a lock file with pinned versions and digests
-scafctl build solution -f solution.yaml
+scafctl package solution -f solution.yaml
 
 # The lock file pins exact versions and digests
 cat .scafctl.lock.yaml
@@ -137,7 +137,7 @@ cat .scafctl.lock.yaml
 {{% tab "PowerShell" %}}
 ```powershell
 # Generate a lock file with pinned versions and digests
-scafctl build solution -f solution.yaml
+scafctl package solution -f solution.yaml
 
 # The lock file pins exact versions and digests
 cat .scafctl.lock.yaml
@@ -254,7 +254,7 @@ cel:
   costLimit: 1000000
 ```
 
-- [ ] Use lock files for all solutions (`scafctl build solution`)
+- [ ] Use lock files for all solutions (`scafctl package solution`)
 - [ ] Store GitHub App private keys in the secret store
 - [ ] Enable `requireSecureKeyring` in production
 - [ ] Keep `allowPrivateIPs: false` (default) unless on-premises access is needed

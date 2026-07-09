@@ -65,8 +65,8 @@ scafctl get examples -o json
 
 > **Terminology Note**: The `plugins/` directory contains go-plugin source code for developing custom providers. When distributing via the catalog, these are pushed as **provider** or **auth-handler** artifacts:
 > ```bash
-> # Build and push a provider to the catalog
-> scafctl build provider ./my-provider --version 1.0.0
+> # Package and push a provider to the catalog
+> scafctl package plugin --name my-provider --kind provider --version 1.0.0 --platform linux/amd64=./my-provider
 > scafctl catalog push my-provider@1.0.0 --catalog ghcr.io/myorg
 > 
 > # The artifact is stored at: ghcr.io/myorg/providers/my-provider:1.0.0
@@ -315,8 +315,8 @@ scafctl snapshot diff /tmp/snap-a.json /tmp/snap-b.json
 
 ### Build and Run from Catalog
 ```bash
-# Build a solution into the catalog
-scafctl build solution -f examples/resolver-demo.yaml --version 1.0.0
+# Package a solution into the catalog
+scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
 
 # Run by name (no file path needed)
 scafctl run resolver resolver-demo
@@ -328,7 +328,7 @@ scafctl catalog list
 ### Export and Import (Air-Gapped Transfer)
 ```bash
 # Build and export a solution
-scafctl build solution -f examples/resolver-demo.yaml --version 1.0.0
+scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
 scafctl catalog save resolver-demo -o resolver-demo.tar
 
 # Transfer the tar file to another machine, then import
@@ -341,8 +341,8 @@ scafctl run resolver resolver-demo
 ### Version Management
 ```bash
 # Build multiple versions
-scafctl build solution -f examples/resolver-demo.yaml --version 1.0.0
-scafctl build solution -f examples/resolver-demo.yaml --version 2.0.0
+scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
+scafctl package solution -f examples/resolver-demo.yaml --version 2.0.0
 
 # Export specific version
 scafctl catalog save resolver-demo@1.0.0 -o resolver-demo-v1.tar

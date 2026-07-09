@@ -268,10 +268,10 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 	}
 
 	// Resolve auth provider for automatic token bridging
-	authProvider := resolveAuthProvider(ctx, registry, opts.Catalog)
+	authHandler := resolveAuthHandler(ctx, registry, opts.Catalog)
 	authScope := resolveAuthScope(ctx, opts.Catalog)
 
-	verboseRemoteInfo(ctx, w, registry, repository, authProvider, authScope)
+	verboseRemoteInfo(ctx, w, registry, repository, authHandlerName(authHandler), authScope)
 
 	// Create remote catalog
 	remoteCatalog, err := catalog.NewRemoteCatalog(catalog.RemoteCatalogConfig{
@@ -279,7 +279,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		Registry:        registry,
 		Repository:      repository,
 		CredentialStore: credStore,
-		AuthProvider:    authProvider,
+		AuthHandler:     authHandler,
 		AuthScope:       authScope,
 		Insecure:        opts.Insecure,
 		Logger:          *lgr,

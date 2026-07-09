@@ -79,6 +79,48 @@ After login, `kubectl` reuses the scafctl-managed identity automatically:
 kubectl --context prod get pods
 ```
 
+## Configure Cluster Resolution
+
+The stock binary resolves clusters by name from the `kube.clusters` config
+section, so `kube login <cluster>` needs neither `--server` nor `--handler` for
+known clusters. Resolution precedence is: explicit `--server`/`--handler` flags,
+then a concrete URL argument, then a static alias, then the dynamic inventory.
+
+Static aliases for one-off clusters not in any inventory:
+
+```yaml
+kube:
+  clusters:
+    aliases:
+      lab:
+        server: https://api.lab.example.com:6443
+        defaultHandler: openshift
+```
+
+A fleet inventory that stamps the handler and auth type on every entry (reuses
+the hostname inventory contract -- source, CEL transform, ttl):
+
+```yaml
+kube:
+  clusters:
+    resolver:
+      source:
+        url: https://clusters.example.com/
+      transform: '_.map(k, {"name": k, "url": _[k].apiServerURL, "defaultHandler": "openshift", "authType": "oauth"})'
+      ttl: 10m
+```
+
+With either configured, all of these work:
+
+```bash
+scafctl kube login lab                      # static alias
+scafctl kube login pd1020                    # from inventory
+scafctl kube login https://api.x:6443 --handler oidc   # direct URL, no config
+```
+
+Embedders can still supply a `RootOptions.ClusterResolver` implementation, which
+takes precedence over the config-driven resolver.
+
 ## Log Out
 
 Remove the kubeconfig entry and revoke the handler's cached credentials:

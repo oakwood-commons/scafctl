@@ -549,12 +549,12 @@ func (c *AuthHandlerClient) Login(ctx context.Context, handlerName string, req L
 
 // Logout delegates to the plugin's Logout.
 func (c *AuthHandlerClient) Logout(ctx context.Context, handlerName string) error {
-	return c.plugin.Logout(ctx, handlerName)
+	return c.plugin.Logout(ctx, handlerName, LogoutRequest{})
 }
 
 // GetStatus delegates to the plugin's GetStatus.
 func (c *AuthHandlerClient) GetStatus(ctx context.Context, handlerName string) (*auth.Status, error) {
-	return c.plugin.GetStatus(ctx, handlerName)
+	return c.plugin.GetStatus(ctx, handlerName, StatusRequest{})
 }
 
 // GetToken delegates to the plugin's GetToken.
@@ -579,6 +579,13 @@ func (c *AuthHandlerClient) HostServiceID() uint32 {
 		return gc.hostServiceID
 	}
 	return 0
+}
+
+func (c *AuthHandlerClient) ActivateServerMode(ctx context.Context, settings []byte) error {
+	if sm, ok := c.plugin.(*AuthHandlerGRPCClient); ok {
+		return sm.ActivateServerMode(ctx, settings)
+	}
+	return fmt.Errorf("plugin does not support server mode")
 }
 
 // Kill terminates the plugin process.

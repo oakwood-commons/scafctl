@@ -75,3 +75,71 @@ func BenchmarkGoTemplateProvider_Execute_DryRun(b *testing.B) {
 		_, _ = p.Execute(ctx, inputs)
 	}
 }
+
+func BenchmarkGoTemplateProvider_RenderTree(b *testing.B) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	b.Run("shared_data_only", func(b *testing.B) {
+		inputs := map[string]any{
+			"operation": "render-tree",
+			"name":      "shared-data-tree",
+			"entries": []any{
+				map[string]any{
+					"path":    "envs/dev/backend.tf",
+					"content": "app = {{ .platformAppName }}",
+				},
+				map[string]any{
+					"path":    "envs/staging/backend.tf",
+					"content": "app = {{ .platformAppName }}",
+				},
+				map[string]any{
+					"path":    "envs/prod/backend.tf",
+					"content": "app = {{ .platformAppName }}",
+				},
+			},
+			"data": map[string]any{
+				"platformAppName": "my-app",
+			},
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
+
+	b.Run("per_entry_data_fanout", func(b *testing.B) {
+		inputs := map[string]any{
+			"operation": "render-tree",
+			"name":      "fanout-tree",
+			"entries": []any{
+				map[string]any{
+					"path":    "envs/dev/backend.tf",
+					"content": "app = {{ .platformAppName }}\nenv = {{ .environment }}",
+					"data":    map[string]any{"environment": "dev"},
+				},
+				map[string]any{
+					"path":    "envs/staging/backend.tf",
+					"content": "app = {{ .platformAppName }}\nenv = {{ .environment }}",
+					"data":    map[string]any{"environment": "staging"},
+				},
+				map[string]any{
+					"path":    "envs/prod/backend.tf",
+					"content": "app = {{ .platformAppName }}\nenv = {{ .environment }}",
+					"data":    map[string]any{"platformAppName": "prod-app", "environment": "prod"},
+				},
+			},
+			"data": map[string]any{
+				"platformAppName": "my-app",
+			},
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
+}

@@ -132,11 +132,12 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 	lgr.V(1).Info("login via plugin auth handler", "handler", w.handlerName)
 
 	req := LoginRequest{
-		TenantID: opts.TenantID,
-		Hostname: opts.Hostname,
-		Scopes:   opts.Scopes,
-		Flow:     opts.Flow,
-		Timeout:  opts.Timeout,
+		TenantID:     opts.TenantID,
+		Hostname:     opts.Hostname,
+		Scopes:       opts.Scopes,
+		Flow:         opts.Flow,
+		Timeout:      opts.Timeout,
+		CallbackPort: opts.CallbackPort,
 	}
 
 	// Bridge the LoginOptions.DeviceCodeCallback to the plugin's streaming callback.
@@ -197,11 +198,24 @@ func (w *AuthHandlerWrapper) Login(ctx context.Context, opts auth.LoginOptions) 
 }
 
 // Logout implements auth.Handler.
+//
+// The empty LogoutRequest{} sends no instance Hostname: the auth.Handler
+// interface's Logout(ctx) carries no selector, so scafctl's own commands clear
+// all of a handler's cached credentials. Per-instance status/logout selection
+// (LogoutRequest/StatusRequest.Hostname, backed by CapInstanceHostname) is
+// forwarded faithfully at the gRPC boundary but not yet wired into a
+// hostname-aware auth.Handler path -- that is tracked separately as part of
+// scafctl-plugin-sdk#58 and is intentionally out of scope for the
+// --callback-port work (#589).
 func (w *AuthHandlerWrapper) Logout(ctx context.Context) error {
-	return w.client.plugin.Logout(ctx, w.handlerName)
+	return w.client.plugin.Logout(ctx, w.handlerName, LogoutRequest{})
 }
 
 // Status implements auth.Handler.
+//
+// See Logout: StatusRequest{} carries no instance Hostname because the
+// auth.Handler interface has no selector; per-instance status is deferred to
+// the CapInstanceHostname follow-up (scafctl-plugin-sdk#58).
 func (w *AuthHandlerWrapper) Status(ctx context.Context) (*auth.Status, error) {
 	ctx, span := authTracer.Start(ctx, "auth.plugin.status",
 		trace.WithAttributes(attribute.String("auth.handler", w.handlerName)))
@@ -216,7 +230,7 @@ func (w *AuthHandlerWrapper) Status(ctx context.Context) (*auth.Status, error) {
 		}
 	}
 
-	return w.client.plugin.GetStatus(ctx, w.handlerName)
+	return w.client.plugin.GetStatus(ctx, w.handlerName, StatusRequest{})
 }
 
 // GetToken implements auth.Handler.
@@ -235,9 +249,13 @@ func (w *AuthHandlerWrapper) GetToken(ctx context.Context, opts auth.TokenOption
 	}
 
 	req := TokenRequest{
-		Scope:        opts.Scope,
-		MinValidFor:  opts.MinValidFor,
-		ForceRefresh: opts.ForceRefresh,
+		Scope:         opts.Scope,
+		MinValidFor:   opts.MinValidFor,
+		ForceRefresh:  opts.ForceRefresh,
+		Hostname:      opts.Hostname,
+		ServerContext: opts.ServerContext,
+		Caller:        opts.Caller,
+		Assertion:     opts.Assertion,
 	}
 
 	resp, err := w.client.plugin.GetToken(ctx, w.handlerName, req)
@@ -574,4 +592,8 @@ func KillAllAuthHandlers(clients []*AuthHandlerClient) {
 			c.Kill()
 		}
 	}
+}
+
+func (w *AuthHandlerWrapper) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
+	return w.client.ActivateServerMode(ctx, settings)
 }

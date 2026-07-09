@@ -48,9 +48,9 @@ root (scafctl)
 │   └── solution                  # Dry-run with options:
 │                                 #   --graph: Show dependency graph
 │                                 #   --snapshot: Save execution snapshot
-├── build
-│   ├── solution                  # Build solution into local catalog
-│   └── plugin                    # Build plugin into local catalog
+├── package
+│   ├── solution                  # Package solution into local catalog
+│   └── plugin                    # Package plugin into local catalog
 ├── push
 │   ├── solution                  # Push solution to remote catalog
 │   └── plugin                    # Push plugin to remote catalog
@@ -121,10 +121,10 @@ pkg/cmd/scafctl/
 │   ├── render.go
 │   ├── solution.go      # 'render solution' (dry-run, --action-graph, --snapshot)
 │   └── graph.go         # Graph rendering logic
-├── build/               # 'build' verb (analogous to docker build)
-│   ├── build.go
-│   ├── solution.go      # 'build solution' to local catalog
-│   └── plugin.go        # 'build plugin' to local catalog
+├── packagecmd/          # 'package' verb ('build' alias, analogous to docker build)
+│   ├── package.go
+│   ├── solution.go      # 'package solution' to local catalog
+│   └── plugin.go        # 'package plugin' to local catalog
 ├── push/                # 'push' verb (analogous to docker push)
 │   ├── push.go
 │   ├── solution.go      # 'push solution' to remote catalog
@@ -1164,7 +1164,7 @@ This section tracks which commands from the design are implemented and what work
 | `run solution` | ✅ | Executes resolvers AND actions |
 | `run resolver` | ✅ | Executes resolvers only (for debugging and inspection) |
 | `render solution` | ✅ | Includes `--action-graph`, `--snapshot`, `--redact` flags |
-| `build solution` | ✅ | Build solution into local catalog |
+| `package solution` | ✅ | Package solution into local catalog |
 | `catalog push` | ✅ | Push artifacts to remote catalog |
 | `catalog pull` | ✅ | Pull artifacts from remote catalog |
 | `catalog list` | ✅ | List catalog contents |
@@ -1346,23 +1346,25 @@ func CommandCatalog(...) *cobra.Command {
 
 #### 6. Implement Catalog Artifact Commands
 
-##### `build solution` / `build plugin`
+##### `package solution` / `package plugin`
 
 ```go
-// pkg/cmd/scafctl/build/solution.go
+// pkg/cmd/scafctl/packagecmd/solution.go
 
-type BuildSolutionOptions struct {
+type SolutionOptions struct {
     File string // -f flag
 }
 ```
 
 **Flags**:
-- `-f, --file` - Solution/plugin file path
+- `package solution`: `-f, --file` - Solution file path
+- `package plugin`: `--name`, `--kind`, `--version`, and one or more `--platform os/arch=path`
 
 **Examples**:
 ```bash
-scafctl build solution -f ./solution.yaml
-scafctl build plugin -f ./plugin-config.yaml
+scafctl package solution -f ./solution.yaml
+scafctl package plugin --name my-plugin --kind provider --version 1.0.0 \
+  --platform linux/amd64=./bin/my-plugin
 ```
 
 ##### `push solution` / `push plugin`

@@ -16,7 +16,8 @@
 //
 // Resolve returns just the endpoint URL. ResolveEntry returns the full Entry,
 // including optional per-cluster OIDC metadata (audience, authType, caData,
-// consoleUrl, insecureSkipTls) that a config-driven inventory can surface for
+// defaultHandler, consoleUrl, insecureSkipTls) that a config-driven inventory
+// can surface for
 // kube login.
 //
 // scafctl core stays shape-blind: all inventory normalization lives in the
@@ -52,6 +53,11 @@ type Entry struct {
 	// AuthType is the login method for this cluster: "" (auto), "oauth", or
 	// "oidc". It mirrors kube.AuthType.
 	AuthType string `json:"authType,omitempty"`
+
+	// DefaultHandler is the auth handler used to authenticate to this cluster
+	// when the caller does not pass an explicit --handler. It lets a fleet
+	// inventory drive `kube login <cluster>` without naming a handler.
+	DefaultHandler string `json:"defaultHandler,omitempty"`
 
 	// CAData is a PEM-encoded CA bundle for the endpoint (preferred over
 	// InsecureSkipTLS).
@@ -103,6 +109,15 @@ func (d Deps) withDefaults() Deps {
 		d.Transform = defaultTransform
 	}
 	return d
+}
+
+// DefaultDeps returns the production collaborators used by Resolve/ResolveEntry:
+// httpc fetch, tokenprovider token, celexp transform, and an on-disk inventory
+// cache. Callers that resolve an inventory outside the auth-handler config path
+// (for example kube cluster resolution) can reuse the same engine via
+// ResolveEntryWith with these deps.
+func DefaultDeps() Deps {
+	return Deps{Cache: newDiskCache()}.withDefaults()
 }
 
 // Resolve turns a hostname selector into a concrete endpoint URL for the given
@@ -179,6 +194,42 @@ func ResolveEntryWith(ctx context.Context, cfg *config.HostnameConfig, handler, 
 
 	// 5. Not found in aliases and no resolver configured.
 	return nil, fmt.Errorf("%w: %q (available: %s)", ErrSelectorNotFound, selector, availableNames(cfg, nil))
+}
+
+// ResolveInventory fetches, transforms, and caches the endpoint inventory for
+// the given resolver config and returns all entries. It is the list-all
+// counterpart to ResolveEntryWith's single-selector lookup, for callers that
+// enumerate entries (e.g. kube cluster-name shell completion). The handler
+// namespaces the cache key and guards against a resolver depending on the
+// handler it resolves; pass a stable non-auth-handler token (e.g. "kube") for
+// non-auth callers.
+func ResolveInventory(ctx context.Context, rc *config.HostnameResolverConfig, handler string, deps Deps) ([]Entry, error) {
+	return resolveInventory(ctx, rc, handler, deps.withDefaults())
+}
+
+// CachedInventory returns the inventory entries already cached for the resolver
+// config, without triggering a network fetch. ok is false when nothing is
+// cached (or caching is disabled). It lets latency-sensitive callers such as
+// shell completion enumerate previously-resolved entries without blocking on
+// I/O. The handler must match the one used at resolution time so the cache key
+// aligns.
+func CachedInventory(ctx context.Context, rc *config.HostnameResolverConfig, handler string, deps Deps) ([]Entry, bool) {
+	deps = deps.withDefaults()
+	if deps.Cache == nil {
+		return nil, false
+	}
+	return deps.Cache.Get(ctx, cacheKey(handler, rc))
+}
+
+// AllCachedInventoryEntries returns the union of inventory entries from every
+// resolver cache on disk, ignoring TTL expiry and without evicting anything. It
+// is a display-only, network-free helper for reverse-mapping a cluster URL back
+// to its short selector when the caller does not know which resolver produced
+// the cache -- for example `auth status` labeling a cluster that was resolved
+// via `kube login` under a different cache key. Returns nil when nothing is
+// cached.
+func AllCachedInventoryEntries() []Entry {
+	return newDiskCache().peekAll()
 }
 
 // resolveInventory fetches, transforms, and caches the endpoint inventory.

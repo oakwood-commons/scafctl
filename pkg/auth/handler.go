@@ -73,6 +73,7 @@ const (
 	FlowGcloudADC         = sdkauth.FlowGcloudADC
 	FlowGitHubApp         = sdkauth.FlowGitHubApp
 	FlowClientCredentials = sdkauth.FlowClientCredentials
+	FlowOnBehalfOf        = sdkauth.FlowOnBehalfOf
 )
 
 // DefaultMinValidFor is the default minimum validity duration for tokens.
@@ -146,3 +147,10 @@ type Configurer interface {
 	// Only non-empty values are applied; empty strings are ignored.
 	ApplyOverrides(ctx context.Context, overrides map[string]string) error
 }
+
+type ServerMode = sdkplugin.ServerMode
+
+const (
+	Delegate = sdkauth.ServerContextDelegated
+	Server   = sdkauth.ServerContextServer
+)

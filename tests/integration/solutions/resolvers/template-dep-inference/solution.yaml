@@ -1,0 +1,198 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-template-dep-inference
+  version: 1.0.0
+  description: |
+    Regression tests for go-template auto-dependency inference. A go-template
+    render step's template root namespace is the union of resolver values, the
+    step's data-input keys, and any forEach item/index aliases. Bare
+    "{{ .field }}" accessors that are satisfied by a data key or a forEach alias
+    must NOT be inferred as resolver dependencies — inferring them previously
+    produced a hard "depends on X but X wasn't present" build failure.
+
+    This exercises three scenarios that all must build (exit 0) and render:
+      - renderedFile:   forEach over a file-based template (template.expr) whose
+                        data.expr provides __fan/platformAppName/appName keys.
+      - renderedInline: forEach over an inline literal template whose data.expr
+                        provides projects/platformAppName/appName keys.
+      - renderedAlias:  forEach whose inline template references the loop alias
+                        directly as "{{ .proj.field }}" via a data key.
+
+spec:
+  resolvers:
+    debug:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "false"
+
+    appName:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-app
+
+    platformAppName:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: my-platform-app
+
+    gcpProjects:
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - app_environment: dev
+                  tfstate_bucket_name: bucket-dev
+                - app_environment: prod
+                  tfstate_bucket_name: bucket-prod
+
+    # Holds a go-template as a string under `.content`, mirroring a file-read
+    # result. Scenario A references it via template.expr: _.backendTemplate.content.
+    backendTemplate:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                content: |
+                  # The following determines where Terraform's state file is stored.
+
+                  #{{ if .debug | eq "false" }}
+                  terraform {
+                    backend "gcs" {
+                      bucket = "{{ .__fan.projects.tfstate_bucket_name }}"
+                      prefix = "terraform/{{ .platformAppName }}/{{ .__fan.projects.app_environment }}/{{ .appName }}"
+                    }
+                  }
+                  # {{else}}
+                  # Removed for testing purposes
+                  # {{ end}}
+
+    # Scenario A: forEach rendering a template stored in another resolver. The
+    # template references {{ .platformAppName }}, {{ .__fan.projects.* }},
+    # {{ .appName }}. No explicit dependsOn — the data keys and forEach alias are
+    # supplied via data.expr and the forEach clause, so none of them are deps.
+    renderedFile:
+      type: array
+      resolve:
+        with:
+          - provider: go-template
+            forEach:
+              item: proj
+              in:
+                expr: "_.gcpProjects"
+            inputs:
+              operation: render
+              template:
+                expr: "_.backendTemplate.content"
+              data:
+                expr: |
+                  {"__fan": {"projects": proj}, "debug": _.debug,
+                   "platformAppName": _.platformAppName, "appName": _.appName}
+
+    # Scenario B: forEach rendering an INLINE literal template. The template text
+    # contains {{ .projects.* }}, {{ .platformAppName }}, {{ .appName }}, all of
+    # which are provided via data.expr rather than resolvers.
+    renderedInline:
+      type: array
+      resolve:
+        with:
+          - provider: go-template
+            forEach:
+              item: proj
+              in:
+                expr: "_.gcpProjects"
+            inputs:
+              operation: render
+              template: |
+                terraform {
+                  backend "gcs" {
+                    bucket = "{{ .projects.tfstate_bucket_name }}"
+                    prefix = "terraform/{{ .platformAppName }}/{{ .projects.app_environment }}/{{ .appName }}"
+                  }
+                }
+              data:
+                expr: |
+                  {"projects": proj,
+                   "platformAppName": _.platformAppName, "appName": _.appName}
+
+    # Scenario C: forEach whose inline template references the loop alias `proj`
+    # directly through a data key. `proj` must not be inferred as a resolver dep.
+    renderedAlias:
+      type: array
+      resolve:
+        with:
+          - provider: go-template
+            forEach:
+              item: proj
+              in:
+                expr: "_.gcpProjects"
+            inputs:
+              operation: render
+              template: |
+                bucket = "{{ .proj.tfstate_bucket_name }}"
+                env    = "{{ .proj.app_environment }}"
+                app    = "{{ .appName }}"
+              data:
+                expr: |
+                  {"proj": proj, "appName": _.appName}
+
+  testing:
+    cases:
+      _base:
+        description: Base template — run all resolvers as JSON
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, template-dep-inference]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Solution must build and render without a dependency error"
+
+      builds-without-dependency-error:
+        description: All three go-template scenarios build (no phantom deps)
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: size(__output.renderedFile) == 2
+            message: "renderedFile should produce one rendering per project"
+          - expression: size(__output.renderedInline) == 2
+          - expression: size(__output.renderedAlias) == 2
+
+      file-template-renders-per-project:
+        description: File-based template forEach renders both projects
+        extends: [_base]
+        assertions:
+          - expression: __output.renderedFile[0].contains("bucket-dev")
+            message: "First rendering should use the dev bucket"
+          - expression: __output.renderedFile[0].contains("terraform/my-platform-app/dev/my-app")
+            message: "Prefix should interpolate platformAppName, env, and appName"
+          - expression: __output.renderedFile[1].contains("bucket-prod")
+            message: "Second rendering should use the prod bucket"
+
+      inline-template-renders:
+        description: Inline template forEach renders using data keys
+        extends: [_base]
+        assertions:
+          - expression: __output.renderedInline[0].contains("bucket-dev")
+          - expression: __output.renderedInline[0].contains("terraform/my-platform-app/dev/my-app")
+
+      alias-template-renders:
+        description: forEach alias accessed via data key renders correctly
+        extends: [_base]
+        assertions:
+          - expression: __output.renderedAlias[0].contains("bucket-dev")
+          - expression: __output.renderedAlias[0].contains("env    = \"dev\"")
+          - expression: __output.renderedAlias[0].contains("app    = \"my-app\"")

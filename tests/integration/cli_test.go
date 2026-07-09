@@ -2183,6 +2183,35 @@ func TestIntegration_LoginMissingHandler(t *testing.T) {
 	assert.Contains(t, stderr, "auth handler is required")
 }
 
+func TestIntegration_LoginResolvesClusterFromConfigAlias(t *testing.T) {
+	t.Parallel()
+	// A kube.clusters static alias supplies the server and default handler, so
+	// `kube login <alias>` resolves without --server or --handler. Login still
+	// fails later (the openshift handler plugin is not installed), but it must
+	// get PAST cluster resolution -- i.e. never hit the "no cluster server
+	// resolved" error.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	seed := `kube:
+  clusters:
+    aliases:
+      lab:
+        server: https://api.lab.example.com:6443
+        defaultHandler: openshift
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(seed), 0o600))
+
+	_, stderr, exitCode := runScafctl(t, "--config", configPath, "kube", "login", "lab")
+
+	// Do not assert on the exit code: the goal is only that cluster resolution
+	// succeeds. Login may fail later (the openshift handler plugin is not
+	// installed) or, in some environments, get further -- either way it must
+	// never hit the "no cluster server resolved" error.
+	_ = exitCode
+	assert.NotContains(t, stderr, "no cluster server resolved",
+		"the config alias must supply the server so resolution succeeds")
+}
+
 func TestIntegration_LogoutHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "kube", "logout", "--help")
@@ -2265,6 +2294,23 @@ func TestIntegration_AuthLoginCallbackPortSupported(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "--callback-port")
+}
+
+func TestIntegration_AuthLoginCallbackPortOutOfRange(t *testing.T) {
+	t.Parallel()
+	// The callback-port range is validated as a static input constraint before
+	// any handler resolution, so out-of-range values are rejected regardless of
+	// whether the target handler/plugin is installed.
+	for _, port := range []string{"80", "-1", "70000"} {
+		port := port
+		t.Run(port, func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctl(t, "auth", "login", "entra", "--callback-port", port)
+			assert.NotEqual(t, 0, exitCode)
+			assert.Contains(t, stderr, "--callback-port must be between 1024 and 65535",
+				"expected range validation error, got: %s", stderr)
+		})
+	}
 }
 
 func TestIntegration_AuthLoginGitHubInteractiveFlow(t *testing.T) {
@@ -2694,6 +2740,25 @@ func TestIntegration_Lint_WarningSeverityFilter(t *testing.T) {
 	assert.Contains(t, stdout, `"infoCount": 0`)
 }
 
+func TestIntegration_Lint_TemplateUnknownAccessor(t *testing.T) {
+	t.Parallel()
+	// The lint-stress-test solution intentionally contains a go-template
+	// resolver with a bare "{{ .projcts }}" accessor that matches no resolver,
+	// data key, or forEach alias. Lint must surface it via the
+	// template-unknown-accessor rule.
+	stdout, _, _ := runScafctl(t, "lint",
+		"-f", "examples/solutions/lint-stress-test/solution.yaml",
+		"-o", "json",
+	)
+
+	assert.Contains(t, stdout, "template-unknown-accessor",
+		"lint should report the unknown template accessor rule")
+	assert.Contains(t, stdout, "projcts",
+		"finding should name the unresolved accessor")
+	assert.Contains(t, stdout, "resolvers.typo_template.resolve",
+		"finding should point at the offending resolver step")
+}
+
 func TestIntegration_Lint_ActionSolution(t *testing.T) {
 	t.Parallel()
 	// Test linting a solution with actions
@@ -2776,24 +2841,39 @@ spec:
 }
 
 // ============================================================================
-// Build Command Tests
+// Package Command Tests
 // ============================================================================
 
-func TestIntegration_BuildHelp(t *testing.T) {
+func TestIntegration_PackageHelp(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "build", "--help")
+	stdout, _, exitCode := runScafctl(t, "package", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "build")
+	assert.Contains(t, stdout, "package")
 	assert.Contains(t, stdout, "solution")
+	assert.Contains(t, stdout, "plugin")
 }
 
-func TestIntegration_BuildSolutionHelp(t *testing.T) {
+// TestIntegration_BuildAliasStillWorks verifies the deprecated "build" alias
+// continues to resolve to the "package" command group after the rename.
+func TestIntegration_BuildAliasStillWorks(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "build", "solution", "--help")
+	_, _, groupExit := runScafctl(t, "build", "--help")
+	assert.Equal(t, 0, groupExit, "'build' group alias should still work")
+
+	_, _, solExit := runScafctl(t, "build", "solution", "--help")
+	assert.Equal(t, 0, solExit, "'build solution' alias should still work")
+
+	_, _, plugExit := runScafctl(t, "build", "plugin", "--help")
+	assert.Equal(t, 0, plugExit, "'build plugin' alias should still work")
+}
+
+func TestIntegration_PackageSolutionHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "package", "solution", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Build a solution")
+	assert.Contains(t, stdout, "Package a solution")
 	assert.Contains(t, stdout, "--version")
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--force")
@@ -2801,6 +2881,20 @@ func TestIntegration_BuildSolutionHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--no-vendor")
 	assert.Contains(t, stdout, "--bundle-max-size")
 	assert.Contains(t, stdout, "--dry-run")
+}
+
+// TestIntegration_PackageSolution_Canonical verifies the canonical "package
+// solution" command name actually packages a solution into the local catalog
+// (not just that --help resolves).
+func TestIntegration_PackageSolution_Canonical(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+	_, _, exitCode := runScafctlWithEnv(t, env, "package", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	assert.Equal(t, 0, exitCode)
 }
 
 func TestIntegration_BuildSolution_UsesMetadataVersion(t *testing.T) {
@@ -5109,6 +5203,34 @@ func TestIntegration_BuildPlugin_AuthHandler(t *testing.T) {
 	assert.Contains(t, stdout, "Built test-auth@1.0.0")
 }
 
+// TestIntegration_PackagePlugin_Canonical verifies the canonical "package
+// plugin" command name packages a multi-platform plugin into the local catalog
+// (the "build plugin" form is covered as an alias elsewhere).
+func TestIntegration_PackagePlugin_Canonical(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	binPath := filepath.Join(tmpDir, "canonical-provider")
+	require.NoError(t, os.WriteFile(binPath, []byte("provider-binary"), 0o755))
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "package", "plugin",
+		"--name", "canonical-provider",
+		"--kind", "provider",
+		"--version", "1.0.0",
+		"--platform", "linux/amd64="+binPath)
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Built canonical-provider@1.0.0")
+}
+
 // TestIntegration_AuthHandlersInstall_ThirdPartyFromCatalog verifies the fix
 // for issue #576: a non-official auth handler published to a configured
 // catalog resolves by name instead of being rejected against the hardcoded
@@ -5424,6 +5546,76 @@ spec:
 
 	// Exit code 11 = TestFailed
 	assert.Equal(t, 11, exitCode, "expected exit code 11 for test failure")
+}
+
+func TestIntegration_Test_Functional_SnapshotMasking(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/snapshot-masking/solution.yaml"
+
+	type resultItem struct {
+		Test        string         `json:"test"`
+		Status      string         `json:"status"`
+		Relaxed     bool           `json:"relaxed"`
+		MaskMatches map[string]int `json:"maskMatches"`
+	}
+
+	t.Run("json surfaces relaxed status and mask counts", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlLong(t,
+			"test", "functional",
+			"-f", solution,
+			"--skip-builtins",
+			"--no-color",
+			"-o", "json",
+		)
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+		var report struct {
+			Results []resultItem `json:"results"`
+			Summary struct {
+				Passed  int `json:"passed"`
+				Relaxed int `json:"relaxed"`
+			} `json:"summary"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+		byTest := map[string]resultItem{}
+		for _, r := range report.Results {
+			byTest[r.Test] = r
+		}
+
+		// Stdout source: custom mask + opt-in email preset (uuid disabled).
+		stdoutCase := byTest["snapshot-stdout"]
+		assert.Equal(t, "pass", stdoutCase.Status)
+		assert.True(t, stdoutCase.Relaxed, "masked test should report relaxed")
+		assert.Equal(t, 1, stdoutCase.MaskMatches["greeting"], "custom greeting mask should match once")
+		assert.Equal(t, 2, stdoutCase.MaskMatches["email"], "opt-in email preset should match twice")
+		assert.NotContains(t, stdoutCase.MaskMatches, "uuid", "disabled built-in preset must not appear")
+
+		// Files source: path-scoped custom mask over the rendered tree.
+		filesCase := byTest["snapshot-files"]
+		assert.Equal(t, "pass", filesCase.Status)
+		assert.True(t, filesCase.Relaxed)
+		assert.Equal(t, 1, filesCase.MaskMatches["contact"], "path-scoped contact mask should match once")
+
+		assert.Equal(t, 2, report.Summary.Passed)
+		assert.Equal(t, 2, report.Summary.Relaxed)
+	})
+
+	t.Run("table output shows PASS star and relaxed section", func(t *testing.T) {
+		t.Parallel()
+		stdout, stderr, exitCode := runScafctlLong(t,
+			"test", "functional",
+			"-f", solution,
+			"--skip-builtins",
+			"--no-color",
+		)
+		require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+		assert.Contains(t, stdout, "PASS*", "relaxed tests should render PASS* in the table")
+		assert.Contains(t, stdout, "Relaxed (snapshot fidelity loosened):")
+		assert.Contains(t, stdout, "2 relaxed")
+	})
 }
 
 func TestIntegration_Test_List(t *testing.T) {

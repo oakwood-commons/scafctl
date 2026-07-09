@@ -1,5 +1,5 @@
 # Run:   scafctl run resolver -f examples/solutions/nested-bundle/parent.yaml
-# Build: scafctl build solution -f examples/solutions/nested-bundle/parent.yaml --dry-run
+# Build: scafctl package solution -f examples/solutions/nested-bundle/parent.yaml --dry-run
 
 apiVersion: scafctl.io/v1
 kind: Solution

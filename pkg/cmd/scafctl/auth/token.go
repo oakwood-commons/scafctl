@@ -6,6 +6,7 @@ package auth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/execcredential"
+	hostnameresolver "github.com/oakwood-commons/scafctl/pkg/auth/hostname"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -41,6 +43,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		exportToken  bool
 		execCred     bool
 		profile      string
+		serverURL    string
 	)
 
 	cmd := &cobra.Command{
@@ -173,8 +176,13 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
-			// Scope is required only for handlers that support per-request scopes
-			if len(scopes) == 0 && auth.HasCapability(caps, auth.CapScopesOnTokenRequest) {
+			// Scope is required for handlers that support per-request scopes,
+			// EXCEPT in exec-credential mode. The kubeconfig exec block encodes
+			// the intended scope (or intentionally none, for handlers like
+			// openshift whose empty-scope token is the held user credential), so
+			// requiring one here would break kubectl/oc for those clusters.
+			execMode := execCred || os.Getenv("KUBERNETES_EXEC_INFO") != ""
+			if len(scopes) == 0 && auth.HasCapability(caps, auth.CapScopesOnTokenRequest) && !execMode {
 				err := fmt.Errorf("--scope is required for the %q auth handler", handlerName)
 				w.Errorf("%v", err)
 				return exitcode.WithCode(err, exitcode.InvalidInput)
@@ -189,10 +197,50 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				scope = strings.Join(sorted, " ")
 			}
 
+			// When kubectl/oc invoke this binary as an exec credential plugin
+			// with provideClusterInfo: true, KUBERNETES_EXEC_INFO carries the
+			// target cluster's API server URL. Forward it as the token hostname
+			// so cluster-aware handlers mint the correct per-cluster token.
+			// Gated on CapTokenHostname: older handlers that only advertise
+			// CapHostname (login) would silently ignore the field and return
+			// their default/most-recent token, so we must not rely on it.
+			// An explicit --server overrides the exec-info value so callers can
+			// request a specific cluster's token without kubectl.
+			execInfo := os.Getenv(execcredential.ExecInfoEnv)
+			var tokenHostname string
+			if auth.HasCapability(caps, auth.CapTokenHostname) {
+				tokenHostname = serverURL
+				if tokenHostname == "" {
+					tokenHostname = execcredential.ClusterServerFromExecInfo(execInfo)
+				}
+			}
+
+			// Resolve a hostname selector (static alias or dynamic inventory) into
+			// a concrete endpoint URL before requesting the token, mirroring the
+			// login path. Returns the value unchanged when it is already a URL or
+			// when the handler has no hostname config, so plain-hostname handlers
+			// and exec-info URLs are unaffected. Without this, a bare cluster
+			// selector (e.g. "pd1020") would reach the plugin unresolved and fail.
+			if tokenHostname != "" {
+				resolved, rErr := hostnameresolver.Resolve(ctx, handlerName, tokenHostname)
+				if rErr != nil {
+					w.Errorf("%v", rErr)
+					code := exitcode.GeneralError
+					if errors.Is(rErr, hostnameresolver.ErrSelectorNotFound) ||
+						errors.Is(rErr, hostnameresolver.ErrResolverLoop) ||
+						errors.Is(rErr, hostnameresolver.ErrTransformShape) {
+						code = exitcode.InvalidInput
+					}
+					return exitcode.WithCode(rErr, code)
+				}
+				tokenHostname = resolved
+			}
+
 			token, err := handler.GetToken(ctx, auth.TokenOptions{
 				Scope:        scope,
 				MinValidFor:  minValidFor,
 				ForceRefresh: forceRefresh,
+				Hostname:     tokenHostname,
 			})
 			if err != nil {
 				err = fmt.Errorf("failed to get token: %w", err)
@@ -204,7 +252,6 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			// via --exec-credential, or auto-detected when kubectl invokes this binary
 			// as an exec plugin (KUBERNETES_EXEC_INFO set) and no other render mode or
 			// explicit output format was requested.
-			execInfo := os.Getenv(execcredential.ExecInfoEnv)
 			wantExecCred := execCred
 			if !wantExecCred && execInfo != "" &&
 				!rawToken && !clip && !exportToken && !curl && !decode &&
@@ -351,6 +398,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().BoolVar(&exportToken, "export", false, fmt.Sprintf("Output a shell export statement: eval $(%s auth token ... --export)", cliParams.BinaryName))
 	cmd.Flags().BoolVar(&execCred, "exec-credential", false, "Emit a Kubernetes client-go ExecCredential JSON (for kubectl/oc exec credential plugins; auto-detected when KUBERNETES_EXEC_INFO is set)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
+	cmd.Flags().StringVar(&serverURL, "server", "", "Cluster API server URL selecting which per-cluster token to mint (handlers advertising token_hostname); overrides KUBERNETES_EXEC_INFO")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
 	return cmd

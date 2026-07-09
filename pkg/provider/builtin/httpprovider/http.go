@@ -14,19 +14,25 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/google/jsonschema-go/jsonschema"
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
+	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/ptrs"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider/callerscope"
 )
 
 const (
 	ProviderName = "http"
 	Version      = "1.0.0"
 )
+
+// maxBodyBytes caps the size of a request body (in bytes) after it has been
+// serialized. This applies uniformly to string and structured (object/array)
+// bodies to bound memory use during serialization and request replay.
+const maxBodyBytes = 1048576
 
 // Field name constants for input/output map keys.
 const (
@@ -121,6 +127,42 @@ func parseRetryConfig(inputs map[string]any) *retryConfig {
 // shouldRetry and calculateBackoff have been removed — httpc.BuildStatusCodeCheckRetry
 // and httpc.BuildNamedBackoff now provide equivalent logic via retryablehttp.
 
+// serializeBody converts a request body input into the string that is written to
+// the wire. A string is returned verbatim. A nil or absent body yields an empty
+// string. Byte slices (including json.RawMessage) are treated as an already
+// serialized body and returned verbatim so they are not base64-encoded. Any
+// other value (map, slice, etc.) is serialized to compact JSON and reported as
+// structured so the caller can default the Content-Type header.
+func serializeBody(body any) (content string, structured bool, err error) {
+	switch v := body.(type) {
+	case nil:
+		return "", false, nil
+	case string:
+		return v, false, nil
+	case json.RawMessage:
+		return string(v), true, nil
+	case []byte:
+		return string(v), false, nil
+	default:
+		encoded, marshalErr := json.Marshal(v)
+		if marshalErr != nil {
+			return "", false, fmt.Errorf("failed to serialize request body to JSON: %w", marshalErr)
+		}
+		return string(encoded), true, nil
+	}
+}
+
+// hasContentType reports whether the headers map already contains a Content-Type
+// header, matching the key case-insensitively.
+func hasContentType(headers map[string]any) bool {
+	for k := range headers {
+		if strings.EqualFold(k, "Content-Type") {
+			return true
+		}
+	}
+	return false
+}
+
 // HTTPProvider implements the Provider interface for making HTTP requests.
 type HTTPProvider struct {
 	descriptor *provider.Descriptor
@@ -177,8 +219,11 @@ func NewHTTPProvider() *HTTPProvider {
 					schemahelper.WithExample("GET"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
 				fieldHeaders: schemahelper.AnyProp("HTTP headers as key-value pairs"),
-				fieldBody: schemahelper.StringProp("Request body for POST/PUT/PATCH requests",
-					schemahelper.WithMaxLength(*ptrs.IntPtr(1048576))),
+				fieldBody: {
+					Types:       []string{"string", "object", "array"},
+					Description: "Request body for POST/PUT/PATCH requests. A string is sent verbatim. A structured value (object or array) is serialized to JSON, and Content-Type defaults to application/json when not otherwise set.",
+					MaxLength:   ptrs.IntPtr(maxBodyBytes),
+				},
 				"timeout": schemahelper.IntProp("Request timeout in seconds",
 					schemahelper.WithExample(30),
 					schemahelper.WithMaximum(*ptrs.Float64Ptr(300.0))),
@@ -312,6 +357,17 @@ inputs:
   headers:
     Content-Type: "application/json"
   body: '{"name": "John Doe", "email": "john@example.com"}'`,
+				},
+				{
+					Name:        "POST request with a structured JSON body",
+					Description: "Pass an object as the body and let the provider serialize it to JSON. Content-Type defaults to application/json when not set. Use a CEL expression to build the body from resolver values without a separate serializer resolver.",
+					YAML: `name: run-graph-query
+provider: http
+inputs:
+  url: "https://api.example.com/graphql"
+  method: POST
+  body:
+    expr: '{"query": _.graphQuery}'`,
 				},
 				{
 					Name:        "Request with authentication header",
@@ -532,8 +588,15 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 	timeoutDuration := time.Duration(timeout) * time.Second
 
-	// Get body content for potential retries
-	bodyContent, _ := inputs[fieldBody].(string)
+	// Get body content for potential retries. A string body is sent verbatim; a
+	// structured body (object/array) is serialized to JSON.
+	bodyContent, bodyStructured, err := serializeBody(inputs[fieldBody])
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ProviderName, err)
+	}
+	if len(bodyContent) > maxBodyBytes {
+		return nil, fmt.Errorf("%s: request body exceeds maximum size of %d bytes (got %d)", ProviderName, maxBodyBytes, len(bodyContent))
+	}
 
 	// Get headers (make a copy to avoid modifying input)
 	headers := make(map[string]any)
@@ -543,6 +606,12 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 		}
 	}
 
+	// Default Content-Type to application/json when a structured body was
+	// serialized and the caller did not set a Content-Type header.
+	if bodyStructured && !hasContentType(headers) {
+		headers["Content-Type"] = "application/json"
+	}
+
 	// Build httpc client with timeout and user-supplied retry configuration.
 	authProvider, _ := inputs["authProvider"].(string)
 	scope, _ := inputs["scope"].(string)
@@ -550,34 +619,9 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	httpcCfg := buildHTTPClientConfig(timeoutDuration, retryCfg)
 
 	if authProvider != "" {
-		tokenOpts := tokenprovider.RequestOptions{
-			Scope:       scope,
-			MinValidFor: timeoutDuration + 60*time.Second,
-			Caller:      callerscope.RequesterCaller,
-		}
-
-		// In API mode, check passthrough tokens forwarded from the request context.
-		token, found := tokenprovider.ExtractPassthroughTokenFromContext(ctx, authProvider)
-		if !found {
-			var err error
-			token, err = tokenprovider.GetToken(ctx, authProvider, tokenOpts)
-			if err != nil {
-				return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
-			}
-
-			// Only wire 401 refresh when the token came from a refreshable source.
-			httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
-				t, err := tokenprovider.GetToken(unauthCtx, authProvider, tokenprovider.RequestOptions{
-					Scope:        tokenOpts.Scope,
-					MinValidFor:  tokenOpts.MinValidFor,
-					Caller:       tokenOpts.Caller,
-					ForceRefresh: true,
-				})
-				if err != nil {
-					return "", err
-				}
-				return fmt.Sprintf("%s %s", t.TokenType, t.AccessToken), nil
-			}
+		token, err := getToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
+		if err != nil {
+			return nil, err
 		}
 		headers["Authorization"] = fmt.Sprintf("%s %s", token.TokenType, token.AccessToken)
 	}
@@ -625,6 +669,56 @@ func (p *HTTPProvider) Execute(ctx context.Context, input any) (*provider.Output
 	}
 
 	return executeFunc()
+}
+
+func handlerToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+	authRegistry := auth.RegistryFromContext(ctx)
+	if authRegistry == nil {
+		return nil, fmt.Errorf("%s: no auth registry in context for provider %q", ProviderName, authProvider)
+	}
+	handler, err := authRegistry.Get(authProvider)
+	if err != nil {
+		return nil, fmt.Errorf("%s: auth provider %q not found: %w", ProviderName, authProvider, err)
+	}
+
+	requiresScope := auth.HasCapability(handler.Capabilities(), auth.CapScopesOnTokenRequest)
+	if scope == "" && requiresScope {
+		return nil, fmt.Errorf("%s: scope is required when authProvider %q is set (handler supports per-request scopes)", ProviderName, authProvider)
+	}
+	if scope != "" && !requiresScope {
+		scope = ""
+	}
+
+	tokenOpts := auth.TokenOptions{
+		Scope:       scope,
+		MinValidFor: timeoutDuration + 60*time.Second,
+	}
+
+	tokenOpts = tokenOptionChain(ctx, authProvider, tokenOpts, withServerContext, withAssertion, withCallerType)
+
+	token, err := handler.GetToken(ctx, tokenOpts)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to get auth token for %q: %w", ProviderName, authProvider, err)
+	}
+	if token == nil || token.AccessToken == "" {
+		return nil, fmt.Errorf("%s: auth handler %q returned empty token", ProviderName, authProvider)
+	}
+
+	// Only wire 401 refresh when the token came from a refreshable source.
+	httpcCfg.OnUnauthorized = func(unauthCtx context.Context) (string, error) {
+		refreshOpts := tokenOpts
+		refreshOpts.ForceRefresh = true
+		t, refreshErr := handler.GetToken(unauthCtx, refreshOpts)
+		if refreshErr != nil {
+			return "", refreshErr
+		}
+		if t == nil || t.AccessToken == "" {
+			return "", fmt.Errorf("%s: auth handler %q returned empty token on refresh", ProviderName, authProvider)
+		}
+		return fmt.Sprintf("%s %s", t.TokenType, t.AccessToken), nil
+	}
+
+	return token, nil
 }
 
 // buildHTTPClientConfig translates provider timeout and retry config into an httpc.ClientConfig.
@@ -776,4 +870,89 @@ func isJSONContentType(contentType string) bool {
 	ct := strings.ToLower(strings.TrimSpace(contentType))
 	return strings.HasPrefix(ct, "application/json") ||
 		strings.HasSuffix(ct, "+json")
+}
+
+func extractHeaderToken(ctx context.Context, authProvider string) (bool, string) {
+	canonicalProvider := http.CanonicalHeaderKey(authProvider)
+	headerTokens := middleware.TokensFromContext(ctx)
+	if headerTokens == nil {
+		return false, ""
+	}
+
+	token, ok := headerTokens[canonicalProvider]
+	if !ok {
+		return false, ""
+	}
+	return true, token
+}
+
+func getToken(ctx context.Context, authProvider, scope string, timeoutDuration time.Duration, httpcCfg *httpc.ClientConfig) (*auth.Token, error) {
+	// First, check if the token is provided in the request headers (e.g., via middleware).
+	if ok, token := extractHeaderToken(ctx, authProvider); ok {
+		if token == "" {
+			return nil, fmt.Errorf("%s: authProvider %q token is empty in request headers", ProviderName, authProvider)
+		}
+		return &auth.Token{AccessToken: token, TokenType: "Bearer"}, nil
+	}
+	// If not in headers, obtain the token from the auth provider.
+	return handlerToken(ctx, authProvider, scope, timeoutDuration, httpcCfg)
+}
+
+func getAssertion(ctx context.Context, authProvider string) string {
+	if authProvider != middleware.OIDCProviderFromContext(ctx) {
+		return ""
+	}
+	middlewareAssertion := middleware.AccessTokenFromContext(ctx)
+	return middlewareAssertion
+}
+
+func determineCallerIdentity(ctx context.Context, authProvider string) sdkauth.CallerType {
+	if authProvider != middleware.OIDCProviderFromContext(ctx) {
+		return ""
+	}
+	claims := middleware.ClaimsFromContext(ctx)
+	if claims == nil {
+		return ""
+	}
+	callerType := claims.CallerType()
+
+	switch callerType {
+	case middleware.IdentityTypeApp:
+		return sdkauth.CallerMachine
+	case middleware.IdentityTypeUser:
+		return sdkauth.CallerUser
+	case middleware.IdentityTypeUnknown:
+		return sdkauth.CallerUser
+	}
+	return sdkauth.CallerUser
+}
+
+type tokenOptionFunc func(context.Context, string, auth.TokenOptions) auth.TokenOptions
+
+func withAssertion(ctx context.Context, authProvider string, opts auth.TokenOptions) auth.TokenOptions {
+	assertions := getAssertion(ctx, authProvider)
+	if assertions != "" {
+		opts.Assertion = assertions
+	}
+	return opts
+}
+
+func withCallerType(ctx context.Context, authProvider string, opts auth.TokenOptions) auth.TokenOptions {
+	callerType := determineCallerIdentity(ctx, authProvider)
+	if callerType != "" {
+		opts.Caller = callerType
+	}
+	return opts
+}
+
+func withServerContext(_ context.Context, _ string, opts auth.TokenOptions) auth.TokenOptions {
+	opts.ServerContext = auth.Delegate
+	return opts
+}
+
+func tokenOptionChain(ctx context.Context, authProvider string, opts auth.TokenOptions, f ...tokenOptionFunc) auth.TokenOptions {
+	for _, fn := range f {
+		opts = fn(ctx, authProvider, opts)
+	}
+	return opts
 }

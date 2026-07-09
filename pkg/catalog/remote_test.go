@@ -13,24 +13,20 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/config"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
 )
 
-// configureAuthAndTokenRegistry registers the given mock handler in both an
-// auth.Registry and a tokenprovider.Registry, then attaches both to ctx.
+// configureAuthRegistry registers the given mock handler in an
+// auth.Registry, then attaches it to ctx.
 // Use this when tests call code paths that invoke BridgeAuthToRegistry
-// (which needs both registries to resolve tokens and usernames in CLI mode).
-func configureAuthAndTokenRegistry(t *testing.T, ctx context.Context, h *auth.MockHandler) context.Context {
+// (which needs the auth registry to resolve tokens and usernames).
+func configureAuthRegistry(t *testing.T, ctx context.Context, h *auth.MockHandler) context.Context {
 	t.Helper()
 	registry := auth.NewRegistry()
 	require.NoError(t, registry.Register(h))
 	ctx = auth.WithRegistry(ctx, registry)
-	ts := tokenprovider.NewRegistry()
-	require.NoError(t, ts.Register(tokenprovider.NewAuthHandlerAdapter(h)))
-	ctx = tokenprovider.WithRegistry(ctx, ts)
 	return ctx
 }
 
@@ -77,12 +73,12 @@ func TestNewRemoteCatalog(t *testing.T) {
 	t.Run("with auth handler only", func(t *testing.T) {
 		t.Parallel()
 		cat, err := NewRemoteCatalog(RemoteCatalogConfig{
-			Name:         "test",
-			Registry:     "ghcr.io",
-			Repository:   "org/repo",
-			AuthProvider: "test-handler",
-			AuthScope:    "repo:read",
-			Logger:       logr.Discard(),
+			Name:        "test",
+			Registry:    "ghcr.io",
+			Repository:  "org/repo",
+			AuthHandler: auth.NewMockHandler("test-handler"),
+			AuthScope:   "repo:read",
+			Logger:      logr.Discard(),
 		})
 		require.NoError(t, err)
 		assert.NotNil(t, cat)
@@ -97,7 +93,7 @@ func TestNewRemoteCatalog(t *testing.T) {
 			Registry:        "ghcr.io",
 			Repository:      "org/repo",
 			CredentialStore: credStore,
-			AuthProvider:    "test-handler",
+			AuthHandler:     auth.NewMockHandler("test-handler"),
 			Logger:          logr.Discard(),
 		})
 		require.NoError(t, err)
@@ -1058,27 +1054,28 @@ func TestAuthHandlerPrecedenceOverDockerConfig(t *testing.T) {
 		logger: logr.Discard(),
 	}
 
+	// Set up auth registry so BridgeAuthToRegistry can resolve the username in CLI mode.
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.StatusResult = &auth.Status{Authenticated: true}
+	mockHandler.GetTokenResult = &auth.Token{AccessToken: "fresh-entra-token", TokenType: "Bearer"}
+
 	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
 		Name:            "test",
 		Registry:        "myregistry.azurecr.io",
 		Repository:      "org/repo",
 		CredentialStore: credStore,
-		AuthProvider:    "entra",
+		AuthHandler:     mockHandler,
 		Logger:          logr.Discard(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cat.client.Credential)
 
-	// Set up auth registry so BridgeAuthToRegistry can resolve the username in CLI mode.
-	mockHandler := auth.NewMockHandler("entra")
-	mockHandler.StatusResult = &auth.Status{Authenticated: true}
-	mockHandler.GetTokenResult = &auth.Token{AccessToken: "fresh-entra-token", TokenType: "Bearer"}
-	ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
+	ctx := configureAuthRegistry(t, context.Background(), mockHandler)
 	// Call the credential function and verify the auth handler is used, not Docker config.
 	cred, err := cat.client.Credential(ctx, "myregistry.azurecr.io")
 	require.NoError(t, err)
 	assert.Equal(t, "fresh-entra-token", cred.Password, "auth handler token should take precedence over Docker config")
-	assert.Equal(t, "entra token", cat.CredentialSource(), "credential source should indicate auth handler")
+	assert.Equal(t, "entra auth handler token", cat.CredentialSource(), "credential source should indicate auth handler")
 }
 
 func TestAuthHandlerFallsBackToCredentialStore(t *testing.T) {
@@ -1097,19 +1094,20 @@ func TestAuthHandlerFallsBackToCredentialStore(t *testing.T) {
 		logger: logr.Discard(),
 	}
 
+	mockHandler := auth.NewMockHandler("entra")
+	mockHandler.GetTokenResult = &auth.Token{AccessToken: "", TokenType: "Bearer"}
+	mockHandler.GetTokenErr = fmt.Errorf("token expired")
+
 	cat, err := NewRemoteCatalog(RemoteCatalogConfig{
 		Name:            "test",
 		Registry:        "myregistry.azurecr.io",
 		Repository:      "org/repo",
 		CredentialStore: credStore,
-		AuthProvider:    "entra",
+		AuthHandler:     mockHandler,
 		Logger:          logr.Discard(),
 	})
 	require.NoError(t, err)
-	mockHandler := auth.NewMockHandler("entra")
-	mockHandler.GetTokenResult = &auth.Token{AccessToken: "", TokenType: "Bearer"}
-	mockHandler.GetTokenErr = fmt.Errorf("token expired")
-	ctx := configureAuthAndTokenRegistry(t, context.Background(), mockHandler)
+	ctx := configureAuthRegistry(t, context.Background(), mockHandler)
 	// When auth handler fails, credential store should be used.
 	cred, err := cat.client.Credential(ctx, "myregistry.azurecr.io")
 	require.NoError(t, err)

@@ -101,6 +101,32 @@ func (c *diskCache) Get(_ context.Context, key string) ([]Entry, bool) {
 	return cf.Entries, true
 }
 
+// peekAll returns the union of entries from every inventory cache file on disk,
+// ignoring TTL expiry and without evicting anything. It backs display-only
+// reverse-mapping (URL -> short selector) where the caller does not know which
+// resolver produced the cache -- e.g. `auth status` labeling a cluster that was
+// resolved via `kube login` under a different cache key. Missing dir or corrupt
+// files are skipped.
+func (c *diskCache) peekAll() []Entry {
+	matches, err := filepath.Glob(filepath.Join(c.baseDir, "*.json"))
+	if err != nil {
+		return nil
+	}
+	var all []Entry
+	for _, p := range matches {
+		data, err := os.ReadFile(p) //nolint:gosec // p is a glob match under the fixed cache dir
+		if err != nil {
+			continue
+		}
+		var cf cacheFile
+		if err := json.Unmarshal(data, &cf); err != nil {
+			continue
+		}
+		all = append(all, cf.Entries...)
+	}
+	return all
+}
+
 // Set writes the entries with an expiry of now+ttl. Write failures are silent:
 // caching is best-effort and must not break resolution.
 func (c *diskCache) Set(_ context.Context, key string, entries []Entry, ttl time.Duration) {

@@ -6,17 +6,11 @@ package config
 import (
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
-)
-
-const (
-	DelegationFlowOBO               = "obo"
-	DelegationFlowClientCredentials = "client_credentials"
 )
 
 // Validate validates the entire configuration.
@@ -246,9 +240,6 @@ func (b *BuildConfig) Validate() error {
 
 // Validate validates the API server configuration.
 func (c *APIServerConfig) Validate() error {
-	if err := c.Identity.Validate(); err != nil {
-		return fmt.Errorf("identity: %w", err)
-	}
 	if c.TokenPassThrough != nil {
 		if err := c.TokenPassThrough.Validate(); err != nil {
 			return fmt.Errorf("tokenPassThrough: %w", err)
@@ -295,149 +286,4 @@ func validHTTPHeaderFieldName(name string) bool {
 		}
 	}
 	return true
-}
-
-// Validate validates the API identity configuration.
-func (c *APIIdentityConfig) Validate() error {
-	if c.Entra != nil {
-		if err := c.Entra.Validate(); err != nil {
-			return fmt.Errorf("entra: %w", err)
-		}
-	}
-	if c.GitHub != nil {
-		if err := c.GitHub.Validate(); err != nil {
-			return fmt.Errorf("github: %w", err)
-		}
-	}
-	return nil
-}
-
-// Validate validates the Entra identity configuration.
-func (c *APIEntraIdentityConfig) Validate() error {
-	if c.TenantID == "" {
-		return fmt.Errorf("entra identity: tenantId is required")
-	}
-	if c.ClientID == "" {
-		return fmt.Errorf("entra identity: clientId is required")
-	}
-	if err := c.Credential.Validate(); err != nil {
-		return fmt.Errorf("entra identity: credential: %w", err)
-	}
-	if err := c.AllowedFlows.Validate(); err != nil {
-		return fmt.Errorf("entra identity: allowedFlows: %w", err)
-	}
-	return nil
-}
-
-// Validate checks the GitHub identity configuration for completeness.
-func (c *APIGitHubIdentityConfig) Validate() error {
-	if err := c.Credential.Validate(); err != nil {
-		return fmt.Errorf("github identity: credential: %w", err)
-	}
-	return nil
-}
-
-// Validate checks the GitHub credential configuration.
-func (c *GitHubCredentialConfig) Validate() error {
-	switch c.Type {
-	case "app":
-		if c.App == nil {
-			return fmt.Errorf("app configuration is required when type is %q", c.Type)
-		}
-		return c.App.Validate()
-	case "pat":
-		if c.PAT == nil {
-			return fmt.Errorf("pat configuration is required when type is %q", c.Type)
-		}
-		return c.PAT.Validate()
-	case "":
-		return fmt.Errorf("type is required")
-	default:
-		return fmt.Errorf("type: invalid value %q, must be one of: app, pat", c.Type)
-	}
-}
-
-// Validate checks the GitHub PAT credential configuration for completeness.
-func (c *GitHubPATCredentialConfig) Validate() error {
-	if c.Token == "" {
-		return fmt.Errorf("token is required")
-	}
-	if err := c.Token.Validate(); err != nil {
-		return fmt.Errorf("token: %w", err)
-	}
-	return nil
-}
-
-// Validate checks the GitHub App credential configuration for completeness.
-func (c *GitHubAppCredentialConfig) Validate() error {
-	if c.ClientID == "" {
-		return fmt.Errorf("clientId is required")
-	}
-	if c.InstallationID == 0 {
-		return fmt.Errorf("installationId is required")
-	}
-	if c.PrivateKey == "" {
-		return fmt.Errorf("privateKey is required")
-	}
-	if err := c.PrivateKey.Validate(); err != nil {
-		return fmt.Errorf("privateKey: %w", err)
-	}
-	return nil
-}
-
-// ValidDelegationFlows returns the list of valid delegation flow names.
-func ValidDelegationFlows() []string {
-	return []string{DelegationFlowOBO, DelegationFlowClientCredentials}
-}
-
-// IsFlowPermitted reports whether the given delegation flow is permitted.
-// When the receiver is nil, only OBO is permitted (the default).
-func (d *DelegationFlowsConfig) IsFlowPermitted(flow string) bool {
-	if d == nil {
-		return flow == DelegationFlowOBO
-	}
-	return slices.Contains(d.Flows, flow)
-}
-
-// Validate checks that all listed flows are recognized values.
-func (d *DelegationFlowsConfig) Validate() error {
-	if d == nil {
-		return nil
-	}
-	valid := ValidDelegationFlows()
-	for _, f := range d.Flows {
-		found := false
-		for _, v := range valid {
-			if f == v {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("invalid flow %q, must be one of: %s", f, strings.Join(valid, ", "))
-		}
-	}
-	return nil
-}
-
-// Validate checks that the credential configuration is complete and consistent.
-func (c *ServerCredentialConfig) Validate() error {
-	switch c.Type {
-	case "secret":
-		if c.ClientSecret == "" {
-			return fmt.Errorf("clientSecret is required when type is %q", c.Type)
-		}
-		if err := c.ClientSecret.Validate(); err != nil {
-			return fmt.Errorf("clientSecret: %w", err)
-		}
-	case "wif":
-		if c.WIFTokenPath == "" {
-			return fmt.Errorf("wifTokenPath is required when type is %q", c.Type)
-		}
-	case "":
-		return fmt.Errorf("type is required")
-	default:
-		return fmt.Errorf("type: invalid value %q, must be one of: wif, secret", c.Type)
-	}
-	return nil
 }

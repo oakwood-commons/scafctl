@@ -28,6 +28,19 @@ const (
 	OperationRender = "render"
 	// OperationRenderTree is the batch render operation for directory trees.
 	OperationRenderTree = "render-tree"
+
+	// DefaultRawStart is the built-in, zero-config fence start marker. Content
+	// between DefaultRawStart and DefaultRawEnd is preserved verbatim (never
+	// parsed as a Go template) and the markers themselves are stripped from the
+	// output. It uses Go template comment syntax so the template remains valid
+	// even when the fence is unused. No ignoredBlocks declaration is required.
+	DefaultRawStart = "{{/* scafctl:ignore:start */}}"
+	// DefaultRawEnd is the built-in, zero-config fence end marker. See DefaultRawStart.
+	DefaultRawEnd = "{{/* scafctl:ignore:end */}}"
+	// DefaultRawLine is the built-in, zero-config per-line marker. Any line
+	// containing this substring is preserved verbatim (marker included, as a
+	// harmless trailing comment). No ignoredBlocks declaration is required.
+	DefaultRawLine = "# scafctl:ignore"
 )
 
 // GoTemplateProvider provides data transformation using Go templates
@@ -102,31 +115,36 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 					schemahelper.WithMaxLength(*ptrs.IntPtr(10))),
 				"data": schemahelper.AnyProp("Additional data to merge with resolver context. These values are accessible alongside resolver data in the template."),
 				"ignoredBlocks": schemahelper.ArrayProp(
-					"List of literal blocks to preserve without template parsing. Each entry uses EITHER start/end markers (for multi-line blocks) OR a line marker (for single-line matches). Content is passed through unchanged. Useful for templates containing syntax like Terraform for_each or GitHub Actions expressions that conflict with Go template delimiters.",
+					"Additional literal blocks to preserve without template parsing, on top of the always-on built-in markers. Built-in (zero-config) markers are recognized without any declaration: fence '{{/* scafctl:ignore:start */}}' ... '{{/* scafctl:ignore:end */}}' (markers stripped from output) and per-line '# scafctl:ignore'. Use this list to declare EXTRA markers. Each entry uses EXACTLY ONE mode: start/end (multi-line, markers preserved), line (single-line matches), or token (every literal occurrence of a substring). Useful for templates containing syntax like Terraform for_each or GitHub Actions expressions that conflict with Go template delimiters.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A block to exclude from template parsing. Use 'start'+'end' for multi-line ranges, or 'line' for single-line matches. These modes are mutually exclusive.",
+						"A block to exclude from template parsing. Use 'start'+'end' for multi-line ranges, 'line' for single-line matches, or 'token' for every occurrence of a literal substring. These modes are mutually exclusive.",
 						nil,
 						map[string]*jsonschema.Schema{
-							"start": schemahelper.StringProp("Start marker for a multi-line ignored block (e.g., '/*scafctl:ignore:start*/'). Must be paired with 'end'. Mutually exclusive with 'line'.",
+							"start": schemahelper.StringProp("Start marker for a multi-line ignored block (e.g., '/*scafctl:ignore:start*/'). Must be paired with 'end'. Mutually exclusive with 'line' and 'token'.",
 								schemahelper.WithExample("/*scafctl:ignore:start*/"),
 								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
-							"end": schemahelper.StringProp("End marker for a multi-line ignored block (e.g., '/*scafctl:ignore:end*/'). Must be paired with 'start'. Mutually exclusive with 'line'.",
+							"end": schemahelper.StringProp("End marker for a multi-line ignored block (e.g., '/*scafctl:ignore:end*/'). Must be paired with 'start'. Mutually exclusive with 'line' and 'token'.",
 								schemahelper.WithExample("/*scafctl:ignore:end*/"),
 								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
-							"line": schemahelper.StringProp("Marker that identifies lines to ignore individually. Every line containing this substring is preserved literally. Mutually exclusive with 'start'/'end'.",
+							"line": schemahelper.StringProp("Marker that identifies lines to ignore individually. Every line containing this substring is preserved literally. Mutually exclusive with 'start'/'end' and 'token'.",
 								schemahelper.WithExample("# scafctl:ignore"),
+								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
+							"token": schemahelper.StringProp("Literal token to preserve wherever it appears. Every occurrence of this exact substring is passed through unchanged. Mutually exclusive with 'start'/'end' and 'line'.",
+								schemahelper.WithExample("${LITERAL}"),
 								schemahelper.WithMaxLength(*ptrs.IntPtr(255))),
 						},
 					)),
 					schemahelper.WithMaxItems(20),
 				),
-				"entries": schemahelper.ArrayProp("Array of file entry objects to render (required for 'render-tree' operation). Each entry must have 'path' (string) and 'content' (string) fields. Typically produced by the directory provider with includeContent: true.",
+				"entries": schemahelper.ArrayProp("Array of file entry objects to render (required for 'render-tree' operation). Each entry must have a 'path' (string) field; 'content' (string) is optional -- entries without string content (e.g., binary files or directories) are skipped with a warning. Each entry may also include an optional 'data' (map) field. Typically produced by the directory provider with includeContent: true.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A file entry with path and content to render as a Go template",
-						[]string{"path", "content"},
+						"A file entry with a required path and optional content to render as a Go template, plus optional per-entry data. Entries without string content are skipped.",
+						[]string{"path"},
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path (preserved in output for downstream use)"),
-							"content": schemahelper.StringProp("File content to render as a Go template"),
+							"content": schemahelper.StringProp("File content to render as a Go template. Optional: entries without string content are skipped with a warning."),
+							"data": schemahelper.ObjectProp("Optional per-entry data map, shallow-merged over the shared top-level 'data' for this entry only. On key conflicts, per-entry values win over shared data, iteration variables, and resolver context. Enables fan-out: one template rendered per entry, each with its own variables and output path, without a separate forEach render resolver.",
+								nil, nil, schemahelper.WithAdditionalProperties(schemahelper.AnyProp("Per-entry data value of any type"))),
 						},
 					))),
 			}),
@@ -253,6 +271,33 @@ inputs:
     - line: "# scafctl:ignore"`,
 				},
 				{
+					Name:        "Built-in fence (zero-config, markers stripped)",
+					Description: "Preserve a block literally using the always-on built-in fence. No ignoredBlocks declaration is needed, and the fence markers are stripped from the output.",
+					YAML: `name: builtin-fence
+provider: go-template
+inputs:
+  name: terraform-config
+  template: |
+    name = "{{.appName}}"
+    {{/* scafctl:ignore:start */}}
+    for_each = { for k, v in var.items : k => v }
+    {{/* scafctl:ignore:end */}}`,
+				},
+				{
+					Name:        "Token mode (literal substring pass-through)",
+					Description: "Preserve every occurrence of a literal substring without wrapping each in markers. Useful when a placeholder like ${LITERAL} must survive rendering wherever it appears.",
+					YAML: `name: literal-tokens
+provider: go-template
+inputs:
+  name: tokens
+  template: |
+    service: {{.appName}}
+    url: ${LITERAL}/api
+    healthcheck: ${LITERAL}/health
+  ignoredBlocks:
+    - token: "${LITERAL}"`,
+				},
+				{
 					Name:        "Render directory tree of templates",
 					Description: "Batch-render an array of file entries from the directory provider. Combine with the file provider's write-tree operation to write rendered files preserving directory structure.",
 					YAML: `name: rendered-templates
@@ -266,6 +311,23 @@ inputs:
     appName: my-app
     namespace: production
     replicas: 3`,
+				},
+				{
+					Name:        "Fan-out with per-entry data",
+					Description: "Render one template per collection item, each with its own variables and output path, in a single resolver. Per-entry 'data' is shallow-merged over the shared 'data' and wins on conflicts. Feeds the file provider's write-tree operation unchanged.",
+					YAML: `name: backend-configs
+provider: go-template
+inputs:
+  operation: render-tree
+  data:
+    platformAppName: my-app
+  entries:
+    expr: |
+      _.environments.map(env, {
+        "path":    "envs/" + env.name + "/backend.tf",
+        "content": _.backendTemplate.entries[0].content,
+        "data":    {"environment": env}
+      })`,
 				},
 			},
 		},
@@ -343,27 +405,14 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 		"rightDelim", rightDelim)
 
 	// Extract ignored blocks for literal pass-through
-	ignoredBlocksCfg := p.parseIgnoredBlocksConfig(inputs)
+	ignoredBlocksCfg := parseIgnoredBlocksConfig(inputs)
 
 	// Validate mutual exclusion for ignored blocks
-	if blocks, ok := inputs["ignoredBlocks"].([]any); ok {
-		for i, block := range blocks {
-			blockMap, ok := block.(map[string]any)
-			if !ok {
-				continue
-			}
-			start, _ := blockMap["start"].(string)
-			end, _ := blockMap["end"].(string)
-			line, _ := blockMap["line"].(string)
-			hasStartEnd := start != "" || end != ""
-			hasLine := line != ""
-			if hasLine && hasStartEnd {
-				return nil, fmt.Errorf("%s: ignoredBlocks[%d]: 'line' and 'start'/'end' are mutually exclusive — use one mode per entry", ProviderName, i)
-			}
-		}
+	if err := validateIgnoredBlocks(inputs); err != nil {
+		return nil, err
 	}
 
-	replacements := p.buildIgnoredBlockReplacements(templateStr, ignoredBlocksCfg)
+	replacements := buildIgnoredBlockReplacements(templateStr, ignoredBlocksCfg)
 
 	// Execute the template
 	result, err := p.service.Execute(ctx, gotmpl.TemplateOptions{
@@ -457,8 +506,13 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		return nil, err
 	}
 
+	// Validate mutual exclusion for ignored blocks
+	if err := validateIgnoredBlocks(inputs); err != nil {
+		return nil, err
+	}
+
 	// Parse ignored blocks configuration (shared with render)
-	ignoredBlocksCfg := p.parseIgnoredBlocksConfig(inputs)
+	ignoredBlocksCfg := parseIgnoredBlocksConfig(inputs)
 
 	// Build base template data from resolver context + additional data
 	baseData := p.buildTemplateData(ctx, inputs)
@@ -502,12 +556,23 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 			continue
 		}
 
-		// Build per-entry template data: base data + entry content is the template
+		// Build per-entry template data: base data + per-entry data overrides.
 		templateData := make(map[string]any, len(baseData))
 		maps.Copy(templateData, baseData)
 
+		// Merge optional per-entry data (shallow: top-level keys win over shared
+		// data, iteration variables, and resolver context). baseData is left
+		// untouched so entries never leak values into one another.
+		if entryDataRaw, present := entry["data"]; present && entryDataRaw != nil {
+			entryData, ok := entryDataRaw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s: entries[%d].data must be a map when present, got %T (path %q)", ProviderName, i, entryDataRaw, entryPath)
+			}
+			maps.Copy(templateData, entryData)
+		}
+
 		// Build ignored block replacements for this entry's content
-		replacements := p.buildIgnoredBlockReplacements(entryContent, ignoredBlocksCfg)
+		replacements := buildIgnoredBlockReplacements(entryContent, ignoredBlocksCfg)
 
 		// Render the entry content as a Go template
 		entryTemplateName := fmt.Sprintf("%s/%s", templateName, entryPath)
@@ -645,11 +710,71 @@ type ignoredBlockConfig struct {
 	start string
 	end   string
 	line  string
+	token string
+	// stripMarkers indicates the start/end markers should be removed from the
+	// output, restoring only the inner content. Used by the built-in fence.
+	stripMarkers bool
+}
+
+// builtinIgnoredBlockConfigs returns the always-on, zero-config ignored block
+// markers that are recognized without any ignoredBlocks declaration:
+//   - a fence ('{{/* scafctl:ignore:start */}}' ... '{{/* scafctl:ignore:end */}}')
+//     whose markers are stripped from the output, and
+//   - a per-line marker ('# scafctl:ignore') whose line is preserved verbatim.
+func builtinIgnoredBlockConfigs() []ignoredBlockConfig {
+	return []ignoredBlockConfig{
+		{start: DefaultRawStart, end: DefaultRawEnd, stripMarkers: true},
+		{line: DefaultRawLine},
+	}
+}
+
+// validateIgnoredBlocks enforces that each ignoredBlocks entry uses exactly one
+// mode: start/end, line, or token. The modes are mutually exclusive, at least
+// one mode must be set, and start/end must be declared as a pair.
+func validateIgnoredBlocks(inputs map[string]any) error {
+	blocks, ok := inputs["ignoredBlocks"].([]any)
+	if !ok {
+		return nil
+	}
+	for i, block := range blocks {
+		blockMap, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		start, _ := blockMap["start"].(string)
+		end, _ := blockMap["end"].(string)
+		line, _ := blockMap["line"].(string)
+		token, _ := blockMap["token"].(string)
+
+		hasStartEnd := start != "" || end != ""
+		hasLine := line != ""
+		hasToken := token != ""
+
+		modes := 0
+		if hasStartEnd {
+			modes++
+		}
+		if hasLine {
+			modes++
+		}
+		if hasToken {
+			modes++
+		}
+		switch {
+		case modes == 0:
+			return fmt.Errorf("%s: ignoredBlocks[%d]: no mode set -- use exactly one of 'start'/'end', 'line', or 'token'", ProviderName, i)
+		case modes > 1:
+			return fmt.Errorf("%s: ignoredBlocks[%d]: 'start'/'end', 'line', and 'token' are mutually exclusive -- use one mode per entry", ProviderName, i)
+		case hasStartEnd && (start == "" || end == ""):
+			return fmt.Errorf("%s: ignoredBlocks[%d]: 'start' and 'end' must both be set for start/end mode", ProviderName, i)
+		}
+	}
+	return nil
 }
 
 // parseIgnoredBlocksConfig parses the ignoredBlocks input into a config slice without
 // applying it to a specific template string. The actual replacements are built per-entry.
-func (p *GoTemplateProvider) parseIgnoredBlocksConfig(inputs map[string]any) []ignoredBlockConfig {
+func parseIgnoredBlocksConfig(inputs map[string]any) []ignoredBlockConfig {
 	blocks, ok := inputs["ignoredBlocks"].([]any)
 	if !ok {
 		return nil
@@ -665,11 +790,13 @@ func (p *GoTemplateProvider) parseIgnoredBlocksConfig(inputs map[string]any) []i
 		start, _ := blockMap["start"].(string)
 		end, _ := blockMap["end"].(string)
 		line, _ := blockMap["line"].(string)
+		token, _ := blockMap["token"].(string)
 
 		configs = append(configs, ignoredBlockConfig{
 			start: start,
 			end:   end,
 			line:  line,
+			token: token,
 		})
 	}
 
@@ -677,24 +804,31 @@ func (p *GoTemplateProvider) parseIgnoredBlocksConfig(inputs map[string]any) []i
 }
 
 // buildIgnoredBlockReplacements builds gotmpl.Replacement entries for a specific template
-// string based on the parsed ignored block config.
-func (p *GoTemplateProvider) buildIgnoredBlockReplacements(templateStr string, configs []ignoredBlockConfig) []gotmpl.Replacement {
+// string based on the parsed ignored block config. The always-on built-in markers are
+// applied in addition to the user-declared configs.
+//
+// Replacements are emitted in two passes: all start/end (fence) replacements first,
+// then all line/token replacements. Because applyReplacements consumes replacements in
+// order, this guarantees fenced regions are protected before any line/token scan runs,
+// so a token/line entry that overlaps a fence cannot mutate the fenced text and prevent
+// the fence from matching -- regardless of user entry order.
+//
+// Within each pass the always-on built-in markers are emitted before user-declared
+// configs. This preserves the "always-on" contract: a user cannot shadow or override
+// the built-in fence stripping (or the built-in per-line marker) by declaring the same
+// markers in ignoredBlocks, because the built-in replacement is consumed first.
+func buildIgnoredBlockReplacements(templateStr string, configs []ignoredBlockConfig) []gotmpl.Replacement {
 	var replacements []gotmpl.Replacement
 
-	for _, cfg := range configs {
-		hasStartEnd := cfg.start != "" || cfg.end != ""
-		hasLine := cfg.line != ""
+	// Always-on built-in markers first, then user-declared configs, so built-ins
+	// take priority and cannot be shadowed/mutated by user entries.
+	effective := make([]ignoredBlockConfig, 0, len(configs)+2)
+	effective = append(effective, builtinIgnoredBlockConfigs()...)
+	effective = append(effective, configs...)
 
-		if hasLine {
-			for _, templateLine := range strings.Split(templateStr, "\n") {
-				if strings.Contains(templateLine, cfg.line) {
-					replacements = append(replacements, gotmpl.Replacement{Find: templateLine})
-				}
-			}
-			continue
-		}
-
-		if !hasStartEnd || cfg.start == "" || cfg.end == "" {
+	// Pass 1: start/end fence replacements take precedence.
+	for _, cfg := range effective {
+		if cfg.start == "" || cfg.end == "" {
 			continue
 		}
 
@@ -709,9 +843,32 @@ func (p *GoTemplateProvider) buildIgnoredBlockReplacements(templateStr string, c
 			if endIdx < 0 {
 				break
 			}
+			inner := afterStart[:endIdx]
 			fullBlock := remaining[startIdx : startIdx+len(cfg.start)+endIdx+len(cfg.end)]
-			replacements = append(replacements, gotmpl.Replacement{Find: fullBlock})
+			repl := gotmpl.Replacement{Find: fullBlock}
+			if cfg.stripMarkers {
+				// Restore only the inner content, dropping the fence markers.
+				repl.RestoreAs = inner
+			}
+			replacements = append(replacements, repl)
 			remaining = remaining[startIdx+len(cfg.start)+endIdx+len(cfg.end):]
+		}
+	}
+
+	// Pass 2: line/token replacements, applied after fences are protected.
+	for _, cfg := range effective {
+		switch {
+		case cfg.token != "":
+			if strings.Contains(templateStr, cfg.token) {
+				replacements = append(replacements, gotmpl.Replacement{Find: cfg.token})
+			}
+
+		case cfg.line != "":
+			for _, templateLine := range strings.Split(templateStr, "\n") {
+				if strings.Contains(templateLine, cfg.line) {
+					replacements = append(replacements, gotmpl.Replacement{Find: templateLine})
+				}
+			}
 		}
 	}
 
@@ -772,54 +929,81 @@ func extractDependencies(inputs map[string]any) []string {
 		rightDelim = rd
 	}
 
-	// Use gotmpl package to extract references with the specified delimiters
-	refs, err := gotmpl.GetGoTemplateReferences(templateContent, leftDelim, rightDelim)
-	if err != nil {
-		// On parse error, fall back to no dependencies - the error will be caught during execution
-		return deps
+	// Strip ignored/raw regions (built-in markers + declared ignoredBlocks)
+	// so that references inside literal pass-through blocks are not mistaken
+	// for resolver dependencies.
+	ignoredCfg := parseIgnoredBlocksConfig(inputs)
+	for _, repl := range buildIgnoredBlockReplacements(templateContent, ignoredCfg) {
+		templateContent = strings.ReplaceAll(templateContent, repl.Find, "")
 	}
 
-	// Build set of keys provided by the data input so we can exclude them
-	// from resolver dependencies. The data map's keys become top-level
-	// template context variables (e.g., data: {config: ...} provides .config)
-	// and should not be treated as resolver references.
-	dataKeys := make(map[string]bool)
-	if dataMap, ok := inputs["data"].(map[string]any); ok {
-		for k := range dataMap {
-			dataKeys[k] = true
-		}
-	}
+	// Determine the template scan context (data keys + forEach aliases). Prefer
+	// the context injected by the dependency-graph builder (which can see the
+	// forEach clause and statically analyse CEL data expressions); otherwise
+	// fall back to best-effort local computation from a literal data map.
+	scan := resolveDepScanContext(inputs)
+	scan.Template = templateContent
+	scan.LeftDelim = leftDelim
+	scan.RightDelim = rightDelim
 
-	// Extract the first segment of each reference path as the dependency name
-	// e.g., ".config.host" -> "config", "._.name" -> "name"
-	for _, ref := range refs {
-		// Skip scoped references — they refer to fields inside {{ with }}/{{ range }}
-		// bodies where dot has been rebound, not to top-level resolvers.
-		if ref.Scoped {
-			continue
-		}
-
-		path := ref.Path
-		// Strip leading dot if present
-		path = strings.TrimPrefix(path, ".")
-		// Handle underscore prefix for resolver context (e.g., "_.name" -> "name")
-		path = strings.TrimPrefix(path, "_.")
-		path = strings.TrimPrefix(path, "_")
-
-		// Get first segment (before any dots)
-		if idx := strings.Index(path, "."); idx > 0 {
-			path = path[:idx]
-		}
-
-		// Skip references satisfied by the data input
-		if dataKeys[path] {
-			continue
-		}
-
-		addDep(path)
+	for _, name := range gotmpl.ExtractResolverDeps(scan) {
+		addDep(name)
 	}
 
 	return deps
+}
+
+// resolveDepScanContext builds the resolver-dependency scan context for the
+// inline template. It prefers a DepScanContext injected under
+// gotmpl.DepScanContextKey; when absent, it derives a best-effort context from a
+// literal data map in the inputs.
+func resolveDepScanContext(inputs map[string]any) gotmpl.ResolverDepsInput {
+	if injected, ok := inputs[gotmpl.DepScanContextKey].(gotmpl.DepScanContext); ok {
+		return gotmpl.ResolverDepsInput{
+			HasDataInput:     injected.HasDataInput,
+			DataKeys:         injected.DataKeys,
+			DataKeysComplete: injected.DataKeysComplete,
+			Aliases:          injected.Aliases,
+		}
+	}
+
+	dataMap, hasData := inputs["data"].(map[string]any)
+	if !hasData {
+		return gotmpl.ResolverDepsInput{}
+	}
+	// A ValueRef-shaped data map (e.g. {expr: "..."}, {rslvr: "vars"},
+	// {tmpl: "..."}) does not expose its runtime keys statically, so treat the
+	// key set as dynamic/incomplete rather than mistaking the control key
+	// (expr/rslvr/tmpl) for a data key.
+	if isValueRefShapedData(dataMap) {
+		return gotmpl.ResolverDepsInput{HasDataInput: true, DataKeysComplete: false}
+	}
+	dataKeys := make(map[string]bool, len(dataMap))
+	for k := range dataMap {
+		dataKeys[k] = true
+	}
+	return gotmpl.ResolverDepsInput{
+		HasDataInput:     true,
+		DataKeys:         dataKeys,
+		DataKeysComplete: true,
+	}
+}
+
+// isValueRefShapedData reports whether a raw data map is a ValueRef wrapper
+// (expr/rslvr/tmpl) rather than a literal map of template context keys. Such
+// wrappers resolve to their value at runtime, so their control key must not be
+// treated as a data-context key.
+func isValueRefShapedData(dataMap map[string]any) bool {
+	if _, ok := dataMap["expr"]; ok {
+		return true
+	}
+	if _, ok := dataMap["rslvr"]; ok {
+		return true
+	}
+	if _, ok := dataMap["tmpl"]; ok {
+		return true
+	}
+	return false
 }
 
 // extractCELDeps extracts resolver references from a CEL expression string.

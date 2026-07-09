@@ -1,0 +1,6 @@
+{
+  "contact": "<EMAIL>",
+  "greeting": "<GREETING>",
+  "projectName": "my-app",
+  "tfvars": "owner = <EMAIL>\nname = my-app\n"
+}

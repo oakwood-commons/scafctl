@@ -210,6 +210,32 @@ tests:
 
 Compose into solution: `compose: [tests.yaml]`
 
+### Snapshot masking (golden baselines)
+
+A test case with `snapshot: <path>` compares against a golden file. Built-in
+presets (`timestamp`, `uuid`, `sandbox`) are always normalized. Declare `masks`
+to normalize other volatile values; set `snapshotSource: files` to snapshot the
+tree of rendered files instead of stdout:
+
+```yaml
+cases:
+  golden-render:
+    command: [run, solution]
+    snapshot: testdata/snapshots/rendered.txt
+    snapshotSource: files          # stdout (default) | files
+    masks:
+      - name: entra-group          # custom regex mask
+        pattern: '\[[^\]]*\]'
+        placeholder: "<GROUP>"
+        path: "envs/**/*.auto.tfvars"  # path glob requires snapshotSource: files
+      - use: email                 # opt-in preset: email | ipv4 | mac
+      - use: uuid                   # disable a built-in preset
+        disabled: true
+```
+
+Any declared mask makes the test report a relaxed status (`PASS*`) with a
+per-mask match count. Regenerate golden files with `--update-snapshots`.
+
 ## Built-in Providers
 
 | Provider | Capability | Purpose |

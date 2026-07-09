@@ -818,7 +818,13 @@ func RegisterCachedPlugin(ctx context.Context, name string, registry *provider.R
 func RegisterCachedPluginVersion(ctx context.Context, name, version string, registry *provider.Registry, cfg *ProviderConfig, cacheDir string, clientOpts ...ClientOption) ([]*Client, error) {
 	cache := NewCache(cacheDir)
 	platform := CurrentPlatform()
-	path, ok := cache.Get(name, version, platform, "")
+	// ResolveVersion searches both the flat (no-registry) layout and every
+	// registry-hash layout so catalog-installed plugins are found even when the
+	// caller does not know the plugin's catalog registry hash.
+	path, ok, err := cache.ResolveVersion(name, version, platform)
+	if err != nil {
+		return nil, fmt.Errorf("resolving cached plugin %q version %q: %w", name, version, err)
+	}
 	if !ok {
 		return nil, fmt.Errorf("plugin %q version %q not found in cache (platform: %s)", name, version, platform)
 	}

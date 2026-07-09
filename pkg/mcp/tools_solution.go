@@ -159,7 +159,7 @@ func (s *Server) registerSolutionTools() {
 
 	// run_solution_tests
 	runSolutionTestsTool := mcp.NewTool("run_solution_tests",
-		mcp.WithDescription("Execute functional tests defined in a solution YAML file (spec.testing.cases) or in a tests/ directory. Returns structured test results with pass/fail status, duration, and assertion details. Closes the write → lint → test loop entirely within the AI session."),
+		mcp.WithDescription("Execute functional tests defined in a solution YAML file (spec.testing.cases) or in a tests/ directory. Returns structured test results with pass/fail status, duration, and assertion details. Snapshot tests that declare masks are reported with 'relaxed': true and a 'maskMatches' map of per-mask replacement counts (also aggregated as summary.relaxed), indicating snapshot fidelity was intentionally loosened for volatile regions. Closes the write → lint → test loop entirely within the AI session."),
 		mcp.WithTitleAnnotation("Run Solution Tests"),
 		mcp.WithToolIcons(toolIcons["testing"]),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -1117,31 +1117,7 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 	summary := soltesting.Summarize(results)
 	summary.WallDuration = elapsed
 
-	type testResultItem struct {
-		Solution   string                       `json:"solution"`
-		Test       string                       `json:"test"`
-		Status     string                       `json:"status"`
-		Duration   string                       `json:"duration"`
-		Message    string                       `json:"message,omitempty"`
-		Assertions []soltesting.AssertionResult `json:"assertions,omitempty"`
-	}
-
-	items := make([]testResultItem, 0, len(results))
-	for _, r := range results {
-		item := testResultItem{
-			Solution: r.Solution,
-			Test:     r.Test,
-			Status:   string(r.Status),
-			Duration: r.Duration.String(),
-			Message:  r.Message,
-		}
-		// Include assertions for failed tests always, or all tests if verbose
-		verbose := request.GetBool("verbose", false)
-		if len(r.Assertions) > 0 && (verbose || r.Status == soltesting.StatusFail) {
-			item.Assertions = r.Assertions
-		}
-		items = append(items, item)
-	}
+	items := buildTestResultItems(results, request.GetBool("verbose", false))
 
 	response := map[string]any{
 		"results": items,
@@ -1151,6 +1127,7 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 			"failed":   summary.Failed,
 			"errors":   summary.Errors,
 			"skipped":  summary.Skipped,
+			"relaxed":  summary.Relaxed,
 			"duration": summary.ElapsedDuration().String(),
 		},
 	}
@@ -1159,6 +1136,45 @@ func (s *Server) handleRunSolutionTests(_ context.Context, request mcp.CallToolR
 	}
 
 	return mcp.NewToolResultJSON(response)
+}
+
+// testResultItem is the JSON shape for a single functional test result in the
+// run_solution_tests response.
+type testResultItem struct {
+	Solution    string                       `json:"solution"`
+	Test        string                       `json:"test"`
+	Status      string                       `json:"status"`
+	Duration    string                       `json:"duration"`
+	Message     string                       `json:"message,omitempty"`
+	Assertions  []soltesting.AssertionResult `json:"assertions,omitempty"`
+	Relaxed     bool                         `json:"relaxed,omitempty"`
+	MaskMatches map[string]int               `json:"maskMatches,omitempty"`
+}
+
+// buildTestResultItems maps runner results to the run_solution_tests JSON
+// items. Assertions are included for failed tests always, or for every test
+// when verbose. Relaxed snapshot fidelity and per-mask replacement counts are
+// surfaced so callers can see where exact comparison was loosened.
+func buildTestResultItems(results []soltesting.TestResult, verbose bool) []testResultItem {
+	items := make([]testResultItem, 0, len(results))
+	for _, r := range results {
+		item := testResultItem{
+			Solution: r.Solution,
+			Test:     r.Test,
+			Status:   string(r.Status),
+			Duration: r.Duration.String(),
+			Message:  r.Message,
+		}
+		if len(r.Assertions) > 0 && (verbose || r.Status == soltesting.StatusFail) {
+			item.Assertions = r.Assertions
+		}
+		if r.Relaxed {
+			item.Relaxed = true
+			item.MaskMatches = r.MaskMatches
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 // handleGetRunCommand analyzes a solution and returns the exact CLI command to run it.

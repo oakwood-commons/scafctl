@@ -1165,12 +1165,12 @@ Transform data using Go text/template syntax. Supports single-template rendering
 | `operation` | string | ❌ | Operation: `render` (default) or `render-tree` |
 | `template` | string | ❌ | Go template content (required for `render`) |
 | `name` | string | ❌ | Template name for error messages (defaults to `"render-tree"` for render-tree) |
-| `entries` | array | ❌ | Array of `{path, content}` objects to render (required for `render-tree`) |
+| `entries` | array | ❌ | Array of `{path, content, data?}` objects to render (required for `render-tree`). Each entry may include an optional `data` map, shallow-merged over the shared `data` for that entry only. |
 | `missingKey` | string | ❌ | Behavior for missing keys: `default`, `zero`, `error` |
 | `leftDelim` | string | ❌ | Left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Right delimiter (default: `}}`) |
 | `data` | any | ❌ | Additional data to merge with resolver context |
-| `ignoredBlocks` | array | ❌ | Blocks to pass through literally without template processing. Each entry uses EITHER `{ start, end }` markers (multi-line) OR `{ line }` marker (single-line). Content is preserved as-is. |
+| `ignoredBlocks` | array | ❌ | Extra literal pass-through markers (on top of the always-on built-ins). Each entry uses EXACTLY ONE mode: `{ start, end }` (multi-line, markers preserved), `{ line }` (single-line), or `{ token }` (every occurrence of a literal). Built-in zero-config markers `{{/* scafctl:ignore:start */}}`...`{{/* scafctl:ignore:end */}}` (markers stripped) and `# scafctl:ignore` (per-line) need no declaration. |
 
 ### Output
 
@@ -1179,6 +1179,36 @@ Transform data using Go text/template syntax. Supports single-template rendering
 **`render-tree` operation:** Returns an array of `{path, content}` objects where
 each `content` is the rendered result. Metadata includes `templateName` and
 `entryCount`.
+
+#### Per-entry data (fan-out)
+
+Each entry may carry an optional `data` map that is shallow-merged over the
+shared top-level `data` for that entry only. On key conflicts, per-entry values
+win over shared `data`, iteration variables, and resolver context. This enables
+fan-out -- one template rendered once per item, each with its own variables and
+output path -- in a single resolver, without a separate `forEach` render step
+or a manual index-zip:
+
+```yaml
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        operation: render-tree
+        data:
+          platformAppName: my-app        # shared default (merge base)
+        entries:
+          expr: |
+            _.environments.map(env, {
+              "path":    "envs/" + env.name + "/backend.tf",
+              "content": _.backendTemplate.entries[0].content,
+              "data":    {"environment": env}   # per-entry, wins over shared
+            })
+```
+
+Entries without a `data` field render against the shared `data` alone, so
+existing `render-tree` usage is unaffected. A non-map `data` value fails with a
+clear error naming the entry index and path.
 
 ### Ignored Blocks
 
@@ -1452,7 +1482,7 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 | `url` | string | ✅ | URL to request |
 | `method` | string | ❌ | HTTP method (default: `GET`) |
 | `headers` | object | ❌ | HTTP headers |
-| `body` | string | ❌ | Request body |
+| `body` | any | ❌ | Request body. A string is sent verbatim; an object or array is serialized to compact JSON and `Content-Type` defaults to `application/json` when not otherwise set |
 | `timeout` | int | ❌ | Timeout in seconds (max 300) |
 | `retry` | object | ❌ | Retry configuration |
 | `auth` | string | ❌ | Auth provider (e.g., `entra`, `github`) |
@@ -1460,6 +1490,25 @@ HTTP client for API calls with built-in pagination support for fetching data acr
 | `pagination` | object | ❌ | Pagination configuration (see below) |
 | `autoParseJson` | bool | ❌ | Parse response body as JSON when Content-Type is `application/json`. Enables direct field access (e.g., `_.result.body.items`) |
 | `poll` | object | ❌ | Polling configuration — re-execute request until a condition is met (see below) |
+
+### Request body
+
+`body` accepts either a string or a structured value:
+
+- **String** -- sent verbatim. You control the exact bytes and the `Content-Type` header.
+- **Object or array** -- serialized to compact JSON. When you do not set a `Content-Type` header, the provider defaults it to `application/json`. An explicit `Content-Type` (matched case-insensitively) is always preserved.
+
+Passing a structured body lets you build the payload directly from resolver values with a CEL expression, avoiding a separate serializer resolver:
+
+```yaml
+# Object body built from a CEL expression -- serialized to JSON automatically
+provider: http
+inputs:
+  url: https://api.example.com/graphql
+  method: POST
+  body:
+    expr: '{"query": _.graphQuery, "variables": {"id": _.recordId}}'
+```
 
 ### Pagination
 

@@ -52,13 +52,13 @@ GOOS=windows GOARCH=amd64 go build -o dist/${PLUGIN_NAME}-windows-amd64.exe ./cm
 
 ## Step 2: Build Multi-Platform Artifact
 
-Use `scafctl build plugin` to package all binaries into a single
+Use `scafctl package plugin` to package all binaries into a single
 multi-platform artifact:
 
 {{< tabs "multi-platform-plugin-build-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name my-provider \
   --kind provider \
   --version 1.0.0 \
@@ -71,7 +71,7 @@ scafctl build plugin \
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build plugin `
+scafctl package plugin `
   --name my-provider `
   --kind provider `
   --version 1.0.0 `
@@ -156,7 +156,7 @@ only supports Linux:
 {{< tabs "multi-platform-plugin-build-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name my-provider \
   --kind provider \
   --version 1.0.0 \
@@ -166,7 +166,7 @@ scafctl build plugin \
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build plugin `
+scafctl package plugin `
   --name my-provider `
   --kind provider `
   --version 1.0.0 `
@@ -190,7 +190,7 @@ The same workflow works for auth handler plugins:
 {{< tabs "multi-platform-plugin-build-cmd-4" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name github-auth \
   --kind auth-handler \
   --version 2.0.0 \
@@ -200,7 +200,7 @@ scafctl build plugin \
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build plugin `
+scafctl package plugin `
   --name github-auth `
   --kind auth-handler `
   --version 2.0.0 `
@@ -217,7 +217,7 @@ Use `--force` to overwrite an existing version:
 {{< tabs "multi-platform-plugin-build-cmd-5" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name my-provider \
   --kind provider \
   --version 1.0.0 \
@@ -227,7 +227,7 @@ scafctl build plugin \
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl build plugin `
+scafctl package plugin `
   --name my-provider `
   --kind provider `
   --version 1.0.0 `

@@ -301,6 +301,24 @@ func TestService_Execute_Replacements(t *testing.T) {
 			data: map[string]any{"Items": []string{"a", "b"}},
 			want: "a b KEEP_THIS",
 		},
+		{
+			name:    "restoreAs strips markers",
+			content: "before <RAW>{{ .notParsed }}</RAW> after",
+			replacements: []Replacement{
+				{Find: "<RAW>{{ .notParsed }}</RAW>", RestoreAs: "{{ .notParsed }}"},
+			},
+			data: map[string]any{},
+			want: "before {{ .notParsed }} after",
+		},
+		{
+			name:    "restoreAs empty falls back to find",
+			content: "keep VERBATIM here",
+			replacements: []Replacement{
+				{Find: "VERBATIM", RestoreAs: ""},
+			},
+			data: map[string]any{},
+			want: "keep VERBATIM here",
+		},
 	}
 
 	for _, tt := range tests {

@@ -109,6 +109,12 @@ type Replacement struct {
 	// Replace is the temporary replacement value
 	// If empty, a UUID will be generated automatically
 	Replace string `json:"replace,omitempty" yaml:"replace,omitempty" doc:"Temporary replacement value; if empty, a UUID is generated" maxLength:"4096"`
+
+	// RestoreAs is the value written back into the output after execution.
+	// If empty, Find is restored verbatim (the default). Set this to restore a
+	// different value than what was matched -- e.g. to strip fence markers while
+	// preserving only the inner content of a protected block.
+	RestoreAs string `json:"restoreAs,omitempty" yaml:"restoreAs,omitempty" doc:"Value restored into the output after execution; if empty, Find is restored verbatim" maxLength:"1048576"`
 }
 
 // ExecuteResult contains the result of template execution
@@ -344,10 +350,15 @@ func (s *Service) applyReplacements(ctx context.Context, content string, replace
 			continue
 		}
 
-		// Apply replacement
+		// Apply replacement. RestoreAs controls what is written back after
+		// execution; when empty the matched text (Find) is restored verbatim.
+		restoreValue := r.Find
+		if r.RestoreAs != "" {
+			restoreValue = r.RestoreAs
+		}
 		count := strings.Count(modified, r.Find)
 		modified = strings.ReplaceAll(modified, r.Find, placeholder)
-		reversalMap[placeholder] = r.Find
+		reversalMap[placeholder] = restoreValue
 
 		lgr.V(2).Info("applied replacement",
 			"index", i,

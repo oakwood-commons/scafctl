@@ -29,7 +29,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/runmode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 )
 
 // Server is the REST API server backed by chi and Huma.
@@ -48,7 +47,6 @@ type Server struct {
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
 	pluginPool        *plugin.Pool
-	tokenProviderReg  *tokenprovider.Registry
 	version           string
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -63,7 +61,6 @@ type serverConfig struct {
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
 	pluginPool        *plugin.Pool
-	tokenProviderReg  *tokenprovider.Registry
 	config            *config.Config
 	version           string
 	ctx               context.Context
@@ -147,13 +144,6 @@ func WithServerPluginPool(pool *plugin.Pool) ServerOption {
 	}
 }
 
-// WithServerTokenProviderRegistry sets the unified token provider registry.
-func WithServerTokenProviderRegistry(reg *tokenprovider.Registry) ServerOption {
-	return func(c *serverConfig) {
-		c.tokenProviderReg = reg
-	}
-}
-
 // NewServer creates a new API server with the given options.
 func NewServer(opts ...ServerOption) (*Server, error) {
 	sc := &serverConfig{}
@@ -192,7 +182,6 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		officialProviders: sc.officialProviders,
 		pluginClients:     sc.pluginClients,
 		pluginPool:        sc.pluginPool,
-		tokenProviderReg:  sc.tokenProviderReg,
 		version:           version,
 		ctx:               ctx,
 		cancel:            cancel,
@@ -300,12 +289,7 @@ func (s *Server) Start() error {
 		ReadTimeout:       parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
 		WriteTimeout:      parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
 		BaseContext: func(_ net.Listener) context.Context {
-			baseCtx := s.ctx
-			if s.tokenProviderReg != nil {
-				baseCtx = tokenprovider.WithRegistry(baseCtx, s.tokenProviderReg)
-			}
-			baseCtx = runmode.WithMode(baseCtx, runmode.API)
-			return baseCtx
+			return runmode.WithMode(s.ctx, runmode.API)
 		},
 	}
 

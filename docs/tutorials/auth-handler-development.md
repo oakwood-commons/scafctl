@@ -859,7 +859,7 @@ Once your auth handler plugin is ready, publish it as an OCI catalog artifact so
 
 ### Build and Push the OCI Artifact
 
-Use `scafctl build plugin` to package your multi-platform binaries into an OCI image index, then `scafctl catalog push` to publish it:
+Use `scafctl package plugin` to package your multi-platform binaries into an OCI image index, then `scafctl catalog push` to publish it:
 
 ~~~bash
 VERSION="1.0.0"
@@ -867,7 +867,7 @@ NAME="my-handler"
 BINARY="scafctl-plugin-auth-my-handler"
 CATALOG="oci://ghcr.io/myorg"
 
-scafctl build plugin \
+scafctl package plugin \
   --force \
   --name "${NAME}" \
   --kind auth-handler \

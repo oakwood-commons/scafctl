@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -571,19 +572,38 @@ func TestGoTemplateProvider_Execute_IgnoredBlocks_Empty(t *testing.T) {
 		"name": "test",
 	})
 
-	// Empty/invalid blocks should be silently skipped
-	inputs := map[string]any{
-		"name":     "empty-blocks-test",
-		"template": "Hello, {{.name}}!",
-		"ignoredBlocks": []any{
-			map[string]any{"start": "", "end": ""},
-			map[string]any{"start": "something", "end": ""},
+	// Empty/invalid blocks are rejected: an entry must declare exactly one mode,
+	// and start/end must be set as a pair.
+	tests := []struct {
+		name    string
+		block   map[string]any
+		wantErr string
+	}{
+		{
+			name:    "no mode set",
+			block:   map[string]any{"start": "", "end": ""},
+			wantErr: "no mode set",
+		},
+		{
+			name:    "start without end",
+			block:   map[string]any{"start": "something", "end": ""},
+			wantErr: "'start' and 'end' must both be set",
 		},
 	}
 
-	output, err := p.Execute(ctx, inputs)
-	require.NoError(t, err)
-	assert.Equal(t, "Hello, test!", output.Data)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputs := map[string]any{
+				"name":          "empty-blocks-test",
+				"template":      "Hello, {{.name}}!",
+				"ignoredBlocks": []any{tt.block},
+			}
+
+			_, err := p.Execute(ctx, inputs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestGoTemplateProvider_Execute_IgnoredBlocks_Line(t *testing.T) {
@@ -725,6 +745,266 @@ func TestGoTemplateProvider_Execute_IgnoredBlocks_Line_MixedEntries(t *testing.T
 	assert.Contains(t, result, "${{ secrets.KEY }}")
 	// Block-ignored content preserved
 	assert.Contains(t, result, "for k, v in var.x : k => v")
+}
+
+func TestGoTemplateProvider_Execute_BuiltinFence_StripsMarkers(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "my-app",
+	})
+
+	// The built-in fence requires NO ignoredBlocks declaration and strips markers.
+	inputs := map[string]any{
+		"name": "builtin-fence-test",
+		"template": `name: {{.name}}
+{{/* scafctl:ignore:start */}}
+raw: {{ this.is.not.parsed }}
+{{/* scafctl:ignore:end */}}
+done: {{.name}}`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Template variables rendered
+	assert.Contains(t, result, "name: my-app")
+	assert.Contains(t, result, "done: my-app")
+	// Inner content preserved verbatim
+	assert.Contains(t, result, "raw: {{ this.is.not.parsed }}")
+	// Fence markers stripped from output
+	assert.NotContains(t, result, "scafctl:ignore:start")
+	assert.NotContains(t, result, "scafctl:ignore:end")
+}
+
+func TestGoTemplateProvider_Execute_BuiltinFence_NotShadowedByUserConfig(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "my-app",
+	})
+
+	// A user declares the SAME markers as the built-in fence. Because built-in
+	// configs take priority, the built-in marker stripping must still win -- the
+	// user's start/end entry (which preserves markers) cannot shadow it.
+	inputs := map[string]any{
+		"name": "builtin-fence-shadow-test",
+		"template": `name: {{.name}}
+{{/* scafctl:ignore:start */}}
+raw: {{ this.is.not.parsed }}
+{{/* scafctl:ignore:end */}}
+done: {{.name}}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"start": "{{/* scafctl:ignore:start */}}",
+				"end":   "{{/* scafctl:ignore:end */}}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	// Template variables rendered
+	assert.Contains(t, result, "name: my-app")
+	assert.Contains(t, result, "done: my-app")
+	// Inner content preserved verbatim
+	assert.Contains(t, result, "raw: {{ this.is.not.parsed }}")
+	// Built-in stripping still wins: markers removed despite the user config.
+	assert.NotContains(t, result, "scafctl:ignore:start")
+	assert.NotContains(t, result, "scafctl:ignore:end")
+}
+
+func TestGoTemplateProvider_Execute_BuiltinLineMarker(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"appName": "my-app",
+	})
+
+	// The built-in '# scafctl:ignore' line marker works with no declaration.
+	inputs := map[string]any{
+		"name": "builtin-line-test",
+		"template": `name: {{.appName}}
+token: ${{ secrets.TOKEN }}  # scafctl:ignore
+tail: {{.appName}}`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "name: my-app")
+	assert.Contains(t, result, "${{ secrets.TOKEN }}")
+	assert.Contains(t, result, "tail: my-app")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Token(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "svc",
+	})
+
+	inputs := map[string]any{
+		"name": "token-test",
+		"template": `service: {{.name}}
+a: ${LITERAL}
+b: ${LITERAL}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"token": "${LITERAL}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "service: svc")
+	// Every occurrence of the token is preserved literally
+	assert.Equal(t, 2, strings.Count(result, "${LITERAL}"))
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_Token_MutualExclusion(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	inputs := map[string]any{
+		"name":     "token-mutual-exclusion-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{
+				"token": "${LITERAL}",
+				"line":  "# scafctl:ignore",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_EmptyEntry_Errors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	inputs := map[string]any{
+		"name":     "empty-entry-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no mode set")
+}
+
+func TestGoTemplateProvider_Execute_IgnoredBlocks_StartWithoutEnd_Errors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "test",
+	})
+
+	inputs := map[string]any{
+		"name":     "start-without-end-test",
+		"template": "Hello, {{.name}}!",
+		"ignoredBlocks": []any{
+			map[string]any{
+				"start": "<<<",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "'start' and 'end' must both be set")
+}
+
+func TestGoTemplateProvider_Execute_TokenInsideFence_FenceTakesPrecedence(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"name": "svc",
+	})
+
+	// A user-declared token overlaps a built-in fenced region. The fence must
+	// still be recognized (markers stripped, inner content preserved verbatim)
+	// regardless of the token entry's ordering.
+	inputs := map[string]any{
+		"name": "token-in-fence-test",
+		"template": `service: {{.name}}
+{{/* scafctl:ignore:start */}}
+url: ${LITERAL}/api
+{{/* scafctl:ignore:end */}}
+tail: ${LITERAL}`,
+		"ignoredBlocks": []any{
+			map[string]any{
+				"token": "${LITERAL}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	result, ok := output.Data.(string)
+	require.True(t, ok)
+
+	assert.Contains(t, result, "service: svc")
+	// Fence markers are stripped, inner content preserved.
+	assert.NotContains(t, result, "scafctl:ignore:start")
+	assert.NotContains(t, result, "scafctl:ignore:end")
+	// The literal token is preserved both inside the fence and outside it.
+	assert.Equal(t, 2, strings.Count(result, "${LITERAL}"))
+}
+
+func TestExtractDependencies_ExcludesIgnoredRegions(t *testing.T) {
+	// References inside built-in fenced regions must not be treated as deps.
+	inputs := map[string]any{
+		"template": `real: {{ .realDep }}
+{{/* scafctl:ignore:start */}}
+phantom: {{ .phantomDep }}
+{{/* scafctl:ignore:end */}}
+line: {{ .lineDep }}  # scafctl:ignore`,
+	}
+
+	deps := extractDependencies(inputs)
+
+	assert.Contains(t, deps, "realDep")
+	assert.NotContains(t, deps, "phantomDep")
+	assert.NotContains(t, deps, "lineDep")
 }
 
 // --- render-tree tests ---
@@ -956,6 +1236,169 @@ func TestGoTemplateProvider_RenderTree_DataOverridesResolverContext(t *testing.T
 	require.True(t, ok)
 	require.Len(t, results, 1)
 	assert.Equal(t, "environment: production", results[0]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataFanOut(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	// A single shared template rendered once per entry, each with its own data
+	// and its own output path -- the fan-out use case.
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "fan-out",
+		"data": map[string]any{
+			"shared": "S",
+		},
+		"entries": []any{
+			map[string]any{
+				"path":    "envs/dev/backend.tf",
+				"content": "env={{ .env }} shared={{ .shared }}",
+				"data":    map[string]any{"env": "dev"},
+			},
+			map[string]any{
+				"path":    "envs/prod/backend.tf",
+				"content": "env={{ .env }} shared={{ .shared }}",
+				"data":    map[string]any{"env": "prod"},
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	assert.Equal(t, "envs/dev/backend.tf", results[0]["path"])
+	assert.Equal(t, "env=dev shared=S", results[0]["content"])
+
+	assert.Equal(t, "envs/prod/backend.tf", results[1]["path"])
+	assert.Equal(t, "env=prod shared=S", results[1]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataOverridesShared(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "entry-override",
+		"data": map[string]any{
+			"env": "FALLBACK",
+		},
+		"entries": []any{
+			map[string]any{
+				"path":    "a.txt",
+				"content": "env={{ .env }}",
+				"data":    map[string]any{"env": "dev"},
+			},
+			map[string]any{
+				// No per-entry data: falls back to shared data.
+				"path":    "b.txt",
+				"content": "env={{ .env }}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "env=dev", results[0]["content"])
+	assert.Equal(t, "env=FALLBACK", results[1]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataOverridesResolverContext(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	ctx = provider.WithResolverContext(ctx, map[string]any{
+		"env": "staging",
+	})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "entry-over-resolver",
+		"entries": []any{
+			map[string]any{
+				"path":    "config.yaml",
+				"content": "environment: {{ .env }}",
+				"data":    map[string]any{"env": "production"},
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "environment: production", results[0]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataDoesNotLeakBetweenEntries(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	// The first entry sets a key via per-entry data; the second entry (with no
+	// per-entry data) must not see it -- baseData must remain untouched.
+	inputs := map[string]any{
+		"operation":  "render-tree",
+		"name":       "no-leak",
+		"missingKey": "zero",
+		"entries": []any{
+			map[string]any{
+				"path":    "first.txt",
+				"content": "value={{ .only }}",
+				"data":    map[string]any{"only": "first"},
+			},
+			map[string]any{
+				"path":    "second.txt",
+				"content": "value={{ .only }}",
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "value=first", results[0]["content"])
+	// Second entry never received the first entry's "only" key.
+	assert.NotContains(t, results[1]["content"], "first")
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryDataInvalidType(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "bad-data",
+		"entries": []any{
+			map[string]any{
+				"path":    "ok.txt",
+				"content": "hello",
+			},
+			map[string]any{
+				"path":    "bad.txt",
+				"content": "{{ .x }}",
+				"data":    "not-a-map",
+			},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entries[1].data must be a map")
+	assert.Contains(t, err.Error(), "bad.txt")
 }
 
 func TestGoTemplateProvider_RenderTree_DryRun(t *testing.T) {
@@ -1282,6 +1725,79 @@ func TestExtractDependencies_DataKeyExclusion(t *testing.T) {
 		for _, d := range deps {
 			assert.NotEqual(t, "config", d)
 			assert.NotEqual(t, "labels", d)
+		}
+	})
+}
+
+func TestExtractDependencies_DepScanContext(t *testing.T) {
+	t.Run("injected context with known data keys excludes them", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .appName }} {{ .other }} {{ ._.token }}",
+			gotmpl.DepScanContextKey: gotmpl.DepScanContext{
+				HasDataInput:     true,
+				DataKeys:         map[string]bool{"appName": true},
+				DataKeysComplete: true,
+			},
+		})
+		assert.Contains(t, deps, "token", "explicit resolver ref is always a dep")
+		assert.Contains(t, deps, "other", "non-data-key field resolves against resolver data")
+		for _, d := range deps {
+			assert.NotEqual(t, "appName", d, "known data key should be excluded")
+		}
+	})
+
+	t.Run("injected context with forEach aliases excludes them", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .proj.name }} {{ .env }}",
+			gotmpl.DepScanContextKey: gotmpl.DepScanContext{
+				Aliases: map[string]bool{"proj": true},
+			},
+		})
+		assert.Contains(t, deps, "env")
+		for _, d := range deps {
+			assert.NotEqual(t, "proj", d, "forEach alias should be excluded")
+		}
+	})
+
+	t.Run("injected context with dynamic data keys skips bare fields", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .anything }} {{ ._.token }}",
+			gotmpl.DepScanContextKey: gotmpl.DepScanContext{
+				HasDataInput:     true,
+				DataKeysComplete: false,
+			},
+		})
+		assert.Contains(t, deps, "token")
+		for _, d := range deps {
+			assert.NotEqual(t, "anything", d, "bare field skipped when data keys are dynamic")
+		}
+	})
+
+	t.Run("falls back to literal data map when context absent", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"template": "{{ .config }} {{ .other }}",
+			"data": map[string]any{
+				"config": map[string]any{"port": 8080},
+			},
+		})
+		assert.Contains(t, deps, "other")
+		for _, d := range deps {
+			assert.NotEqual(t, "config", d, "literal data key should be excluded via fallback")
+		}
+	})
+
+	t.Run("valueref-shaped data map is treated as dynamic in fallback", func(t *testing.T) {
+		for _, controlKey := range []string{"expr", "rslvr", "tmpl"} {
+			deps := extractDependencies(map[string]any{
+				"template":               "{{ .appName }} {{ ._.token }}",
+				"data":                   map[string]any{controlKey: "someValue"},
+				gotmpl.DepScanContextKey: nil,
+			})
+			assert.Contains(t, deps, "token", "explicit resolver ref is always a dep (%s)", controlKey)
+			for _, d := range deps {
+				assert.NotEqual(t, controlKey, d, "%s control key must not be a data key", controlKey)
+				assert.NotEqual(t, "appName", d, "bare field skipped for dynamic valueref data (%s)", controlKey)
+			}
 		}
 	})
 }

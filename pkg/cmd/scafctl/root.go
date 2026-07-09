@@ -17,7 +17,6 @@ import (
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/build"
 	bundlecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/bundle"
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
@@ -32,6 +31,7 @@ import (
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/options"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/packagecmd"
 	pluginscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/plugins"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
@@ -48,6 +48,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
+	"github.com/oakwood-commons/scafctl/pkg/kube/clusterconfig"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/metrics"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -55,7 +56,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/profiler"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
-	"github.com/oakwood-commons/scafctl/pkg/runmode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -65,7 +65,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/input"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
-	"github.com/oakwood-commons/scafctl/pkg/tokenprovider"
 	"github.com/spf13/cobra"
 )
 
@@ -561,10 +560,17 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 			ctx = auth.WithRegistry(ctx, authRegistry)
 
-			// Attach the embedder-provided cluster resolver, if any, so
-			// cluster-aware commands can resolve names to connection details.
-			if opts.ClusterResolver != nil {
+			// Attach a cluster resolver so cluster-aware commands can resolve
+			// names to connection details. An embedder-provided resolver wins;
+			// otherwise a config-driven resolver is built from the kube.clusters
+			// config section when it declares any aliases or an inventory.
+			switch {
+			case opts.ClusterResolver != nil:
 				ctx = kube.WithResolver(ctx, opts.ClusterResolver)
+			default:
+				if cr := clusterconfig.New(cfg.Kube.Clusters); cr.Enabled() {
+					ctx = kube.WithResolver(ctx, cr)
+				}
 			}
 
 			// ── Resolve global auth profile ──
@@ -748,15 +754,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				lgr.V(1).Info("official provider registry disabled via config")
 			}
 
-			// Build CLI-mode token provider registry for unified token retrieval.
-			// must run after auth registry is fully configured since some token providers
-			tsReg, tsErr := tokenprovider.Build(runmode.CLI, authRegistry, nil)
-			if tsErr != nil {
-				w.ErrorWithExit(fmt.Sprintf("failed to build token provider registry: %v", tsErr))
-				return
-			}
-			ctx = tokenprovider.WithRegistry(ctx, tsReg)
-
 			cCmd.SetContext(ctx)
 
 			// Only validate args for the root command itself, not subcommands
@@ -870,7 +867,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 	// Scaffolding Commands — create and package artifacts
 	cCmd.AddCommand(withGroup(groupScaffold, newcmd.CommandNew(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, build.CommandBuild(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupScaffold, packagecmd.CommandPackage(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupScaffold, bundlecmd.CommandBundle(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupScaffold, vendorcmd.CommandVendor(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupScaffold, catalogcmd.CommandCatalog(cliParams, ioStreams, binaryName)))

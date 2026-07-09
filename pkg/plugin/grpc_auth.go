@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-plugin"
+	sdkauth "github.com/oakwood-commons/scafctl-plugin-sdk/auth"
 	sdkplugin "github.com/oakwood-commons/scafctl-plugin-sdk/plugin"
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -153,6 +154,8 @@ func (s *AuthHandlerGRPCServer) Login(req *proto.LoginRequest, stream grpc.Serve
 		Scopes:   req.Scopes,
 		Flow:     auth.Flow(req.Flow),
 		Timeout:  time.Duration(req.TimeoutSeconds) * time.Second,
+		// int32 -> int is a widening conversion and always safe.
+		CallbackPort: int(req.CallbackPort),
 	}
 	loginReq.TenantID = req.TenantId
 
@@ -182,7 +185,7 @@ func (s *AuthHandlerGRPCServer) Logout(ctx context.Context, req *proto.LogoutReq
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
 	}
-	if err := s.Impl.Logout(ctx, req.HandlerName); err != nil {
+	if err := s.Impl.Logout(ctx, req.HandlerName, LogoutRequest{Hostname: req.Hostname}); err != nil {
 		return nil, err
 	}
 	return &proto.LogoutResponse{}, nil
@@ -194,7 +197,7 @@ func (s *AuthHandlerGRPCServer) GetStatus(ctx context.Context, req *proto.GetSta
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
 	}
-	status, err := s.Impl.GetStatus(ctx, req.HandlerName)
+	status, err := s.Impl.GetStatus(ctx, req.HandlerName, StatusRequest{Hostname: req.Hostname})
 	if err != nil {
 		return nil, err
 	}
@@ -208,9 +211,13 @@ func (s *AuthHandlerGRPCServer) GetToken(ctx context.Context, req *proto.GetToke
 		return nil, status.Errorf(codes.InvalidArgument, "invalid profile: %v", err)
 	}
 	tokenReq := TokenRequest{
-		Scope:        req.Scope,
-		MinValidFor:  time.Duration(req.MinValidForSeconds) * time.Second,
-		ForceRefresh: req.ForceRefresh,
+		Scope:         req.Scope,
+		MinValidFor:   time.Duration(req.MinValidForSeconds) * time.Second,
+		ForceRefresh:  req.ForceRefresh,
+		ServerContext: sdkauth.ServerContext(req.ServerContext),
+		Caller:        sdkauth.CallerType(req.Caller),
+		Assertion:     req.Assertion,
+		Hostname:      req.Hostname,
 	}
 	token, err := s.Impl.GetToken(ctx, req.HandlerName, tokenReq)
 	if err != nil {
@@ -345,6 +352,19 @@ func (c *AuthHandlerGRPCClient) GetAuthHandlers(ctx context.Context) ([]AuthHand
 	return handlers, nil
 }
 
+// callbackPortToProto converts a host-side callback port to its wire (int32)
+// form. Out-of-range values (negative, privileged, above the max TCP port, or
+// beyond int32) are normalized to 0 (unset) so the narrowing conversion can
+// never truncate an untrusted value into a spurious port. The bounds are the
+// shared auth.MinCallbackPort/auth.MaxCallbackPort so this wire clamp cannot
+// drift from the CLI's --callback-port validation.
+func callbackPortToProto(port int) int32 {
+	if port < auth.MinCallbackPort || port > auth.MaxCallbackPort {
+		return 0
+	}
+	return int32(port)
+}
+
 // Login implements AuthHandlerPlugin.Login with streaming device code support.
 func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, req LoginRequest, deviceCodeCb func(DeviceCodePrompt)) (*LoginResponse, error) {
 	stream, err := c.client.Login(ctx, &proto.LoginRequest{
@@ -355,6 +375,7 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 		Flow:           string(req.Flow),
 		TimeoutSeconds: int64(req.Timeout / time.Second),
 		Profile:        auth.ProfileFromContext(ctx),
+		CallbackPort:   callbackPortToProto(req.CallbackPort),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("login RPC failed: %w", err)
@@ -390,14 +411,14 @@ func (c *AuthHandlerGRPCClient) Login(ctx context.Context, handlerName string, r
 }
 
 // Logout implements AuthHandlerPlugin.Logout.
-func (c *AuthHandlerGRPCClient) Logout(ctx context.Context, handlerName string) error {
-	_, err := c.client.Logout(ctx, &proto.LogoutRequest{HandlerName: handlerName, Profile: auth.ProfileFromContext(ctx)})
+func (c *AuthHandlerGRPCClient) Logout(ctx context.Context, handlerName string, req LogoutRequest) error {
+	_, err := c.client.Logout(ctx, &proto.LogoutRequest{HandlerName: handlerName, Hostname: req.Hostname, Profile: auth.ProfileFromContext(ctx)})
 	return err
 }
 
 // GetStatus implements AuthHandlerPlugin.GetStatus.
-func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName string) (*auth.Status, error) {
-	resp, err := c.client.GetStatus(ctx, &proto.GetStatusRequest{HandlerName: handlerName, Profile: auth.ProfileFromContext(ctx)})
+func (c *AuthHandlerGRPCClient) GetStatus(ctx context.Context, handlerName string, req StatusRequest) (*auth.Status, error) {
+	resp, err := c.client.GetStatus(ctx, &proto.GetStatusRequest{HandlerName: handlerName, Hostname: req.Hostname, Profile: auth.ProfileFromContext(ctx)})
 	if err != nil {
 		return nil, err
 	}
@@ -412,6 +433,10 @@ func (c *AuthHandlerGRPCClient) GetToken(ctx context.Context, handlerName string
 		MinValidForSeconds: int64(req.MinValidFor / time.Second),
 		ForceRefresh:       req.ForceRefresh,
 		Profile:            auth.ProfileFromContext(ctx),
+		Hostname:           req.Hostname,
+		ServerContext:      string(req.ServerContext),
+		Caller:             string(req.Caller),
+		Assertion:          req.Assertion,
 	})
 	if err != nil {
 		return nil, err
@@ -518,6 +543,25 @@ func (c *AuthHandlerGRPCClient) StopAuthHandler(ctx context.Context, handlerName
 	return nil
 }
 
+// ActivateServerMode sends server-mode settings to the plugin. When settings
+// is nil the plugin stays in CLI mode. When non-nil the bytes are passed as-is
+// to the plugin's ActivateServerMode RPC which unmarshals and validates them.
+func (c *AuthHandlerGRPCClient) ActivateServerMode(ctx context.Context, settings json.RawMessage) error {
+	resp, err := c.client.ActivateServerMode(ctx, &proto.ActivateServerModeRequest{
+		Settings: settings,
+	})
+	if err != nil {
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			return nil
+		}
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("activate server mode failed: %s", resp.Error)
+	}
+	return nil
+}
+
 // ---- Conversion helpers ----
 
 func claimsToProto(c *auth.Claims) *proto.Claims {
@@ -572,6 +616,7 @@ func statusToProto(s *auth.Status) *proto.GetStatusResponse {
 		TokenFile:       s.TokenFile,
 		Scopes:          s.Scopes,
 		Flow:            string(s.Flow),
+		Hostname:        s.Hostname,
 	}
 }
 
@@ -591,6 +636,7 @@ func protoToStatus(resp *proto.GetStatusResponse) *auth.Status {
 		TokenFile:     resp.TokenFile,
 		Scopes:        resp.Scopes,
 		Flow:          auth.Flow(resp.Flow),
+		Hostname:      resp.Hostname,
 	}
 }
 
@@ -636,6 +682,7 @@ func cachedTokenInfoToProto(t *auth.CachedTokenInfo) *proto.CachedTokenInfo {
 		Flow:      string(t.Flow),
 		IsExpired: t.IsExpired,
 		SessionId: t.SessionID,
+		Hostname:  t.Hostname,
 	}
 	if !t.ExpiresAt.IsZero() {
 		p.ExpiresAtUnix = t.ExpiresAt.Unix()
@@ -658,6 +705,7 @@ func protoToCachedTokenInfo(t *proto.CachedTokenInfo) *auth.CachedTokenInfo {
 		Flow:      auth.Flow(t.Flow),
 		IsExpired: t.IsExpired,
 		SessionID: t.SessionId,
+		Hostname:  t.Hostname,
 	}
 	if t.ExpiresAtUnix != 0 {
 		info.ExpiresAt = time.Unix(t.ExpiresAtUnix, 0)

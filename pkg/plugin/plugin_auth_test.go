@@ -20,8 +20,8 @@ import (
 type MockAuthHandlerPlugin struct {
 	handlers        []AuthHandlerInfo
 	loginFunc       func(ctx context.Context, name string, req LoginRequest, cb func(DeviceCodePrompt)) (*LoginResponse, error)
-	logoutFunc      func(ctx context.Context, name string) error
-	statusFunc      func(ctx context.Context, name string) (*auth.Status, error)
+	logoutFunc      func(ctx context.Context, name string, req LogoutRequest) error
+	statusFunc      func(ctx context.Context, name string, req StatusRequest) (*auth.Status, error)
 	tokenFunc       func(ctx context.Context, name string, req TokenRequest) (*TokenResponse, error)
 	listFunc        func(ctx context.Context, name string) ([]*auth.CachedTokenInfo, error)
 	purgeFunc       func(ctx context.Context, name string) (int, error)
@@ -66,16 +66,16 @@ func (m *MockAuthHandlerPlugin) Login(ctx context.Context, handlerName string, r
 	}, nil
 }
 
-func (m *MockAuthHandlerPlugin) Logout(ctx context.Context, handlerName string) error {
+func (m *MockAuthHandlerPlugin) Logout(ctx context.Context, handlerName string, req LogoutRequest) error {
 	if m.logoutFunc != nil {
-		return m.logoutFunc(ctx, handlerName)
+		return m.logoutFunc(ctx, handlerName, req)
 	}
 	return nil
 }
 
-func (m *MockAuthHandlerPlugin) GetStatus(ctx context.Context, handlerName string) (*auth.Status, error) {
+func (m *MockAuthHandlerPlugin) GetStatus(ctx context.Context, handlerName string, req StatusRequest) (*auth.Status, error) {
 	if m.statusFunc != nil {
-		return m.statusFunc(ctx, handlerName)
+		return m.statusFunc(ctx, handlerName, req)
 	}
 	return &auth.Status{
 		Authenticated: true,
@@ -215,7 +215,7 @@ func TestAuthHandlerGRPC_LoginWithDeviceCode(t *testing.T) {
 func TestAuthHandlerGRPC_GetStatus(t *testing.T) {
 	mock := &MockAuthHandlerPlugin{}
 
-	status, err := mock.GetStatus(context.Background(), "test-handler")
+	status, err := mock.GetStatus(context.Background(), "test-handler", StatusRequest{})
 	require.NoError(t, err)
 	assert.True(t, status.Authenticated)
 	assert.Equal(t, "test@example.com", status.Claims.Email)
@@ -882,6 +882,37 @@ func TestAuthHandlerWrapper_Login_ForwardsHostname(t *testing.T) {
 	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname from LoginOptions must reach the plugin LoginRequest")
 }
 
+func TestAuthHandlerWrapper_Login_ForwardsCallbackPort(t *testing.T) {
+	t.Parallel()
+
+	var gotReq LoginRequest
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, req LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+			gotReq = req
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+
+	w := &AuthHandlerWrapper{
+		client: &AuthHandlerClient{
+			plugin: mock,
+			name:   "test-plugin",
+		},
+		handlerName: "openshift",
+		info:        AuthHandlerInfo{Name: "openshift"},
+	}
+
+	_, err := w.Login(context.Background(), auth.LoginOptions{
+		Flow:         auth.FlowInteractive,
+		CallbackPort: 8400,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 8400, gotReq.CallbackPort, "callback port from LoginOptions must reach the plugin LoginRequest")
+}
+
 // mockLoginServerStream is a minimal grpc.ServerStreamingServer used to drive
 // AuthHandlerGRPCServer.Login in unit tests. It records sent messages.
 type mockLoginServerStream struct {
@@ -925,6 +956,32 @@ func TestAuthHandlerGRPCServer_Login_ForwardsHostname(t *testing.T) {
 	}, stream)
 	require.NoError(t, err)
 	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname from proto LoginRequest must reach the handler")
+	require.NotEmpty(t, stream.messages, "server must send a result message")
+}
+
+func TestAuthHandlerGRPCServer_Login_ForwardsCallbackPort(t *testing.T) {
+	t.Parallel()
+
+	var gotReq LoginRequest
+	mock := &MockAuthHandlerPlugin{
+		loginFunc: func(_ context.Context, _ string, req LoginRequest, _ func(DeviceCodePrompt)) (*LoginResponse, error) {
+			gotReq = req
+			return &LoginResponse{
+				Claims:    &auth.Claims{Email: "user@corp.com"},
+				ExpiresAt: time.Now().Add(time.Hour),
+			}, nil
+		},
+	}
+	server := &AuthHandlerGRPCServer{Impl: mock}
+	stream := &mockLoginServerStream{}
+
+	err := server.Login(&proto.LoginRequest{
+		HandlerName:  "openshift",
+		CallbackPort: 8400,
+		Flow:         string(auth.FlowInteractive),
+	}, stream)
+	require.NoError(t, err)
+	assert.Equal(t, 8400, gotReq.CallbackPort, "callback port from proto LoginRequest must reach the handler")
 	require.NotEmpty(t, stream.messages, "server must send a result message")
 }
 

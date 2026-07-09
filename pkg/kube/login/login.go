@@ -101,6 +101,14 @@ type Deps struct {
 	// Resolver resolves cluster names to connection details. Optional.
 	Resolver kube.ClusterResolver
 
+	// LoginRunner, when set, performs the interactive handler login. It lets the
+	// caller wrap the login with a progress UI (e.g. the shared kvx status TUI
+	// used by 'auth login'). When nil, handler.Login is called directly. The
+	// returned Result is currently unused by the orchestration; only the error
+	// matters. The CLI populates this with a TUI-capable runner when stdout is a
+	// terminal and the output is not structured.
+	LoginRunner func(ctx context.Context, handler Authenticator, opts auth.LoginOptions) (*auth.Result, error)
+
 	// BinaryName is the host binary baked into the kubeconfig exec command.
 	// Empty falls back to settings.CliBinaryName.
 	BinaryName string
@@ -178,6 +186,12 @@ type Result struct {
 	// UsedFallback reports that the static kubeconfig writer was used because
 	// the kubeconfig provider was unavailable.
 	UsedFallback bool
+
+	// SupportsPerClusterTokens reports whether the auth handler advertises
+	// CapTokenHostname, i.e. it honors a per-cluster hostname on the token path.
+	// When false, logging into multiple clusters with this handler may return
+	// the wrong cluster's token (see issue #581).
+	SupportsPerClusterTokens bool
 }
 
 // Login resolves the cluster, runs the handler login, and writes a kubeconfig
@@ -227,39 +241,60 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 	if info.APIServerURL != "" && auth.HasCapability(handler.Capabilities(), auth.CapHostname) {
 		loginOpts.Hostname = info.APIServerURL
 	}
-	if _, err := handler.Login(ctx, loginOpts); err != nil {
+	loginRun := deps.LoginRunner
+	if loginRun == nil {
+		loginRun = func(ctx context.Context, h Authenticator, opts auth.LoginOptions) (*auth.Result, error) {
+			return h.Login(ctx, opts)
+		}
+	}
+	if _, err := loginRun(ctx, handler, loginOpts); err != nil {
 		return nil, fmt.Errorf("login with handler %q: %w", handler.Name(), err)
 	}
 
 	// Name the kubeconfig entries. Unlike resolveCluster (which derives the
 	// logical identity used to look the cluster up, so req.Cluster wins), the
 	// explicit --cluster-name flag takes precedence here because its sole
-	// purpose is to override the written kubeconfig entry name.
-	clusterName := firstNonEmpty(req.ClusterName, req.Cluster, info.Name)
+	// purpose is to override the written kubeconfig entry name. A positional
+	// that is a concrete API server URL is not a usable entry name (and can
+	// exceed the provider's cluster_name limit), so it is ignored in favor of
+	// the host-derived info.Name.
+	positional := req.Cluster
+	if isConcreteClusterURL(positional) {
+		positional = ""
+	}
+	clusterName := firstNonEmpty(req.ClusterName, positional, info.Name)
 	contextName := firstNonEmpty(req.ContextName, clusterName)
 	userName := firstNonEmpty(req.UserName, clusterName)
 
 	writeIn := kubeconfig.WriteInput{
-		Server:             info.APIServerURL,
-		Audience:           info.OIDCAudience,
-		ClusterName:        clusterName,
-		ContextName:        contextName,
-		UserName:           userName,
-		KubeconfigPath:     req.KubeconfigPath,
-		ExecCommand:        binaryName,
-		ExecArgs:           buildExecArgs(handler, info, req.Profile),
-		InteractiveMode:    interactiveModeFor(info.AuthType),
-		InstallHint:        buildInstallHint(binaryName),
-		ProvideClusterInfo: false,
+		Server:          info.APIServerURL,
+		Audience:        info.OIDCAudience,
+		ClusterName:     clusterName,
+		ContextName:     contextName,
+		UserName:        userName,
+		KubeconfigPath:  req.KubeconfigPath,
+		ExecCommand:     binaryName,
+		ExecArgs:        buildExecArgs(handler, info, req.Profile),
+		InteractiveMode: interactiveModeFor(info.AuthType),
+		InstallHint:     buildInstallHint(binaryName),
+		// Ask kubectl/oc to pass the target cluster's details (API server URL)
+		// to the exec plugin via KUBERNETES_EXEC_INFO. The exec helper
+		// (auth token --exec-credential) reads that server and forwards it as
+		// TokenOptions.Hostname only for handlers advertising CapTokenHostname;
+		// for handlers without the capability the host withholds it, so they
+		// behave exactly as before. Handlers never read KUBERNETES_EXEC_INFO
+		// directly.
+		ProvideClusterInfo: true,
 		CAData:             info.CAData,
 		InsecureSkipTLS:    info.InsecureSkipTLS,
 		SetCurrentContext:  req.SetCurrentContext,
 	}
 
 	result := &Result{
-		Handler:  handler.Name(),
-		Server:   info.APIServerURL,
-		AuthType: info.AuthType,
+		Handler:                  handler.Name(),
+		Server:                   info.APIServerURL,
+		AuthType:                 info.AuthType,
+		SupportsPerClusterTokens: auth.HasCapability(handler.Capabilities(), auth.CapTokenHostname),
 	}
 
 	writeRes, err := deps.Kubeconfig.WriteKubeconfig(ctx, writeIn)
@@ -338,6 +373,13 @@ func tokenOptionsFor(h Authenticator, info kube.ClusterInfo) auth.TokenOptions {
 	opts := auth.TokenOptions{}
 	if info.OIDCAudience != "" && auth.HasCapability(h.Capabilities(), auth.CapScopesOnTokenRequest) {
 		opts.Scope = info.OIDCAudience
+	}
+	// Route the post-login whoami to the just-authenticated cluster so
+	// cluster-aware handlers return that cluster's token rather than relying on
+	// an implicit "most-recent" default. Mirrors the login-time Hostname and is
+	// gated on CapTokenHostname (see issue #581).
+	if info.APIServerURL != "" && auth.HasCapability(h.Capabilities(), auth.CapTokenHostname) {
+		opts.Hostname = info.APIServerURL
 	}
 	return opts
 }

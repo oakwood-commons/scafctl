@@ -28,6 +28,8 @@ import (
 type mockAuthHandlerServiceClient struct {
 	proto.AuthHandlerServiceClient
 
+	capturedGetTokenReq *proto.GetTokenRequest
+
 	getAuthHandlersResp      *proto.GetAuthHandlersResponse
 	getAuthHandlersErr       error
 	configureAuthHandlerResp *proto.ConfigureAuthHandlerResponse
@@ -48,6 +50,8 @@ type mockAuthHandlerServiceClient struct {
 	stopAuthHandlerErr       error
 	detectAvailableFlowsResp *proto.DetectAvailableFlowsResponse
 	detectAvailableFlowsErr  error
+	activateServerModeResp   *proto.ActivateServerModeResponse
+	activateServerModeErr    error
 }
 
 func (m *mockAuthHandlerServiceClient) GetAuthHandlers(_ context.Context, _ *proto.GetAuthHandlersRequest, _ ...grpc.CallOption) (*proto.GetAuthHandlersResponse, error) {
@@ -74,7 +78,8 @@ func (m *mockAuthHandlerServiceClient) GetStatus(_ context.Context, _ *proto.Get
 	return m.getStatusResp, m.getStatusErr
 }
 
-func (m *mockAuthHandlerServiceClient) GetToken(_ context.Context, _ *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
+func (m *mockAuthHandlerServiceClient) GetToken(_ context.Context, req *proto.GetTokenRequest, _ ...grpc.CallOption) (*proto.GetTokenResponse, error) {
+	m.capturedGetTokenReq = req
 	return m.getTokenResp, m.getTokenErr
 }
 
@@ -92,6 +97,10 @@ func (m *mockAuthHandlerServiceClient) StopAuthHandler(_ context.Context, _ *pro
 
 func (m *mockAuthHandlerServiceClient) DetectAvailableFlows(_ context.Context, _ *proto.DetectAvailableFlowsRequest, _ ...grpc.CallOption) (*proto.DetectAvailableFlowsResponse, error) {
 	return m.detectAvailableFlowsResp, m.detectAvailableFlowsErr
+}
+
+func (m *mockAuthHandlerServiceClient) ActivateServerMode(_ context.Context, req *proto.ActivateServerModeRequest, _ ...grpc.CallOption) (*proto.ActivateServerModeResponse, error) {
+	return m.activateServerModeResp, m.activateServerModeErr
 }
 
 // --- Mock login stream ---
@@ -232,6 +241,65 @@ func TestAuthHandlerGRPCClient_Login_ForwardsHostname(t *testing.T) {
 	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname must be mapped onto the proto LoginRequest")
 }
 
+func TestAuthHandlerGRPCClient_Login_ForwardsCallbackPort(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().Truncate(time.Second)
+	var gotReq *proto.LoginRequest
+	mock := &mockAuthHandlerServiceClient{
+		loginFunc: func(_ context.Context, req *proto.LoginRequest) (grpc.ServerStreamingClient[proto.LoginStreamMessage], error) {
+			gotReq = req
+			return &mockLoginStreamClient{
+				messages: []*proto.LoginStreamMessage{
+					{
+						Payload: &proto.LoginStreamMessage_Result{
+							Result: &proto.LoginResult{
+								Claims:        &proto.Claims{Email: "user@example.com"},
+								ExpiresAtUnix: now.Add(time.Hour).Unix(),
+							},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.Login(context.Background(), "openshift", LoginRequest{
+		CallbackPort: 8400,
+		Flow:         auth.FlowInteractive,
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, gotReq)
+	assert.Equal(t, int32(8400), gotReq.CallbackPort, "callback port must be mapped onto the proto LoginRequest")
+}
+
+func TestCallbackPortToProto(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   int
+		want int32
+	}{
+		{"unset", 0, 0},
+		{"min_valid", 1024, 1024},
+		{"typical", 8400, 8400},
+		{"max_valid", 65535, 65535},
+		{"privileged_clamped", 80, 0},
+		{"negative_clamped", -1, 0},
+		{"above_max_clamped", 70000, 0},
+		{"just_above_max_clamped", auth.MaxCallbackPort + 1, 0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, callbackPortToProto(tc.in))
+		})
+	}
+}
+
 func TestAuthHandlerGRPCClient_Login_WithDeviceCodePrompt(t *testing.T) {
 	t.Parallel()
 
@@ -369,7 +437,7 @@ func TestAuthHandlerGRPCClient_Logout_Success(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	err := client.Logout(context.Background(), "azure")
+	err := client.Logout(context.Background(), "azure", LogoutRequest{})
 	require.NoError(t, err)
 }
 
@@ -381,7 +449,7 @@ func TestAuthHandlerGRPCClient_Logout_Error(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	err := client.Logout(context.Background(), "azure")
+	err := client.Logout(context.Background(), "azure", LogoutRequest{})
 	require.Error(t, err)
 }
 
@@ -407,7 +475,7 @@ func TestAuthHandlerGRPCClient_GetStatus_Success(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	s, err := client.GetStatus(context.Background(), "azure")
+	s, err := client.GetStatus(context.Background(), "azure", StatusRequest{})
 	require.NoError(t, err)
 	assert.True(t, s.Authenticated)
 	assert.Equal(t, "user@example.com", s.Claims.Email)
@@ -424,7 +492,7 @@ func TestAuthHandlerGRPCClient_GetStatus_Error(t *testing.T) {
 	}
 	client := &AuthHandlerGRPCClient{client: mock}
 
-	_, err := client.GetStatus(context.Background(), "azure")
+	_, err := client.GetStatus(context.Background(), "azure", StatusRequest{})
 	require.Error(t, err)
 }
 
@@ -468,6 +536,44 @@ func TestAuthHandlerGRPCClient_GetToken_Error(t *testing.T) {
 
 	_, err := client.GetToken(context.Background(), "azure", TokenRequest{})
 	require.Error(t, err)
+}
+
+func TestAuthHandlerGRPCClient_GetToken_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	// #581: the per-cluster hostname must cross the gRPC boundary so the remote
+	// handler can select the correct cluster's token.
+	mock := &mockAuthHandlerServiceClient{
+		getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.GetToken(context.Background(), "openshift", TokenRequest{
+		Hostname: "https://api.a.example.com:6443",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, mock.capturedGetTokenReq)
+	assert.Equal(t, "https://api.a.example.com:6443", mock.capturedGetTokenReq.Hostname)
+}
+
+func TestAuthHandlerGRPCClient_GetToken_ForwardsServerFields(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		getTokenResp: &proto.GetTokenResponse{AccessToken: "tok", TokenType: "Bearer"},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	_, err := client.GetToken(context.Background(), "entra", TokenRequest{
+		ServerContext: "server",
+		Caller:        "api",
+		Assertion:     "jwt-assertion-value",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, mock.capturedGetTokenReq)
+	assert.Equal(t, "server", mock.capturedGetTokenReq.ServerContext)
+	assert.Equal(t, "api", mock.capturedGetTokenReq.Caller)
+	assert.Equal(t, "jwt-assertion-value", mock.capturedGetTokenReq.Assertion)
 }
 
 func TestAuthHandlerGRPCClient_ListCachedTokens_Success(t *testing.T) {
@@ -809,7 +915,7 @@ func TestAuthHandlerGRPCServer_Logout_Error(t *testing.T) {
 	t.Parallel()
 
 	mock := &MockAuthHandlerPlugin{
-		logoutFunc: func(_ context.Context, _ string) error {
+		logoutFunc: func(_ context.Context, _ string, _ LogoutRequest) error {
 			return fmt.Errorf("logout error")
 		},
 	}
@@ -823,7 +929,7 @@ func TestAuthHandlerGRPCServer_GetStatus_Error(t *testing.T) {
 	t.Parallel()
 
 	mock := &MockAuthHandlerPlugin{
-		statusFunc: func(_ context.Context, _ string) (*auth.Status, error) {
+		statusFunc: func(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 			return nil, fmt.Errorf("status error")
 		},
 	}
@@ -1439,11 +1545,11 @@ func (e *errAuthPlugin) Login(_ context.Context, _ string, _ LoginRequest, _ fun
 	return nil, e.err
 }
 
-func (e *errAuthPlugin) Logout(_ context.Context, _ string) error {
+func (e *errAuthPlugin) Logout(_ context.Context, _ string, _ LogoutRequest) error {
 	return e.err
 }
 
-func (e *errAuthPlugin) GetStatus(_ context.Context, _ string) (*auth.Status, error) {
+func (e *errAuthPlugin) GetStatus(_ context.Context, _ string, _ StatusRequest) (*auth.Status, error) {
 	return nil, e.err
 }
 
@@ -1469,4 +1575,70 @@ func (e *errAuthPlugin) StopAuthHandler(_ context.Context, _ string) error {
 
 func (e *errAuthPlugin) DetectAvailableFlows(_ context.Context, _ string) ([]FlowAvailability, error) {
 	return nil, e.err
+}
+
+// ── ActivateServerMode tests ─────────────────────────────────────────────────
+
+func TestAuthHandlerGRPCClient_ActivateServerMode_Success(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeResp: &proto.ActivateServerModeResponse{},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{"tenant_id":"abc"}`))
+	require.NoError(t, err)
+}
+
+func TestAuthHandlerGRPCClient_ActivateServerMode_NilSettings(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeResp: &proto.ActivateServerModeResponse{},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	err := client.ActivateServerMode(context.Background(), nil)
+	require.NoError(t, err)
+}
+
+func TestAuthHandlerGRPCClient_ActivateServerMode_Unimplemented(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeErr: status.Error(codes.Unimplemented, "not implemented"),
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{}`))
+	require.NoError(t, err, "Unimplemented should be treated as a no-op")
+}
+
+func TestAuthHandlerGRPCClient_ActivateServerMode_GRPCError(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeErr: status.Error(codes.Internal, "connection lost"),
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection lost")
+}
+
+func TestAuthHandlerGRPCClient_ActivateServerMode_ResponseError(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockAuthHandlerServiceClient{
+		activateServerModeResp: &proto.ActivateServerModeResponse{
+			Error: "invalid tenant_id",
+		},
+	}
+	client := &AuthHandlerGRPCClient{client: mock}
+
+	err := client.ActivateServerMode(context.Background(), json.RawMessage(`{}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "activate server mode failed: invalid tenant_id")
 }

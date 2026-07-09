@@ -624,7 +624,7 @@ combinations, scafctl supports **OCI image indexes** (fat manifests).
 | **StoreMultiPlatform** | `pkg/catalog/local_multiplatform.go` | Store multi-platform artifact as image index |
 | **FetchByPlatform** | `pkg/catalog/local_multiplatform.go` | Fetch correct platform binary from image index |
 | **PlatformAwareCatalog** | `pkg/catalog/plugin_fetcher.go` | Interface for catalogs with image index support |
-| **build plugin** | `pkg/cmd/scafctl/build/plugin.go` | CLI for building multi-platform artifacts |
+| **package plugin** | `pkg/cmd/scafctl/packagecmd/plugin.go` | CLI for packaging multi-platform artifacts |
 
 ### OCI Image Index Structure
 
@@ -670,7 +670,7 @@ When `PluginFetcher.FetchPlugin()` is called:
 ### Building Multi-Platform Artifacts
 
 ```bash
-scafctl build plugin \
+scafctl package plugin \
   --name my-provider \
   --kind provider \
   --version 1.0.0 \

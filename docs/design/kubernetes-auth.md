@@ -22,6 +22,7 @@ The design is layered by dependency weight so each phase ships independently:
 | 2b | Kubeconfig provider plugin implementation (`client-go`/`clientcmd`) | plugin | Planned |
 | 3 | Thin `kube login` / `kube logout` commands | core (`pkg/kube/login`, `pkg/cmd/scafctl/kube`) | Shipped |
 | 4 | OpenShift OAuth auth-handler plugin | plugin | Planned |
+| 5 | Multi-cluster per-cluster token routing on the exec-credential path | core (`pkg/auth/execcredential`, `pkg/cmd/scafctl/auth`, `pkg/kube/login`) + SDK `CapTokenHostname` | Shipped |
 
 Phases 1-3 add no OpenShift- or vendor-specific code and already deliver
 credential-helper support for any OIDC cluster.
@@ -40,8 +41,9 @@ See the [auth tutorial](../tutorials/auth-tutorial.md) for the kubeconfig wiring
 ## Phase 1b: ClusterResolver (Shipped)
 
 The `pkg/kube` package defines a dependency-free extension point that maps a
-cluster name to its connection details. scafctl ships **no** cluster data --
-embedders with a cluster registry provide the implementation.
+cluster name to its connection details. The stock binary can populate it from
+configuration (see Config-Driven Resolution below); embedders with their own
+cluster registry can supply an implementation instead.
 
 ### The Interface
 
@@ -124,6 +126,48 @@ fall back to an explicit `--server` and auto-detection. Setting a resolver light
 up positional cluster names, shell completion (via `List`), and OIDC audience
 resolution.
 
+### Config-Driven Resolution (Shipped)
+
+The stock binary resolves clusters by name from the `kube.clusters` config
+section, so users get positional `kube login <cluster>` without an embedder
+resolver. `pkg/kube/clusterconfig` implements `kube.ClusterResolver` backed by
+config and is attached by `RootOptions` when no embedder resolver is supplied
+and `kube.clusters` declares any aliases or an inventory. An embedder-provided
+`ClusterResolver` always wins.
+
+Resolution precedence, highest to lowest:
+
+1. **Explicit flags** -- `--server` / `--handler` override everything.
+2. **Concrete URL argument** -- a `<cluster>` that is already an `http(s)://`
+   URL is used directly as the API server (no inventory required) and is not
+   used as the logical name.
+3. **Static alias** -- a `kube.clusters.aliases.<name>` entry carrying `server`
+   plus optional `defaultHandler`, `authType`, `oidcAudience`, `caData`.
+4. **Dynamic inventory** -- `kube.clusters.resolver` fetches and CEL-transforms
+   a cluster inventory. It reuses the auth hostname inventory engine
+   (`pkg/auth/hostname`: fetch + transform + TTL cache); the transform yields
+   `{name, url}` entries plus the same optional per-cluster fields. Static
+   aliases win over inventory entries of the same name.
+
+~~~yaml
+kube:
+  clusters:
+    aliases:
+      lab:
+        server: https://api.lab.example.com:6443
+        defaultHandler: openshift
+    resolver:
+      source:
+        url: https://clusters.example.com/
+      transform: '_.map(k, {"name": k, "url": _[k].apiServerURL, "defaultHandler": "openshift", "authType": "oauth"})'
+      ttl: 10m
+~~~
+
+Because a fleet transform can stamp the same `defaultHandler` and `authType` on
+every entry, `kube login <cluster>` then needs neither `--server` nor
+`--handler`. One-off users with only a URL or a handful of static aliases keep
+working unchanged.
+
 ### Runtime Model
 
 Cluster details are resolved **once at login** and baked into the kubeconfig
@@ -161,6 +205,46 @@ with no resolver involved.
 - **Phase 4 -- OpenShift OAuth handler plugin.** The one genuinely
   OpenShift-specific credential source: localhost-callback implicit-grant flow,
   plus `ListProjects` / MOTD behind graceful degradation.
+
+## Phase 5: Multi-Cluster Token Routing (Shipped)
+
+A single auth handler can back several clusters. Because the exec-credential
+kubeconfig entry `kube login` writes is otherwise identical for every cluster,
+the exec helper needs a per-invocation discriminator so `kubectl`/`oc` receive
+the correct cluster's token rather than the handler's most-recent one.
+
+The mechanism uses the client-go-idiomatic cluster hint, gated on a dedicated
+capability so mixed-version handlers never misroute silently (see issue #581 and
+the gating decision in #583):
+
+1. **`kube login` sets `provideClusterInfo: true`** on the kubeconfig exec
+   block (`pkg/kube/login`). `kubectl`/`oc` then pass the target cluster's
+   details -- including `spec.cluster.server` -- to the plugin via the
+   `KUBERNETES_EXEC_INFO` environment variable on every credential call. The
+   exec args stay cluster-agnostic (identical for all clusters); the cluster is
+   supplied at call time.
+2. **`auth token --exec-credential` extracts the server** from
+   `KUBERNETES_EXEC_INFO` (`execcredential.ClusterServerFromExecInfo`) and
+   forwards it as `TokenOptions.Hostname`, **only when the handler advertises
+   `auth.CapTokenHostname`**. Handlers that advertise `CapHostname` for login
+   but predate token-path hostname support never receive the field (proto3
+   would silently drop it), so they cannot misroute.
+3. **The host threads `Hostname`** through the in-process handler call and, for
+   plugin handlers, across the gRPC boundary
+   (`plugin.TokenRequest.Hostname` -> `proto.GetTokenRequest.hostname`) on both
+   the client and server mappings.
+4. **The routing key is the raw API server URL.** `kube login` sends
+   `LoginRequest.Hostname = info.APIServerURL`, writes that same value as the
+   kubeconfig `cluster.server`, and client-go echoes it back verbatim in
+   `KUBERNETES_EXEC_INFO`. So the token-time hostname matches the login-time
+   key by construction -- no normalization is required, and the handler stores
+   and retrieves per-cluster tokens under one stable key.
+
+When the resolved handler lacks `CapTokenHostname`, `kube login` emits a warning
+at login time (not token time, where the message would be swallowed inside the
+`kubectl` subprocess) noting that multi-cluster logins with that handler may
+return the wrong token. Single-cluster usage and handlers without the capability
+behave exactly as before.
 
 ## Design Decisions
 
