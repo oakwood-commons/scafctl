@@ -10,6 +10,7 @@ transform, validate, or action step via `call:` + `args:` instead of
 | Example | Description |
 |---------|-------------|
 | [calls-basics.yaml](calls-basics.yaml) | One definition, several call sites; typed args with defaults and required values; the `args` namespace; a call in a validate step with `dedup`. |
+| [calls-http.yaml](calls-http.yaml) | One parameterized `http` call reused across resolvers with different path, method, auth, and body -- the API-heavy case that would otherwise need one `http` resolver per call site. Requires network. |
 | [calls-action.yaml](calls-action.yaml) | A call invoked from workflow actions, reused with different arguments. |
 
 ## Key Concepts
@@ -30,6 +31,9 @@ transform, validate, or action step via `call:` + `args:` instead of
 ~~~bash
 # Resolver-only example
 scafctl run resolver -f examples/calls/calls-basics.yaml -o yaml
+
+# HTTP example (requires network)
+scafctl run resolver -f examples/calls/calls-http.yaml -o yaml
 
 # Workflow (action) example
 scafctl run solution -f examples/calls/calls-action.yaml
