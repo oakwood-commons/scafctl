@@ -17,8 +17,13 @@ import (
 //   - If a prior value exists and matches, no action is taken.
 //   - If a prior value exists and differs, an error is returned.
 //
+// Resolvers whose names are present in skip are not locked on first run: a new
+// immutable value is not persisted when its deferred (cross-resolver) validation
+// failed. Existing locks are still verified so an immutable value cannot drift
+// undetected.
+//
 // Returns the updated state data (with any newly locked immutables).
-func CheckImmutables(stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver) error {
+func CheckImmutables(stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, skip map[string]bool) error {
 	if stateData == nil {
 		return nil
 	}
@@ -40,6 +45,11 @@ func CheckImmutables(stateData *Data, resolverCtx *resolver.Context, resolvers [
 
 		existing, exists := stateData.Immutables[r.Name]
 		if !exists {
+			if skip[r.Name] {
+				// Deferred validation failed: do not persist a new lock, but there is
+				// no existing lock to verify either.
+				continue
+			}
 			// First run: save the value
 			stateData.Immutables[r.Name] = &ImmutableEntry{
 				Value:     result.Value,

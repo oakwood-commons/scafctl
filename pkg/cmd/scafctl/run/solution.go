@@ -529,6 +529,20 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	resolverElapsed := time.Since(start)
 
+	// State lifecycle (D1): commit immutable locks now -- after resolvers and
+	// deferred validation have succeeded, but before running side-effecting
+	// actions. An immutable lock represents a value that is now fixed; it must be
+	// persisted independent of whether a downstream action later fails, so the
+	// next run does not regenerate a different value. Resolvers whose deferred
+	// validation failed are not locked. Merged parameters are saved after actions.
+	if stateMgr != nil && stateData != nil {
+		solMeta := buildStateSolutionMeta(sol)
+		skip := deferredValidationFailures(resolverCtx)
+		if saveErr := stateMgr.SaveImmutables(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta, skip); saveErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state save immutables: %w", saveErr), exitcode.GeneralError)
+		}
+	}
+
 	// Build action graph
 	graph, err := action.BuildGraph(ctx, workflow, resolverData, nil)
 	if err != nil {
@@ -576,11 +590,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
-	// State lifecycle: save merged parameters and check immutable values
-	// after successful action execution.
+	// State lifecycle: save merged parameters after successful action execution.
+	// Immutable locks were already committed before actions (D1).
 	if stateMgr != nil && stateData != nil {
 		solMeta := buildStateSolutionMeta(sol)
-		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
+		if saveErr := stateMgr.SaveParams(ctx, stateData, params, resolverData, solMeta); saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
 	}

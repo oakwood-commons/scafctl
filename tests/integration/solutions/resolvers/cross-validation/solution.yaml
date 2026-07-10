@@ -1,0 +1,105 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-cross-validation
+  version: 1.0.0
+  description: |
+    Functional tests for two-phase (cross-resolver) validation. Two resolvers
+    validate against each other -- one via a value reference (_.backupRegion)
+    and one via a message-only reference ({{ .region }}). Before two-phase
+    validation these mutual references formed a false ordering cycle and the
+    solution failed to load. Now they are deferred and the solution loads and
+    runs cleanly; deferred rules fail only when the cross-resolver assertion
+    is violated (regions equal).
+
+spec:
+  resolvers:
+    region:
+      description: Primary deployment region
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+      validate:
+        with:
+          # INLINE: references only __self -> runs during resolution, fails fast.
+          - provider: validation
+            inputs:
+              expression: "__self != ''"
+              message: "region is required"
+          # DEFERRED: references _.backupRegion -> runs after all resolvers.
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "tmpl: region must differ from backupRegion (both were {{ .region }})"
+
+    backupRegion:
+      description: Backup deployment region (message-only cross-reference)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: backupRegion
+              default: us-west1
+      validate:
+        with:
+          # DEFERRED via message-only reference to _.region.
+          - provider: validation
+            inputs:
+              expression: "__self != ''"
+              message: "tmpl: backupRegion is required and must differ from region {{ .region }}"
+
+  testing:
+    cases:
+      _base:
+        description: Base template running run resolver as JSON
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [resolver, validation, cross-validation]
+
+      loads-without-cycle:
+        description: Mutual validation references load without a cycle error
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Cross-resolver validation must not form a load-time cycle"
+          - expression: '__output.region == "us-east1"'
+          - expression: '__output.backupRegion == "us-west1"'
+
+      differing-regions-pass:
+        description: Deferred validation passes when regions differ
+        extends: [_base]
+        args: ["-r", "region=us-east1", "-r", "backupRegion=us-west1"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.region == "us-east1"'
+          - expression: '__output.backupRegion == "us-west1"'
+
+      equal-regions-fail:
+        description: Deferred validation fails (non-zero) when regions are equal
+        extends: [_base]
+        args: ["-r", "region=us-east1", "-r", "backupRegion=us-east1", "--fail-on-validation"]
+        tags: [negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "Equal regions must fail the deferred cross-resolver rule"
+          - expression: >
+              __stderr.contains("must differ from backupRegion")
+            message: "Failure should surface the rendered deferred validation message"
+
+      equal-regions-nonfatal-shows-values:
+        description: Without --fail-on-validation, values still emit but the failure is reported
+        extends: [_base]
+        args: ["-r", "region=us-east1", "-r", "backupRegion=us-east1"]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Non-fatal mode exits zero and still emits values"
+          - expression: '__output.region == "us-east1"'
+          - expression: >
+              __stderr.contains("must differ from backupRegion")
+            message: "Deferred failure is reported as a diagnostic on stderr"

@@ -1,0 +1,60 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-lint-deferred-validation
+  version: 1.0.0
+  description: |
+    Tests that cross-resolver validation references do NOT trigger the
+    resolver-cycle rule and DO trigger the informational
+    deferred-validation-not-fail-fast advisory. Two resolvers validate against
+    each other; the solution must lint cleanly (no error) with an info finding
+    per deferred rule.
+
+spec:
+  resolvers:
+    region:
+      description: Primary region with a deferred cross-resolver rule
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-east1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "region must differ from backupRegion"
+
+    backupRegion:
+      description: Backup region
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-west1
+
+  testing:
+    cases:
+      lint-no-cycle:
+        description: Cross-resolver validation lints without a cycle error
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, deferred-validation]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Cross-resolver validation must not fail lint"
+          - expression: >
+              !__stderr.contains("cycle") && !__stdout.contains("resolver-cycle")
+            message: "Validation references must not trigger the resolver-cycle rule"
+
+      lint-emits-advisory:
+        description: Deferred validation emits the informational advisory
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, deferred-validation]
+        assertions:
+          - expression: >
+              __stdout.contains("deferred-validation-not-fail-fast")
+            message: "Deferred validation should emit the info advisory"

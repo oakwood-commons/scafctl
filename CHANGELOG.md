@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(resolver)* [**breaking**] Decouple validation from the resolution dependency graph via two-phase execution. Validation rules that reference other resolvers (including message-only references) are now *deferred* and run after all resolvers resolve, so cross-resolver validation no longer forms false ordering cycles. Rules referencing only `__self` run *inline* and fail fast. Immutable-lock state now commits after deferred validation passes and before actions run (previously after actions). The old "sink resolver" workaround for cross-resolver validation is retired (#552)
+- *(lint)* Add `deferred-validation-not-fail-fast` rule (info) advising when a resolver has a cross-resolver validation rule that runs in the deferred phase
 - *(provider)* Add optional per-entry `data` map to the go-template `render-tree` operation, shallow-merged over the shared `data` (per-entry values win), enabling single-resolver fan-out where one template renders once per item with its own variables and output path
 - *(auth)* [**breaking**] Drop the legacy OAuth token-metadata compatibility shim when bumping scafctl-plugin-sdk to v0.11.0. Credentials persisted by earlier versions (which carried fields such as `refreshTokenExpiresAt` / `loginFlow`) no longer deserialize, so a one-time re-login is required after upgrading.
 - *(state)* Add `saveOverrides` field to state backend for save-time-only input resolution, enabling patterns like loading from `main` and saving to a resolver-derived feature branch

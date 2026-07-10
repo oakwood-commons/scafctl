@@ -924,6 +924,23 @@ Error: Resolver 'name' validation failed:
 
 Only the failed validation messages are included in the error. The transformed value `"A"` is still emitted to `_` for use by error handlers or logging.
 
+### Inline vs Deferred Validation
+
+Validation runs in **two phases** depending on what a rule references:
+
+- **Inline rules** reference only their own resolver (via `__self`). They run
+  during resolution, right after `resolve`/`transform`, and **fail fast**.
+- **Deferred rules** reference another resolver (via `_.other` in the rule
+  expression, its inputs, its `when:` condition, or its message template). They
+  run **after every resolver has resolved**, just before actions.
+
+The phase is chosen automatically -- authors never specify it. Because inline
+rules have no foreign references, the `validate` block contributes **no edges**
+to the resolution dependency graph. This is why two resolvers can validate
+against each other without forming a false ordering cycle. See
+[Two-Phase Validation](two-phase-validation.md) for the full model, execution
+order, and skipped/errored semantics.
+
 ### Validation Messages
 
 Validation messages support all four input forms:
@@ -1736,6 +1753,13 @@ spec:
 ~~~
 
 This is valid because the dependency flow is: `feature_flag` → `feature_config` → `app_config` (no cycles).
+
+**Validation references do not create cycles.** Only `resolve`, `transform`, and
+`when:` references contribute edges to the resolution graph. A cross-resolver
+reference inside a `validate` block -- including a message-only reference such as
+`message: "tmpl: {{ .other }} ..."` -- is handled by
+[deferred validation](two-phase-validation.md) and never forms an ordering cycle.
+Two resolvers may safely validate against each other.
 
 ---
 
