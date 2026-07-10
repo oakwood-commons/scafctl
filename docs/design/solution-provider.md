@@ -194,6 +194,94 @@ This keeps the provider focused on execution and delegates post-processing to th
 
 ---
 
+## Value Override Contract
+
+A recurring composition need (issue #616) is for a parent to **override a value the child computes internally** -- for example, the parent enriches a map with extra fields and wants the child's downstream rendering (actions, templates) to consume the enriched version.
+
+The provider deliberately keeps the child **opaque and isolated**: the parent cannot reach in and overwrite an arbitrary child resolver value. Instead, the child **opts in** to an override using mechanisms the engine already provides. This preserves encapsulation -- the child author decides which values are overridable and how the override is merged.
+
+### The contract
+
+The child author exposes an overridable value as three small resolvers:
+
+1. **Override input** -- a `parameter` resolver with a `default` (typically `{}`), so it is empty when the parent passes nothing. The `exists` flag lives in provider **metadata**, not in the resolver value, so downstream expressions cannot read it; rely on the default instead.
+2. **Internal value** -- the child's own computation.
+3. **Effective value** -- the internal value merged with the override, using `map.merge(internal, override)` (the second argument wins on key conflicts).
+
+~~~yaml
+# child.yaml
+spec:
+  resolvers:
+    labels_override:        # 1. optional parent override (empty by default)
+      type: any
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: labels_override
+              default: {}
+
+    labels_internal:        # 2. the child's own computation
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "{'app': 'child', 'tier': 'backend'}"
+
+    labels:                 # 3. effective value the child renders from
+      type: any
+      dependsOn: [labels_internal, labels_override]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "map.merge(_.labels_internal, _.labels_override)"
+~~~
+
+The parent enriches the value and passes it into the child's override input using the nested `expr` form (a bare string would be a literal, not a resolver reference):
+
+~~~yaml
+# parent.yaml
+spec:
+  resolvers:
+    enriched_labels:
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "{'team': 'platform', 'costCenter': 'CC-42'}"
+
+    child_data:
+      type: any
+      dependsOn: [enriched_labels]
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./child.yaml"
+              inputs:
+                labels_override:
+                  expr: "_.enriched_labels"
+~~~
+
+The child's `labels` now contains both its internal keys (`app`, `tier`) and the parent's overrides (`team`, `costCenter`). When the parent omits `labels_override`, `map.merge(internal, {})` yields the internal value unchanged.
+
+### Conventions
+
+- **Use a distinct override key** (e.g. `labels_override`), never the effective resolver's own name (`labels`). Reusing the name triggers name-collision auto-wiring and can invent spurious dependency cycles.
+- **Scalars have no `exists` to test**, so use a sentinel default and a CEL ternary, e.g. `default: ""` with `_.x_override == "" ? _.x_internal : _.x_override`.
+- **Type/shape is the child's responsibility.** A shape mismatch (e.g. override is a scalar but the child expects a map) surfaces as a `map.merge` error at child resolve time and propagates through the normal `propagateErrors` path.
+
+A runnable example lives in [examples/solutions/composition/](../../examples/solutions/composition/) (`child.yaml` + `parent.yaml`).
+
+### Why not an engine-level override API
+
+An earlier proposal (issue #608, item 3) suggested letting the parent override arbitrary child resolver values directly from the `solution` provider input. This was rejected because it breaks the isolation invariant, has no clean answer for override precedence versus the child's own resolve/transform phases, and multiplies type/shape and validation-visibility concerns -- all with no safe default. The opt-in contract above delivers the same outcome while keeping the child in control.
+
+---
+
 ## Output Envelope
 
 ### `from` Capability

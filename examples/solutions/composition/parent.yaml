@@ -14,11 +14,25 @@ metadata:
     as a structured envelope: { resolvers: {...}, status: "success", errors: [] }
 spec:
   resolvers:
+    # Parent computes an enriched data structure that the child also builds
+    # internally under the same logical name. The parent passes it down so the
+    # child renders from the enriched version (issue #616).
+    enriched_labels:
+      type: any
+      description: "Extra labels the parent wants the child to consume"
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "{'team': 'platform', 'costCenter': 'CC-42'}"
+
     # Use the solution provider to load and execute a child solution.
     # The child's resolver values are returned as a structured envelope.
     child_data:
       type: any
       description: "Data from the child solution"
+      dependsOn:
+        - enriched_labels
       resolve:
         with:
           - provider: solution
@@ -26,6 +40,12 @@ spec:
               source: "./child.yaml"
               inputs:
                 message: "hello from parent"
+                # Override contract: pass the parent's enriched value into the
+                # child's opt-in override parameter. Use the nested expr form so
+                # the resolver value is evaluated (a bare string would be a
+                # literal). The child merges this over its internal labels.
+                labels_override:
+                  expr: "_.enriched_labels"
               # Optional: only run specific resolvers from the child.
               # When omitted, all resolvers in the child are executed.
               # resolvers:
@@ -55,3 +75,17 @@ spec:
           - provider: cel
             inputs:
               expression: "_.child_data.resolvers['echo-param']"
+
+    # The child's effective labels, enriched with the parent's overrides.
+    # Contains the child's internal keys (app, tier) plus the parent's
+    # team and costCenter.
+    child_labels:
+      type: any
+      description: "The child's labels after the parent's override merge"
+      dependsOn:
+        - child_data
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.child_data.resolvers.labels"

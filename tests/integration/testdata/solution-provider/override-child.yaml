@@ -1,0 +1,37 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: override-child
+  version: 1.0.0
+spec:
+  resolvers:
+    # Optional parent override (empty map when the parent passes nothing).
+    labels_override:
+      type: any
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: labels_override
+              default: {}
+
+    # The child's own internally computed value.
+    labels_internal:
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "{'app': 'child', 'tier': 'backend'}"
+
+    # Effective value: internal merged with the override (override wins).
+    labels:
+      type: any
+      dependsOn:
+        - labels_internal
+        - labels_override
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "map.merge(_.labels_internal, _.labels_override)"
