@@ -112,6 +112,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolverCycles(sol, result, registry)
 	lintTemplateAccessors(sol, result)
 	lintWorkflow(sol, result, registry)
+	lintCalls(sol, result, registry)
 	lintState(sol, result, registry)
 	lintImmutableResolvers(sol, result)
 	lintTests(sol, filePath, result)

@@ -466,6 +466,17 @@ func computeEffectiveDependencies(
 		}
 	}
 
+	// Add implicit dependencies from __actions references in call-site args.
+	// Call args are resolved at runtime (not materialized via DeferredInputs), so
+	// extract their __actions references here to schedule referenced actions first.
+	if expanded.Action != nil {
+		for _, arg := range expanded.Args {
+			for _, ref := range extractActionsRefsFromValueRef(arg) {
+				insertRefs(ref)
+			}
+		}
+	}
+
 	same := sets.List(sameSet)
 	sort.Strings(same)
 	cross := sets.List(crossSet)
@@ -616,6 +627,27 @@ func extractActionsRefsFromDeferred(dv *DeferredValue) []string {
 		refs.Insert(tmplRefs...)
 	}
 
+	return sets.List(refs)
+}
+
+// extractActionsRefsFromValueRef extracts __actions references from a call-site
+// argument ValueRef (its expr or tmpl form). Used to schedule referenced actions
+// before an action that reads their results through call args. Literal values
+// are passed through un-evaluated, so they are intentionally not scanned: a
+// literal string that happens to contain "__actions." is data, not a reference,
+// and must not create a phantom dependency edge.
+func extractActionsRefsFromValueRef(v *spec.ValueRef) []string {
+	if v == nil {
+		return nil
+	}
+
+	refs := sets.Set[string]{}
+	if v.Expr != nil {
+		refs.Insert(parseActionsRefsForGraph(string(*v.Expr))...)
+	}
+	if v.Tmpl != nil {
+		refs.Insert(parseActionsRefsForGraph(string(*v.Tmpl))...)
+	}
 	return sets.List(refs)
 }
 

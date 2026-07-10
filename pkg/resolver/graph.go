@@ -214,6 +214,9 @@ func extractStrictFromResolvePhase(phase *ResolvePhase, deps map[string]bool) {
 		extractDepsFromExpression(string(*phase.Until.Expr), deps)
 	}
 	for _, source := range phase.With {
+		for _, arg := range source.Args {
+			extractStrictFromValueRef(arg, deps)
+		}
 		if source.When != nil && source.When.Expr != nil {
 			extractDepsFromExpression(string(*source.When.Expr), deps)
 		}
@@ -236,6 +239,9 @@ func extractStrictFromTransformPhase(phase *TransformPhase, deps map[string]bool
 		extractDepsFromExpression(string(*phase.When.Expr), deps)
 	}
 	for _, transform := range phase.With {
+		for _, arg := range transform.Args {
+			extractStrictFromValueRef(arg, deps)
+		}
 		if transform.When != nil && transform.When.Expr != nil {
 			extractDepsFromExpression(string(*transform.When.Expr), deps)
 		}
@@ -258,6 +264,9 @@ func extractStrictFromValidatePhase(phase *ValidatePhase, deps map[string]bool) 
 		extractDepsFromExpression(string(*phase.When.Expr), deps)
 	}
 	for _, validation := range phase.With {
+		for _, arg := range validation.Args {
+			extractStrictFromValueRef(arg, deps)
+		}
 		if validation.When != nil && validation.When.Expr != nil {
 			extractDepsFromExpression(string(*validation.When.Expr), deps)
 		}
@@ -708,6 +717,11 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 
 	// Extract from each source
 	for _, source := range phase.With {
+		// Extract from call-site args (a call source references resolvers via args).
+		for _, arg := range source.Args {
+			extractDepsFromValueRef(arg, deps)
+		}
+
 		// Extract from when condition
 		if source.When != nil && source.When.Expr != nil {
 			extractDepsFromExpression(string(*source.When.Expr), deps)
@@ -796,6 +810,11 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 
 	// Extract from each transform step
 	for _, transform := range phase.With {
+		// Extract from call-site args (a call transform references resolvers via args).
+		for _, arg := range transform.Args {
+			extractDepsFromValueRef(arg, deps)
+		}
+
 		// Extract from when condition
 		if transform.When != nil && transform.When.Expr != nil {
 			extractDepsFromExpression(string(*transform.When.Expr), deps)
@@ -841,6 +860,11 @@ func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lo
 
 	// Extract from each validation rule
 	for _, validation := range phase.With {
+		// Extract from call-site args (a call validation references resolvers via args).
+		for _, arg := range validation.Args {
+			extractDepsFromValueRef(arg, deps)
+		}
+
 		// Extract from the rule-level when condition
 		if validation.When != nil && validation.When.Expr != nil {
 			extractDepsFromExpression(string(*validation.When.Expr), deps)

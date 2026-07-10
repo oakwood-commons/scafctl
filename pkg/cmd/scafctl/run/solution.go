@@ -568,6 +568,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithCwd(originalCwd),
 		action.WithFingerprintChecker(fingerprint.NewChecker(stateData)),
 		action.WithNoCache(o.SkipFingerprint),
+		action.WithCalls(sol.Spec.Calls),
 	)
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)

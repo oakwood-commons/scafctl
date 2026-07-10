@@ -491,7 +491,11 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	// Execute resolvers
 	reg := o.getRegistry(ctx)
 	resolverCfg := o.getEffectiveResolverConfig(ctx)
-	executor := solrender.NewResolverExecutor(reg, resolverCfg)
+	var extraOpts []resolver.ExecutorOption
+	if sol.Spec.HasCalls() {
+		extraOpts = append(extraOpts, resolver.WithCalls(sol.Spec.Calls))
+	}
+	executor := solrender.NewResolverExecutor(reg, resolverCfg, extraOpts...)
 
 	start := time.Now()
 	execCtx, err := executor.Execute(ctx, resolvers, params)

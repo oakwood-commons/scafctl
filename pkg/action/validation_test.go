@@ -469,6 +469,32 @@ func TestValidateWorkflow_ProviderValidation(t *testing.T) {
 		err := ValidateWorkflow(w, nil)
 		assert.NoError(t, err)
 	})
+
+	t.Run("call and provider are mutually exclusive", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					Provider: "shell",
+					CallRef:  spec.CallRef{Call: "run"},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("call-only action skips provider requirement", func(t *testing.T) {
+		w := &Workflow{
+			Actions: map[string]*Action{
+				"deploy": {
+					CallRef: spec.CallRef{Call: "run"},
+				},
+			},
+		}
+		err := ValidateWorkflow(w, nil)
+		assert.NoError(t, err)
+	})
 }
 
 func TestValidateWorkflow_ActionsReferences(t *testing.T) {

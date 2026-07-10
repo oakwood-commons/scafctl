@@ -26,8 +26,10 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -1674,7 +1676,111 @@ func TestAPI_SolutionRender_InvalidPath(t *testing.T) {
 		Status(http.StatusBadRequest)
 }
 
-// TestAPI_SolutionTest_MissingPath verifies test endpoint rejects missing path.
+// TestAPI_SolutionRender_Calls exercises the spec.calls (parameterized calls)
+// feature end-to-end through the render endpoint. It confirms that call
+// definitions invoked from resolve steps bind their arguments -- defaults,
+// call-site overrides, and resolver-sourced values -- and expose them to the
+// underlying provider via the args namespace (_.args.x).
+func TestAPI_SolutionRender_Calls(t *testing.T) {
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(celprovider.NewCelProvider()))
+	require.NoError(t, reg.Register(staticprovider.New()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: api-calls-test
+  version: 1.0.0
+  description: Calls feature exercised over the API render endpoint
+spec:
+  calls:
+    greet:
+      provider: cel
+      args:
+        salutation:
+          type: string
+          default: Hello
+        name:
+          type: string
+          required: true
+      inputs:
+        expression: '_.args.salutation + ", " + _.args.name + "!"'
+  resolvers:
+    english:
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              name: World
+    spanish:
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hola
+              name: Mundo
+    requestor:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Ada
+    personalized:
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hey
+              name:
+                expr: _.requestor
+`
+
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer solServer.Close()
+
+	obj := e.POST("/v1/solutions/render").
+		WithJSON(map[string]any{"path": solServer.URL + "/solution.yaml"}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	data := obj.Value("resolverData").Object()
+	data.HasValue("english", "Hello, World!")  // default salutation applied
+	data.HasValue("spanish", "Hola, Mundo!")   // call-site override
+	data.HasValue("requestor", "Ada")          // base value for the ref below
+	data.HasValue("personalized", "Hey, Ada!") // arg sourced from a resolver ref
+}
+
 func TestAPI_SolutionTest_MissingPath(t *testing.T) {
 	e, ts := setupExpect(t)
 	defer ts.Close()
