@@ -141,6 +141,20 @@ filepath.join("path", "to", "file")        // Join segments
 guid.new()                                 // UUID v4
 ```
 
+### Host paths (`pkg/celexp/ext/host/`)
+
+```cel
+host.configDir()                           // Resolved config dir (branding-aware)
+hostConfigDir()                            // Portable alias; matches the Go template function
+host.configDir() + "/config.d/x.yaml"      // Build a config.d drop-in path
+```
+
+`host.configDir()` returns the host's resolved XDG config directory via
+`paths.ConfigDir()`, so it honors `paths.SetAppName` (a `mycli` embedder gets
+`~/.config/mycli`, not a hardcoded `scafctl` path). It is also registered under
+the dotless alias `hostConfigDir()` so the same name works in Go templates
+(`{{ hostConfigDir }}`).
+
 ### Map (`pkg/celexp/ext/map/`)
 
 ```cel

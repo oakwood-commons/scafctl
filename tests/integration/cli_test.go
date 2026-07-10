@@ -2229,6 +2229,105 @@ func TestIntegration_LogoutNoCluster(t *testing.T) {
 	assert.Contains(t, stderr, "cluster name is required")
 }
 
+func TestIntegration_LoginHelp_NamespaceAndRefresh(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--namespace")
+	assert.Contains(t, stdout, "--refresh")
+}
+
+func TestIntegration_LogoutHelp_All(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "logout", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--all")
+}
+
+func TestIntegration_KubeListHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "clusters")
+}
+
+func TestIntegration_KubeListNoResolver(t *testing.T) {
+	t.Parallel()
+	// scafctl ships no cluster data; with no resolver configured, list reports
+	// that clearly instead of erroring.
+	stdout, stderr, exitCode := runScafctl(t, "kube", "list")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "No cluster resolver configured")
+}
+
+func TestIntegration_KubeStatusNoContext(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	kubeconfig := filepath.Join(tmpDir, "config")
+	require.NoError(t, os.WriteFile(kubeconfig, []byte("apiVersion: v1\nkind: Config\n"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "kube", "status", "--kubeconfig", kubeconfig)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "No current kubeconfig context")
+}
+
+func TestIntegration_KubeStatusShowsContext(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	kubeconfig := filepath.Join(tmpDir, "config")
+	content := `apiVersion: v1
+kind: Config
+current-context: prod
+clusters:
+  - name: prod
+    cluster:
+      server: https://api.prod.example.com:6443
+contexts:
+  - name: prod
+    context:
+      cluster: prod
+      user: prod
+      namespace: team-a
+users:
+  - name: prod
+    user:
+      token: static
+`
+	require.NoError(t, os.WriteFile(kubeconfig, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "kube", "status", "--kubeconfig", kubeconfig, "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "prod")
+	assert.Contains(t, stdout, "https://api.prod.example.com:6443")
+	assert.Contains(t, stdout, "team-a")
+}
+
+func TestIntegration_KubeLogoutAllNoEntries(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	kubeconfig := filepath.Join(tmpDir, "config")
+	require.NoError(t, os.WriteFile(kubeconfig, []byte("apiVersion: v1\nkind: Config\n"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "kube", "logout", "--all", "--kubeconfig", kubeconfig)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "No scafctl-managed kubeconfig entries found")
+}
+
+func TestIntegration_KubeLogoutAllRejectsClusterArg(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "kube", "logout", "--all", "prod")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "--all cannot be combined with a cluster argument")
+}
+
 func TestIntegration_AuthStatusGCP(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "auth", "status", "gcp")

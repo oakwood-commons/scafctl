@@ -96,6 +96,10 @@ type WriteInput struct {
 	// cluster name inside the provider.
 	ContextName string `json:"context_name,omitempty" yaml:"context_name,omitempty" doc:"Kubeconfig context entry name" maxLength:"253"`
 
+	// Namespace is the default namespace set on the written context. Empty omits
+	// the namespace so the context has no default.
+	Namespace string `json:"namespace,omitempty" yaml:"namespace,omitempty" doc:"Default namespace set on the written context" maxLength:"253" example:"prod"`
+
 	// UserName is the kubeconfig user entry name. Empty defaults to the cluster
 	// name inside the provider.
 	UserName string `json:"user_name,omitempty" yaml:"user_name,omitempty" doc:"Kubeconfig user entry name" maxLength:"253"`
@@ -143,6 +147,7 @@ func (in WriteInput) toInputs() map[string]any {
 		"audience":             in.Audience,
 		"cluster_name":         in.ClusterName,
 		"context_name":         in.ContextName,
+		"namespace":            in.Namespace,
 		"user_name":            in.UserName,
 		"kubeconfig_path":      in.KubeconfigPath,
 		"exec_command":         in.ExecCommand,

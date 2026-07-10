@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/debug"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/guid"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/host"
 	celmap "github.com/oakwood-commons/scafctl/pkg/celexp/ext/map"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/marshalling"
 	"github.com/oakwood-commons/scafctl/pkg/celexp/ext/out"
@@ -726,6 +727,9 @@ func Custom() celexp.ExtFunctionList {
 
 		// GUID functions
 		guid.NewFunc(),
+
+		// Host path functions (branding-aware config dir)
+		host.ConfigDirFunc(),
 
 		// Map functions
 		celmap.AddFunc(),
