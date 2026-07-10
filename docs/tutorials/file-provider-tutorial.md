@@ -670,6 +670,7 @@ inputs:
 ## Next Steps
 
 - [Directory Provider Tutorial](directory-provider-tutorial.md) — List, create, copy, and remove directories
+- [Reference-Data Lookups](reference-data-lookups.md) -- Read a dataset file and query it with CEL
 - [Dry-Run Tutorial](dryrun-tutorial.md) — Preview solution changes without side effects
 - [Provider Reference](provider-reference.md) — Complete file provider input/output schema
 - [File Conflict Strategies Design](../design/file-conflict-strategies.md) — Detailed design rationale

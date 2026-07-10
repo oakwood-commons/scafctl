@@ -1768,4 +1768,5 @@ Solution: Check your input values meet the validation requirements.
 - [Run Provider Tutorial](run-provider-tutorial.md) — Test providers in isolation
 - [Actions Tutorial](actions-tutorial.md) — Learn about workflows
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
+- [Reference-Data Lookups](reference-data-lookups.md) -- Resolve values from curated taxonomy datasets
 - [Provider Reference](provider-reference.md) — Complete provider documentation
