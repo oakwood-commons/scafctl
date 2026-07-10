@@ -136,6 +136,11 @@ type Request struct {
 	ContextName string
 	UserName    string
 
+	// Namespace sets the written context's default namespace. Empty falls back
+	// to the resolved cluster's Namespace, then to no default. The flag
+	// overrides the resolver-supplied value.
+	Namespace string
+
 	// KubeconfigPath is the kubeconfig file to write. Empty resolves KUBECONFIG
 	// or ~/.kube/config.
 	KubeconfigPath string
@@ -153,6 +158,12 @@ type Request struct {
 	// does not succeed, Login returns ErrVerificationFailed. Verification needs
 	// the kubeconfig provider and is unavailable in the static-fallback path.
 	Verify bool
+
+	// Refresh re-applies the resolved cluster details (CAData, server, namespace)
+	// to the kubeconfig entry without prompting for a fresh interactive login
+	// when the handler already holds a valid cached token. When no valid token is
+	// cached it falls back to a normal interactive login.
+	Refresh bool
 
 	// Timeout bounds the interactive login. Zero uses the handler default.
 	Timeout time.Duration
@@ -247,8 +258,15 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 			return h.Login(ctx, opts)
 		}
 	}
-	if _, err := loginRun(ctx, handler, loginOpts); err != nil {
-		return nil, fmt.Errorf("login with handler %q: %w", handler.Name(), err)
+	// In --refresh mode, skip the interactive login when the handler already
+	// holds a valid cached token: the goal is to re-apply resolved cluster
+	// details (CAData/server/namespace) to the kubeconfig entry, not to force a
+	// new sign-in. A missing or expired token falls through to a normal login.
+	skipLogin := req.Refresh && hasValidToken(ctx, handler, info)
+	if !skipLogin {
+		if _, err := loginRun(ctx, handler, loginOpts); err != nil {
+			return nil, fmt.Errorf("login with handler %q: %w", handler.Name(), err)
+		}
 	}
 
 	// Name the kubeconfig entries. Unlike resolveCluster (which derives the
@@ -271,6 +289,7 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		Audience:        info.OIDCAudience,
 		ClusterName:     clusterName,
 		ContextName:     contextName,
+		Namespace:       info.Namespace,
 		UserName:        userName,
 		KubeconfigPath:  req.KubeconfigPath,
 		ExecCommand:     binaryName,
@@ -365,6 +384,19 @@ func populateIdentity(ctx context.Context, deps Deps, handler Authenticator, inf
 	result.Username = who.Username
 	result.Groups = who.Groups
 	return true
+}
+
+// hasValidToken reports whether the handler already holds a usable cached token
+// for the cluster. It powers --refresh: a valid token lets login re-apply
+// resolved cluster details without prompting for a fresh interactive sign-in. A
+// token with a zero expiry is treated as valid (the handler manages its own
+// refresh); any lookup error or an already-expired token is treated as invalid.
+func hasValidToken(ctx context.Context, handler Authenticator, info kube.ClusterInfo) bool {
+	token, err := handler.GetToken(ctx, tokenOptionsFor(handler, info))
+	if err != nil || token == nil {
+		return false
+	}
+	return token.ExpiresAt.IsZero() || token.ExpiresAt.After(time.Now())
 }
 
 // tokenOptionsFor builds the token request, passing the cluster audience as a

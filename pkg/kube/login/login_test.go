@@ -353,6 +353,171 @@ func TestLogin_ProvideClusterInfoAlwaysSet(t *testing.T) {
 		"kube login must set provideClusterInfo so kubectl passes cluster details via KUBERNETES_EXEC_INFO")
 }
 
+func TestLogin_NamespaceFlagPlumbedToWrite(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	deps := Deps{Handler: handler, Kubeconfig: kc}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+		Namespace:   "team-a",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "team-a", kc.writeIn.Namespace,
+		"the --namespace flag must reach the kubeconfig write input")
+}
+
+func TestLogin_NamespaceFlagOverridesResolvedCluster(t *testing.T) {
+	t.Parallel()
+
+	// The resolver supplies a default namespace; the explicit flag wins.
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	resolver := &kube.MockResolver{ResolveResult: &kube.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+		Namespace:    "from-resolver",
+	}}
+	deps := Deps{Handler: handler, Kubeconfig: kc, Resolver: resolver}
+
+	_, err := Login(context.Background(), deps, Request{Cluster: "prod", Namespace: "from-flag"})
+	require.NoError(t, err)
+	assert.Equal(t, "from-flag", kc.writeIn.Namespace)
+}
+
+func TestLogin_NamespaceFromResolverWhenNoFlag(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	resolver := &kube.MockResolver{ResolveResult: &kube.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+		Namespace:    "from-resolver",
+	}}
+	deps := Deps{Handler: handler, Kubeconfig: kc, Resolver: resolver}
+
+	_, err := Login(context.Background(), deps, Request{Cluster: "prod"})
+	require.NoError(t, err)
+	assert.Equal(t, "from-resolver", kc.writeIn.Namespace)
+}
+
+func TestLogin_RefreshSkipsInteractiveLoginWithValidToken(t *testing.T) {
+	t.Parallel()
+
+	// A valid cached token means --refresh should re-apply cluster details
+	// without calling the interactive login runner.
+	handler := &stubAuth{
+		name:  "oidc",
+		token: &auth.Token{AccessToken: "cached", ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	loginCalls := 0
+	deps := Deps{
+		Handler:    handler,
+		Kubeconfig: kc,
+		LoginRunner: func(_ context.Context, _ Authenticator, _ auth.LoginOptions) (*auth.Result, error) {
+			loginCalls++
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+		Refresh:     true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, loginCalls, "refresh with a valid cached token must skip interactive login")
+}
+
+func TestLogin_RefreshFallsBackToLoginWhenTokenExpired(t *testing.T) {
+	t.Parallel()
+
+	// No usable cached token: --refresh must fall through to a normal login.
+	handler := &stubAuth{
+		name:  "oidc",
+		token: &auth.Token{AccessToken: "old", ExpiresAt: time.Now().Add(-time.Hour)},
+	}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	loginCalls := 0
+	deps := Deps{
+		Handler:    handler,
+		Kubeconfig: kc,
+		LoginRunner: func(_ context.Context, _ Authenticator, _ auth.LoginOptions) (*auth.Result, error) {
+			loginCalls++
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+		Refresh:     true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, loginCalls, "refresh with an expired token must fall back to interactive login")
+}
+
+func TestLogin_NoRefreshAlwaysLogsIn(t *testing.T) {
+	t.Parallel()
+
+	// Without --refresh, a valid cached token must not short-circuit login.
+	handler := &stubAuth{
+		name:  "oidc",
+		token: &auth.Token{AccessToken: "cached", ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	loginCalls := 0
+	deps := Deps{
+		Handler:    handler,
+		Kubeconfig: kc,
+		LoginRunner: func(_ context.Context, _ Authenticator, _ auth.LoginOptions) (*auth.Result, error) {
+			loginCalls++
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, loginCalls)
+}
+
+func TestLogin_RefreshSkipsLoginWithZeroExpiryToken(t *testing.T) {
+	t.Parallel()
+
+	// A token with a zero expiry is treated as valid (the handler manages its
+	// own refresh), so --refresh must skip the interactive login.
+	handler := &stubAuth{
+		name:  "oidc",
+		token: &auth.Token{AccessToken: "cached"}, // ExpiresAt is the zero time
+	}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	loginCalls := 0
+	deps := Deps{
+		Handler:    handler,
+		Kubeconfig: kc,
+		LoginRunner: func(_ context.Context, _ Authenticator, _ auth.LoginOptions) (*auth.Result, error) {
+			loginCalls++
+			return &auth.Result{}, nil
+		},
+	}
+
+	_, err := Login(context.Background(), deps, Request{
+		Server:      "https://api.example.com:6443",
+		ClusterName: "prod",
+		Refresh:     true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, loginCalls, "refresh with a zero-expiry token must skip interactive login")
+}
+
 func TestLogin_DirectURLDerivesEntryNames(t *testing.T) {
 	t.Parallel()
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/kubeconfig"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // LogoutRequest configures a logout.
@@ -79,6 +80,80 @@ func Logout(ctx context.Context, deps Deps, req LogoutRequest) (*LogoutResult, e
 			if err := handler.Logout(ctx); err != nil {
 				return result, fmt.Errorf("logout handler %q: %w", handler.Name(), err)
 			}
+		}
+	}
+	return result, nil
+}
+
+// LogoutAllRequest configures a bulk logout that removes every scafctl-managed
+// kubeconfig entry.
+type LogoutAllRequest struct {
+	// KubeconfigPath is the kubeconfig file to edit. Empty resolves KUBECONFIG
+	// or ~/.kube/config.
+	KubeconfigPath string
+}
+
+// LogoutAllResult reports the outcome of a bulk logout.
+type LogoutAllResult struct {
+	// Removed lists the context names that were removed.
+	Removed []string
+
+	// UsedFallback reports that the static kubeconfig writer was used for at
+	// least one removal because the provider was unavailable.
+	UsedFallback bool
+}
+
+// LogoutAll removes every scafctl-managed kubeconfig entry (those written by
+// "kube login"). It never revokes handler credentials: a fleet-wide logout must
+// not silently sign the user out of every auth handler. Entries are removed via
+// the kubeconfig provider, falling back to a static edit when it is unavailable.
+func LogoutAll(ctx context.Context, deps Deps, req LogoutAllRequest) (*LogoutAllResult, error) {
+	if deps.Kubeconfig == nil {
+		return nil, ErrNoKubeconfigWriter
+	}
+	binaryName := deps.BinaryName
+	if binaryName == "" {
+		binaryName = settings.CliBinaryName
+	}
+
+	entries, err := ListManaged(binaryName, req.KubeconfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("list managed kubeconfig entries: %w", err)
+	}
+
+	result := &LogoutAllResult{}
+	for _, e := range entries {
+		removeIn := kubeconfig.RemoveInput{
+			ClusterName:    e.ClusterName,
+			ContextName:    e.ContextName,
+			UserName:       e.UserName,
+			KubeconfigPath: req.KubeconfigPath,
+		}
+		res, rerr := deps.Kubeconfig.RemoveEntry(ctx, removeIn)
+		switch {
+		case rerr == nil:
+			// A provider that completes without a Go error but reports
+			// Success=false failed the removal of an entry ListManaged just
+			// found; surface it rather than silently leaving it behind. A
+			// Success=true/Removed=false result is a benign no-op (the entry was
+			// already gone, e.g. a List->Remove race) and is skipped.
+			if !res.Success {
+				return result, fmt.Errorf("remove kubeconfig entry %q: provider reported failure", e.ContextName)
+			}
+			if res.Removed {
+				result.Removed = append(result.Removed, e.ContextName)
+			}
+		case errors.Is(rerr, kubeconfig.ErrProviderUnavailable):
+			removed, fbErr := removeStaticKubeconfig(removeIn)
+			if fbErr != nil {
+				return result, fmt.Errorf("kubeconfig provider unavailable and static fallback failed: %w", fbErr)
+			}
+			result.UsedFallback = true
+			if removed {
+				result.Removed = append(result.Removed, e.ContextName)
+			}
+		default:
+			return result, fmt.Errorf("remove kubeconfig entry %q: %w", e.ContextName, rerr)
 		}
 	}
 	return result, nil

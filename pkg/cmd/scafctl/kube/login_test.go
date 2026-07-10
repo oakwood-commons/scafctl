@@ -6,8 +6,10 @@ package kube
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -206,6 +208,53 @@ func TestCommandLogin_VerifyFailsWithoutProvider(t *testing.T) {
 	require.Error(t, err)
 	assert.FileExists(t, path, "kubeconfig entry is written even when verification fails")
 	assert.Contains(t, buf.String(), "was written", "user is told the entry was written despite the verify failure")
+}
+
+func TestCommandLogin_NamespaceWrittenToContext(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withMockHandler(t, ctx)
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok"}
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod",
+		"--handler", "oidc",
+		"--server", "https://api.example.com:6443",
+		"--kubeconfig", path,
+		"--namespace", "team-a",
+	)
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), "namespace: team-a",
+		"--namespace must be written to the kubeconfig context (static fallback path)")
+}
+
+func TestCommandLogin_RefreshSkipsLoginWithValidToken(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withMockHandler(t, ctx)
+	// A valid, non-expired cached token lets --refresh re-apply cluster details
+	// without a fresh interactive login.
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok", ExpiresAt: time.Now().Add(time.Hour)}
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod",
+		"--handler", "oidc",
+		"--server", "https://api.example.com:6443",
+		"--kubeconfig", path,
+		"--refresh",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, mock.LoginCalls, "refresh with a valid cached token must skip interactive login")
+	assert.FileExists(t, path)
 }
 
 func TestLoginTUIEligibleFormat(t *testing.T) {

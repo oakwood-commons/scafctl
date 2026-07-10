@@ -55,10 +55,14 @@ func writeStaticKubeconfig(in kubeconfig.WriteInput) (kubeconfig.WriteResult, er
 
 	cfg[keyClusters] = upsertNamed(toAnySlice(cfg[keyClusters]), clusterName, "cluster", clusterValue(in))
 	cfg[keyUsers] = upsertNamed(toAnySlice(cfg[keyUsers]), userName, "user", userValue(in))
-	cfg[keyContexts] = upsertNamed(toAnySlice(cfg[keyContexts]), contextName, "context", map[string]any{
+	contextValue := map[string]any{
 		"cluster": clusterName,
 		"user":    userName,
-	})
+	}
+	if in.Namespace != "" {
+		contextValue["namespace"] = in.Namespace
+	}
+	cfg[keyContexts] = upsertNamed(toAnySlice(cfg[keyContexts]), contextName, "context", contextValue)
 	if in.SetCurrentContext {
 		cfg[keyCurrentContext] = contextName
 	}
