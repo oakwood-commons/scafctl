@@ -4685,6 +4685,26 @@ func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
 	assert.Contains(t, stderr, "circular reference detected")
 }
 
+// TestIntegration_RunResolver_CycleChainMessage verifies that a circular
+// resolver dependency surfaces as an ordered, closed cycle chain
+// ("alpha -> beta -> alpha") rather than the legacy "dagObject depends on"
+// phrasing. The chain is deterministic: the search starts from the
+// lexicographically smallest node and follows the smallest dependency edge.
+func TestIntegration_RunResolver_CycleChainMessage(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/lint-resolver-cycle/solution.yaml",
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "cycle detected")
+	assert.Contains(t, stderr, "dependency cycle: alpha -> beta -> alpha",
+		"cycle error must render an ordered, closed chain")
+	assert.NotContains(t, stderr, "dagObject",
+		"legacy 'dagObject depends on' phrasing must not appear")
+}
+
 func TestIntegration_SolutionProvider_DryRun(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
