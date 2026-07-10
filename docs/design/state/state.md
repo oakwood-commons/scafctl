@@ -29,7 +29,10 @@ exclusively through the provider system.
 The replay backbone is the **input parameters**, not resolver outputs:
 scaffolding is deterministic, so the same inputs always produce the same
 resolver set. The only exception is resolvers marked `immutable: true`, whose
-resolved values are locked in state after the first run.
+resolved values are locked in state on the first run. Immutable locks are
+committed after resolvers and deferred validation succeed but **before** actions
+run; merged parameters are persisted **after** actions complete. See
+[Two-Phase Validation](../two-phase-validation.md) for the full lifecycle.
 
 State does not:
 
@@ -509,7 +512,7 @@ spec:
           title: { expr: "'feat: deploy ' + _.appName" }
 ~~~
 
-After actions complete, the state manager saves state as a second commit on `featureBranch`. The PR contains both the scaffolded files and the state file.
+Immutable locks (if any) are committed before actions run; after actions complete, the state manager saves the merged parameters as a second commit on `featureBranch`. The PR contains both the scaffolded files and the state file.
 
 ### Future Backends
 

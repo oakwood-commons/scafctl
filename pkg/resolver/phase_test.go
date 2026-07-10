@@ -1173,3 +1173,84 @@ func TestExtractDepsFromTemplate_UnderscoreVariant(t *testing.T) {
 	extractDepsFromTemplate("{{ ._var2 }}", deps)
 	assert.Contains(t, deps, "var2")
 }
+
+func TestBuildPhases_DeferredWork(t *testing.T) {
+	staticSource := &ResolvePhase{
+		With: []ProviderSource{{
+			Provider: "static",
+			Inputs:   map[string]*ValueRef{"value": {Literal: "x"}},
+		}},
+	}
+
+	t.Run("no deferred work when validations are self-only", func(t *testing.T) {
+		resolvers := []*Resolver{
+			{
+				Name:    "env",
+				Resolve: staticSource,
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+					},
+				},
+			},
+		}
+		result, err := BuildPhases(resolvers, nil)
+		require.NoError(t, err)
+		assert.Empty(t, result.DeferredWork)
+	})
+
+	t.Run("cross-resolver validation is deferred and excluded from DAG", func(t *testing.T) {
+		resolvers := []*Resolver{
+			{Name: "env", Resolve: staticSource},
+			{Name: "region", Resolve: staticSource},
+			{
+				Name:    "checker",
+				Resolve: staticSource,
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("_.env != _.region")}}},
+					},
+				},
+			},
+		}
+		result, err := BuildPhases(resolvers, nil)
+		require.NoError(t, err)
+
+		// The cross-resolver validation must NOT create resolution-graph edges.
+		assert.Empty(t, result.Deps["checker"], "validate refs must not be resolution deps")
+
+		require.Len(t, result.DeferredWork, 1)
+		unit := result.DeferredWork[0]
+		assert.Equal(t, "checker", unit.ResolverName)
+		assert.Equal(t, []int{1}, unit.RuleIndices)
+		assert.Equal(t, []string{"env", "region"}, unit.DependsOn)
+		assert.False(t, unit.PhaseWhenDeferred)
+	})
+
+	t.Run("phase-level foreign when defers entire block", func(t *testing.T) {
+		resolvers := []*Resolver{
+			{Name: "gate", Resolve: staticSource},
+			{
+				Name:    "checker",
+				Resolve: staticSource,
+				Validate: &ValidatePhase{
+					When: &Condition{Expr: celExpPtr("_.gate == true")},
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+					},
+				},
+			},
+		}
+		result, err := BuildPhases(resolvers, nil)
+		require.NoError(t, err)
+		assert.Empty(t, result.Deps["checker"])
+
+		require.Len(t, result.DeferredWork, 1)
+		unit := result.DeferredWork[0]
+		assert.Equal(t, "checker", unit.ResolverName)
+		assert.Equal(t, []int{0}, unit.RuleIndices)
+		assert.Equal(t, []string{"gate"}, unit.DependsOn)
+		assert.True(t, unit.PhaseWhenDeferred)
+	})
+}

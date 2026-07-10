@@ -976,6 +976,87 @@ func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
 	assert.Contains(t, stderr, "scafctl run resolver")
 }
 
+// TestIntegration_RunSolution_DeferredValidationImmutableNotLocked verifies the
+// two-phase validation D1 guarantee: when a deferred (cross-resolver) validation
+// rule fails on an immutable resolver, execution stops before actions run and
+// the immutable value is NOT persisted to state. A subsequent run whose deferred
+// validation passes then locks the value and runs the action.
+func TestIntegration_RunSolution_DeferredValidationImmutableNotLocked(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: d1-immutable-defer
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    region:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "region must differ from backupRegion"
+    backupRegion:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: backupRegion
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Run 1: regions equal -> deferred validation fails. The action must not run
+	// and the immutable value must not be locked (state file absent).
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath)
+	assert.NotEqual(t, 0, exitCode, "failing deferred validation should exit non-zero")
+	assert.Contains(t, stderr, "region must differ from backupRegion")
+	assert.NotContains(t, stdout, "ACTION_RAN", "action must not run when deferred validation fails")
+	assert.NoFileExists(t, statePath, "immutable value must not be persisted when deferred validation fails")
+
+	// Run 2: regions differ -> deferred validation passes. The action runs and
+	// the immutable value is now locked in state.
+	stdout, _, exitCode = runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "backupRegion=us-west1")
+	assert.Equal(t, 0, exitCode, "passing deferred validation should exit zero")
+	assert.Contains(t, stdout, "ACTION_RAN", "action should run when deferred validation passes")
+	require.FileExists(t, statePath, "state file should be written after a successful run")
+
+	raw, err := os.ReadFile(statePath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	var stateDoc struct {
+		Immutables map[string]any `json:"immutables"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &stateDoc))
+	assert.Contains(t, stateDoc.Immutables, "region", "immutable region should be locked after a passing run")
+}
+
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
@@ -5768,6 +5849,103 @@ func TestIntegration_Test_Functional_Calls(t *testing.T) {
 		"array-arg",
 		"validate-call",
 		"action-call",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Test_Functional_CrossValidation exercises the two-phase
+// (deferred cross-resolver) validation feature end-to-end by running the
+// functional test cases bundled with the cross-validation fixture solution.
+// The fixture covers the load-without-cycle guarantee, deferred rules passing
+// when the cross-resolver assertion holds, and both fatal (--fail-on-validation)
+// and non-fatal failure modes when the assertion is violated.
+func TestIntegration_Test_Functional_CrossValidation(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/resolvers/cross-validation/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no cross-validation test case should fail")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	for _, name := range []string{
+		"loads-without-cycle",
+		"differing-regions-pass",
+		"equal-regions-fail",
+		"equal-regions-nonfatal-shows-values",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Test_Functional_LintDeferredValidation exercises the linting
+// side of two-phase validation by running the functional test cases bundled
+// with the lint-deferred-validation fixture. The fixture asserts that
+// cross-resolver validation references do NOT trigger the resolver-cycle rule
+// and DO emit the informational deferred-validation-not-fail-fast advisory.
+func TestIntegration_Test_Functional_LintDeferredValidation(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/lint-deferred-validation/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no lint deferred-validation test case should fail")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	for _, name := range []string{
+		"lint-no-cycle",
+		"lint-emits-advisory",
 	} {
 		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
 	}

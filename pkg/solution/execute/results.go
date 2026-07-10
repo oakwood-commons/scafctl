@@ -239,10 +239,54 @@ func BuildExecutionData(
 		"phaseCount":    phaseCount,
 	}
 
-	return map[string]any{
+	data := map[string]any{
 		"resolvers": resolverMeta,
 		"summary":   summary,
 	}
+
+	if dv := buildDeferredValidationData(resolverCtx.DeferredValidation()); dv != nil {
+		data["deferredValidation"] = dv
+	}
+
+	return data
+}
+
+// buildDeferredValidationData converts a deferred validation summary into a
+// serializable map for the __execution metadata. Returns nil when the deferred
+// validation phase did not run.
+func buildDeferredValidationData(summary *resolver.DeferredValidationSummary) map[string]any {
+	if summary == nil {
+		return nil
+	}
+
+	dv := map[string]any{
+		"evaluated": summary.Evaluated,
+		"failed":    summary.Failed,
+		"skipped":   summary.Skipped,
+	}
+
+	if len(summary.Suppressed) > 0 {
+		dv["suppressed"] = summary.Suppressed
+	}
+	if len(summary.Cycles) > 0 {
+		dv["cycles"] = summary.Cycles
+	}
+	if len(summary.Results) > 0 {
+		results := make([]map[string]any, 0, len(summary.Results))
+		for _, rf := range summary.Results {
+			messages := make([]string, 0, len(rf.Failures))
+			for _, f := range rf.Failures {
+				messages = append(messages, f.Message)
+			}
+			results = append(results, map[string]any{
+				"resolver": rf.ResolverName,
+				"messages": messages,
+			})
+		}
+		dv["results"] = results
+	}
+
+	return dv
 }
 
 // BuildProviderSummary aggregates per-provider usage statistics from resolver execution.

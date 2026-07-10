@@ -1196,7 +1196,7 @@ func TestLintResolverCycles_SimpleCycle(t *testing.T) {
 	assert.Contains(t, cycleFindings[0].Message, "circular dependency")
 }
 
-func TestLintResolverCycles_ValidateCycleSuggestion(t *testing.T) {
+func TestLintResolverCycles_GenericSuggestion(t *testing.T) {
 	reg := provider.NewRegistry()
 	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
 	require.NoError(t, reg.Register(newFakeProviderWithCapabilities("validation", []provider.Capability{provider.CapabilityValidation})))
@@ -1249,8 +1249,69 @@ func TestLintResolverCycles_ValidateCycleSuggestion(t *testing.T) {
 	}
 
 	require.Len(t, cycleFindings, 1)
-	assert.Contains(t, cycleFindings[0].Suggestion, "validate block",
-		"cycle involving validate block should suggest extracting validation")
+	assert.Contains(t, cycleFindings[0].Suggestion, "Break the cycle",
+		"a genuine resolve cycle should give the generic break-the-cycle suggestion")
+	assert.NotContains(t, cycleFindings[0].Suggestion, "validate block",
+		"validation references no longer form cycles, so the validate-specific suggestion is retired")
+}
+
+func TestLintDeferredValidation(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+	require.NoError(t, reg.Register(newFakeProviderWithCapabilities("validation", []provider.Capability{provider.CapabilityValidation})))
+
+	selfExpr := celexp.Expression("__self != ''")
+	crossExpr := celexp.Expression("_.region != _.backupRegion")
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"backupRegion": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "us-west1"}}},
+				},
+			},
+		},
+		"selfOnly": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "x"}}},
+				},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{
+					{Provider: "validation", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &selfExpr}}},
+				},
+			},
+		},
+		"region": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{"value": {Literal: "us-east1"}}},
+				},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{
+					{Provider: "validation", Inputs: map[string]*spec.ValueRef{"expression": {Expr: &crossExpr}}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintDeferredValidation(sol, result, reg)
+
+	var advisories []*Finding
+	for _, f := range result.Findings {
+		if f.RuleName == "deferred-validation-not-fail-fast" {
+			advisories = append(advisories, f)
+		}
+	}
+
+	// Only the cross-resolver rule ("region") is deferred; the self-only rule is not.
+	require.Len(t, advisories, 1)
+	assert.Equal(t, SeverityInfo, advisories[0].Severity)
+	assert.Equal(t, "resolvers.region.validate", advisories[0].Location)
 }
 
 // ---- collectTemplateFileResolverRefs ----

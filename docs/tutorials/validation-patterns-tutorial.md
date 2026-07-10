@@ -648,6 +648,87 @@ Common validation error patterns and their meaning:
 
 ---
 
+## 8. Cross-Resolver (Two-Phase) Validation
+
+Most validation rules check a single value against itself with `__self`. Sometimes
+you need to validate one resolver *against another* -- for example, ensuring a
+primary and backup region differ. scafctl handles this with **two-phase
+validation**:
+
+- **Inline rules** reference only `__self`. They run during resolution and fail
+  fast.
+- **Deferred rules** reference another resolver (via `_.other`, or a message
+  template like `{{ .other }}`). They run after every resolver has resolved,
+  just before actions.
+
+The phase is chosen automatically. Cross-resolver references inside a `validate`
+block **do not** create a resolution dependency, so two resolvers can safely
+validate against each other without triggering a `circular dependency` error.
+
+```yaml
+spec:
+  resolvers:
+    region:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+      validate:
+        with:
+          # INLINE: references only __self -> fails fast during resolution
+          - provider: validation
+            inputs:
+              expression: "__self != ''"
+              message: "region is required"
+          # DEFERRED: references _.backupRegion -> runs after all resolvers
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "tmpl: region must differ from backupRegion (both were {{ .region }})"
+
+    backupRegion:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: backupRegion
+              default: us-west1
+```
+
+> **Tip**: Put dynamic messages under `inputs.message` (with a `tmpl:` or `expr:`
+> prefix) so the template renders with resolver values.
+
+Run it -- equal regions fail, differing regions pass:
+
+{{< tabs "validation-patterns-tutorial-cmd-cross" >}}
+{{% tab "Bash" %}}
+```bash
+# Fails: regions equal
+scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-east1
+# Passes: regions differ
+scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-west1
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Fails: regions equal
+scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-east1
+# Passes: regions differ
+scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-west1
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+In `run resolver` (non-fatal) mode, a failing deferred rule still shows the
+resolved values, reports the failure on stderr, and skips state persistence. Add
+`--fail-on-validation` to exit non-zero. See the
+[Two-Phase Validation design doc](../design/two-phase-validation.md) for the full
+execution order and skipped/errored semantics.
+
+---
+
 ## Next Steps
 
 - [CEL Expressions Tutorial](cel-tutorial.md) — dive deeper into CEL functions for validation
