@@ -226,6 +226,64 @@ func TestBuildExecutionData(t *testing.T) {
 	assert.Equal(t, 2, summary["resolverCount"])
 }
 
+func TestBuildExecutionData_NoDeferredValidation(t *testing.T) {
+	t.Parallel()
+
+	resolverCtx := resolver.NewContext()
+	resolverCtx.SetResult("env", &resolver.ExecutionResult{
+		Value:  "prod",
+		Status: resolver.ExecutionStatusSuccess,
+		Phase:  1,
+	})
+
+	data := BuildExecutionData(resolverCtx, []*resolver.Resolver{{Name: "env"}}, time.Second)
+
+	assert.NotContains(t, data, "deferredValidation",
+		"deferredValidation must be omitted when the phase did not run")
+}
+
+func TestBuildExecutionData_WithDeferredValidation(t *testing.T) {
+	t.Parallel()
+
+	resolverCtx := resolver.NewContext()
+	resolverCtx.SetResult("checker", &resolver.ExecutionResult{
+		Value:  "check",
+		Status: resolver.ExecutionStatusSuccess,
+		Phase:  1,
+	})
+	resolverCtx.SetDeferredValidation(&resolver.DeferredValidationSummary{
+		Evaluated:  2,
+		Failed:     1,
+		Skipped:    1,
+		Suppressed: []string{"downstream"},
+		Cycles:     [][]string{{"a", "b"}},
+		Results: []resolver.DeferredValidationFailure{
+			{
+				ResolverName: "checker",
+				Failures: []resolver.ValidationFailure{
+					{Rule: 0, Provider: "assert", Message: "env must differ from region"},
+				},
+			},
+		},
+	})
+
+	data := BuildExecutionData(resolverCtx, []*resolver.Resolver{{Name: "checker"}}, time.Second)
+
+	dv, ok := data["deferredValidation"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, 2, dv["evaluated"])
+	assert.Equal(t, 1, dv["failed"])
+	assert.Equal(t, 1, dv["skipped"])
+	assert.Equal(t, []string{"downstream"}, dv["suppressed"])
+	assert.Equal(t, [][]string{{"a", "b"}}, dv["cycles"])
+
+	results, ok := dv["results"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "checker", results[0]["resolver"])
+	assert.Equal(t, []string{"env must differ from region"}, results[0]["messages"])
+}
+
 func TestBuildExecutionData_MissingResult(t *testing.T) {
 	t.Parallel()
 

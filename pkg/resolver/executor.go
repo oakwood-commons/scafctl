@@ -68,6 +68,7 @@ type Executor struct {
 	nonFatalValidation bool                  // Treat validation failures as non-fatal: collect them but do not skip dependents
 	skipValidation     bool                  // Skip the validation phase of all resolvers
 	skipTransform      bool                  // Skip the transform and validation phases of all resolvers
+	deferredValidation bool                  // Run the post-resolution deferred (cross-resolver) validation phase
 	mockedResolvers    map[string]any        // Pre-populated resolver values that skip execution
 	calls              map[string]*spec.Call // Reusable call definitions invoked via call + args
 	dedupMemo          *call.Memo            // Per-run memo for opt-in call de-duplication
@@ -161,6 +162,18 @@ func WithSkipTransform(enabled bool) ExecutorOption {
 	}
 }
 
+// WithDeferredValidation enables or disables the post-resolution deferred
+// validation phase, which evaluates cross-resolver validation rules (rules that
+// reference resolvers other than their owner) after every resolver has resolved.
+// It is enabled by default; disable it to evaluate only inline (self-only)
+// validations. Disabling has no effect when validation is already skipped via
+// WithSkipValidation or WithSkipTransform.
+func WithDeferredValidation(enabled bool) ExecutorOption {
+	return func(e *Executor) {
+		e.deferredValidation = enabled
+	}
+}
+
 // WithMockedResolvers pre-populates resolver values so that the corresponding
 // resolvers skip execution entirely and return the mocked value. This enables
 // functional testing of downstream resolvers and CEL expressions without
@@ -183,11 +196,12 @@ func WithCalls(calls map[string]*spec.Call) ExecutorOption {
 // NewExecutor creates a new resolver executor
 func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 	executor := &Executor{
-		registry:       registry,
-		timeout:        settings.DefaultResolverTimeout,
-		maxConcurrency: 0, // unlimited by default
-		phaseTimeout:   settings.DefaultPhaseTimeout,
-		dedupMemo:      call.NewMemo(),
+		registry:           registry,
+		timeout:            settings.DefaultResolverTimeout,
+		maxConcurrency:     0, // unlimited by default
+		phaseTimeout:       settings.DefaultPhaseTimeout,
+		deferredValidation: true, // deferred cross-resolver validation is on by default
+		dedupMemo:          call.NewMemo(),
 	}
 
 	for _, opt := range opts {
@@ -350,6 +364,52 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 	}
 
 	lgr.V(1).Info("resolver execution complete", "total_phases", len(buildResult.Phases))
+
+	// Deferred (cross-resolver) validation phase. Runs after all resolvers have
+	// resolved so rules that reference other resolvers can read their final
+	// values. Skipped when validation is disabled or deferred validation is off.
+	if e.deferredValidation && !e.skipValidation && !e.skipTransform && len(buildResult.DeferredWork) > 0 {
+		resolverMap := make(map[string]*Resolver, len(resolvers))
+		for _, r := range resolvers {
+			resolverMap[r.Name] = r
+		}
+
+		summary := e.runDeferredValidation(ctx, buildResult.DeferredWork, resolverMap, &failedResolvers)
+		resolverCtx.SetDeferredValidation(summary)
+
+		if summary.HasFailures() {
+			switch {
+			case e.nonFatalValidation, e.validateAll:
+				// Collect-errors modes (run resolver non-fatal, validate-all): fold
+				// deferred failures into the aggregated error so they surface through
+				// the same validation-diagnostic path as inline failures. Values stay
+				// inspectable and state persistence is skipped. The typed summary is
+				// also available via the context.
+				if aggregatedError == nil {
+					aggregatedError = &AggregatedExecutionError{}
+				}
+				// Deferred validation runs after all resolver phases, so report it
+				// as an extra 1-based phase after the last resolver phase to satisfy
+				// FailedResolver.Phase's minimum:"1" contract.
+				deferredPhase := len(buildResult.Phases) + 1
+				for _, rf := range summary.Results {
+					aggregatedError.Add(rf.ResolverName, deferredPhase, &AggregatedValidationError{
+						ResolverName: rf.ResolverName,
+						Failures:     rf.Failures,
+						Sensitive:    rf.Sensitive,
+					})
+				}
+			default:
+				derr := &AggregatedDeferredValidationError{
+					Failures:   summary.Results,
+					Suppressed: summary.Suppressed,
+				}
+				span.RecordError(derr)
+				span.SetStatus(codes.Error, derr.Error())
+				return ctx, derr
+			}
+		}
+	}
 
 	// In collect-errors mode, return aggregated error if there were any failures
 	if e.collectErrors() && aggregatedError != nil && aggregatedError.HasErrors() {
@@ -1668,8 +1728,14 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 	lgr := logger.FromContext(ctx)
 	providerCallCount := 0
 
-	// Get resolver context from context
-	resolverCtx, _ := FromContext(ctx)
+	// Partition the phase: only inline (self-only) rules run here. Cross-resolver
+	// rules -- and every rule when the phase-level when references a foreign
+	// resolver -- are deferred to runDeferredValidation, which executes after all
+	// resolvers have resolved.
+	part := partitionValidatePhaseFor(phase, resolverName, e.registry.DescriptorLookup())
+	if part.PhaseWhenDeferred || len(part.InlineRules) == 0 {
+		return providerCallCount, nil
+	}
 
 	// Check phase-level when condition (with __self so conditions can reference the resolved value)
 	if phase.When != nil {
@@ -1691,58 +1757,20 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 		Failures:     make([]ValidationFailure, 0),
 	}
 
-	// Run ALL validation rules and collect failures
-	for i, validation := range phase.With {
-		// Check rule-level when condition (with __self so conditions can
-		// reference the resolved value). A false condition skips the rule.
-		if validation.When != nil {
-			shouldExecute, err := e.evaluateConditionWithSelf(ctx, validation.When, value)
-			if err != nil {
-				return providerCallCount, fmt.Errorf("failed to evaluate validate rule %d when condition: %w", i+1, err)
-			}
-			if !shouldExecute {
-				lgr.V(1).Info("skipping validate rule due to when condition", "rule", i+1)
-				continue
-			}
-		}
-
-		// Execute validation provider (or expanded call) with __self set to value being validated
-		_, err := e.runStepProvider(ctx, validation.CallRef, validation.Provider, validation.Inputs, value)
-		providerCallCount++
-
+	// Run only the inline validation rules and collect failures.
+	for _, i := range part.InlineRules {
+		validation := phase.With[i]
+		calls, failure, err := e.evaluateValidationRule(ctx, i, sensitive, validation, value)
+		providerCallCount += calls
 		if err != nil {
-			// Build failure message
-			message := err.Error()
-
-			// Use custom message if provided
-			if validation.Message != nil {
-				customMsg, msgErr := validation.Message.Resolve(ctx, resolverCtx.ToMap(), &value)
-				if msgErr == nil {
-					if msgStr, ok := customMsg.(string); ok {
-						message = msgStr
-					}
-				}
-			}
-
-			// Redact message if sensitive
-			if sensitive {
-				message = "[REDACTED]"
-			}
-
-			failure := ValidationFailure{
-				Rule:      i,
-				Provider:  validation.Provider,
-				Message:   message,
-				Cause:     err,
-				Sensitive: sensitive,
-			}
-
-			validationErr.AddFailure(failure)
-
+			return providerCallCount, err
+		}
+		if failure != nil {
+			validationErr.AddFailure(*failure)
 			lgr.V(1).Info("validation rule failed",
 				"rule", i+1,
 				logKeyProvider, validation.Provider,
-				"message", redactForLog(message, sensitive))
+				"message", redactForLog(failure.Message, sensitive))
 		}
 	}
 
@@ -1752,6 +1780,57 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 	}
 
 	return providerCallCount, nil
+}
+
+// evaluateValidationRule evaluates a single validation rule against value with
+// __self set to value. It returns the number of provider calls made and a
+// non-nil *ValidationFailure when the rule's provider reports a failure. A
+// returned error indicates a fatal problem evaluating the rule itself (for
+// example a malformed when condition), which is distinct from a validation
+// failure. This helper is shared by the inline validate phase and the deferred
+// (cross-resolver) validation phase so both report failures identically.
+func (e *Executor) evaluateValidationRule(ctx context.Context, ruleIndex int, sensitive bool, validation ProviderValidation, value any) (int, *ValidationFailure, error) {
+	// Check rule-level when condition (with __self so conditions can reference the
+	// resolved value). A false condition skips the rule.
+	if validation.When != nil {
+		shouldExecute, err := e.evaluateConditionWithSelf(ctx, validation.When, value)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to evaluate validate rule %d when condition: %w", ruleIndex+1, err)
+		}
+		if !shouldExecute {
+			return 0, nil, nil
+		}
+	}
+
+	// Execute validation provider (or expanded call) with __self set to value being validated
+	_, err := e.runStepProvider(ctx, validation.CallRef, validation.Provider, validation.Inputs, value)
+	if err == nil {
+		return 1, nil, nil
+	}
+
+	// Build failure message, preferring a custom message when provided.
+	message := err.Error()
+	if validation.Message != nil {
+		resolverCtx, _ := FromContext(ctx)
+		if customMsg, msgErr := validation.Message.Resolve(ctx, resolverCtx.ToMap(), &value); msgErr == nil {
+			if msgStr, ok := customMsg.(string); ok {
+				message = msgStr
+			}
+		}
+	}
+
+	// Redact message if sensitive
+	if sensitive {
+		message = "[REDACTED]"
+	}
+
+	return 1, &ValidationFailure{
+		Rule:      ruleIndex,
+		Provider:  validation.Provider,
+		Message:   message,
+		Cause:     err,
+		Sensitive: sensitive,
+	}, nil
 }
 
 // executeProviderWithSelf executes a provider with resolved inputs and __self set to the provided value

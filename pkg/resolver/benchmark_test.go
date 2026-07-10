@@ -197,3 +197,58 @@ func BenchmarkBuildGraph_Large(b *testing.B) {
 		_, _ = BuildGraph(resolvers, lookup)
 	}
 }
+
+// BenchmarkExecutor_DeferredValidation measures the overhead of the deferred
+// (cross-resolver) validation phase: two resolvers where one validates against
+// the other, forcing a deferred rule that runs after resolution completes.
+func BenchmarkExecutor_DeferredValidation(b *testing.B) {
+	registry := newMockRegistry()
+	_ = registry.Register(&mockProvider{
+		name: "static",
+		executeFunc: func(_ context.Context, inputs map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: inputs["value"]}, nil
+		},
+	})
+	_ = registry.Register(&mockProvider{
+		name: "validation",
+		executeFunc: func(_ context.Context, _ map[string]any) (*provider.Output, error) {
+			return &provider.Output{Data: nil}, nil
+		},
+	})
+
+	resolvers := []*Resolver{
+		{
+			Name: "a",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{{
+					Provider: "static",
+					Inputs:   map[string]*ValueRef{"value": {Literal: "east"}},
+				}},
+			},
+		},
+		{
+			Name: "b",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{{
+					Provider: "static",
+					Inputs:   map[string]*ValueRef{"value": {Literal: "west"}},
+				}},
+			},
+			// Cross-resolver rule -> classified as deferred.
+			Validate: &ValidatePhase{
+				With: []ProviderValidation{{
+					Provider: "validation",
+					Inputs:   map[string]*ValueRef{"expression": {Literal: "_.a != _.b"}},
+				}},
+			},
+		},
+	}
+
+	executor := NewExecutor(registry)
+
+	b.ResetTimer()
+	for b.Loop() {
+		ctx := context.Background()
+		_, _ = executor.Execute(ctx, resolvers, nil)
+	}
+}

@@ -15,9 +15,9 @@ var builtinConcepts = []Concept{
 
 1. **resolve** — one or more provider steps that produce the initial value (e.g., prompt user, read file, call API).
 2. **transform** — optional steps that reshape or enrich the resolved value.
-3. **validate** — optional steps that enforce constraints on the final value.
+3. **validate** — optional steps that enforce constraints on the value. Validation runs in two phases: rules that reference only the owning resolver (via __self) run **inline** during resolution and fail fast; rules that reference another resolver (via _.other, in the expression, inputs, when, or message) are **deferred** and run after every resolver has resolved, just before actions. The phase is chosen automatically, and deferred references do not add edges to the resolution dependency graph — so two resolvers can validate against each other without forming a false ordering cycle.
 
-Resolvers can depend on each other via 'dependsOn' or implicit CEL references (_.otherResolver). The dependency graph must be a DAG — circular references are rejected at lint time.`,
+Resolvers can depend on each other via 'dependsOn' or implicit CEL references (_.otherResolver). The dependency graph must be a DAG — circular references in resolve/transform/when are rejected at lint time (cross-resolver validation references do not count).`,
 		Examples: []string{
 			"spec:\n  resolvers:\n    region:\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              name: region\n              default: us-east-1",
 		},

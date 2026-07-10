@@ -110,6 +110,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
 	lintResolverCycles(sol, result, registry)
+	lintDeferredValidation(sol, result, registry)
 	lintTemplateAccessors(sol, result)
 	lintWorkflow(sol, result, registry)
 	lintCalls(sol, result, registry)
@@ -626,8 +627,9 @@ func isNonTrivialGuard(c *resolver.Condition) bool {
 }
 
 // lintResolverCycles checks for circular dependencies in the resolver dependency graph.
-// When a cycle involves a resolver with a validate block, the suggestion specifically
-// recommends extracting the validation into a separate resolver.
+// Only resolution-phase references (resolve/transform/when) form edges; deferred
+// cross-resolver validation references are excluded by ExtractDependencies and
+// therefore never reported here as cycles.
 func lintResolverCycles(sol *solution.Solution, result *Result, registry *provider.Registry) {
 	if sol.Spec.Resolvers == nil {
 		return
@@ -647,30 +649,48 @@ func lintResolverCycles(sol *solution.Solution, result *Result, registry *provid
 		deps[name] = resolver.ExtractDependencies(res, lookup)
 	}
 
-	// Detect cycles using DFS-based cycle detection.
+	// Detect cycles using DFS-based cycle detection. Any cycle found is a genuine
+	// resolve/transform ordering cycle; validation references cannot contribute.
 	cycles := findResolverCycles(deps)
 	for _, cycle := range cycles {
-		// Check if any resolver in the cycle has a validate block.
-		hasValidate := false
-		for _, name := range cycle {
-			if res, ok := sol.Spec.Resolvers[name]; ok && res != nil && res.Validate != nil && len(res.Validate.With) > 0 {
-				hasValidate = true
-				break
-			}
-		}
-
 		location := fmt.Sprintf("resolvers.%s", cycle[0])
 		cycleStr := strings.Join(cycle, " → ")
 
-		suggestion := "Break the cycle by reordering dependencies or removing unnecessary references"
-		if hasValidate {
-			suggestion = "A validate block is part of this cycle. Extract the validation into a separate resolver that depends on all required values, breaking the cycle"
-		}
-
 		result.addFinding(SeverityError, "dependency", location,
 			fmt.Sprintf("circular dependency detected: %s", cycleStr),
-			suggestion,
+			"Break the cycle by reordering dependencies or removing unnecessary references",
 			"resolver-cycle")
+	}
+}
+
+// lintDeferredValidation emits an advisory finding for each resolver that has a
+// cross-resolver (deferred) validation rule. Deferred rules run after all
+// resolvers resolve and therefore cannot fail fast, so authors are guided to
+// keep cheap self-only checks (required/regex) as separate inline rules to
+// preserve early feedback.
+func lintDeferredValidation(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
+	}
+
+	for _, res := range sol.Spec.ResolversToSlice() {
+		if res == nil || res.Validate == nil {
+			continue
+		}
+		part := resolver.PartitionValidatePhase(res, lookup)
+		if !part.HasDeferred() {
+			continue
+		}
+		location := fmt.Sprintf("resolvers.%s.validate", res.Name)
+		result.addFinding(SeverityInfo, "structure", location,
+			fmt.Sprintf("resolver %q has a cross-resolver validation rule that runs in the deferred phase; it cannot fail fast", res.Name),
+			"Keep cheap self-only checks (required/regex) as separate inline validation rules so they still fail fast; deferred rules run after all resolvers resolve",
+			"deferred-validation-not-fail-fast")
 	}
 }
 

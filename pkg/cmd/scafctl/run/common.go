@@ -609,6 +609,25 @@ func (o *sharedResolverOptions) executeResolvers(
 	return resolverData, resolverCtx, nil
 }
 
+// deferredValidationFailures returns the set of resolver names whose deferred
+// (cross-resolver) validation failed, so their immutable values are not locked
+// even in collect-errors modes. Returns nil when the deferred validation phase
+// did not run or reported no failures.
+func deferredValidationFailures(resolverCtx *resolver.Context) map[string]bool {
+	if resolverCtx == nil {
+		return nil
+	}
+	summary := resolverCtx.DeferredValidation()
+	if summary == nil || len(summary.Results) == 0 {
+		return nil
+	}
+	failed := make(map[string]bool, len(summary.Results))
+	for _, rf := range summary.Results {
+		failed[rf.ResolverName] = true
+	}
+	return failed
+}
+
 // prepareSolutionForExecution loads a solution, sets up the provider registry,
 // and registers the solution provider. It handles bundle extraction, plugin merging,
 // and working directory changes. Returns cleanup function that must be deferred.

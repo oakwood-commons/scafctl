@@ -579,10 +579,21 @@ var KnownRules = map[string]RuleMeta{
 		Severity:    string(SeverityError),
 		Category:    "dependency",
 		Description: "The resolver dependency graph contains a circular dependency.",
-		Why:         "Circular dependencies between resolvers create infinite loops that prevent the DAG from being scheduled. The dependency graph must be acyclic.",
-		Fix:         "Break the cycle by reordering dependencies, removing unnecessary references, or extracting cycle-causing logic into a separate resolver. When a validate block causes the cycle, extract the validation into a dedicated resolver that runs after all its dependencies.",
+		Why:         "Circular dependencies between resolvers create infinite loops that prevent the DAG from being scheduled. The dependency graph must be acyclic. Only resolution-phase references (resolve, transform, when) form edges; cross-resolver validation references are evaluated in a deferred phase after resolution and never create resolution cycles.",
+		Fix:         "Break the cycle by reordering dependencies, removing unnecessary references, or extracting cycle-causing logic into a separate resolver.",
 		Examples: []string{
-			"# Problem: validate block creates a cycle\n# resolverA validate needs resolverB, but resolverB depends on resolverA\n\n# Fix: extract the validation into a separate resolver\nresolvers:\n  resolverA:\n    resolve:\n      with:\n        - provider: parameter\n          inputs:\n            key: inputA\n  validateA:\n    dependsOn: [resolverA, resolverB]\n    validate:\n      with:\n        - provider: validation\n          inputs:\n            expression:\n              expr: '_.resolverB.valid == true'\n            message: 'Validation failed'",
+			"# Problem: resolverA.resolve reads _.resolverB while resolverB.resolve reads _.resolverA\n# Fix: remove one direction or introduce an independent resolver both can read\nresolvers:\n  shared:\n    resolve:\n      with:\n        - provider: parameter\n          inputs:\n            key: shared\n  resolverA:\n    dependsOn: [shared]\n    resolve:\n      with:\n        - provider: cel\n          inputs:\n            expression:\n              expr: '_.shared'\n  resolverB:\n    dependsOn: [shared]\n    resolve:\n      with:\n        - provider: cel\n          inputs:\n            expression:\n              expr: '_.shared'",
+		},
+	},
+	"deferred-validation-not-fail-fast": {
+		Rule:        "deferred-validation-not-fail-fast",
+		Severity:    string(SeverityInfo),
+		Category:    "structure",
+		Description: "A resolver has a cross-resolver validation rule that runs in the deferred (post-resolution) validation phase.",
+		Why:         "scafctl uses a two-phase validation model. Inline rules reference only the owning resolver and run during resolution so they fail fast. A rule that references another resolver is deferred: it runs after all resolvers resolve and before actions, so it cannot fail fast. Mixing a cheap self-only check into a deferred rule delays the feedback the author would otherwise get immediately.",
+		Fix:         "Keep cheap self-only checks (required, regex, length) as separate inline validation rules so they still fail fast. Reserve deferred rules for genuine cross-resolver invariants. Use a rule-level 'when:' guard for conditional cross-checks.",
+		Examples: []string{
+			"# Inline rule fails fast; deferred rule enforces the cross-resolver invariant\nresolvers:\n  region:\n    resolve:\n      with:\n        - provider: parameter\n          inputs:\n            key: region\n    validate:\n      with:\n        - provider: validation   # inline: self-only, fails fast\n          inputs:\n            expression:\n              expr: '__self != \"\"'\n            message: 'region is required'\n        - provider: validation   # deferred: references another resolver\n          inputs:\n            expression:\n              expr: '_.region != _.backupRegion'\n            message: 'region must differ from backupRegion'",
 		},
 	},
 	"invalid-fingerprint-scope": {

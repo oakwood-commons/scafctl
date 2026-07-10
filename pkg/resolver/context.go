@@ -67,6 +67,9 @@ type ExecutionResult struct {
 type Context struct {
 	data    *sync.Map // map[string]any - stores actual values for CEL access
 	results *sync.Map // map[string]*ExecutionResult - stores full results with metadata
+
+	deferredMu         sync.RWMutex
+	deferredValidation *DeferredValidationSummary // set once after all resolvers resolve
 }
 
 // NewContext creates a new resolver context
@@ -140,6 +143,21 @@ func (c *Context) GetAllResults() map[string]*ExecutionResult {
 		return true
 	})
 	return result
+}
+
+// SetDeferredValidation stores the deferred (cross-resolver) validation summary.
+func (c *Context) SetDeferredValidation(summary *DeferredValidationSummary) {
+	c.deferredMu.Lock()
+	c.deferredValidation = summary
+	c.deferredMu.Unlock()
+}
+
+// DeferredValidation returns the deferred validation summary, or nil if the
+// deferred validation phase did not run.
+func (c *Context) DeferredValidation() *DeferredValidationSummary {
+	c.deferredMu.RLock()
+	defer c.deferredMu.RUnlock()
+	return c.deferredValidation
 }
 
 // WithContext adds resolver context to a Go context

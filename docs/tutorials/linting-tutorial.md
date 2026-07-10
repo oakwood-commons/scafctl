@@ -743,7 +743,8 @@ spec:
 
 The cycle `alpha -> beta -> alpha` means neither resolver can run first.
 
-**Fix**: Break the cycle by removing one of the dependencies. Often, the real pattern is that a `validate` block creates the cycle -- extract it into a separate resolver:
+**Fix**: Break the cycle by reordering or removing one of the dependencies so the
+references flow in one direction.
 
 ```yaml
 spec:
@@ -763,18 +764,13 @@ spec:
             inputs:
               expression:
                 expr: '_.alpha + "-derived"'
-
-    # Validation extracted into its own resolver
-    validateAlpha:
-      dependsOn: [alpha, beta]
-      validate:
-        with:
-          - provider: validation
-            inputs:
-              expression:
-                expr: '_.beta != ""'
-              message: "Beta must not be empty"
 ```
+
+> **Note**: Only `resolve`, `transform`, and `when:` references create resolution
+> edges. A cross-resolver reference inside a `validate` block no longer causes a
+> cycle -- it is handled by [deferred validation](../design/two-phase-validation.md).
+> The old workaround of extracting cross-resolver validation into a dedicated
+> "sink" resolver is no longer needed.
 
 This is an **error**-level finding because cycles always prevent execution.
 
