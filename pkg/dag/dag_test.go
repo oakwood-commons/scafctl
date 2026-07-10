@@ -77,7 +77,7 @@ func TestFindCyclesInDependencies(t *testing.T) {
 				"node1": {"node2"},
 				"node2": {"node1"},
 			},
-			want: fmt.Errorf("dagObject %q depends on %q", "node1", "node2"),
+			want: fmt.Errorf("dependency cycle: node1 -> node2 -> node1"),
 		},
 		{
 			name: "complex cycle",
@@ -86,7 +86,33 @@ func TestFindCyclesInDependencies(t *testing.T) {
 				"node2": {"node3"},
 				"node3": {"node1"},
 			},
-			want: fmt.Errorf("dagObject %q depends on %q", "node1", "node2"),
+			want: fmt.Errorf("dependency cycle: node1 -> node2 -> node3 -> node1"),
+		},
+		{
+			name: "self cycle",
+			deps: map[string][]string{
+				"node1": {"node1"},
+			},
+			want: fmt.Errorf("dependency cycle: node1 -> node1"),
+		},
+		{
+			name: "cycle excludes acyclic tail",
+			deps: map[string][]string{
+				"node1": {"node2"},
+				"node2": {"node1"},
+				"node3": {"node1"},
+			},
+			want: fmt.Errorf("dependency cycle: node1 -> node2 -> node1"),
+		},
+		{
+			name: "disjoint cycles pick smallest deterministically",
+			deps: map[string][]string{
+				"alpha": {"beta"},
+				"beta":  {"alpha"},
+				"gamma": {"delta"},
+				"delta": {"gamma"},
+			},
+			want: fmt.Errorf("dependency cycle: alpha -> beta -> alpha"),
 		},
 	}
 
@@ -150,7 +176,7 @@ func TestBuild(t *testing.T) {
 				"node2": {"node1"},
 			},
 			wantErr: true,
-			errMsg:  "cycle detected; dagObject \"node1\" depends on \"node2\"",
+			errMsg:  "cycle detected; dependency cycle: node1 -> node2 -> node1",
 		},
 		{
 			name: "missing previous dagObject",
