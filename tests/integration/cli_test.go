@@ -10255,7 +10255,7 @@ func TestIntegration_StateClearPreservesMetadata(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
 	// Seed state with metadata and parameters
-	content := `{"schemaVersion":1,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","scafctlVersion":"1.0.0"},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"immutables":{},"fingerprints":{}}`
+	content := `{"schemaVersion":2,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","scafctlVersion":"1.0.0"},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"resolvers":{},"fingerprints":{}}`
 	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
 
 	// Clear

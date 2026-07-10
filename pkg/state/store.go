@@ -39,6 +39,11 @@ func LoadFromFile(path, baseDir string) (*Data, error) {
 			ErrUnsupportedSchemaVersion, sd.SchemaVersion, SchemaVersionCurrent)
 	}
 
+	if sd.SchemaVersion < SchemaVersionMinimum {
+		return nil, fmt.Errorf("%w: file version %d is older than the minimum supported version %d; delete the state file and recreate it",
+			ErrIncompatibleSchemaVersion, sd.SchemaVersion, SchemaVersionMinimum)
+	}
+
 	if sd.Parameters == nil {
 		sd.Parameters = make(map[string]any)
 	}

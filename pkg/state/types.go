@@ -10,8 +10,16 @@ import (
 )
 
 const (
-	// SchemaVersionCurrent is the current state file schema version.
+	// SchemaVersionCurrent is the state file schema version written by this build.
 	SchemaVersionCurrent = 2
+
+	// SchemaVersionMinimum is the oldest state file schema version this build can
+	// safely load. Bump this ONLY when a breaking change makes older files unsafe
+	// to read -- e.g. schema v1 stored immutable locks under a legacy `immutables`
+	// field that is now dropped on unmarshal, so loading a v1 file would silently
+	// discard immutable enforcement. Additive, backward-compatible bumps should
+	// raise SchemaVersionCurrent WITHOUT raising this floor so older files still load.
+	SchemaVersionMinimum = 2
 )
 
 // Config is the solution-level state configuration.

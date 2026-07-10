@@ -134,6 +134,21 @@ func TestLoadFromFile_UnsupportedSchemaVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "999")
 }
 
+func TestLoadFromFile_IncompatibleOlderSchemaVersion(t *testing.T) {
+	t.Parallel()
+	// A legacy v1 state file stored immutable locks under a now-dropped field.
+	// Loading it would silently discard immutable enforcement, so it must be
+	// rejected rather than accepted.
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	err := os.WriteFile(path, []byte(`{"schemaVersion":1,"metadata":{},"parameters":{}}`), 0o600)
+	require.NoError(t, err)
+
+	_, err = LoadFromFile(path, "")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIncompatibleSchemaVersion)
+	assert.Contains(t, err.Error(), "delete the state file")
+}
+
 func TestSaveToFile_EmptyPath(t *testing.T) {
 	t.Parallel()
 	err := SaveToFile("", "/tmp", NewData())
