@@ -196,6 +196,50 @@ func TestPersistResolvers(t *testing.T) {
 		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
 
+	t.Run("promoting a persist-only entry to immutable locks the current value", func(t *testing.T) {
+		// First record a persist-only entry.
+		persistOnly := []*resolver.Resolver{
+			{Name: "token", Type: "string", Persist: true},
+		}
+		rctx := resolver.NewContext()
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "first",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, persistOnly)
+		assert.NoError(t, err)
+		assert.False(t, sd.Resolvers["token"].Immutable)
+		firstCreated := sd.Resolvers["token"].CreatedAt
+
+		// Now the resolver is switched to immutable and resolves to a new value.
+		// The existing non-immutable entry must be locked to the current value,
+		// NOT verified against (which would spuriously error).
+		immutable := []*resolver.Resolver{
+			{Name: "token", Type: "string", Immutable: true},
+		}
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "second",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, immutable)
+		assert.NoError(t, err)
+
+		entry := sd.Resolvers["token"]
+		assert.True(t, entry.Immutable, "entry is now locked")
+		assert.Equal(t, "second", entry.Value, "current value is locked, not the prior one")
+		assert.Equal(t, firstCreated, entry.CreatedAt, "CreatedAt is preserved on promotion")
+
+		// A later run with a changed value now errors against the locked entry.
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "third",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, immutable)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
+	})
+
 	t.Run("immutable implies persist even without persist flag", func(t *testing.T) {
 		resolvers := []*resolver.Resolver{
 			{Name: "cluster_id", Type: "string", Immutable: true, Persist: false},

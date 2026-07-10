@@ -89,9 +89,10 @@ func New() *StateProvider {
 					Name:        "Read a prior persisted value",
 					Description: "Read the value db_password persisted on the previous run, falling back to an empty string on the first run",
 					YAML: `provider: state
-operation: get
-key: db_password
-default: ""`,
+inputs:
+  operation: get
+  key: db_password
+  default: ""`,
 				},
 			},
 		},

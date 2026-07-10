@@ -2418,20 +2418,23 @@ without forming a self-cycle.
 ```yaml
 resolvers:
   # Recomputes fresh every run and records its value for next time.
-  - name: db_password
+  db_password:
     persist: true
-    from:
-      provider: exec
-      inputs:
-        command: "openssl rand -hex 16"
+    resolve:
+      with:
+        - provider: exec
+          inputs:
+            command: "openssl rand -hex 16"
 
   # Reads the value db_password persisted on the PRIOR run.
-  - name: prior_password
-    from:
-      provider: state
-      operation: get
-      key: db_password
-      default: ""
+  prior_password:
+    resolve:
+      with:
+        - provider: state
+          inputs:
+            operation: get
+            key: db_password
+            default: ""
 ```
 
 Within a single run, `state.get("db_password")` returns the prior run's value

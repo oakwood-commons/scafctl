@@ -45,13 +45,19 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 		existing, exists := stateData.Resolvers[r.Name]
 
 		if r.Immutable {
-			if !exists {
-				// First run: lock the value.
+			if !exists || !existing.Immutable {
+				// First run as immutable (no prior entry, or the prior entry was
+				// persist-only and is being promoted to immutable): lock the
+				// current value rather than verifying against an unlocked entry.
+				createdAt := now
+				if exists {
+					createdAt = existing.CreatedAt
+				}
 				stateData.Resolvers[r.Name] = &PersistedEntry{
 					Value:     result.Value,
 					Type:      string(r.Type),
 					Immutable: true,
-					CreatedAt: now,
+					CreatedAt: createdAt,
 					UpdatedAt: now,
 				}
 				continue
