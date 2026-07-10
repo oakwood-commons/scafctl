@@ -143,12 +143,16 @@ type PersistedEntry struct {
 	// persist-only entries (overwritten each run).
 	Immutable bool `json:"immutable,omitempty" doc:"Whether the entry is locked and verified across runs"`
 
-	// CreatedAt is when the entry was first stored. For immutable entries this is
-	// the lock time and never changes.
+	// CreatedAt is when the entry was first stored and never changes thereafter.
+	// For entries created immutable this is the lock time. For an entry promoted
+	// from persist-only to immutable it is the original persist time, not the
+	// lock time.
 	CreatedAt time.Time `json:"createdAt" doc:"When the value was first stored"`
 
-	// UpdatedAt is when the entry was last written. For immutable entries it
-	// equals CreatedAt; for persist-only entries it advances each run.
+	// UpdatedAt is when the entry was last written. For persist-only entries it
+	// advances each run. For entries created immutable it equals CreatedAt. For
+	// an entry promoted from persist-only to immutable it is the promotion (lock)
+	// time and is later than CreatedAt.
 	UpdatedAt time.Time `json:"updatedAt" doc:"When the value was last written"`
 }
 
