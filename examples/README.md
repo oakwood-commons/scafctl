@@ -159,6 +159,7 @@ Complete solutions demonstrating real-world use cases.
 | Example | Description |
 |---------|-------------|
 | [comprehensive/](solutions/comprehensive/) | Full-featured solution with all capabilities |
+| [composition/](solutions/composition/) | Parent solution composes a child via the `solution` provider, including the child-opt-in value override contract |
 | [terraform/](solutions/terraform/) | Terraform project scaffolding |
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
