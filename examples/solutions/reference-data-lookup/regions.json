@@ -1,0 +1,6 @@
+{
+  "us-east": { "code": "use1", "displayName": "US East (N. Virginia)", "quota": 40, "tier": "primary" },
+  "us-west": { "code": "usw2", "displayName": "US West (Oregon)", "quota": 30, "tier": "primary" },
+  "eu-west": { "code": "euw1", "displayName": "EU West (Ireland)", "quota": 25, "tier": "secondary" },
+  "ap-south": { "code": "aps1", "displayName": "Asia Pacific (Mumbai)", "quota": 15, "tier": "secondary" }
+}

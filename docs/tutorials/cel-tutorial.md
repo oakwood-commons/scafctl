@@ -1048,6 +1048,7 @@ scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 ## Next Steps
 
 - [Go Templates Tutorial](go-templates-tutorial.md) — When to use `tmpl` vs `expr`
+- [Reference-Data Lookups](reference-data-lookups.md) -- Query taxonomy datasets with `json.unmarshal` and `cel.bind`
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 - [Resolver Tutorial](resolver-tutorial.md) — Use CEL in resolver pipelines
 - [Actions Tutorial](actions-tutorial.md) — Dynamic inputs with `expr`

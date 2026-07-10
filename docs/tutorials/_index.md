@@ -25,6 +25,7 @@ Step-by-step guides for learning scafctl features.
 - [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
 - [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
+- [Reference-Data Lookups](reference-data-lookups.md) -- Look up taxonomy values from inline, file, or HTTP datasets
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 - [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf
 - [Security Hardening](security-hardening.md) — Secure your solutions and workflows
