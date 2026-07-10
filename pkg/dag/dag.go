@@ -281,19 +281,26 @@ func findCyclesInDependencies(deps map[string][]string) error {
 	return getInterdependencyError(dag)
 }
 
-// getInterdependencyError returns an error describing the interdependencies of the first
-// dagObject in the provided DAG map. If the DAG is empty, it returns nil.
-// The error message specifies which dagObject depends on which other objects.
-// Dependencies are listed in sorted order and quoted.
-// The function is intended to help diagnose cyclic or unexpected dependencies in a DAG structure.
+// getInterdependencyError returns an error describing a cycle within the provided
+// residual DAG map. Every key remaining in dag after Kahn's algorithm is blocked by
+// a cycle -- either it participates in one directly or it depends (transitively) on
+// nodes that do. The function reconstructs a concrete cycle chain and renders it as
+// an ordered path (e.g. "a -> b -> a"). If the DAG is empty it returns nil. When a
+// chain cannot be reconstructed it falls back to describing the first node and its
+// unsatisfied dependencies.
 func getInterdependencyError(dag map[string]sets.Set[string]) error {
 	if len(dag) == 0 {
 		return nil
 	}
+	if chain := findCycleChain(dag); len(chain) > 0 {
+		return fmt.Errorf("dependency cycle: %s", strings.Join(chain, " -> "))
+	}
+
+	// Defensive fallback: describe the first node and its dependencies.
 	firstChild := ""
-	for dagObject := range dag {
-		if firstChild == "" || firstChild > dagObject {
-			firstChild = dagObject
+	for node := range dag {
+		if firstChild == "" || firstChild > node {
+			firstChild = node
 		}
 	}
 	deps := sets.List(dag[firstChild])
@@ -302,7 +309,62 @@ func getInterdependencyError(dag map[string]sets.Set[string]) error {
 	for _, dep := range deps {
 		depNames = append(depNames, fmt.Sprintf("%q", dep))
 	}
-	return fmt.Errorf("dagObject %q depends on %s", firstChild, strings.Join(depNames, ", "))
+	return fmt.Errorf("dependency cycle involving %q (depends on %s)", firstChild, strings.Join(depNames, ", "))
+}
+
+// findCycleChain reconstructs a concrete, closed cycle path (first element equals
+// last) from the residual dependency map produced after Kahn's algorithm. Every
+// key in dag is blocked by a cycle, though some may be acyclic tails that only
+// depend on cyclic nodes rather than participating in a cycle themselves; the
+// search follows dependency edges until it closes a loop.
+//
+// Selection is deterministic: the search starts from the lexicographically
+// smallest node and, at each step, follows the lexicographically smallest
+// unsatisfied dependency. Identical graphs therefore always yield identical
+// chains. Returns nil if no cycle can be reconstructed.
+func findCycleChain(dag map[string]sets.Set[string]) []string {
+	starts := make([]string, 0, len(dag))
+	for node := range dag {
+		starts = append(starts, node)
+	}
+	sort.Strings(starts)
+
+	for _, start := range starts {
+		visited := make(map[string]bool, len(dag))
+		if chain := walkCycle(start, dag, visited, nil); chain != nil {
+			return chain
+		}
+	}
+	return nil
+}
+
+// walkCycle performs a depth-first search from node, following dependency edges
+// in sorted order, and returns the first closed cycle it discovers as an ordered
+// path. path holds the nodes on the current DFS stack (in visit order). It
+// returns nil when no cycle is reachable from node.
+func walkCycle(node string, dag map[string]sets.Set[string], visited map[string]bool, path []string) []string {
+	// If node is already on the current path, we found a back-edge: slice the
+	// path from the first occurrence and close the loop.
+	for i, p := range path {
+		if p == node {
+			cycle := append([]string(nil), path[i:]...)
+			return append(cycle, node)
+		}
+	}
+	if visited[node] {
+		return nil
+	}
+	visited[node] = true
+
+	deps := sets.List(dag[node])
+	sort.Strings(deps)
+	path = append(path, node)
+	for _, dep := range deps {
+		if chain := walkCycle(dep, dag, visited, path); chain != nil {
+			return chain
+		}
+	}
+	return nil
 }
 
 // addLink creates a link between two DAG nodes by connecting the node identified by
