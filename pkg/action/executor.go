@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/call"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/fingerprint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -69,6 +70,12 @@ type Executor struct {
 
 	// noCache disables fingerprint-based up-to-date checks when true.
 	noCache bool
+
+	// calls holds reusable call definitions invoked by actions via call + args.
+	calls map[string]*spec.Call
+
+	// dedupMemo is a per-run memo for opt-in call de-duplication.
+	dedupMemo *call.Memo
 }
 
 // ExecutorOption configures the executor.
@@ -160,6 +167,14 @@ func WithNoCache(noCache bool) ExecutorOption {
 	}
 }
 
+// WithCalls sets the reusable call definitions available to actions that invoke
+// providers via call + args.
+func WithCalls(calls map[string]*spec.Call) ExecutorOption {
+	return func(e *Executor) {
+		e.calls = calls
+	}
+}
+
 // NewExecutor creates a new action executor with the given options.
 // It captures the current working directory at creation time for use as __cwd
 // in action expressions.
@@ -171,6 +186,7 @@ func NewExecutor(opts ...ExecutorOption) *Executor {
 		gracePeriod:    settings.DefaultGracePeriod,
 		defaultTimeout: settings.DefaultActionTimeout,
 		cwd:            cwd,
+		dedupMemo:      call.NewMemo(),
 	}
 
 	for _, opt := range opts {
@@ -281,6 +297,9 @@ func (e *Executor) Execute(ctx context.Context, w *Workflow) (*ExecutionResult, 
 
 	// Store workflow-level result schema mode for use during action execution
 	e.workflowResultSchemaMode = w.ResultSchemaMode
+
+	// Reset the opt-in de-duplication memo at the start of each run.
+	e.dedupMemo = call.NewMemo()
 
 	// Create a span for the full workflow execution.
 	ctx, span := telemetry.Tracer(telemetry.TracerAction).Start(ctx, "action.Execute",
@@ -658,8 +677,24 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 		}
 	}
 
-	// Resolve inputs (including deferred values)
-	resolvedInputs, err := e.resolveInputs(ctx, action, graph.AliasMap)
+	// Resolve inputs (including deferred values). Call-based actions expand the
+	// referenced definition instead of resolving direct provider inputs.
+	var (
+		resolvedInputs map[string]any
+		providerName   string
+		callPlan       *actionCallPlan
+		err            error
+	)
+	if action.HasCall() {
+		callPlan, err = e.expandActionCall(ctx, action, graph.AliasMap)
+		if err == nil {
+			resolvedInputs = callPlan.Inputs
+			providerName = callPlan.ProviderName
+		}
+	} else {
+		resolvedInputs, err = e.resolveInputs(ctx, action, graph.AliasMap)
+		providerName = action.Provider
+	}
 	if err != nil {
 		e.actionContext.MarkFailed(actionName, fmt.Sprintf("input resolution failed: %v", err))
 		if e.progressCallback != nil {
@@ -717,7 +752,34 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Create the execution function
 	execFunc := func(execCtx context.Context) (*provider.Output, error) {
-		return e.callProvider(execCtx, action, resolvedInputs)
+		// Call-based actions install the enriched resolver data (carrying the
+		// args namespace) as the provider resolver context so providers that
+		// evaluate against it (e.g. cel) can read _.args.* like resolver calls.
+		if callPlan != nil && callPlan.ResolverData != nil {
+			execCtx = provider.WithResolverContext(execCtx, callPlan.ResolverData)
+		}
+		return e.callProvider(execCtx, providerName, resolvedInputs)
+	}
+
+	// Opt-in de-duplication: identical call args within a run run the provider once.
+	if callPlan != nil && callPlan.Dedup && e.dedupMemo != nil {
+		inner := execFunc
+		execFunc = func(execCtx context.Context) (*provider.Output, error) {
+			out, dedupErr := e.dedupMemo.Do(callPlan.DedupKey, func() (any, error) {
+				return inner(execCtx)
+			})
+			if dedupErr != nil {
+				return nil, dedupErr
+			}
+			if out == nil {
+				return nil, nil
+			}
+			output, ok := out.(*provider.Output)
+			if !ok {
+				return nil, fmt.Errorf("action %q: dedup memo returned unexpected type %T (want *provider.Output)", actionName, out)
+			}
+			return output, nil
+		}
 	}
 
 	// Execute with retry
@@ -890,15 +952,17 @@ func (e *Executor) buildAdditionalVars(aliasMap map[string]string) map[string]an
 	return additionalVars
 }
 
-// callProvider executes the provider for an action.
-func (e *Executor) callProvider(ctx context.Context, action *ExpandedAction, inputs map[string]any) (*provider.Output, error) {
+// callProvider executes the provider for an action. providerName is the
+// effective provider (the action's own provider, or a call definition's provider
+// for call-based actions).
+func (e *Executor) callProvider(ctx context.Context, providerName string, inputs map[string]any) (*provider.Output, error) {
 	if e.registry == nil {
 		return nil, fmt.Errorf("no provider registry configured")
 	}
 
-	prov, ok := e.registry.Get(action.Provider)
+	prov, ok := e.registry.Get(providerName)
 	if !ok {
-		return nil, fmt.Errorf("provider %q not found", action.Provider)
+		return nil, fmt.Errorf("provider %q not found", providerName)
 	}
 
 	// Check for CapabilityAction
@@ -911,7 +975,7 @@ func (e *Executor) callProvider(ctx context.Context, action *ExpandedAction, inp
 		}
 	}
 	if !hasActionCap {
-		return nil, fmt.Errorf("provider %q does not support action capability", action.Provider)
+		return nil, fmt.Errorf("provider %q does not support action capability", providerName)
 	}
 
 	// Set up execution context with action mode

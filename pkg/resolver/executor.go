@@ -12,10 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/call"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -57,16 +59,18 @@ type ProgressCallback interface {
 type Executor struct {
 	registry           RegistryInterface
 	timeout            time.Duration
-	maxConcurrency     int              // Max concurrent resolvers per phase (0 = unlimited)
-	phaseTimeout       time.Duration    // Max time per phase
-	warnValueSize      int64            // Warn when value exceeds this size in bytes (0 = disabled)
-	maxValueSize       int64            // Fail when value exceeds this size in bytes (0 = disabled)
-	progressCallback   ProgressCallback // Optional callback for progress events
-	validateAll        bool             // Continue execution and collect all errors instead of stopping at first
-	nonFatalValidation bool             // Treat validation failures as non-fatal: collect them but do not skip dependents
-	skipValidation     bool             // Skip the validation phase of all resolvers
-	skipTransform      bool             // Skip the transform and validation phases of all resolvers
-	mockedResolvers    map[string]any   // Pre-populated resolver values that skip execution
+	maxConcurrency     int                   // Max concurrent resolvers per phase (0 = unlimited)
+	phaseTimeout       time.Duration         // Max time per phase
+	warnValueSize      int64                 // Warn when value exceeds this size in bytes (0 = disabled)
+	maxValueSize       int64                 // Fail when value exceeds this size in bytes (0 = disabled)
+	progressCallback   ProgressCallback      // Optional callback for progress events
+	validateAll        bool                  // Continue execution and collect all errors instead of stopping at first
+	nonFatalValidation bool                  // Treat validation failures as non-fatal: collect them but do not skip dependents
+	skipValidation     bool                  // Skip the validation phase of all resolvers
+	skipTransform      bool                  // Skip the transform and validation phases of all resolvers
+	mockedResolvers    map[string]any        // Pre-populated resolver values that skip execution
+	calls              map[string]*spec.Call // Reusable call definitions invoked via call + args
+	dedupMemo          *call.Memo            // Per-run memo for opt-in call de-duplication
 }
 
 // ExecutorOption is a functional option for configuring the Executor
@@ -167,6 +171,15 @@ func WithMockedResolvers(mocks map[string]any) ExecutorOption {
 	}
 }
 
+// WithCalls registers the solution's reusable call definitions (spec.calls) so
+// that resolve/transform/validate steps invoking a definition via call + args
+// can be expanded and executed.
+func WithCalls(calls map[string]*spec.Call) ExecutorOption {
+	return func(e *Executor) {
+		e.calls = calls
+	}
+}
+
 // NewExecutor creates a new resolver executor
 func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 	executor := &Executor{
@@ -174,6 +187,7 @@ func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 		timeout:        settings.DefaultResolverTimeout,
 		maxConcurrency: 0, // unlimited by default
 		phaseTimeout:   settings.DefaultPhaseTimeout,
+		dedupMemo:      call.NewMemo(),
 	}
 
 	for _, opt := range opts {
@@ -251,8 +265,12 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 	// Create descriptor lookup function from registry
 	lookup := e.registry.DescriptorLookup()
 
-	// Build execution phases
-	buildResult, err := BuildPhases(resolvers, lookup)
+	// Reset the opt-in de-duplication memo at the start of each run.
+	e.dedupMemo = call.NewMemo()
+
+	// Build execution phases. Call definitions are strictly isolated, so invoking
+	// a call contributes no extra resolver dependencies.
+	buildResult, err := BuildPhasesWithCalls(resolvers, lookup, e.calls)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -1018,8 +1036,9 @@ func (e *Executor) executeResolvePhase(ctx context.Context, phase *ResolvePhase)
 			return result, providerCallCount, nil
 		}
 
-		// Execute provider in resolve (from) mode
-		value, err := e.executeProvider(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.Provider, source.Inputs)
+		// Execute provider in resolve (from) mode. When the source invokes a
+		// call definition, dispatch through the call expansion path.
+		value, err := e.runStepProvider(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.CallRef, source.Provider, source.Inputs, nil)
 		providerCallCount++
 		attemptDuration := time.Since(attemptStart)
 
@@ -1147,8 +1166,10 @@ func (e *Executor) executeTransformPhase(ctx context.Context, phase *TransformPh
 			}
 		}
 
-		// Execute provider with __self set to current value (transform mode)
-		transformed, err := e.executeProviderWithSelf(provider.WithExecutionMode(ctx, provider.CapabilityTransform), transform.Provider, transform.Inputs, currentValue)
+		// Execute provider with __self set to current value (transform mode).
+		// When the step invokes a call definition, dispatch through the call
+		// expansion path.
+		transformed, err := e.runStepProvider(provider.WithExecutionMode(ctx, provider.CapabilityTransform), transform.CallRef, transform.Provider, transform.Inputs, currentValue)
 		providerCallCount++
 		attemptDuration := time.Since(attemptStart)
 
@@ -1283,8 +1304,8 @@ func (e *Executor) executeForEachTransform(ctx context.Context, transform *Provi
 				}
 			}
 
-			// Execute provider with iteration context (transform mode)
-			result, err := e.executeProviderWithIterationContext(provider.WithExecutionMode(ctx, provider.CapabilityTransform), transform.Provider, transform.Inputs, currentValue, iterCtx)
+			// Execute provider (or expanded call) with iteration context (transform mode)
+			result, err := e.runStepProviderIter(provider.WithExecutionMode(ctx, provider.CapabilityTransform), transform.CallRef, transform.Provider, transform.Inputs, currentValue, iterCtx)
 			providerCallCountMu.Lock()
 			providerCallCount++
 			providerCallCountMu.Unlock()
@@ -1441,8 +1462,8 @@ func (e *Executor) executeForEachSource(ctx context.Context, source *ProviderSou
 				}
 			}
 
-			// Execute provider with iteration context (resolve/from mode)
-			result, err := e.executeProviderWithIterationContext(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.Provider, source.Inputs, nil, iterCtx)
+			// Execute provider (or expanded call) with iteration context (resolve/from mode)
+			result, err := e.runStepProviderIter(provider.WithExecutionMode(ctx, provider.CapabilityFrom), source.CallRef, source.Provider, source.Inputs, nil, iterCtx)
 			providerCallCountMu.Lock()
 			providerCallCount++
 			providerCallCountMu.Unlock()
@@ -1685,8 +1706,8 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 			}
 		}
 
-		// Execute validation provider with __self set to value being validated
-		_, err := e.executeProviderWithSelf(ctx, validation.Provider, validation.Inputs, value)
+		// Execute validation provider (or expanded call) with __self set to value being validated
+		_, err := e.runStepProvider(ctx, validation.CallRef, validation.Provider, validation.Inputs, value)
 		providerCallCount++
 
 		if err != nil {
@@ -1731,11 +1752,6 @@ func (e *Executor) executeValidatePhase(ctx context.Context, resolverName string
 	}
 
 	return providerCallCount, nil
-}
-
-// executeProvider executes a provider with resolved inputs
-func (e *Executor) executeProvider(ctx context.Context, providerName string, inputRefs map[string]*ValueRef) (any, error) {
-	return e.executeProviderWithSelf(ctx, providerName, inputRefs, nil)
 }
 
 // executeProviderWithSelf executes a provider with resolved inputs and __self set to the provided value

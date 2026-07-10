@@ -51,6 +51,7 @@ scafctl get examples -o json
 | Directory | Description |
 |-----------|-------------|
 | [actions/](actions/) | Workflow automation with actions |
+| [calls/](calls/) | Reusable, argument-driven provider calls (spec.calls) |
 | [exec/](exec/) | Exec provider shell execution patterns |
 | [providers/](providers/) | Provider-specific solution examples (http, exec, hcl, github, identity, message, metadata) |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |

@@ -36,6 +36,11 @@ type Workflow struct {
 // Actions perform side-effect operations using providers and can depend on
 // other actions for sequencing and data flow.
 type Action struct {
+	// CallRef allows the action to invoke a spec.calls definition instead of a
+	// direct provider. Exactly one of {Call, Provider} may be set (enforced by
+	// validation).
+	spec.CallRef `yaml:",inline"`
+
 	// Name is the action identifier, set from the map key.
 	// Cannot start with "__" (reserved) or contain "[" or "]".
 	Name string `json:"name" yaml:"name" doc:"Action identifier (set from map key)" maxLength:"100" example:"deploy-service" pattern:"^[a-zA-Z_][a-zA-Z0-9_-]*$" patternDescription:"Must start with letter/underscore, followed by alphanumerics, underscores, or hyphens"`
@@ -63,7 +68,7 @@ type Action struct {
 
 	// Provider specifies which action provider to use for execution.
 	// The provider must have CapabilityAction.
-	Provider string `json:"provider" yaml:"provider" doc:"Action provider name" maxLength:"100" example:"shell"`
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Action provider name (mutually exclusive with call)" maxLength:"100" example:"shell"`
 
 	// Inputs is a map of input values passed to the provider.
 	// Values can be literals, resolver references, expressions, or templates.

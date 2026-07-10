@@ -1,0 +1,100 @@
+# Run: scafctl run resolver -f examples/calls/calls-basics.yaml -o yaml
+# Run: scafctl run resolver -f examples/calls/calls-basics.yaml -o json
+#
+# Demonstrates spec.calls: a reusable, argument-driven provider request that is
+# defined once and invoked from multiple resolve, transform, and validate steps.
+# This example is network-free (it uses the cel and validation providers) so it
+# runs anywhere.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: calls-basics
+  displayName: Parameterized Calls Basics
+  category: calls
+  tags:
+    - calls
+    - resolver-example
+  description: |
+    One call definition invoked from several call sites with different
+    arguments. Shows typed args with defaults and required values, the args
+    namespace (_.args.x), and opt-in de-duplication.
+
+spec:
+  # ─────────────────────────────────────────────
+  # Call definitions: reusable, named request shapes.
+  # ─────────────────────────────────────────────
+  calls:
+    # A greeting builder. Declares two typed arguments and references them via
+    # the args namespace (_.args.x in CEL). Define the shape once, supply only
+    # the differing values at each call site.
+    greet:
+      description: Build a localized greeting from a salutation and a name.
+      provider: cel
+      args:
+        salutation:
+          type: string
+          default: Hello
+        name:
+          type: string
+          required: true
+      inputs:
+        expression: '_.args.salutation + ", " + _.args.name + "!"'
+
+    # A reusable validation. dedup:true means identical invocations within a
+    # single run execute the provider only once and share the result.
+    nonEmpty:
+      description: Assert a value is a non-empty lowercase token.
+      dedup: true
+      provider: validation
+      args:
+        value:
+          type: string
+          required: true
+      inputs:
+        value:
+          expr: _.args.value
+        match: '^[a-z][a-z0-9-]*$'
+        message: 'value must be a non-empty lowercase token'
+
+  resolvers:
+    # ─────────────────────────────────────────────
+    # Same definition, different arguments.
+    # ─────────────────────────────────────────────
+    english:
+      description: Uses the default salutation.
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              name: World
+
+    spanish:
+      description: Overrides the salutation argument.
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hola
+              name: Mundo
+
+    # ─────────────────────────────────────────────
+    # A call in a validate step. The value under validation is passed as an
+    # argument, keeping the rule reusable across resolvers.
+    # ─────────────────────────────────────────────
+    environment:
+      description: A validated environment name.
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'production'"
+      validate:
+        with:
+          - call: nonEmpty
+            args:
+              value:
+                expr: __self

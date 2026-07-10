@@ -13,6 +13,7 @@ Architecture and design documentation for scafctl.
 - [Solutions](solutions.md) — Solutions architecture
 - [Resolvers](resolvers.md) — Resolver system design
 - [Providers](providers.md) — Provider framework design
+- [Parameterized Provider Calls](parameterized-calls.md) — Reusable, argument-driven call definitions (`spec.calls`)
 - [Actions](actions.md) — Actions system design
 - [Authentication](auth.md) — Authentication architecture
 - [CEL Integration](cel.md) — CEL expression language integration

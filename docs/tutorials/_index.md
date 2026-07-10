@@ -18,6 +18,7 @@ Step-by-step guides for learning scafctl features.
 - [Resolver Tutorial](resolver-tutorial.md) — Master dynamic value resolution
 - [Run Resolver Tutorial](run-resolver-tutorial.md) — Debug and inspect resolver execution
 - [Run Provider Tutorial](run-provider-tutorial.md) — Test providers in isolation
+- [Parameterized Calls Tutorial](calls-tutorial.md) — Define reusable, argument-driven provider requests with `spec.calls`
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
 - [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI

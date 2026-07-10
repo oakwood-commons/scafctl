@@ -5717,6 +5717,62 @@ func TestIntegration_Test_Functional_SnapshotMasking(t *testing.T) {
 	})
 }
 
+// TestIntegration_Test_Functional_Calls exercises the parameterized calls
+// (spec.calls) feature end-to-end through the CLI by running the functional
+// test cases bundled with the calls fixture solution. The fixture covers call
+// definitions invoked from resolve, validate, and action steps; the args
+// namespace; typed args with defaults and required values; array argument
+// serialization; and opt-in de-duplication.
+func TestIntegration_Test_Functional_Calls(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/calls/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no calls test case should fail")
+	assert.GreaterOrEqual(t, report.Summary.Passed, 8, "expected the calls fixture cases to pass")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	// Spot-check representative cases across resolve, validate, and action call sites.
+	for _, name := range []string{
+		"default-arg",
+		"override-arg",
+		"arg-from-resolver-ref",
+		"int-arg-default",
+		"int-arg-override",
+		"array-arg",
+		"validate-call",
+		"action-call",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
 func TestIntegration_Test_List(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

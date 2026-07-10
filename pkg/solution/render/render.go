@@ -102,7 +102,7 @@ func GetEffectiveResolverConfig(ctx context.Context, timeout, phaseTimeout time.
 }
 
 // NewResolverExecutor creates a resolver.Executor from a provider.Registry and ResolverConfig.
-func NewResolverExecutor(registry *provider.Registry, cfg ResolverConfig) *resolver.Executor {
+func NewResolverExecutor(registry *provider.Registry, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) *resolver.Executor {
 	adapter := &RegistryAdapter{Registry: registry}
 	resolverAdapter := &ResolverRegistryAdapter{RegistryAdapter: adapter}
 
@@ -113,6 +113,7 @@ func NewResolverExecutor(registry *provider.Registry, cfg ResolverConfig) *resol
 	if cfg.MaxConcurrency > 0 {
 		opts = append(opts, resolver.WithMaxConcurrency(cfg.MaxConcurrency))
 	}
+	opts = append(opts, extraOpts...)
 	return resolver.NewExecutor(resolverAdapter, opts...)
 }
 
@@ -120,7 +121,11 @@ func NewResolverExecutor(registry *provider.Registry, cfg ResolverConfig) *resol
 // with the given params and config, returning the resolved data map.
 func ExecuteResolvers(ctx context.Context, sol *solution.Solution, params map[string]any, registry *provider.Registry, cfg ResolverConfig, lgr logr.Logger) (map[string]any, error) {
 	resolvers := sol.Spec.ResolversToSlice()
-	executor := NewResolverExecutor(registry, cfg)
+	var extraOpts []resolver.ExecutorOption
+	if sol.Spec.HasCalls() {
+		extraOpts = append(extraOpts, resolver.WithCalls(sol.Spec.Calls))
+	}
+	executor := NewResolverExecutor(registry, cfg, extraOpts...)
 
 	resultCtx, err := executor.Execute(ctx, resolvers, params)
 	if err != nil {

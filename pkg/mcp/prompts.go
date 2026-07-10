@@ -302,6 +302,7 @@ Follow these rules when creating the solution:
   NEVER set type: string on resolvers using providers that return objects (e.g., http returns {statusCode, body, headers}).
   When in doubt, omit the type field entirely.
 - Actions go under spec.workflow.actions.<name> with provider and inputs
+- To reuse one request shape across many call sites, define it once under spec.calls.<name> (typed args + provider + inputs referencing args via _.args.x in CEL and {{ .args.x }} in Go templates), then invoke it from any resolve/transform/validate step or action with call: + args: instead of provider: + inputs:. A host step sets EXACTLY ONE of call or provider. Set dedup: true on a definition to collapse identical bound-arg invocations within a single run (in-memory only). Call explain_concepts with concept "call" for details.
 - Use ValueRef format for inputs: literal (raw value), rslvr (resolver reference), expr (CEL expression), or tmpl (Go template)
 - Always validate user inputs using the validate phase with the validation provider
 - Use dependsOn for ordering (both resolvers and actions)
