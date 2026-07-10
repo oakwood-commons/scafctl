@@ -38,7 +38,7 @@ func (s *Server) registerActionTools() {
 			mcp.Description("Preview a specific action by name. If omitted, previews all actions."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
+			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD. Solution-relative reads (relativeTo: solution) resolve against the solution's own directory regardless of this setting when the solution has a local directory (a local file path or an extracted catalog bundle); for stdin (-) and unbundled catalog references there is no solution directory, so these reads fall back to the process CWD."),
 		),
 	)
 	s.addTool(previewActionTool, s.handlePreviewAction)
@@ -101,6 +101,10 @@ func (s *Server) handlePreviewAction(_ context.Context, request mcp.CallToolRequ
 	if prepResult.ProviderCtx != nil {
 		ctx = prepResult.ProviderCtx(ctx)
 	}
+
+	// Anchor solution-relative reads (relativeTo: solution, directory, hcl) to
+	// the solution file's directory instead of the MCP server's CWD.
+	ctx = withSolutionDir(ctx, prepResult.SolutionDir)
 
 	// If bundle extraction changed the process CWD, pin the resolver context
 	// to the bundle dir so file reads resolve within the extracted bundle,
