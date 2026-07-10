@@ -18,12 +18,28 @@ func (s *Solution) ValidateSpec() error {
 		return nil
 	}
 
-	// Skip if no resolvers
-	if !s.Spec.HasResolvers() {
+	// Skip only when there is nothing to validate: no resolvers, no call
+	// definitions, and no workflow actions. Workflow actions may contain call
+	// sites (action.call / args) even in a solution with no resolvers or
+	// spec.calls block, and those still need call-site validation.
+	if !s.Spec.HasResolvers() && !s.Spec.HasCalls() && !s.Spec.HasActions() {
 		return nil
 	}
 
 	var problems []string
+
+	// Validate call definitions and call sites independently of resolvers so
+	// that call-only solutions (or workflow-only call sites) are still checked.
+	problems = append(problems, s.validateCalls()...)
+
+	// If there are no resolvers, the remaining resolver-specific checks do not
+	// apply; report any call problems and return.
+	if !s.Spec.HasResolvers() {
+		if len(problems) > 0 {
+			return fmt.Errorf("spec validation failed: %s", strings.Join(problems, "; "))
+		}
+		return nil
+	}
 
 	// Build set of valid resolver names for reference validation
 	resolverNames := make(map[string]bool)
@@ -73,11 +89,13 @@ func (s *Solution) ValidateSpec() error {
 
 	// Note: We pass nil for the lookup since spec validation doesn't have access to
 	// the provider registry. This means generic dependency extraction is used,
-	// which is sufficient for detecting circular dependencies.
+	// which is sufficient for detecting circular dependencies. Calls are passed for
+	// signature parity; because call definitions are strictly isolated, they
+	// contribute no additional dependency edges.
 	if !hasNilResolvers {
 		resolvers := s.Spec.ResolversToSlice()
 		if len(resolvers) > 0 {
-			_, err := resolver.BuildPhases(resolvers, nil)
+			_, err := resolver.BuildPhasesWithCalls(resolvers, nil, s.Spec.Calls)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("resolver dependency error: %v", err))
 			}

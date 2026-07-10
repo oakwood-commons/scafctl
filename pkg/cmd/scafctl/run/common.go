@@ -525,6 +525,10 @@ func (o *sharedResolverOptions) executeResolvers(
 		executorOpts = append(executorOpts, resolver.WithMockedResolvers(mockedResolvers))
 	}
 
+	if sol.Spec.HasCalls() {
+		executorOpts = append(executorOpts, resolver.WithCalls(sol.Spec.Calls))
+	}
+
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
 
 	// Apply solution-level CEL cost limit if configured

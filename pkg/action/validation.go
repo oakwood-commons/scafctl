@@ -470,6 +470,23 @@ func validateDependsOn(action *Action, section string, workflow *Workflow, errs 
 
 // validateProvider validates the provider configuration.
 func validateProvider(action *Action, section string, registry RegistryInterface, errs *AggregatedValidationError) {
+	// An action may invoke a call definition instead of naming a provider
+	// directly. In that case the provider is supplied by the call definition,
+	// so a missing provider here is expected and validated by call validation.
+	// Enforce mutual exclusivity here too: an action must not set both call and
+	// provider, even though solution-level call validation also checks it.
+	if action.HasCall() {
+		if action.Provider != "" {
+			errs.AddError(&ValidationError{
+				Section:    section,
+				ActionName: action.Name,
+				Field:      "provider",
+				Message:    fmt.Sprintf("action sets both call %q and provider %q — they are mutually exclusive", action.Call, action.Provider),
+			})
+		}
+		return
+	}
+
 	if action.Provider == "" {
 		errs.AddError(&ValidationError{
 			Section:    section,

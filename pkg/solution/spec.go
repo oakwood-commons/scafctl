@@ -9,6 +9,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // Spec defines the execution specification for a solution.
@@ -18,6 +19,11 @@ type Spec struct {
 	// Resolvers is a map of resolver definitions keyed by their name.
 	// Resolver names must be unique and cannot start with "__" (reserved for internal use).
 	Resolvers map[string]*resolver.Resolver `json:"resolvers,omitempty" yaml:"resolvers,omitempty" doc:"Resolver definitions keyed by name"`
+
+	// Calls is a map of reusable, provider-agnostic call definitions keyed by name.
+	// A call declares typed arguments plus a provider and inputs, and can be
+	// invoked from any resolve/transform/validate step or action via call + args.
+	Calls map[string]*spec.Call `json:"calls,omitempty" yaml:"calls,omitempty" doc:"Reusable, provider-agnostic call definitions keyed by name"`
 
 	// Workflow defines the action execution specification.
 	// Actions consume resolved data from resolvers and perform side-effect operations.
@@ -68,6 +74,11 @@ func (s *Spec) ResolversToSlice() []*resolver.Resolver {
 // HasResolvers returns true if the spec contains any resolver definitions.
 func (s *Spec) HasResolvers() bool {
 	return s != nil && len(s.Resolvers) > 0
+}
+
+// HasCalls returns true if the spec contains any call definitions.
+func (s *Spec) HasCalls() bool {
+	return s != nil && len(s.Calls) > 0
 }
 
 // HasWorkflow returns true if the spec contains a workflow definition.

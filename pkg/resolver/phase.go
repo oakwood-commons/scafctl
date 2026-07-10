@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/dag"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
@@ -78,6 +79,7 @@ func (r *resolverDagObject) GetDependencyKeys(_ map[string]string, _ map[string]
 type resolverObjectsWithLookup struct {
 	resolvers []*Resolver
 	lookup    DescriptorLookup
+	calls     map[string]*spec.Call
 }
 
 // DagItems returns the slice of dag.Object items with pre-computed dependencies
@@ -86,7 +88,7 @@ func (r *resolverObjectsWithLookup) DagItems() []dag.Object {
 	for i, resolver := range r.resolvers {
 		items[i] = &resolverDagObject{
 			resolver: resolver,
-			deps:     extractDependencies(resolver, r.lookup),
+			deps:     extractDependenciesWithCalls(resolver, r.lookup, r.calls),
 		}
 	}
 	return items
@@ -99,6 +101,14 @@ func (r *resolverObjectsWithLookup) DagItems() []dag.Object {
 // The returned BuildResult includes both the phase groups and PlanData — a static
 // topology snapshot that can be injected as __plan before execution begins.
 func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, error) {
+	return BuildPhasesWithCalls(resolvers, lookup, nil)
+}
+
+// BuildPhasesWithCalls is BuildPhases with awareness of reusable call definitions.
+// Call definitions are strictly isolated (their inputs may not reference solution
+// resolvers), so invoking a call contributes no extra dependencies; the calls map
+// is threaded through for signature parity and future use.
+func BuildPhasesWithCalls(resolvers []*Resolver, lookup DescriptorLookup, calls map[string]*spec.Call) (*BuildResult, error) {
 	if len(resolvers) == 0 {
 		return &BuildResult{
 			Phases: []*PhaseGroup{},
@@ -122,8 +132,8 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, 
 		// template-inferred edges (a go-template {{ .field }} accessor or a forEach
 		// alias) may legitimately reference local template context rather than a
 		// resolver, so an unknown target is dropped rather than failing the build.
-		inferred := extractDependencies(r, lookup)
-		strict := extractStrictDependencies(r)
+		inferred := extractDependenciesWithCalls(r, lookup, calls)
+		strict := extractStrictDependenciesWithCalls(r, calls)
 		filtered := make([]string, 0, len(inferred))
 		for _, dep := range inferred {
 			if _, ok := resolverMap[dep]; ok {
@@ -140,7 +150,7 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, 
 	}
 
 	// Build DAG using existing package
-	objects := &resolverObjectsWithLookup{resolvers: resolvers, lookup: lookup}
+	objects := &resolverObjectsWithLookup{resolvers: resolvers, lookup: lookup, calls: calls}
 	graph, err := dag.Build(objects, deps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)

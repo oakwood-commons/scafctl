@@ -326,6 +326,9 @@ func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *soluti
 				)
 			}
 		}
+		if sol.Spec.HasCalls() {
+			execOpts = append(execOpts, resolver.WithCalls(sol.Spec.Calls))
+		}
 		executor := resolver.NewExecutor(adapter, execOpts...)
 
 		resultCtx, err := executor.Execute(ctx, resolvers, in.Inputs)
@@ -399,6 +402,9 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 				)
 			}
 		}
+		if sol.Spec.HasCalls() {
+			resolverOpts = append(resolverOpts, resolver.WithCalls(sol.Spec.Calls))
+		}
 		resolverExec := resolver.NewExecutor(adapter, resolverOpts...)
 
 		resultCtx, err := resolverExec.Execute(ctx, resolvers, in.Inputs)
@@ -431,6 +437,7 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 	actionExec := action.NewExecutor(
 		action.WithRegistry(actionAdapter),
 		action.WithResolverData(resolverData),
+		action.WithCalls(sol.Spec.Calls),
 	)
 
 	execResult, err := actionExec.Execute(ctx, sol.Spec.Workflow)

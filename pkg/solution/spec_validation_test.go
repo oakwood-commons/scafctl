@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -191,6 +193,29 @@ func TestSolution_ValidateSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSolution_ValidateSpec_WorkflowOnlyCallSites verifies that a solution with
+// no resolvers and no call definitions is still validated when its workflow
+// actions contain call sites. Previously ValidateSpec returned early in this
+// case, letting undefined-call references slip through solution validation.
+func TestSolution_ValidateSpec_WorkflowOnlyCallSites(t *testing.T) {
+	sol := &Solution{
+		Spec: Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"deploy": {
+						Name:    "deploy",
+						CallRef: spec.CallRef{Call: "missing"},
+					},
+				},
+			},
+		},
+	}
+
+	err := sol.ValidateSpec()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "references undefined call")
 }
 
 func TestSolution_ValidateSpec_CircularDependency(t *testing.T) {

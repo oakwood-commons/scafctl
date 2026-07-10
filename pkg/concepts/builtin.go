@@ -40,6 +40,24 @@ For actions, dependsOn controls execution order within the workflow DAG.`,
 		},
 		SeeAlso: []string{"resolver", "action", "dag"},
 	},
+	{
+		Name:     "call",
+		Title:    "Parameterized Call",
+		Category: "resolvers",
+		Summary:  "A reusable, argument-driven provider request defined once under spec.calls and invoked from many resolve, transform, validate, or action steps.",
+		Explanation: `A call decouples a request's shape from its inputs. Instead of duplicating a full provider configuration (URL, headers, body, auth, retry) for every distinct set of inputs, you declare it once as a definition and invoke it from many call sites.
+
+There are two halves:
+
+1. **Call definition** (spec.calls.<name>) — declares typed 'args', a 'provider', and provider 'inputs' that reference those arguments via the 'args' namespace: _.args.x in CEL and {{ .args.x }} in Go templates.
+2. **Call site** (call: + args:) — a resolve, transform, validate, or action step that invokes a definition and supplies argument values as standard ValueRefs (literals, rslvr, expr, or tmpl).
+
+A host step must set exactly one of 'provider' or 'call'. Arguments are typed with optional defaults and a 'required' flag; supplied values are coerced to the declared type before the definition's inputs resolve. Set 'dedup: true' on a definition to collapse identical invocations within a single run (in-memory only, never persisted). Bare 'args.x' in CEL is not supported — always use the _. prefix.`,
+		Examples: []string{
+			"spec:\n  calls:\n    greet:\n      provider: cel\n      args:\n        salutation:\n          type: string\n          default: Hello\n        name:\n          type: string\n          required: true\n      inputs:\n        expression: '_.args.salutation + \", \" + _.args.name + \"!\"'\n  resolvers:\n    english:\n      resolve:\n        with:\n          - call: greet\n            args:\n              name: World",
+		},
+		SeeAlso: []string{"resolver", "action", "provider", "cel-expression"},
+	},
 	// --- Providers ---
 	{
 		Name:     "provider",
