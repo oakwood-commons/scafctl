@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -739,6 +740,214 @@ spec:
 		resolvers := parsed["resolvers"].(map[string]any)
 		name := resolvers["name"].(map[string]any)
 		assert.Equal(t, "Bob", name["value"], "values must still be included in strict mode")
+	})
+}
+
+// TestHandlePreviewResolvers_RelativeToSolution verifies that resolver file
+// reads using relativeTo: solution resolve against the solution file's
+// directory rather than the MCP server's process CWD (issue #607). The server
+// process CWD (the test package directory) intentionally differs from the
+// solution's temp directory, so a read that succeeds proves the solution
+// directory is anchored on the context.
+func TestHandlePreviewResolvers_RelativeToSolution(t *testing.T) {
+	const fileContent = "hello from solution dir"
+
+	newSolution := func(t *testing.T) string {
+		t.Helper()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "data.txt"), []byte(fileContent), 0o644))
+		solFile := filepath.Join(tmpDir, "reads-relative.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: reads-relative
+  version: 1.0.0
+spec:
+  resolvers:
+    fileData:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: data.txt
+              relativeTo: solution
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+		return solFile
+	}
+
+	assertResolved := func(t *testing.T, result *mcp.CallToolResult) {
+		t.Helper()
+		require.False(t, result.IsError, "read with relativeTo: solution should succeed regardless of server CWD")
+
+		require.NotEmpty(t, result.Content, "tool result should include content")
+		textContent, ok := result.Content[0].(mcp.TextContent)
+		require.True(t, ok, "first content item should be text, got %T", result.Content[0])
+		text := textContent.Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		resolvers := parsed["resolvers"].(map[string]any)
+		fileData := resolvers["fileData"].(map[string]any)
+		assert.Equal(t, "resolved", fileData["status"])
+		value := fileData["value"].(map[string]any)
+		assert.Equal(t, fileContent, value["content"])
+	}
+
+	t.Run("without cwd anchors to solution dir", func(t *testing.T) {
+		solFile := newSolution(t)
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assertResolved(t, result)
+	})
+
+	t.Run("cwd override does not affect relativeTo solution", func(t *testing.T) {
+		solFile := newSolution(t)
+		// An unrelated working directory that does NOT contain data.txt.
+		otherDir := t.TempDir()
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+			"cwd":  otherDir,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assertResolved(t, result)
+	})
+}
+
+// TestHandleSolutionExecutors_RelativeToSolution verifies that the remaining
+// solution-executing tools (render_solution, run_solution, dry_run_solution,
+// preview_action) anchor resolver file reads using relativeTo: solution to the
+// solution file's directory rather than the MCP server's process CWD
+// (issue #607). Each solution reads data.txt via relativeTo: solution and
+// surfaces the content through a message action, so the resolved value appears
+// in every tool's output. The server process CWD (the test package directory)
+// intentionally differs from the solution's temp directory, so the content
+// only appears when the solution directory is anchored on the context.
+func TestHandleSolutionExecutors_RelativeToSolution(t *testing.T) {
+	const fileContent = "hello from solution dir"
+
+	newSolution := func(t *testing.T) string {
+		t.Helper()
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "data.txt"), []byte(fileContent), 0o644))
+		solFile := filepath.Join(tmpDir, "reads-relative.yaml")
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: reads-relative
+  version: 1.0.0
+spec:
+  resolvers:
+    fileData:
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: data.txt
+              relativeTo: solution
+  workflow:
+    actions:
+      showData:
+        provider: message
+        inputs:
+          message:
+            expr: _.fileData.content
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+		return solFile
+	}
+
+	type handlerFn func(*Server, context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
+
+	tools := []struct {
+		tool    string
+		handler handlerFn
+	}{
+		{"render_solution", (*Server).handleRenderSolution},
+		{"run_solution", (*Server).handleRunSolution},
+		{"dry_run_solution", (*Server).handleDryRunSolution},
+		{"preview_action", (*Server).handlePreviewAction},
+	}
+
+	scenarios := []struct {
+		name    string
+		withCwd bool
+	}{
+		{"without cwd anchors to solution dir", false},
+		{"cwd override does not affect relativeTo solution", true},
+	}
+
+	for _, tc := range tools {
+		for _, sc := range scenarios {
+			t.Run(tc.tool+"/"+sc.name, func(t *testing.T) {
+				solFile := newSolution(t)
+
+				srv, err := NewServer(WithServerVersion("test"))
+				require.NoError(t, err)
+
+				args := map[string]any{"path": solFile}
+				if sc.withCwd {
+					// An unrelated working directory that does NOT contain data.txt.
+					args["cwd"] = t.TempDir()
+				}
+
+				request := mcp.CallToolRequest{}
+				request.Params.Name = tc.tool
+				request.Params.Arguments = args
+
+				result, err := tc.handler(srv, context.Background(), request)
+				require.NoError(t, err)
+				require.False(t, result.IsError, "read with relativeTo: solution should succeed regardless of server CWD")
+
+				require.NotEmpty(t, result.Content, "tool result should include content")
+				textContent, ok := result.Content[0].(mcp.TextContent)
+				require.True(t, ok, "first content item should be text, got %T", result.Content[0])
+				text := textContent.Text
+				assert.Contains(t, text, fileContent, "resolved file content should appear in the %s output", tc.tool)
+			})
+		}
+	}
+}
+
+// TestWithSolutionDir verifies the withSolutionDir helper: an empty directory
+// leaves the context untouched (stdin / unbundled catalog runs), while a
+// non-empty directory is anchored on the context for solution-relative reads.
+func TestWithSolutionDir(t *testing.T) {
+	t.Run("empty solutionDir leaves context unchanged", func(t *testing.T) {
+		ctx := context.Background()
+		got := withSolutionDir(ctx, "")
+
+		_, ok := provider.SolutionDirectoryFromContext(got)
+		assert.False(t, ok, "no solution directory should be set for empty input")
+	})
+
+	t.Run("non-empty solutionDir is anchored on the context", func(t *testing.T) {
+		dir := t.TempDir()
+		got := withSolutionDir(context.Background(), dir)
+
+		solDir, ok := provider.SolutionDirectoryFromContext(got)
+		require.True(t, ok, "solution directory should be set")
+		assert.Equal(t, dir, solDir)
 	})
 }
 
