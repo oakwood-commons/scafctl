@@ -1,0 +1,113 @@
+# Run: scafctl run resolver -f examples/solutions/reference-data-lookup/solution.yaml -o json
+#
+# Override the lookup key:
+#   scafctl run resolver -f examples/solutions/reference-data-lookup/solution.yaml -r region=eu-west -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: reference-data-lookup
+  displayName: Reference-Data Lookups
+  category: solutions
+  tags:
+    - reference-data
+    - taxonomy
+    - lookup
+    - cel
+  description: |
+    Resolve values from curated reference data (a region/quota taxonomy) by
+    composing existing providers -- no dedicated "dataset" provider required.
+
+    Demonstrates the three canonical source patterns:
+      1. Inline table via the `static` provider + keyed CEL lookup.
+      2. Local dataset file via the `file` provider (`read`) + `json.unmarshal`.
+      3. Safe lookups that fall back to a default when the key is absent.
+
+    A remote/HTTP dataset follows the same shape with `provider: http` in place
+    of `file` -- see the tutorial for that snippet (kept out of this runnable
+    example so it stays hermetic).
+
+spec:
+  resolvers:
+    # The lookup key. Override with `-r region=<name>`.
+    region:
+      description: Region key to look up in the reference data
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+          - provider: static
+            inputs:
+              value: us-east
+
+    # ─────────────────────────────────────────────
+    # Pattern 1: Inline table (static) + keyed lookup
+    # ─────────────────────────────────────────────
+    # An inline taxonomy embedded directly in the solution. Best for small,
+    # rarely-changing tables that live with the solution.
+    regionTable:
+      description: Inline region taxonomy (name -> attributes)
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                us-east: { code: use1, quota: 40, tier: primary }
+                us-west: { code: usw2, quota: 30, tier: primary }
+                eu-west: { code: euw1, quota: 25, tier: secondary }
+                ap-south: { code: aps1, quota: 15, tier: secondary }
+
+    # Keyed lookup with a safe default. Indexing a missing key errors in CEL,
+    # so guard with `in` and provide a fallback record.
+    regionRecord:
+      description: The record for `region`, or a fallback if the key is absent
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                _.region in _.regionTable
+                  ? _.regionTable[_.region]
+                  : {"code": "unknown", "quota": 0, "tier": "unknown"}
+
+    # Derive a single scalar from the looked-up record.
+    regionCode:
+      description: Short region code resolved from the inline table
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: _.regionRecord.code
+
+    # ─────────────────────────────────────────────
+    # Pattern 2: Local dataset file (file read + json.unmarshal)
+    # ─────────────────────────────────────────────
+    # Read a curated JSON file, then parse and query it with CEL. Best when the
+    # taxonomy is large, shared across solutions, or maintained separately.
+    regionsFile:
+      description: Raw contents of the curated regions.json dataset
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: regions.json
+
+    # Parse the file content, then look up the same key with a safe default.
+    quota:
+      description: Quota for `region`, read from the on-disk dataset
+      type: number
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: >
+                cel.bind(t, json.unmarshal(_.regionsFile.content),
+                  _.region in t ? t[_.region].quota : 0
+                )
