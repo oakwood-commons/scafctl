@@ -53,7 +53,7 @@ func (s *Server) registerRunTools() {
 			mcp.Description("Create .bak backup files before overwriting existing files."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. Relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description("Working directory for path resolution. Relative paths resolve against this directory instead of the process CWD. Solution-relative reads (relativeTo: solution) resolve against the solution's own directory regardless of this setting when the solution has a local directory (a local file path or an extracted catalog bundle); for stdin (-) and unbundled catalog references there is no solution directory, so these reads fall back to the process CWD."),
 		),
 		mcp.WithBoolean("show_execution",
 			mcp.Description("Include execution metadata (timing, phases, providers) in the response."),
@@ -134,6 +134,10 @@ func (s *Server) handleRunSolution(_ context.Context, request mcp.CallToolReques
 	if prepResult.ProviderCtx != nil {
 		ctx = prepResult.ProviderCtx(ctx)
 	}
+
+	// Anchor solution-relative reads (relativeTo: solution, directory, hcl) to
+	// the solution file's directory instead of the MCP server's CWD.
+	ctx = withSolutionDir(ctx, prepResult.SolutionDir)
 
 	// If bundle extraction changed the process CWD, pin the resolver context
 	// to the bundle dir so file reads resolve within the extracted bundle.

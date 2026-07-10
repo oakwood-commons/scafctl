@@ -142,3 +142,16 @@ func (s *Server) contextWithCwd(cwd string) (context.Context, error) {
 	}
 	return provider.WithWorkingDirectory(s.ctx, absCwd), nil
 }
+
+// withSolutionDir anchors path resolution to the solution file's directory so
+// that relativeTo:"solution" reads and the directory/hcl providers resolve
+// against the solution being executed rather than the MCP server's CWD. When
+// solutionDir is empty (e.g. stdin or unbundled catalog runs), the context is
+// returned unchanged. This mirrors the CLI run commands, which set the solution
+// directory after loading the solution.
+func withSolutionDir(ctx context.Context, solutionDir string) context.Context {
+	if solutionDir == "" {
+		return ctx
+	}
+	return provider.WithSolutionDirectory(ctx, solutionDir)
+}
