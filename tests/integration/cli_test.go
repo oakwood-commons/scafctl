@@ -4674,6 +4674,55 @@ func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
 	assert.Contains(t, stdout, "succeeded")
 }
 
+func TestIntegration_SolutionProvider_ValueOverrideContract(t *testing.T) {
+	t.Parallel()
+
+	// With an override: the parent passes an enriched value into the child's
+	// opt-in override input, and the child merges it over its internal value.
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"run", "resolver",
+		"-f", "tests/integration/testdata/solution-provider/override-parent.yaml",
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	// child_labels merges the child's internal keys with the parent's overrides.
+	// Decode the output and assert on the object to avoid depending on JSON
+	// formatting (spacing, key ordering, pretty vs compact).
+	var parentResolvers struct {
+		ChildLabels map[string]any `json:"child_labels"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &parentResolvers))
+	assert.Equal(t, map[string]any{
+		"app":        "child",
+		"tier":       "backend",
+		"team":       "platform",
+		"costCenter": "CC-42",
+	}, parentResolvers.ChildLabels)
+
+	// Without an override: the child alone falls back to its internal value
+	// because labels_override defaults to {} (map.merge with {} is a no-op).
+	childOut, childErr, childExit := runScafctlLong(t,
+		"run", "resolver",
+		"-f", "tests/integration/testdata/solution-provider/override-child.yaml",
+		"-o", "json",
+	)
+	t.Logf("childOut: %s", childOut)
+	t.Logf("childErr: %s", childErr)
+	assert.Equal(t, 0, childExit, "expected exit code 0, got %d", childExit)
+	var childResolvers struct {
+		Labels map[string]any `json:"labels"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(childOut), &childResolvers))
+	assert.Equal(t, map[string]any{
+		"app":  "child",
+		"tier": "backend",
+	}, childResolvers.Labels)
+	assert.NotContains(t, childResolvers.Labels, "team")
+	assert.NotContains(t, childResolvers.Labels, "costCenter")
+}
+
 func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,

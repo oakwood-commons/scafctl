@@ -1,0 +1,42 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: override-parent
+  version: 1.0.0
+spec:
+  resolvers:
+    # Parent computes an enriched value the child also builds internally.
+    enriched_labels:
+      type: any
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "{'team': 'platform', 'costCenter': 'CC-42'}"
+
+    child_data:
+      type: any
+      timeout: 90s
+      dependsOn:
+        - enriched_labels
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "override-child.yaml"
+              inputs:
+                # Pass the enriched value into the child's opt-in override input.
+                labels_override:
+                  expr: "_.enriched_labels"
+              timeout: "90s"
+
+    # Extract the child's effective labels after the override merge.
+    child_labels:
+      type: any
+      dependsOn:
+        - child_data
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "_.child_data.resolvers.labels"
