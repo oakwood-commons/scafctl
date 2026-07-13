@@ -36,6 +36,14 @@ spec:
                 - path: "README.md.tpl"
                   content: "# Docs"
 
+    environment:
+      description: Target environment used to route output paths
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "prod"
+
   workflow:
     actions:
       write-basic:
@@ -59,6 +67,18 @@ spec:
           outputPath: >-
             {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
 
+      write-with-resolver-output-path:
+        description: Route output into a resolver-derived directory via outputPath
+        provider: file
+        dependsOn: [write-with-output-path]
+        inputs:
+          operation: write-tree
+          basePath: ./write-tree-env
+          entries:
+            rslvr: entries
+          outputPath: >-
+            {{ .environment }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileName }}
+
   testing:
 
 
@@ -69,7 +89,7 @@ spec:
         args: ["-o", "json"]
         tags: [provider, file, write-tree]
         cleanup:
-          - command: "rm -rf write-tree-output write-tree-transformed"
+          - command: "rm -rf write-tree-output write-tree-transformed write-tree-env"
         assertions:
           - expression: __exitCode == 0
 
@@ -114,3 +134,18 @@ spec:
             message: "Should strip .tpl from k8s/deploy.yaml.tpl preserving directory"
           - expression: '__output.actions["write-with-output-path"].results.paths.exists(p, p == "README.md")'
             message: "Should strip .tpl from README.md.tpl"
+
+      write-tree-resolver-output-path:
+        description: Verify write-tree outputPath can use resolver values
+        extends: [_base]
+        assertions:
+          - expression: __output.actions["write-with-resolver-output-path"].status == "succeeded"
+            message: "write-with-resolver-output-path action should succeed"
+          - expression: __output.actions["write-with-resolver-output-path"].results.filesWritten == 3
+            message: "Should write 3 files into the env directory"
+          - expression: '__output.actions["write-with-resolver-output-path"].results.paths.exists(p, p == "prod/hello.txt")'
+            message: "Should route hello.txt under the environment resolver value"
+          - expression: '__output.actions["write-with-resolver-output-path"].results.paths.exists(p, p == "prod/sub/nested.yaml")'
+            message: "Should route nested path under the environment resolver value"
+          - expression: '__output.actions["write-with-resolver-output-path"].results.paths.exists(p, p == "prod/deep/dir/file.md")'
+            message: "Should route deep path under the environment resolver value"

@@ -993,6 +993,84 @@ func TestFileProvider_WriteTree_OutputPathFlatten(t *testing.T) {
 	assert.Equal(t, "flat", string(b))
 }
 
+func TestFileProvider_WriteTree_OutputPathResolverContext(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{
+		"environment": "prod",
+	})
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "app.conf", "content": "key=value"},
+		},
+		// Route into an env-specific directory using a resolver value.
+		"outputPath": `{{ .environment }}/{{ .__fileName }}`,
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	assert.Equal(t, []string{"prod/app.conf"}, paths)
+
+	b, err := os.ReadFile(filepath.Join(tmpDir, "prod", "app.conf"))
+	require.NoError(t, err)
+	assert.Equal(t, "key=value", string(b))
+}
+
+func TestFileProvider_WriteTree_OutputPathFileVarsTakePrecedence(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	// Resolver context defines __fileName; the computed __file* variable must win.
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{
+		"__fileName": "collision.txt",
+	})
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "real.txt", "content": "data"},
+		},
+		"outputPath": `{{ .__fileName }}`,
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	assert.Equal(t, []string{"real.txt"}, paths)
+}
+
+func TestFileProvider_WriteTree_DryRunOutputPathResolverContext(t *testing.T) {
+	p := NewFileProvider()
+	tmpDir := t.TempDir()
+
+	ctx := provider.WithResolverContext(provider.WithDryRun(context.Background(), true), map[string]any{
+		"environment": "dev",
+	})
+	inputs := map[string]any{
+		"operation": "write-tree",
+		"basePath":  tmpDir,
+		"entries": []any{
+			map[string]any{"path": "app.conf", "content": "key=value"},
+		},
+		"outputPath": `{{ .environment }}/{{ .__fileName }}`,
+	}
+
+	result, err := p.Execute(ctx, inputs)
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	paths := data["paths"].([]string)
+	assert.Equal(t, []string{"dev/app.conf"}, paths)
+}
+
 func TestFileProvider_WriteTree_NoOutputPath(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
