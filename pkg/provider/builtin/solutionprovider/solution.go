@@ -254,14 +254,20 @@ func (p *SolutionProvider) Execute(ctx context.Context, input any) (*provider.Ou
 
 	sol, loadErr := loader.Get(ctx, source)
 	if loadErr != nil {
-		return nil, fmt.Errorf("solution %q: failed to load: %w", in.Source, loadErr)
+		if in.shouldPropagateErrors() {
+			return nil, fmt.Errorf("solution %q: failed to load: %w", source, loadErr)
+		}
+		return buildLoadFailureOutput(ctx, source, loadErr), nil
 	}
 
 	// Auto-resolve official providers needed by the child solution.
 	// Clients are tracked at the struct level and cleaned up via Close()
 	// to avoid killing shared plugins while parallel Execute calls are in flight.
 	if err := p.autoResolveChildProviders(ctx, sol, reg); err != nil {
-		return nil, fmt.Errorf("solution %q: %w", in.Source, err)
+		if in.shouldPropagateErrors() {
+			return nil, fmt.Errorf("solution %q: %w", source, err)
+		}
+		return buildLoadFailureOutput(ctx, source, err), nil
 	}
 
 	// Dry-run: validate source (by loading) but don't execute.
@@ -463,6 +469,32 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 	return output, nil
 }
 
+// buildLoadFailureOutput constructs a degraded envelope for load/parse failures
+// when propagateErrors is false. The envelope reports status "failed" with the
+// error detail, allowing the parent to continue execution.
+func buildLoadFailureOutput(ctx context.Context, source string, loadErr error) *provider.Output {
+	errMsg := fmt.Sprintf("%s: %s", source, loadErr.Error())
+	errors := []ResolverError{{
+		Resolver: "_loader",
+		Message:  errMsg,
+	}}
+
+	mode, _ := provider.ExecutionModeFromContext(ctx)
+	var envelope *Envelope
+	if mode == provider.CapabilityAction {
+		envelope = BuildActionEnvelope(nil, nil, errors)
+	} else {
+		envelope = BuildFromEnvelope(nil, errors)
+	}
+
+	return &provider.Output{
+		Data: envelope.ToMap(),
+		Warnings: []string{
+			fmt.Sprintf("sub-solution failed to load: %s", errMsg),
+		},
+	}
+}
+
 // buildIsolatedContext constructs an isolated context for sub-solution execution.
 // The sub-solution gets a fresh resolver context and parameters, but inherits
 // logger, writer, auth, config, dry-run, and ancestor stack from the parent.
@@ -527,7 +559,7 @@ type Input struct {
 	Source          string         `json:"source" yaml:"source" doc:"Sub-solution location (file path, catalog reference, or URL)" example:"deploy-to-k8s@2.0.0"`
 	Inputs          map[string]any `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Parameters passed to the sub-solution's parameter provider"`
 	Resolvers       []string       `json:"resolvers,omitempty" yaml:"resolvers,omitempty" doc:"Resolver names to execute from the child solution; when empty all resolvers run" maxItems:"100"`
-	PropagateErrors *bool          `json:"propagateErrors,omitempty" yaml:"propagateErrors,omitempty" doc:"Whether sub-solution failures cause a Go error (default: true)"`
+	PropagateErrors *bool          `json:"propagateErrors,omitempty" yaml:"propagateErrors,omitempty" doc:"Whether sub-solution failures (including load/parse) cause a Go error (default: true)"`
 	MaxDepth        *int           `json:"maxDepth,omitempty" yaml:"maxDepth,omitempty" doc:"Maximum nesting depth for recursive composition (default: 10)" minimum:"1" maximum:"100"`
 	Timeout         *string        `json:"timeout,omitempty" yaml:"timeout,omitempty" doc:"Maximum duration for sub-solution execution (e.g. 30s, 5m)" example:"30s" pattern:"^[0-9]+(ns|us|µs|ms|s|m|h)+$" patternDescription:"Go duration string"`
 }

@@ -2384,6 +2384,16 @@ resolve:
       inputs:
         source: "./optional-enrichment.yaml"
         propagateErrors: false
+
+# Load-tolerant composition: if the child YAML is missing or malformed,
+# the parent continues with a degraded envelope (status: "failed",
+# errors: [{resolver: "_loader", message: "..."}]) instead of aborting.
+resolve:
+  with:
+    - provider: solution
+      inputs:
+        source: "./optional-child.yaml"
+        propagateErrors: false
 ```
 
 ---
