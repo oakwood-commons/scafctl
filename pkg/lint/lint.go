@@ -119,6 +119,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 	lintDeprecatedFields(sol, result)
+	lintBundlePlugins(sol, result)
 
 	// Apply suppression directives parsed from inline YAML comments.
 	suppressions := ParseDirectives(sol.RawContent(), filePath).WithSourceMap(result.sourceMap)
@@ -894,6 +895,24 @@ func registryWithBundlePlugins(registry *provider.Registry, sol *solution.Soluti
 		clone.MarkKnown(entry.Name)
 	}
 	return clone
+}
+
+// lintBundlePlugins warns when bundle.plugins entries reference built-in
+// providers. Builtins are compiled into the binary and will be ignored at
+// runtime, so declaring them in bundle.plugins is unnecessary.
+func lintBundlePlugins(sol *solution.Solution, result *Result) {
+	for i, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindProvider && provider.IsBuiltinProvider(p.Name) {
+			result.addFinding(
+				SeverityWarning,
+				"bundle",
+				fmt.Sprintf("bundle.plugins[%d]", i),
+				fmt.Sprintf("bundle.plugins entry %q is a builtin provider and will be ignored at runtime", p.Name),
+				"Remove this entry; builtin providers are always available without an explicit plugin declaration",
+				"builtin-in-bundle-plugins",
+			)
+		}
+	}
 }
 
 // registryAdapter adapts provider.Registry to action.RegistryInterface
