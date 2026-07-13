@@ -247,9 +247,38 @@ writing. It receives these variables:
 | `__fileExtension` | Last extension including dot | `.tpl` |
 | `__fileDir` | Directory part (empty for root files) | `k8s` |
 
+Resolver values are also available in the template (for example `{{ .environment }}`),
+so you can route files into dynamic, resolver-derived directories. The `__file*`
+variables take precedence if a resolver has the same name.
+
+### Routing into a Resolver-Derived Directory
+
+The `outputPath` template renders against the solution's **top-level resolver
+values** (keyed by resolver name), so to use `{{ .environment }}` you need a
+top-level `environment` resolver:
+
+```yaml
+resolvers:
+  environment:
+    type: string
+    resolve:
+      with:
+        - provider: static
+          inputs:
+            value: prod
+```
+
+Then reference it in `outputPath`:
+
+```yaml
+outputPath: "{{ .environment }}/{{ .__fileDir }}/{{ .__fileStem }}"
+```
+
+Result (with `environment: prod`): `k8s/deployment.yaml.tpl` -> `prod/k8s/deployment.yaml`
+
 ### Stripping the `.tpl` Extension
 
-The most common pattern — reconstruct the path using the stem (which drops `.tpl`):
+The most common pattern -- reconstruct the path using the stem (which drops `.tpl`):
 
 ```yaml
 outputPath: >-

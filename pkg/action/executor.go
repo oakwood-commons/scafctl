@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sync"
 	"time"
@@ -752,11 +753,22 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 
 	// Create the execution function
 	execFunc := func(execCtx context.Context) (*provider.Output, error) {
-		// Call-based actions install the enriched resolver data (carrying the
-		// args namespace) as the provider resolver context so providers that
-		// evaluate against it (e.g. cel) can read _.args.* like resolver calls.
-		if callPlan != nil && callPlan.ResolverData != nil {
-			execCtx = provider.WithResolverContext(execCtx, callPlan.ResolverData)
+		// Install the resolver data as the provider resolver context so
+		// providers that render templates or expressions internally (e.g. the
+		// file provider's write-tree outputPath, or cel) can read resolver
+		// values. Call-based actions use the enriched resolver data (carrying
+		// the args namespace) so providers can read _.args.* like resolver
+		// calls; regular actions use the base resolver data.
+		//
+		// Clone the map before installing it: actions run concurrently and
+		// some providers mutate the resolver context they receive (e.g. the
+		// cel provider deletes special keys), so sharing the map by reference
+		// would cause data races and cross-action interference.
+		switch {
+		case callPlan != nil && callPlan.ResolverData != nil:
+			execCtx = provider.WithResolverContext(execCtx, maps.Clone(callPlan.ResolverData))
+		case e.resolverData != nil:
+			execCtx = provider.WithResolverContext(execCtx, maps.Clone(e.resolverData))
 		}
 		return e.callProvider(execCtx, providerName, resolvedInputs)
 	}
