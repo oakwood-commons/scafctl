@@ -1,0 +1,112 @@
+# Run: scafctl run resolver -f examples/providers/parameter-types.yaml \
+#        billingId=00042 port=8080 ratio=1.5 enabled=true \
+#        config='{"replicas":3}' regions=us-east-1,us-west-2 -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: parameter-types-example
+  displayName: Parameter Provider Type Coercion
+  category: providers
+  tags:
+    - parameter
+    - provider-example
+  description: |
+    Demonstrates the parameter provider's "type" input, which controls how a
+    raw CLI value (or default) is coerced. "auto" (the default) infers bools,
+    numbers, JSON, and file://+http:// sources but does NOT split
+    comma-separated values -- opt in with "csv". Every other type forces a
+    single coercion and errors if the value does not match.
+
+spec:
+  resolvers:
+    # auto (default): infers bool, number, JSON, file://, http://.
+    # Comma-separated values are NOT split -- they stay a literal string.
+    inferred:
+      description: Automatic inference (numeric-looking value becomes a number)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: port
+              default: 8080
+
+    # string: keep a numeric-looking value as a string (e.g. an ID with
+    # leading zeros, or a value used with CEL matches()).
+    billingId:
+      description: Force a string so leading zeros survive
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: billingId
+              type: string
+              default: "00042"
+
+    # raw: return the value untouched -- no coercion, no quote stripping.
+    # A YAML-integer default stays an integer; a CLI string stays verbatim.
+    token:
+      description: Return the value exactly as received
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: token
+              type: raw
+              default: "0055"
+
+    # int: force integer parsing; a non-integer value is an error.
+    replicas:
+      description: Parse as an integer
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: port
+              type: int
+              default: 8080
+
+    # float: force floating-point parsing; a non-numeric value is an error.
+    ratio:
+      description: Parse as a float
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: ratio
+              type: float
+              default: 1.5
+
+    # bool: parse true/false (case-insensitive); any other value is an error.
+    enabled:
+      description: Parse as a boolean
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: enabled
+              type: bool
+              default: false
+
+    # json: parse the value as JSON; invalid JSON is an error.
+    config:
+      description: Parse as JSON
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: config
+              type: json
+              default: '{"replicas":1}'
+
+    # csv: split a comma-separated value into a trimmed list of strings.
+    regions:
+      description: Opt in to list splitting (a,b,c -> [a, b, c])
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: regions
+              type: csv
+              default: us-east-1

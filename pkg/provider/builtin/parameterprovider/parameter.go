@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -28,10 +29,53 @@ const (
 	ProviderName = "parameter"
 	// Version is the version of the parameter provider
 	Version = "1.0.0"
-	// TypeString is the value for the "type" input that forces a parameter
-	// value to be returned verbatim as a string, suppressing type inference.
+
+	// TypeAuto is the default value for the "type" input. It infers booleans,
+	// numbers, JSON, and file://+http:// sources, falling back to the literal
+	// string. Comma-separated values are NOT auto-split; use TypeCSV for that.
+	TypeAuto = "auto"
+	// TypeString forces the value to a string, stripping surrounding quotes and
+	// coercing non-string values to their string representation.
 	TypeString = "string"
+	// TypeRaw returns the value exactly as received, with no coercion or
+	// quote-stripping (a numeric YAML default stays numeric, a CLI string stays
+	// verbatim). This is the "disable inference" escape hatch.
+	TypeRaw = "raw"
+	// TypeInt forces integer parsing; a non-integer value is an error.
+	TypeInt = "int"
+	// TypeFloat forces float parsing; a non-numeric value is an error.
+	TypeFloat = "float"
+	// TypeBool forces boolean parsing; a value other than true/false is an error.
+	TypeBool = "bool"
+	// TypeJSON forces JSON parsing; invalid JSON is an error.
+	TypeJSON = "json"
+	// TypeCSV splits a comma-separated value into a list of trimmed strings.
+	TypeCSV = "csv"
 )
+
+// paramTypes lists every value accepted by the "type" input, in schema
+// declaration order. It is the single source of truth for both the descriptor
+// enum and runtime validation.
+var paramTypes = []string{
+	TypeAuto,
+	TypeString,
+	TypeRaw,
+	TypeInt,
+	TypeFloat,
+	TypeBool,
+	TypeJSON,
+	TypeCSV,
+}
+
+// paramTypeEnum is paramTypes converted to []any for the descriptor's enum
+// option, keeping the schema enum and runtime validation from drifting apart.
+var paramTypeEnum = func() []any {
+	enum := make([]any, len(paramTypes))
+	for i, t := range paramTypes {
+		enum[i] = t
+	}
+	return enum
+}()
 
 // HTTPClient defines the interface for HTTP operations
 type HTTPClient interface {
@@ -112,8 +156,8 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					schemahelper.WithMaxItems(50)),
 				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
 					schemahelper.WithExample("fallback")),
-				"type": schemahelper.StringProp("Force the parameter value to be returned verbatim as a string, suppressing automatic type inference (boolean, number, JSON, CSV, file://, http://). The only supported value is \"string\".",
-					schemahelper.WithEnum(TypeString),
+				"type": schemahelper.StringProp("Controls how the parameter value is coerced. \"auto\" (default) infers booleans, numbers, JSON, and file://+http:// sources, falling back to the literal string. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\".",
+					schemahelper.WithEnum(paramTypeEnum...),
 					schemahelper.WithExample(TypeString)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
@@ -149,10 +193,11 @@ inputs:
 				},
 				{
 					Name:        "Get array parameter",
-					Description: "Retrieve a comma-separated list as an array",
+					Description: "Split a comma-separated value into a string list (opt in with type: csv)",
 					YAML: `provider: parameter
 inputs:
-  key: regions`,
+  key: regions
+  type: csv`,
 				},
 				{
 					Name:        "Get boolean parameter",
@@ -163,11 +208,27 @@ inputs:
 				},
 				{
 					Name:        "Force a value to stay a string",
-					Description: "Return the value verbatim, suppressing type inference (e.g. keep a numeric ID as a string)",
+					Description: "Return the value as a string, suppressing inference (e.g. keep a numeric ID with leading zeros)",
 					YAML: `provider: parameter
 inputs:
   key: billingId
   type: string`,
+				},
+				{
+					Name:        "Parse a value as an integer",
+					Description: "Force integer parsing; a non-integer value is an error",
+					YAML: `provider: parameter
+inputs:
+  key: port
+  type: int`,
+				},
+				{
+					Name:        "Keep a value exactly as provided",
+					Description: "Return the value untouched, with no coercion or quote-stripping",
+					YAML: `provider: parameter
+inputs:
+  key: token
+  type: raw`,
 				},
 			},
 		},
@@ -217,9 +278,11 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 		return nil, fmt.Errorf("%s: at least one non-empty parameter name is required (provide key or keys)", ProviderName)
 	}
 
-	// Determine whether the caller wants to suppress type coercion and keep
-	// the value verbatim as a string.
-	forceString := wantsStringType(inputs)
+	// Determine how the caller wants the value coerced (defaults to auto).
+	paramType, err := resolveParamType(inputs)
+	if err != nil {
+		return nil, err
+	}
 
 	// Get parameters from context
 	params, ok := provider.ParametersFromContext(ctx)
@@ -229,7 +292,7 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 
 	// Check for dry-run mode
 	if dryRun := provider.DryRunFromContext(ctx); dryRun {
-		return p.executeDryRun(candidates[0], forceString)
+		return p.executeDryRun(candidates[0], paramType)
 	}
 
 	// Look up the parameter, trying each candidate name in order. The first
@@ -237,7 +300,7 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 	matchedKey, rawValue, exists := firstProvided(candidates, params)
 	if !exists {
 		if def, hasDefault := inputs["default"]; hasDefault {
-			parsedDefault, err := p.resolveValue(ctx, def, forceString)
+			parsedDefault, err := p.resolveValue(ctx, def, paramType)
 			if err != nil {
 				return nil, fmt.Errorf("%s: failed to parse default for parameter %q: %w", ProviderName, candidates[0], err)
 			}
@@ -253,8 +316,8 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 		return nil, fmt.Errorf("%s: parameter %q not provided", ProviderName, candidates[0])
 	}
 
-	// Parse the value according to precedence rules
-	parsedValue, err := p.resolveValue(ctx, rawValue, forceString)
+	// Parse the value according to the requested type.
+	parsedValue, err := p.resolveValue(ctx, rawValue, paramType)
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to parse parameter %q: %w", ProviderName, matchedKey, err)
 	}
@@ -269,27 +332,197 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 	}, nil
 }
 
-// resolveValue returns the value for a parameter. When forceString is true the
-// value is returned verbatim as a string (with any surrounding double quotes
-// removed) and all type-inference rules are skipped; non-string inputs are
-// coerced to their string representation so the output type stays consistent
-// with the requested type: string. Otherwise the standard parsing precedence
-// rules are applied.
-func (p *ParameterProvider) resolveValue(ctx context.Context, value any, forceString bool) (any, error) {
-	if forceString {
-		str, ok := value.(string)
-		if !ok {
-			return fmt.Sprintf("%v", value), nil
-		}
-		if isQuoted(str) {
-			return strings.Trim(str, `"`), nil
-		}
-		return str, nil
+// resolveValue returns the value for a parameter coerced according to the
+// requested type. TypeAuto applies the standard inference pipeline; every other
+// type performs exactly one coercion and returns a descriptive error when the
+// value cannot be represented as that type.
+func (p *ParameterProvider) resolveValue(ctx context.Context, value any, paramType string) (any, error) {
+	switch paramType {
+	case TypeString:
+		return coerceString(value), nil
+	case TypeRaw:
+		return value, nil
+	case TypeInt:
+		return coerceInt(value)
+	case TypeFloat:
+		return coerceFloat(value)
+	case TypeBool:
+		return coerceBool(value)
+	case TypeJSON:
+		return coerceJSON(value)
+	case TypeCSV:
+		return coerceCSV(value), nil
+	case TypeAuto:
+		return p.parseValue(ctx, value)
+	default:
+		return nil, fmt.Errorf("%s: unsupported type %q", ProviderName, paramType)
 	}
-	return p.parseValue(ctx, value)
 }
 
-// parseValue applies the parsing precedence rules to a parameter value
+// unquote removes a single pair of surrounding double quotes, if present.
+func unquote(s string) string {
+	if isQuoted(s) {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+// coerceString returns value as a string, stripping surrounding quotes from
+// string inputs and formatting non-string inputs with their default
+// representation.
+func coerceString(value any) string {
+	str, ok := value.(string)
+	if !ok {
+		return fmt.Sprintf("%v", value)
+	}
+	return unquote(str)
+}
+
+// coerceInt parses value as a 64-bit integer.
+func coerceInt(value any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(unquote(v)), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse %q as int", v)
+		}
+		return n, nil
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case uint:
+		if uint64(v) > math.MaxInt64 {
+			return nil, fmt.Errorf("cannot represent %v as int without loss", v)
+		}
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		if v > math.MaxInt64 {
+			return nil, fmt.Errorf("cannot represent %v as int without loss", v)
+		}
+		return int64(v), nil
+	case float64:
+		// Require a whole number that round-trips through int64 unchanged.
+		// The round-trip guard rejects out-of-range values (e.g. 1e300),
+		// whose int64 conversion is implementation-defined.
+		if v == math.Trunc(v) && float64(int64(v)) == v {
+			return int64(v), nil
+		}
+		return nil, fmt.Errorf("cannot represent %v as int without loss", v)
+	default:
+		return nil, fmt.Errorf("cannot coerce %T to int", value)
+	}
+}
+
+// coerceFloat parses value as a 64-bit float.
+func coerceFloat(value any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(unquote(v)), 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse %q as float", v)
+		}
+		return f, nil
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int8:
+		return float64(v), nil
+	case int16:
+		return float64(v), nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case uint:
+		return float64(v), nil
+	case uint8:
+		return float64(v), nil
+	case uint16:
+		return float64(v), nil
+	case uint32:
+		return float64(v), nil
+	case uint64:
+		return float64(v), nil
+	default:
+		return nil, fmt.Errorf("cannot coerce %T to float", value)
+	}
+}
+
+// coerceBool parses value as a boolean, accepting only true/false
+// (case-insensitive) from strings.
+func coerceBool(value any) (any, error) {
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case string:
+		switch strings.ToLower(strings.TrimSpace(unquote(v))) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+		return nil, fmt.Errorf("cannot parse %q as bool (expected true or false)", v)
+	default:
+		return nil, fmt.Errorf("cannot coerce %T to bool", value)
+	}
+}
+
+// coerceJSON parses a string value as JSON. Non-string values (e.g. an
+// already-structured default) are returned unchanged.
+func coerceJSON(value any) (any, error) {
+	str, ok := value.(string)
+	if !ok {
+		return value, nil
+	}
+	str = strings.TrimSpace(str)
+	var result any
+	if err := json.Unmarshal([]byte(str), &result); err == nil {
+		return result, nil
+	}
+	// Fall back to stripping surrounding quotes added by the CLI/YAML layer
+	// (e.g. a quote-wrapped JSON payload like "{\"a\":1}"), matching the
+	// unquote normalization the other coercions apply.
+	if isQuoted(str) {
+		if err := json.Unmarshal([]byte(unquote(str)), &result); err == nil {
+			return result, nil
+		}
+	}
+	return nil, fmt.Errorf("cannot parse value as JSON: %q", str)
+}
+
+// coerceCSV splits a string value on commas into a list of trimmed strings.
+// Non-string values (e.g. an already-structured list default) are returned
+// unchanged.
+func coerceCSV(value any) any {
+	str, ok := value.(string)
+	if !ok {
+		return value
+	}
+	parts := strings.Split(unquote(str), ",")
+	result := make([]string, len(parts))
+	for i, part := range parts {
+		result[i] = strings.TrimSpace(part)
+	}
+	return result
+}
+
+// parseValue applies the auto inference pipeline to a parameter value.
 func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, error) {
 	// If value is already parsed (not a string), return as-is
 	str, ok := value.(string)
@@ -365,17 +598,7 @@ func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, err
 		return floatVal, nil
 	}
 
-	// 7. CSV detection (no surrounding quotes and contains comma)
-	if strings.Contains(str, ",") && !isQuoted(str) {
-		parts := strings.Split(str, ",")
-		result := make([]string, len(parts))
-		for i, part := range parts {
-			result[i] = strings.TrimSpace(part)
-		}
-		return result, nil
-	}
-
-	// 8. Literal string (fallback)
+	// 7. Literal string (fallback)
 	// Remove surrounding quotes if present
 	if isQuoted(str) {
 		return strings.Trim(str, `"`), nil
@@ -413,35 +636,37 @@ func detectType(value any) string {
 	}
 }
 
-func (p *ParameterProvider) executeDryRun(key string, forceString bool) (*provider.Output, error) {
-	typeName := "unknown"
-	if forceString {
-		typeName = "string"
-	}
+func (p *ParameterProvider) executeDryRun(key, paramType string) (*provider.Output, error) {
 	return &provider.Output{
 		Data: "[DRY-RUN] Not retrieved",
 		Metadata: map[string]any{
 			"dryRun": true,
 			"key":    key,
 			"exists": false,
-			"type":   typeName,
+			"type":   paramType,
 		},
 	}, nil
 }
 
-// wantsStringType reports whether the inputs request that the parameter value
-// be returned verbatim as a string (type: string), suppressing type inference.
-// The provider schema constrains the "type" input to the exact value
-// TypeString, so the comparison is an exact, case-sensitive match to mirror
-// what the executor validates before calling Execute. Surrounding whitespace is
-// not trimmed, so callers that bypass schema validation (e.g. direct resolver
-// execution) stay consistent with the descriptor's declared enum.
-func wantsStringType(inputs map[string]any) bool {
-	t, ok := inputs["type"].(string)
-	if !ok {
-		return false
+// resolveParamType returns the requested parameter value type from the inputs,
+// defaulting to TypeAuto when "type" is absent. The provider schema constrains
+// "type" to the values in paramTypes, so this mirrors that validation for
+// callers that bypass schema validation (e.g. direct resolver execution).
+func resolveParamType(inputs map[string]any) (string, error) {
+	raw, present := inputs["type"]
+	if !present {
+		return TypeAuto, nil
 	}
-	return t == TypeString
+	t, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: type must be a string, got %T", ProviderName, raw)
+	}
+	for _, valid := range paramTypes {
+		if t == valid {
+			return t, nil
+		}
+	}
+	return "", fmt.Errorf("%s: unsupported type %q (valid: %s)", ProviderName, t, strings.Join(paramTypes, ", "))
 }
 
 // candidateKeys returns the ordered list of parameter names to look up for a

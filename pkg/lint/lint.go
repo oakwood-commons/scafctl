@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +117,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintCalls(sol, result, registry)
 	lintState(sol, result, registry)
 	lintImmutableResolvers(sol, result)
+	lintParameterNumericMatches(sol, result)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 	lintDeprecatedFields(sol, result)
@@ -190,6 +192,170 @@ func isUnconditionalSource(step resolver.ProviderSource) bool {
 func parameterSourceHasDefault(step resolver.ProviderSource) bool {
 	_, ok := step.Inputs[parameterDefaultInput]
 	return ok
+}
+
+// parameterTypeInput is the input key the parameter provider reads to select an
+// explicit type instead of automatic inference.
+const parameterTypeInput = "type"
+
+// parameterAutoType is the parameter provider's default type name, which enables
+// automatic type inference (the behavior that triggers the numeric coercion
+// footgun).
+const parameterAutoType = "auto"
+
+// lintParameterNumericMatches warns when a resolver reads a 'parameter' source
+// with a numeric default and no explicit 'type', yet a transform or validate CEL
+// expression calls matches() on the value. Automatic type inference coerces
+// numeric values to integers, which have no matches() method and fail at
+// runtime even though the solution passes lint.
+func lintParameterNumericMatches(sol *solution.Solution, result *Result) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+
+	for name, res := range sol.Spec.Resolvers {
+		if res == nil || res.Resolve == nil {
+			continue
+		}
+		// A resolver-level 'type: string' declaration already coerces the value
+		// to a string, so matches() would work regardless of the parameter source.
+		if strings.EqualFold(string(res.Type), typeStringName) {
+			continue
+		}
+		if !hasNumericParameterWithoutType(res.Resolve.With) {
+			continue
+		}
+		if !resolverUsesMatches(res) {
+			continue
+		}
+		location := fmt.Sprintf("resolvers.%s", name)
+		result.addFinding(SeverityWarning, "type-inference", location,
+			fmt.Sprintf("resolver '%s' reads a numeric 'parameter' default without an explicit 'type' but calls matches() on the value; automatic type inference coerces numbers to integers, which have no matches() method and fail at runtime", name),
+			"Add 'type: string' to the parameter source to keep the value a string for matches(), or quote the default as a string",
+			"parameter-numeric-matches")
+	}
+}
+
+// typeStringName is the parameter/resolver type name that coerces values to
+// strings.
+const typeStringName = "string"
+
+// hasNumericParameterWithoutType reports whether any parameter source in the
+// resolve steps supplies a numeric default while relying on automatic type
+// inference (no explicit 'type', or 'type: auto').
+func hasNumericParameterWithoutType(steps []resolver.ProviderSource) bool {
+	for _, step := range steps {
+		if step.Provider != parameterProviderName {
+			continue
+		}
+		if parameterHasExplicitType(step) {
+			continue
+		}
+		defRef, ok := step.Inputs[parameterDefaultInput]
+		if !ok || defRef == nil {
+			continue
+		}
+		if isNumericLiteral(defRef.Literal) {
+			return true
+		}
+	}
+	return false
+}
+
+// parameterHasExplicitType reports whether a parameter source declares a literal
+// 'type' input other than the automatic-inference default.
+func parameterHasExplicitType(step resolver.ProviderSource) bool {
+	typeRef, ok := step.Inputs[parameterTypeInput]
+	if !ok || typeRef == nil {
+		return false
+	}
+	t, isStr := typeRef.Literal.(string)
+	if !isStr {
+		return false
+	}
+	t = strings.TrimSpace(t)
+	return t != "" && !strings.EqualFold(t, parameterAutoType)
+}
+
+// isNumericLiteral reports whether a literal value is a number or a
+// numeric-looking string that automatic type inference would coerce to a number.
+func isNumericLiteral(v any) bool {
+	switch t := v.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return true
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return false
+		}
+		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return true
+		}
+		if _, err := strconv.ParseFloat(s, 64); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// celBearingInputKeys names the provider inputs whose values are CEL
+// expressions (cel/validation providers). Only these keys are scanned for the
+// matches() function so that non-CEL inputs (e.g. regex patterns) do not
+// trigger false positives.
+var celBearingInputKeys = []string{"expression", "failWhen"}
+
+// resolverUsesMatches reports whether any transform or validate CEL expression
+// in the resolver calls the matches() function.
+func resolverUsesMatches(res *resolver.Resolver) bool {
+	if res.Transform != nil {
+		for _, step := range res.Transform.With {
+			if inputsUseMatches(step.Inputs) {
+				return true
+			}
+		}
+	}
+	if res.Validate != nil {
+		for _, step := range res.Validate.With {
+			if inputsUseMatches(step.Inputs) {
+				return true
+			}
+			if step.Message != nil && step.Message.Expr != nil &&
+				strings.Contains(string(*step.Message.Expr), "matches(") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inputsUseMatches reports whether any known CEL-bearing input in the map
+// carries a matches() call.
+func inputsUseMatches(inputs map[string]*resolver.ValueRef) bool {
+	for _, key := range celBearingInputKeys {
+		if exprContainsMatches(inputs[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+// exprContainsMatches reports whether a ValueRef carries a CEL expression that
+// calls the matches() function. It inspects both explicit expr: references and
+// plain string literals (the validation and cel providers take their CEL
+// expression as a literal 'expression' input).
+func exprContainsMatches(ref *resolver.ValueRef) bool {
+	if ref == nil {
+		return false
+	}
+	if ref.Expr != nil && strings.Contains(string(*ref.Expr), "matches(") {
+		return true
+	}
+	if s, ok := ref.Literal.(string); ok && strings.Contains(s, "matches(") {
+		return true
+	}
+	return false
 }
 
 func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Registry, referencedResolvers map[string]bool) {

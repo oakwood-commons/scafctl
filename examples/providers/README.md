@@ -84,6 +84,12 @@ scafctl run resolver -f examples/providers/http-get.yaml
 | [metadata-full.yaml](metadata-full.yaml) | Full runtime metadata (version, args, cwd, solution) |
 | [metadata-single-field.yaml](metadata-single-field.yaml) | Extract individual fields with CEL |
 
+## Parameter Provider
+
+| File | Description |
+|------|-------------|
+| [parameter-types.yaml](parameter-types.yaml) | `type` coercion enum (`auto`, `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`) |
+
 ## Security
 
 | File | Description |

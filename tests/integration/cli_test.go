@@ -6169,6 +6169,95 @@ func TestIntegration_Test_Functional_LintDeferredValidation(t *testing.T) {
 	}
 }
 
+// TestIntegration_Test_Functional_LintParameterNumericMatches exercises the
+// parameter-numeric-matches lint rule by running the functional test cases
+// bundled with the lint-parameter-numeric-matches fixture. The fixture asserts
+// that a resolver reading a numeric 'parameter' default without an explicit
+// 'type' but calling matches() emits the warning, and that the warning does
+// not fail lint.
+func TestIntegration_Test_Functional_LintParameterNumericMatches(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/lint-parameter-numeric-matches/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no parameter-numeric-matches test case should fail")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	for _, name := range []string{
+		"lint-warns-numeric-matches",
+		"lint-passes-with-warning",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Run_Resolver_ParameterTypes verifies the parameter provider's
+// "type" coercion enum end-to-end by running the bundled example with CLI
+// parameters and asserting each resolver coerces to the expected Go type.
+func TestIntegration_Run_Resolver_ParameterTypes(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/providers/parameter-types.yaml",
+		"-o", "json",
+		"-r", "port=8080",
+		"-r", "billingId=00042",
+		"-r", "token=00abc",
+		"-r", "ratio=1.5",
+		"-r", "enabled=true",
+		"-r", `config={"replicas":3}`,
+		"-r", "regions=us-east-1, us-west-2",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out))
+
+	// auto (default): numeric-looking value infers to a JSON number.
+	assert.InDelta(t, float64(8080), out["inferred"], 0, "auto should infer a number")
+	// string: keep leading zeros as a string.
+	assert.Equal(t, "00042", out["billingId"], "type string should preserve leading zeros")
+	// raw: returned verbatim, no coercion.
+	assert.Equal(t, "00abc", out["token"], "type raw should return the value verbatim")
+	// int: forced integer parsing.
+	assert.InDelta(t, float64(8080), out["replicas"], 0, "type int should parse an integer")
+	// float: forced floating-point parsing.
+	assert.InDelta(t, 1.5, out["ratio"], 0, "type float should parse a float")
+	// bool: forced boolean parsing.
+	assert.Equal(t, true, out["enabled"], "type bool should parse a boolean")
+	// json: parsed into a structured object.
+	assert.Equal(t, map[string]any{"replicas": float64(3)}, out["config"], "type json should parse JSON")
+	// csv: split into a trimmed list of strings.
+	assert.Equal(t, []any{"us-east-1", "us-west-2"}, out["regions"], "type csv should split and trim")
+}
+
 func TestIntegration_Test_List(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

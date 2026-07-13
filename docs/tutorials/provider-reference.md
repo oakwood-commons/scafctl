@@ -2167,9 +2167,22 @@ Access CLI parameters passed via `-r` flags.
 | `key` | string | ❌ | Parameter name (exact match). Provide either `key` or `keys`; `key` takes precedence over `keys` when both are set. |
 | `keys` | array of string | ❌ | Ordered list of parameter names (aliases) for a single logical parameter. The first name provided via CLI wins. Evaluated after `key`. |
 | `default` | any | ❌ | Value returned when the parameter is not provided. |
-| `type` | string | ❌ | Set to `string` to return the value verbatim and suppress type inference. |
+| `type` | string | ❌ | How the value is coerced. One of `auto` (default), `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`. See the table below. |
 
 At least one of `key` or `keys` must be provided.
+
+#### `type` values
+
+| Value | Behavior |
+|-------|----------|
+| `auto` | Default. Infers booleans, numbers, JSON, and `file://` + `http://` sources, falling back to the literal string. Comma-separated values are **not** split into a list -- opt in with `csv`. |
+| `string` | Coerces the value to a string, stripping surrounding quotes. Use to keep a numeric-looking value (leading zeros, or a value used with CEL `matches()`) as a string. |
+| `raw` | Returns the value untouched -- no coercion or quote-stripping. A numeric YAML default stays numeric; a CLI string stays verbatim. The escape hatch to disable inference. |
+| `int` | Forces integer parsing. A non-integer value is an error. |
+| `float` | Forces floating-point parsing. A non-numeric value is an error. |
+| `bool` | Forces boolean parsing, accepting only `true`/`false` (case-insensitive). Any other value is an error. |
+| `json` | Parses a string value as JSON. Invalid JSON is an error; non-string values pass through unchanged. |
+| `csv` | Splits a comma-separated string into a list of trimmed strings. Non-string values pass through unchanged. |
 
 ### Output
 
@@ -2202,6 +2215,36 @@ resolve:
       inputs:
         keys: [environment, e, env]
         default: dev
+```
+
+```yaml
+# Coerce values with the "type" input. "auto" (default) infers bools,
+# numbers, JSON, and file://+http:// sources; other types force one coercion.
+resolve:
+  with:
+    # Keep a numeric-looking ID as a string (leading zeros survive).
+    - provider: parameter
+      inputs:
+        key: billingId
+        type: string
+        default: "00042"
+    # Force integer parsing (a non-integer value is an error).
+    - provider: parameter
+      inputs:
+        key: port
+        type: int
+        default: 8080
+    # Opt in to list splitting: "a,b,c" -> [a, b, c].
+    - provider: parameter
+      inputs:
+        key: regions
+        type: csv
+        default: us-east-1
+    # Return the value exactly as received (no coercion, no quote-stripping).
+    - provider: parameter
+      inputs:
+        key: token
+        type: raw
 ```
 
 Usage:
