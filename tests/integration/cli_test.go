@@ -3020,6 +3020,70 @@ spec:
 	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
 }
 
+func TestIntegration_Lint_BuiltinInBundlePlugins(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: builtin-bundle-test
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: cel
+      kind: provider
+      version: "1.0.0"
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionPath, "-o", "json")
+	assert.Equal(t, 0, exitCode, "lint command should succeed")
+	assert.Contains(t, stdout, "builtin-in-bundle-plugins")
+}
+
+func TestIntegration_RunResolver_BuiltinInBundlePlugins(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: builtin-bundle-run-test
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: cel
+      kind: provider
+      version: "1.0.0"
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello-from-builtin
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionPath, "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "run resolver should succeed despite builtin in bundle.plugins")
+	assert.Contains(t, stdout, "hello-from-builtin")
+}
+
 // ============================================================================
 // Package Command Tests
 // ============================================================================

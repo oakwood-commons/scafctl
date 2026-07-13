@@ -104,6 +104,17 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "The solution cannot execute if it references providers that don't exist. This usually indicates a typo in the provider name.",
 		Fix:         "Use list_providers to see all available provider names. Common providers: static, parameter, env, http, cel, file, exec, directory, go-template, validation.",
 	},
+	"builtin-in-bundle-plugins": {
+		Rule:        "builtin-in-bundle-plugins",
+		Severity:    string(SeverityWarning),
+		Category:    "bundle",
+		Description: "A bundle.plugins entry references a built-in provider that is compiled into the binary.",
+		Why:         "Built-in providers (cel, file, http, static, etc.) are always pre-registered and do not need to be declared in bundle.plugins. Declaring them is unnecessary because the plugin fetcher silently skips built-in entries before catalog resolution.",
+		Fix:         "Remove the built-in provider entry from bundle.plugins. Built-in providers are always available without an explicit plugin declaration.",
+		Examples: []string{
+			"# Wrong -- cel is a builtin:\nbundle:\n  plugins:\n    - name: cel\n      kind: provider\n      version: \"1.0.0\"\n\n# Correct -- only declare external plugins:\nbundle:\n  plugins:\n    - name: aws-provider\n      kind: provider\n      version: \"^1.5.0\"",
+		},
+	},
 	"call-not-found": {
 		Rule:        "call-not-found",
 		Severity:    string(SeverityError),
