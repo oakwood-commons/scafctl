@@ -732,6 +732,144 @@ func TestExecute_LoaderError(t *testing.T) {
 	assert.Contains(t, err.Error(), "network timeout")
 }
 
+func TestExecute_LoadFailure_PropagateFalse_From(t *testing.T) {
+	loader := &mockLoader{
+		err: fmt.Errorf("YAML parse error at line 12"),
+	}
+
+	p := New(
+		WithLoader(loader),
+		WithRegistry(provider.NewRegistry()),
+	)
+
+	ctx := testContext()
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityFrom)
+	input := &Input{
+		Source:          "./broken-child.yaml",
+		PropagateErrors: boolPtr(false),
+	}
+
+	output, err := p.Execute(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "failed", data["status"])
+
+	errors, ok := data["errors"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, errors, 1)
+	assert.Equal(t, "_loader", errors[0]["resolver"])
+	assert.Contains(t, errors[0]["message"], "YAML parse error")
+	assert.Contains(t, errors[0]["message"], "./broken-child.yaml")
+
+	// from capability should not have workflow or success fields
+	_, hasWorkflow := data["workflow"]
+	assert.False(t, hasWorkflow)
+	_, hasSuccess := data["success"]
+	assert.False(t, hasSuccess)
+
+	// Should have a warning
+	require.NotEmpty(t, output.Warnings)
+	assert.Contains(t, output.Warnings[0], "failed to load")
+}
+
+func TestExecute_LoadFailure_PropagateFalse_Action(t *testing.T) {
+	loader := &mockLoader{
+		err: fmt.Errorf("child resolver cycle detected"),
+	}
+
+	p := New(
+		WithLoader(loader),
+		WithRegistry(provider.NewRegistry()),
+	)
+
+	ctx := testContext()
+	ctx = provider.WithExecutionMode(ctx, provider.CapabilityAction)
+	input := &Input{
+		Source:          "./cyclic-child.yaml",
+		PropagateErrors: boolPtr(false),
+	}
+
+	output, err := p.Execute(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	data, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "failed", data["status"])
+	assert.Equal(t, false, data["success"])
+
+	errors, ok := data["errors"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, errors, 1)
+	assert.Equal(t, "_loader", errors[0]["resolver"])
+	assert.Contains(t, errors[0]["message"], "resolver cycle")
+	assert.Contains(t, errors[0]["message"], "./cyclic-child.yaml")
+
+	require.NotEmpty(t, output.Warnings)
+	assert.Contains(t, output.Warnings[0], "failed to load")
+}
+
+func TestExecute_CircularRef_PropagateFalse_StillErrors(t *testing.T) {
+	// Circular reference detection is a hard error regardless of propagateErrors.
+	loader := &mockLoader{
+		solutions: map[string]*solution.Solution{
+			"./self.yaml": newTestSolution(nil, nil),
+		},
+	}
+
+	p := New(
+		WithLoader(loader),
+		WithRegistry(provider.NewRegistry()),
+	)
+
+	ctx := testContext()
+	// Push the canonical name as ancestor to simulate a cycle.
+	ctx = WithAncestorStack(ctx, []string{})
+	var err error
+	ctx, err = PushAncestor(ctx, Canonicalize(ctx, "./self.yaml"))
+	require.NoError(t, err)
+
+	input := &Input{
+		Source:          "./self.yaml",
+		PropagateErrors: boolPtr(false),
+	}
+
+	_, execErr := p.Execute(ctx, input)
+	require.Error(t, execErr)
+	assert.Contains(t, execErr.Error(), "circular")
+}
+
+func TestExecute_DepthExceeded_PropagateFalse_StillErrors(t *testing.T) {
+	// Depth limit is a hard error regardless of propagateErrors.
+	loader := &mockLoader{
+		solutions: map[string]*solution.Solution{
+			"./deep.yaml": newTestSolution(nil, nil),
+		},
+	}
+
+	p := New(
+		WithLoader(loader),
+		WithRegistry(provider.NewRegistry()),
+	)
+
+	ctx := testContext()
+	// Push enough ancestors to exceed MaxDepth of 1.
+	ctx = WithAncestorStack(ctx, []string{"/parent.yaml"})
+
+	input := &Input{
+		Source:          "./deep.yaml",
+		MaxDepth:        intPtr(1),
+		PropagateErrors: boolPtr(false),
+	}
+
+	_, err := p.Execute(ctx, input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "depth")
+}
+
 func TestExecute_DryRun_From(t *testing.T) {
 	loader := &mockLoader{
 		solutions: map[string]*solution.Solution{

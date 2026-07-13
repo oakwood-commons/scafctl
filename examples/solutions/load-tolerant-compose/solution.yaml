@@ -1,0 +1,46 @@
+# Run: scafctl run resolver -f examples/solutions/load-tolerant-compose/solution.yaml -o json
+#
+# Demonstrates the load-tolerant compose pattern: using propagateErrors: false
+# with the solution provider so that a missing or broken child solution degrades
+# gracefully instead of aborting the parent.
+#
+# The child-data resolver references a non-existent file. Because
+# propagateErrors is false, the parent continues and child-data resolves to an
+# envelope with status "failed" and the error detail in errors[].
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: load-tolerant-compose
+  displayName: Load-Tolerant Compose
+  category: solutions
+  tags:
+    - composition
+    - solution
+    - error-handling
+  description: >-
+    Demonstrates graceful degradation when a composed child solution
+    fails to load or parse.
+
+spec:
+  resolvers:
+    child-data:
+      description: >-
+        Attempts to load an optional child solution. If the child is missing
+        or malformed, the envelope reports status "failed" with error details
+        instead of aborting the parent.
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "./optional-child.yaml"
+              propagateErrors: false
+
+    fallback:
+      description: >-
+        Provides a fallback value when child-data fails to load.
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "fallback-value (child unavailable)"

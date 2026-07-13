@@ -4825,6 +4825,91 @@ spec:
 	assert.Contains(t, stdout, "failed")
 }
 
+func TestIntegration_SolutionProvider_PropagateErrorsFalse_LoadFailure(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Create a parent that references a non-existent child with propagateErrors: false.
+	// This exercises the load-tolerant compose mode where child parse/load failures
+	// degrade gracefully into the envelope instead of aborting the parent.
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-load-tolerant
+  version: 1.0.0
+spec:
+  resolvers:
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "` + filepath.ToSlash(filepath.Join(tmpDir, "does-not-exist.yaml")) + `"
+              propagateErrors: false
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", parentPath,
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	// With propagateErrors: false, a load failure should NOT abort the parent.
+	assert.Equal(t, 0, exitCode, "expected exit code 0 with propagateErrors=false on load failure, got %d", exitCode)
+	assert.Contains(t, stdout, "failed")
+	assert.Contains(t, stdout, "_loader")
+}
+
+func TestIntegration_SolutionProvider_PropagateErrorsFalse_MalformedChild(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Create a malformed child YAML (parse failure).
+	malformedChild := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: malformed
+  [[[invalid yaml
+`
+	childPath := filepath.Join(tmpDir, "malformed-child.yaml")
+	require.NoError(t, os.WriteFile(childPath, []byte(malformedChild), 0o644))
+
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-parse-tolerant
+  version: 1.0.0
+spec:
+  resolvers:
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "` + filepath.ToSlash(childPath) + `"
+              propagateErrors: false
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", parentPath,
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	// With propagateErrors: false, a parse failure should degrade gracefully.
+	assert.Equal(t, 0, exitCode, "expected exit code 0 with propagateErrors=false on parse failure, got %d", exitCode)
+	assert.Contains(t, stdout, "failed")
+	assert.Contains(t, stdout, "_loader")
+}
+
 func TestIntegration_SolutionProvider_MaxDepthExceeded(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
