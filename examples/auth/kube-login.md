@@ -65,9 +65,14 @@ Common flags:
 - `--server`: API server URL when no resolver is configured.
 - `--audience`: OIDC audience the minted token must target.
 - `--profile`: auth profile baked into the exec args (for example `work`).
+- `--namespace`, `-n`: default namespace set on the written context.
 - `--current`: set the new context as the current context.
 - `--verify`: confirm the authenticated identity via a post-login whoami
   (requires the kubeconfig provider).
+- `--refresh`: re-apply the resolved cluster details (CA bundle, server,
+  namespace) to an existing entry without a fresh interactive login when a valid
+  token is already cached. Falls back to a normal login when no valid token
+  exists.
 - `--kubeconfig`: target kubeconfig file (defaults to `KUBECONFIG` or
   `~/.kube/config`).
 
@@ -78,6 +83,30 @@ After login, `kubectl` reuses the scafctl-managed identity automatically:
 ```bash
 kubectl --context prod get pods
 ```
+
+## Discover and Inspect
+
+List the clusters your resolver knows about (static aliases plus dynamic
+inventory). scafctl ships no cluster data of its own, so an unconfigured resolver
+lists nothing:
+
+```bash
+scafctl kube list
+scafctl kube list -o json
+```
+
+Inspect the current kubeconfig context -- its cluster, server, namespace, and
+whether scafctl manages the entry. For a scafctl-managed context it also runs a
+best-effort whoami to report the authenticated identity, degrading gracefully
+when the provider or a token is unavailable. It reads the kubeconfig directly, so
+the static view works offline:
+
+```bash
+scafctl kube status
+scafctl kube status -o json
+```
+
+Cluster names complete on `<TAB>` for `kube login` and `kube logout`.
 
 ## Configure Cluster Resolution
 
@@ -134,6 +163,14 @@ while removing only the kubeconfig entry:
 
 ```bash
 scafctl kube logout prod --keep-credentials
+```
+
+Remove every scafctl-managed kubeconfig entry at once (for example to clean up a
+fleet). This removes only the entries scafctl wrote; it leaves handler
+credentials in place so a bulk cleanup never signs you out of every handler:
+
+```bash
+scafctl kube logout --all
 ```
 
 ## Scripting

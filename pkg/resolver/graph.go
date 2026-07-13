@@ -90,16 +90,12 @@ func extractInferredDependencies(r *Resolver, lookup DescriptorLookup) []string 
 		}
 	}
 
-	// Extract from validate phase (excluding self-refs)
-	if r.Validate != nil {
-		validateDeps := make(map[string]bool)
-		extractDepsFromValidatePhase(r.Validate, validateDeps, lookup)
-		for dep := range validateDeps {
-			if dep != r.Name {
-				deps[dep] = true
-			}
-		}
-	}
+	// Validate-phase references are intentionally NOT part of the resolution
+	// dependency graph. Validation runs in a separate post-resolution phase
+	// (two-phase execution): a cross-resolver validation rule is deferred and its
+	// references must not create resolve-ordering edges (or cycles). Self-only
+	// (inline) rules reference nothing but __self, so they contribute no foreign
+	// deps either. See partitionValidatePhase for the deferred-validation machinery.
 
 	result := make([]string, 0, len(deps))
 	for dep := range deps {
@@ -147,16 +143,13 @@ func extractDependencies(r *Resolver, lookup DescriptorLookup) []string {
 		}
 	}
 
-	// Extract from validate phase (same self-ref filtering as transform above)
-	if r.Validate != nil {
-		validateDeps := make(map[string]bool)
-		extractDepsFromValidatePhase(r.Validate, validateDeps, lookup)
-		for dep := range validateDeps {
-			if dep != r.Name {
-				deps[dep] = true
-			}
-		}
-	}
+	// Validate-phase references are intentionally NOT part of the resolution
+	// dependency graph. Validation runs in a separate post-resolution phase
+	// (two-phase execution): a cross-resolver validation rule is deferred and its
+	// references (including refs that appear only inside a rule's message
+	// template) must not create resolve-ordering edges or cycles. Self-only
+	// (inline) rules reference nothing but __self. The deferred rules and their
+	// reporting-graph edges are computed by partitionValidatePhase.
 
 	// Convert to slice
 	result := make([]string, 0, len(deps))
@@ -195,7 +188,11 @@ func extractStrictDependencies(r *Resolver) map[string]bool {
 
 	extractStrictFromResolvePhase(r.Resolve, deps)
 	extractStrictFromTransformPhase(r.Transform, deps)
-	extractStrictFromValidatePhase(r.Validate, deps)
+	// The validate phase contributes no strict resolution edges: deferred
+	// (cross-resolver) rules are excluded from the resolution DAG by design, and
+	// inline (self-only) rules reference nothing but __self. A typo in a deferred
+	// validation reference surfaces at the deferred-validation phase (fail-closed),
+	// not during graph construction.
 
 	// A resolver is never a strict dependency of itself.
 	delete(deps, r.Name)
@@ -214,6 +211,9 @@ func extractStrictFromResolvePhase(phase *ResolvePhase, deps map[string]bool) {
 		extractDepsFromExpression(string(*phase.Until.Expr), deps)
 	}
 	for _, source := range phase.With {
+		for _, arg := range source.Args {
+			extractStrictFromValueRef(arg, deps)
+		}
 		if source.When != nil && source.When.Expr != nil {
 			extractDepsFromExpression(string(*source.When.Expr), deps)
 		}
@@ -236,6 +236,9 @@ func extractStrictFromTransformPhase(phase *TransformPhase, deps map[string]bool
 		extractDepsFromExpression(string(*phase.When.Expr), deps)
 	}
 	for _, transform := range phase.With {
+		for _, arg := range transform.Args {
+			extractStrictFromValueRef(arg, deps)
+		}
 		if transform.When != nil && transform.When.Expr != nil {
 			extractDepsFromExpression(string(*transform.When.Expr), deps)
 		}
@@ -246,23 +249,6 @@ func extractStrictFromTransformPhase(phase *TransformPhase, deps map[string]bool
 			extractStrictFromValueRef(transform.ForEach.In, deps)
 		}
 		extractStrictFromInputs(transform.Inputs, deps)
-	}
-}
-
-// extractStrictFromValidatePhase collects strict references from a validate phase.
-func extractStrictFromValidatePhase(phase *ValidatePhase, deps map[string]bool) {
-	if phase == nil {
-		return
-	}
-	if phase.When != nil && phase.When.Expr != nil {
-		extractDepsFromExpression(string(*phase.When.Expr), deps)
-	}
-	for _, validation := range phase.With {
-		if validation.When != nil && validation.When.Expr != nil {
-			extractDepsFromExpression(string(*validation.When.Expr), deps)
-		}
-		extractStrictFromInputs(validation.Inputs, deps)
-		extractStrictFromValueRef(validation.Message, deps)
 	}
 }
 
@@ -708,6 +694,11 @@ func extractDepsFromResolvePhase(phase *ResolvePhase, deps map[string]bool, look
 
 	// Extract from each source
 	for _, source := range phase.With {
+		// Extract from call-site args (a call source references resolvers via args).
+		for _, arg := range source.Args {
+			extractDepsFromValueRef(arg, deps)
+		}
+
 		// Extract from when condition
 		if source.When != nil && source.When.Expr != nil {
 			extractDepsFromExpression(string(*source.When.Expr), deps)
@@ -796,6 +787,11 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 
 	// Extract from each transform step
 	for _, transform := range phase.With {
+		// Extract from call-site args (a call transform references resolvers via args).
+		for _, arg := range transform.Args {
+			extractDepsFromValueRef(arg, deps)
+		}
+
 		// Extract from when condition
 		if transform.When != nil && transform.When.Expr != nil {
 			extractDepsFromExpression(string(*transform.When.Expr), deps)
@@ -828,39 +824,156 @@ func extractDepsFromTransformPhase(phase *TransformPhase, deps map[string]bool, 
 	}
 }
 
-// extractDepsFromValidatePhase extracts dependencies from a validate phase
+// extractDepsFromValidatePhase extracts dependencies from a validate phase.
+//
+// NOTE: these references are NOT resolution-graph edges. Validation runs in a
+// separate post-resolution phase (see partitionValidatePhase). This helper is
+// retained for callers that need the full validate-phase reference set (e.g.
+// tooling and tests); the resolution-dependency extractors deliberately do not
+// call it.
 func extractDepsFromValidatePhase(phase *ValidatePhase, deps map[string]bool, lookup DescriptorLookup) {
 	if phase == nil {
 		return
 	}
 
-	// Extract from when condition
+	// Extract from phase-level when condition
 	if phase.When != nil && phase.When.Expr != nil {
 		extractDepsFromExpression(string(*phase.When.Expr), deps)
 	}
 
 	// Extract from each validation rule
-	for _, validation := range phase.With {
-		// Extract from the rule-level when condition
-		if validation.When != nil && validation.When.Expr != nil {
-			extractDepsFromExpression(string(*validation.When.Expr), deps)
-		}
+	for i := range phase.With {
+		extractDepsFromValidationRule(phase.With[i], deps, lookup)
+	}
+}
 
-		// Try provider-specific extraction first
-		if extractDepsFromProviderInputs(validation.Provider, validation.Inputs, nil, deps, lookup) {
-			// Still extract from message even if provider handled inputs
-			extractDepsFromValueRef(validation.Message, deps)
+// extractDepsFromValidationRule extracts every resolver reference a single
+// validation rule makes: call-site args, the rule-level when condition, provider
+// inputs, and the custom message template. It uses the same provider-aware
+// extraction the full-phase helper uses so a rule is classified identically
+// regardless of provider.
+func extractDepsFromValidationRule(v ProviderValidation, deps map[string]bool, lookup DescriptorLookup) {
+	// Extract from call-site args (a call validation references resolvers via args).
+	for _, arg := range v.Args {
+		extractDepsFromValueRef(arg, deps)
+	}
+
+	// Extract from the rule-level when condition
+	if v.When != nil && v.When.Expr != nil {
+		extractDepsFromExpression(string(*v.When.Expr), deps)
+	}
+
+	// Try provider-specific extraction first
+	if extractDepsFromProviderInputs(v.Provider, v.Inputs, nil, deps, lookup) {
+		// Still extract from message even if the provider handled inputs
+		extractDepsFromValueRef(v.Message, deps)
+		return
+	}
+
+	// Fall back to generic extraction from inputs
+	for _, input := range v.Inputs {
+		extractDepsFromValueRef(input, deps)
+	}
+
+	// Extract from message
+	extractDepsFromValueRef(v.Message, deps)
+}
+
+// ValidatePartition classifies a resolver's validation rules into those that run
+// inline (during resolution, preserving fail-fast) and those deferred to the
+// post-resolution validation phase.
+//
+// A rule is inline iff it references nothing but the owning resolver itself
+// (self / __self). Any rule that references another resolver -- in its args,
+// inputs, rule-level when, or message template -- is deferred and excluded from
+// the resolution DAG. A phase-level validate.when that references a foreign
+// resolver forces every rule in the block to defer (PhaseWhenDeferred).
+type ValidatePartition struct {
+	// InlineRules holds indices into Validate.With for rules that stay inline.
+	InlineRules []int
+	// DeferredRules holds indices into Validate.With for rules that defer.
+	DeferredRules []int
+	// DeferredRefs is the union of foreign resolver references contributed by the
+	// deferred rules (and the phase-level when, when it forces deferral). These
+	// are used only to order and report deferred validation results; they are
+	// never resolution-graph edges.
+	DeferredRefs map[string]bool
+	// PhaseWhenDeferred indicates the phase-level validate.when referenced a
+	// foreign resolver, forcing the whole block to defer.
+	PhaseWhenDeferred bool
+}
+
+// HasDeferred reports whether the partition contains any deferred rules.
+func (p ValidatePartition) HasDeferred() bool {
+	return len(p.DeferredRules) > 0
+}
+
+// PartitionValidatePhase splits a resolver's validate phase into inline and
+// deferred (cross-resolver) rule sets. It is the exported entry point used by
+// tooling such as linters and embedders to reason about which validation rules
+// run in the deferred phase. A nil resolver or nil validate phase yields an
+// empty partition.
+func PartitionValidatePhase(r *Resolver, lookup DescriptorLookup) ValidatePartition {
+	return partitionValidatePhase(r, lookup)
+}
+
+// classifyValidationRule returns the set of foreign resolver references a single
+// validation rule makes, excluding the owning resolver's own name (self) and the
+// injected __self accessor (which is never a resolver reference). An empty result
+// means the rule is inline-eligible.
+func classifyValidationRule(v ProviderValidation, selfName string, lookup DescriptorLookup) map[string]bool {
+	deps := make(map[string]bool)
+	extractDepsFromValidationRule(v, deps, lookup)
+	delete(deps, selfName)
+	return deps
+}
+
+// partitionValidatePhase splits a resolver's validate phase into inline and
+// deferred rule sets and collects the foreign references contributed by the
+// deferred rules. A nil resolver or nil validate phase yields an empty partition.
+func partitionValidatePhase(r *Resolver, lookup DescriptorLookup) ValidatePartition {
+	if r == nil {
+		return ValidatePartition{DeferredRefs: make(map[string]bool)}
+	}
+	return partitionValidatePhaseFor(r.Validate, r.Name, lookup)
+}
+
+// partitionValidatePhaseFor is the phase-based core of partitionValidatePhase. It
+// operates directly on a validate phase and the owning resolver's name, so the
+// executor can partition without holding the full *Resolver.
+func partitionValidatePhaseFor(phase *ValidatePhase, selfName string, lookup DescriptorLookup) ValidatePartition {
+	part := ValidatePartition{DeferredRefs: make(map[string]bool)}
+	if phase == nil {
+		return part
+	}
+
+	// A phase-level validate.when that references a foreign resolver forces the
+	// entire block to defer (the guard cannot be evaluated until that resolver
+	// has resolved).
+	phaseWhen := make(map[string]bool)
+	if phase.When != nil && phase.When.Expr != nil {
+		extractDepsFromExpression(string(*phase.When.Expr), phaseWhen)
+	}
+	delete(phaseWhen, selfName)
+	if len(phaseWhen) > 0 {
+		part.PhaseWhenDeferred = true
+		for ref := range phaseWhen {
+			part.DeferredRefs[ref] = true
+		}
+	}
+
+	for i := range phase.With {
+		foreign := classifyValidationRule(phase.With[i], selfName, lookup)
+		if part.PhaseWhenDeferred || len(foreign) > 0 {
+			part.DeferredRules = append(part.DeferredRules, i)
+			for ref := range foreign {
+				part.DeferredRefs[ref] = true
+			}
 			continue
 		}
-
-		// Fall back to generic extraction from inputs
-		for _, input := range validation.Inputs {
-			extractDepsFromValueRef(input, deps)
-		}
-
-		// Extract from message
-		extractDepsFromValueRef(validation.Message, deps)
+		part.InlineRules = append(part.InlineRules, i)
 	}
+	return part
 }
 
 // TemplateAccessor identifies a root-level Go template accessor in a resolver's

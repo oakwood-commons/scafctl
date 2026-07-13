@@ -145,10 +145,51 @@ func (m *Manager) Save(ctx context.Context, stateData *Data, resolverCtx *resolv
 	stateData.Parameters = mergedParams
 
 	// Record persisted and immutable resolver values
-	if err := PersistResolvers(stateData, resolverCtx, resolvers); err != nil {
+	if err := PersistResolvers(stateData, resolverCtx, resolvers, nil); err != nil {
 		return err
 	}
 
+	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta)
+}
+
+// SaveImmutables checks and persists immutable resolver locks without touching
+// the saved parameter set. It is used by entrypoints that run side-effecting
+// actions: immutable locks are committed after deferred validation passes and
+// before actions run, so a value that is now fixed is persisted even if a
+// downstream action later fails.
+//
+// skip contains resolver names whose deferred validation failed; their
+// immutable values are not locked.
+func (m *Manager) SaveImmutables(ctx context.Context, stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, mergedParams, resolverData map[string]any, solMeta SolutionMeta, skip map[string]bool) error {
+	if m.config == nil || stateData == nil {
+		return nil
+	}
+
+	// Check and save immutable resolver values. Parameters are intentionally not
+	// updated here -- they are persisted after actions complete via SaveParams.
+	if err := PersistResolvers(stateData, resolverCtx, resolvers, skip); err != nil {
+		return err
+	}
+
+	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta)
+}
+
+// SaveParams persists the merged parameter set. It is called after actions
+// complete so that ordinary (mutable) parameters are only saved on a fully
+// successful run.
+func (m *Manager) SaveParams(ctx context.Context, stateData *Data, mergedParams, resolverData map[string]any, solMeta SolutionMeta) error {
+	if m.config == nil || stateData == nil {
+		return nil
+	}
+
+	stateData.Parameters = mergedParams
+
+	return m.commit(ctx, stateData, resolverData, mergedParams, solMeta)
+}
+
+// commit updates state metadata and writes the current state document to the
+// configured backend.
+func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta) error {
 	// Update metadata
 	now := time.Now().UTC()
 	if stateData.Metadata.CreatedAt.IsZero() {

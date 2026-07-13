@@ -1,0 +1,67 @@
+# Run: scafctl run resolver -f examples/resolvers/cross-validation-demo.yaml
+# Run: scafctl run resolver -f examples/resolvers/cross-validation-demo.yaml region=us-east1 backupRegion=us-west1
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cross-validation-demo
+  displayName: Cross-Resolver Validation Demo
+  category: resolvers
+  tags:
+    - resolver-example
+    - validation
+  description: |
+    Demonstrates the two-phase validation model. A validation rule that
+    references only its own resolver (via `__self`) runs INLINE during
+    resolution and fails fast. A rule that references ANOTHER resolver
+    (via `_.other`) is DEFERRED: it runs after every resolver has resolved,
+    just before actions.
+
+    Because deferred rules are excluded from the resolution dependency graph,
+    two resolvers can validate against each other -- including message-only
+    references -- without creating a false ordering cycle. Before two-phase
+    validation, the mutual references below would have failed to load with a
+    "circular dependency" error.
+
+spec:
+  resolvers:
+    # Primary region. Has one INLINE rule (self-only, fails fast) and one
+    # DEFERRED rule (reads backupRegion).
+    region:
+      description: Primary deployment region
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+      validate:
+        with:
+          # INLINE: references only __self -> runs during resolution, fails fast.
+          - provider: validation
+            inputs:
+              expression: "__self != ''"
+              message: "region is required"
+          # DEFERRED: references _.backupRegion -> runs after all resolvers.
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "tmpl: region must differ from backupRegion (both were {{ .region }})"
+
+    # Backup region. Its validation message references the primary region --
+    # a message-only cross-reference that no longer forms a cycle.
+    backupRegion:
+      description: Backup deployment region
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: backupRegion
+              default: us-west1
+      validate:
+        with:
+          # DEFERRED via message-only reference to _.region.
+          - provider: validation
+            inputs:
+              expression: "__self != ''"
+              message: "tmpl: backupRegion is required and must differ from region {{ .region }}"

@@ -1,0 +1,45 @@
+# Run: scafctl run solution -f examples/calls/calls-action.yaml
+#
+# Demonstrates a call invoked from a workflow action. One definition is reused
+# by two actions with different arguments. Network-free (uses the static
+# provider in action mode).
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: calls-action
+  displayName: Parameterized Calls in Actions
+  category: calls
+  tags:
+    - calls
+    - action-example
+  description: |
+    A reusable call definition invoked from workflow actions. The same request
+    shape is used twice with different arguments.
+
+spec:
+  calls:
+    announce:
+      description: Emit a formatted announcement line.
+      provider: static
+      args:
+        stage:
+          type: string
+          required: true
+      inputs:
+        value:
+          tmpl: '>>> reached stage: {{ .args.stage }}'
+
+  workflow:
+    actions:
+      build:
+        call: announce
+        args:
+          stage: build
+
+      deploy:
+        dependsOn:
+          - build
+        call: announce
+        args:
+          stage: deploy

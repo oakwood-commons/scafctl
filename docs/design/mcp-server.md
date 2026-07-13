@@ -136,7 +136,7 @@ The AI client (VS Code, Claude Desktop, etc.) connects to this local server proc
 
 ### Working Directory Override
 
-All MCP tools that accept file paths support an optional `cwd` parameter. This allows AI agents to specify the project directory for path resolution without requiring the MCP server process to be started from that directory. See the [cwd design doc](cwd.md) for details.
+All MCP tools that accept file paths support an optional `cwd` parameter. This allows AI agents to specify the project directory for path resolution without requiring the MCP server process to be started from that directory. Tools that load and execute a solution additionally anchor path resolution to the solution file's own directory when the solution has a local directory (a local file path or an extracted catalog bundle), so `relativeTo: solution` reads resolve correctly even when `cwd` is not supplied. For stdin (`-`) and unbundled catalog references there is no solution directory, so `relativeTo: solution` falls back to the process CWD. See the [cwd design doc](cwd.md) for details.
 
 ## What Is Required
 

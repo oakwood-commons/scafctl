@@ -1,0 +1,68 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-lint-parameter-numeric-matches
+  version: 1.0.0
+  description: |
+    Tests the parameter-numeric-matches lint rule. A resolver reads a
+    'parameter' source with a numeric default and no explicit 'type', yet a
+    validate CEL expression calls matches() on the value. Automatic inference
+    would coerce the numeric value to an integer, which has no matches() method
+    and fails at runtime -- the rule flags this as a warning while the solution
+    still lints without error.
+
+spec:
+  resolvers:
+    # Fires the rule: numeric default, no explicit type, matches() in validate.
+    version:
+      description: Numeric default read without a type but validated with matches()
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+              default: 1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[0-9]+$")'
+              message: "version must be numeric"
+
+    # Does not fire: explicit type string keeps the value a string for matches().
+    safeVersion:
+      description: Numeric default forced to string, so matches() is safe
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: safeVersion
+              type: string
+              default: 1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[0-9]+$")'
+              message: "safeVersion must be numeric"
+
+  testing:
+    cases:
+      lint-warns-numeric-matches:
+        description: Lint emits the parameter-numeric-matches warning
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, parameter-numeric-matches]
+        assertions:
+          - expression: __stdout.contains("parameter-numeric-matches")
+            message: "Numeric parameter default with matches() should trigger the warning"
+
+      lint-passes-with-warning:
+        description: The warning does not fail lint (exit code stays 0)
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, parameter-numeric-matches]
+        assertions:
+          - expression: __exitCode == 0
+            message: "A warning-severity rule must not fail lint"

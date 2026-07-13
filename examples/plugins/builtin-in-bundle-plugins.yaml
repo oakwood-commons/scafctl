@@ -1,0 +1,48 @@
+# Built-in Provider in bundle.plugins
+#
+# This example demonstrates the WRONG and RIGHT way to declare bundle.plugins.
+# Built-in providers (cel, static, http, file, etc.) are compiled into the
+# scafctl binary and are always available. Declaring them in bundle.plugins
+# is silently skipped at fetch time and triggers a lint warning.
+#
+# Lint (shows the warning):
+#   scafctl lint -f examples/plugins/builtin-in-bundle-plugins.yaml
+#
+# Run resolver (succeeds -- builtin entries are silently skipped at fetch time):
+#   scafctl run resolver -f examples/plugins/builtin-in-bundle-plugins.yaml -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: builtin-in-bundle-plugins-demo
+  displayName: Built-in Provider in bundle.plugins
+  category: developer-tools
+  tags:
+    - plugin
+    - lint
+    - builtin
+  version: 1.0.0
+  description: |
+    Shows what happens when a built-in provider is listed in bundle.plugins.
+    The linter warns and the fetcher silently skips the entry at runtime.
+
+# BAD: cel and static are built-in providers -- do not declare them here.
+# The linter will emit a "builtin-in-bundle-plugins" warning for each entry.
+# Only declare external (catalog-distributed) providers in bundle.plugins.
+bundle:
+  plugins:
+    - name: cel
+      kind: provider
+      version: "1.0.0"
+
+spec:
+  resolvers:
+    greeting:
+      type: string
+      description: A simple greeting produced by a built-in provider
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello

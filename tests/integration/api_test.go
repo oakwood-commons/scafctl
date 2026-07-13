@@ -26,8 +26,12 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -1674,7 +1678,322 @@ func TestAPI_SolutionRender_InvalidPath(t *testing.T) {
 		Status(http.StatusBadRequest)
 }
 
-// TestAPI_SolutionTest_MissingPath verifies test endpoint rejects missing path.
+// TestAPI_SolutionRender_Calls exercises the spec.calls (parameterized calls)
+// feature end-to-end through the render endpoint. It confirms that call
+// definitions invoked from resolve steps bind their arguments -- defaults,
+// call-site overrides, and resolver-sourced values -- and expose them to the
+// underlying provider via the args namespace (_.args.x).
+func TestAPI_SolutionRender_Calls(t *testing.T) {
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(celprovider.NewCelProvider()))
+	require.NoError(t, reg.Register(staticprovider.New()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: api-calls-test
+  version: 1.0.0
+  description: Calls feature exercised over the API render endpoint
+spec:
+  calls:
+    greet:
+      provider: cel
+      args:
+        salutation:
+          type: string
+          default: Hello
+        name:
+          type: string
+          required: true
+      inputs:
+        expression: '_.args.salutation + ", " + _.args.name + "!"'
+  resolvers:
+    english:
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              name: World
+    spanish:
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hola
+              name: Mundo
+    requestor:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Ada
+    personalized:
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hey
+              name:
+                expr: _.requestor
+`
+
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer solServer.Close()
+
+	obj := e.POST("/v1/solutions/render").
+		WithJSON(map[string]any{"path": solServer.URL + "/solution.yaml"}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	data := obj.Value("resolverData").Object()
+	data.HasValue("english", "Hello, World!")  // default salutation applied
+	data.HasValue("spanish", "Hola, Mundo!")   // call-site override
+	data.HasValue("requestor", "Ada")          // base value for the ref below
+	data.HasValue("personalized", "Hey, Ada!") // arg sourced from a resolver ref
+}
+
+// TestAPI_DeferredValidation exercises the two-phase (deferred cross-resolver)
+// validation feature over the API. Two resolvers validate against each other --
+// one via a value reference (_.backupRegion) and one via a message-only
+// reference ({{ .region }}). Before two-phase validation these mutual
+// references formed a false ordering cycle. The render endpoint must now load
+// and resolve them cleanly, and the lint endpoint must NOT report a
+// resolver-cycle while still surfacing the informational
+// deferred-validation-not-fail-fast advisory.
+func TestAPI_DeferredValidation(t *testing.T) {
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(staticprovider.New()))
+	require.NoError(t, reg.Register(validationprovider.NewValidationProvider()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: api-deferred-validation-test
+  version: 1.0.0
+  description: Two-phase cross-resolver validation exercised over the API
+spec:
+  resolvers:
+    region:
+      description: Primary deployment region
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-east1
+      validate:
+        with:
+          # DEFERRED: references _.backupRegion -> runs after all resolvers.
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "tmpl: region must differ from backupRegion (both were {{ .region }})"
+    backupRegion:
+      description: Backup deployment region (message-only cross-reference)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: us-west1
+      validate:
+        with:
+          # DEFERRED via message-only reference to _.region.
+          - provider: validation
+            inputs:
+              expression: "__self != ''"
+              message: "tmpl: backupRegion must differ from region {{ .region }}"
+`
+
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer solServer.Close()
+	solURL := solServer.URL + "/solution.yaml"
+
+	// Render: mutual cross-resolver validation loads without a cycle error and
+	// deferred rules pass because the regions differ.
+	renderObj := e.POST("/v1/solutions/render").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	data := renderObj.Value("resolverData").Object()
+	data.HasValue("region", "us-east1")
+	data.HasValue("backupRegion", "us-west1")
+
+	// Lint: cross-resolver validation references must NOT trigger resolver-cycle,
+	// and each deferred rule emits the info-level advisory.
+	lintObj := e.POST("/v1/solutions/lint").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	findings := lintObj.Value("findings").Array()
+	rules := map[string]int{}
+	for _, f := range findings.Iter() {
+		rules[f.Object().Value("ruleName").String().Raw()]++
+	}
+	assert.Zero(t, rules["resolver-cycle"], "cross-resolver validation must not trigger resolver-cycle")
+	assert.GreaterOrEqual(t, rules["deferred-validation-not-fail-fast"], 1,
+		"deferred validation should emit the info advisory")
+}
+
+// TestAPI_LintParameterNumericMatches exercises the parameter-numeric-matches
+// lint rule over the API. A resolver reads a numeric 'parameter' default with
+// no explicit 'type' yet validates the value with matches(); automatic
+// inference would coerce it to an integer (no matches() method) and fail at
+// runtime. The lint endpoint must surface the warning while the sibling
+// resolver that forces 'type: string' must not.
+func TestAPI_LintParameterNumericMatches(t *testing.T) {
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(parameterprovider.NewParameterProvider()))
+	require.NoError(t, reg.Register(validationprovider.NewValidationProvider()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: api-parameter-numeric-matches-test
+  version: 1.0.0
+  description: numeric parameter default validated with matches()
+spec:
+  resolvers:
+    version:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+              default: 1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[0-9]+$")'
+              message: "version must be numeric"
+    safeVersion:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: safeVersion
+              type: string
+              default: 1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[0-9]+$")'
+              message: "safeVersion must be numeric"
+`
+
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer solServer.Close()
+	solURL := solServer.URL + "/solution.yaml"
+
+	lintObj := e.POST("/v1/solutions/lint").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	findings := lintObj.Value("findings").Array()
+	matchesFindings := 0
+	for _, f := range findings.Iter() {
+		obj := f.Object()
+		if obj.Value("ruleName").String().Raw() != "parameter-numeric-matches" {
+			continue
+		}
+		matchesFindings++
+		// Only the 'version' resolver (no explicit type) should be flagged.
+		assert.Equal(t, "resolvers.version", obj.Value("location").String().Raw(),
+			"the numeric-default resolver should be flagged")
+	}
+	assert.Equal(t, 1, matchesFindings,
+		"exactly one resolver should trigger parameter-numeric-matches")
+}
+
 func TestAPI_SolutionTest_MissingPath(t *testing.T) {
 	e, ts := setupExpect(t)
 	defer ts.Close()

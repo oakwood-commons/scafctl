@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -292,6 +293,201 @@ func TestParameterProvider_Execute_ForceString_DryRun(t *testing.T) {
 	assert.Equal(t, true, output.Metadata["dryRun"])
 }
 
+func TestParameterProvider_Execute_TypedCoercion(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      any
+		typeIn   string
+		expected any
+		typeMeta string
+	}{
+		{"int from string", "8080", TypeInt, int64(8080), "integer"},
+		{"int from int default", int64(8080), TypeInt, int64(8080), "integer"},
+		{"int from int32 default", int32(8080), TypeInt, int64(8080), "integer"},
+		{"int from uint64 default", uint64(8080), TypeInt, int64(8080), "integer"},
+		{"float from string", "3.14", TypeFloat, 3.14, "float"},
+		{"float from int", 42, TypeFloat, float64(42), "float"},
+		{"float from int32", int32(42), TypeFloat, float64(42), "float"},
+		{"float from uint64", uint64(42), TypeFloat, float64(42), "float"},
+		{"bool from string", "true", TypeBool, true, "boolean"},
+		{"bool from bool default", false, TypeBool, false, "boolean"},
+		{"csv from string", "a,b,c", TypeCSV, []string{"a", "b", "c"}, "array"},
+		{"csv with spaces", "a, b , c", TypeCSV, []string{"a", "b", "c"}, "array"},
+		{"json object", `{"a":1}`, TypeJSON, map[string]any{"a": float64(1)}, "object"},
+		{"json with surrounding whitespace", "  {\"a\":1}  ", TypeJSON, map[string]any{"a": float64(1)}, "object"},
+		{"json quote-wrapped payload", "\"{\"a\":1}\"", TypeJSON, map[string]any{"a": float64(1)}, "object"},
+		{"json string literal", `"hello"`, TypeJSON, "hello", "string"},
+		{"raw keeps numeric default", int64(42), TypeRaw, int64(42), "integer"},
+		{"raw keeps verbatim string", "00042", TypeRaw, "00042", "string"},
+		{"auto infers int", "12345", TypeAuto, int64(12345), "integer"},
+		{"auto does not split csv", "a,b,c", TypeAuto, "a,b,c", "string"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"val": tt.raw,
+			})
+
+			output, err := p.Execute(ctx, map[string]any{
+				"key":  "val",
+				"type": tt.typeIn,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.expected, output.Data)
+			assert.Equal(t, tt.typeMeta, output.Metadata["type"])
+		})
+	}
+}
+
+func TestParameterProvider_Execute_TypedCoercion_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     any
+		typeIn  string
+		wantMsg string
+	}{
+		{"int rejects non-numeric", "abc", TypeInt, "cannot parse"},
+		{"int rejects fractional float", 3.5, TypeInt, "without loss"},
+		{"int rejects out-of-range float", 1e300, TypeInt, "without loss"},
+		{"int rejects overflow uint64", uint64(math.MaxUint64), TypeInt, "without loss"},
+		{"float rejects non-numeric", "abc", TypeFloat, "cannot parse"},
+		{"bool rejects other", "yes", TypeBool, "expected true or false"},
+		{"json rejects invalid", "{not json", TypeJSON, "cannot parse value as JSON"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"val": tt.raw,
+			})
+
+			output, err := p.Execute(ctx, map[string]any{
+				"key":  "val",
+				"type": tt.typeIn,
+			})
+			require.Error(t, err)
+			assert.Nil(t, output)
+			assert.Contains(t, err.Error(), tt.wantMsg)
+		})
+	}
+}
+
+func TestCoerceInt_NumericWidths(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"int", int(7)},
+		{"int8", int8(7)},
+		{"int16", int16(7)},
+		{"int32", int32(7)},
+		{"int64", int64(7)},
+		{"uint", uint(7)},
+		{"uint8", uint8(7)},
+		{"uint16", uint16(7)},
+		{"uint32", uint32(7)},
+		{"uint64", uint64(7)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := coerceInt(tt.value)
+			require.NoError(t, err)
+			assert.Equal(t, int64(7), got)
+		})
+	}
+}
+
+func TestCoerceFloat_NumericWidths(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"float32", float32(7)},
+		{"float64", float64(7)},
+		{"int", int(7)},
+		{"int8", int8(7)},
+		{"int16", int16(7)},
+		{"int32", int32(7)},
+		{"int64", int64(7)},
+		{"uint", uint(7)},
+		{"uint8", uint8(7)},
+		{"uint16", uint16(7)},
+		{"uint32", uint32(7)},
+		{"uint64", uint64(7)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := coerceFloat(tt.value)
+			require.NoError(t, err)
+			assert.Equal(t, float64(7), got)
+		})
+	}
+}
+
+func TestParameterProvider_Execute_UnsupportedType(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{"val": "x"})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "val",
+		"type": "number",
+	})
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "unsupported type")
+}
+
+func TestParameterProvider_Execute_TypeNotString(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{"val": "x"})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "val",
+		"type": 123,
+	})
+	require.Error(t, err)
+	assert.Nil(t, output)
+	assert.Contains(t, err.Error(), "type must be a string")
+}
+
+func TestParameterProvider_Execute_TypedDefault(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":     "port",
+		"type":    TypeInt,
+		"default": "9090",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, int64(9090), output.Data)
+	assert.Equal(t, false, output.Metadata["exists"])
+}
+
+func TestParameterProvider_Execute_TypedDryRun_ReportsType(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithDryRun(provider.WithParameters(context.Background(), map[string]any{}), true)
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "port",
+		"type": TypeInt,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, TypeInt, output.Metadata["type"])
+
+	// No type provided -> reports auto.
+	output, err = p.Execute(ctx, map[string]any{"key": "port"})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, TypeAuto, output.Metadata["type"])
+}
+
 func TestParameterProvider_ParseValue_Boolean(t *testing.T) {
 	p := NewParameterProvider()
 	ctx := context.Background()
@@ -364,37 +560,29 @@ func TestParameterProvider_ParseValue_Float(t *testing.T) {
 	}
 }
 
-func TestParameterProvider_ParseValue_CSV(t *testing.T) {
+func TestParameterProvider_ParseValue_CSV_NotAutoSplit(t *testing.T) {
 	p := NewParameterProvider()
 	ctx := context.Background()
 
-	tests := []struct {
-		name     string
-		input    string
-		expected []string
-	}{
-		{"simple list", "a,b,c", []string{"a", "b", "c"}},
-		{"with spaces", "a, b, c", []string{"a", "b", "c"}},
-		{"mixed", "us-east1,us-west1,eu-west1", []string{"us-east1", "us-west1", "eu-west1"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := p.parseValue(ctx, tt.input)
+	// Comma-separated values are NOT auto-split; they stay literal strings.
+	tests := []string{"a,b,c", "a, b, c", "us-east1,us-west1,eu-west1"}
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			result, err := p.parseValue(ctx, input)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
+			assert.Equal(t, input, result)
 		})
 	}
 }
 
-func TestParameterProvider_ParseValue_QuotedString_NoCSVParsing(t *testing.T) {
+func TestParameterProvider_ParseValue_QuotedString(t *testing.T) {
 	p := NewParameterProvider()
 	ctx := context.Background()
 
-	// Quoted strings should not be parsed as CSV
+	// Quoted strings are unquoted and returned as literal strings.
 	result, err := p.parseValue(ctx, `"a,b,c"`)
 	require.NoError(t, err)
-	assert.Equal(t, "a,b,c", result) // Should be string, not array
+	assert.Equal(t, "a,b,c", result)
 }
 
 func TestParameterProvider_ParseValue_JSON_Object(t *testing.T) {
@@ -634,7 +822,7 @@ func TestParameterProvider_Execute_Default_TypedValues(t *testing.T) {
 		{"string literal", "fallback", "fallback", "string"},
 		{"bool string true", "true", true, "boolean"},
 		{"integer string", "42", int64(42), "integer"},
-		{"csv string", "a,b,c", []string{"a", "b", "c"}, "array"},
+		{"csv string not auto-split", "a,b,c", "a,b,c", "string"},
 		{"already-bool", true, true, "boolean"},
 		{"already-int", int64(99), int64(99), "integer"},
 	}

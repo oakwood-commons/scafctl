@@ -18,12 +18,14 @@ Step-by-step guides for learning scafctl features.
 - [Resolver Tutorial](resolver-tutorial.md) — Master dynamic value resolution
 - [Run Resolver Tutorial](run-resolver-tutorial.md) — Debug and inspect resolver execution
 - [Run Provider Tutorial](run-provider-tutorial.md) — Test providers in isolation
+- [Parameterized Calls Tutorial](calls-tutorial.md) — Define reusable, argument-driven provider requests with `spec.calls`
 - [Actions Tutorial](actions-tutorial.md) — Learn how to use actions for workflow automation
 - [Authentication Tutorial](auth-tutorial.md) — Set up authentication for your workflows
 - [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
 - [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
 - [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
+- [Reference-Data Lookups](reference-data-lookups.md) -- Look up taxonomy values from inline, file, or HTTP datasets
 - [Catalog Tutorial](catalog-tutorial.md) — Store and manage solutions in your local catalog
 - [MCP Server Tutorial](mcp-server-tutorial.md) — Set up AI agent integration with VS Code Copilot, Claude, Cursor, and Windsurf
 - [Security Hardening](security-hardening.md) — Secure your solutions and workflows

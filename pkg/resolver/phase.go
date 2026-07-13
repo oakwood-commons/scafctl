@@ -5,8 +5,10 @@ package resolver
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/dag"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
@@ -48,12 +50,35 @@ func (p PlanData) ToMap() map[string]any {
 	return out
 }
 
+// DeferredValidationUnit describes the deferred (cross-resolver) validation
+// rules for a single resolver. These rules reference other resolvers and are
+// excluded from the resolution DAG; they run in a dedicated post-resolution
+// validation phase once every resolver has resolved.
+type DeferredValidationUnit struct {
+	// ResolverName is the resolver that owns the deferred rules.
+	ResolverName string
+	// RuleIndices are indices into the resolver's Validate.With slice identifying
+	// which rules are deferred. Preserves declaration order.
+	RuleIndices []int
+	// DependsOn is the sorted set of foreign resolvers referenced by the deferred
+	// rules. Used only to order and report deferred validation results -- these are
+	// never resolution-graph edges.
+	DependsOn []string
+	// PhaseWhenDeferred indicates the phase-level validate.when referenced a
+	// foreign resolver, forcing every rule in the block to defer.
+	PhaseWhenDeferred bool
+}
+
 // BuildResult is the output of BuildPhases, bundling the phase groups with the
 // pre-execution plan topology so callers can inject __plan without re-computing deps.
 type BuildResult struct {
 	Phases []*PhaseGroup       `json:"phases" yaml:"phases" doc:"Execution phase groups"`
 	Plan   PlanData            `json:"plan"   yaml:"plan"   doc:"Pre-execution resolver topology snapshot"`
 	Deps   map[string][]string `json:"-"      yaml:"-"      doc:"Effective dependency map (reusable by callers)"`
+	// DeferredWork lists resolvers with cross-resolver validation rules that must
+	// run in the post-resolution validation phase. Empty when no resolver has any
+	// deferred validation rules.
+	DeferredWork []DeferredValidationUnit `json:"-" yaml:"-" doc:"Deferred cross-resolver validation work"`
 }
 
 // resolverDagObject implements the dag.Object interface for resolvers
@@ -78,6 +103,7 @@ func (r *resolverDagObject) GetDependencyKeys(_ map[string]string, _ map[string]
 type resolverObjectsWithLookup struct {
 	resolvers []*Resolver
 	lookup    DescriptorLookup
+	calls     map[string]*spec.Call
 }
 
 // DagItems returns the slice of dag.Object items with pre-computed dependencies
@@ -86,7 +112,7 @@ func (r *resolverObjectsWithLookup) DagItems() []dag.Object {
 	for i, resolver := range r.resolvers {
 		items[i] = &resolverDagObject{
 			resolver: resolver,
-			deps:     extractDependencies(resolver, r.lookup),
+			deps:     extractDependenciesWithCalls(resolver, r.lookup, r.calls),
 		}
 	}
 	return items
@@ -99,6 +125,14 @@ func (r *resolverObjectsWithLookup) DagItems() []dag.Object {
 // The returned BuildResult includes both the phase groups and PlanData — a static
 // topology snapshot that can be injected as __plan before execution begins.
 func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, error) {
+	return BuildPhasesWithCalls(resolvers, lookup, nil)
+}
+
+// BuildPhasesWithCalls is BuildPhases with awareness of reusable call definitions.
+// Call definitions are strictly isolated (their inputs may not reference solution
+// resolvers), so invoking a call contributes no extra dependencies; the calls map
+// is threaded through for signature parity and future use.
+func BuildPhasesWithCalls(resolvers []*Resolver, lookup DescriptorLookup, calls map[string]*spec.Call) (*BuildResult, error) {
 	if len(resolvers) == 0 {
 		return &BuildResult{
 			Phases: []*PhaseGroup{},
@@ -122,8 +156,8 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, 
 		// template-inferred edges (a go-template {{ .field }} accessor or a forEach
 		// alias) may legitimately reference local template context rather than a
 		// resolver, so an unknown target is dropped rather than failing the build.
-		inferred := extractDependencies(r, lookup)
-		strict := extractStrictDependencies(r)
+		inferred := extractDependenciesWithCalls(r, lookup, calls)
+		strict := extractStrictDependenciesWithCalls(r, calls)
 		filtered := make([]string, 0, len(inferred))
 		for _, dep := range inferred {
 			if _, ok := resolverMap[dep]; ok {
@@ -140,7 +174,7 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, 
 	}
 
 	// Build DAG using existing package
-	objects := &resolverObjectsWithLookup{resolvers: resolvers, lookup: lookup}
+	objects := &resolverObjectsWithLookup{resolvers: resolvers, lookup: lookup, calls: calls}
 	graph, err := dag.Build(objects, deps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
@@ -216,11 +250,43 @@ func BuildPhases(resolvers []*Resolver, lookup DescriptorLookup) (*BuildResult, 
 		}
 	}
 
+	// Partition each resolver's validate phase and collect the deferred
+	// (cross-resolver) validation work. Deferred rules are excluded from the
+	// resolution DAG above; they run in a dedicated post-resolution phase.
+	deferredWork := buildDeferredWork(resolvers, lookup)
+
 	return &BuildResult{
-		Phases: phases,
-		Plan:   plan,
-		Deps:   deps,
+		Phases:       phases,
+		Plan:         plan,
+		Deps:         deps,
+		DeferredWork: deferredWork,
 	}, nil
+}
+
+// buildDeferredWork partitions every resolver's validate phase and returns the
+// deferred validation units in resolver declaration order. Resolvers without any
+// deferred rules are omitted. The returned slice is nil when no deferred work
+// exists.
+func buildDeferredWork(resolvers []*Resolver, lookup DescriptorLookup) []DeferredValidationUnit {
+	var deferredWork []DeferredValidationUnit
+	for _, r := range resolvers {
+		part := partitionValidatePhase(r, lookup)
+		if !part.HasDeferred() {
+			continue
+		}
+		dependsOn := make([]string, 0, len(part.DeferredRefs))
+		for ref := range part.DeferredRefs {
+			dependsOn = append(dependsOn, ref)
+		}
+		sort.Strings(dependsOn)
+		deferredWork = append(deferredWork, DeferredValidationUnit{
+			ResolverName:      r.Name,
+			RuleIndices:       part.DeferredRules,
+			DependsOn:         dependsOn,
+			PhaseWhenDeferred: part.PhaseWhenDeferred,
+		})
+	}
+	return deferredWork
 }
 
 // GetPhaseForResolver returns the phase number for a given resolver name

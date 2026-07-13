@@ -71,3 +71,27 @@ func ValidateDescriptor(desc *Descriptor) error {
 func IsCapabilityValid(c Capability) bool {
 	return c.IsValid()
 }
+
+// builtinProviderNames is an O(1) lookup set of provider names that are
+// compiled into the scafctl binary. Built-in providers are always
+// pre-registered and must not be fetched from catalogs.
+var builtinProviderNames = map[string]bool{
+	"http":        true,
+	"cel":         true,
+	"file":        true,
+	"validation":  true,
+	"debug":       true,
+	"go-template": true,
+	"message":     true,
+	"static":      true,
+	"parameter":   true,
+	"solution":    true,
+	"state":       true,
+}
+
+// IsBuiltinProvider reports whether name is a built-in provider shipped with
+// the scafctl binary. Built-in providers are always pre-registered and must
+// not be fetched from a catalog.
+func IsBuiltinProvider(name string) bool {
+	return builtinProviderNames[name]
+}

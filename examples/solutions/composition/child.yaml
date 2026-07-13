@@ -25,3 +25,46 @@ spec:
           - provider: parameter
             inputs:
               key: message
+
+    # --- Value override contract (issue #616) ---
+    # A child opts a value into being overridable by the parent. It reads an
+    # optional parameter (default {}) and merges it OVER its own internally
+    # computed value, so the parent can enrich the map the child renders from.
+    # The override key must NOT reuse the effective resolver name ("labels") to
+    # avoid name-collision auto-wiring; use a distinct "_override" suffix.
+
+    # 1. Optional parent override. Empty map when the parent passes nothing.
+    labels_override:
+      type: any
+      description: "Optional parent-provided label overrides"
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: labels_override
+              default: {}
+
+    # 2. The child's own internally computed value.
+    labels_internal:
+      type: any
+      description: "Labels the child computes on its own"
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "{'app': 'child', 'tier': 'backend'}"
+
+    # 3. Effective value the child renders from: internal merged with the
+    #    override. map.merge gives the second argument precedence, so any keys
+    #    the parent supplied win over the child's defaults.
+    labels:
+      type: any
+      description: "Effective labels: internal merged with parent overrides"
+      dependsOn:
+        - labels_internal
+        - labels_override
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "map.merge(_.labels_internal, _.labels_override)"

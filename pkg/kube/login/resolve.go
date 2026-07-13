@@ -51,6 +51,9 @@ func resolveCluster(ctx context.Context, deps Deps, req Request) (kube.ClusterIn
 	if req.Audience != "" {
 		info.OIDCAudience = req.Audience
 	}
+	if req.Namespace != "" {
+		info.Namespace = req.Namespace
+	}
 	if req.InsecureSkipTLS {
 		info.InsecureSkipTLS = true
 		// The kubeconfig writer prefers CAData over InsecureSkipTLS, so a

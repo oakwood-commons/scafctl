@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,6 +91,16 @@ func TestProviderNames(t *testing.T) {
 
 	for _, expected := range expectedNames {
 		assert.Contains(t, names, expected, "should contain provider %q", expected)
+	}
+}
+
+func TestProviderNames_SyncWithIsBuiltinProvider(t *testing.T) {
+	// Ensures ProviderNames() and provider.IsBuiltinProvider() stay in sync.
+	// If a new builtin is added to one list but not the other, this test fails.
+	for _, name := range ProviderNames() {
+		assert.True(t, provider.IsBuiltinProvider(name),
+			"ProviderNames() includes %q but provider.IsBuiltinProvider(%q) returns false — update builtinProviderNames in provider.go",
+			name, name)
 	}
 }
 

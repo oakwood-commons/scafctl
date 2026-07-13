@@ -22,7 +22,12 @@ import (
 //
 // Only resolvers that completed with status Success are recorded; skipped or
 // failed resolvers leave any prior entry untouched.
-func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver) error {
+//
+// Resolvers whose names are present in skip are not locked on first run: a new
+// immutable value is not persisted when its deferred (cross-resolver) validation
+// failed. Existing locks are still verified so an immutable value cannot drift
+// undetected.
+func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers []*resolver.Resolver, skip map[string]bool) error {
 	if stateData == nil {
 		return nil
 	}
@@ -46,6 +51,12 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 
 		if r.Immutable {
 			if !exists || !existing.Immutable {
+				if skip[r.Name] {
+					// Deferred (cross-resolver) validation failed for this resolver:
+					// do not lock a new immutable value. Any existing lock is still
+					// verified below so a value cannot drift undetected.
+					continue
+				}
 				// First run as immutable (no prior entry, or the prior entry was
 				// persist-only and is being promoted to immutable): lock the
 				// current value rather than verifying against an unlocked entry.

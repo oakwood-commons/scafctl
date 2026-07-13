@@ -143,7 +143,9 @@ func TestExtractDependencies(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"base", "region", "invalid", "environment"},
+			// Two-phase validation: validate-phase refs (invalid, environment) are
+			// NOT resolution dependencies; only resolve/transform refs remain.
+			want: []string{"base", "region"},
 		},
 		{
 			name: "phase-level when conditions",
@@ -274,7 +276,9 @@ func TestExtractDependencies(t *testing.T) {
 					},
 				},
 			},
-			want: []string{"environment"},
+			// Two-phase validation: a validate message referencing another resolver
+			// (environment) is deferred, not a resolution dependency.
+			want: []string{},
 		},
 		{
 			name: "go-template provider with direct root-level references",
@@ -472,7 +476,7 @@ func TestExtractDependencies(t *testing.T) {
 			want: []string{"selfRef"},
 		},
 		{
-			name: "validate self-ref with other deps keeps other deps",
+			name: "validate cross-resolver ref is deferred, not a resolution dep",
 			resolver: &Resolver{
 				Name: "checker",
 				Resolve: &ResolvePhase{
@@ -496,8 +500,9 @@ func TestExtractDependencies(t *testing.T) {
 					},
 				},
 			},
-			// _.checker is self-ref (filtered), _.otherResolver is a real dep
-			want: []string{"otherResolver"},
+			// Two-phase validation: _.otherResolver is referenced only in a validate
+			// rule, so it is deferred and does NOT create a resolution-graph edge.
+			want: []string{},
 		},
 		{
 			name: "bracket notation CEL expression dependency",
@@ -551,6 +556,218 @@ func TestExtractDependencies(t *testing.T) {
 			}
 
 			assert.Equal(t, wantMap, gotMap, "dependencies should match")
+		})
+	}
+}
+
+func TestClassifyValidationRule(t *testing.T) {
+	tests := []struct {
+		name string
+		self string
+		rule ProviderValidation
+		want []string
+	}{
+		{
+			name: "self-only rule has no foreign refs",
+			self: "env",
+			rule: ProviderValidation{
+				Provider: "validation",
+				Inputs: map[string]*ValueRef{
+					"expression": {Expr: celExpPtr("__self != ''")},
+				},
+			},
+			want: []string{},
+		},
+		{
+			name: "self reference by name is filtered",
+			self: "env",
+			rule: ProviderValidation{
+				Provider: "validation",
+				Inputs: map[string]*ValueRef{
+					"expression": {Expr: celExpPtr("_.env != ''")},
+				},
+			},
+			want: []string{},
+		},
+		{
+			name: "foreign ref in inputs is returned",
+			self: "env",
+			rule: ProviderValidation{
+				Provider: "validation",
+				Inputs: map[string]*ValueRef{
+					"expression": {Expr: celExpPtr("_.env != _.other")},
+				},
+			},
+			want: []string{"other"},
+		},
+		{
+			name: "foreign ref in rule-level when is returned",
+			self: "env",
+			rule: ProviderValidation{
+				Provider: "validation",
+				When:     &Condition{Expr: celExpPtr("_.enabled == true")},
+				Inputs: map[string]*ValueRef{
+					"expression": {Expr: celExpPtr("__self != ''")},
+				},
+			},
+			want: []string{"enabled"},
+		},
+		{
+			name: "foreign ref only in message template is returned",
+			self: "env",
+			rule: ProviderValidation{
+				Provider: "validation",
+				Inputs: map[string]*ValueRef{
+					"match": {Literal: "^[a-z]+$"},
+				},
+				Message: &ValueRef{Tmpl: tmplPtr("bad value, see {{ ._.other }}")},
+			},
+			want: []string{"other"},
+		},
+		{
+			name: "multiple foreign refs across inputs and message",
+			self: "env",
+			rule: ProviderValidation{
+				Provider: "validation",
+				Inputs: map[string]*ValueRef{
+					"expression": {Expr: celExpPtr("_.env != _.a")},
+				},
+				Message: &ValueRef{Tmpl: tmplPtr("conflict with {{ ._.b }}")},
+			},
+			want: []string{"a", "b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyValidationRule(tt.rule, tt.self, nil)
+
+			wantMap := make(map[string]bool)
+			for _, ref := range tt.want {
+				wantMap[ref] = true
+			}
+			assert.Equal(t, wantMap, got, "foreign refs should match")
+		})
+	}
+}
+
+func TestPartitionValidatePhase(t *testing.T) {
+	tests := []struct {
+		name              string
+		resolver          *Resolver
+		wantInline        []int
+		wantDeferred      []int
+		wantDeferredRefs  []string
+		wantPhaseDeferred bool
+	}{
+		{
+			name:         "nil resolver yields empty partition",
+			resolver:     nil,
+			wantInline:   nil,
+			wantDeferred: nil,
+		},
+		{
+			name: "nil validate phase yields empty partition",
+			resolver: &Resolver{
+				Name: "env",
+			},
+			wantInline:   nil,
+			wantDeferred: nil,
+		},
+		{
+			name: "self-only rules stay inline",
+			resolver: &Resolver{
+				Name: "env",
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("_.env.size() > 0")}}},
+					},
+				},
+			},
+			wantInline:   []int{0, 1},
+			wantDeferred: nil,
+		},
+		{
+			name: "foreign ref defers only that rule",
+			resolver: &Resolver{
+				Name: "env",
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("_.env != _.other")}}},
+					},
+				},
+			},
+			wantInline:       []int{0},
+			wantDeferred:     []int{1},
+			wantDeferredRefs: []string{"other"},
+		},
+		{
+			name: "message-only foreign ref defers the rule",
+			resolver: &Resolver{
+				Name: "env",
+				Validate: &ValidatePhase{
+					With: []ProviderValidation{
+						{
+							Provider: "validation",
+							Inputs:   map[string]*ValueRef{"match": {Literal: "^[a-z]+$"}},
+							Message:  &ValueRef{Tmpl: tmplPtr("conflicts with {{ ._.other }}")},
+						},
+					},
+				},
+			},
+			wantInline:       nil,
+			wantDeferred:     []int{0},
+			wantDeferredRefs: []string{"other"},
+		},
+		{
+			name: "phase-level foreign when forces whole block to defer",
+			resolver: &Resolver{
+				Name: "env",
+				Validate: &ValidatePhase{
+					When: &Condition{Expr: celExpPtr("_.gate == true")},
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("_.env != _.other")}}},
+					},
+				},
+			},
+			wantInline:        nil,
+			wantDeferred:      []int{0, 1},
+			wantDeferredRefs:  []string{"gate", "other"},
+			wantPhaseDeferred: true,
+		},
+		{
+			name: "phase-level self-only when does not force deferral",
+			resolver: &Resolver{
+				Name: "env",
+				Validate: &ValidatePhase{
+					When: &Condition{Expr: celExpPtr("_.env != ''")},
+					With: []ProviderValidation{
+						{Provider: "validation", Inputs: map[string]*ValueRef{"expression": {Expr: celExpPtr("__self != ''")}}},
+					},
+				},
+			},
+			wantInline:   []int{0},
+			wantDeferred: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := partitionValidatePhase(tt.resolver, nil)
+
+			assert.Equal(t, tt.wantInline, got.InlineRules, "inline rule indices")
+			assert.Equal(t, tt.wantDeferred, got.DeferredRules, "deferred rule indices")
+			assert.Equal(t, tt.wantPhaseDeferred, got.PhaseWhenDeferred, "phase-when deferred flag")
+
+			wantRefs := make(map[string]bool)
+			for _, ref := range tt.wantDeferredRefs {
+				wantRefs[ref] = true
+			}
+			assert.Equal(t, wantRefs, got.DeferredRefs, "deferred refs")
+			assert.Equal(t, len(tt.wantDeferred) > 0, got.HasDeferred(), "HasDeferred")
 		})
 	}
 }

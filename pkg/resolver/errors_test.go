@@ -142,6 +142,45 @@ func TestAggregatedValidationError(t *testing.T) {
 	})
 }
 
+func TestAggregatedDeferredValidationError(t *testing.T) {
+	t.Run("single failure", func(t *testing.T) {
+		err := &AggregatedDeferredValidationError{
+			Failures: []DeferredValidationFailure{
+				{
+					ResolverName: "checker",
+					Failures:     []ValidationFailure{{Rule: 0, Message: "env must differ from region"}},
+				},
+			},
+		}
+		expected := `deferred validation failed: resolver "checker": env must differ from region`
+		assert.Equal(t, expected, err.Error())
+		assert.True(t, err.HasFailures())
+		assert.Nil(t, err.Unwrap())
+	})
+
+	t.Run("multiple failures across resolvers", func(t *testing.T) {
+		err := &AggregatedDeferredValidationError{
+			Failures: []DeferredValidationFailure{
+				{ResolverName: "a", Failures: []ValidationFailure{{Rule: 0, Message: "first"}}},
+				{ResolverName: "b", Failures: []ValidationFailure{{Rule: 0, Message: "second"}, {Rule: 1, Message: "third"}}},
+			},
+			Suppressed: []string{"c"},
+		}
+		msg := err.Error()
+		assert.Contains(t, msg, "deferred validation failed with 3 error(s) across 2 resolver(s)")
+		assert.Contains(t, msg, `resolver "a": first`)
+		assert.Contains(t, msg, `resolver "b": second`)
+		assert.Contains(t, msg, `resolver "b": third`)
+		assert.Contains(t, msg, "suppressed due to upstream failures: c")
+	})
+
+	t.Run("no failures", func(t *testing.T) {
+		err := &AggregatedDeferredValidationError{}
+		assert.Equal(t, "deferred validation failed (no details)", err.Error())
+		assert.False(t, err.HasFailures())
+	})
+}
+
 func TestCircularDependencyError(t *testing.T) {
 	t.Run("with cycle", func(t *testing.T) {
 		err := NewCircularDependencyError([]string{"a", "b", "c", "a"})

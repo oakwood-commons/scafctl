@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -110,13 +111,17 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
 	lintResolverCycles(sol, result, registry)
+	lintDeferredValidation(sol, result, registry)
 	lintTemplateAccessors(sol, result)
 	lintWorkflow(sol, result, registry)
+	lintCalls(sol, result, registry)
 	lintState(sol, result, registry)
 	lintImmutableResolvers(sol, result)
+	lintParameterNumericMatches(sol, result)
 	lintTests(sol, filePath, result)
 	lintProviderInputs(sol, result, registry)
 	lintDeprecatedFields(sol, result)
+	lintBundlePlugins(sol, result)
 
 	// Apply suppression directives parsed from inline YAML comments.
 	suppressions := ParseDirectives(sol.RawContent(), filePath).WithSourceMap(result.sourceMap)
@@ -187,6 +192,170 @@ func isUnconditionalSource(step resolver.ProviderSource) bool {
 func parameterSourceHasDefault(step resolver.ProviderSource) bool {
 	_, ok := step.Inputs[parameterDefaultInput]
 	return ok
+}
+
+// parameterTypeInput is the input key the parameter provider reads to select an
+// explicit type instead of automatic inference.
+const parameterTypeInput = "type"
+
+// parameterAutoType is the parameter provider's default type name, which enables
+// automatic type inference (the behavior that triggers the numeric coercion
+// footgun).
+const parameterAutoType = "auto"
+
+// lintParameterNumericMatches warns when a resolver reads a 'parameter' source
+// with a numeric default and no explicit 'type', yet a transform or validate CEL
+// expression calls matches() on the value. Automatic type inference coerces
+// numeric values to integers, which have no matches() method and fail at
+// runtime even though the solution passes lint.
+func lintParameterNumericMatches(sol *solution.Solution, result *Result) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+
+	for name, res := range sol.Spec.Resolvers {
+		if res == nil || res.Resolve == nil {
+			continue
+		}
+		// A resolver-level 'type: string' declaration already coerces the value
+		// to a string, so matches() would work regardless of the parameter source.
+		if strings.EqualFold(string(res.Type), typeStringName) {
+			continue
+		}
+		if !hasNumericParameterWithoutType(res.Resolve.With) {
+			continue
+		}
+		if !resolverUsesMatches(res) {
+			continue
+		}
+		location := fmt.Sprintf("resolvers.%s", name)
+		result.addFinding(SeverityWarning, "type-inference", location,
+			fmt.Sprintf("resolver '%s' reads a numeric 'parameter' default without an explicit 'type' but calls matches() on the value; automatic type inference coerces numbers to integers, which have no matches() method and fail at runtime", name),
+			"Add 'type: string' to the parameter source to keep the value a string for matches(), or quote the default as a string",
+			"parameter-numeric-matches")
+	}
+}
+
+// typeStringName is the parameter/resolver type name that coerces values to
+// strings.
+const typeStringName = "string"
+
+// hasNumericParameterWithoutType reports whether any parameter source in the
+// resolve steps supplies a numeric default while relying on automatic type
+// inference (no explicit 'type', or 'type: auto').
+func hasNumericParameterWithoutType(steps []resolver.ProviderSource) bool {
+	for _, step := range steps {
+		if step.Provider != parameterProviderName {
+			continue
+		}
+		if parameterHasExplicitType(step) {
+			continue
+		}
+		defRef, ok := step.Inputs[parameterDefaultInput]
+		if !ok || defRef == nil {
+			continue
+		}
+		if isNumericLiteral(defRef.Literal) {
+			return true
+		}
+	}
+	return false
+}
+
+// parameterHasExplicitType reports whether a parameter source declares a literal
+// 'type' input other than the automatic-inference default.
+func parameterHasExplicitType(step resolver.ProviderSource) bool {
+	typeRef, ok := step.Inputs[parameterTypeInput]
+	if !ok || typeRef == nil {
+		return false
+	}
+	t, isStr := typeRef.Literal.(string)
+	if !isStr {
+		return false
+	}
+	t = strings.TrimSpace(t)
+	return t != "" && !strings.EqualFold(t, parameterAutoType)
+}
+
+// isNumericLiteral reports whether a literal value is a number or a
+// numeric-looking string that automatic type inference would coerce to a number.
+func isNumericLiteral(v any) bool {
+	switch t := v.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return true
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return false
+		}
+		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return true
+		}
+		if _, err := strconv.ParseFloat(s, 64); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// celBearingInputKeys names the provider inputs whose values are CEL
+// expressions (cel/validation providers). Only these keys are scanned for the
+// matches() function so that non-CEL inputs (e.g. regex patterns) do not
+// trigger false positives.
+var celBearingInputKeys = []string{"expression", "failWhen"}
+
+// resolverUsesMatches reports whether any transform or validate CEL expression
+// in the resolver calls the matches() function.
+func resolverUsesMatches(res *resolver.Resolver) bool {
+	if res.Transform != nil {
+		for _, step := range res.Transform.With {
+			if inputsUseMatches(step.Inputs) {
+				return true
+			}
+		}
+	}
+	if res.Validate != nil {
+		for _, step := range res.Validate.With {
+			if inputsUseMatches(step.Inputs) {
+				return true
+			}
+			if step.Message != nil && step.Message.Expr != nil &&
+				strings.Contains(string(*step.Message.Expr), "matches(") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inputsUseMatches reports whether any known CEL-bearing input in the map
+// carries a matches() call.
+func inputsUseMatches(inputs map[string]*resolver.ValueRef) bool {
+	for _, key := range celBearingInputKeys {
+		if exprContainsMatches(inputs[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+// exprContainsMatches reports whether a ValueRef carries a CEL expression that
+// calls the matches() function. It inspects both explicit expr: references and
+// plain string literals (the validation and cel providers take their CEL
+// expression as a literal 'expression' input).
+func exprContainsMatches(ref *resolver.ValueRef) bool {
+	if ref == nil {
+		return false
+	}
+	if ref.Expr != nil && strings.Contains(string(*ref.Expr), "matches(") {
+		return true
+	}
+	if s, ok := ref.Literal.(string); ok && strings.Contains(s, "matches(") {
+		return true
+	}
+	return false
 }
 
 func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Registry, referencedResolvers map[string]bool) {
@@ -625,8 +794,9 @@ func isNonTrivialGuard(c *resolver.Condition) bool {
 }
 
 // lintResolverCycles checks for circular dependencies in the resolver dependency graph.
-// When a cycle involves a resolver with a validate block, the suggestion specifically
-// recommends extracting the validation into a separate resolver.
+// Only resolution-phase references (resolve/transform/when) form edges; deferred
+// cross-resolver validation references are excluded by ExtractDependencies and
+// therefore never reported here as cycles.
 func lintResolverCycles(sol *solution.Solution, result *Result, registry *provider.Registry) {
 	if sol.Spec.Resolvers == nil {
 		return
@@ -646,30 +816,48 @@ func lintResolverCycles(sol *solution.Solution, result *Result, registry *provid
 		deps[name] = resolver.ExtractDependencies(res, lookup)
 	}
 
-	// Detect cycles using DFS-based cycle detection.
+	// Detect cycles using DFS-based cycle detection. Any cycle found is a genuine
+	// resolve/transform ordering cycle; validation references cannot contribute.
 	cycles := findResolverCycles(deps)
 	for _, cycle := range cycles {
-		// Check if any resolver in the cycle has a validate block.
-		hasValidate := false
-		for _, name := range cycle {
-			if res, ok := sol.Spec.Resolvers[name]; ok && res != nil && res.Validate != nil && len(res.Validate.With) > 0 {
-				hasValidate = true
-				break
-			}
-		}
-
 		location := fmt.Sprintf("resolvers.%s", cycle[0])
 		cycleStr := strings.Join(cycle, " → ")
 
-		suggestion := "Break the cycle by reordering dependencies or removing unnecessary references"
-		if hasValidate {
-			suggestion = "A validate block is part of this cycle. Extract the validation into a separate resolver that depends on all required values, breaking the cycle"
-		}
-
 		result.addFinding(SeverityError, "dependency", location,
 			fmt.Sprintf("circular dependency detected: %s", cycleStr),
-			suggestion,
+			"Break the cycle by reordering dependencies or removing unnecessary references",
 			"resolver-cycle")
+	}
+}
+
+// lintDeferredValidation emits an advisory finding for each resolver that has a
+// cross-resolver (deferred) validation rule. Deferred rules run after all
+// resolvers resolve and therefore cannot fail fast, so authors are guided to
+// keep cheap self-only checks (required/regex) as separate inline rules to
+// preserve early feedback.
+func lintDeferredValidation(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
+	}
+
+	for _, res := range sol.Spec.ResolversToSlice() {
+		if res == nil || res.Validate == nil {
+			continue
+		}
+		part := resolver.PartitionValidatePhase(res, lookup)
+		if !part.HasDeferred() {
+			continue
+		}
+		location := fmt.Sprintf("resolvers.%s.validate", res.Name)
+		result.addFinding(SeverityInfo, "structure", location,
+			fmt.Sprintf("resolver %q has a cross-resolver validation rule that runs in the deferred phase; it cannot fail fast", res.Name),
+			"Keep cheap self-only checks (required/regex) as separate inline validation rules so they still fail fast; deferred rules run after all resolvers resolve",
+			"deferred-validation-not-fail-fast")
 	}
 }
 
@@ -873,6 +1061,24 @@ func registryWithBundlePlugins(registry *provider.Registry, sol *solution.Soluti
 		clone.MarkKnown(entry.Name)
 	}
 	return clone
+}
+
+// lintBundlePlugins warns when bundle.plugins entries reference built-in
+// providers. Builtins are compiled into the binary and will be ignored at
+// runtime, so declaring them in bundle.plugins is unnecessary.
+func lintBundlePlugins(sol *solution.Solution, result *Result) {
+	for i, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindProvider && provider.IsBuiltinProvider(p.Name) {
+			result.addFinding(
+				SeverityWarning,
+				"bundle",
+				fmt.Sprintf("bundle.plugins[%d]", i),
+				fmt.Sprintf("bundle.plugins entry %q is a builtin provider and will be ignored at runtime", p.Name),
+				"Remove this entry; builtin providers are always available without an explicit plugin declaration",
+				"builtin-in-bundle-plugins",
+			)
+		}
+	}
 }
 
 // registryAdapter adapts provider.Registry to action.RegistryInterface

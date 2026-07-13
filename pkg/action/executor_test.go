@@ -146,6 +146,41 @@ func TestExecutor_Execute_SingleAction(t *testing.T) {
 	assert.Equal(t, StatusSucceeded, result.Actions["test-action"].Status)
 }
 
+func TestExecutor_Execute_InstallsResolverContext(t *testing.T) {
+	var gotResolverCtx map[string]any
+	var gotOK bool
+
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "ctx-provider",
+		execute: func(ctx context.Context, _ any) (*provider.Output, error) {
+			gotResolverCtx, gotOK = provider.ResolverContextFromContext(ctx)
+			return &provider.Output{Data: map[string]any{"success": true}}, nil
+		},
+	})
+
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithResolverData(map[string]any{"environment": "prod"}),
+		WithDefaultTimeout(5*time.Second),
+	)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"ctx-action": {
+				Provider: "ctx-provider",
+			},
+		},
+	}
+
+	result, err := executor.Execute(context.Background(), workflow)
+
+	require.NoError(t, err)
+	assert.Equal(t, ExecutionSucceeded, result.FinalStatus)
+	require.True(t, gotOK, "provider should receive resolver context for a regular action")
+	assert.Equal(t, "prod", gotResolverCtx["environment"])
+}
+
 func TestExecutor_Execute_ActionChain(t *testing.T) {
 	executionOrder := make([]string, 0)
 	var mu sync.Mutex

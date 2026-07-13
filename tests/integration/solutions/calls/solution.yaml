@@ -1,0 +1,282 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-calls
+  version: 1.0.0
+  description: |
+    Functional tests for spec.calls -- reusable, argument-driven provider
+    requests. Verifies call definitions invoked from resolve, transform,
+    validate, and action steps; the args namespace (_.args.x and {{ .args.x }});
+    typed args with defaults and required values; array/object argument
+    serialization; and opt-in de-duplication. Network-free (uses the cel,
+    static, and validation providers).
+
+spec:
+  # ─────────────────────────────────────────────
+  # Call definitions: reusable, named request shapes.
+  # ─────────────────────────────────────────────
+  calls:
+    # A greeting builder. Two typed args referenced via the args namespace.
+    greet:
+      description: Build a greeting from a salutation and a name.
+      provider: cel
+      args:
+        salutation:
+          type: string
+          default: Hello
+        name:
+          type: string
+          required: true
+      inputs:
+        expression: '_.args.salutation + ", " + _.args.name + "!"'
+
+    # A definition with an int arg (default) and a Go-template input that
+    # references the args namespace as {{ .args.x }}.
+    repeatTag:
+      provider: go-template
+      args:
+        tag:
+          type: string
+          required: true
+        count:
+          type: int
+          default: 2
+      inputs:
+        template: '{{ range $i := until (.args.count | int) }}{{ $.args.tag }}{{ end }}'
+
+    # A definition with an array arg serialized in the request.
+    joinItems:
+      provider: cel
+      args:
+        items:
+          type: array
+          required: true
+      inputs:
+        expression: 'string(size(_.args.items)) + ":" + _.args.items[0]'
+
+    # A reusable validation with dedup enabled. Identical invocations within a
+    # single run execute the provider only once and share the result.
+    nonEmpty:
+      dedup: true
+      provider: validation
+      args:
+        value:
+          type: string
+          required: true
+      inputs:
+        value:
+          expr: _.args.value
+        match: '^[a-z][a-z0-9-]*$'
+        message: 'value must be a non-empty lowercase token'
+
+    # An action-side definition invoked from workflow actions. Uses the cel
+    # provider with _.args.x to verify actions expose the args namespace to
+    # providers that evaluate against the resolver context.
+    announce:
+      description: Emit a formatted announcement line for a stage.
+      provider: cel
+      args:
+        stage:
+          type: string
+          required: true
+      inputs:
+        expression: "'reached stage: ' + _.args.stage"
+
+  resolvers:
+    # Same definition, default salutation.
+    english:
+      description: Uses the default salutation argument.
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              name: World
+
+    # Same definition, overridden salutation.
+    spanish:
+      description: Overrides the salutation argument.
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hola
+              name: Mundo
+
+    # Argument sourced from another resolver via a ValueRef (expr).
+    requestor:
+      description: A base value referenced by a call-site argument.
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Ada
+
+    personalized:
+      description: Call-site argument sourced from a resolver reference.
+      type: string
+      resolve:
+        with:
+          - call: greet
+            args:
+              salutation: Hey
+              name:
+                expr: _.requestor
+
+    # Int-typed arg with default via a Go-template definition.
+    tagDefault:
+      description: Uses the default count (2).
+      type: string
+      resolve:
+        with:
+          - call: repeatTag
+            args:
+              tag: ab
+
+    tagOverride:
+      description: Overrides the count argument.
+      type: string
+      resolve:
+        with:
+          - call: repeatTag
+            args:
+              tag: x
+              count: 4
+
+    # Array argument serialization.
+    itemsSummary:
+      description: Passes an array argument to a call.
+      type: string
+      resolve:
+        with:
+          - call: joinItems
+            args:
+              items:
+                - alpha
+                - beta
+                - gamma
+
+    # A call in a validate step. The value under validation is passed as an
+    # argument, keeping the rule reusable. dedup:true on the definition.
+    environment:
+      description: A validated environment name.
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'production'"
+      validate:
+        with:
+          - call: nonEmpty
+            args:
+              value:
+                expr: __self
+
+    # A second call site of the dedup definition with identical bound args.
+    environmentEcho:
+      description: Second dedup call site with the same bound argument value.
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: "'production'"
+      validate:
+        with:
+          - call: nonEmpty
+            args:
+              value:
+                expr: __self
+
+  workflow:
+    actions:
+      build:
+        description: Invoke a call from an action.
+        call: announce
+        args:
+          stage: build
+
+      deploy:
+        description: Reuse the same definition with a different argument.
+        dependsOn:
+          - build
+        call: announce
+        args:
+          stage: deploy
+
+  testing:
+    cases:
+      _base:
+        description: Base template for resolver call tests
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [calls]
+        assertions:
+          - expression: __exitCode == 0
+
+      _run-base:
+        description: Base template for workflow call tests
+        command: [run, solution]
+        args: ["-o", "json"]
+        tags: [calls, action]
+        assertions:
+          - expression: __exitCode == 0
+
+      default-arg:
+        description: Definition default argument is applied when omitted
+        extends: [_base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.english == "Hello, World!"
+
+      override-arg:
+        description: Call site overrides an optional argument
+        extends: [_base]
+        assertions:
+          - expression: __output.spanish == "Hola, Mundo!"
+
+      arg-from-resolver-ref:
+        description: Call-site argument sourced from a resolver reference
+        extends: [_base]
+        assertions:
+          - expression: __output.personalized == "Hey, Ada!"
+
+      int-arg-default:
+        description: Typed int argument default in a Go-template definition
+        extends: [_base]
+        assertions:
+          - expression: __output.tagDefault == "abab"
+
+      int-arg-override:
+        description: Typed int argument overridden at the call site
+        extends: [_base]
+        assertions:
+          - expression: __output.tagOverride == "xxxx"
+
+      array-arg:
+        description: Array argument serialized and referenced in a definition
+        extends: [_base]
+        assertions:
+          - expression: __output.itemsSummary == "3:alpha"
+
+      validate-call:
+        description: A call invoked from a validate step passes
+        extends: [_base]
+        assertions:
+          - expression: __output.environment == "production"
+          - expression: __output.environmentEcho == "production"
+
+      action-call:
+        description: A call invoked from workflow actions succeeds and is reused
+        extends: [_run-base]
+        tags: [smoke]
+        assertions:
+          - expression: __output.status == "succeeded"
+          - expression: __output.actions["build"].status == "succeeded"
+          - expression: __output.actions["deploy"].status == "succeeded"
+          - expression: __output.actions["build"].results.contains("build")
+          - expression: __output.actions["deploy"].results.contains("deploy")

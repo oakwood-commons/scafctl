@@ -349,10 +349,26 @@ func (f *Fetcher) FetchPlugins(ctx context.Context, plugins []solution.PluginDep
 		return nil, nil
 	}
 
-	results := make([]FetchResult, len(plugins))
+	// Filter out built-in providers — they are compiled into the binary and
+	// must not be fetched from catalogs. This is the single enforcement point
+	// (analogous to Terraform's BuiltInProviderAvailable check in the
+	// provider installer).
+	var filtered []solution.PluginDependency
+	for _, dep := range plugins {
+		if dep.Kind == solution.PluginKindProvider && provider.IsBuiltinProvider(dep.Name) {
+			f.logger.V(1).Info("skipping builtin provider in plugin fetch", "name", dep.Name)
+			continue
+		}
+		filtered = append(filtered, dep)
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+
+	results := make([]FetchResult, len(filtered))
 	errGroup, ctx := errgroup.WithContext(ctx)
 	errGroup.SetLimit(settings.DefaultFetchConcurrency)
-	for i, dep := range plugins {
+	for i, dep := range filtered {
 		errGroup.Go(func() error {
 			result, err := f.fetchOne(ctx, dep, lockPlugins)
 			if err != nil {

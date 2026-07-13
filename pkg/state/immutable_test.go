@@ -127,7 +127,7 @@ func TestVerifyImmutables(t *testing.T) {
 
 func TestPersistResolvers(t *testing.T) {
 	t.Run("nil state data is a no-op", func(t *testing.T) {
-		err := PersistResolvers(nil, resolver.NewContext(), nil)
+		err := PersistResolvers(nil, resolver.NewContext(), nil, nil)
 		assert.NoError(t, err)
 	})
 
@@ -143,7 +143,7 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, resolvers)
+		err := PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 
 		entry := sd.Resolvers["token"]
@@ -157,7 +157,7 @@ func TestPersistResolvers(t *testing.T) {
 			Value:  "second",
 			Status: resolver.ExecutionStatusSuccess,
 		})
-		err = PersistResolvers(sd, rctx, resolvers)
+		err = PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 
 		entry = sd.Resolvers["token"]
@@ -177,13 +177,13 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, resolvers)
+		err := PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 		assert.True(t, sd.Resolvers["cluster_id"].Immutable)
 		assert.Equal(t, "uuid-1234", sd.Resolvers["cluster_id"].Value)
 
 		// Same value on a subsequent run passes.
-		err = PersistResolvers(sd, rctx, resolvers)
+		err = PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 
 		// A changed value errors.
@@ -191,7 +191,7 @@ func TestPersistResolvers(t *testing.T) {
 			Value:  "uuid-CHANGED",
 			Status: resolver.ExecutionStatusSuccess,
 		})
-		err = PersistResolvers(sd, rctx, resolvers)
+		err = PersistResolvers(sd, rctx, resolvers, nil)
 		assert.Error(t, err)
 		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
@@ -208,7 +208,7 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, persistOnly)
+		err := PersistResolvers(sd, rctx, persistOnly, nil)
 		assert.NoError(t, err)
 		assert.False(t, sd.Resolvers["token"].Immutable)
 		firstCreated := sd.Resolvers["token"].CreatedAt
@@ -223,7 +223,7 @@ func TestPersistResolvers(t *testing.T) {
 			Value:  "second",
 			Status: resolver.ExecutionStatusSuccess,
 		})
-		err = PersistResolvers(sd, rctx, immutable)
+		err = PersistResolvers(sd, rctx, immutable, nil)
 		assert.NoError(t, err)
 
 		entry := sd.Resolvers["token"]
@@ -236,7 +236,7 @@ func TestPersistResolvers(t *testing.T) {
 			Value:  "third",
 			Status: resolver.ExecutionStatusSuccess,
 		})
-		err = PersistResolvers(sd, rctx, immutable)
+		err = PersistResolvers(sd, rctx, immutable, nil)
 		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
 
@@ -252,7 +252,7 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, immutable)
+		err := PersistResolvers(sd, rctx, immutable, nil)
 		assert.NoError(t, err)
 		assert.True(t, sd.Resolvers["cluster_id"].Immutable)
 		lockedCreated := sd.Resolvers["cluster_id"].CreatedAt
@@ -268,7 +268,7 @@ func TestPersistResolvers(t *testing.T) {
 			Value:  "uuid-CHANGED",
 			Status: resolver.ExecutionStatusSuccess,
 		})
-		err = PersistResolvers(sd, rctx, persistOnly)
+		err = PersistResolvers(sd, rctx, persistOnly, nil)
 		assert.NoError(t, err)
 
 		entry := sd.Resolvers["cluster_id"]
@@ -290,7 +290,7 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, resolvers)
+		err := PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 		assert.Contains(t, sd.Resolvers, "cluster_id")
 	})
@@ -307,7 +307,7 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, resolvers)
+		err := PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 		assert.NotContains(t, sd.Resolvers, "env")
 	})
@@ -324,8 +324,48 @@ func TestPersistResolvers(t *testing.T) {
 		})
 
 		sd := NewData()
-		err := PersistResolvers(sd, rctx, resolvers)
+		err := PersistResolvers(sd, rctx, resolvers, nil)
 		assert.NoError(t, err)
 		assert.NotContains(t, sd.Resolvers, "token")
+	})
+
+	t.Run("skip prevents locking a new immutable on first run", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
+		assert.NoError(t, err)
+		assert.NotContains(t, sd.Resolvers, "cluster_id", "skipped resolver must not lock a new value")
+	})
+
+	t.Run("skip still verifies an existing lock and detects drift", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
+			Value:     "uuid-1234",
+			Type:      "string",
+		}
+
+		err := PersistResolvers(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
 }

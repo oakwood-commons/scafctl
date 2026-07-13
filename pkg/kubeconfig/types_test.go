@@ -20,6 +20,7 @@ func TestWriteInput_ToInputs(t *testing.T) {
 		Audience:           "aud",
 		ClusterName:        "prod",
 		ContextName:        "ctx",
+		Namespace:          "team-a",
 		UserName:           "user",
 		KubeconfigPath:     "/tmp/kubeconfig",
 		ExecCommand:        "scafctl",
@@ -34,6 +35,7 @@ func TestWriteInput_ToInputs(t *testing.T) {
 	got := in.toInputs()
 	assert.Equal(t, "https://api.example.com:6443", got["server"])
 	assert.Equal(t, "prod", got["cluster_name"])
+	assert.Equal(t, "team-a", got["namespace"])
 	assert.Equal(t, "scafctl", got["exec_command"])
 	assert.Equal(t, []string{"auth", "token"}, got["exec_args"])
 	assert.Equal(t, "-----BEGIN CERTIFICATE-----", got["ca_data"])

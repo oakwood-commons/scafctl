@@ -264,3 +264,24 @@ func BenchmarkDescriptor_DescribeWhatIf_Fallback(b *testing.B) {
 		_ = d.DescribeWhatIf(ctx, nil)
 	}
 }
+
+func TestIsBuiltinProvider(t *testing.T) {
+	t.Run("returns true for all builtin providers", func(t *testing.T) {
+		builtins := []string{
+			"http", "cel", "file", "validation", "debug",
+			"go-template", "message", "static", "parameter", "solution",
+		}
+		for _, name := range builtins {
+			assert.True(t, IsBuiltinProvider(name), "expected %q to be builtin", name)
+		}
+	})
+
+	t.Run("returns false for external providers", func(t *testing.T) {
+		externals := []string{
+			"aws-provider", "custom", "my-plugin", "", "HTTP", "CEL",
+		}
+		for _, name := range externals {
+			assert.False(t, IsBuiltinProvider(name), "expected %q to NOT be builtin", name)
+		}
+	})
+}

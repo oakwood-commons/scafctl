@@ -122,6 +122,66 @@ func (e *AggregatedValidationError) AddFailure(failure ValidationFailure) {
 	e.Failures = append(e.Failures, failure)
 }
 
+// DeferredValidationFailure holds the deferred (cross-resolver) validation
+// failures for a single resolver. It reuses ValidationFailure for each failing
+// rule so the inline and deferred paths report failures identically.
+type DeferredValidationFailure struct {
+	ResolverName string              `json:"resolverName" yaml:"resolverName" doc:"Name of the resolver whose deferred validation failed" example:"checker"`
+	Failures     []ValidationFailure `json:"failures" yaml:"failures" doc:"List of deferred validation failures" minItems:"1"`
+	Sensitive    bool                `json:"sensitive,omitempty" yaml:"sensitive,omitempty" doc:"Whether the resolver value is sensitive"`
+}
+
+// AggregatedDeferredValidationError aggregates deferred (cross-resolver)
+// validation failures across resolvers, ordered root-cause-first. Deferred
+// validation runs after every resolver has resolved, so failures cannot be
+// attributed to a single resolve phase; this error type carries per-resolver
+// failure groups plus the set of rules suppressed because an upstream deferred
+// validation already failed.
+type AggregatedDeferredValidationError struct {
+	Failures   []DeferredValidationFailure `json:"failures" yaml:"failures" doc:"Per-resolver deferred validation failures, root-cause-first" minItems:"1"`
+	Suppressed []string                    `json:"suppressed,omitempty" yaml:"suppressed,omitempty" doc:"Resolvers whose deferred rules were suppressed due to an upstream failure"`
+}
+
+// Error implements the error interface.
+func (e *AggregatedDeferredValidationError) Error() string {
+	total := 0
+	for _, rf := range e.Failures {
+		total += len(rf.Failures)
+	}
+
+	if len(e.Failures) == 0 {
+		return "deferred validation failed (no details)"
+	}
+
+	if len(e.Failures) == 1 && len(e.Failures[0].Failures) == 1 {
+		return fmt.Sprintf("deferred validation failed: resolver %q: %s",
+			e.Failures[0].ResolverName, e.Failures[0].Failures[0].Error())
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "deferred validation failed with %d error(s) across %d resolver(s):\n", total, len(e.Failures))
+	for _, rf := range e.Failures {
+		for _, f := range rf.Failures {
+			fmt.Fprintf(&sb, "  - resolver %q: %s\n", rf.ResolverName, f.Error())
+		}
+	}
+	if len(e.Suppressed) > 0 {
+		fmt.Fprintf(&sb, "  (suppressed due to upstream failures: %s)\n", strings.Join(e.Suppressed, ", "))
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+// Unwrap returns nil since this error aggregates multiple failures.
+// Use errors.As with *ValidationFailure to inspect individual failures.
+func (e *AggregatedDeferredValidationError) Unwrap() error {
+	return nil
+}
+
+// HasFailures returns true if there are any deferred validation failures.
+func (e *AggregatedDeferredValidationError) HasFailures() bool {
+	return len(e.Failures) > 0
+}
+
 // CircularDependencyError represents a cycle detected in resolver dependencies.
 type CircularDependencyError struct {
 	Cycle []string `json:"cycle" yaml:"cycle" doc:"List of resolver names forming the cycle" minItems:"2" example:"[\"resolver-a\", \"resolver-b\", \"resolver-a\"]"`

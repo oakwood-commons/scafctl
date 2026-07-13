@@ -28,6 +28,8 @@ func TestCommandKube(t *testing.T) {
 	}
 	assert.True(t, sub["login"], "kube must expose the login subcommand")
 	assert.True(t, sub["logout"], "kube must expose the logout subcommand")
+	assert.True(t, sub["list"], "kube must expose the list subcommand")
+	assert.True(t, sub["status"], "kube must expose the status subcommand")
 }
 
 func TestCommandKube_LongHelpUsesBinaryName(t *testing.T) {

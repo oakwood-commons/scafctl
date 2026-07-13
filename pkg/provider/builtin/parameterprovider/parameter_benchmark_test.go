@@ -43,3 +43,40 @@ func BenchmarkParameterProvider_Execute(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkParameterProvider_Execute_TypedCoercion(b *testing.B) {
+	p := NewParameterProvider()
+
+	cases := []struct {
+		name   string
+		value  any
+		typeIn string
+	}{
+		{"auto_int", "8080", TypeAuto},
+		{"int", "8080", TypeInt},
+		{"float", "3.14", TypeFloat},
+		{"bool", "true", TypeBool},
+		{"json", `{"a":1,"b":[2,3]}`, TypeJSON},
+		{"csv", "us-east-1,us-west-2,eu-west-1", TypeCSV},
+		{"string", "00042", TypeString},
+		{"raw", "00042", TypeRaw},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"val": tc.value,
+			})
+			inputs := map[string]any{
+				"key":  "val",
+				"type": tc.typeIn,
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = p.Execute(ctx, inputs)
+			}
+		})
+	}
+}

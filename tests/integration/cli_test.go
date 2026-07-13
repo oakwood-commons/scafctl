@@ -976,6 +976,87 @@ func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
 	assert.Contains(t, stderr, "scafctl run resolver")
 }
 
+// TestIntegration_RunSolution_DeferredValidationImmutableNotLocked verifies the
+// two-phase validation D1 guarantee: when a deferred (cross-resolver) validation
+// rule fails on an immutable resolver, execution stops before actions run and
+// the immutable value is NOT persisted to state. A subsequent run whose deferred
+// validation passes then locks the value and runs the action.
+func TestIntegration_RunSolution_DeferredValidationImmutableNotLocked(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: d1-immutable-defer
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    region:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: "_.region != _.backupRegion"
+              message: "region must differ from backupRegion"
+    backupRegion:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: backupRegion
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Run 1: regions equal -> deferred validation fails. The action must not run
+	// and the immutable value must not be locked (state file absent).
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath)
+	assert.NotEqual(t, 0, exitCode, "failing deferred validation should exit non-zero")
+	assert.Contains(t, stderr, "region must differ from backupRegion")
+	assert.NotContains(t, stdout, "ACTION_RAN", "action must not run when deferred validation fails")
+	assert.NoFileExists(t, statePath, "immutable value must not be persisted when deferred validation fails")
+
+	// Run 2: regions differ -> deferred validation passes. The action runs and
+	// the immutable value is now locked in state.
+	stdout, _, exitCode = runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "backupRegion=us-west1")
+	assert.Equal(t, 0, exitCode, "passing deferred validation should exit zero")
+	assert.Contains(t, stdout, "ACTION_RAN", "action should run when deferred validation passes")
+	require.FileExists(t, statePath, "state file should be written after a successful run")
+
+	raw, err := os.ReadFile(statePath) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	var stateDoc struct {
+		Resolvers map[string]any `json:"resolvers"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &stateDoc))
+	assert.Contains(t, stateDoc.Resolvers, "region", "immutable region should be locked after a passing run")
+}
+
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
@@ -2229,6 +2310,105 @@ func TestIntegration_LogoutNoCluster(t *testing.T) {
 	assert.Contains(t, stderr, "cluster name is required")
 }
 
+func TestIntegration_LoginHelp_NamespaceAndRefresh(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--namespace")
+	assert.Contains(t, stdout, "--refresh")
+}
+
+func TestIntegration_LogoutHelp_All(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "logout", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--all")
+}
+
+func TestIntegration_KubeListHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "clusters")
+}
+
+func TestIntegration_KubeListNoResolver(t *testing.T) {
+	t.Parallel()
+	// scafctl ships no cluster data; with no resolver configured, list reports
+	// that clearly instead of erroring.
+	stdout, stderr, exitCode := runScafctl(t, "kube", "list")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "No cluster resolver configured")
+}
+
+func TestIntegration_KubeStatusNoContext(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	kubeconfig := filepath.Join(tmpDir, "config")
+	require.NoError(t, os.WriteFile(kubeconfig, []byte("apiVersion: v1\nkind: Config\n"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "kube", "status", "--kubeconfig", kubeconfig)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "No current kubeconfig context")
+}
+
+func TestIntegration_KubeStatusShowsContext(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	kubeconfig := filepath.Join(tmpDir, "config")
+	content := `apiVersion: v1
+kind: Config
+current-context: prod
+clusters:
+  - name: prod
+    cluster:
+      server: https://api.prod.example.com:6443
+contexts:
+  - name: prod
+    context:
+      cluster: prod
+      user: prod
+      namespace: team-a
+users:
+  - name: prod
+    user:
+      token: static
+`
+	require.NoError(t, os.WriteFile(kubeconfig, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "kube", "status", "--kubeconfig", kubeconfig, "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "prod")
+	assert.Contains(t, stdout, "https://api.prod.example.com:6443")
+	assert.Contains(t, stdout, "team-a")
+}
+
+func TestIntegration_KubeLogoutAllNoEntries(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	kubeconfig := filepath.Join(tmpDir, "config")
+	require.NoError(t, os.WriteFile(kubeconfig, []byte("apiVersion: v1\nkind: Config\n"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "kube", "logout", "--all", "--kubeconfig", kubeconfig)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "No scafctl-managed kubeconfig entries found")
+}
+
+func TestIntegration_KubeLogoutAllRejectsClusterArg(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t, "kube", "logout", "--all", "prod")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "--all cannot be combined with a cluster argument")
+}
+
 func TestIntegration_AuthStatusGCP(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "auth", "status", "gcp")
@@ -2838,6 +3018,70 @@ spec:
 	// Should auto-discover solution.yaml and lint it
 	assert.Contains(t, stdout, "findings")
 	assert.True(t, exitCode == 0 || exitCode == 2, "lint should exit 0 or 2, got %d", exitCode)
+}
+
+func TestIntegration_Lint_BuiltinInBundlePlugins(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: builtin-bundle-test
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: cel
+      kind: provider
+      version: "1.0.0"
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: Hello
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionPath, "-o", "json")
+	assert.Equal(t, 0, exitCode, "lint command should succeed")
+	assert.Contains(t, stdout, "builtin-in-bundle-plugins")
+}
+
+func TestIntegration_RunResolver_BuiltinInBundlePlugins(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: builtin-bundle-run-test
+  version: 1.0.0
+bundle:
+  plugins:
+    - name: cel
+      kind: provider
+      version: "1.0.0"
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello-from-builtin
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionPath, "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "run resolver should succeed despite builtin in bundle.plugins")
+	assert.Contains(t, stdout, "hello-from-builtin")
 }
 
 // ============================================================================
@@ -4494,6 +4738,55 @@ func TestIntegration_SolutionProvider_WorkflowComposition(t *testing.T) {
 	assert.Contains(t, stdout, "succeeded")
 }
 
+func TestIntegration_SolutionProvider_ValueOverrideContract(t *testing.T) {
+	t.Parallel()
+
+	// With an override: the parent passes an enriched value into the child's
+	// opt-in override input, and the child merges it over its internal value.
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"run", "resolver",
+		"-f", "tests/integration/testdata/solution-provider/override-parent.yaml",
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+	// child_labels merges the child's internal keys with the parent's overrides.
+	// Decode the output and assert on the object to avoid depending on JSON
+	// formatting (spacing, key ordering, pretty vs compact).
+	var parentResolvers struct {
+		ChildLabels map[string]any `json:"child_labels"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &parentResolvers))
+	assert.Equal(t, map[string]any{
+		"app":        "child",
+		"tier":       "backend",
+		"team":       "platform",
+		"costCenter": "CC-42",
+	}, parentResolvers.ChildLabels)
+
+	// Without an override: the child alone falls back to its internal value
+	// because labels_override defaults to {} (map.merge with {} is a no-op).
+	childOut, childErr, childExit := runScafctlLong(t,
+		"run", "resolver",
+		"-f", "tests/integration/testdata/solution-provider/override-child.yaml",
+		"-o", "json",
+	)
+	t.Logf("childOut: %s", childOut)
+	t.Logf("childErr: %s", childErr)
+	assert.Equal(t, 0, childExit, "expected exit code 0, got %d", childExit)
+	var childResolvers struct {
+		Labels map[string]any `json:"labels"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(childOut), &childResolvers))
+	assert.Equal(t, map[string]any{
+		"app":  "child",
+		"tier": "backend",
+	}, childResolvers.Labels)
+	assert.NotContains(t, childResolvers.Labels, "team")
+	assert.NotContains(t, childResolvers.Labels, "costCenter")
+}
+
 func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,
@@ -4503,6 +4796,26 @@ func TestIntegration_SolutionProvider_CircularReference(t *testing.T) {
 	t.Logf("stderr: %s", stderr)
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "circular reference detected")
+}
+
+// TestIntegration_RunResolver_CycleChainMessage verifies that a circular
+// resolver dependency surfaces as an ordered, closed cycle chain
+// ("alpha -> beta -> alpha") rather than the legacy "dagObject depends on"
+// phrasing. The chain is deterministic: the search starts from the
+// lexicographically smallest node and follows the smallest dependency edge.
+func TestIntegration_RunResolver_CycleChainMessage(t *testing.T) {
+	t.Parallel()
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/lint-resolver-cycle/solution.yaml",
+	)
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "cycle detected")
+	assert.Contains(t, stderr, "dependency cycle: alpha -> beta -> alpha",
+		"cycle error must render an ordered, closed chain")
+	assert.NotContains(t, stderr, "dagObject",
+		"legacy 'dagObject depends on' phrasing must not appear")
 }
 
 func TestIntegration_SolutionProvider_DryRun(t *testing.T) {
@@ -4574,6 +4887,91 @@ spec:
 	// and return an envelope with status "failed" for the child
 	assert.Equal(t, 0, exitCode, "expected exit code 0 with propagateErrors=false, got %d", exitCode)
 	assert.Contains(t, stdout, "failed")
+}
+
+func TestIntegration_SolutionProvider_PropagateErrorsFalse_LoadFailure(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Create a parent that references a non-existent child with propagateErrors: false.
+	// This exercises the load-tolerant compose mode where child parse/load failures
+	// degrade gracefully into the envelope instead of aborting the parent.
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-load-tolerant
+  version: 1.0.0
+spec:
+  resolvers:
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "` + filepath.ToSlash(filepath.Join(tmpDir, "does-not-exist.yaml")) + `"
+              propagateErrors: false
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", parentPath,
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	// With propagateErrors: false, a load failure should NOT abort the parent.
+	assert.Equal(t, 0, exitCode, "expected exit code 0 with propagateErrors=false on load failure, got %d", exitCode)
+	assert.Contains(t, stdout, "failed")
+	assert.Contains(t, stdout, "_loader")
+}
+
+func TestIntegration_SolutionProvider_PropagateErrorsFalse_MalformedChild(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+
+	// Create a malformed child YAML (parse failure).
+	malformedChild := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: malformed
+  [[[invalid yaml
+`
+	childPath := filepath.Join(tmpDir, "malformed-child.yaml")
+	require.NoError(t, os.WriteFile(childPath, []byte(malformedChild), 0o644))
+
+	parentSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parent-parse-tolerant
+  version: 1.0.0
+spec:
+  resolvers:
+    child-result:
+      type: any
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: "` + filepath.ToSlash(childPath) + `"
+              propagateErrors: false
+`
+	parentPath := filepath.Join(tmpDir, "parent.yaml")
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentSolution), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", parentPath,
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	// With propagateErrors: false, a parse failure should degrade gracefully.
+	assert.Equal(t, 0, exitCode, "expected exit code 0 with propagateErrors=false on parse failure, got %d", exitCode)
+	assert.Contains(t, stdout, "failed")
+	assert.Contains(t, stdout, "_loader")
 }
 
 func TestIntegration_SolutionProvider_MaxDepthExceeded(t *testing.T) {
@@ -5616,6 +6014,248 @@ func TestIntegration_Test_Functional_SnapshotMasking(t *testing.T) {
 		assert.Contains(t, stdout, "Relaxed (snapshot fidelity loosened):")
 		assert.Contains(t, stdout, "2 relaxed")
 	})
+}
+
+// TestIntegration_Test_Functional_Calls exercises the parameterized calls
+// (spec.calls) feature end-to-end through the CLI by running the functional
+// test cases bundled with the calls fixture solution. The fixture covers call
+// definitions invoked from resolve, validate, and action steps; the args
+// namespace; typed args with defaults and required values; array argument
+// serialization; and opt-in de-duplication.
+func TestIntegration_Test_Functional_Calls(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/calls/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no calls test case should fail")
+	assert.GreaterOrEqual(t, report.Summary.Passed, 8, "expected the calls fixture cases to pass")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	// Spot-check representative cases across resolve, validate, and action call sites.
+	for _, name := range []string{
+		"default-arg",
+		"override-arg",
+		"arg-from-resolver-ref",
+		"int-arg-default",
+		"int-arg-override",
+		"array-arg",
+		"validate-call",
+		"action-call",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Test_Functional_CrossValidation exercises the two-phase
+// (deferred cross-resolver) validation feature end-to-end by running the
+// functional test cases bundled with the cross-validation fixture solution.
+// The fixture covers the load-without-cycle guarantee, deferred rules passing
+// when the cross-resolver assertion holds, and both fatal (--fail-on-validation)
+// and non-fatal failure modes when the assertion is violated.
+func TestIntegration_Test_Functional_CrossValidation(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/resolvers/cross-validation/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no cross-validation test case should fail")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	for _, name := range []string{
+		"loads-without-cycle",
+		"differing-regions-pass",
+		"equal-regions-fail",
+		"equal-regions-nonfatal-shows-values",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Test_Functional_LintDeferredValidation exercises the linting
+// side of two-phase validation by running the functional test cases bundled
+// with the lint-deferred-validation fixture. The fixture asserts that
+// cross-resolver validation references do NOT trigger the resolver-cycle rule
+// and DO emit the informational deferred-validation-not-fail-fast advisory.
+func TestIntegration_Test_Functional_LintDeferredValidation(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/lint-deferred-validation/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no lint deferred-validation test case should fail")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	for _, name := range []string{
+		"lint-no-cycle",
+		"lint-emits-advisory",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Test_Functional_LintParameterNumericMatches exercises the
+// parameter-numeric-matches lint rule by running the functional test cases
+// bundled with the lint-parameter-numeric-matches fixture. The fixture asserts
+// that a resolver reading a numeric 'parameter' default without an explicit
+// 'type' but calling matches() emits the warning, and that the warning does
+// not fail lint.
+func TestIntegration_Test_Functional_LintParameterNumericMatches(t *testing.T) {
+	t.Parallel()
+
+	const solution = "tests/integration/solutions/lint-parameter-numeric-matches/solution.yaml"
+
+	type resultItem struct {
+		Test   string `json:"test"`
+		Status string `json:"status"`
+	}
+
+	stdout, stderr, exitCode := runScafctlLong(t,
+		"test", "functional",
+		"-f", solution,
+		"--skip-builtins",
+		"--no-color",
+		"-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var report struct {
+		Results []resultItem `json:"results"`
+		Summary struct {
+			Passed int `json:"passed"`
+			Failed int `json:"failed"`
+		} `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+
+	assert.Zero(t, report.Summary.Failed, "no parameter-numeric-matches test case should fail")
+
+	byTest := map[string]string{}
+	for _, r := range report.Results {
+		byTest[r.Test] = r.Status
+	}
+	for _, name := range []string{
+		"lint-warns-numeric-matches",
+		"lint-passes-with-warning",
+	} {
+		assert.Equal(t, "pass", byTest[name], "case %q should pass", name)
+	}
+}
+
+// TestIntegration_Run_Resolver_ParameterTypes verifies the parameter provider's
+// "type" coercion enum end-to-end by running the bundled example with CLI
+// parameters and asserting each resolver coerces to the expected Go type.
+func TestIntegration_Run_Resolver_ParameterTypes(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/providers/parameter-types.yaml",
+		"-o", "json",
+		"-r", "port=8080",
+		"-r", "billingId=00042",
+		"-r", "token=00abc",
+		"-r", "ratio=1.5",
+		"-r", "enabled=true",
+		"-r", `config={"replicas":3}`,
+		"-r", "regions=us-east-1, us-west-2",
+	)
+	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &out))
+
+	// auto (default): numeric-looking value infers to a JSON number.
+	assert.InDelta(t, float64(8080), out["inferred"], 0, "auto should infer a number")
+	// string: keep leading zeros as a string.
+	assert.Equal(t, "00042", out["billingId"], "type string should preserve leading zeros")
+	// raw: returned verbatim, no coercion.
+	assert.Equal(t, "00abc", out["token"], "type raw should return the value verbatim")
+	// int: forced integer parsing.
+	assert.InDelta(t, float64(8080), out["replicas"], 0, "type int should parse an integer")
+	// float: forced floating-point parsing.
+	assert.InDelta(t, 1.5, out["ratio"], 0, "type float should parse a float")
+	// bool: forced boolean parsing.
+	assert.Equal(t, true, out["enabled"], "type bool should parse a boolean")
+	// json: parsed into a structured object.
+	assert.Equal(t, map[string]any{"replicas": float64(3)}, out["config"], "type json should parse JSON")
+	// csv: split into a trimmed list of strings.
+	assert.Equal(t, []any{"us-east-1", "us-west-2"}, out["regions"], "type csv should split and trim")
 }
 
 func TestIntegration_Test_List(t *testing.T) {

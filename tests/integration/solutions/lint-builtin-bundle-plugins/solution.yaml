@@ -1,0 +1,57 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-builtin-bundle-plugins
+  version: 1.0.0
+  description: |
+    Tests the builtin-in-bundle-plugins lint rule that warns when
+    bundle.plugins entries reference built-in providers (cel, static, etc.)
+    that are compiled into the binary and do not need explicit declarations.
+
+bundle:
+  plugins:
+    - name: cel
+      kind: provider
+      version: "1.0.0"
+
+spec:
+  resolvers:
+    greeting:
+      description: Simple resolver to make the solution valid
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+  testing:
+    cases:
+      builtin-detected:
+        description: Lint detects built-in provider in bundle.plugins
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, builtin-in-bundle-plugins]
+        assertions:
+          - expression: __exitCode == 0
+            message: "builtin-in-bundle-plugins is warning-level, should not cause non-zero exit"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "builtin-in-bundle-plugins")
+            message: "Should detect built-in provider in bundle.plugins"
+          - expression: >
+              __output.findings.filter(f, f.ruleName == "builtin-in-bundle-plugins").size() == 1
+            message: "Should flag exactly one builtin bundle.plugins entry"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "builtin-in-bundle-plugins" && f.severity == "warning")
+            message: "builtin-in-bundle-plugins finding should be warning severity"
+
+      resolver-still-works:
+        description: Resolver executes despite builtin in bundle.plugins
+        command: [run, resolver]
+        args: ["-o", "json"]
+        tags: [run, builtin-in-bundle-plugins]
+        assertions:
+          - expression: __exitCode == 0
+            message: "run resolver should succeed despite builtin in bundle.plugins"
+          - expression: '__output.greeting == "hello"'
+            message: "greeting resolver should resolve to hello"

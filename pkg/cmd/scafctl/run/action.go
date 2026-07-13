@@ -411,13 +411,14 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	}
 	resolverElapsed := time.Since(start)
 
-	// State lifecycle: verify immutable resolver values BEFORE any action runs.
-	// A locked-value violation must abort the run before side effects (file
-	// scaffolding, external calls, etc.) occur. New immutables are locked later
-	// by Save, after successful action execution.
+	// State lifecycle (D1): commit immutable locks after resolvers and deferred
+	// validation succeed, before running side-effecting actions. Merged
+	// parameters are saved after actions complete.
 	if stateMgr != nil && stateData != nil {
-		if verifyErr := stateMgr.VerifyImmutables(stateData, resolverCtx, resolvers); verifyErr != nil {
-			return o.exitWithCode(ctx, fmt.Errorf("state: %w", verifyErr), exitcode.GeneralError)
+		solMeta := buildStateSolutionMeta(sol)
+		skip := deferredValidationFailures(resolverCtx)
+		if saveErr := stateMgr.SaveImmutables(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta, skip); saveErr != nil {
+			return o.exitWithCode(ctx, fmt.Errorf("state save immutables: %w", saveErr), exitcode.GeneralError)
 		}
 	}
 
@@ -455,6 +456,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		action.WithCwd(originalCwd),
 		action.WithFingerprintChecker(fingerprint.NewChecker(stateData)),
 		action.WithNoCache(o.SkipFingerprint),
+		action.WithCalls(sol.Spec.Calls),
 	)
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
@@ -462,11 +464,11 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
-	// State lifecycle: save merged parameters and check immutable values
-	// after successful action execution.
+	// State lifecycle: save merged parameters after successful action execution.
+	// Immutable locks were already committed before actions (D1).
 	if stateMgr != nil && stateData != nil {
 		solMeta := buildStateSolutionMeta(sol)
-		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
+		if saveErr := stateMgr.SaveParams(ctx, stateData, params, resolverData, solMeta); saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
 	}

@@ -14,7 +14,7 @@ scafctl --cwd /path/to/project run solution -f solution.yaml
 scafctl -C /path/to/project run resolver -f demo.yaml -o json
 ```
 
-When `--cwd` is set, **all** relative paths—including `-f`, `--output-dir`, snapshot paths, and auto-discovery—resolve against the specified directory instead of the process CWD.
+When `--cwd` is set, **all** relative paths -- including `-f`, `--output-dir`, snapshot paths, and auto-discovery -- resolve against the specified directory instead of the process CWD.
 
 ---
 
@@ -86,6 +86,17 @@ All MCP tools that accept file paths support an optional `cwd` parameter. When p
 }
 ```
 
+### Solution Directory Anchoring
+
+MCP tools that load and execute a solution (`preview_resolvers`, `render_solution`, `run_solution`, `dry_run_solution`, `preview_action`) also anchor the **solution's own directory** onto the context via `provider.WithSolutionDirectory()` after the solution is loaded, provided the solution has a local directory (a local file path or an extracted catalog bundle). This mirrors the CLI `run` commands and ensures that:
+
+- `relativeTo: solution` reads resolve against the solution file's directory
+- The `directory` and `hcl` providers resolve their default base path against the solution directory when `cwd` is not supplied (see the precedence note below -- when `cwd` is set, `AbsFromContext` prefers it first)
+
+For stdin (`-`) and unbundled catalog references there is no solution directory, so nothing is anchored and `relativeTo: solution` falls back to the process CWD.
+
+This anchoring is **independent of `cwd`**. Even when `cwd` is not supplied, solution-relative reads resolve against the solution directory rather than the MCP server's process CWD. The `cwd` parameter still controls where the solution `path` itself and other non-solution-relative paths resolve from. When both apply, `AbsFromContext` prefers the working directory (`cwd`), then the solution directory, then `os.Getwd()`.
+
 ### Tools with `cwd` Support
 
 | Tool | File |
@@ -122,8 +133,9 @@ All MCP tools that accept file paths support an optional `cwd` parameter. When p
 
 When `--cwd` is **not** set:
 1. `WorkingDirectoryFromContext` returns `("", false)`
-2. `AbsFromContext` falls through to `filepath.Abs()` which uses `os.Getwd()`
-3. Behavior is identical to running without `--cwd`—fully backward compatible
+2. `AbsFromContext` next checks `SolutionDirectoryFromContext`. For MCP solution-executing tools this is set to the loaded solution's directory (see [Solution Directory Anchoring](#solution-directory-anchoring)); for other cases it is unset.
+3. If neither is set, `AbsFromContext` falls through to `filepath.Abs()` which uses `os.Getwd()`
+4. Behavior is identical to running without `--cwd` -- fully backward compatible
 
 ---
 
@@ -145,7 +157,7 @@ When running a catalog solution (bare name), the bundle is extracted to a tempor
 directory and the process CWD is changed there so resolvers can read bundled files.
 
 However, file-writing **actions** need to resolve relative paths against the
-caller's original working directory — not the temporary bundle directory. The CLI
+caller's original working directory -- not the temporary bundle directory. The CLI
 injects the caller's CWD into the action execution context via
 `provider.WithWorkingDirectory(actionCtx, originalCwd)`. This ensures
 `AbsFromContext` resolves relative action paths against the caller's CWD, matching
@@ -163,7 +175,7 @@ Catalog run:  scafctl run solution my-app
 ```
 
 This aligns with how tools like `npm init`, `cargo init`, and `cookiecutter` work
-— they scaffold into the directory you run them from, regardless of where the
+-- they scaffold into the directory you run them from, regardless of where the
 template source lives.
 
 When `--output-dir` is specified, it takes precedence over the context CWD for

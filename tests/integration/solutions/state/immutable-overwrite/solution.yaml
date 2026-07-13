@@ -6,7 +6,7 @@ metadata:
   version: 1.0.0
   description: |
     Functional tests for immutable state overwrite protection.
-    Verifies that CheckImmutables rejects attempts to resolve an immutable
+    Verifies that immutable persistence rejects attempts to resolve an immutable
     entry to a different value, and that same-value resolves are allowed.
 
     This solution uses a static-only resolver with immutable flag. The

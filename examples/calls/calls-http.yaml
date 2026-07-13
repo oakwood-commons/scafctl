@@ -1,0 +1,107 @@
+# Run: scafctl run resolver -f examples/calls/calls-http.yaml -o yaml
+# Run: scafctl run resolver -f examples/calls/calls-http.yaml -o json
+#
+# Demonstrates spec.calls with the http provider: define one parameterized HTTP
+# request shape (endpoint, method, auth header, body) once, then invoke it from
+# multiple call sites with different arguments. This is the API-heavy use case
+# where, without calls, each call site would need its own duplicated http
+# resolver.
+#
+# Requires network access. httpbin.org/anything echoes the request back so the
+# outputs show which method, headers, and body each call site sent.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: calls-http
+  displayName: Parameterized HTTP Calls
+  category: calls
+  tags:
+    - calls
+    - http
+    - resolver-example
+  description: |
+    One http call definition invoked from several resolvers with different
+    arguments. Define the endpoint, auth, and body shape once; supply only the
+    differing inputs (path, method, payload) at each call site. dedup collapses
+    identical invocations within a single run to a single request.
+
+spec:
+  # ─────────────────────────────────────────────
+  # Call definition: a reusable, parameterized HTTP request. Declared once and
+  # invoked from any resolve/transform/validate step or workflow action.
+  # ─────────────────────────────────────────────
+  calls:
+    httpbinRequest:
+      description: Send a request to httpbin, echoing method, an auth header, and body.
+      # dedup:true means identical invocations (same bound args) within a single
+      # run execute the request only once and share the result.
+      dedup: true
+      provider: http
+      args:
+        # The resource path appended to the base URL.
+        path:
+          type: string
+          required: true
+        # HTTP method; defaults to GET so read call sites can omit it.
+        method:
+          type: string
+          default: GET
+        # A bearer token surfaced as an Authorization header.
+        token:
+          type: string
+          default: anonymous
+        # An optional request body (echoed back by httpbin).
+        payload:
+          type: any
+          default: null
+      inputs:
+        url:
+          tmpl: 'https://httpbin.org/anything/{{ .args.path }}'
+        method:
+          expr: _.args.method
+        headers:
+          expr: |
+            {"Authorization": "Bearer " + _.args.token}
+        body:
+          expr: _.args.payload
+
+  resolvers:
+    # ─────────────────────────────────────────────
+    # Same definition, different arguments.
+    # ─────────────────────────────────────────────
+
+    # A GET call site: only the path differs from the defaults.
+    listWidgets:
+      description: GET /widgets using the default method and token.
+      type: any
+      resolve:
+        with:
+          - call: httpbinRequest
+            args:
+              path: widgets
+
+    # A POST call site: overrides method, token, and supplies a body.
+    createWidget:
+      description: POST /widgets with an auth token and a JSON body.
+      type: any
+      resolve:
+        with:
+          - call: httpbinRequest
+            args:
+              path: widgets
+              method: POST
+              token: s3cr3t-token
+              payload:
+                expr: |
+                  {"name": "gadget", "size": 42}
+
+    # A third call site reusing the same shape for a different resource.
+    getWidget:
+      description: GET /widgets/1 -- the reused shape with one differing arg.
+      type: any
+      resolve:
+        with:
+          - call: httpbinRequest
+            args:
+              path: widgets/1

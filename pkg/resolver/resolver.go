@@ -255,7 +255,8 @@ type ValidatePhase struct {
 
 // ProviderSource represents a single source in the resolve phase
 type ProviderSource struct {
-	Provider        string               `json:"provider" yaml:"provider" doc:"Provider name" example:"parameter" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	spec.CallRef    `yaml:",inline"`
+	Provider        string               `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Provider name (mutually exclusive with call)" example:"parameter" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
 	Inputs          map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
 	When            *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Source-level condition"`
 	ContinueOnError *Condition           `json:"continueOnError,omitempty" yaml:"continueOnError,omitempty" doc:"Whether to continue (recover) when the provider fails. Accepts a boolean or a CEL expression evaluated with the error text bound as __error. Truthy skips this source and continues the fallback chain; falsy fails the resolver. Overrides the deprecated onError field."`
@@ -265,7 +266,8 @@ type ProviderSource struct {
 
 // ProviderTransform represents a single transform step
 type ProviderTransform struct {
-	Provider        string               `json:"provider" yaml:"provider" doc:"Provider name" example:"cel" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	spec.CallRef    `yaml:",inline"`
+	Provider        string               `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Provider name (mutually exclusive with call)" example:"cel" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
 	Inputs          map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
 	When            *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Step-level condition"`
 	ContinueOnError *Condition           `json:"continueOnError,omitempty" yaml:"continueOnError,omitempty" doc:"Whether to continue (recover) when the provider fails. Accepts a boolean or a CEL expression evaluated with the error text bound as __error. Truthy skips this step and keeps the current value; falsy fails the resolver. Overrides the deprecated onError field."`
@@ -275,8 +277,9 @@ type ProviderTransform struct {
 
 // ProviderValidation represents a single validation rule
 type ProviderValidation struct {
-	Provider string               `json:"provider" yaml:"provider" doc:"Provider name" example:"validation" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
-	Inputs   map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
-	When     *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Rule-level condition; the rule is skipped when this evaluates to false"`
-	Message  *ValueRef            `json:"message,omitempty" yaml:"message,omitempty" doc:"Error message on validation failure"`
+	spec.CallRef `yaml:",inline"`
+	Provider     string               `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Provider name (mutually exclusive with call)" example:"validation" maxLength:"100" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	Inputs       map[string]*ValueRef `json:"inputs,omitempty" yaml:"inputs,omitempty" doc:"Provider inputs" required:"false"`
+	When         *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Rule-level condition; the rule is skipped when this evaluates to false"`
+	Message      *ValueRef            `json:"message,omitempty" yaml:"message,omitempty" doc:"Error message on validation failure"`
 }

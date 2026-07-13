@@ -286,6 +286,9 @@ func Resolvers(
 	if cfg.SkipTransform {
 		executorOpts = append(executorOpts, resolver.WithSkipTransform(true))
 	}
+	if sol.Spec.HasCalls() {
+		executorOpts = append(executorOpts, resolver.WithCalls(sol.Spec.Calls))
+	}
 	executor := resolver.NewExecutor(adapter, executorOpts...)
 
 	// Apply solution-level CEL cost limit if configured
@@ -506,6 +509,9 @@ func Actions(
 		executorOpts = append(executorOpts, action.WithCwd(cfg.Cwd))
 	} else if cwd, ok := provider.WorkingDirectoryFromContext(ctx); ok && cwd != "" {
 		executorOpts = append(executorOpts, action.WithCwd(cwd))
+	}
+	if sol.Spec.HasCalls() {
+		executorOpts = append(executorOpts, action.WithCalls(sol.Spec.Calls))
 	}
 
 	executor := action.NewExecutor(executorOpts...)

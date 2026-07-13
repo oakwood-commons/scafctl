@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockBackendProvider implements provider.Provider for testing the manager.
@@ -374,6 +375,88 @@ func TestManagerSave(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManagerSaveImmutablesAndParams(t *testing.T) {
+	baseConfig := &Config{
+		Enabled: literalValueRef(true),
+		Backend: Backend{
+			Provider: "mock-state",
+			Inputs:   map[string]*spec.ValueRef{},
+		},
+	}
+	solMeta := SolutionMeta{Name: "my-app", Version: "1.0.0"}
+
+	t.Run("SaveImmutables locks immutable without persisting parameters", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+		sd := NewData()
+
+		err := mgr.SaveImmutables(context.Background(), sd, rctx, resolvers,
+			map[string]any{"appName": "demo"}, nil, solMeta, nil)
+		require.NoError(t, err)
+
+		// Immutable locked, but parameters were not persisted to the document.
+		assert.Equal(t, "uuid-1234", sd.Resolvers["cluster_id"].Value)
+		assert.Empty(t, sd.Parameters)
+		assert.Len(t, backend.saveCalls, 1)
+	})
+
+	t.Run("SaveImmutables skips resolvers whose deferred validation failed", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+		sd := NewData()
+
+		err := mgr.SaveImmutables(context.Background(), sd, rctx, resolvers,
+			nil, nil, solMeta, map[string]bool{"cluster_id": true})
+		require.NoError(t, err)
+
+		// The failed immutable must NOT be locked.
+		assert.NotContains(t, sd.Resolvers, "cluster_id")
+	})
+
+	t.Run("SaveParams persists the merged parameter set", func(t *testing.T) {
+		backend := &mockBackendProvider{}
+		reg := newTestRegistry(t, backend)
+		mgr := NewManager(baseConfig, reg, "test-version")
+
+		sd := NewData()
+		params := map[string]any{"appName": "demo", "region": "us-east1"}
+
+		err := mgr.SaveParams(context.Background(), sd, params, nil, solMeta)
+		require.NoError(t, err)
+
+		assert.Equal(t, params, sd.Parameters)
+		assert.Len(t, backend.saveCalls, 1)
+	})
+
+	t.Run("nil config is a no-op", func(t *testing.T) {
+		mgr := NewManager(nil, provider.NewRegistry(), "test-version")
+		sd := NewData()
+
+		require.NoError(t, mgr.SaveImmutables(context.Background(), sd, resolver.NewContext(), nil, nil, nil, solMeta, nil))
+		require.NoError(t, mgr.SaveParams(context.Background(), sd, nil, nil, solMeta))
+	})
 }
 
 func TestManagerSave_Immutable(t *testing.T) {

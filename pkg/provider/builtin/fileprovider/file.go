@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -117,6 +118,7 @@ func NewFileProvider() *FileProvider {
 				"outputPath": schemahelper.StringProp("Go template for transforming each entry's output path before writing (write-tree only). "+
 					"Available variables: __filePath (relative path), __fileName (base name), __fileStem (name without final extension), "+
 					"__fileExtension (final extension with dot), __fileDir (parent directory). "+
+					"Resolver values are also available (e.g. {{ .environment }}); the __file* variables take precedence on name collisions. "+
 					"Sprig functions are available. If omitted, the original entry path is used unchanged.",
 					schemahelper.WithExample("{{ .__fileDir }}/{{ .__fileStem }}"),
 					schemahelper.WithMaxLength(4096)),
@@ -704,7 +706,7 @@ func (p *FileProvider) executeWriteTree(ctx context.Context, absBasePath string,
 			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
 		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
+			transformed, tmplErr := p.renderOutputPath(ctx, outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("outputPath template failed for entries[%d] (%s): %w", i, entry.path, tmplErr)
 			}
@@ -997,8 +999,10 @@ func (p *FileProvider) parseWriteTreeEntries(inputs map[string]any) ([]writeTree
 }
 
 // renderOutputPath renders the outputPath Go template for a given file path,
-// injecting __file* variables computed from the path.
-func (p *FileProvider) renderOutputPath(outputPathTmpl, filePath string) (string, error) {
+// injecting __file* variables computed from the path. Resolver values from the
+// context are also made available; the __file* variables take precedence in
+// case of name collisions.
+func (p *FileProvider) renderOutputPath(ctx context.Context, outputPathTmpl, filePath string) (string, error) {
 	// Compute __file* variables
 	fileName := filepath.Base(filePath)
 	fileExt := filepath.Ext(fileName)
@@ -1008,16 +1012,21 @@ func (p *FileProvider) renderOutputPath(outputPathTmpl, filePath string) (string
 		fileDir = ""
 	}
 
-	data := map[string]any{
-		"__filePath":      filepath.ToSlash(filePath),
-		"__fileName":      fileName,
-		"__fileStem":      fileStem,
-		"__fileExtension": fileExt,
-		"__fileDir":       fileDir,
+	data := make(map[string]any)
+
+	// Inject resolver context first so __file* variables take precedence.
+	if resolverData, ok := provider.ResolverContextFromContext(ctx); ok && resolverData != nil {
+		maps.Copy(data, resolverData)
 	}
 
+	data["__filePath"] = filepath.ToSlash(filePath)
+	data["__fileName"] = fileName
+	data["__fileStem"] = fileStem
+	data["__fileExtension"] = fileExt
+	data["__fileDir"] = fileDir
+
 	svc := gotmpl.NewService(nil)
-	result, err := svc.Execute(context.Background(), gotmpl.TemplateOptions{
+	result, err := svc.Execute(ctx, gotmpl.TemplateOptions{
 		Content:    outputPathTmpl,
 		Name:       "outputPath",
 		Data:       data,
@@ -1074,7 +1083,7 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 			outputPath = strings.TrimSuffix(outputPath, stripSuffix)
 		}
 		if outputPathTmpl != "" {
-			transformed, tmplErr := p.renderOutputPath(outputPathTmpl, outputPath)
+			transformed, tmplErr := p.renderOutputPath(ctx, outputPathTmpl, outputPath)
 			if tmplErr != nil {
 				return nil, fmt.Errorf("%s: outputPath template failed for entries[%d] (%s): %w", ProviderName, i, entry.path, tmplErr)
 			}

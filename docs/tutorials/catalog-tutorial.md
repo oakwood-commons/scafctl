@@ -1681,6 +1681,8 @@ Bundle analysis for nested-demo/parent.yaml:
 
 Notice that scafctl **recursively discovered** the child sub-solution (`sub/child.yaml`) and its file dependency (`sub/templates/greeting.tmpl`). No `bundle.include` is needed -- the solution provider reference is detected by static analysis.
 
+> **Tip:** To let a parent override a value the child computes internally (for example, enriching a map the child renders from), use the child-opt-in **value override contract**. See [Solution Provider -- Value Override Contract](../design/solution-provider.md#value-override-contract).
+
 ### Step 4: Build and Run
 
 {{< tabs "catalog-tutorial-cmd-46" >}}

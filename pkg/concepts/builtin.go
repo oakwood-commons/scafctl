@@ -15,9 +15,9 @@ var builtinConcepts = []Concept{
 
 1. **resolve** — one or more provider steps that produce the initial value (e.g., prompt user, read file, call API).
 2. **transform** — optional steps that reshape or enrich the resolved value.
-3. **validate** — optional steps that enforce constraints on the final value.
+3. **validate** — optional steps that enforce constraints on the value. Validation runs in two phases: rules that reference only the owning resolver (via __self) run **inline** during resolution and fail fast; rules that reference another resolver (via _.other, in the expression, inputs, when, or message) are **deferred** and run after every resolver has resolved, just before actions. The phase is chosen automatically, and deferred references do not add edges to the resolution dependency graph — so two resolvers can validate against each other without forming a false ordering cycle.
 
-Resolvers can depend on each other via 'dependsOn' or implicit CEL references (_.otherResolver). The dependency graph must be a DAG — circular references are rejected at lint time.`,
+Resolvers can depend on each other via 'dependsOn' or implicit CEL references (_.otherResolver). The dependency graph must be a DAG — circular references in resolve/transform/when are rejected at lint time (cross-resolver validation references do not count).`,
 		Examples: []string{
 			"spec:\n  resolvers:\n    region:\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              name: region\n              default: us-east-1",
 		},
@@ -39,6 +39,24 @@ For actions, dependsOn controls execution order within the workflow DAG.`,
 			"resolvers:\n  setup:\n    resolve:\n      with:\n        - provider: exec\n          inputs:\n            command: setup.sh\n  main:\n    dependsOn: [setup]\n    resolve:\n      with:\n        - provider: file\n          inputs:\n            path: output.json",
 		},
 		SeeAlso: []string{"resolver", "action", "dag"},
+	},
+	{
+		Name:     "call",
+		Title:    "Parameterized Call",
+		Category: "resolvers",
+		Summary:  "A reusable, argument-driven provider request defined once under spec.calls and invoked from many resolve, transform, validate, or action steps.",
+		Explanation: `A call decouples a request's shape from its inputs. Instead of duplicating a full provider configuration (URL, headers, body, auth, retry) for every distinct set of inputs, you declare it once as a definition and invoke it from many call sites.
+
+There are two halves:
+
+1. **Call definition** (spec.calls.<name>) — declares typed 'args', a 'provider', and provider 'inputs' that reference those arguments via the 'args' namespace: _.args.x in CEL and {{ .args.x }} in Go templates.
+2. **Call site** (call: + args:) — a resolve, transform, validate, or action step that invokes a definition and supplies argument values as standard ValueRefs (literals, rslvr, expr, or tmpl).
+
+A host step must set exactly one of 'provider' or 'call'. Arguments are typed with optional defaults and a 'required' flag; supplied values are coerced to the declared type before the definition's inputs resolve. Set 'dedup: true' on a definition to collapse identical invocations within a single run (in-memory only, never persisted). Bare 'args.x' in CEL is not supported — always use the _. prefix.`,
+		Examples: []string{
+			"spec:\n  calls:\n    greet:\n      provider: cel\n      args:\n        salutation:\n          type: string\n          default: Hello\n        name:\n          type: string\n          required: true\n      inputs:\n        expression: '_.args.salutation + \", \" + _.args.name + \"!\"'\n  resolvers:\n    english:\n      resolve:\n        with:\n          - call: greet\n            args:\n              name: World",
+		},
+		SeeAlso: []string{"resolver", "action", "provider", "cel-expression"},
 	},
 	// --- Providers ---
 	{

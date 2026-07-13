@@ -1426,6 +1426,90 @@ func TestLintState_BundlePluginSuppressesFinding(t *testing.T) {
 	assert.Empty(t, findings, "bundle.plugins-declared provider should not trigger invalid-state-backend")
 }
 
+func TestLintBundlePlugins_BuiltinWarning(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "cel"}}}}}},
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "cel", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "builtin-in-bundle-plugins")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "cel")
+	assert.Contains(t, findings[0].Message, "builtin provider")
+}
+
+func TestLintBundlePlugins_ExternalNoWarning(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "aws-provider", Kind: solution.PluginKindProvider, Version: ">=1.0.0"},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "builtin-in-bundle-plugins")
+	assert.Empty(t, findings, "external provider should not trigger builtin-in-bundle-plugins")
+}
+
+func TestLintBundlePlugins_MultipleBuiltins(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "cel", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+				{Name: "aws-provider", Kind: solution.PluginKindProvider, Version: ">=1.0.0"},
+				{Name: "file", Kind: solution.PluginKindProvider, Version: ">=0.1.0"},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "builtin-in-bundle-plugins")
+	assert.Len(t, findings, 2, "should warn for both cel and file, not aws-provider")
+}
+
+func TestLintBundlePlugins_AuthHandlerNotWarned(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec:       solution.Spec{Resolvers: map[string]*resolver.Resolver{"a": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}}}},
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "cel", Kind: solution.PluginKindAuthHandler, Version: "1.0.0"},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "builtin-in-bundle-plugins")
+	assert.Empty(t, findings, "auth handler with builtin name should not trigger warning")
+}
+
 func TestLintState_ProviderWithoutCapabilityState(t *testing.T) {
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",

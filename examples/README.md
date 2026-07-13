@@ -51,6 +51,7 @@ scafctl get examples -o json
 | Directory | Description |
 |-----------|-------------|
 | [actions/](actions/) | Workflow automation with actions |
+| [calls/](calls/) | Reusable, argument-driven provider calls (spec.calls) |
 | [exec/](exec/) | Exec provider shell execution patterns |
 | [providers/](providers/) | Provider-specific solution examples (http, exec, hcl, github, identity, message, metadata) |
 | [resolvers/](resolvers/) | Dynamic value resolution patterns |
@@ -132,6 +133,7 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 | [dependencies.yaml](resolvers/dependencies.yaml) | Resolver dependencies & phases | `scafctl run resolver -f examples/resolvers/dependencies.yaml` |
 | [env-config.yaml](resolvers/env-config.yaml) | Environment-based configuration | `scafctl run resolver -f examples/resolvers/env-config.yaml -r env=production` |
 | [validation.yaml](resolvers/validation.yaml) | Input validation patterns | `scafctl run resolver -f examples/resolvers/validation.yaml` |
+| [cross-validation-demo.yaml](resolvers/cross-validation-demo.yaml) | Two-phase (inline + deferred cross-resolver) validation | `scafctl run resolver -f examples/resolvers/cross-validation-demo.yaml` |
 | [transform-pipeline.yaml](resolvers/transform-pipeline.yaml) | Data transformation pipeline | `scafctl run resolver -f examples/resolvers/transform-pipeline.yaml` |
 | [feature-flags.yaml](resolvers/feature-flags.yaml) | Feature flag patterns | `scafctl run resolver -f examples/resolvers/feature-flags.yaml` |
 | [secrets.yaml](resolvers/secrets.yaml) | Secret management (requires secret store) | `scafctl run resolver -f examples/resolvers/secrets.yaml` |
@@ -157,6 +159,7 @@ Complete solutions demonstrating real-world use cases.
 | Example | Description |
 |---------|-------------|
 | [comprehensive/](solutions/comprehensive/) | Full-featured solution with all capabilities |
+| [composition/](solutions/composition/) | Parent solution composes a child via the `solution` provider, including the child-opt-in value override contract |
 | [terraform/](solutions/terraform/) | Terraform project scaffolding |
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |

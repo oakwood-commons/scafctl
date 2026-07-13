@@ -72,6 +72,7 @@ tests/integration/solutions/
 ├── rendering/                # Template rendering tests
 ├── composition/              # Multi-file compose tests
 │   └── parts/                # Composed YAML fragments
+├── calls/                    # Parameterized call (spec.calls) tests
 ├── plugins/                  # Plugin CLI command tests
 │   └── signature-verification/ # Signature verification policy tests
 ├── test-generation/          # Test generation tests
