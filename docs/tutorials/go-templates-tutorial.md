@@ -1515,7 +1515,7 @@ Result:
 
 - `render-tree` batch-renders an array of `{path, content}` entries
 - `write-tree` writes them to disk preserving directory structure
-- `outputPath` is a Go template for transforming output paths (variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`)
+- `outputPath` is a Go template for transforming output paths (variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`; resolver values are also available, e.g. `{{ .environment }}`)
 - Use `expr: '_.resolver.entries'` to feed directory provider results into render-tree
 - Each entry may carry an optional `data` map, shallow-merged over the shared `data` (per-entry values win), so you can render one template per item with its own variables and output path in a single resolver
 

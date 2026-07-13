@@ -1009,7 +1009,7 @@ resolve:
 **`write-tree` inputs:**
 - `basePath` (required): Destination root directory
 - `entries` (required): Array of `{path, content}` objects
-- `outputPath`: Go template to transform each entry’s output path. Variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`
+- `outputPath`: Go template to transform each entry's output path. Variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`. Resolver values are also available (e.g. `{{ .environment }}`); the `__file*` variables take precedence on name collisions.
 
 ~~~yaml
 # Batch-write rendered templates, stripping .tpl extensions

@@ -105,3 +105,9 @@ spec:
           #   README.md.tpl           → README.md
           outputPath: >-
             {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+          # Resolver values are also available in outputPath. To route the
+          # rendered files into an environment-specific directory, prefix the
+          # path with a resolver value (the __file* variables take precedence
+          # on name collisions):
+          #   outputPath: >-
+          #     {{ .vars.environment }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
