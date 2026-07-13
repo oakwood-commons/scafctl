@@ -1002,6 +1002,86 @@ func TestFetcher_FetchPlugins_CatalogFallback_InvalidConstraintReportsParseError
 	assert.Contains(t, err.Error(), "resolving version")
 }
 
+func TestFetcher_FetchPlugins_SkipsBuiltinProviders(t *testing.T) {
+	t.Parallel()
+
+	// Catalog has only the external plugin — builtins are never published.
+	cat := newMockCatalog()
+	ref := testRef("my-plugin", "1.0.0")
+	cat.addArtifact(ref, []byte("external-binary"))
+
+	cacheDir := t.TempDir()
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(cacheDir),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		// Builtin providers — must be silently skipped.
+		{Name: "cel", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+		{Name: "file", Kind: solution.PluginKindProvider, Version: ">=1.0.0"},
+		// External plugin — must be fetched normally.
+		{Name: "my-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	// Only the external plugin should appear in results.
+	require.Len(t, results, 1)
+	assert.Equal(t, "my-plugin", results[0].Name)
+}
+
+func TestFetcher_FetchPlugins_AllBuiltins_ReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	// When every declared plugin is a builtin, FetchPlugins should return nil.
+	cat := newMockCatalog()
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "cel", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+		{Name: "http", Kind: solution.PluginKindProvider, Version: ">=0.1.0"},
+		{Name: "static", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	assert.Nil(t, results)
+}
+
+func TestFetcher_FetchPlugins_AuthHandlerBuiltinNotSkipped(t *testing.T) {
+	t.Parallel()
+
+	// Auth handler plugins with a builtin provider name should NOT be skipped
+	// (the builtin check only applies to provider-kind plugins).
+	cat := newMockCatalog()
+	ref := testRef("cel", "1.0.0")
+	cat.addArtifact(ref, []byte("auth-binary"))
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "cel", Kind: solution.PluginKindAuthHandler, Version: "1.0.0"},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "cel", results[0].Name)
+}
+
 func TestCachedVersionSatisfies(t *testing.T) {
 	t.Parallel()
 

@@ -142,6 +142,18 @@ performance-critical remain in-process.
 | `message` | Terminal output only, coupled to host writer |
 | `solution` | Orchestration coupling -- invokes nested solution runs (rule 3) |
 
+### Built-in Providers in bundle.plugins
+
+Declaring a built-in provider in `bundle.plugins` is unnecessary and
+triggers the `builtin-in-bundle-plugins` lint warning. At runtime the
+plugin fetcher silently skips built-in entries before catalog resolution
+(they are already pre-registered), so the solution still works -- but the
+declaration is misleading and adds unnecessary noise.
+
+Only declare **external** (catalog-distributed) providers in
+`bundle.plugins`. Built-in providers are always available without an
+explicit plugin declaration.
+
 ---
 
 ## Plugin Architecture
