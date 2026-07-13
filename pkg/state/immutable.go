@@ -71,6 +71,14 @@ func PersistResolvers(stateData *Data, resolverCtx *resolver.Context, resolvers 
 		}
 
 		// Persist-only: overwrite the value each run, preserving CreatedAt.
+		// If a prior entry is immutable (the resolver was previously locked and
+		// is now switched to persist-only), leave it untouched rather than
+		// silently downgrading/unlocking it. Removing the lock requires an
+		// explicit state delete.
+		if exists && existing.Immutable {
+			continue
+		}
+
 		createdAt := now
 		if exists {
 			createdAt = existing.CreatedAt

@@ -240,6 +240,44 @@ func TestPersistResolvers(t *testing.T) {
 		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
 
+	t.Run("switching an immutable entry to persist-only does not downgrade the lock", func(t *testing.T) {
+		// First lock an immutable entry.
+		immutable := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-locked",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, immutable)
+		assert.NoError(t, err)
+		assert.True(t, sd.Resolvers["cluster_id"].Immutable)
+		lockedCreated := sd.Resolvers["cluster_id"].CreatedAt
+		lockedUpdated := sd.Resolvers["cluster_id"].UpdatedAt
+
+		// The resolver is switched to persist-only and resolves to a new value.
+		// The existing immutable lock must be left untouched (no silent unlock,
+		// no value overwrite).
+		persistOnly := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Persist: true},
+		}
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, persistOnly)
+		assert.NoError(t, err)
+
+		entry := sd.Resolvers["cluster_id"]
+		assert.True(t, entry.Immutable, "immutable lock is preserved")
+		assert.Equal(t, "uuid-locked", entry.Value, "locked value is not overwritten")
+		assert.Equal(t, lockedCreated, entry.CreatedAt, "CreatedAt is unchanged")
+		assert.Equal(t, lockedUpdated, entry.UpdatedAt, "UpdatedAt is unchanged")
+	})
+
 	t.Run("immutable implies persist even without persist flag", func(t *testing.T) {
 		resolvers := []*resolver.Resolver{
 			{Name: "cluster_id", Type: "string", Immutable: true, Persist: false},
