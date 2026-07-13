@@ -29,6 +29,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/messageprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/validationprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -1891,6 +1892,106 @@ spec:
 	assert.Zero(t, rules["resolver-cycle"], "cross-resolver validation must not trigger resolver-cycle")
 	assert.GreaterOrEqual(t, rules["deferred-validation-not-fail-fast"], 1,
 		"deferred validation should emit the info advisory")
+}
+
+// TestAPI_LintParameterNumericMatches exercises the parameter-numeric-matches
+// lint rule over the API. A resolver reads a numeric 'parameter' default with
+// no explicit 'type' yet validates the value with matches(); automatic
+// inference would coerce it to an integer (no matches() method) and fail at
+// runtime. The lint endpoint must surface the warning while the sibling
+// resolver that forces 'type: string' must not.
+func TestAPI_LintParameterNumericMatches(t *testing.T) {
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(parameterprovider.NewParameterProvider()))
+	require.NoError(t, reg.Register(validationprovider.NewValidationProvider()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: api-parameter-numeric-matches-test
+  version: 1.0.0
+  description: numeric parameter default validated with matches()
+spec:
+  resolvers:
+    version:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+              default: 1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[0-9]+$")'
+              message: "version must be numeric"
+    safeVersion:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: safeVersion
+              type: string
+              default: 1
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              expression: '__self.matches("^[0-9]+$")'
+              message: "safeVersion must be numeric"
+`
+
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer solServer.Close()
+	solURL := solServer.URL + "/solution.yaml"
+
+	lintObj := e.POST("/v1/solutions/lint").
+		WithJSON(map[string]any{"path": solURL}).
+		Expect().
+		Status(http.StatusOK).
+		JSON().Object()
+
+	findings := lintObj.Value("findings").Array()
+	matchesFindings := 0
+	for _, f := range findings.Iter() {
+		obj := f.Object()
+		if obj.Value("ruleName").String().Raw() != "parameter-numeric-matches" {
+			continue
+		}
+		matchesFindings++
+		// Only the 'version' resolver (no explicit type) should be flagged.
+		assert.Equal(t, "resolvers.version", obj.Value("location").String().Raw(),
+			"the numeric-default resolver should be flagged")
+	}
+	assert.Equal(t, 1, matchesFindings,
+		"exactly one resolver should trigger parameter-numeric-matches")
 }
 
 func TestAPI_SolutionTest_MissingPath(t *testing.T) {

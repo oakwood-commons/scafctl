@@ -427,6 +427,17 @@ var KnownRules = map[string]RuleMeta{
 			"# Problem: parameter source with no default and no fallback\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: environment\n\n# Fix: add a default\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: environment\n        default: development",
 		},
 	},
+	"parameter-numeric-matches": {
+		Rule:        "parameter-numeric-matches",
+		Severity:    string(SeverityWarning),
+		Category:    "type-inference",
+		Description: "A resolver reads a 'parameter' source with a numeric default and no explicit 'type', yet a transform or validate CEL expression calls matches() on the value.",
+		Why:         "The 'parameter' provider's automatic type inference coerces numeric-looking values (defaults or CLI arguments) into integers. Integers have no matches() method in CEL, so the expression fails at runtime with a type error even though the solution passes lint. Declaring 'type: string' keeps the value a string so matches() works; other explicit types (e.g. raw, int) do not, since they preserve or coerce the value to a non-string.",
+		Fix:         "Add 'type: string' to the parameter source to keep the value a string for matches(), or quote the default as a string. Do not use 'type: raw' here: raw preserves numeric defaults as numbers, so matches() still fails.",
+		Examples: []string{
+			"# Problem: numeric default auto-coerced to int, matches() fails\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: version\n        default: 1\nvalidate:\n  with:\n    - provider: validation\n      inputs:\n        expression: '__self.matches(\"^[0-9]+$\")'\n\n# Fix: force string type\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: version\n        type: string\n        default: 1",
+		},
+	},
 	"null-resolver": {
 		Rule:        "null-resolver",
 		Severity:    string(SeverityError),

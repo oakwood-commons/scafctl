@@ -1094,6 +1094,206 @@ func TestLintResolvers_ParameterMissingDefault_AllConditional(t *testing.T) {
 		"should not warn for a conditional parameter source (handled by missing-fallback-source)")
 }
 
+// ---- parameter-numeric-matches ----
+
+func filterByNumericMatches(findings []*Finding) []*Finding {
+	var out []*Finding
+	for _, f := range findings {
+		if f.RuleName == "parameter-numeric-matches" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func numericMatchesResolver(defaultRef, typeRef *spec.ValueRef) *resolver.Resolver {
+	inputs := map[string]*spec.ValueRef{"key": {Literal: "version"}}
+	if defaultRef != nil {
+		inputs["default"] = defaultRef
+	}
+	if typeRef != nil {
+		inputs["type"] = typeRef
+	}
+	matchExpr := celexp.Expression(`__self.matches("^[0-9]+$")`)
+	return &resolver.Resolver{
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{Provider: "parameter", Inputs: inputs},
+			},
+		},
+		Validate: &resolver.ValidatePhase{
+			With: []resolver.ProviderValidation{
+				{Provider: "validation", Inputs: map[string]*spec.ValueRef{
+					"expression": {Expr: &matchExpr},
+				}},
+			},
+		},
+	}
+}
+
+func TestLintParameterNumericMatches_Fires(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": numericMatchesResolver(&spec.ValueRef{Literal: 1}, nil),
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	findings := filterByNumericMatches(result.Findings)
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	assert.Equal(t, "resolvers.version", findings[0].Location)
+	assert.Contains(t, findings[0].Message, "matches()")
+}
+
+func TestLintParameterNumericMatches_NumericStringDefault(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": numericMatchesResolver(&spec.ValueRef{Literal: "8080"}, nil),
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Len(t, filterByNumericMatches(result.Findings), 1,
+		"numeric-looking string default should also trigger the rule")
+}
+
+func TestLintParameterNumericMatches_ExplicitStringType(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": numericMatchesResolver(
+			&spec.ValueRef{Literal: 1},
+			&spec.ValueRef{Literal: "string"},
+		),
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Empty(t, filterByNumericMatches(result.Findings),
+		"explicit type should suppress the warning")
+}
+
+func TestLintParameterNumericMatches_AutoTypeStillFires(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": numericMatchesResolver(
+			&spec.ValueRef{Literal: 1},
+			&spec.ValueRef{Literal: "auto"},
+		),
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Len(t, filterByNumericMatches(result.Findings), 1,
+		"type: auto is the inference default and should not suppress the warning")
+}
+
+func TestLintParameterNumericMatches_ResolverTypeString(t *testing.T) {
+	res := numericMatchesResolver(&spec.ValueRef{Literal: 1}, nil)
+	res.Type = resolver.Type("string")
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{"version": res}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Empty(t, filterByNumericMatches(result.Findings),
+		"resolver-level type: string coerces the value and should suppress the warning")
+}
+
+func TestLintParameterNumericMatches_NoMatches(t *testing.T) {
+	res := numericMatchesResolver(&spec.ValueRef{Literal: 1}, nil)
+	res.Validate = nil
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{"version": res}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Empty(t, filterByNumericMatches(result.Findings),
+		"no matches() call means no footgun to warn about")
+}
+
+func TestLintParameterNumericMatches_NonNumericDefault(t *testing.T) {
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": numericMatchesResolver(&spec.ValueRef{Literal: "production"}, nil),
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Empty(t, filterByNumericMatches(result.Findings),
+		"non-numeric default is not coerced to an integer")
+}
+
+func TestLintParameterNumericMatches_MatchesInTransform(t *testing.T) {
+	matchExpr := celexp.Expression(`__self.matches("^[0-9]+$") ? "ok" : "bad"`)
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"key":     {Literal: "version"},
+						"default": {Literal: 1},
+					}},
+				},
+			},
+			Transform: &resolver.TransformPhase{
+				With: []resolver.ProviderTransform{
+					{Provider: "cel", Inputs: map[string]*spec.ValueRef{
+						"expression": {Expr: &matchExpr},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Len(t, filterByNumericMatches(result.Findings), 1,
+		"matches() in a transform expression should trigger the rule")
+}
+
+func TestLintParameterNumericMatches_LiteralExpressionString(t *testing.T) {
+	// The validation provider takes its CEL as a plain string literal, not an
+	// expr: ValueRef. The rule must still detect matches() in that form.
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"version": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"key":     {Literal: "version"},
+						"default": {Literal: 1},
+					}},
+				},
+			},
+			Validate: &resolver.ValidatePhase{
+				With: []resolver.ProviderValidation{
+					{Provider: "validation", Inputs: map[string]*spec.ValueRef{
+						"expression": {Literal: `__self.matches("^[0-9]+$")`},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintParameterNumericMatches(sol, result)
+
+	assert.Len(t, filterByNumericMatches(result.Findings), 1,
+		"matches() in a literal expression string should trigger the rule")
+}
+
 // ---- hyphensToCamelCase ----
 
 func TestHyphensToCamelCase(t *testing.T) {

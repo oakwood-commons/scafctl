@@ -46,12 +46,13 @@ spec:
               key: config
 
     csvParam:
-      description: CSV list parameter
+      description: CSV list parameter (opt in with type csv; auto no longer splits)
       resolve:
         with:
           - provider: parameter
             inputs:
               key: tags
+              type: csv
 
     paramWithDefault:
       description: Parameter with static fallback
@@ -95,6 +96,46 @@ spec:
             inputs:
               key: billingId
               default: 42
+
+    rawValue:
+      description: type raw returns the value untouched (no coercion or unquoting)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: rawId
+              type: raw
+              default: "0055"
+
+    floatValue:
+      description: type float forces floating-point parsing
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: ratio
+              type: float
+              default: 1.5
+
+    jsonValue:
+      description: type json forces JSON parsing of the raw value
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: settings
+              type: json
+              default: '{"replicas":1}'
+
+    strictInt:
+      description: type int forces integer parsing and errors on a non-integer value
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: strictCount
+              type: int
+              default: 3
 
   testing:
     config:
@@ -168,3 +209,61 @@ spec:
             message: "type string should keep the numeric value as a string"
           - expression: __output.coercedNumber == 12345
             message: "without type string the same value should be coerced to a number"
+
+      csv-parameter:
+        description: Verify type csv splits a comma-separated value into a string list
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a,b,c"]
+        assertions:
+          - expression: __output.csvParam == ["a", "b", "c"]
+            message: "type csv should split the comma-separated value into a trimmed list"
+
+      csv-auto-no-split:
+        description: Verify auto inference no longer splits comma-separated values (breaking change)
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=a,b,c", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=x"]
+        assertions:
+          - expression: __output.stringParam == "a,b,c"
+            message: "auto inference should keep a comma-separated value as a literal string"
+
+      raw-parameter:
+        description: Verify type raw returns the value exactly as provided
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "rawId=0055"]
+        assertions:
+          - expression: __output.rawValue == "0055"
+            message: "type raw should return the value untouched, preserving leading zeros"
+
+      float-parameter:
+        description: Verify type float parses a floating-point value
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "ratio=2.75"]
+        assertions:
+          - expression: __output.floatValue == 2.75
+            message: "type float should coerce the value to a float"
+
+      json-parameter:
+        description: Verify type json parses the raw value into a structured object
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "settings={\"replicas\":3}"]
+        assertions:
+          - expression: __output.jsonValue.replicas == 3
+            message: "type json should parse the value into a map with accessible fields"
+
+      typed-int-valid:
+        description: Verify type int coerces a valid integer value
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "strictCount=7"]
+        assertions:
+          - expression: __output.strictInt == 7
+            message: "type int should coerce a valid integer value"
+
+      typed-int-error:
+        description: Verify type int errors on a non-integer value instead of silently coercing
+        command: [run, resolver]
+        tags: [provider, parameter]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "strictCount=abc"]
+        assertions:
+          - expression: __exitCode != 0
+            message: "type int should fail the run when the value cannot be parsed as an integer"
+

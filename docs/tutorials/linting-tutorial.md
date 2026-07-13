@@ -140,6 +140,8 @@ This shows:
 |----|----------|----------|-------------|
 | missing-description | warning | best-practice | Solution should have a description |
 | unused-resolver | warning | correctness | Resolver is defined but never referenced |
+| parameter-numeric-matches | warning | type-inference | Numeric `parameter` default without an explicit `type` is used with `matches()`, which fails at runtime because inference coerces it to an integer |
+| deferred-validation-not-fail-fast | info | validation | Resolver has a cross-resolver validation rule that runs in the deferred phase rather than failing fast |
 | ... | ... | ... | ... |
 
 ### Filter by Format

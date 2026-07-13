@@ -1288,15 +1288,36 @@ scafctl run resolver -f param-demo.yaml unknown=value
 {{% /tab %}}
 {{< /tabs >}}
 
-### Forcing a String Value
+### Controlling Parameter Types
 
 By default the parameter provider infers a type from the raw value: `true`/`false`
 become booleans, numeric strings become numbers, JSON objects/arrays are parsed,
-comma-separated values become lists, and `file://`/`http://` values are loaded.
-When you need the value kept verbatim as a string -- for example a numeric ID
-with leading zeros, or a value that merely looks like JSON -- set `type: string`
-on the input. This suppresses all type inference and returns the value exactly as
-provided.
+and `file://`/`http://` values are loaded. When automatic inference produces the
+wrong type -- for example a numeric ID with leading zeros that should stay a
+string, or a value that must be parsed a specific way -- set the `type` input to
+take explicit control.
+
+The `type` input accepts these values:
+
+| Type     | Behavior                                                                 |
+| -------- | ------------------------------------------------------------------------ |
+| `auto`   | Default. Infers bool, number, JSON, and `file://`/`http://` values.      |
+| `string` | Coerces the value to a string (strips surrounding quotes).               |
+| `raw`    | Returns the value exactly as received, with no coercion or quote strip.  |
+| `int`    | Parses the value as an integer; errors if it is not a whole number.      |
+| `float`  | Parses the value as a floating-point number; errors on failure.          |
+| `bool`   | Parses `true`/`false` (case-insensitive); errors on any other value.     |
+| `json`   | Parses the value as JSON; errors on invalid JSON.                        |
+| `csv`    | Splits the value on commas into a trimmed list of strings.               |
+
+> **Breaking change:** Comma-separated values are no longer split into lists
+> automatically. A value like `a,b,c` now stays the string `"a,b,c"` under `auto`.
+> Set `type: csv` when you want a list. This removes a surprising footgun where
+> any value containing a comma silently became an array.
+
+An explicit `type` applies to both CLI-supplied values and the `default` input.
+When a typed value cannot be parsed (for example `type: int` on `abc`), the
+resolver fails with a clear error rather than silently returning the wrong type.
 
 Create a file called `param-string-demo.yaml`:
 
@@ -1323,35 +1344,49 @@ spec:
             inputs:
               key: billingId
               type: string
+    # Opt-in list: "a,b,c" becomes ["a", "b", "c"]
+    regions:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: regions
+              type: csv
+              default: us-east-1
 ```
 
 {{< tabs "run-resolver-tutorial-cmd-24b" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f param-string-demo.yaml billingId=00042 -o json
+scafctl run resolver -f param-string-demo.yaml billingId=00042 regions=us-east-1,us-west-2 -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f param-string-demo.yaml billingId=00042 -o json
+scafctl run resolver -f param-string-demo.yaml billingId=00042 regions=us-east-1,us-west-2 -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
-Output -- type inference drops the leading zeros, `type: string` preserves them:
+Output -- inference drops the leading zeros, `type: string` preserves them, and
+`type: csv` splits the list:
 
 ```json
 {
   "billingId": 42,
-  "billingIdString": "00042"
+  "billingIdString": "00042",
+  "regions": ["us-east-1", "us-west-2"]
 }
 ```
 
-> **Note:** `type: string` only accepts the literal value `string`. It applies to
-> both CLI-supplied values and the `default` input, so a `default` value is also
-> returned verbatim. Non-string defaults are coerced to their string form.
+> **Note:** Use `type: string` to keep numeric-looking values usable with CEL
+> string functions like `matches()`; `auto` would coerce `8080` to an integer,
+> which has no `matches()` method. Use `type: raw` when you want the value
+> untouched, including preserving a non-string `default` (such as a YAML integer)
+> exactly as written.
 
 ---
+
 
 ## Common Workflows
 
