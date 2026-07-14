@@ -578,6 +578,7 @@ func (m *Manager) Save() error {
 	m.v.Set("resolver", m.config.Resolver)
 	m.v.Set("action", m.config.Action)
 	m.v.Set("auth", m.config.Auth)
+	m.v.Set("kube", m.config.Kube)
 	m.v.Set("build", m.config.Build)
 
 	return m.writeConfig(m.v, "")
@@ -606,6 +607,7 @@ func (m *Manager) SaveAs(path string) error {
 	m.v.Set("resolver", m.config.Resolver)
 	m.v.Set("action", m.config.Action)
 	m.v.Set("auth", m.config.Auth)
+	m.v.Set("kube", m.config.Kube)
 	m.v.Set("build", m.config.Build)
 
 	return m.writeConfig(m.v, path)

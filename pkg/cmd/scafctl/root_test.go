@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -354,11 +356,18 @@ func TestRoot_WithoutClusterResolver_Execution(t *testing.T) {
 	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
+	// Isolate from the developer's real config (which may declare clusters) by
+	// pointing at an empty config file. This keeps the test deterministic
+	// regardless of the machine's ~/.config/scafctl/config.yaml.
+	emptyCfg := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(emptyCfg, []byte("{}\n"), 0o600))
+
 	capturedSet := false
 	var captured kube.ClusterResolver
 	cmd, cleanup := Root(&RootOptions{
 		IOStreams:  ioStreams,
 		BinaryName: "mycli",
+		ConfigPath: emptyCfg,
 		PreRunHook: func(c *cobra.Command, _ []string) error {
 			captured = kube.ResolverFromContext(c.Context())
 			capturedSet = true
@@ -372,4 +381,43 @@ func TestRoot_WithoutClusterResolver_Execution(t *testing.T) {
 	// With no resolver configured, the context must not carry one.
 	assert.True(t, capturedSet, "PreRunHook should have run")
 	assert.Nil(t, captured)
+}
+
+// TestRoot_ConfigPathHonored verifies that RootOptions.ConfigPath is actually
+// read: a config file declaring a kube cluster alias must drive the attached
+// resolver. Regression guard for the flag-default bug where StringVar reset
+// configPath to "" and silently fell back to the global XDG path.
+func TestRoot_ConfigPathHonored(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(
+		"kube:\n"+
+			"  clusters:\n"+
+			"    aliases:\n"+
+			"      lab:\n"+
+			"        server: https://api.lab.example.com:6443\n"+
+			"        defaultHandler: oidc\n"), 0o600))
+
+	var captured kube.ClusterResolver
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams:  ioStreams,
+		BinaryName: "mycli",
+		ConfigPath: cfgPath,
+		PreRunHook: func(c *cobra.Command, _ []string) error {
+			captured = kube.ResolverFromContext(c.Context())
+			return nil
+		},
+	})
+	defer cleanup()
+	cmd.SetArgs([]string{"auth", "handlers", "-o", "json"})
+	require.NoError(t, cmd.Execute())
+
+	// A resolver built from the ConfigPath file must be attached and resolve the
+	// alias declared there, proving the embedder-provided ConfigPath was honored.
+	require.NotNil(t, captured, "ConfigPath config must drive the cluster resolver")
+	info, err := captured.Resolve(context.Background(), "lab")
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.lab.example.com:6443", info.APIServerURL)
 }

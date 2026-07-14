@@ -73,10 +73,11 @@ Common flags:
   namespace) to an existing entry without a fresh interactive login when a valid
   token is already cached. Falls back to a normal login when no valid token
   exists.
+- `--save-alias`: after a successful login, remember the resolved cluster under
+   this short name as a `kube.clusters` static alias (see
+   [Remember a Cluster](#remember-a-cluster-after-login)).
 - `--kubeconfig`: target kubeconfig file (defaults to `KUBECONFIG` or
-  `~/.kube/config`).
-
-## Use It
+   `~/.kube/config`).
 
 After login, `kubectl` reuses the scafctl-managed identity automatically:
 
@@ -149,6 +150,28 @@ scafctl kube login https://api.x:6443 --handler oidc   # direct URL, no config
 
 Embedders can still supply a `RootOptions.ClusterResolver` implementation, which
 takes precedence over the config-driven resolver.
+
+## Remember a Cluster After Login
+
+When you log in to a cluster by direct URL (or any cluster not yet in your
+config), add `--save-alias <name>` to persist the resolved cluster as a
+`kube.clusters` static alias. The saved alias records the server, default
+handler, auth type, audience, CA data, and console URL that login resolved:
+
+```bash
+scafctl kube login https://api.x:6443 --handler oidc --save-alias staging
+```
+
+Afterwards the short name resolves with no flags:
+
+```bash
+scafctl kube login staging
+scafctl kube list          # staging now appears
+```
+
+Saving is best-effort and never fails the login: if the config cannot be written,
+or the login produced no resolved server, scafctl warns on stderr and leaves your
+session intact. Re-saving an existing alias updates it in place.
 
 ## Log Out
 

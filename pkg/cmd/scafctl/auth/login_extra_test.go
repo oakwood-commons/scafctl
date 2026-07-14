@@ -64,6 +64,66 @@ func TestCommandLogin_HostnameNotSupported(t *testing.T) {
 	assert.Contains(t, err.Error(), "--hostname is not supported")
 }
 
+// TestCommandLogin_SaveAliasRequiresHostname verifies --save-alias errors when
+// no --hostname was given (there is no resolved host to save under the alias).
+func TestCommandLogin_SaveAliasRequiresHostname(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("openshift")
+	mock.CapabilitiesValue = []auth.Capability{auth.CapHostname}
+	mock.SetNotAuthenticated()
+	ctx = withTestHandler(ctx, mock)
+
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandLogin(settings.NewCliParams(), ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"openshift", "--save-alias", "prod"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--save-alias requires --hostname")
+}
+
+// TestCommandLogin_SaveAliasUnsupportedHandler verifies --save-alias is rejected
+// when the handler does not advertise CapHostname (aliases are hostname-scoped).
+func TestCommandLogin_SaveAliasUnsupportedHandler(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("entra")
+	mock.CapabilitiesValue = []auth.Capability{} // no CapHostname
+	mock.SetNotAuthenticated()
+	ctx = withTestHandler(ctx, mock)
+
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandLogin(settings.NewCliParams(), ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"entra", "--save-alias", "prod"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--save-alias is not supported")
+}
+
+// TestCommandLogin_SaveAliasEmptyName verifies a blank --save-alias value is
+// rejected before login (there is no usable alias key).
+func TestCommandLogin_SaveAliasEmptyName(t *testing.T) {
+	ctx, buf := newTestContext(t)
+
+	mock := auth.NewMockHandler("openshift")
+	mock.CapabilitiesValue = []auth.Capability{auth.CapHostname}
+	mock.SetNotAuthenticated()
+	ctx = withTestHandler(ctx, mock)
+
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandLogin(settings.NewCliParams(), ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"openshift", "--hostname", "https://api.x:6443", "--save-alias", "   "})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-empty alias name")
+}
+
 // TestCommandLogin_FederatedTokenNotSupported verifies that --federated-token
 // is rejected when the handler doesn't declare CapFederatedToken.
 func TestCommandLogin_FederatedTokenNotSupported(t *testing.T) {
