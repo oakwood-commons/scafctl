@@ -6,7 +6,7 @@ metadata:
   version: 1.0.0
   description: |
     Functional tests for immutable state overwrite protection.
-    Verifies that CheckImmutables rejects attempts to resolve an immutable
+    Verifies that immutable persistence rejects attempts to resolve an immutable
     entry to a different value, and that same-value resolves are allowed.
 
     This solution uses a static-only resolver with immutable flag. The
@@ -61,7 +61,7 @@ spec:
         tags: [state, immutable]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{"value":{"value":"fixed-value","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"value":{"value":"fixed-value","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode == 0
@@ -79,7 +79,7 @@ spec:
         tags: [state, immutable, negative]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{"value":{"value":"original-locked","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"value":{"value":"original-locked","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode != 0
@@ -99,7 +99,7 @@ spec:
         tags: [state, immutable]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-immutable-overwrite","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode == 0

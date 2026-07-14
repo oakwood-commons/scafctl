@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -17,8 +16,8 @@ import (
 // registerStateTools registers state inspection MCP tools.
 func (s *Server) registerStateTools() {
 	listTool := mcp.NewTool("state_list",
-		mcp.WithDescription(fmt.Sprintf("List all entries in a %s state file. Shows key names, types, values, and timestamps. Use this to inspect persisted resolver values between solution runs.", s.name)),
-		mcp.WithTitleAnnotation("List State Entries"),
+		mcp.WithDescription(fmt.Sprintf("List the persisted resolver values in a %s state file. Returns the resolvers map (keyed by resolver name, each with value, type, immutable flag, and timestamps) -- the entries the state provider can read back on later runs. Use state_show to inspect the full state document.", s.name)),
+		mcp.WithTitleAnnotation("List Persisted Resolvers"),
 		mcp.WithToolIcons(toolIcons["config"]),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
@@ -33,6 +32,24 @@ func (s *Server) registerStateTools() {
 		),
 	)
 	s.addTool(listTool, s.handleStateList)
+
+	showTool := mcp.NewTool("state_show",
+		mcp.WithDescription(fmt.Sprintf("Show the full contents of a %s state file. Returns the faithful on-disk state document (schemaVersion, metadata, command, parameters, resolvers, fingerprints). Use state_list for just the persisted resolver values.", s.name)),
+		mcp.WithTitleAnnotation("Show Full State"),
+		mcp.WithToolIcons(toolIcons["config"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("State file path (relative to working directory or absolute)"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
+	)
+	s.addTool(showTool, s.handleStateShow)
 
 	getTool := mcp.NewTool("state_get",
 		mcp.WithDescription(fmt.Sprintf("Get a single entry from a %s state file by key. Returns the value, type, and metadata for the specified key.", s.name)),
@@ -117,7 +134,7 @@ func stateBaseDir(cwd string) (string, error) {
 	return os.Getwd()
 }
 
-// handleStateList lists all entries in a state file.
+// handleStateList returns the persisted resolver values from a state file.
 func (s *Server) handleStateList(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	path := request.GetString("path", "")
 	if path == "" {
@@ -139,58 +156,38 @@ func (s *Server) handleStateList(_ context.Context, request mcp.CallToolRequest)
 		), nil
 	}
 
-	type entryInfo struct {
-		Key       string `json:"key"`
-		Value     any    `json:"value,omitempty"`
-		Type      string `json:"type,omitempty"`
-		Section   string `json:"section"`
-		CreatedAt string `json:"createdAt,omitempty"`
-		Readonly  bool   `json:"readonly,omitempty"`
+	// Return just the persisted resolvers -- the entries the state provider can
+	// read back on later runs. Use state_show for the full document. Mirrors
+	// `scafctl state list -o json`.
+	return mcp.NewToolResultJSON(sd.Resolvers)
+}
+
+// handleStateShow returns the full on-disk state document.
+func (s *Server) handleStateShow(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path := request.GetString("path", "")
+	if path == "" {
+		return newStructuredError(ErrCodeInvalidInput, "path is required",
+			WithField("path"),
+			WithSuggestion("Provide the state file path (e.g., 'my-app-state.json')"),
+		), nil
 	}
 
-	totalEntries := len(sd.Parameters) + len(sd.Immutables)
-
-	paramKeys := make([]string, 0, len(sd.Parameters))
-	for k := range sd.Parameters {
-		paramKeys = append(paramKeys, k)
-	}
-	sort.Strings(paramKeys)
-
-	immKeys := make([]string, 0, len(sd.Immutables))
-	for k := range sd.Immutables {
-		immKeys = append(immKeys, k)
-	}
-	sort.Strings(immKeys)
-
-	entries := make([]entryInfo, 0, totalEntries)
-	for _, key := range paramKeys {
-		entries = append(entries, entryInfo{
-			Key:     key,
-			Value:   sd.Parameters[key],
-			Section: "parameters",
-		})
-	}
-	for _, key := range immKeys {
-		entry := sd.Immutables[key]
-		info := entryInfo{
-			Key:      key,
-			Value:    entry.Value,
-			Type:     entry.Type,
-			Section:  "immutables",
-			Readonly: true,
-		}
-		if !entry.CreatedAt.IsZero() {
-			info.CreatedAt = entry.CreatedAt.Format("2006-01-02T15:04:05Z")
-		}
-		entries = append(entries, info)
+	baseDir, err := stateBaseDir(request.GetString("cwd", ""))
+	if err != nil {
+		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("cannot determine working directory: %v", err)), nil
 	}
 
-	return mcp.NewToolResultJSON(map[string]any{
-		"path":     path,
-		"count":    len(entries),
-		"entries":  entries,
-		"metadata": sd.Metadata,
-	})
+	sd, err := state.LoadFromFile(path, baseDir)
+	if err != nil {
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err),
+			WithSuggestion("Check that the path is correct and the file is valid JSON"),
+		), nil
+	}
+
+	// Return the faithful on-disk state document so callers always see the true
+	// schema. This is schema-driven: new fields in the state format surface
+	// automatically without changes here, mirroring `scafctl state show -o json`.
+	return mcp.NewToolResultJSON(sd)
 }
 
 // handleStateGet retrieves a single state entry by key.
@@ -221,7 +218,7 @@ func (s *Server) handleStateGet(_ context.Context, request mcp.CallToolRequest) 
 		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("failed to load state: %v", err)), nil
 	}
 
-	// Check parameters first, then immutables
+	// Check parameters first, then persisted resolvers
 	if val, ok := sd.Parameters[key]; ok {
 		return mcp.NewToolResultJSON(map[string]any{
 			"key":     key,
@@ -230,12 +227,17 @@ func (s *Server) handleStateGet(_ context.Context, request mcp.CallToolRequest) 
 		})
 	}
 
-	if entry, ok := sd.Immutables[key]; ok {
+	if entry, ok := sd.Resolvers[key]; ok {
+		section := "persisted"
+		if entry.Immutable {
+			section = "immutable"
+		}
 		return mcp.NewToolResultJSON(map[string]any{
-			"key":     key,
-			"value":   entry.Value,
-			"type":    entry.Type,
-			"section": "immutables",
+			"key":       key,
+			"value":     entry.Value,
+			"type":      entry.Type,
+			"section":   section,
+			"immutable": entry.Immutable,
 		})
 	}
 
@@ -270,9 +272,10 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 	if key != "" {
 		// Delete a single key -- check both maps (mirrors CLI behavior)
 		_, inParams := sd.Parameters[key]
-		_, inImmutables := sd.Immutables[key]
+		resEntry, inResolvers := sd.Resolvers[key]
+		isImmutable := inResolvers && resEntry.Immutable
 
-		if !inParams && !inImmutables {
+		if !inParams && !inResolvers {
 			return newStructuredError(ErrCodeNotFound, fmt.Sprintf("key %q not found in state", key),
 				WithField("key"),
 				WithRelatedTools("state_list"),
@@ -282,8 +285,8 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 		if inParams {
 			delete(sd.Parameters, key)
 		}
-		if inImmutables {
-			delete(sd.Immutables, key)
+		if inResolvers {
+			delete(sd.Resolvers, key)
 		}
 
 		if err := state.SaveToFile(path, baseDir, sd); err != nil {
@@ -292,10 +295,14 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 
 		var msg string
 		switch {
-		case inParams && inImmutables:
+		case inParams && isImmutable:
 			msg = fmt.Sprintf("deleted parameter and immutable key %q", key)
-		case inImmutables:
+		case inParams && inResolvers:
+			msg = fmt.Sprintf("deleted parameter and persisted key %q", key)
+		case isImmutable:
 			msg = fmt.Sprintf("deleted immutable key %q", key)
+		case inResolvers:
+			msg = fmt.Sprintf("deleted persisted key %q", key)
 		default:
 			msg = fmt.Sprintf("deleted parameter %q", key)
 		}
@@ -307,9 +314,9 @@ func (s *Server) handleStateDelete(_ context.Context, request mcp.CallToolReques
 	}
 
 	// Clear all entries
-	count := len(sd.Parameters) + len(sd.Immutables) + len(sd.Fingerprints)
+	count := len(sd.Parameters) + len(sd.Resolvers) + len(sd.Fingerprints)
 	sd.Parameters = make(map[string]any)
-	sd.Immutables = make(map[string]*state.ImmutableEntry)
+	sd.Resolvers = make(map[string]*state.PersistedEntry)
 	sd.Fingerprints = make(map[string]*state.FingerprintEntry)
 	if err := state.SaveToFile(path, baseDir, sd); err != nil {
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("failed to save state: %v", err)), nil

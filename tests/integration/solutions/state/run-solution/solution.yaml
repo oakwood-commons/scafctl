@@ -81,7 +81,7 @@ spec:
         tags: [state, run-solution]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production","build_id":"build-042"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production","build_id":"build-042"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/run-solution-state.json
         assertions:
           - expression: __exitCode == 0
@@ -101,7 +101,7 @@ spec:
         tags: [state, run-solution]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-run-solution","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{"target":"production"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/run-solution-state.json
         assertions:
           - expression: __exitCode == 0

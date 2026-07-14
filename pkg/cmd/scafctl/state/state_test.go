@@ -42,7 +42,8 @@ func seedStateWithImmutable(t *testing.T, path string) {
 	sd := state.NewData()
 	sd.Parameters["env"] = "prod"
 	sd.Parameters["project_id"] = "abc-123"
-	sd.Immutables["project_id"] = &state.ImmutableEntry{
+	sd.Resolvers["project_id"] = &state.PersistedEntry{
+		Immutable: true,
 		Value:     "abc-123",
 		Type:      "string",
 		CreatedAt: time.Now(),
@@ -87,13 +88,13 @@ func TestCommandList_EmptyState(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "State file is empty")
+	assert.Contains(t, buf.String(), "no persisted resolver values")
 }
 
 func TestCommandList_WithEntries(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.json")
-	seedState(t, path)
+	seedStateWithImmutable(t, path)
 
 	ctx, buf := newTestContext(t)
 	cliParams := &settings.Run{BinaryName: "testcli"}
@@ -104,8 +105,137 @@ func TestCommandList_WithEntries(t *testing.T) {
 
 	err := cmd.Execute()
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "env")
-	assert.Contains(t, buf.String(), "count")
+	// list returns only the persisted resolvers map -- not parameters/metadata.
+	assert.Contains(t, buf.String(), "project_id")
+	assert.NotContains(t, buf.String(), "metadata")
+	assert.NotContains(t, buf.String(), "schemaVersion")
+}
+
+func TestCommandList_EmptyResolvers(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "empty-resolvers.json")
+	seedState(t, path) // parameters only, no resolvers
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandList(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path})
+
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, buf.String(), "no persisted resolver values")
+}
+
+func TestCommandList_ImmutableIncludesValue(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "immutable.json")
+	seedStateWithImmutable(t, path)
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandList(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "-o", "json"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	// The immutable entry's locked value must appear in the listing,
+	// not just its key and metadata.
+	assert.Contains(t, buf.String(), "project_id")
+	assert.Contains(t, buf.String(), "abc-123")
+}
+
+// TestCommandList_ExpressionDefaultFormat verifies that a CEL expression
+// (-e/--expression) works without an explicit -o format. The filter runs
+// against the resolvers map (list's scope), so a path like '_.project_id.value'
+// resolves successfully.
+func TestCommandList_ExpressionDefaultFormat(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "expr.json")
+	seedStateWithImmutable(t, path)
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandList(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "-e", "_.project_id.value"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "abc-123")
+	// The resolvers table header must NOT appear -- the expression selected a
+	// single scalar, so only that value is emitted.
+	assert.NotContains(t, buf.String(), "Resolvers")
+}
+
+// ── Show tests ────────────────────────────────────────────────────────────────
+
+// TestCommandShow_FullDocument verifies show renders every populated section.
+func TestCommandShow_FullDocument(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "show.json")
+	seedStateWithImmutable(t, path)
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandShow(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "-o", "json"})
+
+	require.NoError(t, cmd.Execute())
+	out := buf.String()
+	assert.Contains(t, out, "schemaVersion")
+	assert.Contains(t, out, "metadata")
+	assert.Contains(t, out, "parameters")
+	assert.Contains(t, out, "resolvers")
+}
+
+// TestCommandShow_SummaryHeader verifies the human view leads with a compact
+// identity + counts summary.
+func TestCommandShow_SummaryHeader(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "summary.json")
+	sd := state.NewData()
+	sd.Metadata.Solution = "demo"
+	sd.Metadata.Version = "9.9.9"
+	sd.Parameters["env"] = "prod"
+	sd.Resolvers["tok"] = &state.PersistedEntry{Value: "x", Type: "string"}
+	require.NoError(t, state.SaveToFile(path, "", sd))
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandShow(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path})
+
+	require.NoError(t, cmd.Execute())
+	out := buf.String()
+	assert.Contains(t, out, "demo@9.9.9")
+	assert.Contains(t, out, "1 parameters, 1 resolvers, 0 fingerprints")
+}
+
+// TestCommandShow_Expression verifies a CEL expression runs against the whole
+// document under show.
+func TestCommandShow_Expression(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "show-expr.json")
+	seedStateWithImmutable(t, path)
+
+	ctx, buf := newTestContext(t)
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{Out: buf, ErrOut: buf}
+	cmd := CommandShow(cliParams, ios, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "-e", "_.resolvers.project_id.value"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, buf.String(), "abc-123")
+	assert.NotContains(t, buf.String(), "Metadata")
 }
 
 // ── Get tests ─────────────────────────────────────────────────────────────────
@@ -180,7 +310,7 @@ func TestCommandSet_Immutable(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "test.json")
 	sd := state.NewData()
-	sd.Immutables["locked"] = &state.ImmutableEntry{Value: "v1", Type: "string", CreatedAt: time.Now().UTC()}
+	sd.Resolvers["locked"] = &state.PersistedEntry{Immutable: true, Value: "v1", Type: "string", CreatedAt: time.Now().UTC()}
 	require.NoError(t, state.SaveToFile(path, "", sd))
 
 	ctx, buf := newTestContext(t)
@@ -191,6 +321,62 @@ func TestCommandSet_Immutable(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, buf.String(), "immutable")
+}
+
+func TestCommandSet_Persist(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandSet(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "token", "--value", "abc", "--persist"})
+
+	require.NoError(t, cmd.Execute())
+
+	sd, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	entry, ok := sd.Resolvers["token"]
+	require.True(t, ok)
+	assert.Equal(t, "abc", entry.Value)
+	assert.False(t, entry.Immutable, "persist entry must not be immutable")
+	assert.NotContains(t, sd.Parameters, "token")
+}
+
+func TestCommandSet_PersistOverwritesPreservingCreatedAt(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+	created := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	sd := state.NewData()
+	sd.Resolvers["token"] = &state.PersistedEntry{Value: "old", Type: "string", CreatedAt: created, UpdatedAt: created}
+	require.NoError(t, state.SaveToFile(path, "", sd))
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandSet(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "token", "--value", "new", "--persist"})
+
+	require.NoError(t, cmd.Execute())
+
+	reloaded, loadErr := state.LoadFromFile(path, "")
+	require.NoError(t, loadErr)
+	entry := reloaded.Resolvers["token"]
+	assert.Equal(t, "new", entry.Value)
+	assert.Equal(t, created, entry.CreatedAt.UTC(), "persist preserves CreatedAt")
+}
+
+func TestCommandSet_ImmutableAndPersistMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "test.json")
+
+	ctx, buf := newTestContext(t)
+	cmd := CommandSet(&settings.Run{BinaryName: "testcli"}, &terminal.IOStreams{Out: buf, ErrOut: buf}, "")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--path", path, "--key", "k", "--value", "v", "--immutable", "--persist"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), "mutually exclusive")
 }
 
 func TestCommandSet_TypedInt(t *testing.T) {
@@ -351,7 +537,7 @@ func TestCommandDelete_ImmutableWithoutForce(t *testing.T) {
 	sd, loadErr := state.LoadFromFile(path, "")
 	require.NoError(t, loadErr)
 	assert.Contains(t, sd.Parameters, "project_id")
-	assert.Contains(t, sd.Immutables, "project_id")
+	assert.Contains(t, sd.Resolvers, "project_id")
 }
 
 func TestCommandDelete_ImmutableWithForce(t *testing.T) {
@@ -372,7 +558,7 @@ func TestCommandDelete_ImmutableWithForce(t *testing.T) {
 	sd, loadErr := state.LoadFromFile(path, "")
 	require.NoError(t, loadErr)
 	assert.NotContains(t, sd.Parameters, "project_id")
-	assert.NotContains(t, sd.Immutables, "project_id")
+	assert.NotContains(t, sd.Resolvers, "project_id")
 	// Other parameters should be untouched
 	assert.Contains(t, sd.Parameters, "env")
 }
@@ -383,7 +569,8 @@ func TestCommandDelete_ImmutableOnlyWithForce(t *testing.T) {
 
 	// Seed state with key only in immutables, not in parameters
 	sd := state.NewData()
-	sd.Immutables["generated_id"] = &state.ImmutableEntry{
+	sd.Resolvers["generated_id"] = &state.PersistedEntry{
+		Immutable: true,
 		Value:     "xyz-789",
 		Type:      "string",
 		CreatedAt: time.Now(),
@@ -402,7 +589,7 @@ func TestCommandDelete_ImmutableOnlyWithForce(t *testing.T) {
 	// Verify key is gone
 	loaded, loadErr := state.LoadFromFile(path, "")
 	require.NoError(t, loadErr)
-	assert.NotContains(t, loaded.Immutables, "generated_id")
+	assert.NotContains(t, loaded.Resolvers, "generated_id")
 }
 
 func TestCommandDelete_SaveError(t *testing.T) {
@@ -453,7 +640,7 @@ func TestCommandClear(t *testing.T) {
 	sd, loadErr := state.LoadFromFile(path, "")
 	require.NoError(t, loadErr)
 	assert.Empty(t, sd.Parameters)
-	assert.Empty(t, sd.Immutables)
+	assert.Empty(t, sd.Resolvers)
 }
 
 func TestCommandClear_EmptyState(t *testing.T) {
@@ -620,13 +807,13 @@ func TestClearEntries_Default(t *testing.T) {
 	sd := state.NewData()
 	now := time.Now().UTC()
 	sd.Parameters["env"] = "prod"
-	sd.Immutables["key"] = &state.ImmutableEntry{Value: "val", CreatedAt: now}
+	sd.Resolvers["key"] = &state.PersistedEntry{Immutable: true, Value: "val", CreatedAt: now}
 	sd.Fingerprints["__fingerprint:build:sources"] = &state.FingerprintEntry{Value: "abc", UpdatedAt: now}
 
 	count := clearEntries(sd, &clearOptions{})
 	assert.Equal(t, 3, count)
 	assert.Empty(t, sd.Parameters)
-	assert.Empty(t, sd.Immutables)
+	assert.Empty(t, sd.Resolvers)
 	assert.Empty(t, sd.Fingerprints)
 }
 

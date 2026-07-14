@@ -1051,10 +1051,10 @@ spec:
 	raw, err := os.ReadFile(statePath) //nolint:gosec // test-controlled path
 	require.NoError(t, err)
 	var stateDoc struct {
-		Immutables map[string]any `json:"immutables"`
+		Resolvers map[string]any `json:"resolvers"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &stateDoc))
-	assert.Contains(t, stateDoc.Immutables, "region", "immutable region should be locked after a passing run")
+	assert.Contains(t, stateDoc.Resolvers, "region", "immutable region should be locked after a passing run")
 }
 
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
@@ -10493,9 +10493,9 @@ func TestIntegration_StateList(t *testing.T) {
 	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
-	// Set keys
-	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k1", "--value", "v1")
-	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k2", "--value", "v2")
+	// Persist keys so they land in the resolvers section that `state list` shows.
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k1", "--value", "v1", "--persist")
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "k2", "--value", "v2", "--persist")
 
 	// List
 	stdout, _, exitCode := runScafctl(t, "state", "list", "--path", stateFile)
@@ -10562,7 +10562,7 @@ func TestIntegration_StateSetImmutableRejectsOverwrite(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
 	// Seed state with an immutable entry using the new schema
-	content := `{"schemaVersion":1,"metadata":{},"command":{"subcommand":"","parameters":{}},"parameters":{},"immutables":{"locked":{"value":"original","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}`
+	content := `{"schemaVersion":2,"metadata":{},"command":{"subcommand":"","parameters":{}},"parameters":{},"resolvers":{"locked":{"value":"original","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}`
 	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
 
 	// Attempt to overwrite the immutable key
@@ -10576,18 +10576,90 @@ func TestIntegration_StateSetImmutableRejectsOverwrite(t *testing.T) {
 	assert.Contains(t, stdout, "original")
 }
 
+// TestIntegration_RunSolution_ImmutableViolationAbortsBeforeActions is a
+// regression test for a bug where an immutable resolver whose value changed
+// between runs still let the action workflow execute (scaffolding files with
+// the illegal value) before the immutable check fired at state-save time.
+// The immutable check must run BEFORE any action, so a violation aborts the
+// run and leaves prior output untouched.
+func TestIntegration_RunSolution_ImmutableViolationAbortsBeforeActions(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	solutionPath := filepath.Join(dir, "solution.yaml")
+	solution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: immutable-action-ordering
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: "state.json"
+spec:
+  resolvers:
+    deployment_id:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "deployment_id"
+  workflow:
+    actions:
+      write-id:
+        provider: file
+        inputs:
+          operation: write
+          path: "out.txt"
+          content:
+            expr: "_.deployment_id"
+`
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solution), 0o600))
+	outFile := filepath.Join(dir, "out.txt")
+
+	// First run locks deployment_id=original and scaffolds out.txt.
+	_, stderr, exitCode := runScafctlInDir(t, dir,
+		"run", "solution", "-f", solutionPath,
+		"-r", "deployment_id=original", "--on-conflict", "overwrite",
+	)
+	require.Equal(t, 0, exitCode, "first run should succeed: %s", stderr)
+	original, err := os.ReadFile(outFile) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Contains(t, string(original), "original")
+
+	// Second run attempts to change the immutable value. It must abort BEFORE
+	// the action runs, so out.txt must remain unchanged (never rewritten to
+	// "changed").
+	_, stderr, exitCode = runScafctlInDir(t, dir,
+		"run", "solution", "-f", solutionPath,
+		"-r", "deployment_id=changed", "--on-conflict", "overwrite",
+	)
+	assert.NotEqual(t, 0, exitCode, "run must fail when an immutable value changes")
+	assert.Contains(t, stderr, "immutable")
+
+	after, err := os.ReadFile(outFile) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, string(original), string(after),
+		"output file must not be scaffolded with the illegal immutable value")
+	assert.NotContains(t, string(after), "changed",
+		"action must not have executed with the changed immutable value")
+}
+
 func TestIntegration_StateGetJSON(t *testing.T) {
 	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
 	// Seed state with an immutable entry using the new schema
-	content := `{"schemaVersion":1,"metadata":{},"command":{"subcommand":"","parameters":{}},"parameters":{},"immutables":{"api_key":{"value":"sk-123","type":"string","createdAt":"2025-04-01T10:00:00Z"}},"fingerprints":{}}`
+	content := `{"schemaVersion":2,"metadata":{},"command":{"subcommand":"","parameters":{}},"parameters":{},"resolvers":{"api_key":{"value":"sk-123","type":"string","immutable":true,"createdAt":"2025-04-01T10:00:00Z"}},"fingerprints":{}}`
 	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
 
 	stdout, _, exitCode := runScafctl(t, "state", "get", "--path", stateFile, "--key", "api_key", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "sk-123")
-	assert.Contains(t, stdout, "immutables")
+	assert.Contains(t, stdout, "immutable")
 	assert.Contains(t, stdout, "string")
 }
 
@@ -10595,9 +10667,9 @@ func TestIntegration_StateListJSON(t *testing.T) {
 	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
-	// Seed with multiple keys
-	runScafctl(t, "state", "set", "--path", stateFile, "--key", "alpha", "--value", "a")
-	runScafctl(t, "state", "set", "--path", stateFile, "--key", "beta", "--value", "b")
+	// Persist keys so they appear in the resolvers section `state list` returns.
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "alpha", "--value", "a", "--persist")
+	runScafctl(t, "state", "set", "--path", stateFile, "--key", "beta", "--value", "b", "--persist")
 
 	stdout, _, exitCode := runScafctl(t, "state", "list", "--path", stateFile, "-o", "json")
 	assert.Equal(t, 0, exitCode)
@@ -10605,6 +10677,171 @@ func TestIntegration_StateListJSON(t *testing.T) {
 	assert.Contains(t, stdout, "beta")
 	// JSON output should be parseable
 	assert.Contains(t, stdout, "{")
+}
+
+// TestIntegration_StateListResolversJSON verifies that `state list -o json`
+// returns only the persisted resolvers map -- the entries accessible to the
+// state provider -- not the full state document.
+func TestIntegration_StateListResolversJSON(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed a state file exercising every section: a parameter, a persisted
+	// resolver, an immutable resolver, and a fingerprint.
+	content := `{"schemaVersion":2,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+		`"command":{"subcommand":"run resolver","parameters":{"token":"alpha"}},` +
+		`"parameters":{"env":"prod"},` +
+		`"resolvers":{` +
+		`"current_token":{"value":"alpha","type":"string","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-02-02T00:00:00Z"},` +
+		`"locked":{"value":"secret","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-01T00:00:00Z"}},` +
+		`"fingerprints":{"__fingerprint:build:inputs":{"value":"deadbeef","updatedAt":"2025-02-02T00:00:00Z"}}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "state", "list", "--path", stateFile, "-o", "json")
+	require.Equal(t, 0, exitCode)
+
+	// The payload is the resolvers subtree itself, keyed by resolver name.
+	var resolvers map[string]struct {
+		Value     any    `json:"value"`
+		Type      string `json:"type"`
+		Immutable bool   `json:"immutable"`
+		CreatedAt string `json:"createdAt"`
+		UpdatedAt string `json:"updatedAt"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &resolvers), "output must be valid JSON")
+
+	require.Len(t, resolvers, 2)
+	current := resolvers["current_token"]
+	assert.False(t, current.Immutable)
+	assert.Equal(t, "string", current.Type)
+	assert.Equal(t, "2025-02-02T00:00:00Z", current.UpdatedAt)
+	assert.True(t, resolvers["locked"].Immutable)
+
+	// Other document sections are NOT present in the list payload.
+	assert.NotContains(t, stdout, "schemaVersion")
+	assert.NotContains(t, stdout, "fingerprints")
+}
+
+// TestIntegration_StateListResolversTable verifies that the default (human)
+// table output for `state list` shows only the resolvers section -- no summary
+// header and no other section headings.
+func TestIntegration_StateListResolversTable(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	content := `{"schemaVersion":2,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+		`"command":{"subcommand":"run resolver","parameters":{}},` +
+		`"parameters":{"env":"prod"},` +
+		`"resolvers":{"current_token":{"value":"alpha","type":"string","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-02-02T00:00:00Z"}},` +
+		`"fingerprints":{}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "state", "list", "--path", stateFile)
+	require.Equal(t, 0, exitCode)
+
+	// Only the resolvers section renders.
+	assert.Contains(t, stdout, "Resolvers")
+	assert.Contains(t, stdout, "current_token")
+	// No summary header and no other section headings.
+	assert.NotContains(t, stdout, "grouped-demo@2.0.0")
+	assert.NotContains(t, stdout, "Metadata")
+	assert.NotContains(t, stdout, "Parameters")
+}
+
+// TestIntegration_StateShowGrouped verifies that `state show -o json` returns
+// the faithful on-disk state schema (the raw state object), so scripts always
+// see the true structure. This path is schema-driven and does not need updating
+// when new fields are added to the state format.
+func TestIntegration_StateShowGrouped(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	// Seed a state file exercising every section: a parameter, a persisted
+	// resolver, an immutable resolver, and a fingerprint.
+	content := `{"schemaVersion":2,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+		`"command":{"subcommand":"run resolver","parameters":{"token":"alpha"}},` +
+		`"parameters":{"env":"prod"},` +
+		`"resolvers":{` +
+		`"current_token":{"value":"alpha","type":"string","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-02-02T00:00:00Z"},` +
+		`"locked":{"value":"secret","type":"string","immutable":true,"createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-01T00:00:00Z"}},` +
+		`"fingerprints":{"__fingerprint:build:inputs":{"value":"deadbeef","updatedAt":"2025-02-02T00:00:00Z"}}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "state", "show", "--path", stateFile, "-o", "json")
+	require.Equal(t, 0, exitCode)
+
+	var view struct {
+		SchemaVersion int            `json:"schemaVersion"`
+		Metadata      map[string]any `json:"metadata"`
+		Command       map[string]any `json:"command"`
+		Parameters    map[string]any `json:"parameters"`
+		Resolvers     map[string]struct {
+			Value     any    `json:"value"`
+			Type      string `json:"type"`
+			Immutable bool   `json:"immutable"`
+			CreatedAt string `json:"createdAt"`
+			UpdatedAt string `json:"updatedAt"`
+		} `json:"resolvers"`
+		Fingerprints map[string]struct {
+			Value     string `json:"value"`
+			UpdatedAt string `json:"updatedAt"`
+		} `json:"fingerprints"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &view), "output must be valid JSON")
+
+	assert.Equal(t, 2, view.SchemaVersion)
+	assert.Equal(t, "grouped-demo", view.Metadata["solution"])
+	assert.Equal(t, "run resolver", view.Command["subcommand"])
+
+	require.Len(t, view.Parameters, 1)
+	assert.Equal(t, "prod", view.Parameters["env"])
+
+	require.Len(t, view.Resolvers, 2)
+	current := view.Resolvers["current_token"]
+	assert.False(t, current.Immutable)
+	assert.Equal(t, "string", current.Type)
+	assert.Equal(t, "2025-02-02T00:00:00Z", current.UpdatedAt)
+	assert.True(t, view.Resolvers["locked"].Immutable)
+
+	require.Len(t, view.Fingerprints, 1)
+	assert.Equal(t, "deadbeef", view.Fingerprints["__fingerprint:build:inputs"].Value)
+}
+
+// TestIntegration_StateShowGroupedTable verifies that the default (human) table
+// output for `state show` renders a summary header plus each populated section
+// under its own heading.
+func TestIntegration_StateShowGroupedTable(t *testing.T) {
+	t.Parallel()
+	stateFile := filepath.Join(t.TempDir(), "test-state.json")
+
+	content := `{"schemaVersion":2,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+		`"command":{"subcommand":"run resolver","parameters":{}},` +
+		`"parameters":{"env":"prod"},` +
+		`"resolvers":{"current_token":{"value":"alpha","type":"string","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-02-02T00:00:00Z"}},` +
+		`"fingerprints":{}}`
+	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "state", "show", "--path", stateFile)
+	require.Equal(t, 0, exitCode)
+
+	// A compact summary header leads the view for at-a-glance context.
+	assert.Contains(t, stdout, "grouped-demo@2.0.0")
+	assert.Contains(t, stdout, "1 parameters, 1 resolvers, 0 fingerprints")
+
+	// Section headings mirror the state file layout.
+	assert.Contains(t, stdout, "Metadata")
+	assert.Contains(t, stdout, "Command")
+	assert.Contains(t, stdout, "Parameters")
+	assert.Contains(t, stdout, "Resolvers")
+	// Detail values are present.
+	assert.Contains(t, stdout, "grouped-demo")
+	assert.Contains(t, stdout, "current_token")
+	// Empty fingerprints section is omitted from the human view.
+	assert.NotContains(t, stdout, "Fingerprints")
 }
 
 func TestIntegration_StateDeleteNonexistentKey(t *testing.T) {
@@ -10658,7 +10895,7 @@ func TestIntegration_StateClearPreservesMetadata(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
 	// Seed state with metadata and parameters
-	content := `{"schemaVersion":1,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","scafctlVersion":"1.0.0"},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"immutables":{},"fingerprints":{}}`
+	content := `{"schemaVersion":2,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","scafctlVersion":"1.0.0"},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"resolvers":{},"fingerprints":{}}`
 	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
 
 	// Clear

@@ -206,8 +206,16 @@ type Resolver struct {
 	// runs, the resolver still executes but its value is compared against the stored value.
 	// If the values differ, execution fails with an error. Use this for non-deterministic
 	// values (e.g., UUIDs) that must remain stable across runs. Requires the solution to
-	// have a state block configured and enabled.
+	// have a state block configured and enabled. Setting Immutable implies Persist.
 	Immutable bool `json:"immutable,omitempty" yaml:"immutable,omitempty" doc:"Lock resolver value in state after first execution" example:"true"`
+
+	// Persist records the resolver's value in state after each successful run so it can be
+	// read back on a later run via the state provider. Unlike Immutable, the value is not
+	// locked or verified -- it is overwritten with the latest value every run. Persistence
+	// does not affect replay, does not skip execution, and does not feed the value back into
+	// resolver inputs automatically. Requires the solution to have a state block configured
+	// and enabled.
+	Persist bool `json:"persist,omitempty" yaml:"persist,omitempty" doc:"Record resolver value in state after each run for later retrieval via the state provider" example:"true"`
 
 	// Phases
 	Resolve   *ResolvePhase   `json:"resolve" yaml:"resolve" doc:"Value resolution phase"`

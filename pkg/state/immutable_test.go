@@ -4,79 +4,368 @@
 package state
 
 import (
-	"errors"
 	"testing"
+	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func newImmutableResolverCtx(t *testing.T, value any) *resolver.Context {
-	t.Helper()
-	rctx := resolver.NewContext()
-	rctx.SetResult("cluster_id", &resolver.ExecutionResult{
-		Value:  value,
-		Status: resolver.ExecutionStatusSuccess,
-	})
-	return rctx
-}
-
-func TestCheckImmutables(t *testing.T) {
-	resolvers := []*resolver.Resolver{
+func TestVerifyImmutables(t *testing.T) {
+	immutableResolvers := []*resolver.Resolver{
 		{Name: "cluster_id", Type: "string", Immutable: true},
 	}
 
-	t.Run("first run locks the value", func(t *testing.T) {
-		sd := NewData()
-		rctx := newImmutableResolverCtx(t, "uuid-1234")
-
-		err := CheckImmutables(sd, rctx, resolvers, nil)
-		require.NoError(t, err)
-		require.Contains(t, sd.Immutables, "cluster_id")
-		assert.Equal(t, "uuid-1234", sd.Immutables["cluster_id"].Value)
+	t.Run("nil state data is a no-op", func(t *testing.T) {
+		err := VerifyImmutables(nil, resolver.NewContext(), immutableResolvers)
+		assert.NoError(t, err)
 	})
 
-	t.Run("skip prevents locking a new value on first run", func(t *testing.T) {
-		sd := NewData()
-		rctx := newImmutableResolverCtx(t, "uuid-1234")
-
-		err := CheckImmutables(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
-		require.NoError(t, err)
-		assert.NotContains(t, sd.Immutables, "cluster_id")
+	t.Run("nil immutables map is a no-op", func(t *testing.T) {
+		sd := &Data{}
+		err := VerifyImmutables(sd, resolver.NewContext(), immutableResolvers)
+		assert.NoError(t, err)
 	})
 
-	t.Run("existing lock with matching value passes", func(t *testing.T) {
-		sd := NewData()
-		sd.Immutables["cluster_id"] = &ImmutableEntry{Value: "uuid-1234", Type: "string"}
-		rctx := newImmutableResolverCtx(t, "uuid-1234")
+	t.Run("matching value passes", func(t *testing.T) {
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
 
-		err := CheckImmutables(sd, rctx, resolvers, nil)
-		require.NoError(t, err)
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
+			Value:     "uuid-1234",
+			Type:      "string",
+			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		err := VerifyImmutables(sd, rctx, immutableResolvers)
+		assert.NoError(t, err)
 	})
 
-	t.Run("existing lock with differing value fails", func(t *testing.T) {
-		sd := NewData()
-		sd.Immutables["cluster_id"] = &ImmutableEntry{Value: "uuid-1234", Type: "string"}
-		rctx := newImmutableResolverCtx(t, "uuid-9999")
+	t.Run("different value errors", func(t *testing.T) {
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusSuccess,
+		})
 
-		err := CheckImmutables(sd, rctx, resolvers, nil)
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrImmutableEntry))
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
+			Value:     "uuid-1234",
+			Type:      "string",
+			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		err := VerifyImmutables(sd, rctx, immutableResolvers)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
+		assert.Contains(t, err.Error(), "cluster_id")
+		assert.Contains(t, err.Error(), "state delete")
+	})
+
+	t.Run("does not mutate state (no locking of new immutables)", func(t *testing.T) {
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		// No existing immutable entry -- VerifyImmutables must NOT create one.
+		sd := NewData()
+
+		err := VerifyImmutables(sd, rctx, immutableResolvers)
+		assert.NoError(t, err)
+		assert.NotContains(t, sd.Resolvers, "cluster_id", "verify must not lock new immutables")
+	})
+
+	t.Run("non-immutable resolver is ignored", func(t *testing.T) {
+		rctx := resolver.NewContext()
+		rctx.SetResult("env", &resolver.ExecutionResult{
+			Value:  "prod",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		sd.Resolvers["env"] = &PersistedEntry{
+			Immutable: true,
+			Value:     "dev",
+			Type:      "string",
+			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+		resolvers := []*resolver.Resolver{
+			{Name: "env", Type: "string", Immutable: false},
+		}
+
+		err := VerifyImmutables(sd, rctx, resolvers)
+		assert.NoError(t, err, "non-immutable resolvers are never verified")
+	})
+
+	t.Run("failed resolver result is skipped", func(t *testing.T) {
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusFailed,
+		})
+
+		sd := NewData()
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
+			Value:     "uuid-1234",
+			Type:      "string",
+			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+
+		err := VerifyImmutables(sd, rctx, immutableResolvers)
+		assert.NoError(t, err, "non-successful resolver results must not be verified")
+	})
+}
+
+func TestPersistResolvers(t *testing.T) {
+	t.Run("nil state data is a no-op", func(t *testing.T) {
+		err := PersistResolvers(nil, resolver.NewContext(), nil, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("persist-only resolver is recorded and overwritten each run", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "token", Type: "string", Persist: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "first",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+
+		entry := sd.Resolvers["token"]
+		assert.NotNil(t, entry)
+		assert.Equal(t, "first", entry.Value)
+		assert.False(t, entry.Immutable)
+		firstCreated := entry.CreatedAt
+
+		// Second run with a different value overwrites, preserving CreatedAt.
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "second",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+
+		entry = sd.Resolvers["token"]
+		assert.Equal(t, "second", entry.Value)
+		assert.Equal(t, firstCreated, entry.CreatedAt, "persist-only preserves CreatedAt")
+	})
+
+	t.Run("immutable resolver locks on first run and verifies on later runs", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+		assert.True(t, sd.Resolvers["cluster_id"].Immutable)
+		assert.Equal(t, "uuid-1234", sd.Resolvers["cluster_id"].Value)
+
+		// Same value on a subsequent run passes.
+		err = PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+
+		// A changed value errors.
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, resolvers, nil)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
+	})
+
+	t.Run("promoting a persist-only entry to immutable locks the current value", func(t *testing.T) {
+		// First record a persist-only entry.
+		persistOnly := []*resolver.Resolver{
+			{Name: "token", Type: "string", Persist: true},
+		}
+		rctx := resolver.NewContext()
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "first",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, persistOnly, nil)
+		assert.NoError(t, err)
+		assert.False(t, sd.Resolvers["token"].Immutable)
+		firstCreated := sd.Resolvers["token"].CreatedAt
+
+		// Now the resolver is switched to immutable and resolves to a new value.
+		// The existing non-immutable entry must be locked to the current value,
+		// NOT verified against (which would spuriously error).
+		immutable := []*resolver.Resolver{
+			{Name: "token", Type: "string", Immutable: true},
+		}
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "second",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, immutable, nil)
+		assert.NoError(t, err)
+
+		entry := sd.Resolvers["token"]
+		assert.True(t, entry.Immutable, "entry is now locked")
+		assert.Equal(t, "second", entry.Value, "current value is locked, not the prior one")
+		assert.Equal(t, firstCreated, entry.CreatedAt, "CreatedAt is preserved on promotion")
+
+		// A later run with a changed value now errors against the locked entry.
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "third",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, immutable, nil)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
+	})
+
+	t.Run("switching an immutable entry to persist-only does not downgrade the lock", func(t *testing.T) {
+		// First lock an immutable entry.
+		immutable := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-locked",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, immutable, nil)
+		assert.NoError(t, err)
+		assert.True(t, sd.Resolvers["cluster_id"].Immutable)
+		lockedCreated := sd.Resolvers["cluster_id"].CreatedAt
+		lockedUpdated := sd.Resolvers["cluster_id"].UpdatedAt
+
+		// The resolver is switched to persist-only and resolves to a new value.
+		// The existing immutable lock must be left untouched (no silent unlock,
+		// no value overwrite).
+		persistOnly := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Persist: true},
+		}
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+		err = PersistResolvers(sd, rctx, persistOnly, nil)
+		assert.NoError(t, err)
+
+		entry := sd.Resolvers["cluster_id"]
+		assert.True(t, entry.Immutable, "immutable lock is preserved")
+		assert.Equal(t, "uuid-locked", entry.Value, "locked value is not overwritten")
+		assert.Equal(t, lockedCreated, entry.CreatedAt, "CreatedAt is unchanged")
+		assert.Equal(t, lockedUpdated, entry.UpdatedAt, "UpdatedAt is unchanged")
+	})
+
+	t.Run("immutable implies persist even without persist flag", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true, Persist: false},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+		assert.Contains(t, sd.Resolvers, "cluster_id")
+	})
+
+	t.Run("plain resolver is not recorded", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "env", Type: "string"},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("env", &resolver.ExecutionResult{
+			Value:  "prod",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+		assert.NotContains(t, sd.Resolvers, "env")
+	})
+
+	t.Run("skipped or failed results are not recorded", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "token", Type: "string", Persist: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("token", &resolver.ExecutionResult{
+			Value:  "value",
+			Status: resolver.ExecutionStatusFailed,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, nil)
+		assert.NoError(t, err)
+		assert.NotContains(t, sd.Resolvers, "token")
+	})
+
+	t.Run("skip prevents locking a new immutable on first run", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-1234",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
+		sd := NewData()
+		err := PersistResolvers(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
+		assert.NoError(t, err)
+		assert.NotContains(t, sd.Resolvers, "cluster_id", "skipped resolver must not lock a new value")
 	})
 
 	t.Run("skip still verifies an existing lock and detects drift", func(t *testing.T) {
+		resolvers := []*resolver.Resolver{
+			{Name: "cluster_id", Type: "string", Immutable: true},
+		}
+
+		rctx := resolver.NewContext()
+		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
+			Value:  "uuid-CHANGED",
+			Status: resolver.ExecutionStatusSuccess,
+		})
+
 		sd := NewData()
-		sd.Immutables["cluster_id"] = &ImmutableEntry{Value: "uuid-1234", Type: "string"}
-		rctx := newImmutableResolverCtx(t, "uuid-9999")
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
+			Value:     "uuid-1234",
+			Type:      "string",
+		}
 
-		err := CheckImmutables(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrImmutableEntry))
-	})
-
-	t.Run("nil state data is a no-op", func(t *testing.T) {
-		err := CheckImmutables(nil, resolver.NewContext(), resolvers, nil)
-		require.NoError(t, err)
+		err := PersistResolvers(sd, rctx, resolvers, map[string]bool{"cluster_id": true})
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrImmutableEntry)
 	})
 }

@@ -95,7 +95,7 @@ spec:
         tags: [state, run-action]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production","version":"2.5.0"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production","version":"2.5.0"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/run-action-state.json
         assertions:
           - expression: __exitCode == 0
@@ -116,7 +116,7 @@ spec:
         tags: [state, run-action]
         init:
           - command: >-
-              printf '{"schemaVersion":1,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production"},"immutables":{},"fingerprints":{}}'
+              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-run-action","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run action","parameters":{}},"parameters":{"env":"production"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/run-action-state.json
         assertions:
           - expression: __exitCode == 0

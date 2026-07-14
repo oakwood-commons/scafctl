@@ -169,6 +169,8 @@ Complete solutions demonstrating real-world use cases.
 | [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` -- generates starter test suites |
 | [github-auth/](solutions/github-auth/) | GitHub authentication -- identity, API calls, and status checks |
 | [message-demo/](solutions/message-demo/) | Message provider -- styled terminal output with templates |
+| [state-immutable/](solutions/state-immutable/) | Immutable resolver values -- locked and verified across runs |
+| [state-persist/](solutions/state-persist/) | Persisted resolvers + `state` provider -- read a prior run's saved value |
 | [taskfile-discovery.yaml](solutions/taskfile-discovery.yaml) | Auto-discovery of `taskfile.yaml` named solutions without `-f` |
 
 ---

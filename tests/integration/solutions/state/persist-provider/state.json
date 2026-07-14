@@ -1,0 +1,26 @@
+{
+  "command": {
+    "parameters": {},
+    "subcommand": "run solution"
+  },
+  "fingerprints": {},
+  "metadata": {
+    "createdAt": "2026-07-08T18:03:33.734263Z",
+    "lastUpdatedAt": "2026-07-08T20:06:07.647078Z",
+    "scafctlVersion": "0.32.0-alpha20260708",
+    "solution": "test-state-persist-provider",
+    "version": "1.0.0"
+  },
+  "parameters": {
+    "token": "delta"
+  },
+  "resolvers": {
+    "current_token": {
+      "createdAt": "2026-07-08T20:06:01.3438Z",
+      "type": "string",
+      "updatedAt": "2026-07-08T20:06:07.647078Z",
+      "value": "delta"
+    }
+  },
+  "schemaVersion": 2
+}
