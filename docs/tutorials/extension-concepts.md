@@ -24,7 +24,7 @@ This page defines the core terminology and links to the detailed development gui
 
 | | **Builtin** | **Plugin** |
 |---|---|---|
-| **Provider** | Compiled into scafctl; 10 built-in providers (http, cel, static, parameter...) | Standalone gRPC binary; auto-fetched from OCI catalogs (10 official: exec, git, env...) |
+| **Provider** | Compiled into scafctl; 11 built-in providers (http, cel, static, parameter...) | Standalone gRPC binary; auto-fetched from OCI catalogs (10 official: exec, git, env...) |
 | **Auth Handler** | Compiled into scafctl; 3 built-in handlers (entra, github, gcp) | Standalone gRPC binary; auto-fetched from OCI catalogs |
 
 ## When to Choose Builtin vs Plugin

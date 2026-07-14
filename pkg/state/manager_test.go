@@ -407,7 +407,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 		require.NoError(t, err)
 
 		// Immutable locked, but parameters were not persisted to the document.
-		assert.Equal(t, "uuid-1234", sd.Immutables["cluster_id"].Value)
+		assert.Equal(t, "uuid-1234", sd.Resolvers["cluster_id"].Value)
 		assert.Empty(t, sd.Parameters)
 		assert.Len(t, backend.saveCalls, 1)
 	})
@@ -432,7 +432,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 		require.NoError(t, err)
 
 		// The failed immutable must NOT be locked.
-		assert.NotContains(t, sd.Immutables, "cluster_id")
+		assert.NotContains(t, sd.Resolvers, "cluster_id")
 	})
 
 	t.Run("SaveParams persists the merged parameter set", func(t *testing.T) {
@@ -486,9 +486,9 @@ func TestManagerSave_Immutable(t *testing.T) {
 
 		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.NoError(t, err)
-		assert.Contains(t, sd.Immutables, "cluster_id")
-		assert.Equal(t, "uuid-1234", sd.Immutables["cluster_id"].Value)
-		assert.Equal(t, "string", sd.Immutables["cluster_id"].Type)
+		assert.Contains(t, sd.Resolvers, "cluster_id")
+		assert.Equal(t, "uuid-1234", sd.Resolvers["cluster_id"].Value)
+		assert.Equal(t, "string", sd.Resolvers["cluster_id"].Type)
 	})
 
 	t.Run("same value is no-op", func(t *testing.T) {
@@ -507,7 +507,8 @@ func TestManagerSave_Immutable(t *testing.T) {
 
 		// Pre-populate state with the same value
 		sd := NewData()
-		sd.Immutables["cluster_id"] = &ImmutableEntry{
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
 			Value:     "uuid-1234",
 			Type:      "string",
 			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -517,7 +518,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.NoError(t, err)
 		// CreatedAt should remain unchanged (entry was skipped)
-		assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), sd.Immutables["cluster_id"].CreatedAt)
+		assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), sd.Resolvers["cluster_id"].CreatedAt)
 	})
 
 	t.Run("different value errors", func(t *testing.T) {
@@ -536,7 +537,8 @@ func TestManagerSave_Immutable(t *testing.T) {
 
 		// Pre-populate state with different value
 		sd := NewData()
-		sd.Immutables["cluster_id"] = &ImmutableEntry{
+		sd.Resolvers["cluster_id"] = &PersistedEntry{
+			Immutable: true,
 			Value:     "uuid-1234-old",
 			Type:      "string",
 			CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -571,7 +573,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 
 		err := mgr.Save(context.Background(), sd, rctx, resolvers, nil, nil, solMeta)
 		assert.NoError(t, err)
-		assert.NotContains(t, sd.Immutables, "env")
+		assert.NotContains(t, sd.Resolvers, "env")
 	})
 }
 
@@ -695,7 +697,7 @@ func TestExtractStateData(t *testing.T) {
 			"parameters": map[string]any{
 				"region": "us-east-1",
 			},
-			"immutables":   map[string]any{},
+			"resolvers":    map[string]any{},
 			"fingerprints": map[string]any{},
 		}
 		result, err := extractStateData(&provider.ExecutionResult{

@@ -21,6 +21,7 @@ func seedTestState(t *testing.T, path string) {
 	sd := state.NewData()
 	sd.Parameters["env"] = "prod"
 	sd.Parameters["count"] = float64(42)
+	sd.Resolvers["token"] = &state.PersistedEntry{Value: "alpha", Type: "string"}
 	require.NoError(t, state.SaveToFile(path, "", sd))
 }
 
@@ -49,9 +50,14 @@ func TestHandleStateList(t *testing.T) {
 		text := result.Content[0].(mcp.TextContent).Text
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 
-		assert.Equal(t, float64(2), output["count"])
-		entries := output["entries"].([]any)
-		assert.Len(t, entries, 2)
+		// The handler returns only the persisted resolvers map.
+		require.Len(t, output, 1)
+		token := output["token"].(map[string]any)
+		assert.Equal(t, "alpha", token["value"])
+		assert.Equal(t, "string", token["type"])
+		// The full document's other sections are NOT present.
+		assert.NotContains(t, output, "parameters")
+		assert.NotContains(t, output, "metadata")
 	})
 
 	t.Run("empty state", func(t *testing.T) {
@@ -67,11 +73,64 @@ func TestHandleStateList(t *testing.T) {
 		text := result.Content[0].(mcp.TextContent).Text
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
 
-		assert.Equal(t, float64(0), output["count"])
+		assert.Empty(t, output)
 	})
 
 	t.Run("missing path", func(t *testing.T) {
 		result, err := srv.handleStateList(context.Background(), newStateRequest("state_list", map[string]any{}))
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+}
+
+func TestHandleStateShow(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	t.Run("with entries", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		seedTestState(t, path)
+
+		result, err := srv.handleStateShow(context.Background(), newStateRequest("state_show", map[string]any{
+			"path": path,
+		}))
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		var output map[string]any
+		text := result.Content[0].(mcp.TextContent).Text
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		// The handler returns the faithful on-disk state document.
+		assert.Equal(t, float64(state.SchemaVersionCurrent), output["schemaVersion"])
+		params := output["parameters"].(map[string]any)
+		assert.Len(t, params, 2)
+		assert.Equal(t, "prod", params["env"])
+		assert.Contains(t, output, "resolvers")
+		assert.Contains(t, output, "fingerprints")
+		assert.Contains(t, output, "metadata")
+		assert.Contains(t, output, "command")
+	})
+
+	t.Run("empty state", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "empty.json")
+
+		result, err := srv.handleStateShow(context.Background(), newStateRequest("state_show", map[string]any{
+			"path": path,
+		}))
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		var output map[string]any
+		text := result.Content[0].(mcp.TextContent).Text
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		assert.Empty(t, output["parameters"])
+		assert.Empty(t, output["resolvers"])
+	})
+
+	t.Run("missing path", func(t *testing.T) {
+		result, err := srv.handleStateShow(context.Background(), newStateRequest("state_show", map[string]any{}))
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
 	})
@@ -177,13 +236,13 @@ func TestHandleStateDelete(t *testing.T) {
 		var output map[string]any
 		text := result.Content[0].(mcp.TextContent).Text
 		require.NoError(t, json.Unmarshal([]byte(text), &output))
-		assert.Contains(t, output["message"], "cleared 2 entries")
+		assert.Contains(t, output["message"], "cleared 3 entries")
 
 		// Verify all entries gone
 		sd, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.Empty(t, sd.Parameters)
-		assert.Empty(t, sd.Immutables)
+		assert.Empty(t, sd.Resolvers)
 	})
 
 	t.Run("missing path", func(t *testing.T) {
@@ -235,7 +294,7 @@ func TestHandleStateSet(t *testing.T) {
 	t.Run("set key with same name as immutable writes to parameters", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "state.json")
 		sd := state.NewData()
-		sd.Immutables["locked"] = &state.ImmutableEntry{Value: "v1", Type: "string", CreatedAt: time.Now().UTC()}
+		sd.Resolvers["locked"] = &state.PersistedEntry{Immutable: true, Value: "v1", Type: "string", CreatedAt: time.Now().UTC()}
 		require.NoError(t, state.SaveToFile(path, "", sd))
 
 		result, err := srv.handleStateSet(context.Background(), newStateRequest("state_set", map[string]any{
@@ -250,7 +309,7 @@ func TestHandleStateSet(t *testing.T) {
 		reloaded, loadErr := state.LoadFromFile(path, "")
 		require.NoError(t, loadErr)
 		assert.Equal(t, "v2", reloaded.Parameters["locked"])
-		assert.Equal(t, "v1", reloaded.Immutables["locked"].Value)
+		assert.Equal(t, "v1", reloaded.Resolvers["locked"].Value)
 	})
 
 	t.Run("type coercion int", func(t *testing.T) {

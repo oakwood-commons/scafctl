@@ -31,7 +31,7 @@ scafctl providers are split into two categories:
 | **Built-in** | Compiled into the scafctl binary. Always available without network access or plugins. |
 | **Official (plugin)** | Distributed as external plugin binaries via `ghcr.io/oakwood-commons/providers/<name>`. Auto-resolved at runtime when referenced in a solution. |
 
-**Built-in providers** (10): `cel`, `debug`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `static`, `validation`
+**Built-in providers** (11): `cel`, `debug`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `state`, `static`, `validation`
 
 **Official plugin providers** (10): `directory`, `env`, `exec`, `git`, `github`, `hcl`, `identity`, `metadata`, `secret`, `sleep`
 
@@ -59,6 +59,7 @@ Official providers are automatically fetched from the catalog when a solution re
 | [secret](#secret) | official | ✅ | ❌ | ❌ | ❌ |
 | [sleep](#sleep) | official | ✅ | ✅ | ✅ | ✅ |
 | [solution](#solution) | built-in | ✅ | ❌ | ❌ | ✅ |
+| [state](#state) | built-in | ✅ | ❌ | ❌ | ❌ |
 | [static](#static) | built-in | ✅ | ✅ | ❌ | ❌ |
 | [validation](#validation) | built-in | ❌ | ✅ | ✅ | ❌ |
 
@@ -2438,6 +2439,59 @@ resolve:
         source: "./optional-child.yaml"
         propagateErrors: false
 ```
+
+---
+
+## state
+
+Read a resolver value that was persisted on a previous run. The value comes from
+the state snapshot loaded at the start of the run -- i.e. the value from the
+**prior** run, before the current run overwrites it at save time. Pair with a
+resolver marked `persist: true` (or `immutable: true`) to reproduce the legacy
+"read another resolver's previously saved value" pattern.
+
+The `key` input is treated as an opaque string: it never creates a dependency
+edge in the resolver graph, so a resolver may safely read its own prior value
+without forming a self-cycle.
+
+### Capabilities
+
+`from`
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `operation` | string | ❌ | State operation. Only `get` is supported (the default). |
+| `key` | string | ✅ | Name of the persisted resolver whose prior-run value to read. |
+| `default` | any | ❌ | Value returned when the key has no persisted entry (e.g. on the first run). Returns null when omitted. |
+
+### Examples
+
+```yaml
+resolvers:
+  # Recomputes fresh every run and records its value for next time.
+  db_password:
+    persist: true
+    resolve:
+      with:
+        - provider: exec
+          inputs:
+            command: "openssl rand -hex 16"
+
+  # Reads the value db_password persisted on the PRIOR run.
+  prior_password:
+    resolve:
+      with:
+        - provider: state
+          inputs:
+            operation: get
+            key: db_password
+            default: ""
+```
+
+Within a single run, `state.get("db_password")` returns the prior run's value
+while `_.db_password` returns the value produced by the current run.
 
 ---
 

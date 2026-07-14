@@ -33,6 +33,7 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(CommandShow(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandGet(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandSet(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(CommandDelete(cliParams, ioStreams, cmdPath))

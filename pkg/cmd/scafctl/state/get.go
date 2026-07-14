@@ -33,7 +33,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 	cmd := &cobra.Command{
 		Use:   "get",
 		Short: "Get a state value",
-		Long:  "Retrieve and display the value of a specific state key from parameters or immutables.",
+		Long:  "Retrieve and display the value of a specific state key from parameters or persisted resolvers.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -69,7 +69,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 
-			// Check parameters first, then immutables
+			// Check parameters first, then persisted resolvers
 			if val, ok := sd.Parameters[opts.Key]; ok {
 				data := []map[string]any{{
 					"key":     opts.Key,
@@ -79,16 +79,21 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string
 				return kvxOpts.Write(data)
 			}
 
-			if entry, ok := sd.Immutables[opts.Key]; ok {
+			if entry, ok := sd.Resolvers[opts.Key]; ok {
 				createdAt := ""
 				if !entry.CreatedAt.IsZero() {
 					createdAt = entry.CreatedAt.Format("2006-01-02T15:04:05Z")
+				}
+				section := "persisted"
+				if entry.Immutable {
+					section = "immutable"
 				}
 				data := []map[string]any{{
 					"key":       opts.Key,
 					"value":     entry.Value,
 					"type":      entry.Type,
-					"section":   "immutables",
+					"section":   section,
+					"immutable": entry.Immutable,
 					"createdAt": createdAt,
 				}}
 				return kvxOpts.Write(data)

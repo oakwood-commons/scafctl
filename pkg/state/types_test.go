@@ -17,8 +17,8 @@ func TestNewStateData(t *testing.T) {
 	assert.Equal(t, SchemaVersionCurrent, data.SchemaVersion)
 	assert.NotNil(t, data.Parameters)
 	assert.Empty(t, data.Parameters)
-	assert.NotNil(t, data.Immutables)
-	assert.Empty(t, data.Immutables)
+	assert.NotNil(t, data.Resolvers)
+	assert.Empty(t, data.Resolvers)
 	assert.NotNil(t, data.Fingerprints)
 	assert.Empty(t, data.Fingerprints)
 	assert.NotNil(t, data.Command.Parameters)
@@ -47,10 +47,11 @@ func TestStateData_JSONRoundTrip(t *testing.T) {
 			"env":    "prod",
 			"region": "us-east-1",
 		},
-		Immutables: map[string]*ImmutableEntry{
+		Resolvers: map[string]*PersistedEntry{
 			"cluster_id": {
 				Value:     "uuid-1234",
 				Type:      "string",
+				Immutable: true,
 				CreatedAt: now,
 			},
 		},
@@ -78,9 +79,9 @@ func TestStateData_JSONRoundTrip(t *testing.T) {
 	assert.Len(t, restored.Parameters, 2)
 	assert.Equal(t, "prod", restored.Parameters["env"])
 	assert.Equal(t, "us-east-1", restored.Parameters["region"])
-	assert.Len(t, restored.Immutables, 1)
-	assert.Equal(t, "uuid-1234", restored.Immutables["cluster_id"].Value)
-	assert.Equal(t, "string", restored.Immutables["cluster_id"].Type)
+	assert.Len(t, restored.Resolvers, 1)
+	assert.Equal(t, "uuid-1234", restored.Resolvers["cluster_id"].Value)
+	assert.Equal(t, "string", restored.Resolvers["cluster_id"].Type)
 	assert.Len(t, restored.Fingerprints, 1)
 	assert.Equal(t, "abc123", restored.Fingerprints["__fingerprint:deploy:sources"].Value)
 }
@@ -121,23 +122,23 @@ func TestNewMockStateData_NilParams(t *testing.T) {
 	assert.Empty(t, data.Parameters)
 }
 
-func TestImmutableEntry_JSONRoundTrip(t *testing.T) {
+func TestPersistedEntry_JSONRoundTrip(t *testing.T) {
 	now := time.Now().UTC()
 	tests := []struct {
 		name  string
-		entry ImmutableEntry
+		entry PersistedEntry
 	}{
 		{
 			name:  "string value",
-			entry: ImmutableEntry{Value: "hello", Type: "string", CreatedAt: now},
+			entry: PersistedEntry{Value: "hello", Type: "string", Immutable: true, CreatedAt: now, UpdatedAt: now},
 		},
 		{
 			name:  "number value",
-			entry: ImmutableEntry{Value: float64(42), Type: "int", CreatedAt: now},
+			entry: PersistedEntry{Value: float64(42), Type: "int", CreatedAt: now, UpdatedAt: now},
 		},
 		{
 			name:  "bool value",
-			entry: ImmutableEntry{Value: true, Type: "bool", CreatedAt: now},
+			entry: PersistedEntry{Value: true, Type: "bool", CreatedAt: now, UpdatedAt: now},
 		},
 	}
 
@@ -146,11 +147,12 @@ func TestImmutableEntry_JSONRoundTrip(t *testing.T) {
 			data, err := json.Marshal(tt.entry)
 			require.NoError(t, err)
 
-			var restored ImmutableEntry
+			var restored PersistedEntry
 			err = json.Unmarshal(data, &restored)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.entry.Type, restored.Type)
+			assert.Equal(t, tt.entry.Immutable, restored.Immutable)
 		})
 	}
 }

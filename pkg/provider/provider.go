@@ -86,6 +86,7 @@ var builtinProviderNames = map[string]bool{
 	"static":      true,
 	"parameter":   true,
 	"solution":    true,
+	"state":       true,
 }
 
 // IsBuiltinProvider reports whether name is a built-in provider shipped with

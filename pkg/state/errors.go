@@ -22,6 +22,12 @@ var (
 	// ErrUnsupportedSchemaVersion indicates the state file was written by a newer
 	// version of scafctl and cannot be safely read by this version.
 	ErrUnsupportedSchemaVersion = errors.New("unsupported state schema version")
+
+	// ErrIncompatibleSchemaVersion indicates the state file was written by an
+	// older, no-longer-supported schema version whose layout cannot be safely
+	// read by this build (e.g. a breaking change dropped a field). The file must
+	// be deleted and recreated.
+	ErrIncompatibleSchemaVersion = errors.New("incompatible state schema version")
 )
 
 // MissingParamsError is returned when state load fails because the state

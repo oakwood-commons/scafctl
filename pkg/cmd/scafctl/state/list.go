@@ -5,8 +5,6 @@ package state
 
 import (
 	"fmt"
-	"os"
-	"sort"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -18,13 +16,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// resolversSection is the state document section that holds persisted resolver
+// values -- the entries the state provider can read back on later runs.
+const resolversSection = "resolvers"
+
 // listOptions holds the options for the list command.
 type listOptions struct {
 	flags.KvxOutputFlags
 	Path string
 }
 
-// CommandList creates the 'state list' command.
+// CommandList creates the 'state list' command. It lists the persisted resolver
+// values held in a state file -- the entries accessible to the state provider on
+// subsequent runs. Use 'state show' to view the full document (metadata,
+// command, parameters, resolvers, fingerprints).
 func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	opts := &listOptions{
 		KvxOutputFlags: flags.KvxOutputFlags{AppName: cliParams.BinaryName},
@@ -32,8 +37,10 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List stored state keys",
-		Long:  "List all keys and metadata in a state file.",
+		Short: "List persisted resolver values",
+		Long: "List the persisted resolver values stored in a state file -- the entries " +
+			"the state provider can read back on later runs. Use 'state show' to view the " +
+			"full state document.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			w := writer.FromContext(ctx)
@@ -41,89 +48,37 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			if opts.Path == "" {
-				err := fmt.Errorf("--path is required")
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-
-			cwd, err := os.Getwd()
+			sd, err := loadStateForDisplay(w, opts.Path)
 			if err != nil {
-				err := fmt.Errorf("cannot determine working directory: %w", err)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.GeneralError)
-			}
-
-			// Resolve and verify the file exists before loading.
-			resolved, err := state.ResolveStatePath(opts.Path, cwd)
-			if err != nil {
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.InvalidInput)
-			}
-			if _, statErr := os.Stat(resolved); os.IsNotExist(statErr) {
-				err := fmt.Errorf("state file not found: %s", resolved)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.FileNotFound)
-			}
-
-			sd, err := state.LoadFromFile(opts.Path, cwd)
-			if err != nil {
-				err := fmt.Errorf("failed to load state: %w", err)
-				w.Errorf("%v", err)
-				return exitcode.WithCode(err, exitcode.GeneralError)
-			}
-
-			totalEntries := len(sd.Parameters) + len(sd.Immutables)
-			if totalEntries == 0 {
-				if !cliParams.IsQuiet {
-					w.Warning("State file is empty \u2014 no parameters or immutables stored")
-				}
-				return nil
+				return err
 			}
 
 			kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
 
-			data := make([]map[string]any, 0, totalEntries)
-
-			// Parameters section
-			paramKeys := make([]string, 0, len(sd.Parameters))
-			for k := range sd.Parameters {
-				paramKeys = append(paramKeys, k)
-			}
-			sort.Strings(paramKeys)
-
-			for _, name := range paramKeys {
-				data = append(data, map[string]any{
-					"key":      name,
-					"section":  "parameters",
-					"value":    sd.Parameters[name],
-					"readonly": false,
-				})
-			}
-
-			// Immutables section
-			immKeys := make([]string, 0, len(sd.Immutables))
-			for k := range sd.Immutables {
-				immKeys = append(immKeys, k)
-			}
-			sort.Strings(immKeys)
-
-			for _, name := range immKeys {
-				entry := sd.Immutables[name]
-				createdAt := ""
-				if !entry.CreatedAt.IsZero() {
-					createdAt = entry.CreatedAt.Format("2006-01-02T15:04:05Z")
+			// Structured/interactive output, or any CEL filter (-e/--expression,
+			// -w/--where), operates on the resolvers map so callers can traverse
+			// or filter it (e.g. '_.current_token.value'). Normalize to native
+			// map/slice types first because CEL cannot introspect a raw Go struct.
+			if wantsStructuredOutput(&opts.KvxOutputFlags, kvxOpts.Format) {
+				normalized, err := kvx.StructToMap(sd)
+				if err != nil {
+					err = fmt.Errorf("failed to prepare state for output: %w", err)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
-				data = append(data, map[string]any{
-					"key":       name,
-					"section":   "immutables",
-					"type":      entry.Type,
-					"createdAt": createdAt,
-					"readonly":  true,
-				})
+				return kvxOpts.Write(scopeToSection(normalized, resolversSection))
 			}
 
-			return kvxOpts.Write(data)
+			// Human-readable output: render just the resolvers section as a table.
+			view := state.BuildListView(sd)
+			resolvers := view.SectionByName(resolversSection)
+			if resolvers == nil || len(resolvers.Rows) == 0 {
+				if !cliParams.IsQuiet {
+					w.Warning("State file has no persisted resolver values")
+				}
+				return nil
+			}
+			return writeSection(w, kvxOpts, *resolvers)
 		},
 	}
 
