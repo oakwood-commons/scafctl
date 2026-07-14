@@ -17,7 +17,6 @@ import (
 
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
-	toml "github.com/pelletier/go-toml/v2"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -860,11 +859,11 @@ func StructToMap(v any) (any, error) {
 
 // writeTOML writes data as TOML.
 func (o *OutputOptions) writeTOML(data any) error {
-	tomlData, err := toml.Marshal(data)
+	tomlString, err := tui.MarshalTOML(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal TOML: %w", err)
 	}
-	fmt.Fprint(o.IOStreams.Out, string(tomlData))
+	fmt.Fprint(o.IOStreams.Out, tomlString)
 	return nil
 }
 
