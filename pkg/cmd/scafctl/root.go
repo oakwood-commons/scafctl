@@ -837,7 +837,11 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.PersistentFlags().BoolVar(&cliParams.Verbose, "verbose", false, "Enable verbose output across all commands")
 	cCmd.PersistentFlags().BoolVar(&cliParams.NoColor, "no-color", false, "Disable color output")
 	cCmd.PersistentFlags().StringVarP(&cwdFlag, "cwd", "C", "", "Change the working directory before executing the command (similar to git -C)")
-	cCmd.PersistentFlags().StringVar(&configPath, "config", "", fmt.Sprintf("Path to config file (default: $XDG_CONFIG_HOME/%s/config.yaml or ~/.config/%s/config.yaml)", binaryName, binaryName))
+	// Use configPath (seeded from opts.ConfigPath) as the flag default so an
+	// embedder-provided ConfigPath is honored. StringVar would otherwise reset
+	// configPath to "" here, silently discarding RootOptions.ConfigPath and
+	// falling back to the global XDG path. An explicit --config still overrides.
+	cCmd.PersistentFlags().StringVar(&configPath, "config", configPath, fmt.Sprintf("Path to config file (default: $XDG_CONFIG_HOME/%s/config.yaml or ~/.config/%s/config.yaml)", binaryName, binaryName))
 	cCmd.PersistentFlags().String("pprof", "", "Enable profiling (options: memory, cpu)")
 	cCmd.PersistentFlags().String("pprof-output-dir", "./", "directory path to save the profiler.prof file (default: current working directory)")
 	cCmd.PersistentFlags().String("otel-endpoint", "", "OpenTelemetry OTLP exporter endpoint (e.g. localhost:4317). Overrides OTEL_EXPORTER_OTLP_ENDPOINT")

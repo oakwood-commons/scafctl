@@ -301,3 +301,30 @@ func TestResolver_List_InventoryErrorReturnsAliases(t *testing.T) {
 	require.Len(t, list, 1, "static aliases must still be returned when inventory fetch fails")
 	assert.Equal(t, "lab", list[0].Name)
 }
+
+func TestInfoToAlias_RoundTrip(t *testing.T) {
+	t.Parallel()
+	info := kube.ClusterInfo{
+		Name:            "prod",
+		APIServerURL:    "https://api.prod.example.com:6443",
+		ConsoleURL:      "https://console.prod.example.com",
+		AuthType:        kube.AuthTypeOIDC,
+		OIDCAudience:    "api://cluster-aud",
+		DefaultHandler:  "openshift",
+		CAData:          "-----BEGIN CERTIFICATE-----X",
+		InsecureSkipTLS: true,
+	}
+
+	alias := InfoToAlias(info)
+	assert.Equal(t, "https://api.prod.example.com:6443", alias.Server)
+	assert.Equal(t, "openshift", alias.DefaultHandler)
+	assert.Equal(t, "oidc", alias.AuthType)
+	assert.Equal(t, "api://cluster-aud", alias.OIDCAudience)
+	assert.Equal(t, "-----BEGIN CERTIFICATE-----X", alias.CAData)
+	assert.Equal(t, "https://console.prod.example.com", alias.ConsoleURL)
+	assert.True(t, alias.InsecureSkipTLS)
+
+	// InfoToAlias is the inverse of aliasToInfo (name is carried separately).
+	back := aliasToInfo(info.Name, alias)
+	assert.Equal(t, info, *back)
+}

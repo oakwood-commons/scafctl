@@ -327,6 +327,45 @@ func TestManager_SaveAs(t *testing.T) {
 	assert.Equal(t, "test", cfg2.Catalogs[2].Name)
 }
 
+// TestManager_Save_PersistsKubeClusters is a regression guard: Save() and
+// SaveAs() must sync the kube section to viper. Without it, kube.clusters edits
+// (e.g. aliases written by `kube login --save-alias`) are silently dropped.
+func TestManager_Save_PersistsKubeClusters(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	mgr := NewManager(configPath)
+	cfg, err := mgr.Load()
+	require.NoError(t, err)
+	cfg.Kube.Clusters.Aliases = map[string]ClusterAlias{
+		"prod": {
+			Server:         "https://api.prod.example.com:6443",
+			DefaultHandler: "openshift",
+			AuthType:       "oidc",
+		},
+	}
+
+	// Save() must persist the kube section.
+	require.NoError(t, mgr.Save())
+	cfg2, err := NewManager(configPath).Load()
+	require.NoError(t, err)
+	got, ok := cfg2.Kube.Clusters.Aliases["prod"]
+	require.True(t, ok, "kube cluster alias must survive Save/Load")
+	assert.Equal(t, "https://api.prod.example.com:6443", got.Server)
+	assert.Equal(t, "openshift", got.DefaultHandler)
+	assert.Equal(t, "oidc", got.AuthType)
+
+	// SaveAs() must persist it too.
+	savePath := filepath.Join(tmpDir, "saved", "config.yaml")
+	require.NoError(t, mgr.SaveAs(savePath))
+	cfg3, err := NewManager(savePath).Load()
+	require.NoError(t, err)
+	_, ok = cfg3.Kube.Clusters.Aliases["prod"]
+	assert.True(t, ok, "kube cluster alias must survive SaveAs/Load")
+}
+
 func TestManager_GetSet(t *testing.T) {
 	t.Parallel()
 

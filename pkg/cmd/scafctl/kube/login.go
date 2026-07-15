@@ -18,8 +18,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/loginui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/aliassave"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	kubeapi "github.com/oakwood-commons/scafctl/pkg/kube"
+	"github.com/oakwood-commons/scafctl/pkg/kube/clusterconfig"
 	kubelogin "github.com/oakwood-commons/scafctl/pkg/kube/login"
 	"github.com/oakwood-commons/scafctl/pkg/kubeconfig"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -45,6 +48,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		insecure       bool
 		verify         bool
 		refresh        bool
+		saveAlias      string
 		timeout        time.Duration
 		outputFlags    flags.KvxOutputFlags
 	)
@@ -92,6 +96,15 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			var cluster string
 			if len(args) == 1 {
 				cluster = args[0]
+			}
+
+			// --save-alias needs a non-empty name to key the persisted alias.
+			// Fail fast, before login, so the user isn't logged in only to have
+			// the alias silently dropped.
+			if cmd.Flags().Changed("save-alias") && strings.TrimSpace(saveAlias) == "" {
+				err := fmt.Errorf("--save-alias requires a non-empty alias name")
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
 
 			mgr := kubeconfig.NewManager(cliParams.BinaryName)
@@ -154,6 +167,12 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				)
 			}
 
+			// --save-alias: remember this cluster under a short name by persisting
+			// a static ClusterAlias built from the resolved connection details.
+			if saveAlias != "" {
+				saveClusterAlias(cmd, w, saveAlias, res)
+			}
+
 			return renderLoginResult(ioStreams, &outputFlags, w, res)
 		},
 	}
@@ -171,6 +190,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 	cmd.Flags().BoolVar(&insecure, "insecure-skip-tls-verify", false, "Disable API server TLS verification (development only)")
 	cmd.Flags().BoolVar(&verify, "verify", false, "Verify the authenticated identity via a post-login whoami (requires the kubeconfig provider)")
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Re-apply resolved cluster details (CA, server, namespace) without a fresh interactive login when a valid token is cached")
+	cmd.Flags().StringVar(&saveAlias, "save-alias", "", "After login, remember this cluster under this short name (persists a kube.clusters alias)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Login timeout (e.g. 5m); zero uses the handler default")
 	flags.AddKvxOutputFlagsToStruct(cmd, &outputFlags)
 
@@ -207,6 +227,30 @@ func renderLoginResult(ioStreams *terminal.IOStreams, outputFlags *flags.KvxOutp
 		w.Warningf("kubeconfig provider unavailable; wrote a static kubeconfig entry")
 	}
 	return nil
+}
+
+// saveClusterAlias persists the resolved cluster as a static alias under
+// kube.clusters.aliases so a later `kube login <alias>` resolves it. The login
+// already succeeded, so any problem here only warns.
+func saveClusterAlias(cmd *cobra.Command, w *writer.Writer, name string, res *kubelogin.Result) {
+	alias := clusterconfig.InfoToAlias(res.ResolvedCluster)
+	if alias.Server == "" {
+		w.WarnStderrf("could not save alias %q: the login produced no resolved server", name)
+		return
+	}
+	// Persist the handler actually used so `kube login <alias>` works without
+	// --handler, even when the resolver supplied no default.
+	if alias.DefaultHandler == "" {
+		alias.DefaultHandler = res.Handler
+	}
+	aliassave.Persist(w, configPathFromCmd(cmd), name, func(cfg *config.Config) bool {
+		if cfg.Kube.Clusters.Aliases == nil {
+			cfg.Kube.Clusters.Aliases = map[string]config.ClusterAlias{}
+		}
+		_, existed := cfg.Kube.Clusters.Aliases[name]
+		cfg.Kube.Clusters.Aliases[name] = alias
+		return existed
+	})
 }
 
 // loginTUIEligibleFormat reports whether the requested output format permits the

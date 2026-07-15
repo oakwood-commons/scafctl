@@ -46,6 +46,23 @@ auth:
           stg: https://api.stg.example.com:6443
 ```
 
+### Save an alias at login time
+
+When you log in by concrete URL (or via the dynamic resolver), add
+`--save-alias <name>` to persist the resolved endpoint as a `hostname.aliases`
+entry under the handler. This turns a one-off login into a reusable selector:
+
+```bash
+scafctl auth login openshift --hostname https://api.prod.example.com:6443 --save-alias prod
+scafctl auth login openshift --hostname prod        # resolves via the saved alias
+scafctl auth token openshift --server prod          # same selector resolves here too
+```
+
+`--save-alias` requires `--hostname` (there must be a resolved endpoint to
+record) and only works with handlers that advertise the `hostname` capability.
+Saving is best-effort: if the config cannot be written, scafctl warns on stderr
+without failing the login, and re-saving an existing alias updates it in place.
+
 ## Dynamic resolution
 
 When a fleet has too many endpoints to alias by hand, configure a resolver. At

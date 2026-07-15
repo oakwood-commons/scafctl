@@ -52,6 +52,23 @@ func (w *Writer) Successf(format string, args ...any) {
 	w.Success(fmt.Sprintf(format, args...))
 }
 
+// SuccessStderr writes a success message to stderr instead of stdout.
+// Use this for status confirmations that must not corrupt structured command
+// output (e.g., -o json). Respects --quiet and --no-color flags.
+func (w *Writer) SuccessStderr(msg string) {
+	if w.cliParams.IsQuiet {
+		return
+	}
+	fmt.Fprintln(w.ioStreams.ErrOut, output.SuccessMessage(msg, w.cliParams.NoColor))
+}
+
+// SuccessStderrf writes a formatted success message to stderr.
+// Use this for status confirmations that must not corrupt structured command
+// output (e.g., -o json). Respects --quiet and --no-color flags.
+func (w *Writer) SuccessStderrf(format string, args ...any) {
+	w.SuccessStderr(fmt.Sprintf(format, args...))
+}
+
 // Warning writes a warning message to stdout.
 // Respects --quiet and --no-color flags.
 func (w *Writer) Warning(msg string) {
