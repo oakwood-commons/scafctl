@@ -96,6 +96,19 @@ func TestCommandLogin_UnknownHandler(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestCommandLogin_SaveAliasEmptyName verifies a blank --save-alias value is
+// rejected before login (fail fast, no login side effects).
+func TestCommandLogin_SaveAliasEmptyName(t *testing.T) {
+	t.Parallel()
+	ctx, _ := newTestContext(t)
+
+	cmd := CommandLogin(embedderParams(), terminal.NewIOStreams(nil, nil, nil, false), "mycli")
+	err := runCmd(t, cmd, ctx, "prod", "--save-alias", "  ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-empty alias name")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+}
+
 func TestCommandLogin_FallbackWritesKubeconfig(t *testing.T) {
 	t.Parallel()
 	ctx, buf := newTestContext(t)

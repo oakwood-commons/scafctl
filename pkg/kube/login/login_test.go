@@ -405,6 +405,33 @@ func TestLogin_NamespaceFromResolverWhenNoFlag(t *testing.T) {
 	assert.Equal(t, "from-resolver", kc.writeIn.Namespace)
 }
 
+// TestLogin_PopulatesResolvedCluster verifies Login surfaces the fully resolved
+// cluster on the Result so callers (e.g. `kube login --save-alias`) can persist
+// it without re-resolving.
+func TestLogin_PopulatesResolvedCluster(t *testing.T) {
+	t.Parallel()
+
+	handler := &stubAuth{name: "oidc"}
+	kc := &stubKube{writeRes: kubeconfig.WriteResult{Success: true}}
+	resolver := &kube.MockResolver{ResolveResult: &kube.ClusterInfo{
+		Name:           "prod",
+		APIServerURL:   "https://api.example.com:6443",
+		AuthType:       kube.AuthTypeOIDC,
+		OIDCAudience:   "api://aud",
+		DefaultHandler: "oidc",
+		CAData:         "-----BEGIN CERTIFICATE-----X",
+	}}
+	deps := Deps{Handler: handler, Kubeconfig: kc, Resolver: resolver}
+
+	res, err := Login(context.Background(), deps, Request{Cluster: "prod"})
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.example.com:6443", res.ResolvedCluster.APIServerURL)
+	assert.Equal(t, kube.AuthTypeOIDC, res.ResolvedCluster.AuthType)
+	assert.Equal(t, "api://aud", res.ResolvedCluster.OIDCAudience)
+	assert.Equal(t, "oidc", res.ResolvedCluster.DefaultHandler)
+	assert.Equal(t, "-----BEGIN CERTIFICATE-----X", res.ResolvedCluster.CAData)
+}
+
 func TestLogin_RefreshSkipsInteractiveLoginWithValidToken(t *testing.T) {
 	t.Parallel()
 

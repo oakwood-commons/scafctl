@@ -105,7 +105,34 @@ func TestCommandLogin_HostnameConcreteURLPassthrough(t *testing.T) {
 	assert.Equal(t, "https://api.custom.example.com:6443", mock.LoginCalls[0].Hostname)
 }
 
-// hostnameTokenFixture builds a CapTokenHostname mock handler that returns a
+// TestCommandLogin_SaveAliasPersists verifies that a successful login with
+// --save-alias persists the resolved hostname URL under the handler's
+// hostname.aliases so future logins can reference it by the short name.
+func TestCommandLogin_SaveAliasPersists(t *testing.T) {
+	ctx, mock := hostnameLoginFixture(t, nil)
+
+	buf := &bytes.Buffer{}
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+	cmd := CommandLogin(settings.NewCliParams(), ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{
+		"openshift",
+		"--hostname", "https://api.prod.example.com:6443",
+		"--save-alias", "prod",
+	})
+
+	require.NoError(t, cmd.Execute())
+	require.Len(t, mock.LoginCalls, 1)
+
+	// hostnameLoginFixture isolates XDG to a temp dir, so the alias is persisted
+	// to the temp config and can be read back with a default-path manager.
+	cfg, err := config.NewManager("").Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Auth.Handlers["openshift"].Hostname)
+	assert.Equal(t, "https://api.prod.example.com:6443",
+		cfg.Auth.Handlers["openshift"].Hostname.Aliases["prod"])
+}
+
 // token, seeded with the given hostname config for that handler, for exercising
 // `auth token --server <selector>` resolution.
 func hostnameTokenFixture(t *testing.T, hn *config.HostnameConfig) (context.Context, *auth.MockHandler) {

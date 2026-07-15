@@ -186,6 +186,11 @@ type Result struct {
 	// AuthType is the resolved (or detected) authentication method.
 	AuthType kube.AuthType
 
+	// ResolvedCluster is the fully resolved cluster connection detail used for
+	// the login (server, auth type, audience, CA, etc.). It lets callers persist
+	// a static alias via "kube login --save-alias" without re-resolving.
+	ResolvedCluster kube.ClusterInfo
+
 	// Username and Groups come from a best-effort whoami; empty when whoami did
 	// not run or did not succeed.
 	Username string
@@ -313,6 +318,7 @@ func Login(ctx context.Context, deps Deps, req Request) (*Result, error) {
 		Handler:                  handler.Name(),
 		Server:                   info.APIServerURL,
 		AuthType:                 info.AuthType,
+		ResolvedCluster:          info,
 		SupportsPerClusterTokens: auth.HasCapability(handler.Capabilities(), auth.CapTokenHostname),
 	}
 

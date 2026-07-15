@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/loginui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/aliassave"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
@@ -44,6 +45,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 		registryScope             string
 		writeRegistryAuth         bool
 		profile                   string
+		saveAlias                 string
 	)
 
 	cmd := &cobra.Command{
@@ -256,6 +258,25 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				}
 				hostname = resolved
 			}
+			// --save-alias persists the resolved hostname URL as a static alias,
+			// so it needs the hostname capability and a resolved hostname to save.
+			// Gate it here (after resolution) rather than deep in the login path.
+			if cmd.Flags().Changed("save-alias") {
+				switch {
+				case !auth.HasCapability(caps, auth.CapHostname):
+					err := fmt.Errorf("--save-alias is not supported by the %q auth handler (it does not support hostname aliases)", handlerName)
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				case strings.TrimSpace(saveAlias) == "":
+					err := fmt.Errorf("--save-alias requires a non-empty alias name")
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				case hostname == "":
+					err := fmt.Errorf("--save-alias requires --hostname (the resolved host is saved under the alias)")
+					w.Errorf("%v", err)
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			}
 			if federatedToken != "" && !auth.HasCapability(caps, auth.CapFederatedToken) {
 				err := fmt.Errorf("--federated-token is not supported by the %q auth handler", handlerName)
 				w.Errorf("%v", err)
@@ -356,6 +377,24 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 				}
 			}
 
+			// --save-alias: persist the resolved hostname URL as a static alias
+			// under auth.handlers.<handler>.hostname.aliases so future logins can
+			// reference it by the short name (and `auth token --server <alias>`
+			// resolves it). The login already succeeded, so a save failure only
+			// warns.
+			if saveAlias != "" {
+				resolvedURL := hostname
+				aliassave.Persist(w, configPathFromCmd(cmd), saveAlias, func(cfg *config.Config) bool {
+					hn := ensureHostnameConfig(cfg, handlerName)
+					if hn.Aliases == nil {
+						hn.Aliases = map[string]string{}
+					}
+					_, existed := hn.Aliases[saveAlias]
+					hn.Aliases[saveAlias] = resolvedURL
+					return existed
+				})
+			}
+
 			// Post-login registry bridge.
 			// Re-create the handler with the same overrides used during login so that
 			// token retrieval uses the correct clientID fingerprint and refresh token.
@@ -408,6 +447,7 @@ func CommandLogin(cliParams *settings.Run, _ *terminal.IOStreams, _ string) *cob
 	cmd.Flags().StringVar(&registryScope, "registry-scope", "", "OAuth scope for registry credential bridging")
 	cmd.Flags().BoolVar(&writeRegistryAuth, "write-registry-auth", false, "Also write bridged credentials to container auth file (Docker/Podman interop)")
 	cmd.Flags().StringVar(&profile, "profile", "", "Named profile for isolated credential storage (e.g. work, personal)")
+	cmd.Flags().StringVar(&saveAlias, "save-alias", "", "After login, save the resolved --hostname as a static alias under this name (requires hostname capability)")
 
 	return cmd
 }

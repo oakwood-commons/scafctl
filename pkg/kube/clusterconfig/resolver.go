@@ -182,6 +182,21 @@ func aliasToInfo(name string, a config.ClusterAlias) *kube.ClusterInfo {
 	}
 }
 
+// InfoToAlias maps a resolved ClusterInfo to a static ClusterAlias suitable for
+// persisting under kube.clusters.aliases. It is the inverse of aliasToInfo, used
+// by `kube login --save-alias` to remember a cluster by a short name.
+func InfoToAlias(info kube.ClusterInfo) config.ClusterAlias {
+	return config.ClusterAlias{
+		Server:          info.APIServerURL,
+		DefaultHandler:  info.DefaultHandler,
+		AuthType:        string(info.AuthType),
+		OIDCAudience:    info.OIDCAudience,
+		CAData:          info.CAData,
+		ConsoleURL:      info.ConsoleURL,
+		InsecureSkipTLS: info.InsecureSkipTLS,
+	}
+}
+
 // entryToInfo maps a resolved inventory Entry to a ClusterInfo.
 func entryToInfo(e *hostname.Entry) *kube.ClusterInfo {
 	return &kube.ClusterInfo{

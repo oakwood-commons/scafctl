@@ -2319,6 +2319,22 @@ func TestIntegration_LoginHelp_NamespaceAndRefresh(t *testing.T) {
 	assert.Contains(t, stdout, "--refresh")
 }
 
+func TestIntegration_KubeLoginHelp_SaveAlias(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "kube", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--save-alias")
+}
+
+func TestIntegration_AuthLoginHelp_SaveAlias(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "login", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--save-alias")
+}
+
 func TestIntegration_LogoutHelp_All(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "kube", "logout", "--help")
@@ -2337,9 +2353,13 @@ func TestIntegration_KubeListHelp(t *testing.T) {
 
 func TestIntegration_KubeListNoResolver(t *testing.T) {
 	t.Parallel()
-	// scafctl ships no cluster data; with no resolver configured, list reports
-	// that clearly instead of erroring.
-	stdout, stderr, exitCode := runScafctl(t, "kube", "list")
+	// Isolate from the developer's real config (which may declare clusters) by
+	// pointing at an empty config file. scafctl ships no cluster data, so with no
+	// resolver configured, list reports that clearly instead of erroring.
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("{}\n"), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t, "--config", configPath, "kube", "list")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout+stderr, "No cluster resolver configured")
