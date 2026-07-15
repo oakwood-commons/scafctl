@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Auth Tokens",
+  "description": "Cached token metadata for scafctl authentication handlers",
+  "type": "array",
+
+  "x-kvx-icon": "🔑",
+  "x-kvx-collectionTitle": "Cached Tokens",
+
+  "x-kvx-list": {
+    "titleField": "handler",
+    "subtitleField": "scope",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["tokenKind", "expiresIn"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "handler",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["handler", "cluster", "tokenKind"],
+        "layout": "inline"
+      },
+      {
+        "title": "Expiry",
+        "fields": ["scope", "expiresIn", "isExpired", "expiresAt", "cachedAt"],
+        "layout": "table"
+      },
+      {
+        "title": "Details",
+        "fields": ["tokenType", "flow", "sessionId"],
+        "layout": "table"
+      },
+      {
+        "title": "Retrieve Token",
+        "fields": ["getTokenCommand"],
+        "layout": "paragraph"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["handler", "tokenKind"],
+    "properties": {
+      "handler": {
+        "type": "string",
+        "title": "Handler",
+        "description": "Auth handler that owns this token",
+        "maxLength": 16
+      },
+      "cluster": {
+        "type": "string",
+        "title": "Cluster",
+        "description": "Instance alias or hostname for per-instance handlers",
+        "maxLength": 40
+      },
+      "tokenKind": {
+        "type": "string",
+        "title": "Kind",
+        "description": "Token kind (refresh or access)",
+        "maxLength": 10
+      },
+      "scope": {
+        "type": "string",
+        "title": "Scope",
+        "description": "OAuth scope or resource identifier",
+        "maxLength": 40
+      },
+      "expiresIn": {
+        "type": "string",
+        "title": "Expires",
+        "description": "Human-readable time until expiry",
+        "maxLength": 10
+      },
+      "isExpired": {
+        "type": "boolean",
+        "title": "Expired",
+        "description": "Whether the token has expired"
+      },
+      "tokenType": {
+        "type": "string",
+        "title": "Token Type",
+        "description": "OAuth token type (e.g., Bearer)"
+      },
+      "flow": {
+        "type": "string",
+        "title": "Flow",
+        "description": "Authentication flow used to obtain this token"
+      },
+      "sessionId": {
+        "type": "string",
+        "title": "Session ID",
+        "description": "Session identifier for the token"
+      },
+      "expiresAt": {
+        "type": "string",
+        "title": "Expires At",
+        "description": "Absolute expiry timestamp"
+      },
+      "cachedAt": {
+        "type": "string",
+        "title": "Cached At",
+        "description": "When the token was cached"
+      },
+      "getTokenCommand": {
+        "type": "string",
+        "title": "Retrieve Command",
+        "description": "CLI command to retrieve this token value"
+      }
+    }
+  }
+}

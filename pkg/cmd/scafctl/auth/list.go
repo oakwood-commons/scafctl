@@ -4,12 +4,14 @@
 package auth
 
 import (
+	_ "embed"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/hostname"
 	"github.com/oakwood-commons/scafctl/pkg/auth/statusrows"
@@ -21,6 +23,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed auth_list_schema.json
+var authListDisplaySchema []byte
 
 // authListSchema controls table column display for 'auth list'. Columns in the
 // "required" array resist truncation; "deprecated" fields are hidden in table
@@ -185,15 +190,12 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 					return exitcode.WithCode(err, exitcode.GeneralError)
 				}
 				if outputFlags.Output == "json" || outputFlags.Output == "yaml" || outputFlags.Output == "quiet" {
-					opts := flags.NewKvxOutputOptionsFromFlags(
-						outputFlags.Output,
-						outputFlags.Interactive,
-						outputFlags.Expression,
+					opts := flags.ToKvxOutputOptions(&outputFlags,
+						kvx.WithIOStreams(ioStreams),
 						kvx.WithOutputContext(ctx),
 						kvx.WithOutputNoColor(cliParams.NoColor),
 						kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
 					)
-					opts.IOStreams = ioStreams
 					return opts.Write([]map[string]any{})
 				}
 				w.Infof("No active authentication sessions.")
@@ -248,17 +250,16 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			results := make([]map[string]any, 0)
 
-			outputOpts := flags.NewKvxOutputOptionsFromFlags(
-				outputFlags.Output,
-				outputFlags.Interactive,
-				outputFlags.Expression,
+			outputOpts := flags.ToKvxOutputOptions(&outputFlags,
+				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputContext(ctx),
 				kvx.WithOutputNoColor(cliParams.NoColor),
 				kvx.WithOutputAppName(cliParams.BinaryName+" auth list"),
 				kvx.WithOutputColumnOrder([]string{"handler", "cluster", "tokenKind", "scope", "expiresIn", "isExpired"}),
+				kvx.WithOutputColumnarMode(tui.ColumnarModeAlways),
 				kvx.WithOutputSchemaJSON(authListSchema),
+				kvx.WithOutputDisplaySchemaJSON(authListDisplaySchema),
 			)
-			outputOpts.IOStreams = ioStreams
 
 			for _, name := range handlerNames {
 				handler, err := getHandler(ctx, name)
