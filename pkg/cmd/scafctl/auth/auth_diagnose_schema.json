@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Auth Diagnostics",
+  "description": "Diagnostic check results for scafctl authentication",
+  "type": "array",
+
+  "x-kvx-icon": "🩺",
+  "x-kvx-collectionTitle": "Auth Diagnostics",
+
+  "x-kvx-list": {
+    "titleField": "check",
+    "subtitleField": "message",
+    "subtitleMaxLines": 2,
+    "badgeFields": ["status", "category"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "check",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["status", "category", "check"],
+        "layout": "inline"
+      },
+      {
+        "title": "Message",
+        "fields": ["message"],
+        "layout": "paragraph"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["check", "status"],
+    "properties": {
+      "category": {
+        "type": "string",
+        "title": "Category",
+        "description": "Diagnostic category (registry, config, handler, cache, etc.)",
+        "maxLength": 10
+      },
+      "check": {
+        "type": "string",
+        "title": "Check",
+        "description": "Name of the diagnostic check"
+      },
+      "status": {
+        "type": "string",
+        "title": "Status",
+        "description": "Check result (ok, warn, fail, info)",
+        "maxLength": 6
+      },
+      "message": {
+        "type": "string",
+        "title": "Message",
+        "description": "Detailed check result message"
+      }
+    }
+  }
+}

@@ -4,6 +4,7 @@
 package auth
 
 import (
+	_ "embed"
 	"fmt"
 	"strings"
 	"time"
@@ -27,6 +28,9 @@ import (
 // pluginStartupWarnThreshold is the latency above which a plugin handler
 // startup is flagged as slow during 'auth diagnose'.
 const pluginStartupWarnThreshold = 2 * time.Second
+
+//go:embed auth_diagnose_schema.json
+var authDiagnoseDisplaySchema []byte
 
 // clockSkewCheckFunc is the function used to perform the clock skew check.
 // Tests can replace this to avoid real network calls.
@@ -403,15 +407,14 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						"message":  c.Message,
 					})
 				}
-				outputOpts := flags.NewKvxOutputOptionsFromFlags(
-					outputFlags.Output,
-					outputFlags.Interactive,
-					outputFlags.Expression,
+				outputOpts := flags.ToKvxOutputOptions(&outputFlags,
+					kvx.WithIOStreams(ioStreams),
 					kvx.WithOutputContext(ctx),
 					kvx.WithOutputNoColor(cliParams.NoColor),
 					kvx.WithOutputAppName(cliParams.BinaryName+" auth diagnose"),
+					kvx.WithOutputDisplaySchemaJSON(authDiagnoseDisplaySchema),
+					kvx.WithOutputColumnOrder([]string{"status", "category", "check", "message"}),
 				)
-				outputOpts.IOStreams = ioStreams
 				return outputOpts.Write(results)
 			}
 

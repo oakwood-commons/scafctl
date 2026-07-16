@@ -6,10 +6,12 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -411,4 +413,79 @@ func (m *minimalHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth
 
 func (m *minimalHandler) InjectAuth(_ context.Context, _ *http.Request, _ auth.TokenOptions) error {
 	return nil
+}
+
+func TestCommandList_MultiHandler_ColumnarTable(t *testing.T) {
+	// When multiple handlers are registered, 'auth list -o text' must render
+	// as a multi-column table (not a key/value array) even when handlers
+	// produce heterogeneous key sets.
+	var stdout bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &bytes.Buffer{}, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := writer.WithWriter(context.Background(), w)
+	ctx = logger.WithLogger(ctx, logger.GetNoopLogger())
+
+	now := time.Now()
+	mockGCP := auth.NewMockHandler("gcp")
+	mockGCP.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "gcp",
+			Hostname:  "https://gcp.example.com",
+			TokenKind: "access",
+			Scope:     "https://www.googleapis.com/auth/cloud-platform",
+			Flow:      auth.FlowInteractive,
+			ExpiresAt: now.Add(50 * time.Minute),
+			CachedAt:  now.Add(-10 * time.Minute),
+			IsExpired: false,
+		},
+	}
+
+	mockGitHub := auth.NewMockHandler("github")
+	mockGitHub.ListCachedTokensResult = []*auth.CachedTokenInfo{
+		{
+			Handler:   "github",
+			TokenKind: "access",
+			Scope:     "repo,user",
+			Flow:      auth.FlowDeviceCode,
+			ExpiresAt: now.Add(7 * 24 * time.Hour),
+			CachedAt:  now.Add(-1 * time.Hour),
+			IsExpired: false,
+		},
+	}
+
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(mockGCP))
+	require.NoError(t, reg.Register(mockGitHub))
+	ctx = auth.WithRegistry(ctx, reg)
+
+	cliParams := settings.NewCliParams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/auth")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"-o", "text"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := stdout.String()
+	// Multi-column table renders column headers and both handler rows.
+	assert.Contains(t, output, "gcp")
+	assert.Contains(t, output, "github")
+	// Must NOT render as a key/value array (index-based).
+	assert.NotContains(t, output, "[0]")
+	assert.NotContains(t, output, "[1]")
+}
+
+// ── Display schema tests ─────────────────────────────────────────────────────
+
+func TestAuthListDisplaySchema_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(authListDisplaySchema), "auth_list_schema.json must be valid JSON")
+}
+
+func TestAuthListDisplaySchema_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(authListDisplaySchema)
+	require.NoError(t, err, "auth_list_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
 }
