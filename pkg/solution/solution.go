@@ -198,6 +198,8 @@ type PluginDependency struct {
 	// Version is a semver constraint (e.g., "^1.5.0", ">=2.0.0", "3.1.2") or "latest".
 	Version string `json:"version" yaml:"version" doc:"Semver version constraint or 'latest'" example:"^1.5.0" maxLength:"50" pattern:"^([~^>=<]*[0-9]|latest$)" patternDescription:"semver constraint or 'latest'"`
 
+	Catalog string `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Optional catalog name (OCI registry prefix) fetch the plugin from" example:"registry.example.com:5000/myorg/" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$"`
+
 	// Defaults provides default values for plugin inputs.
 	// These are shallow-merged beneath inline provider inputs (inline always wins).
 	Defaults map[string]*spec.ValueRef `json:"defaults,omitempty" yaml:"defaults,omitempty" doc:"Default input values for this plugin (supports ValueRef)"`
