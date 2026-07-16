@@ -169,6 +169,78 @@ func TestLogout_NoDefaultHandlerSkipsRevoke(t *testing.T) {
 	assert.False(t, lookupCalled, "no DefaultHandler means no handler lookup")
 }
 
+func TestLogout_RevokesAuthTypeFallbackHandler(t *testing.T) {
+	t.Parallel()
+
+	// The resolved cluster carries an AuthType but no DefaultHandler (e.g. an
+	// inventory that stamps authType only). Logout applies the same
+	// AuthTypeHandlers fallback that login used, revoking the auto-routed handler.
+	handler := &stubAuth{name: "openshift"}
+	var lookupName string
+	kc := &stubKube{removeRes: kubeconfig.RemoveResult{Removed: true}}
+	deps := Deps{
+		Kubeconfig:       kc,
+		Resolver:         &kube.MockResolver{ResolveResult: &kube.ClusterInfo{Name: "prod", AuthType: kube.AuthTypeOAuth}},
+		AuthTypeHandlers: DefaultAuthTypeHandlers(),
+		HandlerLookup: func(_ context.Context, name string) (Authenticator, error) {
+			lookupName = name
+			return handler, nil
+		},
+	}
+
+	res, err := Logout(context.Background(), deps, LogoutRequest{Cluster: "prod"})
+	require.NoError(t, err)
+	assert.True(t, res.Removed)
+	assert.Equal(t, "openshift", lookupName, "AuthType fallback must drive the revoke when DefaultHandler is empty")
+	assert.Equal(t, 1, handler.logoutCalls)
+}
+
+func TestLogout_DefaultHandlerWinsOverAuthTypeFallback(t *testing.T) {
+	t.Parallel()
+
+	// When both are present, the explicit DefaultHandler wins over the AuthType
+	// fallback map.
+	var lookupName string
+	kc := &stubKube{removeRes: kubeconfig.RemoveResult{Removed: true}}
+	deps := Deps{
+		Kubeconfig:       kc,
+		Resolver:         &kube.MockResolver{ResolveResult: &kube.ClusterInfo{Name: "prod", DefaultHandler: "github", AuthType: kube.AuthTypeOAuth}},
+		AuthTypeHandlers: DefaultAuthTypeHandlers(),
+		HandlerLookup: func(_ context.Context, name string) (Authenticator, error) {
+			lookupName = name
+			return &stubAuth{name: name}, nil
+		},
+	}
+
+	_, err := Logout(context.Background(), deps, LogoutRequest{Cluster: "prod"})
+	require.NoError(t, err)
+	assert.Equal(t, "github", lookupName, "DefaultHandler must win over the AuthType fallback")
+}
+
+func TestLogout_AuthTypeFallbackUndetectedSkipsRevoke(t *testing.T) {
+	t.Parallel()
+
+	// AuthType is unset (auto/undetected) with no DefaultHandler: the fallback
+	// map has no entry for auto, so no handler is revoked (the entry is still
+	// removed).
+	lookupCalled := false
+	kc := &stubKube{removeRes: kubeconfig.RemoveResult{Removed: true}}
+	deps := Deps{
+		Kubeconfig:       kc,
+		Resolver:         &kube.MockResolver{ResolveResult: &kube.ClusterInfo{Name: "prod"}},
+		AuthTypeHandlers: DefaultAuthTypeHandlers(),
+		HandlerLookup: func(_ context.Context, _ string) (Authenticator, error) {
+			lookupCalled = true
+			return &stubAuth{name: "x"}, nil
+		},
+	}
+
+	res, err := Logout(context.Background(), deps, LogoutRequest{Cluster: "prod"})
+	require.NoError(t, err)
+	assert.True(t, res.Removed)
+	assert.False(t, lookupCalled, "undetected AuthType has no fallback mapping")
+}
+
 func TestLogout_DefaultHandlerLookupErrorIsNonFatal(t *testing.T) {
 	t.Parallel()
 

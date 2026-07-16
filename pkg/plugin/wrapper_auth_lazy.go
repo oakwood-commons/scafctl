@@ -14,6 +14,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 )
 
@@ -99,12 +100,17 @@ func NewLazyAuthHandlerWrapper(cfg LazyAuthHandlerConfig) *LazyAuthHandlerWrappe
 				if info.Name == cfg.Name {
 					wrapper := NewAuthHandlerWrapper(client, info)
 
-					// Set trusted domains from official registry + config.
-					if cfg.OfficialRegistry != nil {
-						if official, ok := cfg.OfficialRegistry.Get(cfg.Name); ok {
-							wrapper.SetTrustedDomains(official.TrustedVerificationDomains)
-						}
+					// Resolve trusted domains (official + operator config) and fail
+					// closed on device-code verification when none resolve. Official
+					// handlers whose OAuth host is per-cluster (e.g. openshift) carry
+					// no hardcoded domains and rely on this until
+					// auth.handlers.<name>.trustedVerificationDomains is set.
+					var cfgDomains, handlerDomains []string
+					if appCfg := config.FromContext(ctx); appCfg != nil {
+						cfgDomains = appCfg.Auth.TrustedVerificationDomains
+						handlerDomains = appCfg.Auth.Handlers[cfg.Name].TrustedVerificationDomains
 					}
+					applyTrustedDomains(wrapper, cfg.Name, cfg.OfficialRegistry, cfgDomains, handlerDomains)
 
 					// Configure the handler.
 					if cfg.PluginCfg != nil {

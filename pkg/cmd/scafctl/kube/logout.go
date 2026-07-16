@@ -81,6 +81,10 @@ func CommandLogout(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ str
 				Kubeconfig: mgr,
 				Resolver:   kubeapi.ResolverFromContext(ctx),
 				BinaryName: cliParams.BinaryName,
+				// Mirror the login auto-routing policy so logout revokes the same
+				// handler an auto-routed login selected when the resolved cluster
+				// carries an AuthType but no explicit DefaultHandler.
+				AuthTypeHandlers: kubelogin.DefaultAuthTypeHandlers(),
 				HandlerLookup: func(ctx context.Context, name string) (kubelogin.Authenticator, error) {
 					return auth.GetHandler(ctx, name)
 				},

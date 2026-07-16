@@ -47,6 +47,19 @@ func withMockHandler(t *testing.T, ctx context.Context) (context.Context, *auth.
 	return auth.WithRegistry(ctx, reg), mock
 }
 
+// withNamedMockHandler registers a mock auth handler under the given name in the
+// context's auth registry. Used to exercise AuthType-based auto-routing, where
+// the handler name is chosen by the detected cluster auth type rather than by
+// --handler.
+func withNamedMockHandler(t *testing.T, ctx context.Context, name string) (context.Context, *auth.MockHandler) {
+	t.Helper()
+	mock := auth.NewMockHandler(name)
+	mock.LoginResult = &auth.Result{}
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(mock))
+	return auth.WithRegistry(ctx, reg), mock
+}
+
 // embedderParams returns CLI params with a non-default binary name to exercise
 // the embedder contract.
 func embedderParams() *settings.Run {
@@ -198,6 +211,86 @@ func TestCommandLogin_HandlerFromResolverDefault(t *testing.T) {
 	assert.FileExists(t, path)
 	assert.Len(t, mock.LoginCalls, 1)
 	assert.Contains(t, buf.String(), "Logged in")
+}
+
+// TestCommandLogin_AutoRoutesOAuthToOpenshift verifies the CLI wires
+// DefaultAuthTypeHandlers so a detected OAuth cluster with no --handler and no
+// resolver DefaultHandler routes to the "openshift" handler. Only the openshift
+// mock is registered, so a successful login proves the routing selected it.
+func TestCommandLogin_AutoRoutesOAuthToOpenshift(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withNamedMockHandler(t, ctx, "openshift")
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok"}
+
+	resolver := &kubeapi.MockResolver{ResolveResult: &kubeapi.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+		AuthType:     kubeapi.AuthTypeOAuth,
+	}}
+	ctx = kubeapi.WithResolver(ctx, resolver)
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod", "--kubeconfig", path)
+	require.NoError(t, err)
+	assert.Len(t, mock.LoginCalls, 1, "oauth cluster must auto-route to the openshift handler")
+	assert.Contains(t, buf.String(), "Logged in")
+}
+
+// TestCommandLogin_AutoRoutesOIDCToEntra verifies a detected OIDC cluster with a
+// resolved audience and no --handler routes to the "entra" handler.
+func TestCommandLogin_AutoRoutesOIDCToEntra(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withNamedMockHandler(t, ctx, "entra")
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok"}
+
+	resolver := &kubeapi.MockResolver{ResolveResult: &kubeapi.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+		AuthType:     kubeapi.AuthTypeOIDC,
+		OIDCAudience: "api://cluster-client-id",
+	}}
+	ctx = kubeapi.WithResolver(ctx, resolver)
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod", "--kubeconfig", path)
+	require.NoError(t, err)
+	assert.Len(t, mock.LoginCalls, 1, "oidc cluster must auto-route to the entra handler")
+	assert.Contains(t, buf.String(), "Logged in")
+}
+
+// TestCommandLogin_AutoRouteOIDCNoAudienceErrors verifies that auto-routing an
+// OIDC cluster with no resolvable audience fails fast with ErrNoAudience mapped
+// to the InvalidInput exit code, before any kubeconfig is written.
+func TestCommandLogin_AutoRouteOIDCNoAudienceErrors(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, _ = withNamedMockHandler(t, ctx, "entra")
+
+	resolver := &kubeapi.MockResolver{ResolveResult: &kubeapi.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+		AuthType:     kubeapi.AuthTypeOIDC,
+		// No OIDCAudience: the entra route cannot scope the token.
+	}}
+	ctx = kubeapi.WithResolver(ctx, resolver)
+
+	path := filepath.Join(t.TempDir(), "config")
+	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
+
+	cmd := CommandLogin(embedderParams(), ioStreams, "mycli")
+	err := runCmd(t, cmd, ctx, "prod", "--kubeconfig", path)
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, err.Error(), "audience")
+	assert.NoFileExists(t, path, "login must fail before writing a kubeconfig entry")
 }
 
 func TestCommandLogin_VerifyFailsWithoutProvider(t *testing.T) {

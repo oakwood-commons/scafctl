@@ -416,21 +416,9 @@ func configureAndRegisterAuthHandlers(ctx context.Context, registry *auth.Regist
 
 		wrapper := NewAuthHandlerWrapper(client, info)
 
-		// Set trusted domains: merge per-handler official domains + global config
-		// domains + per-handler config domains. Non-official handlers do not
-		// inherit the hardcoded official domains; their trust comes from config.
-		trusted := buildTrustedDomains(info.Name, officialReg, cfgDomains, handlerCfgs[info.Name].TrustedVerificationDomains)
-		if len(trusted) > 0 {
-			wrapper.SetTrustedDomains(trusted)
-		}
-
-		// Fail closed on device-code verification for non-official handlers: a
-		// catalog-resolved third-party handler must not display arbitrary
-		// verification URLs without configured trusted domains. Official
-		// handlers carry hardcoded trust domains and are exempt.
-		if officialReg == nil || !officialReg.Has(info.Name) {
-			wrapper.SetRequireTrustedDomains(true)
-		}
+		// Resolve trusted verification domains (official + config) onto the
+		// wrapper and fail closed on device-code verification when none resolve.
+		applyTrustedDomains(wrapper, info.Name, officialReg, cfgDomains, handlerCfgs[info.Name].TrustedVerificationDomains)
 
 		if err := registry.Register(wrapper); err != nil {
 			lgr.V(1).Info("failed to register auth handler", "handler", info.Name, "error", err)
@@ -498,6 +486,22 @@ func buildTrustedDomains(handlerName string, officialReg *authofficial.Registry,
 	domains = append(domains, cfgDomains...)
 	domains = append(domains, handlerDomains...)
 	return domains
+}
+
+// applyTrustedDomains resolves a handler's trusted device-code verification
+// domains (official hardcoded + operator config) onto the wrapper. When none
+// resolve it fails closed by requiring trusted domains, so a plugin cannot phish
+// via an arbitrary HTTPS verification URL. This uniformly covers catalog-resolved
+// third-party handlers (no hardcoded domains) and official handlers whose OAuth
+// host is per-cluster and thus carry no hardcoded domains (e.g. openshift);
+// operators supply trust via auth.handlers.<name>.trustedVerificationDomains.
+func applyTrustedDomains(wrapper *AuthHandlerWrapper, handlerName string, officialReg *authofficial.Registry, cfgDomains, handlerDomains []string) {
+	trusted := buildTrustedDomains(handlerName, officialReg, cfgDomains, handlerDomains)
+	if len(trusted) > 0 {
+		wrapper.SetTrustedDomains(trusted)
+		return
+	}
+	wrapper.SetRequireTrustedDomains(true)
 }
 
 // injectAuthHandlerSettings reads per-handler auth configuration from the app

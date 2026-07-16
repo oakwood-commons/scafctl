@@ -890,3 +890,114 @@ func TestLogin_VerifyFailure(t *testing.T) {
 	require.NotNil(t, res)
 	assert.Equal(t, "prod", res.ContextName)
 }
+
+func TestDefaultAuthTypeHandlers(t *testing.T) {
+	t.Parallel()
+
+	m := DefaultAuthTypeHandlers()
+	assert.Equal(t, "openshift", m[kube.AuthTypeOAuth])
+	assert.Equal(t, "entra", m[kube.AuthTypeOIDC])
+	// Auto has no default mapping: an undetected cluster must require an
+	// explicit handler rather than guess.
+	_, ok := m[kube.AuthTypeAuto]
+	assert.False(t, ok)
+}
+
+func TestResolveHandler_AuthTypeFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		req         Request
+		info        kube.ClusterInfo
+		authMap     map[kube.AuthType]string
+		wantHandler string
+		wantErr     error
+	}{
+		{
+			name:        "oauth detected routes to openshift",
+			info:        kube.ClusterInfo{AuthType: kube.AuthTypeOAuth},
+			authMap:     DefaultAuthTypeHandlers(),
+			wantHandler: "openshift",
+		},
+		{
+			name:        "oidc detected with audience routes to entra",
+			info:        kube.ClusterInfo{AuthType: kube.AuthTypeOIDC, OIDCAudience: "aud"},
+			authMap:     DefaultAuthTypeHandlers(),
+			wantHandler: "entra",
+		},
+		{
+			name:    "oidc detected without audience errors",
+			info:    kube.ClusterInfo{AuthType: kube.AuthTypeOIDC},
+			authMap: DefaultAuthTypeHandlers(),
+			wantErr: ErrNoAudience,
+		},
+		{
+			name:    "auto undetected still errors",
+			info:    kube.ClusterInfo{AuthType: kube.AuthTypeAuto},
+			authMap: DefaultAuthTypeHandlers(),
+			wantErr: ErrNoHandler,
+		},
+		{
+			name:        "explicit handler wins over fallback map",
+			req:         Request{Handler: "github"},
+			info:        kube.ClusterInfo{AuthType: kube.AuthTypeOAuth},
+			authMap:     DefaultAuthTypeHandlers(),
+			wantHandler: "github",
+		},
+		{
+			name:        "cluster default handler wins over fallback map",
+			info:        kube.ClusterInfo{AuthType: kube.AuthTypeOAuth, DefaultHandler: "entra"},
+			authMap:     DefaultAuthTypeHandlers(),
+			wantHandler: "entra",
+		},
+		{
+			name:    "nil map disables the fallback",
+			info:    kube.ClusterInfo{AuthType: kube.AuthTypeOAuth},
+			authMap: nil,
+			wantErr: ErrNoHandler,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotName string
+			deps := Deps{
+				AuthTypeHandlers: tt.authMap,
+				HandlerLookup: func(_ context.Context, name string) (Authenticator, error) {
+					gotName = name
+					return &stubAuth{name: name}, nil
+				},
+			}
+			h, err := resolveHandler(context.Background(), deps, tt.req, tt.info)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, h)
+			assert.Equal(t, tt.wantHandler, h.Name())
+			assert.Equal(t, tt.wantHandler, gotName)
+		})
+	}
+}
+
+func TestResolveHandler_ExplicitHandlerSkipsAudienceGuard(t *testing.T) {
+	t.Parallel()
+
+	// An explicitly requested handler on an OIDC cluster with no audience must
+	// NOT trip ErrNoAudience: the guard applies only to the auto-routed path.
+	deps := Deps{
+		AuthTypeHandlers: DefaultAuthTypeHandlers(),
+		HandlerLookup: func(_ context.Context, name string) (Authenticator, error) {
+			return &stubAuth{name: name}, nil
+		},
+	}
+	h, err := resolveHandler(context.Background(), deps,
+		Request{Handler: "entra"},
+		kube.ClusterInfo{AuthType: kube.AuthTypeOIDC})
+	require.NoError(t, err)
+	assert.Equal(t, "entra", h.Name())
+}
