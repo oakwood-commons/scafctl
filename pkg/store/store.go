@@ -10,10 +10,26 @@
 // thread safety should use the pkg/cache packages instead.
 package store
 
+// Storer is the behavioral contract implemented by Store. It captures the
+// minimal key/value operations without exposing the concrete backing type,
+// letting callers depend on the abstraction for testing or alternative
+// implementations.
+type Storer[K comparable, V any] interface {
+	// Get returns the value stored under key and reports whether it was present.
+	Get(key K) (V, bool)
+	// Set stores value under key, overwriting any existing value.
+	Set(key K, value V)
+	// Delete removes the entry stored under key. Deleting an absent key is a no-op.
+	Delete(key K)
+	// Len returns the number of entries in the store.
+	Len() int
+}
+
 // Store is an unbounded, generic key/value store backed by a map.
 //
 // Store is NOT safe for concurrent use. Wrap it with a type that provides
 // synchronization if it is shared across goroutines.
+
 type Store[K comparable, V any] struct {
 	items map[K]V
 
@@ -33,6 +49,9 @@ type Store[K comparable, V any] struct {
 func New[K comparable, V any]() *Store[K, V] {
 	return &Store[K, V]{items: make(map[K]V)}
 }
+
+// Compile-time assertion that *Store satisfies Storer.
+var _ Storer[int, int] = (*Store[int, int])(nil)
 
 // Get returns the value stored under key and reports whether it was present.
 func (s *Store[K, V]) Get(key K) (V, bool) {

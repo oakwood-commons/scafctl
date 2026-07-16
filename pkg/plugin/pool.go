@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -55,7 +56,7 @@ const (
 // poolEntry tracks a single managed plugin process.
 type poolEntry struct {
 	mu       sync.Mutex
-	client   *Client
+	client   pluginClient
 	state    entryState
 	lastUsed time.Time
 	refCount int32 // atomic; tracks in-flight requests using this plugin
@@ -76,6 +77,7 @@ type poolEntry struct {
 	// but the process Kill is deferred until the final Release drains the last
 	// reference. This prevents tearing down a plugin mid-request.
 	pendingKill bool
+	version     *semver.Version // resolved version of the plugin binary (from catalog or fetch result)
 }
 
 // poolOptions holds Pool configuration.
@@ -595,7 +597,7 @@ func (p *Pool) Release(name string) {
 	}
 	entry.mu.Lock()
 	newCount := atomic.AddInt32(&entry.refCount, -1)
-	var client *Client
+	var client pluginClient
 	if newCount <= 0 && entry.pendingKill {
 		client = entry.client
 		entry.client = nil
