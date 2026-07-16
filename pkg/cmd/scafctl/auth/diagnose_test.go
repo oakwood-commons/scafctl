@@ -6,11 +6,13 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/adrg/xdg"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/auth/diagnose"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
@@ -682,4 +684,19 @@ func TestCommandDiagnose_NoHandlers_ShowsOfficialAvailable(t *testing.T) {
 	assert.Contains(t, output, "no handlers installed yet")
 	assert.Contains(t, output, "github")
 	assert.Contains(t, output, "entra")
+}
+
+// ── Display schema tests ─────────────────────────────────────────────────────
+
+func TestAuthDiagnoseDisplaySchema_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(authDiagnoseDisplaySchema), "auth_diagnose_schema.json must be valid JSON")
+}
+
+func TestAuthDiagnoseDisplaySchema_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(authDiagnoseDisplaySchema)
+	require.NoError(t, err, "auth_diagnose_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
 }
