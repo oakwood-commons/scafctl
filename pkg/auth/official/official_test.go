@@ -12,15 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewRegistry_Contains3Handlers(t *testing.T) {
+func TestNewRegistry_Contains4Handlers(t *testing.T) {
 	r := NewRegistry()
-	assert.Equal(t, 3, r.Len())
+	assert.Equal(t, 4, r.Len())
 }
 
 func TestNewRegistry_AllNamesPresent(t *testing.T) {
 	r := NewRegistry()
 
-	expected := []string{"entra", "gcp", "github"}
+	expected := []string{"entra", "gcp", "github", "openshift"}
 	assert.Equal(t, expected, r.Names())
 }
 
@@ -30,10 +30,15 @@ func TestRegistry_Get(t *testing.T) {
 		query     string
 		wantFound bool
 		wantName  string
+		// wantTrustedDomains is false for handlers whose OAuth host is
+		// per-cluster/config-driven (e.g. openshift), which intentionally
+		// carry no pinned identity-provider domains.
+		wantTrustedDomains bool
 	}{
-		{name: "known handler github", query: "github", wantFound: true, wantName: "github"},
-		{name: "known handler entra", query: "entra", wantFound: true, wantName: "entra"},
-		{name: "known handler gcp", query: "gcp", wantFound: true, wantName: "gcp"},
+		{name: "known handler github", query: "github", wantFound: true, wantName: "github", wantTrustedDomains: true},
+		{name: "known handler entra", query: "entra", wantFound: true, wantName: "entra", wantTrustedDomains: true},
+		{name: "known handler gcp", query: "gcp", wantFound: true, wantName: "gcp", wantTrustedDomains: true},
+		{name: "known handler openshift", query: "openshift", wantFound: true, wantName: "openshift", wantTrustedDomains: false},
 		{name: "unknown handler", query: "nonexistent", wantFound: false},
 		{name: "empty string", query: "", wantFound: false},
 		{name: "builtin handler not extracted", query: "oauth2", wantFound: false},
@@ -49,7 +54,11 @@ func TestRegistry_Get(t *testing.T) {
 				assert.NotEmpty(t, h.CatalogRef)
 				assert.NotEmpty(t, h.DefaultVersion)
 				assert.NotEmpty(t, h.MinSDKVersion)
-				assert.NotEmpty(t, h.TrustedVerificationDomains)
+				if tt.wantTrustedDomains {
+					assert.NotEmpty(t, h.TrustedVerificationDomains)
+				} else {
+					assert.Empty(t, h.TrustedVerificationDomains)
+				}
 			}
 		})
 	}
@@ -64,6 +73,7 @@ func TestRegistry_Has(t *testing.T) {
 		{name: "known github", query: "github", want: true},
 		{name: "known entra", query: "entra", want: true},
 		{name: "known gcp", query: "gcp", want: true},
+		{name: "known openshift", query: "openshift", want: true},
 		{name: "unknown", query: "aws", want: false},
 		{name: "builtin not extracted", query: "oauth2", want: false},
 	}
@@ -132,7 +142,7 @@ func TestDefaultAuthHandlers_ReturnsCopy(t *testing.T) {
 }
 
 func TestDefaultAuthHandlers_Count(t *testing.T) {
-	assert.Equal(t, 3, len(DefaultAuthHandlers()))
+	assert.Equal(t, 4, len(DefaultAuthHandlers()))
 }
 
 func TestDefaultAuthHandlers_ExtendPattern(t *testing.T) {
@@ -141,7 +151,7 @@ func TestDefaultAuthHandlers_ExtendPattern(t *testing.T) {
 	)
 
 	r := NewRegistryFrom(extended)
-	assert.Equal(t, 4, r.Len())
+	assert.Equal(t, 5, r.Len())
 	assert.True(t, r.Has("github"))
 	assert.True(t, r.Has("okta"))
 }
@@ -200,7 +210,7 @@ func TestRegistry_Len(t *testing.T) {
 		handlers []AuthHandler
 		want     int
 	}{
-		{name: "default", handlers: defaultAuthHandlers, want: 3},
+		{name: "default", handlers: defaultAuthHandlers, want: 4},
 		{name: "empty", handlers: nil, want: 0},
 		{name: "one", handlers: []AuthHandler{{Name: "x"}}, want: 1},
 	}
@@ -232,7 +242,7 @@ func TestWithRegistry_ContextRoundTrip(t *testing.T) {
 
 	got := RegistryFromContext(ctx)
 	require.NotNil(t, got)
-	assert.Equal(t, 3, got.Len())
+	assert.Equal(t, 4, got.Len())
 }
 
 func TestRegistryFromContext_NilWhenNotSet(t *testing.T) {

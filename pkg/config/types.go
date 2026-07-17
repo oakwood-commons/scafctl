@@ -982,7 +982,8 @@ type APITracingConfig struct {
 // (OCI registries, APIs, providers, etc.).
 type CustomOAuth2Config struct {
 	// Name is the handler identifier, used as: scafctl auth login <name>
-	// Must not conflict with built-in handler names (github, gcp, entra).
+	// Must not conflict with a reserved first-party (official) handler name
+	// (github, gcp, entra, openshift, ...); such configs are skipped at startup.
 	Name        string `json:"name" yaml:"name" mapstructure:"name" doc:"Handler name (used as CLI argument)" maxLength:"64" example:"quay"`
 	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty" mapstructure:"displayName" doc:"Human-readable display name" maxLength:"128" example:"Quay.io"`
 

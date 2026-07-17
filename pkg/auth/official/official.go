@@ -1,11 +1,18 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-// Package official defines the registry of first-party auth handlers that will
-// be extracted from scafctl's built-in set into standalone plugin repos. The
-// registry drives auto-resolution: when a CLI command or solution references an
-// auth handler that isn't registered (built-in, config-defined, or plugin), the
-// runtime checks this list and auto-fetches from the official OCI catalog.
+// Package official defines the manifest of first-party auth handlers that scafctl
+// distributes as standalone gRPC plugins (published to
+// ghcr.io/oakwood-commons/auth-handlers/<name>), NOT compiled into the binary.
+// Each entry is a pointer -- name, OCI catalog ref, version constraint, and
+// minimum plugin SDK version -- and carries no handler logic. The manifest
+// drives zero-config auto-resolution: when a CLI command or solution references
+// an auth handler that isn't already registered (an embedder builtin, a
+// config-defined handler, or an installed plugin), the runtime consults this
+// manifest and auto-fetches the matching plugin from the official OCI catalog.
+// It also acts as a trust allowlist -- only these names auto-resolve to the
+// official catalog. Embedders override the set via
+// RootOptions.OfficialAuthHandlers.
 package official
 
 import (
@@ -54,8 +61,8 @@ type AuthHandler struct {
 	TrustedVerificationDomains []string
 }
 
-// defaultAuthHandlers is the canonical list of all 3 auth handlers planned for
-// extraction. Sorted alphabetically by name.
+// defaultAuthHandlers is the canonical list of the 4 official first-party auth
+// handlers, distributed as standalone plugins. Sorted alphabetically by name.
 //
 // DefaultVersion is "latest" so the catalog resolver picks the newest
 // available version. This avoids hard-coding a concrete semver that must
@@ -89,6 +96,18 @@ var defaultAuthHandlers = []AuthHandler{
 			"github.com",
 		},
 	},
+	{
+		Name:           "openshift",
+		CatalogRef:     "openshift",
+		DefaultVersion: "latest",
+		MinSDKVersion:  "0.2.0",
+		// No TrustedVerificationDomains: the OpenShift OAuth server host is
+		// per-cluster and discovered at login from the API server's
+		// .well-known/oauth-authorization-server endpoint, so there is no fixed
+		// identity-provider domain to pin. Host verification for this handler is
+		// config-driven per cluster rather than hardcoded here.
+		TrustedVerificationDomains: nil,
+	},
 }
 
 // Registry holds the set of known official auth handlers.
@@ -97,7 +116,7 @@ type Registry struct {
 }
 
 // NewRegistry returns the default official auth handler registry containing
-// all 3 auth handlers planned for extraction.
+// the 4 official first-party auth handlers.
 func NewRegistry() *Registry {
 	return NewRegistryFrom(defaultAuthHandlers)
 }
@@ -113,7 +132,7 @@ func NewRegistryFrom(handlers []AuthHandler) *Registry {
 	return &Registry{handlers: m}
 }
 
-// DefaultAuthHandlers returns a copy of the 3 official auth handler entries.
+// DefaultAuthHandlers returns a copy of the 4 official auth handler entries.
 // Embedders can append their own entries and pass the result to
 // NewRegistryFrom to extend rather than replace the defaults.
 func DefaultAuthHandlers() []AuthHandler {

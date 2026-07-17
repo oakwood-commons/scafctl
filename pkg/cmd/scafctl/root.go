@@ -187,7 +187,7 @@ type RootOptions struct {
 
 	// OfficialAuthHandlers overrides the default official auth handler registry
 	// used for auto-resolution. When nil and DisableOfficialAuthHandlers is
-	// false, the default registry (3 extracted first-party auth handlers) is
+	// false, the default registry (4 extracted first-party auth handlers) is
 	// used. Embedders can supply a custom registry via
 	// authofficial.NewRegistryFrom to extend or replace the default set.
 	OfficialAuthHandlers *authofficial.Registry
@@ -497,14 +497,44 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				}
 			}
 
+			// ── Wire official auth handler registry for auto-resolution ──
+			// Same pattern as official providers. When the embedder provides a
+			// custom registry, use it. Otherwise, use the default registry
+			// unless disabled in config.
+			// NOTE: Resolved before custom OAuth2 handlers so their names can be
+			// reserved (a customOAuth2 must not shadow an official first-party
+			// handler), and before RegisterAuthHandlerPlugins so that
+			// configureAndRegisterAuthHandlers can read per-handler
+			// TrustedVerificationDomains.
+			var officialAuthReg *authofficial.Registry
+			if !cfg.Settings.DisableOfficialAuthHandlers {
+				officialAuthReg = opts.OfficialAuthHandlers
+				if officialAuthReg == nil {
+					officialAuthReg = authofficial.NewRegistry()
+				}
+				source := "default"
+				if opts.OfficialAuthHandlers != nil {
+					source = "embedder"
+				}
+				lgr.V(1).Info("official auth handler registry enabled", "count", officialAuthReg.Len(), "source", source)
+				ctx = authofficial.WithRegistry(ctx, officialAuthReg)
+			} else {
+				lgr.V(1).Info("official auth handler registry disabled via config")
+			}
+
 			// Register custom OAuth2 handlers from config
 			for _, customCfg := range cfg.Auth.CustomOAuth2 {
 				if validateErr := customoauth2.ValidateConfig(customCfg); validateErr != nil {
 					lgr.V(1).Info("warning: skipping invalid custom OAuth2 handler", "name", customCfg.Name, "error", validateErr)
 					continue
 				}
-				if authRegistry.Has(customCfg.Name) {
-					lgr.V(1).Info("warning: custom OAuth2 handler name conflicts with built-in handler, skipping", "name", customCfg.Name)
+				// Skip names already registered (an embedder builtin) or reserved
+				// by an official first-party handler, so user config cannot shadow
+				// a first-party handler name (github, gcp, entra, openshift, ...).
+				// When official handlers are disabled, officialAuthReg is nil and
+				// user configs are free to use those names.
+				if authRegistry.Has(customCfg.Name) || (officialAuthReg != nil && officialAuthReg.Has(customCfg.Name)) {
+					lgr.V(1).Info("warning: custom OAuth2 handler name conflicts with a reserved first-party handler, skipping", "name", customCfg.Name)
 					continue
 				}
 				var customOpts []customoauth2.Option
@@ -520,27 +550,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 						lgr.V(1).Info("warning: failed to register custom OAuth2 handler", "name", customCfg.Name, "error", regErr)
 					}
 				}
-			}
-
-			// ── Wire official auth handler registry for auto-resolution ──
-			// Same pattern as official providers. When the embedder provides a
-			// custom registry, use it. Otherwise, use the default registry
-			// unless disabled in config.
-			// NOTE: This must be wired before RegisterAuthHandlerPlugins so that
-			// configureAndRegisterAuthHandlers can read per-handler TrustedVerificationDomains.
-			if !cfg.Settings.DisableOfficialAuthHandlers {
-				officialAuthReg := opts.OfficialAuthHandlers
-				if officialAuthReg == nil {
-					officialAuthReg = authofficial.NewRegistry()
-				}
-				source := "default"
-				if opts.OfficialAuthHandlers != nil {
-					source = "embedder"
-				}
-				lgr.V(1).Info("official auth handler registry enabled", "count", officialAuthReg.Len(), "source", source)
-				ctx = authofficial.WithRegistry(ctx, officialAuthReg)
-			} else {
-				lgr.V(1).Info("official auth handler registry disabled via config")
 			}
 
 			// Register auth handler plugins if directories are configured

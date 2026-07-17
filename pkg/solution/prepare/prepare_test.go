@@ -1352,6 +1352,7 @@ func TestResolveOfficialAuthHandlers_AllRegistered(t *testing.T) {
 	_ = authReg.Register(auth.NewMockHandler("github"))
 	_ = authReg.Register(auth.NewMockHandler("entra"))
 	_ = authReg.Register(auth.NewMockHandler("gcp"))
+	_ = authReg.Register(auth.NewMockHandler("openshift"))
 
 	officialReg := authofficial.NewRegistry()
 	lgr := logr.Discard()

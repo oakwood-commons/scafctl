@@ -430,7 +430,7 @@ func TestRoot_OfficialAuthHandlerRegistry_Enabled(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.NotNil(t, registryFromCtx, "official auth handler registry should be set in context")
-	assert.Equal(t, 3, registryFromCtx.Len(), "default registry should contain 3 handlers")
+	assert.Equal(t, 4, registryFromCtx.Len(), "default registry should contain 4 handlers")
 }
 
 // TestRoot_OfficialAuthHandlerRegistry_CustomEmbedder verifies that an
@@ -509,7 +509,7 @@ func TestRoot_OfficialAuthHandlerRegistry_Enabled_NonDefaultBinary(t *testing.T)
 	err := cmd.Execute()
 	require.NoError(t, err)
 	require.NotNil(t, registryFromCtx, "official auth handler registry should be set for custom binary")
-	assert.Equal(t, 3, registryFromCtx.Len())
+	assert.Equal(t, 4, registryFromCtx.Len())
 }
 
 // TestRoot_PluginSignaturePolicy_Wired verifies that PluginSignaturePolicy is

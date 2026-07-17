@@ -205,6 +205,42 @@ scafctl kube login prod --handler oidc -o json
 scafctl kube logout prod -o json
 ```
 
+## OpenShift: OAuth or Entra, One Command
+
+For OpenShift clusters, `kube login` detects the cluster's auth method (probing
+`/.well-known/oauth-authorization-server`) and, when you pass neither `--handler`
+nor a resolver default, routes automatically:
+
+- **OAuth cluster** (OpenShift bundled OAuth) uses the `openshift` handler's
+  browser web-login.
+- **OIDC / structured-auth cluster** (Entra) uses the `entra` handler with the
+  cluster's audience from the resolver, a static alias, or `--audience`.
+
+```bash
+# Same command for either cluster type -- scafctl detects and routes
+scafctl kube login mycluster --server https://api.mycluster.example.com:6443
+
+# Reaching an OIDC cluster directly needs an audience to scope the token
+scafctl kube login --server https://api.mycluster.example.com:6443 \
+  --audience api://mycluster-client-id/.default
+```
+
+An explicit `--handler` and a resolver-supplied `defaultHandler` both take
+precedence over the detected auth type. When an OIDC cluster is auto-routed to
+`entra` with no audience available, login fails fast asking for `--audience`.
+
+After login, the OpenShift integrated image registry is served through scafctl's
+credential helper -- `docker`/`podman` pulls fetch fresh tokens automatically:
+
+```bash
+podman pull default-route-openshift-image-registry.mycluster/myns/myimage
+```
+
+The `openshift` handler is inferred for the default registry route
+(`default-route-openshift-image-registry.*`) and the in-cluster service host
+(`image-registry.openshift-image-registry.svc*`). Custom routes use a
+`customOAuth2` registry mapping.
+
 ## Limitations
 
 For OpenShift-style OAuth (implicit-grant) clusters, the kubeconfig `exec` block

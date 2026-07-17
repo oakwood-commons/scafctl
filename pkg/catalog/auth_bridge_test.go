@@ -73,6 +73,24 @@ func TestBridgeAuthToRegistry(t *testing.T) {
 			wantPassword: "eyJ0entra-token",
 		},
 		{
+			name:         "openshift handler uses cluster username",
+			handlerName:  "openshift",
+			registryHost: "default-route-openshift-image-registry.apps.example.com",
+			token:        "sha256~openshift-token",
+			claims:       &auth.Claims{Username: "developer"},
+			wantUsername: "developer",
+			wantPassword: "sha256~openshift-token",
+		},
+		{
+			name:         "openshift handler falls back to default username",
+			handlerName:  "openshift",
+			registryHost: "image-registry.openshift-image-registry.svc:5000",
+			token:        "sha256~openshift-token",
+			claims:       &auth.Claims{},
+			wantUsername: RegistryUsernameDefault,
+			wantPassword: "sha256~openshift-token",
+		},
+		{
 			name:         "generic handler uses oauth2accesstoken",
 			handlerName:  "quay",
 			registryHost: "quay.io",
@@ -200,6 +218,14 @@ func TestInferAuthHandler(t *testing.T) {
 		{"gcr.io", "gcp"},
 		{"us.gcr.io", "gcp"},
 		{"myacr.azurecr.io", "entra"},
+		{"default-route-openshift-image-registry.apps.example.com", "openshift"},
+		{"image-registry.openshift-image-registry.svc", "openshift"},
+		{"image-registry.openshift-image-registry.svc:5000", "openshift"},
+		{"image-registry.openshift-image-registry.svc.cluster.local:5000", "openshift"},
+		// Look-alike hosts must NOT match: the ".svc" segment requires a
+		// boundary (end, ":", or ".") so a token is never sent to an impostor.
+		{"image-registry.openshift-image-registry.svcevil.example", ""},
+		{"image-registry.openshift-image-registry.svc-evil.example", ""},
 		{"quay.io", "quay"},
 		{"registry.gitlab.com", "gitlab"},
 		{"registry-1.docker.io", ""},
@@ -217,26 +243,6 @@ func TestInferAuthHandler(t *testing.T) {
 func TestInferAuthHandler_NoCustomHandlers(t *testing.T) {
 	assert.Equal(t, "github", InferAuthHandler("ghcr.io", nil))
 	assert.Equal(t, "", InferAuthHandler("quay.io", nil))
-}
-
-func TestIsBuiltinHandlerName(t *testing.T) {
-	tests := []struct {
-		name string
-		want bool
-	}{
-		{"github", true},
-		{"gcp", true},
-		{"entra", true},
-		{"quay", false},
-		{"custom", false},
-		{"", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, IsBuiltinHandlerName(tt.name))
-		})
-	}
 }
 
 // Benchmarks

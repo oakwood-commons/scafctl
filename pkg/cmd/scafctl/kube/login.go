@@ -113,6 +113,12 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 				Kubeconfig: mgr,
 				Resolver:   kubeapi.ResolverFromContext(ctx),
 				BinaryName: cliParams.BinaryName,
+				// Route a detected cluster AuthType to a default handler when the
+				// caller supplies neither --handler nor a cluster DefaultHandler:
+				// OpenShift OAuth clusters -> "openshift", OIDC clusters -> "entra".
+				// Embedders override this by setting DefaultHandler/AuthType on their
+				// resolved clusters (which take precedence over this fallback).
+				AuthTypeHandlers: kubelogin.DefaultAuthTypeHandlers(),
 				HandlerLookup: func(ctx context.Context, name string) (kubelogin.Authenticator, error) {
 					return auth.GetHandler(ctx, name)
 				},
@@ -150,7 +156,7 @@ func CommandLogin(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			res, err := kubelogin.Login(ctx, deps, req)
 			if err != nil {
 				w.Errorf("%v", err)
-				if errors.Is(err, kubelogin.ErrNoHandler) || errors.Is(err, kubelogin.ErrNoServer) {
+				if errors.Is(err, kubelogin.ErrNoHandler) || errors.Is(err, kubelogin.ErrNoServer) || errors.Is(err, kubelogin.ErrNoAudience) {
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
 				if errors.Is(err, kubelogin.ErrVerificationFailed) && res != nil {

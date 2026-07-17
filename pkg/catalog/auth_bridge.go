@@ -19,16 +19,25 @@ const RegistryUsernameDefault = "oauth2accesstoken"
 // ACR uses a zero-GUID as the username when authenticating with an Entra token.
 const RegistryUsernameACR = "00000000-0000-0000-0000-000000000000"
 
+// OpenShift integrated image-registry host patterns. The registry is exposed
+// either through a default route (external) or the in-cluster service DNS
+// (internal). Custom/renamed registry routes are not matched here; they are
+// handled via config.CustomOAuth2Config.Registry exact-host mappings.
+const (
+	// openshiftRegistryRoutePrefix matches the default exposed route form,
+	// e.g. default-route-openshift-image-registry.apps.<cluster-domain>.
+	openshiftRegistryRoutePrefix = "default-route-openshift-image-registry."
+	// openshiftRegistrySvcPrefix matches the in-cluster service form,
+	// e.g. image-registry.openshift-image-registry.svc(.cluster.local)(:5000).
+	openshiftRegistrySvcPrefix = "image-registry.openshift-image-registry.svc"
+)
+
 // RegistryUsernameProvider is an optional interface for auth handlers that declare
 // a custom registry username convention. BridgeAuthToRegistry checks for this
 // interface via type assertion on the default (non-built-in) path.
 type RegistryUsernameProvider interface {
 	RegistryUsername() string
 }
-
-// builtinHandlerNames contains the names of built-in auth handlers.
-// Used for name conflict detection when registering custom OAuth2 handlers.
-var builtinHandlerNames = []string{"github", "gcp", "entra"}
 
 // BridgeAuthToRegistry converts an auth handler's token into OCI registry credentials.
 // Each registry type expects a specific username/password convention:
@@ -66,16 +75,9 @@ func BridgeAuthToRegistry(ctx context.Context, handler auth.Handler, registryHos
 func RegistryUsername(ctx context.Context, handler auth.Handler, _ string) (string, error) {
 	switch handler.Name() {
 	case "github":
-		// GHCR expects the GitHub username as the registry username.
-		// Falls back to default if Status is unavailable or claims are empty.
-		status, err := handler.Status(ctx)
-		if err != nil {
-			return RegistryUsernameDefault, nil //nolint:nilerr // intentional fallback to default username
-		}
-		if status.Claims != nil && status.Claims.Username != "" {
-			return status.Claims.Username, nil
-		}
-		return RegistryUsernameDefault, nil
+		// GHCR expects the GitHub username as the registry username, falling
+		// back to the default when Status/claims are unavailable.
+		return claimsUsernameOrDefault(ctx, handler), nil
 
 	case "entra":
 		// ACR expects the zero-GUID as username
@@ -84,6 +86,12 @@ func RegistryUsername(ctx context.Context, handler auth.Handler, _ string) (stri
 	case "gcp":
 		// GCR/Artifact Registry expects "oauth2accesstoken"
 		return RegistryUsernameDefault, nil
+
+	case "openshift":
+		// The OpenShift integrated registry accepts the user's token as the
+		// password with the OpenShift username as the docker username (like the
+		// GitHub case), falling back to the default when unavailable.
+		return claimsUsernameOrDefault(ctx, handler), nil
 
 	default:
 		// Check if the handler provides a custom registry username override
@@ -96,6 +104,21 @@ func RegistryUsername(ctx context.Context, handler auth.Handler, _ string) (stri
 		// Generic OAuth2 handlers default to oauth2accesstoken
 		return RegistryUsernameDefault, nil
 	}
+}
+
+// claimsUsernameOrDefault returns the handler's authenticated username from its
+// Status claims, falling back to RegistryUsernameDefault when Status is
+// unavailable or the claim is empty. Used by registries (GHCR, the OpenShift
+// integrated registry) that expect the user's own name as the docker username.
+func claimsUsernameOrDefault(ctx context.Context, handler auth.Handler) string {
+	status, err := handler.Status(ctx)
+	if err != nil {
+		return RegistryUsernameDefault
+	}
+	if status.Claims != nil && status.Claims.Username != "" {
+		return status.Claims.Username
+	}
+	return RegistryUsernameDefault
 }
 
 // InferAuthHandler maps a registry host to a built-in or custom auth handler name.
@@ -111,6 +134,8 @@ func InferAuthHandler(registryHost string, customHandlers []config.CustomOAuth2C
 		return "gcp"
 	case strings.HasSuffix(registryHost, ".azurecr.io"):
 		return "entra"
+	case isOpenShiftRegistryHost(registryHost):
+		return "openshift"
 	}
 
 	// Check custom OAuth2 handler registry mappings
@@ -123,6 +148,23 @@ func InferAuthHandler(registryHost string, customHandlers []config.CustomOAuth2C
 	return ""
 }
 
+// isOpenShiftRegistryHost reports whether host is an OpenShift integrated
+// image-registry host: the exposed default route or the in-cluster service DNS.
+// The service-form match enforces a boundary after the ".svc" segment (end of
+// host, ":" for a port, or "." for a domain suffix) so look-alike hosts such as
+// "image-registry.openshift-image-registry.svcevil.example" are not matched and
+// cannot be sent an OpenShift token.
+func isOpenShiftRegistryHost(host string) bool {
+	if strings.HasPrefix(host, openshiftRegistryRoutePrefix) {
+		return true
+	}
+	rest, ok := strings.CutPrefix(host, openshiftRegistrySvcPrefix)
+	if !ok {
+		return false
+	}
+	return rest == "" || rest[0] == ':' || rest[0] == '.'
+}
+
 // InferDefaultScope returns the default OAuth scope for a known registry host.
 // Returns empty string if no default scope is known for the registry.
 func InferDefaultScope(registryHost string) string {
@@ -133,14 +175,4 @@ func InferDefaultScope(registryHost string) string {
 		return "https://www.googleapis.com/auth/cloud-platform"
 	}
 	return ""
-}
-
-// IsBuiltinHandlerName returns true if the name conflicts with a built-in handler.
-func IsBuiltinHandlerName(name string) bool {
-	for _, builtin := range builtinHandlerNames {
-		if name == builtin {
-			return true
-		}
-	}
-	return false
 }

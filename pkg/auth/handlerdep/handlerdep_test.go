@@ -103,11 +103,21 @@ func TestResolve_ConfigPinDefaults(t *testing.T) {
 }
 
 func TestResolve_NoConfigNoOfficial(t *testing.T) {
-	// Nil config and no official registry: any name resolves as a bare catalog
-	// name (third-party enabled by default).
-	dep, source, err := Resolve(context.Background(), "openshift")
+	// Nil config and no official registry: a non-official name resolves as a
+	// bare catalog name (third-party enabled by default).
+	dep, source, err := Resolve(context.Background(), "acme")
 	require.NoError(t, err)
 	assert.Equal(t, SourceCatalog, source)
+	assert.Equal(t, "acme", dep.Name)
+}
+
+func TestResolve_NoRegistryFallsBackToDefaultOfficial(t *testing.T) {
+	// With no official registry attached, Resolve falls back to the canonical
+	// default official names so an official handler (e.g. openshift) is still
+	// classified as official rather than a bare catalog artifact.
+	dep, source, err := Resolve(context.Background(), "openshift")
+	require.NoError(t, err)
+	assert.Equal(t, SourceOfficial, source)
 	assert.Equal(t, "openshift", dep.Name)
 }
 
@@ -197,7 +207,7 @@ func TestResolve_ErrorsHaveNoBinaryName(t *testing.T) {
 	ctx := config.WithConfig(context.Background(), &config.Config{
 		Settings: config.Settings{DisableThirdPartyAuthHandlers: true},
 	})
-	_, _, err := Resolve(ctx, "openshift")
+	_, _, err := Resolve(ctx, "acme")
 	require.Error(t, err)
 	assert.NotContains(t, strings.ToLower(err.Error()), "scafctl")
 }

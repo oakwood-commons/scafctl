@@ -58,7 +58,34 @@ var (
 	// authenticated identity via a post-login whoami. The kubeconfig entry is
 	// still written; only the verification step failed.
 	ErrVerificationFailed = errors.New("login: post-login identity verification failed")
+
+	// ErrNoAudience indicates the auth handler was auto-selected for an OIDC
+	// cluster (via the AuthType fallback) but no audience could be resolved to
+	// scope the minted token. An OIDC token without the cluster's audience
+	// cannot authenticate to the API server, so login fails fast rather than
+	// writing a kubeconfig entry that would reject every subsequent request.
+	ErrNoAudience = errors.New("login: OIDC cluster requires an audience; pass --audience or configure the cluster's oidcAudience")
 )
+
+// Default auth handler names used by DefaultAuthTypeHandlers to route a detected
+// cluster AuthType to a handler when the caller supplies none. Embedders that
+// ship different handlers override the policy by populating Deps.AuthTypeHandlers
+// themselves (or by setting DefaultHandler on their resolved clusters).
+const (
+	defaultOAuthHandler = "openshift"
+	defaultOIDCHandler  = "entra"
+)
+
+// DefaultAuthTypeHandlers returns the built-in policy that maps a detected
+// cluster AuthType to a fallback auth handler name: OpenShift OAuth clusters
+// route to the "openshift" handler and OIDC clusters to "entra". The CLI wires
+// this into Deps.AuthTypeHandlers; embedders may supply their own map instead.
+func DefaultAuthTypeHandlers() map[kube.AuthType]string {
+	return map[kube.AuthType]string{
+		kube.AuthTypeOAuth: defaultOAuthHandler,
+		kube.AuthTypeOIDC:  defaultOIDCHandler,
+	}
+}
 
 // Authenticator is the subset of auth.Handler the login orchestration needs.
 // *auth.Handler implementations satisfy it; tests supply a stub.
@@ -100,6 +127,16 @@ type Deps struct {
 
 	// Resolver resolves cluster names to connection details. Optional.
 	Resolver kube.ClusterResolver
+
+	// AuthTypeHandlers maps a detected cluster AuthType to a fallback auth
+	// handler name, consulted only when neither an explicit --handler nor the
+	// resolved cluster's DefaultHandler is set. It powers zero-config
+	// `login <cluster>`: an auto-detected OpenShift OAuth cluster routes to the
+	// "openshift" handler, an OIDC cluster to "entra". Nil disables the
+	// AuthType fallback (undetected clusters then require an explicit handler).
+	// The CLI populates this from DefaultAuthTypeHandlers; embedders may supply
+	// their own policy.
+	AuthTypeHandlers map[kube.AuthType]string
 
 	// LoginRunner, when set, performs the interactive handler login. It lets the
 	// caller wrap the login with a progress UI (e.g. the shared kvx status TUI
@@ -354,8 +391,29 @@ func resolveHandler(ctx context.Context, deps Deps, req Request, info kube.Clust
 		return deps.Handler, nil
 	}
 	name := firstNonEmpty(req.Handler, info.DefaultHandler)
+	// When neither an explicit --handler nor the cluster's DefaultHandler is
+	// set, fall back to the detected auth type's default handler (e.g. an
+	// auto-detected OpenShift OAuth cluster routes to "openshift", an OIDC
+	// cluster to "entra"). This powers zero-config `login <cluster>`. An
+	// undetected AuthType (AuthTypeAuto) has no mapping and still errors below.
+	usedAuthTypeFallback := false
+	if name == "" && deps.AuthTypeHandlers != nil {
+		if mapped := deps.AuthTypeHandlers[info.AuthType]; mapped != "" {
+			name = mapped
+			usedAuthTypeFallback = true
+		}
+	}
 	if name == "" {
 		return nil, ErrNoHandler
+	}
+	// The OIDC route mints a cluster-scoped token, which needs the cluster's
+	// audience (its client ID). When the handler was auto-selected for an OIDC
+	// cluster but no audience was resolved (from the inventory/alias, --audience,
+	// or the resolver), fail fast before the interactive login rather than write
+	// a kubeconfig entry that cannot authenticate. An explicitly requested
+	// handler is left to the caller's intent and skips this guard.
+	if usedAuthTypeFallback && info.AuthType == kube.AuthTypeOIDC && info.OIDCAudience == "" {
+		return nil, ErrNoAudience
 	}
 	if deps.HandlerLookup == nil {
 		return nil, ErrNoHandler
