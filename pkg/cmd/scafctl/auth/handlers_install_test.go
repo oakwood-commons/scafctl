@@ -33,11 +33,11 @@ func TestCommandHandlersInstall_ThirdPartyDisabledNoOfficial(t *testing.T) {
 
 	cmd := commandHandlersInstall(cliParams, ioStreams)
 	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{"openshift"})
+	cmd.SetArgs([]string{"notarealhandler"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "openshift")
+	assert.Contains(t, err.Error(), "notarealhandler")
 	assert.Contains(t, err.Error(), "disabled")
 }
 

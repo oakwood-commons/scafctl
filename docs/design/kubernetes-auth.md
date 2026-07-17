@@ -21,7 +21,7 @@ The design is layered by dependency weight so each phase ships independently:
 | 2a | Kubeconfig provider capability contract + host-side manager | core (`pkg/kubeconfig`, `CapabilityKubeconfig`) | Shipped |
 | 2b | Kubeconfig provider plugin implementation (`client-go`/`clientcmd`) | plugin | Planned |
 | 3 | Thin `kube login` / `kube logout` commands | core (`pkg/kube/login`, `pkg/cmd/scafctl/kube`) | Shipped |
-| 4 | OpenShift OAuth auth-handler plugin | plugin | Planned |
+| 4 | OpenShift OAuth auth-handler plugin + two-path routing | plugin + core (`pkg/kube/login`, `pkg/catalog`, `pkg/auth/official`) | Shipped |
 | 5 | Multi-cluster per-cluster token routing on the exec-credential path | core (`pkg/auth/execcredential`, `pkg/cmd/scafctl/auth`, `pkg/kube/login`) + SDK `CapTokenHostname` | Shipped |
 
 Phases 1-3 add no OpenShift- or vendor-specific code and already deliver
@@ -202,9 +202,45 @@ with no resolver involved.
   resolver supplies `ClusterInfo.DefaultHandler`). When the kubeconfig provider
   plugin cannot be fetched, it degrades gracefully to writing a minimal static
   exec-credential kubeconfig directly. `client-go` never enters core.
-- **Phase 4 -- OpenShift OAuth handler plugin.** The one genuinely
-  OpenShift-specific credential source: localhost-callback implicit-grant flow,
-  plus `ListProjects` / MOTD behind graceful degradation.
+- **Phase 4 -- OpenShift OAuth handler plugin + two-path routing (Shipped).**
+  The one genuinely OpenShift-specific credential source: the
+  `openshift` auth-handler plugin runs a localhost-callback implicit-grant flow
+  (OAuth server discovered from the cluster's
+  `.well-known/oauth-authorization-server` endpoint), enriches the username via
+  `user.openshift.io`, and mints service-account tokens through the Kubernetes
+  TokenRequest API -- all over raw HTTP, so no `client-go` enters core. The
+  plugin is registered in `pkg/auth/official` so `kube login` auto-fetches it
+  from `ghcr.io/oakwood-commons/auth-handlers/openshift`.
+
+  **Two-path routing.** `kube login` auto-detects the cluster's auth method via
+  the kubeconfig provider's `DetectAuthType` (`pkg/kube/login`) and, when the
+  caller supplies neither `--handler` nor a resolved
+  `ClusterInfo.DefaultHandler`, routes on the detected `AuthType`:
+
+  - `oauth` (OpenShift bundled OAuth) -> the `openshift` handler's browser
+    web-login flow.
+  - `oidc` (structured / external identity, e.g. Entra) -> the existing `entra`
+    handler with the cluster's audience. The audience comes from the resolver's
+    `oidcAudience`, a `--audience` flag, or a static alias -- never a hardcoded
+    tenant or client ID. When the OIDC route is auto-selected but no audience is
+    resolvable, login fails fast (`ErrNoAudience`) rather than writing a
+    kubeconfig entry that cannot authenticate.
+
+  The policy is data, not a hardcoded switch: `login.Deps.AuthTypeHandlers`
+  (defaulted by `login.DefaultAuthTypeHandlers`) maps an `AuthType` to a handler
+  name and is consulted only as a last resort -- an explicit `--handler` and a
+  resolver-supplied `DefaultHandler` both take precedence, so embedders that ship
+  different handlers (or stamp `defaultHandler` in their cluster inventory)
+  override the fallback without touching core. An undetected `AuthType` (auto)
+  still requires an explicit handler.
+
+  **Credential-helper use.** Once logged in, the OpenShift integrated image
+  registry is served through the Docker credential-helper protocol
+  (`pkg/credentialhelper`): `pkg/catalog` infers the `openshift` handler for the
+  registry route (`default-route-openshift-image-registry.*`) and in-cluster
+  service (`image-registry.openshift-image-registry.svc*`) host forms, so
+  `docker`/`podman` pulls fetch fresh tokens from scafctl. Custom or renamed
+  registry routes are supported via a `customOAuth2` registry mapping.
 
 ## Phase 5: Multi-Cluster Token Routing (Shipped)
 

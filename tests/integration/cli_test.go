@@ -3441,23 +3441,36 @@ func TestIntegration_CustomOAuth2Handler_AuthStatus(t *testing.T) {
 func TestIntegration_CustomOAuth2Handler_NameConflict(t *testing.T) {
 	t.Parallel()
 
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	configContent := `auth:
+	// A customOAuth2 config must not shadow a reserved first-party (official)
+	// handler name. The reserved set is derived from the official registry, so
+	// both the long-standing handlers (github) and newer ones (openshift) are
+	// protected. Such configs are skipped at startup without crashing.
+	for _, name := range []string{"github", "openshift"} {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			configContent := `auth:
   customOAuth2:
-    - name: github
+    - name: ` + name + `
       displayName: "Conflict"
       tokenURL: "https://example.com/oauth/token"
       clientID: "test-client"
       clientSecret: "test-secret"
       defaultFlow: client_credentials
 `
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
+			require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
-	// The handler should be skipped (name conflicts with built-in)
-	// but the CLI should not crash
-	_, _, exitCode := runScafctl(t, "--config", configPath, "auth", "list")
-	assert.Equal(t, 0, exitCode)
+			// With debug logging on, the startup skip is observable. The CLI
+			// must not crash, and the conflicting handler must be skipped.
+			_, stderr, exitCode := runScafctl(t, "--config", configPath, "--log-level", "debug", "auth", "list")
+			assert.Equal(t, 0, exitCode)
+			assert.Containsf(t, stderr, "skipping", "reserved first-party name %q must be skipped", name)
+			assert.Contains(t, stderr, name)
+		})
+	}
 }
 
 func TestIntegration_CatalogListHelp(t *testing.T) {
@@ -5714,21 +5727,21 @@ settings:
 	}
 
 	binDir := t.TempDir()
-	binPath := filepath.Join(binDir, "scafctl-plugin-auth-openshift")
+	binPath := filepath.Join(binDir, "scafctl-plugin-auth-acme")
 	require.NoError(t, os.WriteFile(binPath, []byte("dummy-auth-handler"), 0o755))
 	platform := runtime.GOOS + "/" + runtime.GOARCH
 
 	_, buildErr, buildExit := runScafctlWithEnv(t, env, "build", "plugin",
-		"--name", "openshift",
+		"--name", "acme",
 		"--kind", "auth-handler",
 		"--version", "0.1.0",
 		"--platform", platform+"="+binPath)
 	require.Equal(t, 0, buildExit, "build plugin failed: %s", buildErr)
 
 	// Policy blocks resolution of the third-party handler.
-	_, stderr, exitCode := runScafctlWithEnv(t, env, "auth", "handlers", "install", "openshift")
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "auth", "handlers", "install", "acme")
 	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "openshift")
+	assert.Contains(t, stderr, "acme")
 	assert.Contains(t, stderr, "disabled")
 }
 

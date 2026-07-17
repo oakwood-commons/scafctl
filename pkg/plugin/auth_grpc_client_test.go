@@ -1371,6 +1371,114 @@ func TestConfigureAndRegisterAuthHandlers_SetsTrustedDomains(t *testing.T) {
 	assert.Equal(t, []string{"github.com"}, wrapper.trustedDomains)
 }
 
+func TestApplyTrustedDomains(t *testing.T) {
+	t.Parallel()
+
+	officialWithDomains := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "github", CatalogRef: "github", TrustedVerificationDomains: []string{"github.com"}},
+	})
+	// openshift is official but carries no hardcoded domains (per-cluster host).
+	officialEmpty := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "openshift", CatalogRef: "openshift"},
+	})
+
+	tests := []struct {
+		name           string
+		handler        string
+		officialReg    *authofficial.Registry
+		cfgDomains     []string
+		handlerDomains []string
+		wantTrusted    []string
+		wantRequire    bool
+	}{
+		{
+			name:        "official with hardcoded domains is validated, not fail-closed",
+			handler:     "github",
+			officialReg: officialWithDomains,
+			wantTrusted: []string{"github.com"},
+			wantRequire: false,
+		},
+		{
+			name:        "official without hardcoded domains fails closed (e.g. openshift)",
+			handler:     "openshift",
+			officialReg: officialEmpty,
+			wantRequire: true,
+		},
+		{
+			name:           "official without domains but operator config is validated",
+			handler:        "openshift",
+			officialReg:    officialEmpty,
+			handlerDomains: []string{"oauth.mycluster.example.com"},
+			wantTrusted:    []string{"oauth.mycluster.example.com"},
+			wantRequire:    false,
+		},
+		{
+			name:        "third-party handler with no config fails closed",
+			handler:     "acme",
+			officialReg: officialEmpty, // acme absent
+			wantRequire: true,
+		},
+		{
+			name:        "nil registry with global config is validated",
+			handler:     "acme",
+			officialReg: nil,
+			cfgDomains:  []string{"login.acme.example.com"},
+			wantTrusted: []string{"login.acme.example.com"},
+			wantRequire: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := &AuthHandlerWrapper{
+				client:      &AuthHandlerClient{plugin: &MockAuthHandlerPlugin{}, name: "p"},
+				handlerName: tt.handler,
+				info:        AuthHandlerInfo{Name: tt.handler},
+			}
+			applyTrustedDomains(w, tt.handler, tt.officialReg, tt.cfgDomains, tt.handlerDomains)
+
+			w.mu.RLock()
+			defer w.mu.RUnlock()
+			assert.Equal(t, tt.wantRequire, w.requireTrustedDomains)
+			if tt.wantTrusted == nil {
+				assert.Empty(t, w.trustedDomains)
+			} else {
+				assert.Equal(t, tt.wantTrusted, w.trustedDomains)
+			}
+		})
+	}
+}
+
+// TestConfigureAndRegisterAuthHandlers_FailsClosedOnEmptyTrusted verifies the
+// eager registration path fails closed for an official handler that carries no
+// hardcoded trusted domains (e.g. openshift), so device-code verification cannot
+// be phished via an arbitrary HTTPS URL.
+func TestConfigureAndRegisterAuthHandlers_FailsClosedOnEmptyTrusted(t *testing.T) {
+	t.Parallel()
+
+	reg := authofficial.NewRegistryFrom([]authofficial.AuthHandler{
+		{Name: "openshift", CatalogRef: "openshift"}, // no hardcoded domains
+	})
+	ctx := authofficial.WithRegistry(context.Background(), reg)
+
+	registry := auth.NewRegistry()
+	ahClient := &AuthHandlerClient{plugin: &MockAuthHandlerPlugin{}, name: "test-plugin"}
+	handlers := []AuthHandlerInfo{{Name: "openshift", DisplayName: "OpenShift"}}
+
+	configureAndRegisterAuthHandlers(ctx, registry, ahClient, handlers, nil)
+
+	h, err := registry.Get("openshift")
+	require.NoError(t, err)
+	wrapper, ok := h.(*AuthHandlerWrapper)
+	require.True(t, ok)
+	wrapper.mu.RLock()
+	defer wrapper.mu.RUnlock()
+	assert.True(t, wrapper.requireTrustedDomains, "official handler with empty trusted domains must fail closed")
+	assert.Empty(t, wrapper.trustedDomains)
+}
+
 // =====================================================================
 // KillAll / KillAllAuthHandlers additional tests
 // =====================================================================

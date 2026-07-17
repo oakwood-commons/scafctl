@@ -162,8 +162,12 @@ func LogoutAll(ctx context.Context, deps Deps, req LogoutAllRequest) (*LogoutAll
 // logoutHandler returns the handler whose cached credentials should be revoked.
 // An explicit Deps.Handler wins; otherwise the resolved cluster's DefaultHandler
 // is looked up best-effort so "logout <cluster>" revokes the same handler that
-// "login <cluster>" used. Returns nil when no handler can be determined; the
-// caller treats credential revocation as optional.
+// "login <cluster>" used. When the cluster carries no DefaultHandler but does
+// carry an AuthType, the same AuthTypeHandlers fallback that login uses is
+// applied, so an auto-routed login can be cleanly revoked. A pure --server
+// login with no resolver cannot be re-detected here and still needs an explicit
+// --handler. Returns nil when no handler can be determined; the caller treats
+// credential revocation as optional.
 func logoutHandler(ctx context.Context, deps Deps, req LogoutRequest) Authenticator {
 	if deps.Handler != nil {
 		return deps.Handler
@@ -172,10 +176,17 @@ func logoutHandler(ctx context.Context, deps Deps, req LogoutRequest) Authentica
 		return nil
 	}
 	resolved, err := deps.Resolver.Resolve(ctx, req.Cluster)
-	if err != nil || resolved == nil || resolved.DefaultHandler == "" {
+	if err != nil || resolved == nil {
 		return nil
 	}
-	handler, err := deps.HandlerLookup(ctx, resolved.DefaultHandler)
+	name := resolved.DefaultHandler
+	if name == "" && deps.AuthTypeHandlers != nil {
+		name = deps.AuthTypeHandlers[resolved.AuthType]
+	}
+	if name == "" {
+		return nil
+	}
+	handler, err := deps.HandlerLookup(ctx, name)
 	if err != nil {
 		return nil
 	}

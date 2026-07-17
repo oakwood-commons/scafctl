@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	kubeapi "github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -93,6 +94,35 @@ func TestCommandLogout_RevokesResolverDefaultHandler(t *testing.T) {
 	logoutCmd := CommandLogout(embedderParams(), terminal.NewIOStreams(nil, buf, buf, false), "mycli")
 	require.NoError(t, runCmd(t, logoutCmd, ctx, "prod", "--kubeconfig", path))
 	assert.Equal(t, 1, mock.LogoutCalls, "resolver default handler must be revoked without --handler")
+}
+
+// TestCommandLogout_RevokesAuthTypeFallbackHandler verifies the logout CLI wires
+// DefaultAuthTypeHandlers so a cluster with an AuthType but no DefaultHandler is
+// revoked via the same auto-routing login used. Only the openshift mock is
+// registered, so a revoke proves the AuthType fallback selected it.
+func TestCommandLogout_RevokesAuthTypeFallbackHandler(t *testing.T) {
+	t.Parallel()
+	ctx, buf := newTestContext(t)
+	ctx, mock := withNamedMockHandler(t, ctx, "openshift")
+	mock.GetTokenResult = &auth.Token{AccessToken: "tok"}
+
+	// The resolver carries an OAuth AuthType but no DefaultHandler, mirroring an
+	// inventory that stamps authType only. Login auto-routes to openshift.
+	resolver := &kubeapi.MockResolver{ResolveResult: &kubeapi.ClusterInfo{
+		Name:         "prod",
+		APIServerURL: "https://api.example.com:6443",
+		AuthType:     kubeapi.AuthTypeOAuth,
+	}}
+	ctx = kubeapi.WithResolver(ctx, resolver)
+
+	path := filepath.Join(t.TempDir(), "config")
+	loginCmd := CommandLogin(embedderParams(), terminal.NewIOStreams(nil, buf, buf, false), "mycli")
+	require.NoError(t, runCmd(t, loginCmd, ctx, "prod", "--kubeconfig", path))
+
+	buf.Reset()
+	logoutCmd := CommandLogout(embedderParams(), terminal.NewIOStreams(nil, buf, buf, false), "mycli")
+	require.NoError(t, runCmd(t, logoutCmd, ctx, "prod", "--kubeconfig", path))
+	assert.Equal(t, 1, mock.LogoutCalls, "AuthType fallback must revoke the auto-routed handler without --handler")
 }
 
 func TestCommandLogout_OutputUsesEffectiveClusterFromFlag(t *testing.T) {

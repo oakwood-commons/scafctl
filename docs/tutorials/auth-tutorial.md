@@ -2364,6 +2364,86 @@ Both commands support structured output (`-o json`, `-o yaml`) for automation.
 For a complete walkthrough see the
 [Kubernetes login / logout example](../../examples/auth/kube-login.md).
 
+### OpenShift: One Command, OAuth or Entra (auto-routing)
+
+OpenShift clusters authenticate one of two ways, and `kube login` picks the
+right path for you. It probes the API server's
+`/.well-known/oauth-authorization-server` endpoint to detect the cluster's auth
+type, then -- when you supply neither `--handler` nor a resolver default --
+routes automatically:
+
+- **OAuth cluster** (OpenShift's bundled OAuth server) -> the `openshift`
+  handler runs a browser web-login (the `oc login --web` experience) and holds
+  the token.
+- **OIDC / structured-auth cluster** (delegated to Entra / Azure AD) -> the
+  existing `entra` handler mints a cluster-scoped token. The cluster's audience
+  comes from your resolver (`oidcAudience`), a static alias, or `--audience` --
+  never a hardcoded tenant or client ID.
+
+The same command works for either cluster; scafctl holds the credential and
+serves it back to `kubectl`/`oc` on every call:
+
+{{< tabs "auth-tutorial-openshift-login" >}}
+{{% tab "Bash" %}}
+```bash
+# One command regardless of auth type -- scafctl detects and routes
+scafctl kube login mycluster --server https://api.mycluster.example.com:6443
+#   oauth cluster   -> browser web login via the openshift handler
+#   oidc cluster    -> entra handler, cluster-scoped token
+
+# OIDC cluster reached directly needs an audience to scope the token
+scafctl kube login --server https://api.mycluster.example.com:6443 \
+  --audience api://mycluster-client-id/.default
+
+kubectl get pods   # kubectl calls scafctl for a fresh token
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# One command regardless of auth type -- scafctl detects and routes
+scafctl kube login mycluster --server https://api.mycluster.example.com:6443
+
+# OIDC cluster reached directly needs an audience to scope the token
+scafctl kube login --server https://api.mycluster.example.com:6443 `
+  --audience api://mycluster-client-id/.default
+
+kubectl get pods   # kubectl calls scafctl for a fresh token
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+The routing is a fallback only: an explicit `--handler` and a resolver-supplied
+`defaultHandler` both win over the detected auth type, so a fleet inventory can
+stamp `defaultHandler` / `authType` / `audience` on every entry and users just
+run `kube login <cluster>`. When an OIDC cluster is auto-routed to `entra` but
+no audience is available, login fails fast asking for `--audience` rather than
+writing a kubeconfig entry that cannot authenticate.
+
+Once logged in, the OpenShift integrated image registry is served through
+scafctl's credential helper, so `docker`/`podman` pulls fetch fresh tokens
+without a separate `docker login`:
+
+{{< tabs "auth-tutorial-openshift-registry" >}}
+{{% tab "Bash" %}}
+```bash
+# Pull from the OpenShift integrated registry via the credential helper
+podman pull default-route-openshift-image-registry.mycluster/myns/myimage
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Pull from the OpenShift integrated registry via the credential helper
+podman pull default-route-openshift-image-registry.mycluster/myns/myimage
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+scafctl infers the `openshift` handler for the default registry route
+(`default-route-openshift-image-registry.*`) and the in-cluster service host
+(`image-registry.openshift-image-registry.svc*`). For a custom or renamed
+registry route, add a `customOAuth2` registry mapping (see
+[Custom OAuth2 registries](gcp-custom-oauth-tutorial.md)).
+
 ### Decoding the JWT (Header + Payload)
 
 Use `--decode` to inspect the full JWT structure -- both the **header** and the **payload** -- without needing an external decoder tool. Signature validation is intentionally skipped; this is for debugging only:
@@ -3113,13 +3193,64 @@ Custom handlers support all three OAuth2 flows:
 For advanced configurations including token exchange and identity
 verification, see [examples/auth/custom-oauth2-config.md](https://github.com/oakwood-commons/scafctl/blob/main/examples/auth/custom-oauth2-config.md).
 
+### Pinning an External Plugin Handler (`auth.handlers.<name>.plugin`)
+
+The `customOAuth2` block above adds a handler using scafctl's built-in generic
+OAuth2 engine -- no plugin binary required. When you instead need a *plugin* auth
+handler (a standalone gRPC binary -- e.g. written in another language, or with
+logic the generic engine can't express), pin it to a name under
+`auth.handlers.<name>.plugin`. scafctl auto-fetches the plugin from a configured
+catalog on first use. Neither approach requires recompiling scafctl:
+
+```yaml
+catalogs:
+  - name: acme
+    type: oci
+    url: oci://ghcr.io/acme/scafctl-handlers
+
+auth:
+  handlers:
+    acme:
+      plugin:
+        ref: acme-auth        # catalog artifact name (defaults to the handler name)
+        version: ">=1.0.0"    # semver constraint or "latest" (the default)
+      # Third-party handlers do not inherit the official trusted domains, so
+      # declare any device-code verification domains explicitly:
+      trustedVerificationDomains:
+        - login.acme.example.com
+      # Any other keys are forwarded opaquely to the plugin as its settings:
+      tenantId: "..."
+```
+
+Then it behaves like any other handler:
+
+```bash
+scafctl auth login acme
+scafctl auth status acme
+```
+
+Notes:
+
+- **Precedence.** A config pin wins over the built-in official manifest, so
+  `auth.handlers.github.plugin` repoints the `github` name at your own artifact.
+  (Unlike a `customOAuth2` entry -- which may not reuse a reserved official name
+  such as `github`, `gcp`, `entra`, or `openshift` -- a deliberate plugin pin is
+  allowed to override one.)
+- **Bare names work too.** If the artifact name matches the handler name, you can
+  skip the pin and just reference the name; scafctl auto-fetches it from your
+  configured catalogs. The pin is only needed to fix a `ref`/`version` or to
+  alias a differently named artifact.
+- **Policy switches.** `settings.disableThirdPartyAuthHandlers` blocks catalog
+  and config-pin resolution; `settings.disableOfficialAuthHandlers` blocks the
+  built-in official manifest.
+
 ---
 
 ## Handler Lifecycle Management
 
-Official auth handlers (github, gcp, entra) are delivered as plugin binaries and
-downloaded automatically on first use (e.g., during `scafctl auth login github`).
-You can also manage them explicitly.
+Official auth handlers (github, gcp, entra, openshift) are delivered as plugin
+binaries and downloaded automatically on first use (e.g., during `scafctl auth
+login github`). You can also manage them explicitly.
 
 ### Listing Available Handlers
 

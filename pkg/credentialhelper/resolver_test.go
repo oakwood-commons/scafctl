@@ -285,6 +285,21 @@ func TestAuthTokenResolver_Resolve(t *testing.T) {
 		assert.Contains(t, err.Error(), "not available")
 	})
 
+	t.Run("openshift integrated registry infers openshift handler", func(t *testing.T) {
+		t.Parallel()
+		handler := &mockAuthHandler{
+			name:   "openshift",
+			claims: &auth.Claims{Username: "developer"},
+		}
+		ctx, registry := configureAuthRegistry(t, context.Background(), handler)
+
+		resolver := NewAuthTokenResolver(registry)
+		cred, err := resolver.Resolve(ctx, "default-route-openshift-image-registry.apps.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "developer", cred.Username)
+		assert.Equal(t, "fresh-access-token", cred.Secret)
+	})
+
 	t.Run("handler token error returns error", func(t *testing.T) {
 		t.Parallel()
 		handler := &mockAuthHandler{
