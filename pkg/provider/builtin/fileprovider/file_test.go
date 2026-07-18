@@ -113,6 +113,332 @@ func TestFileProvider_Execute_Read_Directory(t *testing.T) {
 	assert.Contains(t, err.Error(), "is a directory")
 }
 
+func TestFileProvider_Execute_Read_Parse(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		parse   string
+		assert  func(t *testing.T, object any)
+	}{
+		{
+			name:    "yaml object",
+			content: "name: John\nage: 30\n",
+			parse:   "yaml",
+			assert: func(t *testing.T, object any) {
+				m, ok := object.(map[string]any)
+				require.True(t, ok, "expected map, got %T", object)
+				assert.Equal(t, "John", m["name"])
+				assert.Equal(t, 30, m["age"])
+			},
+		},
+		{
+			name:    "json object",
+			content: `{"name":"John","age":30}`,
+			parse:   "json",
+			assert: func(t *testing.T, object any) {
+				m, ok := object.(map[string]any)
+				require.True(t, ok, "expected map, got %T", object)
+				assert.Equal(t, "John", m["name"])
+				assert.InEpsilon(t, 30.0, m["age"], 0.0001)
+			},
+		},
+		{
+			name:    "yaml array",
+			content: "- apple\n- banana\n- cherry\n",
+			parse:   "yaml",
+			assert: func(t *testing.T, object any) {
+				arr, ok := object.([]any)
+				require.True(t, ok, "expected slice, got %T", object)
+				assert.Equal(t, []any{"apple", "banana", "cherry"}, arr)
+			},
+		},
+		{
+			name:    "auto parses json content with unknown extension",
+			content: `{"key":"value"}`,
+			parse:   "auto",
+			assert: func(t *testing.T, object any) {
+				m, ok := object.(map[string]any)
+				require.True(t, ok, "expected map, got %T", object)
+				assert.Equal(t, "value", m["key"])
+			},
+		},
+		{
+			name:    "auto parses yaml content with unknown extension",
+			content: "key: value\n",
+			parse:   "auto",
+			assert: func(t *testing.T, object any) {
+				m, ok := object.(map[string]any)
+				require.True(t, ok, "expected map, got %T", object)
+				assert.Equal(t, "value", m["key"])
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewFileProvider()
+			tmpFile, err := os.CreateTemp("", "test-parse-*.txt")
+			require.NoError(t, err)
+			defer os.Remove(tmpFile.Name())
+			_, err = tmpFile.WriteString(tt.content)
+			require.NoError(t, err)
+			require.NoError(t, tmpFile.Close())
+
+			result, err := p.Execute(context.Background(), map[string]any{
+				"operation": "read",
+				"path":      tmpFile.Name(),
+				"parse":     tt.parse,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			data := result.Data.(map[string]any)
+			// Raw content is always preserved alongside the parsed object.
+			assert.Equal(t, tt.content, data["content"])
+			tt.assert(t, data["object"])
+		})
+	}
+}
+
+func TestFileProvider_Execute_Read_Parse_MalformedFailsLoud(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		parse   string
+	}{
+		{name: "invalid json", content: "{not json", parse: "json"},
+		{name: "invalid yaml", content: "key: value\n\t- bad: indent", parse: "yaml"},
+		{name: "auto neither", content: "{not: valid: json: or: yaml", parse: "auto"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewFileProvider()
+			tmpFile, err := os.CreateTemp("", "test-parse-bad-*.txt")
+			require.NoError(t, err)
+			defer os.Remove(tmpFile.Name())
+			_, err = tmpFile.WriteString(tt.content)
+			require.NoError(t, err)
+			require.NoError(t, tmpFile.Close())
+
+			result, err := p.Execute(context.Background(), map[string]any{
+				"operation": "read",
+				"path":      tmpFile.Name(),
+				"parse":     tt.parse,
+			})
+
+			require.Error(t, err)
+			assert.Nil(t, result)
+			assert.Contains(t, err.Error(), "failed to parse file")
+		})
+	}
+}
+
+func TestFileProvider_Execute_Read_Parse_OmittedReturnsRawOnly(t *testing.T) {
+	p := NewFileProvider()
+	tmpFile, err := os.CreateTemp("", "test-noparse-*.yaml")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	content := "name: John\n"
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	result, err := p.Execute(context.Background(), map[string]any{
+		"operation": "read",
+		"path":      tmpFile.Name(),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.Equal(t, content, data["content"])
+	_, hasObject := data["object"]
+	assert.False(t, hasObject, "object should be absent when parse is omitted")
+}
+
+func TestFileProvider_Execute_Read_Parse_SkippedForBinary(t *testing.T) {
+	p := NewFileProvider()
+	tmpFile, err := os.CreateTemp("", "test-binary-*.bin")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	content := "name: John\n"
+	_, err = tmpFile.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	result, err := p.Execute(context.Background(), map[string]any{
+		"operation": "read",
+		"path":      tmpFile.Name(),
+		"parse":     "yaml",
+		"encoding":  "binary",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	_, hasObject := data["object"]
+	assert.False(t, hasObject, "object should be absent for binary encoding")
+}
+
+func TestFileProvider_Execute_Read_Parse_TransformMode(t *testing.T) {
+	// executeRead runs for both From and Transform capabilities, so the parsed
+	// object must be produced (and is schema-declared) in transform mode too.
+	p := NewFileProvider()
+	tmpFile, err := os.CreateTemp("", "test-parse-transform-*.yaml")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.WriteString("name: John\n")
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	ctx := provider.WithExecutionMode(context.Background(), provider.CapabilityTransform)
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "read",
+		"path":      tmpFile.Name(),
+		"parse":     "yaml",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	m, ok := data["object"].(map[string]any)
+	require.True(t, ok, "expected parsed object in transform mode, got %T", data["object"])
+	assert.Equal(t, "John", m["name"])
+
+	// The transform output schema must declare the object field it can return.
+	transformSchema := p.Descriptor().OutputSchemas[provider.CapabilityTransform]
+	require.NotNil(t, transformSchema)
+	assert.Contains(t, transformSchema.Properties, "object")
+}
+
+func TestFileProvider_Execute_DryRun_Read_Parse(t *testing.T) {
+	p := NewFileProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "read",
+		"path":      "/some/path.yaml",
+		"parse":     "yaml",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["_dryRun"].(bool))
+	object, hasObject := data["object"]
+	assert.True(t, hasObject, "object key should be present in dry-run when parse is set")
+	assert.Nil(t, object)
+}
+
+func TestFileProvider_Execute_DryRun_Read_Parse_SkippedForBinary(t *testing.T) {
+	// Dry-run must match real read: parsing is skipped for binary encoding, so
+	// the object key is omitted rather than set to nil.
+	p := NewFileProvider()
+	ctx := provider.WithDryRun(context.Background(), true)
+
+	result, err := p.Execute(ctx, map[string]any{
+		"operation": "read",
+		"path":      "/some/path.bin",
+		"parse":     "yaml",
+		"encoding":  "binary",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	data := result.Data.(map[string]any)
+	assert.True(t, data["_dryRun"].(bool))
+	_, hasObject := data["object"]
+	assert.False(t, hasObject, "object should be absent in dry-run for binary encoding")
+}
+
+func TestParseContent(t *testing.T) {
+	t.Run("unsupported mode returns error", func(t *testing.T) {
+		object, err := parseContent([]byte("anything"), "xml", "")
+		require.Error(t, err)
+		assert.Nil(t, object)
+		assert.Contains(t, err.Error(), "unsupported parse mode")
+	})
+
+	t.Run("empty mode returns error", func(t *testing.T) {
+		_, err := parseContent([]byte("anything"), "", "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported parse mode")
+	})
+}
+
+func TestParseContent_AutoExtensionAware(t *testing.T) {
+	// A file whose content is valid in both formats: the extension decides which
+	// decoder wins, which affects numeric typing (JSON -> float64, YAML -> int).
+	jsonish := []byte(`{"age": 30}`)
+
+	t.Run(".json extension uses JSON decoder", func(t *testing.T) {
+		object, err := parseContent(jsonish, "auto", ".json")
+		require.NoError(t, err)
+		m := object.(map[string]any)
+		assert.IsType(t, float64(0), m["age"], "JSON decoder yields float64")
+	})
+
+	t.Run(".yaml extension uses YAML decoder", func(t *testing.T) {
+		object, err := parseContent([]byte("age: 30\n"), "auto", ".yaml")
+		require.NoError(t, err)
+		m := object.(map[string]any)
+		assert.Equal(t, 30, m["age"], "YAML decoder yields int")
+	})
+
+	t.Run(".yml extension uses YAML decoder", func(t *testing.T) {
+		object, err := parseContent([]byte("age: 30\n"), "auto", ".yml")
+		require.NoError(t, err)
+		m := object.(map[string]any)
+		assert.Equal(t, 30, m["age"])
+	})
+
+	t.Run("unknown extension sniffs YAML first", func(t *testing.T) {
+		// JSON content with an unrecognized extension: YAML (a JSON superset)
+		// parses it, decoding the integer as int.
+		object, err := parseContent(jsonish, "auto", ".txt")
+		require.NoError(t, err)
+		m := object.(map[string]any)
+		assert.Equal(t, 30, m["age"])
+	})
+
+	t.Run("mislabeled extension falls back to other decoder", func(t *testing.T) {
+		// A .json file that actually contains YAML still parses via the fallback.
+		object, err := parseContent([]byte("age: 30\n"), "auto", ".json")
+		require.NoError(t, err)
+		m := object.(map[string]any)
+		assert.Equal(t, 30, m["age"])
+	})
+
+	t.Run("invalid in both formats returns error", func(t *testing.T) {
+		_, err := parseContent([]byte("{not: valid: json: or: yaml"), "auto", ".json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "neither valid JSON nor YAML")
+	})
+}
+
+func TestFileProvider_Execute_Read_Parse_AutoUsesExtension(t *testing.T) {
+	// End-to-end: executeRead derives the extension from the file path.
+	p := NewFileProvider()
+	tmpFile, err := os.CreateTemp("", "test-auto-*.yaml")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.WriteString("age: 30\n")
+	require.NoError(t, err)
+	require.NoError(t, tmpFile.Close())
+
+	result, err := p.Execute(context.Background(), map[string]any{
+		"operation": "read",
+		"path":      tmpFile.Name(),
+		"parse":     "auto",
+	})
+
+	require.NoError(t, err)
+	data := result.Data.(map[string]any)
+	m := data["object"].(map[string]any)
+	assert.Equal(t, 30, m["age"], "auto should use the .yaml extension's YAML decoder")
+}
+
 func TestFileProvider_Execute_Write_Success(t *testing.T) {
 	p := NewFileProvider()
 

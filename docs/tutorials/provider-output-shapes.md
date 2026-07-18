@@ -159,7 +159,8 @@ Returns file content, or for `write-tree`, information about written files.
 
 | Capability | Fields | Type | Description |
 |-----------|--------|------|-------------|
-| from | `content` | string | Raw file content |
+| from / transform | `content` | string | Raw file content |
+| | `object` | any | Parsed content (only when the `parse` input is set to `json`, `yaml`, or `auto`) |
 | | `path` | string | Resolved file path |
 | | `size` | int | File size in bytes |
 | action (`write-tree`) | `success` | bool | Whether all files were written |
