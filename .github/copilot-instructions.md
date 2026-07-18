@@ -43,7 +43,7 @@ The project uses `task` (go-task/task) for builds and linting. **Always use `tas
 - **After any change**: Run `task test:e2e` to ensure everything passes. E2E is slow -- run it **once**, redirect output to a file (`task test:e2e 2>&1 | tee /tmp/e2e-results.txt`), and grep the file to check results. Never re-run just to read output differently.
 - **Test coverage**: Every new or changed file must have tests. Target 70%+ patch coverage. Never submit a new file with 0% test coverage
 - **No magic values**: Always define constants or use settings for configuration values
-- **Git safety**: The AI may commit/push, but must **ask for approval first** every time (never commit/push/amend without explicit per-action approval). Before committing, verify a signing key is loaded (`ssh-add -l`); if none is loaded, prompt the user to run `ssh-add --apple-use-keychain ~/.ssh/id_ecdsa_public_github` (drop the flag on non-macOS; on Windows first `Start-Service ssh-agent` in PowerShell) rather than attempting a doomed commit. All commits must be signed (`-S`) and DCO signed-off (`-s`). See `AGENTS.md` for details.
+- **Git safety**: The AI may commit, but must **ask for approval first** every time (never commit without explicit per-action approval); `git push` and `git commit --amend` are **denied** and run manually by the user. Before committing, verify a signing key is loaded (`ssh-add -l`); if none is loaded, prompt the user to run `ssh-add --apple-use-keychain ~/.ssh/id_ecdsa_public_github` (drop the flag on non-macOS; on Windows first `Start-Service ssh-agent` in PowerShell) rather than attempting a doomed commit. All commits must be signed (`-S`) and DCO signed-off (`-s`). See `AGENTS.md` for details.
 
 ## Embedder Contract
 

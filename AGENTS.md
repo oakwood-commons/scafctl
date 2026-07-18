@@ -9,11 +9,13 @@ auto-loaded by opencode via `opencode.json`:
 
 ## Git safety & commit signing
 
-The AI **may** create commits and push, but must follow these rules:
+The AI **may** create commits (with approval), but must follow these rules:
 
-1. **Always ask first.** Never run `git commit`, `git push`, or
-   `git commit --amend` without explicit user approval for that action.
-   (Enforced as `ask` in `opencode.json`.)
+1. **Commits are ask-gated; push and amend are blocked.** The AI may run
+   `git commit` only after explicit per-action user approval. `git push` and
+   `git commit --amend` are **denied** outright -- the user runs those manually.
+   (Enforced in `opencode.json`: `git commit *` -> `ask`, `git push *` ->
+   `deny`, `git commit --amend *` -> `deny`.)
 2. **Commits must be signed AND DCO signed-off.**
    - The repo sets `commit.gpgsign=true` (SSH signing).
    - The DCO check requires a `Signed-off-by:` trailer, so always commit with
