@@ -19,7 +19,7 @@ The design is layered by dependency weight so each phase ships independently:
 | 1a | Handler-agnostic exec-credential output on `auth token` | core (`pkg/auth/execcredential`) | Shipped |
 | 1b | `ClusterResolver` interface + `RootOptions` hook | core (`pkg/kube`) | Shipped |
 | 2a | Kubeconfig provider capability contract + host-side manager | core (`pkg/kubeconfig`, `CapabilityKubeconfig`) | Shipped |
-| 2b | Kubeconfig provider plugin implementation (`client-go`/`clientcmd`) | plugin | Planned |
+| 2b | Kubeconfig provider plugin implementation (`client-go`/`clientcmd`) | plugin ([`scafctl-plugin-kubeconfig`](https://github.com/oakwood-commons/scafctl-plugin-kubeconfig)) | Shipped |
 | 3 | Thin `kube login` / `kube logout` commands | core (`pkg/kube/login`, `pkg/cmd/scafctl/kube`) | Shipped |
 | 4 | OpenShift OAuth auth-handler plugin + two-path routing | plugin + core (`pkg/kube/login`, `pkg/catalog`, `pkg/auth/official`) | Shipped |
 | 5 | Multi-cluster per-cluster token routing on the exec-credential path | core (`pkg/auth/execcredential`, `pkg/cmd/scafctl/auth`, `pkg/kube/login`) + SDK `CapTokenHostname` | Shipped |
@@ -186,11 +186,12 @@ with no resolver involved.
   `detect_auth_type`, `reachable`, `whoami` -- each returning `success: boolean`.
   No `client-go` enters core; the manager resolves and drives the external
   plugin over the existing provider RPC.
-- **Phase 2b -- Kubeconfig provider plugin implementation (Planned).** Carries
-  `client-go`/`clientcmd`. Merges/writes the kubeconfig cluster, user, and
-  context with an `ExecConfig` credential plugin; implements `DetectAuthType`,
-  `CheckAPIServerReachable` (`/healthz`), and `Whoami` (SelfSubjectReview).
-  Vendor-neutral; reused by both OIDC and OpenShift paths.
+- **Phase 2b -- Kubeconfig provider plugin implementation (Shipped).** Lives in
+  the [`scafctl-plugin-kubeconfig`](https://github.com/oakwood-commons/scafctl-plugin-kubeconfig)
+  repository. Carries `client-go`/`clientcmd`. Merges/writes the kubeconfig
+  cluster, user, and context with an `ExecConfig` credential plugin; implements
+  `DetectAuthType`, `CheckAPIServerReachable` (`/healthz`), and `Whoami`
+  (SelfSubjectReview). Vendor-neutral; reused by both OIDC and OpenShift paths.
 - **Phase 3 -- `kube login` / `kube logout` commands (Shipped).**
   Orchestration only, in `pkg/kube/login` (domain) with thin CLI wiring in
   `pkg/cmd/scafctl/kube`: run the handler login to mint a token, then delegate
