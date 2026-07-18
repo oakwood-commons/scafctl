@@ -20,12 +20,25 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
+	yaml "gopkg.in/yaml.v3"
 
 	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 )
 
 // ProviderName is the name of this provider.
 const ProviderName = "file"
+
+// Parse modes for the read operation's optional parse input. These constants
+// back both the input schema enum and the parseContent switch so the two
+// cannot drift apart.
+const (
+	parseModeJSON = "json"
+	parseModeYAML = "yaml"
+	parseModeAuto = "auto"
+)
+
+// encodingBinary is the encoding value for which structured parsing is skipped.
+const encodingBinary = "binary"
 
 // FileProvider provides filesystem operations.
 type FileProvider struct {
@@ -97,6 +110,14 @@ func NewFileProvider() *FileProvider {
 					schemahelper.WithExample("utf-8"),
 					schemahelper.WithDefault("utf-8"),
 					schemahelper.WithEnum("utf-8", "binary")),
+				"parse": schemahelper.StringProp("Parse the file content into a structured object (read operation). "+
+					"When set, the parsed value is returned in the 'object' output field alongside the raw 'content'. "+
+					"json: parse as JSON. yaml: parse as YAML. auto: pick the decoder from the file extension "+
+					"(.json, .yaml, .yml), falling back to content sniffing (YAML then JSON) for other extensions. "+
+					"Malformed content returns an error. When omitted, only the raw string 'content' is returned. "+
+					"Ignored when encoding is binary.",
+					schemahelper.WithExample(parseModeAuto),
+					schemahelper.WithEnum(parseModeJSON, parseModeYAML, parseModeAuto)),
 				"basePath": schemahelper.StringProp("Destination root directory (required for write-tree operation). Entries are written relative to this path.",
 					schemahelper.WithExample("./output"),
 					schemahelper.WithMaxLength(4096)),
@@ -169,12 +190,14 @@ func NewFileProvider() *FileProvider {
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"content": schemahelper.StringProp("File content (for read operation)"),
+					"object":  schemahelper.AnyProp("Parsed content as a structured object (read operation, only present when the parse input is set)"),
 					"exists":  schemahelper.BoolProp("Whether the file exists (for exists operation)"),
 					"path":    schemahelper.StringProp("Absolute path to the file"),
 					"size":    schemahelper.IntProp("File size in bytes (for read operation)"),
 				}),
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"content": schemahelper.StringProp("File content (for read operation)"),
+					"object":  schemahelper.AnyProp("Parsed content as a structured object (read operation, only present when the parse input is set)"),
 					"path":    schemahelper.StringProp("Absolute path to the file"),
 					"size":    schemahelper.IntProp("File size in bytes"),
 				}),
@@ -217,6 +240,16 @@ provider: file
 inputs:
   operation: read
   path: ./config.yaml`,
+				},
+				{
+					Name:        "Read and parse structured data",
+					Description: "Read a file and parse its content into a structured object. The parsed value is available in the 'object' output field (e.g. _.read-config.object), removing the need for a separate CEL json.unmarshal/yaml.unmarshal resolver. Use parse: json, yaml, or auto.",
+					YAML: `name: read-config
+provider: file
+inputs:
+  operation: read
+  path: ./config.yaml
+  parse: yaml`,
 				},
 				{
 					Name:        "Write file",
@@ -397,7 +430,7 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 	var result *provider.Output
 	switch operation {
 	case "read":
-		result, err = p.executeRead(absPath)
+		result, err = p.executeRead(absPath, inputs)
 	case "write":
 		result, err = p.executeWrite(ctx, absPath, inputs)
 	case "exists":
@@ -416,7 +449,7 @@ func (p *FileProvider) Execute(ctx context.Context, input any) (*provider.Output
 	return result, nil
 }
 
-func (p *FileProvider) executeRead(absPath string) (*provider.Output, error) {
+func (p *FileProvider) executeRead(absPath string, inputs map[string]any) (*provider.Output, error) {
 	// Check if file exists
 	info, err := os.Stat(absPath)
 	if err != nil {
@@ -436,13 +469,76 @@ func (p *FileProvider) executeRead(absPath string) (*provider.Output, error) {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	return &provider.Output{
-		Data: map[string]any{
-			"content": string(content),
-			"path":    absPath,
-			"size":    info.Size(),
-		},
-	}, nil
+	data := map[string]any{
+		"content": string(content),
+		"path":    absPath,
+		"size":    info.Size(),
+	}
+
+	// Optionally parse the content into a structured object. Parsing is
+	// opt-in via the parse input and fails loudly on malformed content.
+	// It is skipped for binary encoding, where structured parsing is meaningless.
+	parseMode, _ := inputs["parse"].(string)
+	encoding, _ := inputs["encoding"].(string)
+	if parseMode != "" && encoding != encodingBinary {
+		ext := strings.ToLower(filepath.Ext(absPath))
+		object, err := parseContent(content, parseMode, ext)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse file %s as %s: %w", absPath, parseMode, err)
+		}
+		data["object"] = object
+	}
+
+	return &provider.Output{Data: data}, nil
+}
+
+// parseContent decodes raw file content into a structured value according to
+// the requested parse mode: "json", "yaml", or "auto". In auto mode the file
+// extension selects the preferred decoder (.json -> JSON, .yaml/.yml -> YAML)
+// and the other decoder is tried as a fallback, so mislabeled or extensionless
+// files still parse when possible.
+func parseContent(content []byte, mode, ext string) (any, error) {
+	switch mode {
+	case parseModeJSON:
+		var object any
+		if err := json.Unmarshal(content, &object); err != nil {
+			return nil, err
+		}
+		return object, nil
+	case parseModeYAML:
+		var object any
+		if err := yaml.Unmarshal(content, &object); err != nil {
+			return nil, err
+		}
+		return object, nil
+	case parseModeAuto:
+		return parseAuto(content, ext)
+	default:
+		return nil, fmt.Errorf("unsupported parse mode: %q (expected json, yaml, or auto)", mode)
+	}
+}
+
+// unmarshalFunc matches the signature of json.Unmarshal and yaml.Unmarshal.
+type unmarshalFunc func([]byte, any) error
+
+// parseAuto parses content with the decoder preferred by the file extension,
+// falling back to the other decoder. Unknown or absent extensions try YAML
+// first (a superset of JSON), matching the parameter-file loader convention.
+func parseAuto(content []byte, ext string) (any, error) {
+	decoders := []unmarshalFunc{yaml.Unmarshal, json.Unmarshal}
+	if ext == ".json" {
+		decoders = []unmarshalFunc{json.Unmarshal, yaml.Unmarshal}
+	}
+	var lastErr error
+	for _, decode := range decoders {
+		var object any
+		err := decode(content, &object)
+		if err == nil {
+			return object, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("content is neither valid JSON nor YAML: %w", lastErr)
 }
 
 func (p *FileProvider) executeWrite(ctx context.Context, absPath string, inputs map[string]any) (*provider.Output, error) {
@@ -1154,15 +1250,21 @@ func (p *FileProvider) executeDryRunWriteTree(ctx context.Context, absBasePath s
 func (p *FileProvider) executeDryRun(ctx context.Context, operation, absPath string, inputs map[string]any) (*provider.Output, error) {
 	switch operation {
 	case "read":
-		return &provider.Output{
-			Data: map[string]any{
-				"content":  "[DRY RUN] Would read file content",
-				"path":     absPath,
-				"size":     0,
-				"_dryRun":  true,
-				"_message": fmt.Sprintf("Would read file: %s", absPath),
-			},
-		}, nil
+		data := map[string]any{
+			"content":  "[DRY RUN] Would read file content",
+			"path":     absPath,
+			"size":     0,
+			"_dryRun":  true,
+			"_message": fmt.Sprintf("Would read file: %s", absPath),
+		}
+		// Mirror executeRead: parsing (and thus the object field) is skipped for
+		// binary encoding, so dry-run output stays consistent with real output.
+		parseMode, _ := inputs["parse"].(string)
+		encoding, _ := inputs["encoding"].(string)
+		if parseMode != "" && encoding != encodingBinary {
+			data["object"] = nil
+		}
+		return &provider.Output{Data: data}, nil
 
 	case "write":
 		content, ok := inputs["content"].(string)

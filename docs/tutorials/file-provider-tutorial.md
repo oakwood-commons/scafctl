@@ -78,6 +78,79 @@ Output:
 }
 ```
 
+### Parsing Structured Content
+
+By default `read` returns the file body as a raw string in `content`. To work with
+the data as a structured object, set the `parse` input. The parsed value is
+returned in an additional `object` field, so you do not need a separate CEL
+`json.unmarshal` / `yaml.unmarshal` resolver.
+
+Reach for `parse: auto` in most cases -- it picks the decoder from the file
+extension (`.json`, `.yaml`, `.yml`), so you never hand-pick the format:
+
+```yaml
+spec:
+  resolvers:
+    config:
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: config.yaml
+              parse: auto   # decoder chosen from the .yaml extension
+```
+
+Output (raw `content` is still present alongside the parsed `object`):
+
+```json
+{
+  "config": {
+    "content": "name: my-project\nversion: 1.0.0\n",
+    "object": { "name": "my-project", "version": "1.0.0" },
+    "path": "/abs/path/to/config.yaml"
+  }
+}
+```
+
+Downstream resolvers then read fields directly, e.g. `_.config.object.version`.
+
+#### Forcing a decoder
+
+Use an explicit `parse: yaml` (or `parse: json`) when the extension cannot be
+trusted -- for example a file with no data extension, or one named `.conf`,
+`.txt`, or similar that actually holds YAML:
+
+```yaml
+spec:
+  resolvers:
+    settings:
+      type: any
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: settings.conf   # holds YAML, but the extension won't reveal it
+              parse: yaml
+```
+
+Accepted `parse` values:
+
+| Value | Behavior |
+|-------|----------|
+| `json` | Parse content as JSON. |
+| `yaml` | Parse content as YAML. |
+| `auto` | Pick the decoder from the file extension (`.json`, `.yaml`, `.yml`); fall back to content sniffing (YAML then JSON) for other extensions. |
+| (omitted) | Return raw string `content` only (default). |
+
+Parsing fails loudly: malformed content returns an error rather than a silent
+`nil`. `parse` is ignored when `encoding` is `binary`. Note that `json` decodes
+numbers as floating point while `yaml` decodes integers as integers; in `auto`
+mode the winning decoder (chosen by extension) determines the numeric type --
+relevant for exact numeric comparisons in CEL.
+
 ---
 
 ## Writing Files

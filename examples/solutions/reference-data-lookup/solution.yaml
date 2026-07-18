@@ -20,7 +20,7 @@ metadata:
 
     Demonstrates the three canonical source patterns:
       1. Inline table via the `static` provider + keyed CEL lookup.
-      2. Local dataset file via the `file` provider (`read`) + `json.unmarshal`.
+      2. Local dataset file via the `file` provider (`read` with `parse: json`).
       3. Safe lookups that fall back to a default when the key is absent.
 
     A remote/HTTP dataset follows the same shape with `provider: http` in place
@@ -85,12 +85,13 @@ spec:
               expression: _.regionRecord.code
 
     # ─────────────────────────────────────────────
-    # Pattern 2: Local dataset file (file read + json.unmarshal)
+    # Pattern 2: Local dataset file (file read with parse)
     # ─────────────────────────────────────────────
-    # Read a curated JSON file, then parse and query it with CEL. Best when the
-    # taxonomy is large, shared across solutions, or maintained separately.
+    # Read a curated JSON file and parse it in one step via the file provider's
+    # parse input. Best when the taxonomy is large, shared across solutions, or
+    # maintained separately.
     regionsFile:
-      description: Raw contents of the curated regions.json dataset
+      description: Parsed contents of the curated regions.json dataset
       type: any
       resolve:
         with:
@@ -98,8 +99,11 @@ spec:
             inputs:
               operation: read
               path: regions.json
+              parse: json
 
-    # Parse the file content, then look up the same key with a safe default.
+    # Look up the key with a safe default. The dataset is already parsed by the
+    # file provider (available as _.regionsFile.object), so no separate
+    # json.unmarshal resolver is needed.
     quota:
       description: Quota for `region`, read from the on-disk dataset
       type: number
@@ -108,6 +112,6 @@ spec:
           - provider: cel
             inputs:
               expression: >
-                cel.bind(t, json.unmarshal(_.regionsFile.content),
+                cel.bind(t, _.regionsFile.object,
                   _.region in t ? t[_.region].quota : 0
                 )

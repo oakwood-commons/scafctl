@@ -447,6 +447,7 @@ a tree of files.
 | `content` | string | ❌ | Content to write (required for `write`) |
 | `createDirs` | bool | ❌ | Create parent directories if missing (for `write`) |
 | `encoding` | string | ❌ | File encoding: `utf-8`, `binary` (default: `utf-8`) |
+| `parse` | string | ❌ | Parse file content into a structured `object` (for `read`): `json`, `yaml`, or `auto` (decoder chosen by file extension `.json`/`.yaml`/`.yml`, else content-sniffed). Malformed content errors. Omitted returns raw `content` only. Ignored when `encoding` is `binary`. |
 | `basePath` | string | ❌ | Destination root directory (required for `write-tree`) |
 | `entries` | array | ❌ | Array of `{path, content}` objects (required for `write-tree`) |
 | `outputPath` | string | ❌ | Go template to transform each entry's path before writing (`write-tree` only). Available variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`. Sprig functions supported. |
@@ -456,6 +457,7 @@ a tree of files.
 | Field | Type | Description |
 |-------|------|-------------|
 | `content` | string | File content (for `read`) |
+| `object` | any | Parsed content (for `read`, only when `parse` is set) |
 | `exists` | bool | Whether file exists |
 | `size` | int | File size in bytes |
 | `success` | bool | Operation success (action only) |
