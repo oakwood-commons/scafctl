@@ -44,6 +44,36 @@ spec:
               operation: read
               path: ./test-data.json
 
+    parseJson:
+      description: Read and parse a JSON fixture file into a structured object
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./test-data.json
+              parse: json
+
+    parseYaml:
+      description: Read and parse a YAML fixture into a structured object (JSON is valid YAML)
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./test-data.json
+              parse: yaml
+
+    parseAuto:
+      description: Read and auto-parse a fixture, selecting the decoder by file extension
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./test-data.json
+              parse: auto
+
   testing:
     config:
       # resolve-defaults: resolvers read fixture files that only exist via test init steps
@@ -106,3 +136,50 @@ spec:
         assertions:
           - expression: '__output.readJson.content.contains("key")'
           - expression: '__output.readJson.content.contains("value")'
+
+      parse-json-object:
+        description: Verify parse:json returns a structured object alongside raw content
+        extends: [_base]
+        init:
+          - command: "echo -n 'dummy' > test-fixture.txt"
+          - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: '__output.parseJson.object.key == "value"'
+            message: "Parsed object should expose nested fields"
+          - expression: '__output.parseJson.object.count == 42'
+            message: "Parsed object should preserve numeric values"
+          - expression: '__output.parseJson.content.contains("key")'
+            message: "Raw content should still be present alongside object"
+
+      parse-yaml-object:
+        description: Verify parse:yaml returns a structured object
+        extends: [_base]
+        init:
+          - command: "echo -n 'dummy' > test-fixture.txt"
+          - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: '__output.parseYaml.object.key == "value"'
+            message: "Parsed YAML object should expose mapping fields"
+          - expression: '__output.parseYaml.object.count == 42'
+            message: "Parsed YAML object should preserve numeric values"
+
+      parse-auto-by-extension:
+        description: Verify parse:auto selects the decoder from the .json extension
+        extends: [_base]
+        init:
+          - command: "echo -n 'dummy' > test-fixture.txt"
+          - command: 'echo -n ''{"key":"value","count":42}'' > test-data.json'
+        cleanup:
+          - command: "rm -f test-fixture.txt test-data.json"
+        assertions:
+          - expression: '__output.parseAuto.object.key == "value"'
+            message: "auto should parse the .json fixture into an object"
+          - expression: '__output.parseAuto.object.count == 42'
+            message: "auto should expose numeric fields"
+
+
+

@@ -108,7 +108,7 @@ Given `regions.json`:
 }
 ~~~
 
-Read it, then parse and query with CEL:
+Read and parse it in one step, then query with CEL:
 
 ~~~yaml
 spec:
@@ -124,7 +124,7 @@ spec:
             inputs:
               value: us-east
 
-    # `file` read returns an object; access the file body via `.content`.
+    # `file` read with `parse: json` returns the parsed value in `.object`.
     regionsFile:
       type: any
       resolve:
@@ -133,8 +133,9 @@ spec:
             inputs:
               operation: read
               path: regions.json
+              parse: json
 
-    # Parse once with cel.bind, then look up the key with a safe default.
+    # Bind the parsed object once, then look up the key with a safe default.
     quota:
       type: number
       resolve:
@@ -142,13 +143,14 @@ spec:
           - provider: cel
             inputs:
               expression: >
-                cel.bind(t, json.unmarshal(_.regionsFile.content),
+                cel.bind(t, _.regionsFile.object,
                   _.region in t ? t[_.region].quota : 0
                 )
 ~~~
 
-For a YAML dataset, swap `json.unmarshal` for `yaml.unmarshal`. The `file` read
-returns `{ content, path, size }`, so the payload is always at `.content`.
+For a YAML dataset, use `parse: yaml` instead. The `file` read returns
+`{ content, path, size }`, plus `object` (the parsed value) when `parse` is set;
+the raw text is always available at `.content`.
 
 ## Pattern 3: Remote Dataset
 
@@ -206,11 +208,11 @@ _.region in _.regionTable
   : {"code": "unknown", "quota": 0, "tier": "unknown"}
 ~~~
 
-When the source is a parsed file or HTTP body, bind the parsed value once with
-`cel.bind` so you do not unmarshal it twice:
+When the source is an already-parsed file object or an HTTP body, bind the
+value once with `cel.bind` so you do not unmarshal or re-reference it twice:
 
 ~~~cel
-cel.bind(t, json.unmarshal(_.regionsFile.content),
+cel.bind(t, _.regionsFile.object,
   _.region in t ? t[_.region].quota : 0
 )
 ~~~

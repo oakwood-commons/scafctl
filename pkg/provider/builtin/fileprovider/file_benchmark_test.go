@@ -34,6 +34,40 @@ func BenchmarkFileProvider_Execute_Read(b *testing.B) {
 	}
 }
 
+func BenchmarkFileProvider_Execute_Read_Parse(b *testing.B) {
+	yamlContent := []byte("name: John\nage: 30\ntags:\n  - a\n  - b\n  - c\n")
+
+	for _, mode := range []string{"json", "yaml", "auto"} {
+		b.Run(mode, func(b *testing.B) {
+			p := NewFileProvider()
+			tmpDir := b.TempDir()
+			testFile := filepath.Join(tmpDir, "bench-parse.yaml")
+			content := yamlContent
+			if mode == "json" {
+				content = []byte(`{"name":"John","age":30,"tags":["a","b","c"]}`)
+			}
+			if err := os.WriteFile(testFile, content, 0o600); err != nil {
+				b.Fatal(err)
+			}
+
+			ctx := provider.WithWorkingDirectory(context.Background(), tmpDir)
+			inputs := map[string]any{
+				"operation": "read",
+				"path":      testFile,
+				"parse":     mode,
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := p.Execute(ctx, inputs); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkFileProvider_Execute_Exists(b *testing.B) {
 	p := NewFileProvider()
 
