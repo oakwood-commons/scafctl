@@ -37,11 +37,11 @@ Present the user with:
 **Scope**:
 | Size | Description |
 |------|-------------|
-| **XS** | Trivial — config change, typo fix, single-line edit |
-| **S** | Small — isolated change in 1-2 files, < 1 hour |
-| **M** | Medium — touches multiple files/layers, < 1 day |
-| **L** | Large — cross-cutting change, new interfaces, multi-day |
-| **XL** | Extra large — architectural change, major refactor |
+| **XS** | Trivial -- config change, typo fix, single-line edit |
+| **S** | Small -- isolated change in 1-2 files, < 1 hour |
+| **M** | Medium -- touches multiple files/layers, < 1 day |
+| **L** | Large -- cross-cutting change, new interfaces, multi-day |
+| **XL** | Extra large -- architectural change, major refactor |
 
 **Affected areas**: Packages and layers impacted
 

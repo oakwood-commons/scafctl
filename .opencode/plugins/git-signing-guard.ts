@@ -30,22 +30,62 @@ export const GitSigningGuard: Plugin = async ({ $ }) => {
       const isCommit = /\bgit\b[^&|;]*\bcommit\b/.test(command)
       if (!isCommit) return
 
-      // Is any identity loaded in the ssh-agent?
-      let hasKey = false
+      // Enumerate identities currently loaded in the ssh-agent.
+      // exit 0 => at least one key; 1 => agent has no identities;
+      // 2 => cannot contact agent.
+      let agentList = ""
+      let agentHasAnyKey = false
       try {
         const res = await $`ssh-add -l`.quiet().nothrow()
-        // exit 0 => at least one key; 1 => agent has no identities;
-        // 2 => cannot contact agent.
-        hasKey = res.exitCode === 0
+        agentHasAnyKey = res.exitCode === 0
+        agentList = res.stdout?.toString() ?? ""
       } catch {
-        hasKey = false
+        agentHasAnyKey = false
       }
+
+      // Resolve the repo's configured SSH signing key fingerprint so we can
+      // verify THAT specific key is loaded -- not just any unrelated identity.
+      // If gpg.format is not ssh, or the key/ssh-keygen is unavailable, we fall
+      // back to the weaker "any key loaded" check rather than blocking blindly.
+      let signingKeyFingerprint = ""
+      try {
+        const fmt = (
+          await $`git config --get gpg.format`.quiet().nothrow()
+        ).stdout
+          ?.toString()
+          .trim()
+        if (fmt === "ssh") {
+          const keyPath = (
+            await $`git config --get user.signingkey`.quiet().nothrow()
+          ).stdout
+            ?.toString()
+            .trim()
+          if (keyPath) {
+            const fp = (
+              await $`ssh-keygen -lf ${keyPath}`.quiet().nothrow()
+            ).stdout
+              ?.toString()
+              .trim()
+            // `ssh-keygen -lf` output: "<bits> SHA256:<hash> <comment> (<type>)"
+            const match = fp?.match(/SHA256:[A-Za-z0-9+/]+/)
+            if (match) signingKeyFingerprint = match[0]
+          }
+        }
+      } catch {
+        signingKeyFingerprint = ""
+      }
+
+      // Prefer the precise check: is the configured signing key loaded?
+      // Otherwise degrade to "is any key loaded?".
+      const hasKey = signingKeyFingerprint
+        ? agentList.includes(signingKeyFingerprint)
+        : agentHasAnyKey
 
       if (!hasKey) {
         throw new Error(
           [
-            "Commit blocked: no SSH signing key is loaded in the ssh-agent.",
-            "This repo requires signed commits, which will fail without the key.",
+            "Commit blocked: the SSH signing key required by this repo is not",
+            "loaded in the ssh-agent. Signed commits will fail without it.",
             "",
             "Load the signing key (you will be prompted for its passphrase):",
             "",

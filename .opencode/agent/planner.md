@@ -37,7 +37,7 @@ Ordered list of implementation steps, each with:
 - Dependencies on other tasks
 
 ### 4. Interface Design
-Define interfaces FIRST — these are the contracts:
+Define interfaces FIRST -- these are the contracts:
 ```go
 type SomeInterface interface {
     Method(ctx context.Context, params...) (Result, error)
@@ -68,11 +68,11 @@ type SomeInterface interface {
 
 ## Principles
 
-- **Read-only** — This agent plans but does not modify code
-- **Interface-driven** — Define contracts before implementations
-- **Incremental** — Break work into small, independently testable pieces
-- **Convention-following** — Match existing codebase patterns
-- **Complete** — Include docs, examples, MCP tools, and integration tests in every plan
+- **Read-only** -- This agent plans but does not modify code
+- **Interface-driven** -- Define contracts before implementations
+- **Incremental** -- Break work into small, independently testable pieces
+- **Convention-following** -- Match existing codebase patterns
+- **Complete** -- Include docs, examples, MCP tools, and integration tests in every plan
 
 ## Output
 

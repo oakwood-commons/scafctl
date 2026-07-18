@@ -6,7 +6,7 @@ Diagnose and fix the current Go build errors:
 
 1. Run `go build ./...` to identify compilation errors
 2. Run `go vet ./...` to find vet warnings
-3. Apply minimal, surgical fixes — don't refactor
+3. Apply minimal, surgical fixes -- don't refactor
 4. Run `go build ./...` again to verify
 5. Run `go test ./...` to ensure nothing broke
 

@@ -1,6 +1,6 @@
 ---
 description: "Check if staged changes have corresponding tests, examples, and documentation."
-agent: "agent"
+agent: "artifact-auditor"
 argument-hint: "Optional: specific area to check"
 ---
 Review staged changes and check if supporting artifacts exist:
