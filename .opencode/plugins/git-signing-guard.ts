@@ -16,8 +16,8 @@ import type { Plugin } from "@opencode-ai/plugin"
  * not available in the agent, blocks the command with actionable instructions
  * instead of letting it fail obscurely. It also nudges toward `-s` (DCO).
  *
- * Consent (asking the user before committing) is handled separately by
- * the `permission` block in opencode.json, which also denies `git push` and
+ * Consent (asking the user before committing and pushing) is handled
+ * separately by the `permission` block in opencode.json, which also denies
  * `git commit --amend`; this hook only enforces the signing-key precondition.
  */
 export const GitSigningGuard: Plugin = async ({ $ }) => {

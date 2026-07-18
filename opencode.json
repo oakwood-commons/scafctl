@@ -20,7 +20,7 @@
     "bash": {
       "*": "allow",
       "git commit *": "ask",
-      "git push *": "deny",
+      "git push *": "ask",
       "git commit --amend *": "deny"
     }
   }
