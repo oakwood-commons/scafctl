@@ -314,6 +314,36 @@ func TestManagerSave(t *testing.T) {
 			},
 		},
 		{
+			name: "upgrades schema version on save",
+			config: &Config{
+				Enabled: literalValueRef(true),
+				Backend: Backend{
+					Provider: "mock-state",
+					Inputs:   map[string]*spec.ValueRef{},
+				},
+			},
+			backend: &mockBackendProvider{},
+			// Simulate a state file loaded under an older, still-supported
+			// schema. Saving must re-stamp it with the current schema version so
+			// the on-disk format matches the content actually written.
+			state: func() *Data {
+				d := NewData()
+				d.SchemaVersion = SchemaVersionMinimum
+				return d
+			}(),
+			setup: func() (*resolver.Context, []*resolver.Resolver) {
+				return resolver.NewContext(), nil
+			},
+			check: func(t *testing.T, sd *Data, backend *mockBackendProvider) {
+				assert.Equal(t, SchemaVersionCurrent, sd.SchemaVersion)
+				// The persisted document must carry the upgraded version too.
+				require.Len(t, backend.saveCalls, 1)
+				data, ok := backend.saveCalls[0]["data"].(map[string]any)
+				require.True(t, ok, "save inputs must include the state data map")
+				assert.EqualValues(t, SchemaVersionCurrent, data["schemaVersion"])
+			},
+		},
+		{
 			name: "preserves existing createdAt",
 			config: &Config{
 				Enabled: literalValueRef(true),

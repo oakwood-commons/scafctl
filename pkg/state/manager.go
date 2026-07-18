@@ -211,6 +211,11 @@ func (m *Manager) SaveParams(ctx context.Context, stateData *Data, mergedParams,
 func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta) error {
 	// Update metadata
 	now := time.Now().UTC()
+	// Stamp the current schema version so a state file loaded under an older
+	// (still-supported) schema is re-persisted under the format this build
+	// actually writes -- otherwise the on-disk schemaVersion would understate
+	// the content (e.g. a v2 file re-saved with the v3 runtime block).
+	stateData.SchemaVersion = SchemaVersionCurrent
 	if stateData.Metadata.CreatedAt.IsZero() {
 		stateData.Metadata.CreatedAt = now
 	}
