@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -192,7 +193,7 @@ func TestCaptureSnapshot(t *testing.T) {
 			// Verify metadata
 			assert.Equal(t, tt.solutionName, snapshot.Metadata.Solution)
 			assert.Equal(t, tt.solutionVersion, snapshot.Metadata.Version)
-			assert.Equal(t, tt.buildVersion, snapshot.Metadata.ScafctlVersion)
+			assert.Equal(t, tt.buildVersion, snapshot.Metadata.Runtime.Engine.Version)
 			assert.Equal(t, string(tt.overallStatus), snapshot.Metadata.Status)
 			assert.NotZero(t, snapshot.Metadata.Timestamp)
 
@@ -226,6 +227,57 @@ func TestCaptureSnapshot(t *testing.T) {
 
 			// Verify phases
 			assert.NotEmpty(t, snapshot.Phases)
+		})
+	}
+}
+
+// TestCaptureSnapshot_Runtime verifies the runtime provenance block: the engine
+// is always scafctl at the build version, while the CLI mirrors the engine for
+// direct use and reflects the embedder identity when embedded.
+func TestCaptureSnapshot_Runtime(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctxSettings *settings.Run
+		wantCLIName string
+		wantCLIVer  string
+	}{
+		{
+			name:        "direct use mirrors engine",
+			ctxSettings: nil,
+			wantCLIName: settings.CliBinaryName,
+			wantCLIVer:  "0.1.0",
+		},
+		{
+			name:        "embedder identity distinct from engine",
+			ctxSettings: &settings.Run{BinaryName: "mycli", EmbedderVersion: "9.9.9"},
+			wantCLIName: "mycli",
+			wantCLIVer:  "9.9.9",
+		},
+		{
+			name:        "embedder name without version falls back to engine version",
+			ctxSettings: &settings.Run{BinaryName: "mycli"},
+			wantCLIName: "mycli",
+			wantCLIVer:  "0.1.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithContext(context.Background(), NewContext())
+			if tt.ctxSettings != nil {
+				ctx = settings.IntoContext(ctx, tt.ctxSettings)
+			}
+
+			snapshot, err := CaptureSnapshot(
+				ctx, "sol", "1.0.0", "0.1.0", map[string]any{}, 0, ExecutionStatusSuccess,
+			)
+			require.NoError(t, err)
+
+			rt := snapshot.Metadata.Runtime
+			assert.Equal(t, settings.CliBinaryName, rt.Engine.Name)
+			assert.Equal(t, "0.1.0", rt.Engine.Version)
+			assert.Equal(t, tt.wantCLIName, rt.CLI.Name)
+			assert.Equal(t, tt.wantCLIVer, rt.CLI.Version)
 		})
 	}
 }
@@ -306,12 +358,15 @@ func TestSaveAndLoadSnapshot(t *testing.T) {
 	// Create a snapshot
 	originalSnapshot := &Snapshot{
 		Metadata: SnapshotMetadata{
-			Solution:       "test-solution",
-			Version:        "1.0.0",
-			Timestamp:      time.Date(2026, 1, 14, 10, 0, 0, 0, time.UTC),
-			ScafctlVersion: "0.1.0",
-			TotalDuration:  "1.234s",
-			Status:         "success",
+			Solution:  "test-solution",
+			Version:   "1.0.0",
+			Timestamp: time.Date(2026, 1, 14, 10, 0, 0, 0, time.UTC),
+			Runtime: SnapshotRuntime{
+				Engine: SnapshotRuntimeComponent{Name: "scafctl", Version: "0.1.0"},
+				CLI:    SnapshotRuntimeComponent{Name: "scafctl", Version: "0.1.0"},
+			},
+			TotalDuration: "1.234s",
+			Status:        "success",
 		},
 		Parameters: map[string]any{
 			"env":    "production",
@@ -365,7 +420,7 @@ func TestSaveAndLoadSnapshot(t *testing.T) {
 	// Verify loaded snapshot matches original
 	assert.Equal(t, originalSnapshot.Metadata.Solution, loadedSnapshot.Metadata.Solution)
 	assert.Equal(t, originalSnapshot.Metadata.Version, loadedSnapshot.Metadata.Version)
-	assert.Equal(t, originalSnapshot.Metadata.ScafctlVersion, loadedSnapshot.Metadata.ScafctlVersion)
+	assert.Equal(t, originalSnapshot.Metadata.Runtime, loadedSnapshot.Metadata.Runtime)
 	assert.Equal(t, originalSnapshot.Metadata.Status, loadedSnapshot.Metadata.Status)
 
 	assert.Equal(t, originalSnapshot.Parameters, loadedSnapshot.Parameters)

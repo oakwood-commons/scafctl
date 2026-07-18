@@ -30,12 +30,12 @@ func writeTestSnapshot(t *testing.T, dir, name string, snap *resolver.Snapshot) 
 func TestHandleShowSnapshot(t *testing.T) {
 	baseSnap := &resolver.Snapshot{
 		Metadata: resolver.SnapshotMetadata{
-			Solution:       "my-solution",
-			Version:        "1.0.0",
-			Timestamp:      time.Date(2026, 2, 20, 15, 30, 0, 0, time.UTC),
-			ScafctlVersion: "0.15.0",
-			TotalDuration:  "2.3s",
-			Status:         "success",
+			Solution:      "my-solution",
+			Version:       "1.0.0",
+			Timestamp:     time.Date(2026, 2, 20, 15, 30, 0, 0, time.UTC),
+			Runtime:       resolver.SnapshotRuntime{Engine: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "0.15.0"}, CLI: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "0.15.0"}},
+			TotalDuration: "2.3s",
+			Status:        "success",
 		},
 		Parameters: map[string]any{"env": "prod", "region": "us-east1"},
 		Resolvers: map[string]*resolver.SnapshotResolver{

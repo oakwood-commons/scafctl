@@ -31,11 +31,14 @@ func TestStateData_JSONRoundTrip(t *testing.T) {
 	original := &Data{
 		SchemaVersion: 1,
 		Metadata: Metadata{
-			Solution:       "deploy-app",
-			Version:        "1.0.0",
-			CreatedAt:      now,
-			LastUpdatedAt:  now,
-			ScafctlVersion: "0.9.0",
+			Solution:      "deploy-app",
+			Version:       "1.0.0",
+			CreatedAt:     now,
+			LastUpdatedAt: now,
+			Runtime: Runtime{
+				Engine: RuntimeComponent{Name: "scafctl", Version: "0.9.0"},
+				CLI:    RuntimeComponent{Name: "mycli", Version: "2.3.4"},
+			},
 		},
 		Command: CommandInfo{
 			Subcommand: "run solution",
@@ -73,7 +76,7 @@ func TestStateData_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, original.SchemaVersion, restored.SchemaVersion)
 	assert.Equal(t, original.Metadata.Solution, restored.Metadata.Solution)
 	assert.Equal(t, original.Metadata.Version, restored.Metadata.Version)
-	assert.Equal(t, original.Metadata.ScafctlVersion, restored.Metadata.ScafctlVersion)
+	assert.Equal(t, original.Metadata.Runtime, restored.Metadata.Runtime)
 	assert.Equal(t, original.Command.Subcommand, restored.Command.Subcommand)
 	assert.Equal(t, original.Command.Parameters, restored.Command.Parameters)
 	assert.Len(t, restored.Parameters, 2)
@@ -109,7 +112,7 @@ func TestNewMockStateData(t *testing.T) {
 	assert.Equal(t, SchemaVersionCurrent, data.SchemaVersion)
 	assert.Equal(t, "test-sol", data.Metadata.Solution)
 	assert.Equal(t, "2.0.0", data.Metadata.Version)
-	assert.Equal(t, "test", data.Metadata.ScafctlVersion)
+	assert.Equal(t, "test", data.Metadata.Runtime.Engine.Version)
 	assert.False(t, data.Metadata.CreatedAt.IsZero())
 	assert.Len(t, data.Parameters, 1)
 	assert.Equal(t, "prod", data.Parameters["env"])

@@ -73,7 +73,7 @@ spec:
         init:
           - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/dynamic"
           - command: >-
-              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-config"},"resolvers":{},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-config"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/dynamic/beta.json
         assertions:
           - expression: __exitCode == 0
@@ -92,7 +92,7 @@ spec:
           - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/dynamic"
           # Pre-seed for project "beta" only
           - command: >-
-              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-only"},"resolvers":{},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-dynamic-path","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"beta-only"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/dynamic/beta.json
         assertions:
           - expression: __exitCode == 0

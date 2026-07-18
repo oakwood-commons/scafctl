@@ -122,15 +122,15 @@ func (s *Server) handleShowSnapshot(_ context.Context, request mcp.CallToolReque
 	}
 
 	result := map[string]any{
-		"solution":       snapshot.Metadata.Solution,
-		"version":        snapshot.Metadata.Version,
-		"timestamp":      snapshot.Metadata.Timestamp,
-		"scafctlVersion": snapshot.Metadata.ScafctlVersion,
-		"duration":       snapshot.Metadata.TotalDuration,
-		"status":         snapshot.Metadata.Status,
-		"resolverCount":  counts,
-		"phases":         len(snapshot.Phases),
-		"parameters":     snapshot.Parameters,
+		"solution":      snapshot.Metadata.Solution,
+		"version":       snapshot.Metadata.Version,
+		"timestamp":     snapshot.Metadata.Timestamp,
+		"runtime":       snapshot.Metadata.Runtime,
+		"duration":      snapshot.Metadata.TotalDuration,
+		"status":        snapshot.Metadata.Status,
+		"resolverCount": counts,
+		"phases":        len(snapshot.Phases),
+		"parameters":    snapshot.Parameters,
 	}
 
 	if format == "resolvers" || format == "full" {

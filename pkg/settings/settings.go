@@ -477,6 +477,12 @@ type Run struct {
 	ExitOnError        bool               `json:"exitOnError" yaml:"exitOnError" doc:"Whether to exit on error"`
 	BinaryName         string             `json:"binaryName" yaml:"binaryName" doc:"Runtime binary name for the CLI" maxLength:"64" example:"scafctl"`
 
+	// EmbedderVersion is the version string of the embedding CLI/frontend, when
+	// scafctl is used as a library. Empty when scafctl runs directly. It is used
+	// to record invoking-CLI provenance (distinct from the engine version) in
+	// state metadata.
+	EmbedderVersion string `json:"embedderVersion,omitempty" yaml:"embedderVersion,omitempty" doc:"Version of the embedding CLI/frontend" maxLength:"64" example:"1.2.3"`
+
 	// ActionDiscoveryFileNames overrides the file names used by "run action"
 	// auto-discovery. When empty, defaults from ActionFileNamesFor are used.
 	ActionDiscoveryFileNames []string `json:"-" yaml:"-"`

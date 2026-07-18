@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 )
 
@@ -23,12 +24,26 @@ type Snapshot struct {
 
 // SnapshotMetadata contains metadata about the snapshot
 type SnapshotMetadata struct {
-	Solution       string    `json:"solution" yaml:"solution" doc:"Solution name" maxLength:"512" example:"my-solution"`
-	Version        string    `json:"version,omitempty" yaml:"version,omitempty" doc:"Solution version" maxLength:"64" example:"1.0.0"`
-	Timestamp      time.Time `json:"timestamp" yaml:"timestamp" doc:"When snapshot was captured"`
-	ScafctlVersion string    `json:"scafctlVersion" yaml:"scafctlVersion" doc:"scafctl version" maxLength:"64" example:"0.5.0"`
-	TotalDuration  string    `json:"totalDuration" yaml:"totalDuration" doc:"Total execution duration" maxLength:"32" example:"1.5s"`
-	Status         string    `json:"status" yaml:"status" doc:"Overall execution status (success, failed)" maxLength:"32" example:"success"`
+	Solution      string          `json:"solution" yaml:"solution" doc:"Solution name" maxLength:"512" example:"my-solution"`
+	Version       string          `json:"version,omitempty" yaml:"version,omitempty" doc:"Solution version" maxLength:"64" example:"1.0.0"`
+	Timestamp     time.Time       `json:"timestamp" yaml:"timestamp" doc:"When snapshot was captured"`
+	Runtime       SnapshotRuntime `json:"runtime" yaml:"runtime" doc:"Execution provenance (engine vs invoking CLI)"`
+	TotalDuration string          `json:"totalDuration" yaml:"totalDuration" doc:"Total execution duration" maxLength:"32" example:"1.5s"`
+	Status        string          `json:"status" yaml:"status" doc:"Overall execution status (success, failed)" maxLength:"32" example:"success"`
+}
+
+// SnapshotRuntime records execution provenance, separating the engine (scafctl
+// library) identity from the invoking CLI/frontend identity. When scafctl runs
+// directly (not embedded), CLI mirrors Engine.
+type SnapshotRuntime struct {
+	Engine SnapshotRuntimeComponent `json:"engine" yaml:"engine" doc:"Execution engine (scafctl library) identity"`
+	CLI    SnapshotRuntimeComponent `json:"cli" yaml:"cli" doc:"Invoking CLI/frontend identity"`
+}
+
+// SnapshotRuntimeComponent identifies a named, versioned runtime participant.
+type SnapshotRuntimeComponent struct {
+	Name    string `json:"name" yaml:"name" doc:"Component name" maxLength:"64" example:"scafctl"`
+	Version string `json:"version" yaml:"version" doc:"Component version" maxLength:"64" example:"0.5.0"`
 }
 
 // SnapshotResolver contains execution result for a single resolver
@@ -60,6 +75,18 @@ type SnapshotPhase struct {
 	Resolvers []string `json:"resolvers" yaml:"resolvers" doc:"Resolver names in this phase" maxItems:"500"`
 }
 
+// snapshotRuntime builds execution provenance for a snapshot from the shared
+// settings primitive, applying the CLI-mirrors-engine fallback. The engine is
+// always scafctl at buildVersion; the CLI is the configured binary name and
+// embedder version (from context), defaulting to the engine when not embedded.
+func snapshotRuntime(ctx context.Context, buildVersion string) SnapshotRuntime {
+	p := settings.RuntimeProvenanceFromContext(ctx, buildVersion)
+	return SnapshotRuntime{
+		Engine: SnapshotRuntimeComponent{Name: p.EngineName, Version: p.EngineVersion},
+		CLI:    SnapshotRuntimeComponent{Name: p.ResolvedCLIName(), Version: p.ResolvedCLIVersion()},
+	}
+}
+
 // CaptureSnapshot creates a snapshot from execution context and results
 func CaptureSnapshot(
 	ctx context.Context,
@@ -80,12 +107,12 @@ func CaptureSnapshot(
 
 	snapshot := &Snapshot{
 		Metadata: SnapshotMetadata{
-			Solution:       solutionName,
-			Version:        solutionVersion,
-			Timestamp:      time.Now().UTC(),
-			ScafctlVersion: buildVersion,
-			TotalDuration:  format.Duration(totalDuration),
-			Status:         string(overallStatus),
+			Solution:      solutionName,
+			Version:       solutionVersion,
+			Timestamp:     time.Now().UTC(),
+			Runtime:       snapshotRuntime(ctx, buildVersion),
+			TotalDuration: format.Duration(totalDuration),
+			Status:        string(overallStatus),
 		},
 		Parameters: parameters,
 		Resolvers:  make(map[string]*SnapshotResolver),

@@ -87,7 +87,10 @@ outputs.
     "version": "1.0.0",
     "createdAt": "2026-02-12T10:00:00Z",
     "lastUpdatedAt": "2026-05-27T14:30:00Z",
-    "scafctlVersion": "1.8.0"
+    "runtime": {
+      "engine": { "name": "scafctl", "version": "1.8.0" },
+      "cli": { "name": "scafctl", "version": "1.8.0" }
+    }
   },
   "command": {
     "subcommand": "run solution",
