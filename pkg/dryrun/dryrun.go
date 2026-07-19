@@ -239,6 +239,9 @@ func checkFingerprintStatus(ctx context.Context, ea *action.ExpandedAction, sd *
 	if err != nil {
 		return "error", err.Error()
 	}
+	if result.SourcesAllEmpty {
+		return "no-sources", fmt.Sprintf("source pattern(s) matched no files: %v", result.SourcesEmptyPatterns)
+	}
 	if !result.Stale {
 		return "up-to-date", string(result.Reason)
 	}

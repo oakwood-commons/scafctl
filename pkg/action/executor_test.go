@@ -1406,6 +1406,113 @@ func TestExecutor_Execute_FingerprintUpToDate(t *testing.T) {
 	assert.Equal(t, SkipReasonUpToDate, result.Actions["build"].SkipReason)
 }
 
+// Regression for #522: an action whose sources include a glob that matches no
+// files (e.g. a typo or a not-yet-created file) must still be fingerprinted on
+// its remaining sources -- it must NOT re-run on every invocation.
+func TestExecutor_Execute_FingerprintPartialMissingSource(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/main.go", []byte("package main"), 0o644))
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	// One source glob matches (main.go), one references a non-existent file.
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "test-provider",
+				Sources:  []string{"*.go", "NonExistentFile.txt"},
+			},
+		},
+	}
+
+	// First execution: runs and records a fingerprint on the matched source.
+	executor := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+	_, err := executor.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second execution: must skip as up-to-date despite the missing source glob.
+	executor2 := NewExecutor(
+		WithRegistry(registry),
+		WithFingerprintChecker(fpChecker),
+		WithCwd(dir),
+		WithDefaultTimeout(5*time.Second),
+	)
+	result, err := executor2.Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount, "action must not re-run when only a non-matching source glob is present")
+	assert.Equal(t, StatusSkipped, result.Actions["build"].Status)
+	assert.Equal(t, SkipReasonUpToDate, result.Actions["build"].SkipReason)
+}
+
+// Regression for #522: an action whose sources ALL match nothing has no
+// trackable inputs, so it must re-run on every invocation (never silently
+// skipped) rather than being cached on the deterministic empty-set hash.
+func TestExecutor_Execute_FingerprintAllMissingSourcesAlwaysRuns(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+		},
+	})
+
+	stateData := state.NewData()
+	fpChecker := fingerprint.NewChecker(stateData)
+
+	workflow := &Workflow{
+		Actions: map[string]*Action{
+			"build": {
+				Provider: "test-provider",
+				Sources:  []string{"does-not-exist-a.txt", "does-not-exist-b.txt"},
+			},
+		},
+	}
+
+	newExec := func() *Executor {
+		return NewExecutor(
+			WithRegistry(registry),
+			WithFingerprintChecker(fpChecker),
+			WithCwd(dir),
+			WithDefaultTimeout(5*time.Second),
+		)
+	}
+
+	_, err := newExec().Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, execCount)
+
+	// Second run: must execute again (no trackable inputs => always stale).
+	result, err := newExec().Execute(context.Background(), workflow)
+	require.NoError(t, err)
+	assert.Equal(t, 2, execCount, "action with no matching sources must re-run every time")
+	assert.Equal(t, StatusSucceeded, result.Actions["build"].Status)
+}
+
 func TestExecutor_Execute_FingerprintNoCache(t *testing.T) {
 	t.Parallel()
 

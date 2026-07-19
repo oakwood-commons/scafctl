@@ -68,6 +68,15 @@ func TestExpandGlobs(t *testing.T) {
 			wantErr:  ErrNoMatches,
 		},
 		{
+			name: "partial match tolerated by ExpandGlobs",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				testWriteFile(t, dir, "a.go", "package a")
+			},
+			patterns: []string{"*.go", "does-not-exist.txt"},
+			want:     []string{"a.go"},
+		},
+		{
 			name:     "invalid pattern returns error",
 			patterns: []string{"[invalid"},
 			wantErr:  ErrPatternInvalid,
@@ -114,6 +123,86 @@ func TestExpandGlobs(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExpandGlobsReport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		setup        func(t *testing.T, dir string)
+		patterns     []string
+		wantFiles    []string
+		wantEmpty    []string
+		wantAllEmpty bool
+		wantErr      error
+	}{
+		{
+			name:     "empty patterns yields zero-value result",
+			patterns: nil,
+		},
+		{
+			name: "all patterns match",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				testWriteFile(t, dir, "a.go", "package a")
+			},
+			patterns:  []string{"*.go"},
+			wantFiles: []string{"a.go"},
+		},
+		{
+			name: "partial match reports empty pattern but no error",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				testWriteFile(t, dir, "a.go", "package a")
+				testWriteFile(t, dir, "go.mod", "module x")
+			},
+			patterns:  []string{"*.go", "go.mod", "missing.txt"},
+			wantFiles: []string{"a.go", "go.mod"},
+			wantEmpty: []string{"missing.txt"},
+		},
+		{
+			name: "total no-match sets AllEmpty without error",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				testWriteFile(t, dir, "a.txt", "text")
+			},
+			patterns:     []string{"*.go", "missing.txt"},
+			wantEmpty:    []string{"*.go", "missing.txt"},
+			wantAllEmpty: true,
+		},
+		{
+			name:     "invalid pattern still errors",
+			patterns: []string{"[invalid"},
+			wantErr:  ErrPatternInvalid,
+		},
+		{
+			name:     "absolute pattern still errors",
+			patterns: []string{"/etc/passwd"},
+			wantErr:  ErrPatternInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if tt.setup != nil {
+				tt.setup(t, dir)
+			}
+
+			got, err := ExpandGlobsReport(dir, tt.patterns)
+			if tt.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFiles, got.Files)
+			assert.Equal(t, tt.wantEmpty, got.EmptyPatterns)
+			assert.Equal(t, tt.wantAllEmpty, got.AllEmpty())
 		})
 	}
 }

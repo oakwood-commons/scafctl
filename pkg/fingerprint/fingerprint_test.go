@@ -310,6 +310,76 @@ func TestChecker_CheckFiles(t *testing.T) {
 		assert.True(t, result.Stale)
 		assert.Equal(t, ReasonSourcesChanged, result.Reason)
 	})
+
+	// Regression for #522: a source glob referencing a non-existent file must
+	// NOT disable fingerprinting. The action should still be fingerprinted on
+	// its other sources and report up-to-date on the second run.
+	t.Run("partial no-match preserves idempotency", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		testWriteFile(t, dir, "main.go", "package main")
+
+		stateData := state.NewData()
+		checker := NewChecker(stateData)
+		sources := []string{"*.go", "NonExistentFile.txt"}
+
+		err := checker.Record(context.Background(), "build", sources, nil, dir, nil)
+		require.NoError(t, err)
+
+		result, err := checker.CheckFiles(context.Background(), "build", sources, nil, dir)
+		require.NoError(t, err)
+
+		assert.False(t, result.Stale, "action must be treated as up-to-date despite the missing source")
+		assert.Equal(t, ReasonUpToDate, result.Reason)
+		assert.Equal(t, []string{"NonExistentFile.txt"}, result.SourcesEmptyPatterns)
+		assert.False(t, result.SourcesAllEmpty)
+	})
+
+	// Regression for #522: when every source glob matches nothing, CheckFiles
+	// must not return an error; it reports SourcesAllEmpty and marks the action
+	// stale (no trackable inputs) so it re-runs rather than being silently
+	// skipped on the deterministic empty-set hash.
+	t.Run("total no-match reports AllEmpty and forces stale", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		testWriteFile(t, dir, "a.txt", "text")
+
+		stateData := state.NewData()
+		checker := NewChecker(stateData)
+		sources := []string{"*.go", "missing.txt"}
+
+		// Record then check: an all-empty sources set must remain stale even
+		// after a prior run recorded the empty-set hash.
+		require.NoError(t, checker.Record(context.Background(), "build", sources, nil, dir, nil))
+
+		result, err := checker.CheckFiles(context.Background(), "build", sources, nil, dir)
+		require.NoError(t, err)
+		assert.True(t, result.SourcesAllEmpty)
+		assert.True(t, result.Stale, "no trackable sources must be treated as always stale")
+		assert.Equal(t, ReasonNoSources, result.Reason)
+		assert.Equal(t, sources, result.SourcesEmptyPatterns)
+	})
+
+	// A declared output that does not exist must mark the action stale even when
+	// other declared outputs are present (strict generates semantics).
+	t.Run("partial-missing generates marks stale", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		testWriteFile(t, dir, "main.go", "package main")
+		testWriteFile(t, dir, "app", "binary")
+
+		stateData := state.NewData()
+		checker := NewChecker(stateData)
+		sources := []string{"*.go"}
+		generates := []string{"app", "missing-output"}
+
+		require.NoError(t, checker.Record(context.Background(), "build", sources, generates, dir, nil))
+
+		result, err := checker.CheckFiles(context.Background(), "build", sources, generates, dir)
+		require.NoError(t, err)
+		assert.True(t, result.Stale, "a missing declared output must force a rebuild")
+		assert.Equal(t, ReasonGeneratesMissing, result.Reason)
+	})
 }
 
 func TestChecker_CheckInputs(t *testing.T) {

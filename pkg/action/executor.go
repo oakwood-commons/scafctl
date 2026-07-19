@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/oakwood-commons/scafctl/pkg/telemetry"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -673,8 +674,11 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			// Log warning and continue execution (fail-open)
 			logger.FromContext(ctx).V(0).Info("fingerprint file check failed, executing action",
 				"action", actionName, "error", fpErr.Error())
-		} else if !fpResult.Stale {
-			filesFresh = true
+		} else {
+			e.warnEmptySources(ctx, actionName, fpResult.SourcesEmptyPatterns, fpResult.SourcesAllEmpty)
+			if !fpResult.Stale {
+				filesFresh = true
+			}
 		}
 	}
 
@@ -907,6 +911,31 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	}
 
 	return nil
+}
+
+// warnEmptySources surfaces user-visible warnings when an action's source globs
+// match no files. A total no-match (allEmpty) means the action cannot be
+// fingerprinted meaningfully, so caching is effectively disabled. A partial
+// no-match (some patterns matched) still fingerprints correctly and is a milder
+// typo hint. Both are written to stderr so they never corrupt structured
+// command output (e.g. -o json). It is a no-op when no writer is attached to the
+// context (e.g. embedded/library use) so domain behavior never depends on CLI
+// wiring.
+func (e *Executor) warnEmptySources(ctx context.Context, actionName string, emptyPatterns []string, allEmpty bool) {
+	if len(emptyPatterns) == 0 {
+		return
+	}
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+	if allEmpty {
+		w.WarnStderrf("%s: sources matched no files (fingerprint disabled, action will always re-run): %v",
+			actionName, emptyPatterns)
+		return
+	}
+	w.WarnStderrf("%s: source pattern(s) matched no files (ignored): %v",
+		actionName, emptyPatterns)
 }
 
 // resolveInputs resolves all inputs including deferred values.

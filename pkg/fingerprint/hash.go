@@ -13,11 +13,56 @@ import (
 	"path/filepath"
 )
 
+// HashResult carries a content hash plus diagnostics about glob patterns that
+// matched no files.
+type HashResult struct {
+	// Hash is the SHA-256 hash over the matched file set. For an all-empty
+	// pattern set it is the deterministic hash of zero files (empty string).
+	Hash string
+
+	// EmptyPatterns lists patterns that matched no files, in input order.
+	EmptyPatterns []string
+
+	// AllEmpty is true when every pattern matched zero files.
+	AllEmpty bool
+}
+
+// HashFilesReport computes a deterministic SHA-256 hash over the files matching
+// the given glob patterns, tolerating patterns that match nothing. Unlike
+// HashFiles it never returns ErrNoMatches; instead it reports which patterns
+// were empty via HashResult, so callers can warn without losing the hash of the
+// files that did match. Malformed/unsafe patterns still return ErrPatternInvalid.
+func HashFilesReport(baseDir string, patterns []string) (HashResult, error) {
+	if len(patterns) == 0 {
+		return HashResult{}, nil
+	}
+
+	report, err := ExpandGlobsReport(baseDir, patterns)
+	if err != nil {
+		return HashResult{}, err
+	}
+
+	hash, err := hashFileList(baseDir, report.Files)
+	if err != nil {
+		return HashResult{}, err
+	}
+
+	return HashResult{
+		Hash:          hash,
+		EmptyPatterns: report.EmptyPatterns,
+		AllEmpty:      report.AllEmpty(),
+	}, nil
+}
+
 // HashFiles computes a deterministic SHA-256 hash over the contents of all
 // files matching the given glob patterns, resolved relative to baseDir.
 // Files are sorted lexicographically before hashing for determinism.
 // The hash includes both file paths and contents so that renames are detected.
 // Returns empty string and nil error if patterns is empty.
+//
+// Individual patterns matching no files are tolerated; HashFiles only returns
+// ErrNoMatches when every pattern matches nothing. Callers that need to
+// distinguish partial from total no-match should use HashFilesReport.
 func HashFiles(baseDir string, patterns []string) (string, error) {
 	if len(patterns) == 0 {
 		return "", nil
