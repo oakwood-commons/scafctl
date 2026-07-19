@@ -305,3 +305,127 @@ func BenchmarkCommandInspectSolution_JSON(b *testing.B) {
 		_ = cmd.Execute()
 	}
 }
+
+const usageInspectSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: usage-test
+  version: 2.0.0
+  description: Fallback description
+  usage:
+    synopsis: Do useful things with this solution
+    examples:
+      - description: Refresh
+        command: scafctl run solution -r action=refresh
+spec:
+  resolvers:
+    action:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: action
+              default: show
+  workflow:
+    actions:
+      show:
+        description: Show summary
+        when: '_.action == "show"'
+        provider: shell
+        inputs:
+          command: "echo show"
+      refresh:
+        description: Refresh data
+        when: '_.action == "refresh"'
+        provider: shell
+        inputs:
+          command: "echo refresh"
+`
+
+func TestCommandInspectSolution_UsageJSON(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	solFile := writeSolution(t, dir, usageInspectSolution)
+
+	out, ioStreams := makeIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandInspectSolution(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"-f", solFile, "--usage", "-o", "json"})
+	cmd.SetOut(out)
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	cmd.SetContext(ctx)
+
+	require.NoError(t, cmd.Execute())
+
+	var usage inspect.UsageInfo
+	require.NoError(t, json.Unmarshal(out.Bytes(), &usage))
+
+	assert.Equal(t, "usage-test", usage.Name)
+	assert.Equal(t, "2.0.0", usage.Version)
+	assert.Equal(t, "Do useful things with this solution", usage.Synopsis)
+	assert.Equal(t, "scafctl run solution", usage.Run)
+	require.Len(t, usage.Params, 1)
+	assert.Equal(t, "action", usage.Params[0].Name)
+	assert.Equal(t, "show", usage.Params[0].Default)
+	assert.ElementsMatch(t, []any{"refresh", "show"}, usage.Params[0].AllowedValues)
+	assert.Len(t, usage.Actions, 2)
+	assert.Len(t, usage.Examples, 1)
+}
+
+func TestCommandInspectSolution_UsageText(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	solFile := writeSolution(t, dir, usageInspectSolution)
+
+	out, ioStreams := makeIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandInspectSolution(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"-f", solFile, "--usage"})
+	cmd.SetOut(out)
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	cmd.SetContext(ctx)
+
+	require.NoError(t, cmd.Execute())
+
+	got := out.String()
+	assert.Contains(t, got, "usage-test (2.0.0)")
+	assert.Contains(t, got, "Do useful things with this solution")
+	assert.Contains(t, got, "PARAMETERS")
+	assert.Contains(t, got, "values: refresh, show")
+	assert.Contains(t, got, "ACTIONS")
+	assert.Contains(t, got, "scafctl run solution -r action=refresh")
+	assert.Contains(t, got, "EXAMPLES")
+}
+
+func TestCommandInspect(t *testing.T) {
+	t.Parallel()
+	_, ioStreams := makeIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandInspect(cliParams, ioStreams, "scafctl")
+
+	require.NotNil(t, cmd)
+	assert.Equal(t, "inspect", cmd.Use)
+	assert.NotEmpty(t, cmd.Short)
+	assert.NotEmpty(t, cmd.Long)
+	assert.NotEmpty(t, cmd.Example)
+	assert.True(t, cmd.SilenceUsage)
+
+	// The group wires up the solution subcommand.
+	names := make([]string, 0, len(cmd.Commands()))
+	for _, c := range cmd.Commands() {
+		names = append(names, c.Name())
+	}
+	assert.Contains(t, names, "solution")
+
+	// Embedder-safe: a non-default binary name appears in the examples.
+	cmd2 := CommandInspect(cliParams, ioStreams, "mycli")
+	assert.Contains(t, cmd2.Example, "mycli inspect solution")
+}

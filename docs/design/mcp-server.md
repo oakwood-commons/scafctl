@@ -157,7 +157,8 @@ There is no MCP library in `go.mod` today. We would add one:
 | Tool | Maps To | Description |
 |------|---------|-------------|
 | `list_solutions` | `scafctl get solution` | List available solutions from local catalog |
-| `inspect_solution` | `scafctl get solution <name>` | Get solution metadata, resolvers, actions |
+| `inspect_solution` | `scafctl inspect solution <name>` | Get solution metadata, resolvers, actions |
+| `get_solution_usage` | `scafctl inspect solution --usage` | User-facing usage view: synopsis, parameters (defaults + allowed values), per-action commands |
 | `run_solution` | `scafctl run solution` | Execute a solution with parameters |
 | `run_resolver` | `scafctl run resolver` | Run resolvers only (no actions) |
 | `lint_solution` | `scafctl lint` | Validate a solution file |
@@ -339,9 +340,9 @@ func BuildSolutionExplanation(sol *solution.Solution) *SolutionExplanation
 func LookupProvider(ctx context.Context, name string, reg *provider.Registry) (*provider.Descriptor, error)
 ```
 
-All types have JSON/YAML tags. The CLI `explain solution` and `explain provider` commands now call these functions and format the results. MCP tools can call the same functions and return the structs as JSON.
+All types have JSON/YAML tags. The CLI `inspect solution` command and `explain <kind>` schema browser call these functions and format the results. MCP tools can call the same functions and return the structs as JSON.
 
-**Files:** `pkg/cmd/scafctl/explain/results.go`, `pkg/cmd/scafctl/explain/solution.go` (refactored), `pkg/cmd/scafctl/explain/provider.go` (refactored), `pkg/cmd/scafctl/explain/solution_test.go` (updated), `pkg/cmd/scafctl/explain/provider_test.go` (updated)
+**Files:** `pkg/solution/inspect/` (`inspect.go`, `usage.go`, `run_command.go` -- the shared domain builders), consumed by `pkg/cmd/scafctl/inspect/solution.go` (CLI) and `pkg/mcp/tools_solution.go` (MCP).
 
 #### 4. Fix Stray `os.Exit` Call ✅
 

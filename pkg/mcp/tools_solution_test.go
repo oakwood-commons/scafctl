@@ -204,7 +204,9 @@ func TestHandleLintSolution(t *testing.T) {
 }
 
 func TestHandleRenderSolution(t *testing.T) {
+	t.Parallel()
 	t.Run("missing path returns error", func(t *testing.T) {
+		t.Parallel()
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
 
@@ -1581,5 +1583,102 @@ func TestBuildTestResultItems(t *testing.T) {
 		assert.Contains(t, decoded[0], "maskMatches")
 		assert.NotContains(t, decoded[1], "relaxed")
 		assert.NotContains(t, decoded[1], "maskMatches")
+	})
+}
+
+func TestHandleGetSolutionUsage(t *testing.T) {
+	t.Parallel()
+
+	const usageSol = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: usage-mcp
+  version: 1.0.0
+  description: Fallback description
+  usage:
+    synopsis: Consume via the action parameter
+spec:
+  resolvers:
+    action:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: action
+              default: show
+  workflow:
+    actions:
+      show:
+        description: Show summary
+        when: '_.action == "show"'
+        provider: message
+        inputs:
+          message: showing
+      refresh:
+        description: Refresh data
+        when: '_.action == "refresh"'
+        provider: message
+        inputs:
+          message: refreshing
+`
+
+	t.Run("returns structured usage view", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "usage.yaml")
+		require.NoError(t, os.WriteFile(solFile, []byte(usageSol), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_solution_usage"
+		request.Params.Arguments = map[string]any{"path": solFile}
+
+		result, err := srv.handleGetSolutionUsage(context.Background(), request)
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var usage map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &usage))
+
+		assert.Equal(t, "usage-mcp", usage["name"])
+		assert.Equal(t, "Consume via the action parameter", usage["synopsis"])
+		params := usage["parameters"].([]any)
+		require.Len(t, params, 1)
+		p0 := params[0].(map[string]any)
+		assert.Equal(t, "show", p0["default"])
+		allowed := p0["allowedValues"].([]any)
+		assert.ElementsMatch(t, []any{"refresh", "show"}, allowed)
+		assert.Len(t, usage["actions"].([]any), 2)
+	})
+
+	t.Run("missing path returns error", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_solution_usage"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleGetSolutionUsage(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("nonexistent solution returns load error", func(t *testing.T) {
+		t.Parallel()
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "get_solution_usage"
+		request.Params.Arguments = map[string]any{"path": "/nonexistent/solution.yaml"}
+
+		result, err := srv.handleGetSolutionUsage(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
 	})
 }

@@ -591,7 +591,7 @@ func (s *Server) handleListSolutions(ctx context.Context, request mcp.CallToolRe
 
 **Purpose:** Get full solution metadata — resolvers, actions, tags, links, maintainers, catalog info. This is the **merged** `inspect_solution` + `explain_solution` tool.
 
-**Maps to:** `scafctl explain solution`
+**Maps to:** `scafctl inspect solution`
 
 **Input schema:**
 
@@ -790,7 +790,7 @@ func (s *Server) handleListProviders(ctx context.Context, request mcp.CallToolRe
 
 **Purpose:** Get the full JSON Schema for a provider's inputs, plus description and examples.
 
-**Maps to:** `scafctl explain provider`
+**Maps to:** `scafctl explain provider (schema)`
 
 **Input schema:**
 

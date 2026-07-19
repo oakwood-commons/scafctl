@@ -755,7 +755,7 @@ Each entry in `__files` is keyed by the relative path from the sandbox root and 
 
 `regex`, `contains`, `notRegex`, and `notContains` assertions match against the stream specified by the `target` field (default: `stdout`). When `target` is `combined`, stdout and stderr are concatenated with a newline separator. This is useful for:
 
-- Commands that don't support `-o json` (e.g., `explain solution`)
+- Commands that don't support `-o json` (e.g., `render solution` text output)
 - Quick substring checks without CEL overhead
 - Pattern matching on formatted output
 - Ensuring sensitive values or panic traces don't appear in output

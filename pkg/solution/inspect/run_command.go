@@ -8,8 +8,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 )
 
 // RunCommandInfo holds the structured result of analyzing a solution to
@@ -21,6 +23,12 @@ type RunCommandInfo struct {
 
 	// Subcommand is the base command (e.g., "scafctl run solution").
 	Subcommand string `json:"subcommand" yaml:"subcommand" doc:"Base CLI subcommand" maxLength:"128" example:"scafctl run solution"`
+
+	// BaseCommand is the subcommand plus the resolved solution source
+	// (e.g. "scafctl run solution -f ./my-solution.yaml"), without any example
+	// parameter flags. Append parameter flags to this to build a runnable command
+	// that targets the correct solution rather than relying on cwd auto-discovery.
+	BaseCommand string `json:"baseCommand" yaml:"baseCommand" doc:"Subcommand plus the solution source (-f/name), without example params" maxLength:"1152" example:"scafctl run solution -f ./my-solution.yaml"`
 
 	// Explanation describes why this command variant was chosen.
 	Explanation string `json:"explanation" yaml:"explanation" doc:"Why this command variant was chosen" maxLength:"512" example:"Solution has a workflow with actions"`
@@ -37,10 +45,27 @@ type RunCommandInfo struct {
 
 // ParamInfo describes a parameter-type resolver that requires a user-provided value.
 type ParamInfo struct {
-	Name        string `json:"name" yaml:"name" doc:"Parameter name" maxLength:"256" example:"projectName"`
+	// Name is the CLI flag name used to supply this parameter (the parameter
+	// provider's `inputs.key`, or the first of `inputs.keys`). This is what the
+	// user passes via `-r <name>=value`. It may differ from the resolver's name.
+	Name string `json:"name" yaml:"name" doc:"Parameter name (CLI flag key)" maxLength:"256" example:"projectName"`
+
+	// ResolverName is the resolver's map-key name in spec.resolvers. CEL
+	// when-clauses reference the resolver by this name (e.g. `_.<resolverName>`),
+	// which is not necessarily the CLI key.
+	ResolverName string `json:"resolverName,omitempty" yaml:"resolverName,omitempty" doc:"Resolver name (as referenced by _.<name> in expressions)" maxLength:"256"`
+
 	Type        string `json:"type,omitempty" yaml:"type,omitempty" doc:"Parameter type" maxLength:"64" example:"string"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Parameter description" maxLength:"512" example:"Name of the project to create"`
 	Example     any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value"`
+
+	// Default is the literal default value declared on the parameter provider
+	// (its "default" input), when present.
+	Default any `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value when the parameter is not supplied"`
+
+	// Required is true when the parameter has no default value and must be
+	// supplied by the user.
+	Required bool `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether the parameter must be supplied"`
 }
 
 // BuildRunCommand analyzes a solution and returns the exact CLI command to run it,
@@ -83,24 +108,32 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 				continue
 			}
 			if rslvr.Resolve.With[0].Provider == "parameter" {
+				inputs := rslvr.Resolve.With[0].Inputs
+				def := parameterDefault(inputs)
+				cliKey := parameterCLIKey(inputs, name)
 				parameters = append(parameters, ParamInfo{
-					Name:        name,
-					Type:        string(rslvr.Type),
-					Description: rslvr.Description,
-					Example:     rslvr.Example,
+					Name:         cliKey,
+					ResolverName: name,
+					Type:         string(rslvr.Type),
+					Description:  rslvr.Description,
+					Example:      rslvr.Example,
+					Default:      def,
+					Required:     def == nil,
 				})
 			}
 		}
 	}
 
-	// Build the full command string.
-	// Ensure relative paths have "./" prefix so VS Code chat does not
-	// auto-linkify bare filenames into content-reference URLs.
-	cmdPath := path
-	if !strings.HasPrefix(cmdPath, "/") && !strings.HasPrefix(cmdPath, "./") && !strings.HasPrefix(cmdPath, "../") && !strings.Contains(cmdPath, "://") {
-		cmdPath = "./" + cmdPath
+	// Build the source argument (how to point the command at this solution).
+	// It is derived from how the solution was actually loaded, so catalog/URL
+	// references become positional args and auto-discovery falls back to the
+	// resolved path -- never a bogus "-f ./" or "-f ./my-catalog-ref".
+	sourceArg := solutionSourceArg(sol, path)
+	baseCommand := command
+	if sourceArg != "" {
+		baseCommand = command + " " + sourceArg
 	}
-	fullCommand := fmt.Sprintf("%s -f %s", command, cmdPath)
+	fullCommand := baseCommand
 	for _, p := range parameters {
 		exampleVal := "<value>"
 		if p.Example != nil {
@@ -118,9 +151,125 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 	return &RunCommandInfo{
 		Command:      fullCommand,
 		Subcommand:   command,
+		BaseCommand:  baseCommand,
 		Explanation:  explanation,
 		Parameters:   parameters,
 		HasWorkflow:  hasWorkflow,
 		HasResolvers: hasResolvers,
 	}, nil
+}
+
+// solutionSourceArg returns the command-line argument that points `run
+// solution`/`run resolver` at this solution, derived from how the solution was
+// actually loaded (via sol.GetPath()). rawPath is the original user input
+// (an -f path, a catalog/URL/registry ref, or "" for auto-discovery) and is
+// preferred when it is a usable reference.
+//
+// Returns:
+//   - "-f <path>"   for local files (and auto-discovery, using the resolved path)
+//   - "<ref>"       (positional) for catalog names, remote OCI refs, and URLs
+//   - ""            when no source can be determined
+func solutionSourceArg(sol *solution.Solution, rawPath string) string {
+	resolved := ""
+	if sol != nil {
+		resolved = sol.GetPath()
+	}
+
+	// Catalog reference: run solution accepts the bare name positionally.
+	if ref, ok := strings.CutPrefix(resolved, "catalog:"); ok {
+		// catalogPath may be "catalog:<name[@ver]>" or "catalog:<cat>:<name[@ver]>".
+		if rawPath != "" && get.IsCatalogReference(rawPath) {
+			return rawPath
+		}
+		if i := strings.LastIndex(ref, ":"); i >= 0 {
+			ref = ref[i+1:]
+		}
+		return ref
+	}
+	// Remote OCI reference: positional.
+	if ref, ok := strings.CutPrefix(resolved, "remote:"); ok {
+		if rawPath != "" {
+			return rawPath
+		}
+		return ref
+	}
+	// URL: positional (no ./ prefixing).
+	if strings.Contains(resolved, "://") {
+		return resolved
+	}
+	if strings.Contains(rawPath, "://") {
+		return rawPath
+	}
+
+	// Local file. Prefer the user's own -f path when they gave one (preserves
+	// their relative form); otherwise fall back to the resolved discovery path.
+	filePath := rawPath
+	if filePath == "" {
+		filePath = resolved
+	}
+	if filePath == "" {
+		return ""
+	}
+	// Ensure relative paths have a "./" prefix so chat UIs do not auto-linkify
+	// bare filenames into content-reference URLs.
+	if !strings.HasPrefix(filePath, "/") && !strings.HasPrefix(filePath, "./") &&
+		!strings.HasPrefix(filePath, "../") && !strings.Contains(filePath, "://") {
+		filePath = "./" + filePath
+	}
+	return "-f " + filePath
+}
+
+// parameterDefault extracts the literal "default" input from a parameter
+// provider's inputs, if declared. Returns nil when there is no default or when
+// the default is not a literal (e.g. an expression/template resolved at runtime).
+func parameterDefault(inputs map[string]*resolver.ValueRef) any {
+	if inputs == nil {
+		return nil
+	}
+	ref, ok := inputs["default"]
+	if !ok || ref == nil {
+		return nil
+	}
+	return ref.Literal
+}
+
+// parameterCLIKey returns the CLI flag name a user passes to supply this
+// parameter (`-r <key>=value`). The parameter provider looks up values by
+// `inputs.key` (preferred) or the first of `inputs.keys`; only that key -- not
+// the resolver's map-key name -- matches a CLI-provided parameter. Falls back to
+// the resolver name when neither is a usable string literal.
+func parameterCLIKey(inputs map[string]*resolver.ValueRef, resolverName string) string {
+	if inputs != nil {
+		if ref, ok := inputs["key"]; ok && ref != nil {
+			if s, isStr := ref.Literal.(string); isStr && s != "" {
+				return s
+			}
+		}
+		if ref, ok := inputs["keys"]; ok && ref != nil {
+			if first, isStr := firstStringInLiteral(ref.Literal); isStr {
+				return first
+			}
+		}
+	}
+	return resolverName
+}
+
+// firstStringInLiteral returns the first string element of a literal list value
+// (e.g. an `inputs.keys` array). Handles []any and []string shapes.
+func firstStringInLiteral(lit any) (string, bool) {
+	switch v := lit.(type) {
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok && s != "" {
+				return s, true
+			}
+		}
+	case []string:
+		for _, s := range v {
+			if s != "" {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }

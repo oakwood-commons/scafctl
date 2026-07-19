@@ -3873,10 +3873,10 @@ func TestIntegration_RenderSolution_FromCatalog_ByName(t *testing.T) {
 	assert.Contains(t, stdout, "Phase")
 }
 
-// Explain Solution from Catalog Tests
+// Inspect Solution from Catalog Tests
 // =============================================================================
 
-func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
+func TestIntegration_InspectSolution_FromCatalog_ByName(t *testing.T) {
 	t.Parallel()
 	// Create a temp directory for the catalog
 	tmpDir := t.TempDir()
@@ -3889,11 +3889,21 @@ func TestIntegration_ExplainSolution_FromCatalog_ByName(t *testing.T) {
 	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
 	require.Equal(t, 0, exitCode)
 
-	// Explain the solution from catalog by name
-	stdout, _, exitCode := runScafctlWithEnv(t, env, "explain", "solution", "resolver-demo")
+	// Inspect the solution from catalog by name
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "inspect", "solution", "resolver-demo")
 	assert.Equal(t, 0, exitCode)
 	// Should have solution metadata
 	assert.Contains(t, stdout, "resolver-demo")
+}
+
+// Regression: inspecting a solution when none can be found must print a clear
+// error, not exit silently (the coded ExitError was previously swallowed).
+func TestIntegration_InspectSolution_NoSolution_PrintsError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "inspect", "solution")
+	assert.NotEqual(t, 0, exitCode, "should fail when no solution is found")
+	assert.Contains(t, stderr, "no solution", "must surface a clear error message")
 }
 
 // Lint Solution from Catalog Tests
@@ -7085,6 +7095,24 @@ func TestIntegration_EvalCEL_Simple(t *testing.T) {
 	assert.Contains(t, stdout, "3")
 }
 
+// eval refs was relocated from 'get resolver refs' (#644). Verify the new path
+// extracts resolver references from an expression.
+func TestIntegration_EvalRefs_Expr(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "eval", "refs", "--expr", `_.config.host + ":" + string(_.port)`)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "config")
+	assert.Contains(t, stdout, "port")
+}
+
+// The old 'get resolver' group was removed by #644; it must no longer appear
+// as a subcommand of 'get'.
+func TestIntegration_GetResolver_Removed(t *testing.T) {
+	t.Parallel()
+	stdout, _, _ := runScafctl(t, "get", "--help")
+	assert.NotContains(t, stdout, "resolver")
+}
+
 func TestIntegration_EvalCEL_WithVar(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "eval", "cel", "--expression", "size(name) > 3", "-v", "name=hello")
@@ -9110,9 +9138,9 @@ func TestIntegration_SolutionDiff_Alias(t *testing.T) {
 // Positional Path Rejection Tests — Uniform -f/--file Input
 // ============================================================================
 
-func TestIntegration_ExplainSolution_PositionalPathRejected(t *testing.T) {
+func TestIntegration_InspectSolution_PositionalPathRejected(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "explain", "solution", "./my-solution.yaml")
+	_, stderr, exitCode := runScafctl(t, "inspect", "solution", "./my-solution.yaml")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
 }

@@ -219,6 +219,25 @@ func (s *Server) registerSolutionTools() {
 		),
 	)
 	s.addTool(getRunCommandTool, s.handleGetRunCommand)
+
+	// get_solution_usage
+	getSolutionUsageTool := mcp.NewTool("get_solution_usage",
+		mcp.WithDescription("Get the user-facing usage view for a solution: a synopsis, the user-supplied parameters (with types, defaults, and discovered allowed values), and each runnable action with the exact command to invoke it. Answers 'what can I do with this solution and how do I run it?' Accepts a local file path, catalog name, or URL."),
+		mcp.WithTitleAnnotation("Get Solution Usage"),
+		mcp.WithToolIcons(toolIcons["solution"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Path to solution file, catalog name, or URL"),
+		),
+		mcp.WithString("cwd",
+			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+		),
+	)
+	s.addTool(getSolutionUsageTool, s.handleGetSolutionUsage)
 }
 
 // handleListSolutions lists available solutions from the local catalog.
@@ -1300,6 +1319,46 @@ func (s *Server) handleGetRunCommand(_ context.Context, request mcp.CallToolRequ
 	)
 
 	return result, nil
+}
+
+// handleGetSolutionUsage returns the user-facing usage view for a solution.
+func (s *Server) handleGetSolutionUsage(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide a path to a solution file, catalog name, or URL"),
+		), nil
+	}
+	cwd := request.GetString("cwd", "")
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	sol, err := inspect.LoadSolution(ctx, path)
+	if err != nil {
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Check that the path points to a valid solution file"),
+			WithRelatedTools("lint_solution"),
+		), nil
+	}
+
+	usage, err := inspect.BuildUsage(ctx, sol, path, settings.BinaryNameFromContext(ctx))
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("The solution needs either resolvers or a workflow section to have a usage view"),
+			WithRelatedTools("inspect_solution"),
+		), nil
+	}
+
+	return mcp.NewToolResultJSON(usage)
 }
 
 // buildResolverExecutionError converts resolver execution errors into rich structured

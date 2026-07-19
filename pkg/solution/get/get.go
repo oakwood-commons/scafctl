@@ -425,7 +425,7 @@ func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion stri
 //   - arg looks like a local file path rather than a catalog/registry name
 //
 // cmdUsage is included in the error message to suggest the correct invocation
-// (e.g., "scafctl explain solution").
+// (e.g., "scafctl inspect solution").
 func ValidatePositionalRef(arg, fileFlag, cmdUsage string) error {
 	if fileFlag != "" {
 		return fmt.Errorf("cannot use both -f/--file and a positional argument")
