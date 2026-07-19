@@ -224,13 +224,16 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
 
 ~~~json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "metadata": {
     "solution": "deploy-app",
     "version": "1.0.0",
     "createdAt": "2026-02-12T10:00:00Z",
     "lastUpdatedAt": "2026-02-12T11:30:00Z",
-    "scafctlVersion": "1.8.0"
+    "runtime": {
+      "engine": { "name": "scafctl", "version": "1.8.0" },
+      "cli": { "name": "mycli", "version": "3.2.0" }
+    }
   },
   "command": {
     "subcommand": "run solution",
@@ -261,7 +264,10 @@ State is persisted as JSON. The schema includes a `schemaVersion` field for forw
 | `metadata.version` | Solution version from `metadata.version` |
 | `metadata.createdAt` | Timestamp of first state file creation |
 | `metadata.lastUpdatedAt` | Timestamp of most recent state save |
-| `metadata.scafctlVersion` | Version of scafctl that last wrote the state |
+| `metadata.runtime.engine.name` | Execution engine (scafctl library) name -- always `scafctl` |
+| `metadata.runtime.engine.version` | Execution engine (scafctl library) build version |
+| `metadata.runtime.cli.name` | Invoking CLI/frontend binary name. Equals the engine name for direct scafctl use; differs for embedded runners |
+| `metadata.runtime.cli.version` | Invoking CLI/frontend version. Equals the engine version when not embedded or when the embedder supplies no version |
 | `command.subcommand` | CLI subcommand used (e.g., `run solution`) |
 | `command.parameters` | Key-value pairs from the most recent invocation's `-r/--resolver` flags |
 | `parameters` | Merged set of all CLI parameters across runs (drives replay) |

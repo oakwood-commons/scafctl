@@ -7,7 +7,10 @@
   "metadata": {
     "createdAt": "2026-07-08T18:03:33.734263Z",
     "lastUpdatedAt": "2026-07-08T20:06:07.647078Z",
-    "scafctlVersion": "0.32.0-alpha20260708",
+    "runtime": {
+      "engine": { "name": "scafctl", "version": "0.32.0-alpha20260708" },
+      "cli": { "name": "scafctl", "version": "0.32.0-alpha20260708" }
+    },
     "solution": "test-state-persist-provider",
     "version": "1.0.0"
   },
@@ -22,5 +25,5 @@
       "value": "delta"
     }
   },
-  "schemaVersion": 2
+  "schemaVersion": 3
 }

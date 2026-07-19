@@ -264,12 +264,12 @@ func TestRunDiff_OutputToFile(t *testing.T) {
 func createTestSnapshotForDiff() *resolver.Snapshot {
 	return &resolver.Snapshot{
 		Metadata: resolver.SnapshotMetadata{
-			Solution:       "test-solution",
-			Version:        "1.0.0",
-			Timestamp:      time.Now(),
-			ScafctlVersion: "dev",
-			TotalDuration:  "1s",
-			Status:         "success",
+			Solution:      "test-solution",
+			Version:       "1.0.0",
+			Timestamp:     time.Now(),
+			Runtime:       resolver.SnapshotRuntime{Engine: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}, CLI: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}},
+			TotalDuration: "1s",
+			Status:        "success",
 		},
 		Resolvers: map[string]*resolver.SnapshotResolver{
 			"test_resolver": {
@@ -289,12 +289,12 @@ func createTestSnapshotPair(t *testing.T, dir string) (beforeFile, afterFile str
 	beforeFile = filepath.Join(dir, "before.json")
 	before := &resolver.Snapshot{
 		Metadata: resolver.SnapshotMetadata{
-			Solution:       "test-solution",
-			Version:        "1.0.0",
-			Timestamp:      time.Now().Add(-time.Hour),
-			ScafctlVersion: "dev",
-			TotalDuration:  "1s",
-			Status:         "success",
+			Solution:      "test-solution",
+			Version:       "1.0.0",
+			Timestamp:     time.Now().Add(-time.Hour),
+			Runtime:       resolver.SnapshotRuntime{Engine: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}, CLI: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}},
+			TotalDuration: "1s",
+			Status:        "success",
 		},
 		Resolvers: map[string]*resolver.SnapshotResolver{
 			"test_resolver": {
@@ -312,12 +312,12 @@ func createTestSnapshotPair(t *testing.T, dir string) (beforeFile, afterFile str
 	afterFile = filepath.Join(dir, "after.json")
 	after := &resolver.Snapshot{
 		Metadata: resolver.SnapshotMetadata{
-			Solution:       "test-solution",
-			Version:        "1.0.0",
-			Timestamp:      time.Now(),
-			ScafctlVersion: "dev",
-			TotalDuration:  "1s",
-			Status:         "success",
+			Solution:      "test-solution",
+			Version:       "1.0.0",
+			Timestamp:     time.Now(),
+			Runtime:       resolver.SnapshotRuntime{Engine: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}, CLI: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}},
+			TotalDuration: "1s",
+			Status:        "success",
 		},
 		Resolvers: map[string]*resolver.SnapshotResolver{
 			"test_resolver": {

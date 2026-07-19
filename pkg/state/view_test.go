@@ -44,11 +44,14 @@ func TestBuildListView_GroupsSections(t *testing.T) {
 
 	sd := NewData()
 	sd.Metadata = Metadata{
-		Solution:       "demo",
-		Version:        "1.2.3",
-		ScafctlVersion: "dev",
-		CreatedAt:      created,
-		LastUpdatedAt:  updated,
+		Solution: "demo",
+		Version:  "1.2.3",
+		Runtime: Runtime{
+			Engine: RuntimeComponent{Name: "scafctl", Version: "dev"},
+			CLI:    RuntimeComponent{Name: "scafctl", Version: "dev"},
+		},
+		CreatedAt:     created,
+		LastUpdatedAt: updated,
 	}
 	sd.Command = CommandInfo{
 		Subcommand: "run resolver",
@@ -80,7 +83,7 @@ func TestBuildListView_GroupsSections(t *testing.T) {
 	meta := view.SectionByName("metadata").Fields
 	assert.Equal(t, "demo", meta["solution"])
 	assert.Equal(t, "1.2.3", meta["version"])
-	assert.Equal(t, "dev", meta["scafctlVersion"])
+	assert.NotNil(t, meta["runtime"])
 	assert.Equal(t, "2025-01-02T03:04:05Z", meta["createdAt"])
 	assert.Equal(t, "2025-06-07T08:09:10Z", meta["lastUpdatedAt"])
 

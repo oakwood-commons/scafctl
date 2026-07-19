@@ -257,6 +257,12 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cliParams.BinaryName = binaryName
 	paths.SetAppName(binaryName)
 
+	// Record the embedder's version (if supplied) so state metadata can capture
+	// the invoking CLI/frontend provenance distinctly from the engine version.
+	if opts.VersionExtra != nil && opts.VersionExtra.BuildVersion != "" {
+		cliParams.EmbedderVersion = opts.VersionExtra.BuildVersion
+	}
+
 	// Update package-level solution discovery lists so any code reading them
 	// directly (e.g., PossibleSolutionPaths, MCP capabilities) reflects the
 	// embedder's binary name rather than the hardcoded default.

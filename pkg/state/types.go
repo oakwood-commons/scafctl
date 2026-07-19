@@ -11,7 +11,13 @@ import (
 
 const (
 	// SchemaVersionCurrent is the state file schema version written by this build.
-	SchemaVersionCurrent = 2
+	// v3 replaced the single-purpose metadata.scafctlVersion field with a
+	// metadata.runtime block that separates the execution engine identity
+	// (runtime.engine) from the invoking CLI/frontend identity (runtime.cli).
+	// Legacy v2 files still load (SchemaVersionMinimum stays 2) but their old
+	// scafctlVersion value is intentionally NOT migrated into runtime -- the
+	// runtime block is re-stamped from the current invocation on the next save.
+	SchemaVersionCurrent = 3
 
 	// SchemaVersionMinimum is the oldest state file schema version this build can
 	// safely load. Bump this ONLY when a breaking change makes older files unsafe
@@ -115,8 +121,32 @@ type Metadata struct {
 	// LastUpdatedAt is when the state file was most recently saved.
 	LastUpdatedAt time.Time `json:"lastUpdatedAt" doc:"Most recent save"`
 
-	// ScafctlVersion is the version of scafctl that last wrote the state.
-	ScafctlVersion string `json:"scafctlVersion" doc:"Version of scafctl that last wrote" maxLength:"30"`
+	// Runtime records the execution provenance that last wrote the state,
+	// separating the engine (library) identity from the invoking CLI/frontend.
+	Runtime Runtime `json:"runtime" doc:"Execution provenance that last wrote the state"`
+}
+
+// Runtime records execution provenance: which engine performed the run and
+// which CLI/frontend invoked it. When scafctl is run directly (not embedded),
+// CLI mirrors Engine.
+type Runtime struct {
+	// Engine identifies the execution engine (the scafctl library) that
+	// performed the run.
+	Engine RuntimeComponent `json:"engine" doc:"Execution engine (scafctl library) identity"`
+
+	// CLI identifies the CLI/frontend that invoked execution. For embedded
+	// runners this is the wrapper binary; for direct scafctl use it mirrors
+	// Engine.
+	CLI RuntimeComponent `json:"cli" doc:"Invoking CLI/frontend identity"`
+}
+
+// RuntimeComponent identifies a named, versioned runtime participant.
+type RuntimeComponent struct {
+	// Name is the component's binary/identifier name.
+	Name string `json:"name" doc:"Component name" maxLength:"64" example:"scafctl"`
+
+	// Version is the component's version string. May be empty when unknown.
+	Version string `json:"version" doc:"Component version" maxLength:"64" example:"0.5.0"`
 }
 
 // CommandInfo captures the most recent invocation for validation replay.

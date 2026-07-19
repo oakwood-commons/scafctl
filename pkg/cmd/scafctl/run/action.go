@@ -381,7 +381,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	if sol.State != nil {
-		stateMgr = state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
+		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run action", params)
 		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
 		if loadErr != nil {

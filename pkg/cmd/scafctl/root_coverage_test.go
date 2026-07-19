@@ -370,6 +370,62 @@ func TestRoot_VersionExtra(t *testing.T) {
 	assert.Contains(t, output, "v2.0.0")
 }
 
+// TestRoot_EmbedderVersion_WiredFromVersionExtra verifies that a non-default
+// embedder supplying VersionExtra has its build version recorded in the ambient
+// settings as EmbedderVersion, so state/snapshot provenance can distinguish the
+// invoking CLI from the scafctl engine.
+func TestRoot_EmbedderVersion_WiredFromVersionExtra(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	var captured *settings.Run
+	cmd, _ := Root(&RootOptions{
+		IOStreams:  ioStreams,
+		BinaryName: "mycli",
+		VersionExtra: &settings.VersionInfo{
+			BuildVersion: "v2.0.0",
+		},
+		PreRunHook: func(c *cobra.Command, _ []string) error {
+			captured, _ = settings.FromContext(c.Context())
+			return nil
+		},
+	})
+	cmd.SetArgs([]string{"version"})
+	require.NoError(t, cmd.Execute())
+
+	require.NotNil(t, captured)
+	assert.Equal(t, "mycli", captured.BinaryName)
+	assert.Equal(t, "v2.0.0", captured.EmbedderVersion)
+}
+
+// TestRoot_EmbedderVersion_UnsetWhenNoVersionExtra verifies that without
+// VersionExtra (or with an empty build version) EmbedderVersion stays empty, so
+// CLI provenance falls back to mirroring the engine.
+func TestRoot_EmbedderVersion_UnsetWhenNoVersionExtra(t *testing.T) {
+	t.Parallel()
+
+	capture := func(opts *RootOptions) *settings.Run {
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		opts.IOStreams = ioStreams
+		var captured *settings.Run
+		opts.PreRunHook = func(c *cobra.Command, _ []string) error {
+			captured, _ = settings.FromContext(c.Context())
+			return nil
+		}
+		cmd, _ := Root(opts)
+		cmd.SetArgs([]string{"version"})
+		require.NoError(t, cmd.Execute())
+		require.NotNil(t, captured)
+		return captured
+	}
+
+	assert.Equal(t, "", capture(&RootOptions{BinaryName: "mycli"}).EmbedderVersion)
+	assert.Equal(t, "", capture(&RootOptions{
+		BinaryName:   "mycli",
+		VersionExtra: &settings.VersionInfo{BuildVersion: ""},
+	}).EmbedderVersion)
+}
+
 // TestNewRootOptions_NewFields verifies new fields have correct zero values.
 func TestNewRootOptions_NewFields(t *testing.T) {
 	t.Parallel()

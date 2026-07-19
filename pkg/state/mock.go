@@ -11,11 +11,14 @@ func NewMockData(solution, version string, params map[string]any) *Data {
 	now := time.Now().UTC()
 	data := NewData()
 	data.Metadata = Metadata{
-		Solution:       solution,
-		Version:        version,
-		CreatedAt:      now,
-		LastUpdatedAt:  now,
-		ScafctlVersion: "test",
+		Solution:      solution,
+		Version:       version,
+		CreatedAt:     now,
+		LastUpdatedAt: now,
+		Runtime: Runtime{
+			Engine: RuntimeComponent{Name: "scafctl", Version: "test"},
+			CLI:    RuntimeComponent{Name: "scafctl", Version: "test"},
+		},
 	}
 	if params != nil {
 		data.Parameters = params

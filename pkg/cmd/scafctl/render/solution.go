@@ -781,7 +781,7 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 		}
 	}
 
-	stateMgr := state.NewManager(sol.State, reg, settings.VersionInformation.BuildVersion)
+	stateMgr := state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 	cmdInfo := state.CommandInfo{
 		Subcommand: "render solution",
 		Parameters: formatParams(params),

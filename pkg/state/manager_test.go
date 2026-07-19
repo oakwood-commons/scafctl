@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -216,7 +217,7 @@ func TestManagerLoad(t *testing.T) {
 				reg = provider.NewRegistry()
 			}
 
-			mgr := NewManager(tt.config, reg, "test-version")
+			mgr := NewManager(tt.config, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 			cmd := CommandInfo{
 				Subcommand: "run solution",
 				Parameters: map[string]string{"foo": "bar"},
@@ -306,9 +307,40 @@ func TestManagerSave(t *testing.T) {
 			check: func(t *testing.T, sd *Data, _ *mockBackendProvider) {
 				assert.Equal(t, "my-app", sd.Metadata.Solution)
 				assert.Equal(t, "2.0.0", sd.Metadata.Version)
-				assert.Equal(t, "test-version", sd.Metadata.ScafctlVersion)
+				assert.Equal(t, "test-version", sd.Metadata.Runtime.Engine.Version)
+				assert.Equal(t, "scafctl", sd.Metadata.Runtime.Engine.Name)
 				assert.False(t, sd.Metadata.CreatedAt.IsZero())
 				assert.False(t, sd.Metadata.LastUpdatedAt.IsZero())
+			},
+		},
+		{
+			name: "upgrades schema version on save",
+			config: &Config{
+				Enabled: literalValueRef(true),
+				Backend: Backend{
+					Provider: "mock-state",
+					Inputs:   map[string]*spec.ValueRef{},
+				},
+			},
+			backend: &mockBackendProvider{},
+			// Simulate a state file loaded under an older, still-supported
+			// schema. Saving must re-stamp it with the current schema version so
+			// the on-disk format matches the content actually written.
+			state: func() *Data {
+				d := NewData()
+				d.SchemaVersion = SchemaVersionMinimum
+				return d
+			}(),
+			setup: func() (*resolver.Context, []*resolver.Resolver) {
+				return resolver.NewContext(), nil
+			},
+			check: func(t *testing.T, sd *Data, backend *mockBackendProvider) {
+				assert.Equal(t, SchemaVersionCurrent, sd.SchemaVersion)
+				// The persisted document must carry the upgraded version too.
+				require.Len(t, backend.saveCalls, 1)
+				data, ok := backend.saveCalls[0]["data"].(map[string]any)
+				require.True(t, ok, "save inputs must include the state data map")
+				assert.EqualValues(t, SchemaVersionCurrent, data["schemaVersion"])
 			},
 		},
 		{
@@ -360,7 +392,7 @@ func TestManagerSave(t *testing.T) {
 				reg = provider.NewRegistry()
 			}
 
-			mgr := NewManager(tt.config, reg, "test-version")
+			mgr := NewManager(tt.config, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 			rctx, resolvers := tt.setup()
 			solMeta := SolutionMeta{Name: "my-app", Version: "2.0.0"}
 
@@ -390,7 +422,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 	t.Run("SaveImmutables locks immutable without persisting parameters", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		rctx := resolver.NewContext()
 		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
@@ -415,7 +447,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 	t.Run("SaveImmutables skips resolvers whose deferred validation failed", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		rctx := resolver.NewContext()
 		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
@@ -438,7 +470,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 	t.Run("SaveParams persists the merged parameter set", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		sd := NewData()
 		params := map[string]any{"appName": "demo", "region": "us-east1"}
@@ -451,7 +483,7 @@ func TestManagerSaveImmutablesAndParams(t *testing.T) {
 	})
 
 	t.Run("nil config is a no-op", func(t *testing.T) {
-		mgr := NewManager(nil, provider.NewRegistry(), "test-version")
+		mgr := NewManager(nil, provider.NewRegistry(), settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 
 		require.NoError(t, mgr.SaveImmutables(context.Background(), sd, resolver.NewContext(), nil, nil, nil, solMeta, nil))
@@ -471,7 +503,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 	t.Run("first write saves immutable entry", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		rctx := resolver.NewContext()
 		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
@@ -494,7 +526,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 	t.Run("same value is no-op", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		rctx := resolver.NewContext()
 		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
@@ -524,7 +556,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 	t.Run("different value errors", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		rctx := resolver.NewContext()
 		rctx.SetResult("cluster_id", &resolver.ExecutionResult{
@@ -558,7 +590,7 @@ func TestManagerSave_Immutable(t *testing.T) {
 	t.Run("non-immutable resolver does not create entry", func(t *testing.T) {
 		backend := &mockBackendProvider{}
 		reg := newTestRegistry(t, backend)
-		mgr := NewManager(baseConfig, reg, "test-version")
+		mgr := NewManager(baseConfig, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 		rctx := resolver.NewContext()
 		rctx.SetResult("env", &resolver.ExecutionResult{
@@ -684,11 +716,14 @@ func TestExtractStateData(t *testing.T) {
 		dataMap := map[string]any{
 			"schemaVersion": float64(1),
 			"metadata": map[string]any{
-				"solution":       "test-app",
-				"version":        "1.0.0",
-				"scafctlVersion": "dev",
-				"createdAt":      "2025-01-01T00:00:00Z",
-				"lastUpdatedAt":  "2025-01-01T00:00:00Z",
+				"solution": "test-app",
+				"version":  "1.0.0",
+				"runtime": map[string]any{
+					"engine": map[string]any{"name": "scafctl", "version": "dev"},
+					"cli":    map[string]any{"name": "scafctl", "version": "dev"},
+				},
+				"createdAt":     "2025-01-01T00:00:00Z",
+				"lastUpdatedAt": "2025-01-01T00:00:00Z",
 			},
 			"command": map[string]any{
 				"subcommand": "run solution",
@@ -739,7 +774,7 @@ func TestManagerLoad_ParamsAsParams(t *testing.T) {
 				Inputs:   map[string]*spec.ValueRef{"path": {Expr: &expr}},
 			},
 		}
-		mgr := NewManager(cfg, reg, "v")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "v"})
 		params := map[string]any{"project": "my-proj"}
 		result, err := mgr.Load(context.Background(), params, CommandInfo{Subcommand: "run solution"})
 		assert.NoError(t, err)
@@ -758,7 +793,7 @@ func TestManagerLoad_ParamsAsParams(t *testing.T) {
 				Inputs:   map[string]*spec.ValueRef{},
 			},
 		}
-		mgr := NewManager(cfg, reg, "v")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "v"})
 
 		// enabled=true
 		result, err := mgr.Load(context.Background(), map[string]any{"state_enabled": true}, CommandInfo{})
@@ -783,7 +818,7 @@ func TestManagerLoad_ParamsAsParams(t *testing.T) {
 				Inputs:   map[string]*spec.ValueRef{"path": {Tmpl: &tmpl}},
 			},
 		}
-		mgr := NewManager(cfg, reg, "v")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "v"})
 		params := map[string]any{"project": "my-proj"}
 		result, err := mgr.Load(context.Background(), params, CommandInfo{})
 		assert.NoError(t, err)
@@ -801,7 +836,7 @@ func TestManagerLoad_ParamsAsParams(t *testing.T) {
 				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("default.json")},
 			},
 		}
-		mgr := NewManager(cfg, reg, "v")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "v"})
 		result, err := mgr.Load(context.Background(), nil, CommandInfo{})
 		assert.NoError(t, err)
 		assert.False(t, result.Skipped)
@@ -870,7 +905,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				Inputs:   map[string]*spec.ValueRef{"path": literalValueRef("state.json")},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
@@ -893,7 +928,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
@@ -918,7 +953,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		resolverData := map[string]any{"featureBranch": "feat/my-feature"}
@@ -943,7 +978,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		resolverData := map[string]any{"appName": "my-app"}
@@ -970,7 +1005,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
@@ -998,7 +1033,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		// Load should succeed -- saveOverrides are not resolved
 		result, err := mgr.Load(context.Background(), nil, CommandInfo{Subcommand: "run solution"})
 		assert.NoError(t, err)
@@ -1020,7 +1055,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
@@ -1042,7 +1077,7 @@ func TestManagerSave_SaveOverrides(t *testing.T) {
 				},
 			},
 		}
-		mgr := NewManager(cfg, reg, "test-version")
+		mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 		sd := NewData()
 		rctx := resolver.NewContext()
 		err := mgr.Save(context.Background(), sd, rctx, nil, nil, nil, SolutionMeta{Name: "app", Version: "1.0.0"})
@@ -1203,7 +1238,7 @@ func TestLoad_MissingParamsError(t *testing.T) {
 
 	backend := &mockBackendProvider{}
 	reg := newTestRegistry(t, backend)
-	mgr := NewManager(cfg, reg, "test-version")
+	mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
 
 	t.Run("returns MissingParamsError when params missing", func(t *testing.T) {
 		// No params supplied -- template will fail on .__params.project

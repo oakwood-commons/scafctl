@@ -134,7 +134,8 @@ func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Write
 	// Metadata
 	w.Plainlnf("Solution:        %s (v%s)", snapshot.Metadata.Solution, snapshot.Metadata.Version)
 	w.Plainlnf("Timestamp:       %s", snapshot.Metadata.Timestamp.Format("2006-01-02 15:04:05"))
-	w.Plainlnf("%s Version: %s", opts.BinaryName, snapshot.Metadata.ScafctlVersion)
+	w.Plainlnf("Engine:          %s %s", snapshot.Metadata.Runtime.Engine.Name, snapshot.Metadata.Runtime.Engine.Version)
+	w.Plainlnf("CLI:             %s %s", snapshot.Metadata.Runtime.CLI.Name, snapshot.Metadata.Runtime.CLI.Version)
 	w.Plainlnf("Total Duration:  %s", snapshot.Metadata.TotalDuration)
 	w.Plainlnf("Overall Status:  %s\n", snapshot.Metadata.Status)
 
