@@ -433,6 +433,35 @@ tasks:
         golangci-lint run ./... --config .golangci.yml --timeout 10m0s
         echo "✅ No linting issues found"
 
+  lint:changed:
+    desc: "Lint ONLY issues introduced by this branch (vs. the merge base). Cuts through pre-existing findings in untouched files so you can verify your own changes are clean before committing."
+    aliases: [lc]
+    silent: true
+    deps: [install-tools]
+    vars:
+      # Branch to diff against; override with BASE=<ref>. Defaults to the
+      # tracked default branch, falling back to main.
+      BASE: '{{.BASE | default "main"}}'
+    cmds:
+      - |
+        set -e
+        export PATH="{{.TOOLS_PATH}}:$PATH"
+        mkdir -p "{{.GOLANGCI_LINT_CACHE}}"
+
+        # Resolve the merge base so only lines this branch changed are reported.
+        base_ref="{{.BASE}}"
+        if git rev-parse --verify --quiet "origin/${base_ref}" >/dev/null; then
+          base_ref="origin/${base_ref}"
+        fi
+
+        echo "Linting changes introduced since ${base_ref}..."
+        golangci-lint run ./... \
+          --config .golangci.yml \
+          --timeout 10m0s \
+          --new-from-merge-base "${base_ref}" \
+          --whole-files
+        echo "✅ No new linting issues in changed code"
+
   vet:
     desc: "Run go vet (static checks from the Go toolchain)"
     silent: true

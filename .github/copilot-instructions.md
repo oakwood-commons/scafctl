@@ -76,7 +76,16 @@ Once the code changes for the issue are complete and local tests pass, and
    MEDIUM before proposing a commit (hand off to `go-fixer` if substantial).
    Validate the fixes (build, `-race` tests, targeted integration) and note any
    accepted LOW/INFO items with justification.
-4. **Summarize** -- Report the review outcome and what was fixed. Surface a
+4. **Lint before commit (mandatory)** -- Immediately before proposing a commit,
+   run `task lint:changed` and confirm it reports **no new issues** in the
+   changed code. This is required on the FINAL diff every time -- a lint run from
+   earlier in the session does not count, since later edits (including test
+   changes) can introduce new findings. Note: plain `task lint` always exits
+   non-zero because of pre-existing issues in untouched files; `task lint:changed`
+   filters to only issues this branch introduced (vs. the merge base), so a
+   clean result there is the gate. If it reports anything, fix it before
+   committing -- never push a lint-failing change and rely on CI to catch it.
+5. **Summarize** -- Report the review outcome and what was fixed. Surface a
    question to the user only if a finding requires a genuine product/design
    decision -- never merely to ask permission to run the gate.
 

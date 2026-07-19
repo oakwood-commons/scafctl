@@ -50,6 +50,16 @@ flow) over the staged-or-changed set. Confirm the change has:
   concrete options and a recommendation. When in doubt whether it is "obvious,"
   ask.
 
+## Phase 4.5: Lint the final diff (mandatory before commit)
+
+Run `task lint:changed` on the FINAL diff and confirm **no new issues** in the
+changed code. Do this every time, right before proposing a commit -- an earlier
+lint run does not count, because the review/fix edits above can introduce new
+findings. `task lint` always exits non-zero due to pre-existing issues in
+untouched files; `task lint:changed` reports only issues this branch introduced
+(vs. the merge base), so a clean result there is the gate. Fix anything it
+reports before committing; never rely on CI to catch a lint failure.
+
 ## Phase 5: Summarize
 
 Report: review outcome (findings by severity), what was fixed, coverage status,

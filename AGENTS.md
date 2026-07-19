@@ -93,4 +93,7 @@ through the ssh-agent.
   packages -- put it in shared domain packages.
 - **Tests** for every new/changed file (target 70%+ patch coverage).
 - **Scratch files** go in the gitignored `temp/`; never commit them.
-- **Build/lint** via `task` (use `task lint`, not raw golangci-lint).
+- **Build/lint** via `task` (use `task lint`, not raw golangci-lint). Before
+  every commit, run `task lint:changed` and confirm no new issues -- it filters
+  out pre-existing findings in untouched files (which make plain `task lint`
+  always exit non-zero) and reports only what this branch introduced.
