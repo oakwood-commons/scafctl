@@ -232,12 +232,19 @@ func actionCommand(ctx context.Context, binaryName, base, name string, act *acti
 
 // sourceArgs extracts the source portion (everything after "<bin> run solution")
 // from a base command like "<bin> run solution -f ./sol.yaml", so it can be
-// reattached to a "run action" variant. Returns ("", false) when base has no
-// recognizable source suffix.
+// reattached to a "run action" variant. Only "-f <path>" sources are reattached
+// -- `run action` treats bare positional args as action names, so a positional
+// solution ref (catalog/URL) must NOT be appended. Returns ("", false) when
+// there is no reattachable -f source.
 func sourceArgs(base, binaryName string) (string, bool) {
 	prefix := binaryName + " run solution"
-	if strings.HasPrefix(base, prefix) {
-		return strings.TrimPrefix(base, prefix), true
+	suffix, ok := strings.CutPrefix(base, prefix)
+	if !ok {
+		return "", false
+	}
+	// Only "-f <path>" is safe to reattach to `run action`.
+	if strings.HasPrefix(strings.TrimSpace(suffix), "-f ") {
+		return suffix, true
 	}
 	return "", false
 }

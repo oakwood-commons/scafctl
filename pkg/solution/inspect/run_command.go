@@ -11,6 +11,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 )
 
 // RunCommandInfo holds the structured result of analyzing a solution to
@@ -123,14 +124,15 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 		}
 	}
 
-	// Build the full command string.
-	// Ensure relative paths have "./" prefix so VS Code chat does not
-	// auto-linkify bare filenames into content-reference URLs.
-	cmdPath := path
-	if !strings.HasPrefix(cmdPath, "/") && !strings.HasPrefix(cmdPath, "./") && !strings.HasPrefix(cmdPath, "../") && !strings.Contains(cmdPath, "://") {
-		cmdPath = "./" + cmdPath
+	// Build the source argument (how to point the command at this solution).
+	// It is derived from how the solution was actually loaded, so catalog/URL
+	// references become positional args and auto-discovery falls back to the
+	// resolved path -- never a bogus "-f ./" or "-f ./my-catalog-ref".
+	sourceArg := solutionSourceArg(sol, path)
+	baseCommand := command
+	if sourceArg != "" {
+		baseCommand = command + " " + sourceArg
 	}
-	baseCommand := fmt.Sprintf("%s -f %s", command, cmdPath)
 	fullCommand := baseCommand
 	for _, p := range parameters {
 		exampleVal := "<value>"
@@ -155,6 +157,66 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 		HasWorkflow:  hasWorkflow,
 		HasResolvers: hasResolvers,
 	}, nil
+}
+
+// solutionSourceArg returns the command-line argument that points `run
+// solution`/`run resolver` at this solution, derived from how the solution was
+// actually loaded (via sol.GetPath()). rawPath is the original user input
+// (an -f path, a catalog/URL/registry ref, or "" for auto-discovery) and is
+// preferred when it is a usable reference.
+//
+// Returns:
+//   - "-f <path>"   for local files (and auto-discovery, using the resolved path)
+//   - "<ref>"       (positional) for catalog names, remote OCI refs, and URLs
+//   - ""            when no source can be determined
+func solutionSourceArg(sol *solution.Solution, rawPath string) string {
+	resolved := ""
+	if sol != nil {
+		resolved = sol.GetPath()
+	}
+
+	// Catalog reference: run solution accepts the bare name positionally.
+	if ref, ok := strings.CutPrefix(resolved, "catalog:"); ok {
+		// catalogPath may be "catalog:<name[@ver]>" or "catalog:<cat>:<name[@ver]>".
+		if rawPath != "" && get.IsCatalogReference(rawPath) {
+			return rawPath
+		}
+		if i := strings.LastIndex(ref, ":"); i >= 0 {
+			ref = ref[i+1:]
+		}
+		return ref
+	}
+	// Remote OCI reference: positional.
+	if ref, ok := strings.CutPrefix(resolved, "remote:"); ok {
+		if rawPath != "" {
+			return rawPath
+		}
+		return ref
+	}
+	// URL: positional (no ./ prefixing).
+	if strings.Contains(resolved, "://") {
+		return resolved
+	}
+	if strings.Contains(rawPath, "://") {
+		return rawPath
+	}
+
+	// Local file. Prefer the user's own -f path when they gave one (preserves
+	// their relative form); otherwise fall back to the resolved discovery path.
+	filePath := rawPath
+	if filePath == "" {
+		filePath = resolved
+	}
+	if filePath == "" {
+		return ""
+	}
+	// Ensure relative paths have a "./" prefix so chat UIs do not auto-linkify
+	// bare filenames into content-reference URLs.
+	if !strings.HasPrefix(filePath, "/") && !strings.HasPrefix(filePath, "./") &&
+		!strings.HasPrefix(filePath, "../") && !strings.Contains(filePath, "://") {
+		filePath = "./" + filePath
+	}
+	return "-f " + filePath
 }
 
 // parameterDefault extracts the literal "default" input from a parameter
