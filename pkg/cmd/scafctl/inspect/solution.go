@@ -43,13 +43,19 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	cmd := &cobra.Command{
 		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol"},
-		Short:   "Inspect solution structure with kvx output",
+		Short:   "Inspect a solution's structure (or --usage for how to run it)",
 		Long: heredoc.Doc(`
-			Inspect a solution's structure and metadata with full kvx output support.
+			Inspect a specific solution's structure and metadata with full kvx
+			output support.
 
-			This provides a structured view of solution metadata, resolvers, actions,
-			parameters, file dependencies, and the run command in all kvx output
-			formats including table, JSON, YAML, tree, mermaid, and interactive mode.
+			By default this shows the developer view: metadata, resolvers, actions,
+			file dependencies, and the run command, in any kvx output format
+			(table, JSON, YAML, tree, mermaid, interactive).
+
+			Add --usage for the user-facing view: a synopsis, the parameters a
+			solution takes (with types, defaults, and discovered allowed values),
+			and the exact command to run each action. Use this to learn how to
+			consume a solution you did not write.
 
 			Solutions can be loaded from:
 			  - Catalog name or remote registry ref: positional argument
@@ -58,7 +64,13 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			  - Auto-discovery: if no source is specified, searches for solution.yaml
 		`),
 		Example: heredoc.Docf(`
-			# Inspect a solution from a file (table view)
+			# How do I run this solution? (usage view)
+			$ %[1]s inspect solution -f ./my-solution.yaml --usage
+
+			# Usage view as structured data
+			$ %[1]s inspect solution -f ./my-solution.yaml --usage -o json
+
+			# Inspect a solution's structure from a file (table view)
 			$ %[1]s inspect solution -f ./my-solution.yaml
 
 			# Inspect from catalog with JSON output
@@ -107,9 +119,16 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 
 // Run executes the inspect solution command.
 func (o *SolutionOptions) Run(ctx context.Context) error {
+	w := writer.FromContext(ctx)
+
 	sol, err := inspect.LoadSolution(ctx, o.File)
 	if err != nil {
-		return fmt.Errorf("loading solution: %w", err)
+		// Surface the error to the user before returning the coded error;
+		// otherwise a non-GeneralError exit code exits silently.
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+		return err
 	}
 
 	appName := o.BinaryName + " inspect solution"
@@ -124,7 +143,10 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	if o.Usage {
 		usage, uErr := inspect.BuildUsage(ctx, sol, o.File, o.BinaryName)
 		if uErr != nil {
-			return fmt.Errorf("building usage view: %w", uErr)
+			if w != nil {
+				w.Errorf("%v", uErr)
+			}
+			return exitcode.WithCode(uErr, exitcode.InvalidInput)
 		}
 		// Default (auto) non-interactive output uses a human-friendly sectioned
 		// renderer; explicit -o/-i uses the kvx pipeline for structured output.

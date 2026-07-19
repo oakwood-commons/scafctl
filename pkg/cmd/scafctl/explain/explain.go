@@ -29,12 +29,14 @@ func CommandExplain(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 	cCmd := &cobra.Command{
 		Use:     "explain <kind>[.field.path]",
 		Aliases: []string{"exp"},
-		Short:   "Show schema documentation for resource kinds",
-		Long: fmt.Sprintf(`Show detailed schema documentation for resource kinds.
+		Short:   "Show the schema of a resource kind (fields, types, validation)",
+		Long: fmt.Sprintf(`Show the schema of a resource KIND -- the fields, types, and validation
+rules available when writing that kind of YAML. The information is extracted
+from Go struct tags.
 
-This command displays the struct definition, field types, validation rules,
-and documentation extracted from Go struct tags. Use it to understand what
-fields are available and their constraints when writing YAML configurations.
+Note: 'explain' describes a KIND (a type), not a specific file. To inspect an
+actual solution file, use 'inspect solution'; for how to run it, use
+'inspect solution --usage'.
 
 AVAILABLE KINDS:
   %s
@@ -50,16 +52,28 @@ Examples:
   scafctl explain action --recursive
 
   # Show Resolver schema
-  scafctl explain resolver`, strings.Join(kindNames, ", ")),
+  scafctl explain resolver
+
+See also:
+  inspect solution          Structure/metadata of a specific solution file
+  inspect solution --usage  Parameters and how to run a solution
+  get                       List resources or show one by name`, strings.Join(kindNames, ", ")),
 		SilenceUsage: true,
 	}
 
 	// Add the schema browser as the default command behavior
 	schemaCmd := CommandSchema(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use))
 
-	// Copy schema command's RunE to the parent command
-	cCmd.RunE = schemaCmd.RunE
-	cCmd.Args = schemaCmd.Args
+	// Copy the schema command's behavior onto the parent, but show help when
+	// invoked with no arguments instead of erroring on the missing kind.
+	schemaRunE := schemaCmd.RunE
+	cCmd.RunE = func(c *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return c.Help()
+		}
+		return schemaRunE(c, args)
+	}
+	cCmd.Args = cobra.ArbitraryArgs
 	cCmd.ValidArgsFunction = schemaCmd.ValidArgsFunction
 
 	// Copy flags from schema command

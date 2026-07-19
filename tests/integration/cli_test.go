@@ -3896,6 +3896,16 @@ func TestIntegration_InspectSolution_FromCatalog_ByName(t *testing.T) {
 	assert.Contains(t, stdout, "resolver-demo")
 }
 
+// Regression: inspecting a solution when none can be found must print a clear
+// error, not exit silently (the coded ExitError was previously swallowed).
+func TestIntegration_InspectSolution_NoSolution_PrintsError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "inspect", "solution")
+	assert.NotEqual(t, 0, exitCode, "should fail when no solution is found")
+	assert.Contains(t, stderr, "no solution", "must surface a clear error message")
+}
+
 // Lint Solution from Catalog Tests
 // =============================================================================
 
