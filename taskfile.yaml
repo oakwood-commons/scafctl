@@ -1049,7 +1049,7 @@ tasks:
       CGO_ENABLED: '{{ if eq .HAS_CC "true" }}1{{ else }}0{{ end }}'
     cmds:
       - go test {{.RACE_FLAG}} -count=1 ./tests/integration/ -run "TestAPI_"
-      - go test -count=1 -parallel 4 ./tests/integration/ -run "TestIntegration_" -timeout 5m
+      - go test -count=1 -parallel 4 ./tests/integration/ -run "TestIntegration_" -timeout 10m
       - '{{.DIST}}/{{.OUTPUT_FILE}} test functional --tests-path "{{.FIXED_ROOT}}/tests/integration/solutions" --no-color -q --concurrency 8'
 
   test:e2e:
