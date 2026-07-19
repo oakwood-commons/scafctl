@@ -403,3 +403,29 @@ func TestCommandInspectSolution_UsageText(t *testing.T) {
 	assert.Contains(t, got, "scafctl run solution -r action=refresh")
 	assert.Contains(t, got, "EXAMPLES")
 }
+
+func TestCommandInspect(t *testing.T) {
+	t.Parallel()
+	_, ioStreams := makeIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandInspect(cliParams, ioStreams, "scafctl")
+
+	require.NotNil(t, cmd)
+	assert.Equal(t, "inspect", cmd.Use)
+	assert.NotEmpty(t, cmd.Short)
+	assert.NotEmpty(t, cmd.Long)
+	assert.NotEmpty(t, cmd.Example)
+	assert.True(t, cmd.SilenceUsage)
+
+	// The group wires up the solution subcommand.
+	names := make([]string, 0, len(cmd.Commands()))
+	for _, c := range cmd.Commands() {
+		names = append(names, c.Name())
+	}
+	assert.Contains(t, names, "solution")
+
+	// Embedder-safe: a non-default binary name appears in the examples.
+	cmd2 := CommandInspect(cliParams, ioStreams, "mycli")
+	assert.Contains(t, cmd2.Example, "mycli inspect solution")
+}
