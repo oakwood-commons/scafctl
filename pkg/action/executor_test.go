@@ -1519,20 +1519,6 @@ func TestExecutor_Execute_FingerprintAllMissingSourcesAlwaysRuns(t *testing.T) {
 func TestExecutor_Execute_FingerprintInvalidPatternHardFails(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-
-	execCount := 0
-	registry := newExecMockRegistry()
-	registry.register(&execMockProvider{
-		name: "test-provider",
-		execute: func(_ context.Context, _ any) (*provider.Output, error) {
-			execCount++
-			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
-		},
-	})
-
-	fpChecker := fingerprint.NewChecker(state.NewData())
-
 	for _, tc := range []struct {
 		name    string
 		pattern string
@@ -1542,7 +1528,21 @@ func TestExecutor_Execute_FingerprintInvalidPatternHardFails(t *testing.T) {
 		{"malformed glob", "[invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			execCount = 0
+			t.Parallel()
+
+			dir := t.TempDir()
+
+			execCount := 0
+			registry := newExecMockRegistry()
+			registry.register(&execMockProvider{
+				name: "test-provider",
+				execute: func(_ context.Context, _ any) (*provider.Output, error) {
+					execCount++
+					return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+				},
+			})
+			fpChecker := fingerprint.NewChecker(state.NewData())
+
 			workflow := &Workflow{
 				Actions: map[string]*Action{
 					"build": {
