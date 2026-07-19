@@ -26,7 +26,7 @@ func TestCommandEval(t *testing.T) {
 
 	// Verify subcommands are added
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 3, "should have 3 subcommands: cel, template, validate")
+	require.Len(t, subCmds, 4, "should have 4 subcommands: cel, template, validate, refs")
 
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
@@ -35,6 +35,7 @@ func TestCommandEval(t *testing.T) {
 	assert.Contains(t, cmdNames, "cel")
 	assert.Contains(t, cmdNames, "template")
 	assert.Contains(t, cmdNames, "validate")
+	assert.Contains(t, cmdNames, "refs")
 }
 
 func TestCommandEval_NoRunE(t *testing.T) {

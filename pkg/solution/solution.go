@@ -147,6 +147,11 @@ type Metadata struct {
 	// Annotations is a free-form map of key-value metadata for tooling and humans.
 	// Not interpreted by the engine. Follows the Kubernetes annotation pattern.
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"Free-form key-value annotations" required:"false"`
+
+	// Usage holds optional author-curated documentation for the user-facing
+	// usage view (inspect solution --usage). When absent, the view is generated
+	// from parameters and actions.
+	Usage *spec.Usage `json:"usage,omitempty" yaml:"usage,omitempty" doc:"Optional user-facing usage documentation" required:"false"`
 }
 
 // Catalog controls distribution and visibility of the solution.

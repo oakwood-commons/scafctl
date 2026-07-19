@@ -243,7 +243,7 @@ Linting is advisory, not blocking. Output supports table, JSON, YAML, and quiet 
 - Resolver DAG visualization ✅ (`--graph` with ASCII, DOT, Mermaid, JSON)
 - Action DAG visualization ✅ (`--action-graph` with ASCII, DOT, Mermaid, JSON)
 - Rendered action graph inspection ✅ (`scafctl render solution`)
-- Dependency summaries ✅ (`scafctl explain solution`)
+- Dependency summaries ✅ (`scafctl inspect solution`)
 
 Visualization operates on rendered graphs, not runtime execution.
 

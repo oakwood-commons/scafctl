@@ -17,10 +17,16 @@ func CommandEval(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cCmd := &cobra.Command{
 		Use:     "eval",
 		Aliases: []string{"e"},
-		Short:   "Evaluate CEL expressions and Go templates",
-		Long: `Evaluate and validate CEL expressions and Go templates in isolation.
+		Short:   "Evaluate, validate, and analyze CEL expressions and Go templates",
+		Long: `Work with CEL expressions and Go templates in isolation:
 
-Useful for testing expressions and templates before using them in solutions.`,
+  eval cel        Evaluate a CEL expression
+  eval template   Render a Go template
+  eval validate   Check an expression or template for syntax errors
+  eval refs       Extract the resolver references (_.name) an expression/template uses
+
+Useful for testing and analyzing expressions and templates before using them
+in solutions.`,
 		SilenceUsage: true,
 	}
 
@@ -29,6 +35,7 @@ Useful for testing expressions and templates before using them in solutions.`,
 	cCmd.AddCommand(CommandCEL(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandTemplate(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandValidate(cliParams, ioStreams, cmdPath))
+	cCmd.AddCommand(CommandRefs(cliParams, ioStreams, settings.SanitizeBinaryName(cliParams.BinaryName)))
 
 	return cCmd
 }

@@ -36,9 +36,9 @@ spec:
         assertions:
           - expression: __exitCode == 0
 
-      explain-with-auto-inject:
-        description: Verify explain works with auto-injected -f flag
-        command: [explain, solution]
+      inspect-with-auto-inject:
+        description: Verify inspect solution works with auto-injected -f flag
+        command: [inspect, solution]
         tags: [input-flag]
         assertions:
           - expression: __exitCode == 0

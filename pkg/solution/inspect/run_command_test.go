@@ -92,7 +92,9 @@ func TestBuildRunCommand_PathPrefixing(t *testing.T) {
 		{"relative dotslash", "./solution.yaml", "-f ./solution.yaml"},
 		{"relative dotdot", "../solution.yaml", "-f ../solution.yaml"},
 		{"absolute", "/home/user/solution.yaml", "-f /home/user/solution.yaml"},
-		{"url", "https://example.com/sol.yaml", "-f https://example.com/sol.yaml"},
+		// URLs are passed positionally (run solution accepts a positional ref),
+		// not as -f.
+		{"url", "https://example.com/sol.yaml", "run resolver https://example.com/sol.yaml"},
 	}
 
 	for _, tt := range tests {
@@ -124,5 +126,75 @@ func BenchmarkBuildRunCommand(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		BuildRunCommand(sol, "solution.yaml", "scafctl") //nolint:errcheck
+	}
+}
+
+// TestBuildRunCommand_SourceArg verifies the generated source argument is
+// correct for each load type (regression for PR #646: no bogus `-f ./` or
+// `-f ./<catalog-ref>` commands).
+func TestBuildRunCommand_SourceArg(t *testing.T) {
+	newSol := func(resolvedPath string) *solution.Solution {
+		s := &solution.Solution{}
+		s.Spec.Resolvers = map[string]*resolver.Resolver{
+			"x": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "cel"}}}},
+		}
+		if resolvedPath != "" {
+			s.SetPath(resolvedPath)
+		}
+		return s
+	}
+
+	tests := []struct {
+		name         string
+		resolvedPath string // sol.GetPath()
+		rawPath      string // the original -f/positional input
+		wantContains string
+		wantMissing  string
+	}{
+		{
+			name:         "local file uses -f",
+			resolvedPath: "/abs/solution.yaml",
+			rawPath:      "./solution.yaml",
+			wantContains: "run resolver -f ./solution.yaml",
+		},
+		{
+			name:         "auto-discovery falls back to resolved path (no -f ./)",
+			resolvedPath: "scafctl/solution.yaml",
+			rawPath:      "",
+			wantContains: "run resolver -f ./scafctl/solution.yaml",
+			wantMissing:  "run resolver -f ./ ",
+		},
+		{
+			name:         "catalog ref is positional, not -f",
+			resolvedPath: "catalog:my-app@1.0.0",
+			rawPath:      "my-app@1.0.0",
+			wantContains: "run resolver my-app@1.0.0",
+			wantMissing:  "-f",
+		},
+		{
+			name:         "catalog ref with catalog name strips prefix",
+			resolvedPath: "catalog:official:my-app",
+			rawPath:      "",
+			wantContains: "run resolver my-app",
+			wantMissing:  "-f",
+		},
+		{
+			name:         "remote ref is positional",
+			resolvedPath: "remote:ghcr.io/org/app@1.0.0",
+			rawPath:      "ghcr.io/org/app@1.0.0",
+			wantContains: "run resolver ghcr.io/org/app@1.0.0",
+			wantMissing:  "-f",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := BuildRunCommand(newSol(tt.resolvedPath), tt.rawPath, "scafctl")
+			require.NoError(t, err)
+			assert.Contains(t, info.BaseCommand, tt.wantContains)
+			if tt.wantMissing != "" {
+				assert.NotContains(t, info.BaseCommand, tt.wantMissing)
+			}
+		})
 	}
 }

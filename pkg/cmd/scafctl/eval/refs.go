@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package resolver
+package eval
 
 import (
 	"context"
@@ -57,28 +57,28 @@ func CommandRefs(_ *settings.Run, ioStreams *terminal.IOStreams, binaryName stri
 		`),
 		Example: heredoc.Docf(`
 			# Extract references from a template file
-			$ %[1]s get resolver refs --template-file template.tmpl
+			$ %[1]s eval refs --template-file template.tmpl
 			
 			# Extract references with custom delimiters
-			$ %[1]s get resolver refs --template-file template.tmpl --left-delim '<%' --right-delim '%%>'
+			$ %[1]s eval refs --template-file template.tmpl --left-delim '<%' --right-delim '%%>'
 			
 			# Extract references from inline template
-			$ %[1]s get resolver refs --template '{{ ._.config.host }}:{{ ._.port }}'
+			$ %[1]s eval refs --template '{{ ._.config.host }}:{{ ._.port }}'
 			
 			# Extract references from CEL expression
-			$ %[1]s get resolver refs --expr '_.config.host + ":" + string(_.port)'
+			$ %[1]s eval refs --expr '_.config.host + ":" + string(_.port)'
 			
 			# Output as JSON
-			$ %[1]s get resolver refs --template-file template.tmpl -o json
+			$ %[1]s eval refs --template-file template.tmpl -o json
 			
 			# Output as YAML
-			$ %[1]s get resolver refs --expr '_.a + _.b' -o yaml
+			$ %[1]s eval refs --expr '_.a + _.b' -o yaml
 			
 			# Read template from stdin
-			$ cat template.tmpl | %[1]s get resolver refs --template -
+			$ cat template.tmpl | %[1]s eval refs --template -
 			
 			# Read CEL expression from stdin
-			$ echo '_.config.host' | %[1]s get resolver refs --expr -
+			$ echo '_.config.host' | %[1]s eval refs --expr -
 		`, binaryName),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runRefs(cmd.Context(), opts, ioStreams)

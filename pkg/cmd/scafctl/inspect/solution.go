@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -28,6 +29,9 @@ type SolutionOptions struct {
 	BinaryName string
 	File       string
 
+	// Usage switches to the user-facing "how do I run this" projection.
+	Usage bool
+
 	// kvx output integration
 	flags.KvxOutputFlags
 }
@@ -39,14 +43,19 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	cmd := &cobra.Command{
 		Use:     "solution [name[@version]]",
 		Aliases: []string{"sol"},
-		Short:   "Inspect solution structure with kvx output",
+		Short:   "Inspect a solution's structure (or --usage for how to run it)",
 		Long: heredoc.Doc(`
-			Inspect a solution's structure and metadata with full kvx output support.
+			Inspect a specific solution's structure and metadata with full kvx
+			output support.
 
-			This provides a structured view of solution metadata, resolvers, actions,
-			parameters, file dependencies, and the run command. Unlike 'explain solution'
-			which uses fixed text output, 'inspect solution' supports all kvx output
-			formats including table, JSON, YAML, tree, mermaid, and interactive mode.
+			By default this shows the developer view: metadata, resolvers, actions,
+			file dependencies, and the run command, in any kvx output format
+			(table, JSON, YAML, tree, mermaid, interactive).
+
+			Add --usage for the user-facing view: a synopsis, the parameters a
+			solution takes (with types, defaults, and discovered allowed values),
+			and the exact command to run each action. Use this to learn how to
+			consume a solution you did not write.
 
 			Solutions can be loaded from:
 			  - Catalog name or remote registry ref: positional argument
@@ -55,7 +64,13 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 			  - Auto-discovery: if no source is specified, searches for solution.yaml
 		`),
 		Example: heredoc.Docf(`
-			# Inspect a solution from a file (table view)
+			# How do I run this solution? (usage view)
+			$ %[1]s inspect solution -f ./my-solution.yaml --usage
+
+			# Usage view as structured data
+			$ %[1]s inspect solution -f ./my-solution.yaml --usage -o json
+
+			# Inspect a solution's structure from a file (table view)
 			$ %[1]s inspect solution -f ./my-solution.yaml
 
 			# Inspect from catalog with JSON output
@@ -96,6 +111,7 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	}
 
 	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Path to the solution file (local file, URL, or '-' for stdin)")
+	cmd.Flags().BoolVar(&opts.Usage, "usage", false, "Show the user-facing usage view (synopsis, parameters, and how to run each action)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
 	return cmd
@@ -103,23 +119,46 @@ func CommandInspectSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 
 // Run executes the inspect solution command.
 func (o *SolutionOptions) Run(ctx context.Context) error {
+	w := writer.FromContext(ctx)
+
 	sol, err := inspect.LoadSolution(ctx, o.File)
 	if err != nil {
-		return fmt.Errorf("loading solution: %w", err)
+		// Surface the error to the user before returning the coded error;
+		// otherwise a non-GeneralError exit code exits silently.
+		if w != nil {
+			w.Errorf("%v", err)
+		}
+		return err
 	}
 
-	exp := inspect.BuildSolutionExplanation(sol)
-
-	// Build the full inspection result including run command info
-	result := buildInspectResult(exp, sol, o.File, o.BinaryName)
-
+	appName := o.BinaryName + " inspect solution"
 	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.BinaryName+" inspect solution"),
+		kvx.WithOutputAppName(appName),
 		kvx.WithIOStreams(o.IOStreams),
 	)
 
+	// User-facing usage projection.
+	if o.Usage {
+		usage, uErr := inspect.BuildUsage(ctx, sol, o.File, o.BinaryName)
+		if uErr != nil {
+			if w != nil {
+				w.Errorf("%v", uErr)
+			}
+			return exitcode.WithCode(uErr, exitcode.InvalidInput)
+		}
+		// Default (auto) non-interactive output uses a human-friendly sectioned
+		// renderer; explicit -o/-i uses the kvx pipeline for structured output.
+		if (o.Output == "" || o.Output == "auto") && !o.Interactive {
+			return o.renderUsageText(ctx, usage)
+		}
+		return kvxOpts.Write(usage)
+	}
+
+	// Default: developer structure view.
+	exp := inspect.BuildSolutionExplanation(sol)
+	result := buildInspectResult(exp, sol, o.File, o.BinaryName)
 	return kvxOpts.Write(result)
 }
 
@@ -177,4 +216,92 @@ func buildInspectResult(exp *inspect.SolutionExplanation, sol *solution.Solution
 	}
 
 	return result
+}
+
+// renderUsageText renders the usage view as human-friendly sectioned output.
+// Used for the default (auto) non-interactive format; structured formats go
+// through the kvx pipeline instead.
+func (o *SolutionOptions) renderUsageText(ctx context.Context, u *inspect.UsageInfo) error {
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return nil
+	}
+
+	// Header: name (version) + synopsis.
+	title := u.Name
+	if u.Version != "" {
+		title = fmt.Sprintf("%s (%s)", u.Name, u.Version)
+	}
+	w.Plainlnf("%s", title)
+	if u.Synopsis != "" {
+		w.Plainlnf("%s", u.Synopsis)
+	}
+	if u.Run != "" {
+		w.Plainln("")
+		w.Plainlnf("Run: %s", u.Run)
+	}
+
+	// Parameters.
+	if len(u.Params) > 0 {
+		w.Plainln("")
+		w.Plainln("PARAMETERS")
+		for _, p := range u.Params {
+			line := "  " + p.Name
+			if p.Type != "" {
+				line += " (" + p.Type + ")"
+			}
+			if p.Required {
+				line += " [required]"
+			} else if p.Default != nil {
+				line += fmt.Sprintf(" [default: %v]", p.Default)
+			}
+			w.Plainlnf("%s", line)
+			if p.Description != "" {
+				w.Plainlnf("      %s", p.Description)
+			}
+			if len(p.AllowedValues) > 0 {
+				w.Plainlnf("      values: %s", joinAny(p.AllowedValues))
+			}
+		}
+	}
+
+	// Actions.
+	if len(u.Actions) > 0 {
+		w.Plainln("")
+		w.Plainln("ACTIONS")
+		for _, a := range u.Actions {
+			name := "  " + a.Name
+			if a.Default {
+				name += " (default)"
+			}
+			w.Plainlnf("%s", name)
+			if a.Description != "" {
+				w.Plainlnf("      %s", a.Description)
+			}
+			w.Plainlnf("      %s", a.Command)
+		}
+	}
+
+	// Curated examples.
+	if len(u.Examples) > 0 {
+		w.Plainln("")
+		w.Plainln("EXAMPLES")
+		for _, ex := range u.Examples {
+			if ex.Description != "" {
+				w.Plainlnf("  # %s", ex.Description)
+			}
+			w.Plainlnf("  %s", ex.Command)
+		}
+	}
+
+	return nil
+}
+
+// joinAny formats a slice of literal values as a comma-separated string.
+func joinAny(vals []any) string {
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = fmt.Sprintf("%v", v)
+	}
+	return strings.Join(parts, ", ")
 }

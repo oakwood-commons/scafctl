@@ -15,13 +15,17 @@ func CommandSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, bina
 	cmd := &cobra.Command{
 		Use:          "solution",
 		Aliases:      []string{"sol"},
-		Short:        "Compare solution files",
+		Short:        "Compare solutions (solution diff)",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
-			Compare solution files.
+			Structurally compare two solutions.
 
-			This command group provides tools for structural comparison of
-			solution files to understand what changed between versions.
+			Currently this group provides a single command, 'solution diff', which
+			reports what changed between two solution files or catalog versions
+			(resolvers, actions, parameters, and metadata).
+
+			Related: use 'inspect solution' to examine a single solution, and
+			'inspect solution --usage' to see how to run one.
 		`),
 		Example: heredoc.Docf(`
 			# Compare two solution files

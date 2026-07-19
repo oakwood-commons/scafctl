@@ -1158,8 +1158,7 @@ This section tracks which commands from the design are implemented and what work
 | `get solutions` | ✅ | List all solutions (plural alias) |
 | `get provider` | ✅ | Show provider metadata |
 | `get providers` | ✅ | List all registered providers (plural alias) |
-| `get resolver` | ✅ | Show resolver details |
-| `get authhandler` | ✅ | Show auth handler details |
+| `eval refs` | ✅ | Extract resolver references from templates/expressions (was `get resolver refs`) |
 | `get celfunction` | ✅ | Show CEL function details |
 | `run solution` | ✅ | Executes resolvers AND actions |
 | `run resolver` | ✅ | Executes resolvers only (for debugging and inspection) |
@@ -1174,7 +1173,7 @@ This section tracks which commands from the design are implemented and what work
 | `catalog tag` | ✅ | Create version aliases |
 | `catalog save` | ✅ | Export artifact to tar |
 | `catalog load` | ✅ | Import artifact from tar |
-| `explain solution` | ✅ | Show solution metadata |
+| `inspect solution` | ✅ | Show solution structure/metadata (was `explain solution`; `--usage` for the usage view) |
 | `explain provider` | ✅ | Show provider schema/docs |
 | `snapshot show` | ✅ | Display saved snapshot |
 | `snapshot diff` | ✅ | Compare two snapshots |
