@@ -82,7 +82,7 @@ spec:
         init:
           # Pre-seed at inputs.path -- this should be found at load time
           - command: >-
-              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-save-overrides","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-default-path"},"resolvers":{},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-save-overrides","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"app_name":"from-default-path"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/default-state.json
         assertions:
           - expression: __output.app_name == "from-default-path"

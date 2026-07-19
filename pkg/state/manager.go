@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
@@ -23,16 +24,34 @@ import (
 type Manager struct {
 	registry *provider.Registry
 	config   *Config
-	version  string // scafctl build version for metadata
+	runtime  settings.RuntimeProvenance // execution provenance for metadata
 }
 
-// NewManager creates a state manager for the given state configuration.
-func NewManager(config *Config, registry *provider.Registry, version string) *Manager {
+// NewManager creates a state manager for the given state configuration. The
+// provenance records both the engine (scafctl library) and invoking
+// CLI/frontend identities; see settings.RuntimeProvenance.
+func NewManager(config *Config, registry *provider.Registry, runtime settings.RuntimeProvenance) *Manager {
 	return &Manager{
 		config:   config,
 		registry: registry,
-		version:  version,
+		runtime:  runtime,
 	}
+}
+
+// runtimeMetadata adapts the shared provenance primitive into the state
+// Runtime metadata block, applying the CLI-mirrors-engine fallback.
+func runtimeMetadata(p settings.RuntimeProvenance) Runtime {
+	return Runtime{
+		Engine: RuntimeComponent{Name: p.EngineName, Version: p.EngineVersion},
+		CLI:    RuntimeComponent{Name: p.ResolvedCLIName(), Version: p.ResolvedCLIVersion()},
+	}
+}
+
+// RuntimeProvenanceFromContext builds execution provenance from the ambient CLI
+// settings. It is a thin wrapper over settings.RuntimeProvenanceFromContext so
+// callers in the command layer need not import settings directly.
+func RuntimeProvenanceFromContext(ctx context.Context) settings.RuntimeProvenance {
+	return settings.RuntimeProvenanceFromContext(ctx, "")
 }
 
 // LoadResult is returned by Load with the loaded state and merged parameters.
@@ -192,13 +211,18 @@ func (m *Manager) SaveParams(ctx context.Context, stateData *Data, mergedParams,
 func (m *Manager) commit(ctx context.Context, stateData *Data, resolverData, mergedParams map[string]any, solMeta SolutionMeta) error {
 	// Update metadata
 	now := time.Now().UTC()
+	// Stamp the current schema version so a state file loaded under an older
+	// (still-supported) schema is re-persisted under the format this build
+	// actually writes -- otherwise the on-disk schemaVersion would understate
+	// the content (e.g. a v2 file re-saved with the v3 runtime block).
+	stateData.SchemaVersion = SchemaVersionCurrent
 	if stateData.Metadata.CreatedAt.IsZero() {
 		stateData.Metadata.CreatedAt = now
 	}
 	stateData.Metadata.LastUpdatedAt = now
 	stateData.Metadata.Solution = solMeta.Name
 	stateData.Metadata.Version = solMeta.Version
-	stateData.Metadata.ScafctlVersion = m.version
+	stateData.Metadata.Runtime = runtimeMetadata(m.runtime)
 
 	// Resolve backend inputs for save -- resolver outputs are available as _
 	// and CLI params as __params in backend input expressions.

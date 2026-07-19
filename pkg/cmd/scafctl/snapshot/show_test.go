@@ -335,12 +335,12 @@ func TestShowSummary_StatusCounting(t *testing.T) {
 func createTestSnapshot() *resolver.Snapshot {
 	return &resolver.Snapshot{
 		Metadata: resolver.SnapshotMetadata{
-			Solution:       "test-solution",
-			Version:        "1.0.0",
-			Timestamp:      time.Now(),
-			ScafctlVersion: "dev",
-			TotalDuration:  "1s",
-			Status:         "success",
+			Solution:      "test-solution",
+			Version:       "1.0.0",
+			Timestamp:     time.Now(),
+			Runtime:       resolver.SnapshotRuntime{Engine: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}, CLI: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "dev"}},
+			TotalDuration: "1s",
+			Status:        "success",
 		},
 		Resolvers: map[string]*resolver.SnapshotResolver{
 			"test_resolver": {
@@ -423,12 +423,12 @@ func TestRunShow_Integration(t *testing.T) {
 	snapshotFile := filepath.Join(tmpDir, "snapshot.json")
 	snapshot := &resolver.Snapshot{
 		Metadata: resolver.SnapshotMetadata{
-			Solution:       "my-app",
-			Version:        "2.3.1",
-			Timestamp:      time.Now(),
-			ScafctlVersion: "0.1.0",
-			TotalDuration:  "5s",
-			Status:         "success",
+			Solution:      "my-app",
+			Version:       "2.3.1",
+			Timestamp:     time.Now(),
+			Runtime:       resolver.SnapshotRuntime{Engine: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "0.1.0"}, CLI: resolver.SnapshotRuntimeComponent{Name: "scafctl", Version: "0.1.0"}},
+			TotalDuration: "5s",
+			Status:        "success",
 		},
 		Resolvers: map[string]*resolver.SnapshotResolver{
 			"db_password": {

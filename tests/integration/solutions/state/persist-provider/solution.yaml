@@ -161,7 +161,7 @@ spec:
         tags: [state, persist, provider]
         init:
           - command: >-
-              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-alpha","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-alpha","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode == 0
@@ -209,7 +209,7 @@ spec:
         tags: [state, workflow, provider]
         init:
           - command: >-
-              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run solution","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-prior","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run solution","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-prior","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state.json
         assertions:
           - expression: __exitCode == 0

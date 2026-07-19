@@ -2,7 +2,10 @@
   "metadata": {
     "solution": "diamond-pattern-snapshot",
     "version": "1.0.0",
-    "scafctlVersion": "test",
+    "runtime": {
+      "engine": { "name": "scafctl", "version": "test" },
+      "cli": { "name": "scafctl", "version": "test" }
+    },
     "timestamp": "2024-01-01T00:00:00Z",
     "status": "success",
     "totalDuration": "150ms"

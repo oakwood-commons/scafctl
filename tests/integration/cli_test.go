@@ -10721,8 +10721,8 @@ func TestIntegration_StateListResolversJSON(t *testing.T) {
 
 	// Seed a state file exercising every section: a parameter, a persisted
 	// resolver, an immutable resolver, and a fingerprint.
-	content := `{"schemaVersion":2,` +
-		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+	content := `{"schemaVersion":3,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},` +
 		`"command":{"subcommand":"run resolver","parameters":{"token":"alpha"}},` +
 		`"parameters":{"env":"prod"},` +
 		`"resolvers":{` +
@@ -10763,8 +10763,8 @@ func TestIntegration_StateListResolversTable(t *testing.T) {
 	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
-	content := `{"schemaVersion":2,` +
-		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+	content := `{"schemaVersion":3,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},` +
 		`"command":{"subcommand":"run resolver","parameters":{}},` +
 		`"parameters":{"env":"prod"},` +
 		`"resolvers":{"current_token":{"value":"alpha","type":"string","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-02-02T00:00:00Z"}},` +
@@ -10793,8 +10793,8 @@ func TestIntegration_StateShowGrouped(t *testing.T) {
 
 	// Seed a state file exercising every section: a parameter, a persisted
 	// resolver, an immutable resolver, and a fingerprint.
-	content := `{"schemaVersion":2,` +
-		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+	content := `{"schemaVersion":3,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},` +
 		`"command":{"subcommand":"run resolver","parameters":{"token":"alpha"}},` +
 		`"parameters":{"env":"prod"},` +
 		`"resolvers":{` +
@@ -10825,7 +10825,7 @@ func TestIntegration_StateShowGrouped(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(stdout), &view), "output must be valid JSON")
 
-	assert.Equal(t, 2, view.SchemaVersion)
+	assert.Equal(t, 3, view.SchemaVersion)
 	assert.Equal(t, "grouped-demo", view.Metadata["solution"])
 	assert.Equal(t, "run resolver", view.Command["subcommand"])
 
@@ -10850,8 +10850,8 @@ func TestIntegration_StateShowGroupedTable(t *testing.T) {
 	t.Parallel()
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
-	content := `{"schemaVersion":2,` +
-		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","scafctlVersion":"dev"},` +
+	content := `{"schemaVersion":3,` +
+		`"metadata":{"solution":"grouped-demo","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-02-02T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},` +
 		`"command":{"subcommand":"run resolver","parameters":{}},` +
 		`"parameters":{"env":"prod"},` +
 		`"resolvers":{"current_token":{"value":"alpha","type":"string","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-02-02T00:00:00Z"}},` +
@@ -10928,7 +10928,7 @@ func TestIntegration_StateClearPreservesMetadata(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "test-state.json")
 
 	// Seed state with metadata and parameters
-	content := `{"schemaVersion":2,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","scafctlVersion":"1.0.0"},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"resolvers":{},"fingerprints":{}}`
+	content := `{"schemaVersion":3,"metadata":{"solution":"my-sol","version":"2.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-03-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"1.0.0"},"cli":{"name":"scafctl","version":"1.0.0"}}},"command":{"subcommand":"run solution","parameters":{"env":"prod"}},"parameters":{"k1":"v1","k2":"v2"},"resolvers":{},"fingerprints":{}}`
 	require.NoError(t, os.WriteFile(stateFile, []byte(content), 0o600))
 
 	// Clear

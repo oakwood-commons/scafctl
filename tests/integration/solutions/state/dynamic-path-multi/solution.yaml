@@ -144,7 +144,7 @@ spec:
         init:
           - command: "mkdir -p $SCAFCTL_SANDBOX_DIR/state/acme/staging"
           - command: >-
-              printf '{"schemaVersion":2,"metadata":{"solution":"test-state-dynamic-path-multi","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","scafctlVersion":"dev"},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"staging-config"},"resolvers":{},"fingerprints":{}}'
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-dynamic-path-multi","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{"config_value":"staging-config"},"resolvers":{},"fingerprints":{}}'
               > $SCAFCTL_SANDBOX_DIR/state/acme/staging/web.json
         assertions:
           - expression: __exitCode == 0

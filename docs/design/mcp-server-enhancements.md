@@ -636,7 +636,10 @@ mcp.NewTool("show_snapshot",
   "solution": "my-solution",
   "version": "1.0.0",
   "timestamp": "2026-02-20T15:30:00Z",
-  "scafctlVersion": "0.15.0",
+  "runtime": {
+    "engine": { "name": "scafctl", "version": "0.15.0" },
+    "cli": { "name": "scafctl", "version": "0.15.0" }
+  },
   "duration": "2.3s",
   "status": "success",
   "resolverCount": { "total": 10, "success": 9, "failed": 1, "skipped": 0 },
