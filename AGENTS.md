@@ -56,6 +56,26 @@ The AI **may** create commits and push (with approval), but must follow these ru
    (The `.opencode/plugins/git-signing-guard.ts` plugin enforces this by
    blocking commits when no key is loaded.)
 
+### This is a squash-merge repo
+
+PRs are merged with **squash**, so every PR becomes a single commit on `main`
+and the individual commit messages on the branch are discarded (GitHub uses the
+**PR title and body** as the final squash commit message). Commit accordingly:
+
+- **Do not split a branch into multiple commits for history's sake** -- it buys
+  nothing under squash and the messages are thrown away. Prefer a single,
+  well-formed commit per PR (or however many is convenient while working;
+  they collapse anyway).
+- **Put the real effort into the PR title and body**, not per-commit messages.
+  The PR title must be a valid conventional-commit subject (`feat:`, `fix:`,
+  `docs:`, `!` for breaking) because it becomes the squash subject.
+- **One logical change per PR.** Since everything in a PR squashes together,
+  keep unrelated concerns in **separate PRs** rather than separate commits --
+  e.g. a bug fix and unrelated tooling/docs changes should be two PRs, not one
+  PR with two commits.
+- The branch still must be signed and DCO signed-off (the checks run on the
+  branch commits, and the DCO trailer must survive into the squash).
+
 ### Identity for this worktree
 
 Repos under the `Public/` folder are signed as **abaker9@gmail.com** using
@@ -66,9 +86,14 @@ through the ssh-agent.
 ## Conventions (summary; see .github for full detail)
 
 - **Conventional commits** (`feat:`, `fix:`, `docs:`, `!` for breaking).
+- **Squash-merge repo:** PRs squash to one commit from the PR title/body -- don't
+  split for history, keep unrelated concerns in separate PRs (see Git section).
 - **Errors:** wrap with `fmt.Errorf("context: %w", err)`; never panic.
 - **Business logic** never in `pkg/cmd/scafctl/...`, `pkg/mcp/tools_*.go`, or API
   packages -- put it in shared domain packages.
 - **Tests** for every new/changed file (target 70%+ patch coverage).
 - **Scratch files** go in the gitignored `temp/`; never commit them.
-- **Build/lint** via `task` (use `task lint`, not raw golangci-lint).
+- **Build/lint** via `task` (use `task lint`, not raw golangci-lint). Before
+  every commit, run `task lint:changed` and confirm no new issues -- it filters
+  out pre-existing findings in untouched files (which make plain `task lint`
+  always exit non-zero) and reports only what this branch introduced.

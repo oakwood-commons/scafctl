@@ -138,6 +138,35 @@ func HashFiles(baseDir string, patterns []string) (string, error)
 func ExpandGlobs(baseDir string, patterns []string) ([]string, error)
 ~~~
 
+#### Empty source globs
+
+A `sources` pattern that matches no files (for example a typo, or a file that
+does not exist yet) is **tolerated** rather than fatal -- mirroring the
+`sources` semantics of build tools like go-task:
+
+- **Partial no-match** (some patterns match, some do not): the action is
+  fingerprinted on the files that *did* match. The non-matching patterns are
+  reported and surface as a low-key stderr hint (useful for catching typos),
+  but idempotency is preserved. This fixes the silent correctness bug where a
+  single bad pattern disabled caching for the whole action.
+- **Total no-match** (every source pattern matches nothing): there are no
+  trackable inputs, so the action is treated as **always stale** (reason
+  `no source files`) and re-runs on every invocation. A stderr warning is
+  emitted (`sources matched no files (fingerprint disabled)`). Caching is
+  effectively disabled for that action until at least one source pattern matches.
+- **Invalid or unsafe patterns** (malformed globs, absolute paths, `..`
+  traversal) remain a hard error (`ErrPatternInvalid`).
+
+Note that `generates` is stricter than `sources`: a declared output that does
+not exist (partial or total no-match) always marks the action stale, since a
+missing product means the action must run to produce it.
+
+`ExpandGlobs` returns `ErrNoMatches` only for the total no-match case; callers
+that need to distinguish partial from total (and warn accordingly) use
+`ExpandGlobsReport` / `HashFilesReport`, which never return `ErrNoMatches` and
+instead report `EmptyPatterns` and `AllEmpty`. All warnings are written to
+stderr so they never corrupt structured output (`-o json`).
+
 ### 4.5 State Helpers
 
 ~~~go

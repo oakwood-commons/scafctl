@@ -209,3 +209,70 @@ func BenchmarkHashInputs(b *testing.B) {
 		_, _ = HashInputs(inputs)
 	}
 }
+
+func TestHashFilesReport(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty patterns returns zero-value result", func(t *testing.T) {
+		t.Parallel()
+		res, err := HashFilesReport(t.TempDir(), nil)
+		require.NoError(t, err)
+		assert.Empty(t, res.Hash)
+		assert.Empty(t, res.EmptyPatterns)
+		assert.False(t, res.AllEmpty)
+	})
+
+	t.Run("partial match hashes matched files and reports empty pattern", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		testWriteFile(t, dir, "a.go", "package a")
+
+		res, err := HashFilesReport(dir, []string{"*.go", "missing.txt"})
+		require.NoError(t, err)
+		assert.NotEmpty(t, res.Hash)
+		assert.Equal(t, []string{"missing.txt"}, res.EmptyPatterns)
+		assert.False(t, res.AllEmpty)
+
+		// The hash must equal hashing only the matched file, proving the empty
+		// pattern did not corrupt or disable hashing.
+		want, err := HashFiles(dir, []string{"*.go"})
+		require.NoError(t, err)
+		assert.Equal(t, want, res.Hash)
+	})
+
+	t.Run("total no-match sets AllEmpty with deterministic empty hash", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		testWriteFile(t, dir, "a.txt", "text")
+
+		res, err := HashFilesReport(dir, []string{"*.go", "missing.txt"})
+		require.NoError(t, err)
+		assert.True(t, res.AllEmpty)
+		assert.Equal(t, []string{"*.go", "missing.txt"}, res.EmptyPatterns)
+
+		// Deterministic across runs.
+		res2, err := HashFilesReport(dir, []string{"*.go"})
+		require.NoError(t, err)
+		assert.Equal(t, res.Hash, res2.Hash)
+	})
+
+	t.Run("invalid pattern still errors", func(t *testing.T) {
+		t.Parallel()
+		_, err := HashFilesReport(t.TempDir(), []string{"/etc/passwd"})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrPatternInvalid)
+	})
+}
+
+func BenchmarkHashFilesReport(b *testing.B) {
+	dir := b.TempDir()
+	testWriteFile(b, dir, "a.go", "package a")
+	testWriteFile(b, dir, "b.go", "package b")
+	patterns := []string{"*.go", "missing.txt"}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = HashFilesReport(dir, patterns)
+	}
+}
