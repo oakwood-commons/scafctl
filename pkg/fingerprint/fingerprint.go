@@ -249,11 +249,15 @@ func (c *Checker) Check(ctx context.Context, actionName string, sources, generat
 		return nil, err
 	}
 
-	// Merge file hashes into input result for completeness
+	// Merge file-check results into the input result for completeness so the
+	// convenience API exposes the same diagnostics as CheckFiles, including the
+	// empty-source-glob signals.
 	inputResult.CurrentHash = fileResult.CurrentHash
 	inputResult.PreviousHash = fileResult.PreviousHash
 	inputResult.GeneratesHash = fileResult.GeneratesHash
 	inputResult.PreviousGeneratesHash = fileResult.PreviousGeneratesHash
+	inputResult.SourcesEmptyPatterns = fileResult.SourcesEmptyPatterns
+	inputResult.SourcesAllEmpty = fileResult.SourcesAllEmpty
 
 	return inputResult, nil
 }

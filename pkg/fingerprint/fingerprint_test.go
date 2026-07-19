@@ -50,6 +50,29 @@ func TestChecker_Check(t *testing.T) {
 		assert.Equal(t, ReasonUpToDate, result.Reason)
 	})
 
+	// PR #642 review: the Check convenience method must propagate the empty-
+	// source-glob diagnostics from CheckFiles on the non-stale path, not just
+	// the hash fields.
+	t.Run("propagates empty-source diagnostics on up-to-date path", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		testWriteFile(t, dir, "main.go", "package main")
+
+		stateData := state.NewData()
+		checker := NewChecker(stateData)
+		sources := []string{"*.go", "NonExistentFile.txt"}
+
+		require.NoError(t, checker.Record(context.Background(), "build", sources, nil, dir, nil))
+
+		result, err := checker.Check(context.Background(), "build", sources, nil, dir, nil)
+		require.NoError(t, err)
+
+		assert.False(t, result.Stale)
+		assert.Equal(t, []string{"NonExistentFile.txt"}, result.SourcesEmptyPatterns,
+			"Check must surface the same empty-pattern diagnostics as CheckFiles")
+		assert.False(t, result.SourcesAllEmpty)
+	})
+
 	t.Run("sources changed - stale", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

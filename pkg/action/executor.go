@@ -671,7 +671,20 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 	if e.fingerprintChecker != nil && !e.noCache && len(action.Sources) > 0 {
 		fpResult, fpErr := e.fingerprintChecker.CheckFiles(ctx, actionName, action.Sources, action.Generates, e.cwd)
 		if fpErr != nil {
-			// Log warning and continue execution (fail-open)
+			// A malformed, absolute, or path-traversing glob is a user/security
+			// error, not a transient miss -- fail the action hard rather than
+			// silently executing it (fail-open would defeat the pattern
+			// validation and its containment checks).
+			if errors.Is(fpErr, fingerprint.ErrPatternInvalid) {
+				e.actionContext.MarkFailed(actionName, fmt.Sprintf("invalid sources/generates pattern: %v", fpErr))
+				if e.progressCallback != nil {
+					e.progressCallback.OnActionFailed(actionName, fpErr)
+				}
+				span.RecordError(fpErr)
+				span.SetStatus(codes.Error, fpErr.Error())
+				return fpErr
+			}
+			// Other errors are non-fatal: log and continue execution (fail-open).
 			logger.FromContext(ctx).V(0).Info("fingerprint file check failed, executing action",
 				"action", actionName, "error", fpErr.Error())
 		} else {

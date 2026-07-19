@@ -1513,6 +1513,63 @@ func TestExecutor_Execute_FingerprintAllMissingSourcesAlwaysRuns(t *testing.T) {
 	assert.Equal(t, StatusSucceeded, result.Actions["build"].Status)
 }
 
+// A malformed, absolute, or path-traversing sources glob is a user/security
+// error and must fail the action hard rather than fail-open into execution
+// (PR #642 review: invalid patterns must not be silently ignored).
+func TestExecutor_Execute_FingerprintInvalidPatternHardFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	execCount := 0
+	registry := newExecMockRegistry()
+	registry.register(&execMockProvider{
+		name: "test-provider",
+		execute: func(_ context.Context, _ any) (*provider.Output, error) {
+			execCount++
+			return &provider.Output{Data: map[string]any{"result": "built"}}, nil
+		},
+	})
+
+	fpChecker := fingerprint.NewChecker(state.NewData())
+
+	for _, tc := range []struct {
+		name    string
+		pattern string
+	}{
+		{"absolute path", "/etc/passwd"},
+		{"path traversal", "../../../etc/passwd"},
+		{"malformed glob", "[invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			execCount = 0
+			workflow := &Workflow{
+				Actions: map[string]*Action{
+					"build": {
+						Provider: "test-provider",
+						Sources:  []string{tc.pattern},
+					},
+				},
+			}
+
+			executor := NewExecutor(
+				WithRegistry(registry),
+				WithFingerprintChecker(fpChecker),
+				WithCwd(dir),
+				WithDefaultTimeout(5*time.Second),
+			)
+
+			result, err := executor.Execute(context.Background(), workflow)
+			require.Error(t, err, "invalid pattern must fail the action")
+			assert.ErrorIs(t, err, fingerprint.ErrPatternInvalid)
+			assert.Equal(t, 0, execCount, "action must NOT execute when its pattern is invalid")
+			if result != nil {
+				assert.Equal(t, StatusFailed, result.Actions["build"].Status)
+			}
+		})
+	}
+}
+
 func TestExecutor_Execute_FingerprintNoCache(t *testing.T) {
 	t.Parallel()
 

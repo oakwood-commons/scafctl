@@ -17,7 +17,8 @@ import (
 // matched no files.
 type HashResult struct {
 	// Hash is the SHA-256 hash over the matched file set. For an all-empty
-	// pattern set it is the deterministic hash of zero files (empty string).
+	// pattern set it is the deterministic SHA-256 digest of an empty file set
+	// (a stable non-empty hex string), not an empty string.
 	Hash string
 
 	// EmptyPatterns lists patterns that matched no files, in input order.
