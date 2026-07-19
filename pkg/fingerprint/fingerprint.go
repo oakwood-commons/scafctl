@@ -30,6 +30,11 @@ const (
 	// ReasonGeneratesMissing indicates one or more generated files don't exist.
 	ReasonGeneratesMissing Reason = "generates missing"
 
+	// ReasonNoSources indicates every declared source glob matched no files, so
+	// there is nothing to fingerprint. The action is treated as always stale
+	// (never cacheable) because it has no trackable inputs.
+	ReasonNoSources Reason = "no source files"
+
 	// ReasonInputsChanged indicates resolved action inputs have changed since last run.
 	ReasonInputsChanged Reason = "inputs changed"
 
@@ -60,6 +65,16 @@ type Result struct {
 	// PreviousInputsHash is the stored hash of inputs from last successful run.
 	PreviousInputsHash string
 
+	// SourcesEmptyPatterns lists source glob patterns that matched no files.
+	// Populated for both partial and total no-match so callers can warn about
+	// typos that would otherwise silently weaken idempotency.
+	SourcesEmptyPatterns []string
+
+	// SourcesAllEmpty is true when every source glob matched zero files, meaning
+	// there is nothing to fingerprint and caching is effectively disabled for
+	// the action.
+	SourcesAllEmpty bool
+
 	// Reason provides a human-readable explanation.
 	Reason Reason
 }
@@ -81,20 +96,41 @@ func NewChecker(stateData *state.Data) *Checker {
 // If Stale==false, the caller should resolve inputs and call CheckInputs.
 //
 // Staleness logic:
-//  1. No previous state -> stale (first run)
-//  2. Sources hash mismatch -> stale (sources changed)
-//  3. If generates declared: generated files missing -> stale
-//  4. If generates declared: generates hash mismatch -> stale (externally modified)
-//  5. All file hashes match -> not stale (proceed to CheckInputs)
+//  1. Every source glob matched no files -> stale (no source files to track)
+//  2. No previous state -> stale (first run)
+//  3. Sources hash mismatch -> stale (sources changed)
+//  4. If generates declared: any declared output missing -> stale
+//  5. If generates declared: generates hash mismatch -> stale (externally modified)
+//  6. All file hashes match -> not stale (proceed to CheckInputs)
+//
+// A partially-matching sources set (some patterns match, some do not) is
+// tolerated: the action is fingerprinted on the files that matched. Only a
+// total no-match forces staleness.
 func (c *Checker) CheckFiles(_ context.Context, actionName string, sources, generates []string, baseDir string) (*Result, error) {
 	result := &Result{}
 
-	// Compute current sources hash
-	currentHash, err := HashFiles(baseDir, sources)
+	// Compute current sources hash. Source globs that match no files are
+	// tolerated (hashed on whatever matched); the empty patterns are reported so
+	// the caller can warn. Only ErrPatternInvalid (malformed/unsafe) is fatal.
+	sourcesReport, err := HashFilesReport(baseDir, sources)
 	if err != nil {
 		return nil, err
 	}
+	currentHash := sourcesReport.Hash
 	result.CurrentHash = currentHash
+	result.SourcesEmptyPatterns = sourcesReport.EmptyPatterns
+	result.SourcesAllEmpty = sourcesReport.AllEmpty
+
+	// Every source glob matched nothing: there are no trackable inputs, so the
+	// action cannot be meaningfully fingerprinted. Treat it as always stale
+	// rather than skipping it on the deterministic empty-set hash -- an action
+	// with no inputs to compare should re-run, and this keeps behavior aligned
+	// with the "fingerprint disabled" warning surfaced to the user.
+	if sourcesReport.AllEmpty {
+		result.Stale = true
+		result.Reason = ReasonNoSources
+		return result, nil
+	}
 
 	// Load previous sources hash from state
 	result.PreviousHash = LoadSourcesHash(c.stateData, actionName)
@@ -113,19 +149,21 @@ func (c *Checker) CheckFiles(_ context.Context, actionName string, sources, gene
 		return result, nil
 	}
 
-	// If generates are declared, check them too
+	// If generates are declared, check them too. Unlike sources, a declared
+	// output that does not exist means the action's product is missing, so any
+	// non-matching generates pattern (partial or total) marks the action stale.
 	if len(generates) > 0 {
-		genHash, genErr := HashFiles(baseDir, generates)
+		genReport, genErr := HashFilesReport(baseDir, generates)
 		if genErr != nil {
-			// If generates don't exist (ErrNoMatches), they're missing
-			if isNoMatchError(genErr) {
-				result.Stale = true
-				result.Reason = ReasonGeneratesMissing
-				return result, nil
-			}
 			return nil, genErr
 		}
-		result.GeneratesHash = genHash
+		// Any declared output missing -> rebuild.
+		if len(genReport.EmptyPatterns) > 0 {
+			result.Stale = true
+			result.Reason = ReasonGeneratesMissing
+			return result, nil
+		}
+		result.GeneratesHash = genReport.Hash
 
 		// Load previous generates hash
 		result.PreviousGeneratesHash = LoadGeneratesHash(c.stateData, actionName)
@@ -138,7 +176,7 @@ func (c *Checker) CheckFiles(_ context.Context, actionName string, sources, gene
 		}
 
 		// Generates modified externally
-		if genHash != result.PreviousGeneratesHash {
+		if genReport.Hash != result.PreviousGeneratesHash {
 			result.Stale = true
 			result.Reason = ReasonGeneratesModified
 			return result, nil
@@ -211,11 +249,15 @@ func (c *Checker) Check(ctx context.Context, actionName string, sources, generat
 		return nil, err
 	}
 
-	// Merge file hashes into input result for completeness
+	// Merge file-check results into the input result for completeness so the
+	// convenience API exposes the same diagnostics as CheckFiles, including the
+	// empty-source-glob signals.
 	inputResult.CurrentHash = fileResult.CurrentHash
 	inputResult.PreviousHash = fileResult.PreviousHash
 	inputResult.GeneratesHash = fileResult.GeneratesHash
 	inputResult.PreviousGeneratesHash = fileResult.PreviousGeneratesHash
+	inputResult.SourcesEmptyPatterns = fileResult.SourcesEmptyPatterns
+	inputResult.SourcesAllEmpty = fileResult.SourcesAllEmpty
 
 	return inputResult, nil
 }
@@ -223,10 +265,14 @@ func (c *Checker) Check(ctx context.Context, actionName string, sources, generat
 // Record stores the current fingerprints (sources + generates + inputs) after a
 // successful action. Call this after action execution to persist the new baseline.
 func (c *Checker) Record(_ context.Context, actionName string, sources, generates []string, baseDir string, resolvedInputs map[string]any) error {
-	sourcesHash, err := HashFiles(baseDir, sources)
+	// Source globs matching no files are tolerated: record the hash of whatever
+	// matched (or the empty-set hash when none matched) so idempotency is not
+	// silently disabled. Only ErrPatternInvalid is fatal.
+	sourcesReport, err := HashFilesReport(baseDir, sources)
 	if err != nil {
 		return err
 	}
+	sourcesHash := sourcesReport.Hash
 
 	var generatesHash string
 	if len(generates) > 0 {

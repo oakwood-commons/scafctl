@@ -1,0 +1,73 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-fingerprint-missing-source
+  version: 1.0.0
+  description: |
+    Regression coverage for #522. A source glob that matches no files (a typo
+    or a not-yet-created file) must NOT hard-fail the action's fingerprint. The
+    action still runs and succeeds; a total no-match simply disables caching for
+    that action instead of erroring. Two-run idempotency (skip on the second run
+    with a partially-matching sources set) is covered by unit tests in
+    pkg/action/executor_test.go (TestExecutor_Execute_FingerprintPartialMissingSource).
+
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: fingerprint-missing-source-state.json
+
+spec:
+  workflow:
+    actions:
+      # 'partialMissing' has one matching source (the solution file) and one
+      # pattern that references a non-existent file. Prior to the #522 fix the
+      # missing pattern caused ErrNoMatches, which silently broke fingerprinting.
+      partialMissing:
+        description: Action with a partially-matching sources set
+        provider: exec
+        sources:
+          - "solution.yaml"
+          - "NonExistentFile.txt"
+        inputs:
+          command: "echo PARTIAL_OK"
+
+      # 'allMissing' has ONLY non-matching source patterns. This is the
+      # degenerate case: fingerprinting is effectively disabled, but the action
+      # must still execute and succeed rather than erroring out.
+      allMissing:
+        description: Action whose source globs all match nothing
+        provider: exec
+        sources:
+          - "does-not-exist-a.txt"
+          - "does-not-exist-b.txt"
+        inputs:
+          command: "echo ALL_MISSING_OK"
+
+  testing:
+    cases:
+      partial-missing-source-succeeds:
+        description: A missing source glob does not fail the action
+        command: [run, action]
+        args: ["partialMissing", "-o", "json"]
+        tags: [fingerprint, actions, smoke]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["partialMissing"].status == "succeeded"
+            message: "Action with a partially-matching sources set must succeed"
+          - expression: __output.actions["partialMissing"].results.stdout.contains("PARTIAL_OK")
+            message: "Action output should be produced"
+
+      all-missing-sources-still-runs:
+        description: An all-empty sources set disables caching but does not error
+        command: [run, action]
+        args: ["allMissing", "-o", "json"]
+        tags: [fingerprint, actions]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.actions["allMissing"].status == "succeeded"
+            message: "Action must still run when every source glob matches nothing"
+          - expression: __output.actions["allMissing"].results.stdout.contains("ALL_MISSING_OK")
+            message: "Action output should be produced"

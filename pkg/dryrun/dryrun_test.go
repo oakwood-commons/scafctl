@@ -511,6 +511,32 @@ func TestGenerate_FingerprintStatus_FirstRun(t *testing.T) {
 	assert.Equal(t, "first run", report.ActionPlan[0].FingerprintReason)
 }
 
+// Regression for #522: an action whose source globs all match nothing reports
+// the dedicated "no-sources" status in dry-run output rather than "error".
+func TestGenerate_FingerprintStatus_AllSourcesMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	sol := minimalSolution("app")
+	sol.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{
+			"build": {
+				Provider: "shell",
+				Sources:  []string{"does-not-exist-a.txt", "does-not-exist-b.txt"},
+			},
+		},
+	}
+
+	sd := state.NewData()
+	report, err := Generate(context.Background(), sol, Options{
+		StateData: sd,
+		Cwd:       tmpDir,
+	})
+	require.NoError(t, err)
+	require.Len(t, report.ActionPlan, 1)
+	assert.Equal(t, "no-sources", report.ActionPlan[0].FingerprintStatus)
+	assert.Contains(t, report.ActionPlan[0].FingerprintReason, "matched no files")
+}
+
 func TestGenerate_FingerprintStatus_UpToDate(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "main.go")

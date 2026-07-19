@@ -34,7 +34,9 @@ After all fixes are applied, run in this order:
 
 1. `go build ./...` -- must compile
 2. `go vet ./...` -- no warnings
-3. `task lint` -- no lint issues
+3. `task lint:changed` -- no NEW lint issues in changed code (plain `task lint`
+   always exits non-zero from pre-existing issues in untouched files, which hides
+   findings you introduced; `lint:changed` reports only what this branch added)
 4. `task test:e2e 2>&1 | tee /tmp/e2e-results.txt` -- all tests pass (run once, grep results)
 
 Fix any errors introduced by the changes before proceeding.
