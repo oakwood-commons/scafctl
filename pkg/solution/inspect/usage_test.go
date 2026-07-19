@@ -106,9 +106,9 @@ func TestBuildUsage(t *testing.T) {
 	for _, a := range usage.Actions {
 		byName[a.Name] = a
 	}
-	assert.Equal(t, "scafctl run solution -r action=refresh", byName["refresh"].Command)
-	assert.Equal(t, "scafctl run solution -r action=show", byName["show"].Command)
-	assert.Equal(t, "scafctl run action cleanup", byName["cleanup"].Command)
+	assert.Equal(t, "scafctl run solution -f ./solution.yaml -r action=refresh", byName["refresh"].Command)
+	assert.Equal(t, "scafctl run solution -f ./solution.yaml -r action=show", byName["show"].Command)
+	assert.Equal(t, "scafctl run action cleanup -f ./solution.yaml", byName["cleanup"].Command)
 	assert.False(t, byName["show"].Default)
 	assert.False(t, byName["cleanup"].Default)
 }
@@ -150,9 +150,10 @@ func TestBuildUsage_EmbedderBinaryName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "mycli run solution", usage.Run)
 	require.Len(t, usage.Actions, 1)
-	// Default action (not explicit, no when) -> bare run command with embedder name.
+	// Default action (not explicit, no when) -> base run command (with source)
+	// and the embedder binary name.
 	assert.True(t, usage.Actions[0].Default)
-	assert.Equal(t, "mycli run solution", usage.Actions[0].Command)
+	assert.Equal(t, "mycli run solution -f ./solution.yaml", usage.Actions[0].Command)
 }
 
 func TestBuildUsage_NoRunnableErrors(t *testing.T) {
@@ -230,4 +231,102 @@ func BenchmarkBuildUsage(b *testing.B) {
 	for b.Loop() {
 		_, _ = BuildUsage(ctx, sol, "solution.yaml", "scafctl")
 	}
+}
+
+// C: when the parameter provider's inputs.key differs from the resolver name,
+// allowed values (discovered by resolver name via when-clauses) must attach to
+// the CLI key, and the -r command must use the CLI key.
+func TestBuildUsage_ParamKeyDiffersFromResolverName(t *testing.T) {
+	t.Parallel()
+	// Resolver named "environment" but CLI key is "env".
+	envResolver := &resolver.Resolver{
+		Type: "string",
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+					"key":     {Literal: "env"},
+					"default": {Literal: "dev"},
+				}},
+			},
+		},
+	}
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "app"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{"environment": envResolver},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"deploy": {
+						Description: "Deploy",
+						// when references the RESOLVER name, not the CLI key.
+						When: whenCondition(`_.environment == "prod"`),
+					},
+				},
+			},
+		},
+	}
+	usage, err := BuildUsage(context.Background(), sol, "solution.yaml", "scafctl")
+	require.NoError(t, err)
+
+	// Parameter is displayed by its CLI key.
+	require.Len(t, usage.Params, 1)
+	assert.Equal(t, "env", usage.Params[0].Name)
+	// Allowed value discovered from the resolver-name when-clause attaches to it.
+	assert.Contains(t, usage.Params[0].AllowedValues, "prod")
+
+	// The action command uses the CLI key (-r env=prod), not the resolver name.
+	require.Len(t, usage.Actions, 1)
+	assert.Equal(t, "scafctl run solution -f ./solution.yaml -r env=prod", usage.Actions[0].Command)
+}
+
+// D: a compound when-clause that is not fully reducible must NOT produce a
+// misleading -r command (it would not actually satisfy the whole gate).
+func TestBuildUsage_CompoundWhenNoMisleadingCommand(t *testing.T) {
+	t.Parallel()
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "app"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"mode": paramResolver("mode", "normal"),
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"go": {
+						Description: "Go",
+						When:        whenCondition(`_.mode == "prod" && _.enabled`),
+					},
+				},
+			},
+		},
+	}
+	usage, err := BuildUsage(context.Background(), sol, "solution.yaml", "scafctl")
+	require.NoError(t, err)
+	require.Len(t, usage.Actions, 1)
+	// Falls back to the base command (no misleading -r mode=prod).
+	assert.Equal(t, "scafctl run solution -f ./solution.yaml", usage.Actions[0].Command)
+}
+
+// E: generated -r values with spaces/metacharacters are shell-quoted.
+func TestBuildUsage_ShellQuotesValues(t *testing.T) {
+	t.Parallel()
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "app"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"mode": paramResolver("mode", "normal"),
+			},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"run": {
+						Description: "Run",
+						When:        whenCondition(`_.mode == "dry run"`),
+					},
+				},
+			},
+		},
+	}
+	usage, err := BuildUsage(context.Background(), sol, "solution.yaml", "scafctl")
+	require.NoError(t, err)
+	require.Len(t, usage.Actions, 1)
+	assert.Equal(t, "scafctl run solution -f ./solution.yaml -r mode='dry run'", usage.Actions[0].Command)
 }

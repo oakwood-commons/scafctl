@@ -342,7 +342,7 @@ func LookupProvider(ctx context.Context, name string, reg *provider.Registry) (*
 
 All types have JSON/YAML tags. The CLI `inspect solution` command and `explain <kind>` schema browser call these functions and format the results. MCP tools can call the same functions and return the structs as JSON.
 
-**Files:** `pkg/cmd/scafctl/explain/results.go`, `pkg/cmd/scafctl/explain/solution.go` (refactored), `pkg/cmd/scafctl/explain/provider.go` (refactored), `pkg/cmd/scafctl/explain/solution_test.go` (updated), `pkg/cmd/scafctl/explain/provider_test.go` (updated)
+**Files:** `pkg/solution/inspect/` (`inspect.go`, `usage.go`, `run_command.go` -- the shared domain builders), consumed by `pkg/cmd/scafctl/inspect/solution.go` (CLI) and `pkg/mcp/tools_solution.go` (MCP).
 
 #### 4. Fix Stray `os.Exit` Call ✅
 

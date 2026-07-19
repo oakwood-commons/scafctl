@@ -127,3 +127,62 @@ func BenchmarkParamEqualities(b *testing.B) {
 		_, _ = expr.ParamEqualities(ctx)
 	}
 }
+
+func TestParamEqualitiesFullyReducible(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name          string
+		expr          string
+		wantOK        bool
+		wantReducible bool
+		wantFound     map[string][]any
+	}{
+		{
+			name:          "single equality is fully reducible",
+			expr:          `_.action == "show"`,
+			wantOK:        true,
+			wantReducible: true,
+			wantFound:     map[string][]any{"action": {"show"}},
+		},
+		{
+			name:          "OR of equalities fully reducible",
+			expr:          `_.env == "prod" || _.env == "staging"`,
+			wantOK:        true,
+			wantReducible: true,
+			wantFound:     map[string][]any{"env": {"prod", "staging"}},
+		},
+		{
+			name:          "AND with a non-reducible branch: found but NOT fully reducible",
+			expr:          `_.mode == "prod" && _.enabled`,
+			wantOK:        true,
+			wantReducible: false,
+			wantFound:     map[string][]any{"mode": {"prod"}},
+		},
+		{
+			name:          "negation contributes nothing and is not reducible",
+			expr:          `!(_.action == "delete")`,
+			wantOK:        false,
+			wantReducible: false,
+		},
+		{
+			name:          "inequality not reducible",
+			expr:          `_.count > 3`,
+			wantOK:        false,
+			wantReducible: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			found, reducible, ok := Expression(tt.expr).ParamEqualitiesFullyReducible(ctx)
+			assert.Equal(t, tt.wantOK, ok, "ok mismatch")
+			assert.Equal(t, tt.wantReducible, reducible, "reducible mismatch")
+			if tt.wantFound != nil {
+				assert.Equal(t, tt.wantFound, found)
+			}
+		})
+	}
+}

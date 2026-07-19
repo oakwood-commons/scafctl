@@ -45,42 +45,57 @@ const operatorLogicalOr = "_||_"
 // Only string, int, uint, double, and bool literals are collected; other
 // constant kinds are ignored.
 func (e Expression) ParamEqualities(ctx context.Context) (map[string][]any, bool) {
+	found, _, ok := e.paramEqualitiesWithPrefix(ctx, "_.")
+	return found, ok
+}
+
+// ParamEqualitiesFullyReducible behaves like ParamEqualities but also reports
+// whether the ENTIRE expression reduces to a boolean combination of supported
+// equality/membership checks (via && / ||). When the second return is false,
+// the expression contains a component this analysis cannot statically satisfy
+// (a negation, inequality, function call, comparison of two variables, etc.),
+// so satisfying the discovered equalities alone does not guarantee the whole
+// condition is met. Callers that generate a runnable command from a when-clause
+// should require it to be fully reducible. The third return reports whether any
+// equalities were found at all.
+func (e Expression) ParamEqualitiesFullyReducible(ctx context.Context) (map[string][]any, bool, bool) {
 	return e.paramEqualitiesWithPrefix(ctx, "_.")
 }
 
-// paramEqualitiesWithPrefix is ParamEqualities with a configurable variable
-// prefix (e.g. "_." for resolver values). If prefix is empty it defaults to "_.".
-func (e Expression) paramEqualitiesWithPrefix(ctx context.Context, prefix string) (map[string][]any, bool) {
+// paramEqualitiesWithPrefix is the shared implementation. It returns the
+// discovered param->values map, whether the whole expression was reducible, and
+// whether any equalities were found at all.
+func (e Expression) paramEqualitiesWithPrefix(ctx context.Context, prefix string) (map[string][]any, bool, bool) {
 	if prefix == "" {
 		prefix = "_."
 	}
 
 	env, err := newParseEnv(ctx)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 
 	parsed, issues := env.Parse(string(e))
 	if issues != nil && issues.Err() != nil {
-		return nil, false
+		return nil, false, false
 	}
 
 	parsedExpr, err := cel.AstToParsedExpr(parsed)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 
 	found := make(map[string][]any)
-	collectEqualities(parsedExpr.GetExpr(), prefix, found)
+	reducible := collectEqualities(parsedExpr.GetExpr(), prefix, found)
 	if len(found) == 0 {
-		return nil, false
+		return nil, reducible, false
 	}
 
 	// Deduplicate and sort each value list for deterministic output.
 	for name, vals := range found {
 		found[name] = dedupeSortValues(vals)
 	}
-	return found, true
+	return found, reducible, true
 }
 
 // newParseEnv builds a CEL environment for parse-only AST inspection, reusing
@@ -93,32 +108,44 @@ func newParseEnv(ctx context.Context) (*cel.Env, error) {
 }
 
 // collectEqualities recursively walks call nodes, accumulating discovered
-// param -> literal-values into found.
-func collectEqualities(expr *exprpb.Expr, prefix string, found map[string][]any) {
+// param -> literal-values into found. It returns whether the given subtree is
+// FULLY reducible to a boolean combination of supported equality/membership
+// checks. Unsupported shapes (negations, inequalities, function calls,
+// variable-to-variable comparisons, etc.) are NOT descended into -- they neither
+// contribute values nor count as reducible -- so a condition like
+// `!(_.action == "delete")` does not advertise "delete" as an allowed value.
+func collectEqualities(expr *exprpb.Expr, prefix string, found map[string][]any) bool {
 	call := expr.GetCallExpr()
 	if call == nil {
-		return
+		return false
 	}
 
 	switch call.GetFunction() {
 	case operatorLogicalAnd, operatorLogicalOr:
+		// Reducible only if EVERY branch is reducible.
+		reducible := true
 		for _, arg := range call.GetArgs() {
-			collectEqualities(arg, prefix, found)
+			if !collectEqualities(arg, prefix, found) {
+				reducible = false
+			}
 		}
+		return reducible
 	case operatorEquals:
 		if name, val, ok := equalityPair(call.GetArgs(), prefix); ok {
 			found[name] = append(found[name], val)
+			return true
 		}
+		return false
 	case operatorIn:
 		if name, vals, ok := membershipValues(call.GetArgs(), prefix); ok {
 			found[name] = append(found[name], vals...)
+			return true
 		}
+		return false
 	default:
-		// Some other call (e.g. negation, function). Still traverse args in case
-		// a boolean sub-expression contains equality checks.
-		for _, arg := range call.GetArgs() {
-			collectEqualities(arg, prefix, found)
-		}
+		// Negation, function call, or any other shape: not statically reducible.
+		// Do NOT descend -- descending would misattribute values inside negations.
+		return false
 	}
 }
 

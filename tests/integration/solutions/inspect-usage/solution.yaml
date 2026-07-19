@@ -71,4 +71,4 @@ spec:
           - expression: __exitCode == 0
           - expression: __stdout.contains("PARAMETERS")
           - expression: __stdout.contains("ACTIONS")
-          - expression: __stdout.contains("run solution -r action=refresh")
+          - expression: __stdout.contains("-r action=refresh")

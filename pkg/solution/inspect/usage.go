@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -76,10 +77,21 @@ func BuildUsage(ctx context.Context, sol *solution.Solution, path, binaryName st
 	}
 
 	// Discover allowed parameter values from action when-clauses (best-effort).
+	// These are keyed by RESOLVER name (what `_.x` references in a when-clause).
 	allowed := discoverAllowedValues(ctx, sol)
 
+	// Map resolver name -> CLI parameter key so allowed values (discovered by
+	// resolver name) attach to the right parameter and commands use the right
+	// `-r <key>=`.
+	resolverToKey := make(map[string]string, len(runInfo.Parameters))
+	for _, p := range runInfo.Parameters {
+		if p.ResolverName != "" {
+			resolverToKey[p.ResolverName] = p.Name
+		}
+	}
+
 	info.Params = buildParamUsage(runInfo.Parameters, allowed)
-	info.Actions = buildActionUsage(ctx, sol, binaryName)
+	info.Actions = buildActionUsage(ctx, sol, runInfo.BaseCommand, binaryName, resolverToKey)
 
 	return info, nil
 }
@@ -129,8 +141,11 @@ func discoverAllowedValues(ctx context.Context, sol *solution.Solution) map[stri
 	return agg
 }
 
-// buildParamUsage merges run-command parameter info with discovered allowed values.
-func buildParamUsage(params []ParamInfo, allowed map[string][]any) []ParamUsage {
+// buildParamUsage merges run-command parameter info with discovered allowed
+// values. Allowed values are discovered keyed by RESOLVER name (what a
+// when-clause references), so they are looked up by ParamInfo.ResolverName; the
+// displayed parameter name is the CLI key (ParamInfo.Name).
+func buildParamUsage(params []ParamInfo, allowedByResolver map[string][]any) []ParamUsage {
 	if len(params) == 0 {
 		return nil
 	}
@@ -142,7 +157,7 @@ func buildParamUsage(params []ParamInfo, allowed map[string][]any) []ParamUsage 
 			Description:   p.Description,
 			Default:       p.Default,
 			Required:      p.Required,
-			AllowedValues: allowed[p.Name],
+			AllowedValues: allowedByResolver[p.ResolverName],
 		})
 	}
 	return out
@@ -151,8 +166,9 @@ func buildParamUsage(params []ParamInfo, allowed map[string][]any) []ParamUsage 
 // buildActionUsage produces the per-action command list. An action is "default"
 // when it runs on a bare invocation: not explicit, and not gated by a when
 // clause. Explicit actions and when-gated actions get an explanatory command
-// that names the action or the parameter that enables it.
-func buildActionUsage(ctx context.Context, sol *solution.Solution, binaryName string) []ActionUsage {
+// that names the action or the parameter that enables it. base is the run
+// command with the solution source already included (e.g. "... -f ./sol.yaml").
+func buildActionUsage(ctx context.Context, sol *solution.Solution, base, binaryName string, resolverToKey map[string]string) []ActionUsage {
 	if !sol.Spec.HasWorkflow() || sol.Spec.Workflow == nil {
 		return nil
 	}
@@ -162,7 +178,6 @@ func buildActionUsage(ctx context.Context, sol *solution.Solution, binaryName st
 	}
 	sort.Strings(names)
 
-	base := binaryName + " run solution"
 	out := make([]ActionUsage, 0, len(names))
 	for _, name := range names {
 		act := sol.Spec.Workflow.Actions[name]
@@ -174,31 +189,71 @@ func buildActionUsage(ctx context.Context, sol *solution.Solution, binaryName st
 			Name:        name,
 			Description: act.Description,
 			Default:     isDefault,
-			Command:     actionCommand(ctx, binaryName, base, name, act),
+			Command:     actionCommand(ctx, binaryName, base, name, act, resolverToKey),
 		})
 	}
 	return out
 }
 
 // actionCommand generates the CLI command that triggers a specific action.
-//   - default action: the bare run command.
-//   - explicit action: uses the action name via 'run action <name>'.
-//   - when-gated action: if the gate is a single `_.param == value`, suggest the
-//     enabling `-r param=value`; otherwise fall back to the bare run command.
-func actionCommand(ctx context.Context, binaryName, base, name string, act *action.Action) string {
+//   - default action: the bare run command (with the solution source).
+//   - explicit action: 'run action <name>' against the same source.
+//   - when-gated action: only when the ENTIRE when-clause reduces to a single
+//     `_.param == value` (or membership with one value) do we suggest the
+//     enabling `-r <key>=value`; otherwise we fall back to the base command so
+//     we never print a command that would not actually satisfy the gate.
+func actionCommand(ctx context.Context, binaryName, base, name string, act *action.Action, resolverToKey map[string]string) string {
 	if act.Explicit {
+		// base is "<bin> run solution -f <src>"; swap the subcommand for
+		// "run action <name>" while preserving the source flags.
+		if src, ok := sourceArgs(base, binaryName); ok {
+			return fmt.Sprintf("%s run action %s%s", binaryName, name, src)
+		}
 		return fmt.Sprintf("%s run action %s", binaryName, name)
 	}
 	if act.When != nil && act.When.Expr != nil {
-		if eqs, ok := act.When.Expr.ParamEqualities(ctx); ok && len(eqs) == 1 {
-			for param, vals := range eqs {
-				if len(vals) >= 1 {
-					return fmt.Sprintf("%s -r %s=%v", base, param, vals[0])
+		eqs, reducible, ok := act.When.Expr.ParamEqualitiesFullyReducible(ctx)
+		// Only emit a runnable -r command when the whole clause is satisfied by
+		// setting a single parameter to a single value.
+		if ok && reducible && len(eqs) == 1 {
+			for resolverName, vals := range eqs {
+				if len(vals) == 1 {
+					key := resolverName
+					if k, mapped := resolverToKey[resolverName]; mapped {
+						key = k
+					}
+					return fmt.Sprintf("%s -r %s=%s", base, key, shellQuote(fmt.Sprintf("%v", vals[0])))
 				}
 			}
 		}
 	}
 	return base
+}
+
+// sourceArgs extracts the source portion (everything after "<bin> run solution")
+// from a base command like "<bin> run solution -f ./sol.yaml", so it can be
+// reattached to a "run action" variant. Returns ("", false) when base has no
+// recognizable source suffix.
+func sourceArgs(base, binaryName string) (string, bool) {
+	prefix := binaryName + " run solution"
+	if strings.HasPrefix(base, prefix) {
+		return strings.TrimPrefix(base, prefix), true
+	}
+	return "", false
+}
+
+// shellQuote wraps a value in single quotes when it contains characters that
+// would break shell word-splitting (spaces, quotes, shell metacharacters), so
+// generated commands are copy-paste safe. Simple safe tokens are left as-is.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(s, " \t\n\"'`$&|;<>(){}[]*?!#~\\") {
+		return s
+	}
+	// Single-quote and escape embedded single quotes as '\''.
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // dedupeSortAny removes duplicate literal values and sorts them for stable output.

@@ -9138,7 +9138,7 @@ func TestIntegration_SolutionDiff_Alias(t *testing.T) {
 // Positional Path Rejection Tests — Uniform -f/--file Input
 // ============================================================================
 
-func TestIntegration_ExplainSolution_PositionalPathRejected(t *testing.T) {
+func TestIntegration_InspectSolution_PositionalPathRejected(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t, "inspect", "solution", "./my-solution.yaml")
 	assert.NotEqual(t, 0, exitCode)
