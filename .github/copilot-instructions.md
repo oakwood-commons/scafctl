@@ -15,6 +15,7 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 ## Conventions
 
 - **Commits**: Use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#specification)
+- **Squash-merge**: PRs are squash-merged, so a PR becomes one commit on `main` built from the **PR title and body** (branch commit messages are discarded). Do not split a branch into multiple commits for history's sake, put the effort into the PR title/body, and keep unrelated concerns in **separate PRs** rather than separate commits. The PR title must be a valid conventional-commit subject. See `AGENTS.md` for detail.
 - **Signing**: All commits must be GPG/SSH signed (`-S`) and include DCO sign-off (`-s`)
 - **Errors**: Return errors with `fmt.Errorf("context: %w", err)`, don't panic
 - **Breaking changes**: Allowed -- this app is not in production. Note when doing so.
