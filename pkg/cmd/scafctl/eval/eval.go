@@ -29,6 +29,7 @@ Useful for testing expressions and templates before using them in solutions.`,
 	cCmd.AddCommand(CommandCEL(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandTemplate(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandValidate(cliParams, ioStreams, cmdPath))
+	cCmd.AddCommand(CommandRefs(cliParams, ioStreams, settings.SanitizeBinaryName(cliParams.BinaryName)))
 
 	return cCmd
 }

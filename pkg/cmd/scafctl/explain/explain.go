@@ -15,7 +15,8 @@ import (
 )
 
 // CommandExplain creates the 'explain' command which provides detailed
-// documentation about resource schemas and solution/provider instances.
+// schema documentation for resource kinds (from Go struct tags). Instance
+// views live under 'inspect' (e.g. 'inspect solution').
 func CommandExplain(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	// Get available kinds for documentation
 	reg, err := schema.GetGlobalRegistry()
@@ -63,10 +64,6 @@ Examples:
 
 	// Copy flags from schema command
 	cCmd.Flags().AddFlagSet(schemaCmd.Flags())
-
-	// Add subcommands for specific resource types
-	// Note: We don't add CommandProvider here because it would shadow the "provider" schema lookup
-	cCmd.AddCommand(CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 
 	return cCmd
 }
