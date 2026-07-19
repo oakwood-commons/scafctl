@@ -1,0 +1,58 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+# Demonstrates the user-facing usage view:
+#   scafctl inspect solution -f examples/inspect/usage-view.yaml --usage
+#
+# The `metadata.usage` block enriches the auto-generated view with a synopsis
+# and curated examples. Parameters, their defaults, discovered allowed values
+# (from action `when` clauses), and per-action run commands are generated
+# automatically. Add `-o json` (or `-o yaml`) for structured output.
+
+metadata:
+  name: registry-index
+  version: 1.0.0
+  description: Query and refresh a small registry index.
+  usage:
+    synopsis: Query and refresh a registry index of modules and providers
+    examples:
+      - description: Show the registry summary (default)
+        command: scafctl run solution
+      - description: Refresh the index from live data
+        command: scafctl run solution -r action=refresh
+
+spec:
+  resolvers:
+    action:
+      description: What the solution should do
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: action
+              default: show
+
+  workflow:
+    actions:
+      show:
+        description: Display the registry summary tables
+        when: '_.action == "show"'
+        provider: message
+        inputs:
+          message: "Showing registry summary"
+          type: info
+      refresh:
+        description: Fetch fresh data and update the local index
+        when: '_.action == "refresh"'
+        provider: message
+        inputs:
+          message: "Refreshing registry index"
+          type: info
+      json:
+        description: Output the cached registry index as raw JSON
+        when: '_.action == "json"'
+        provider: message
+        inputs:
+          message: "Emitting JSON"
+          type: info

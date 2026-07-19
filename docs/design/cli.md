@@ -28,7 +28,8 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `run resolver` | ✅ Implemented | Resolver-only execution for debugging and inspection |
 | `render solution` | ✅ Implemented | Includes action-graph and snapshot modes |
 | `get solution/provider/resolver` | ✅ Implemented | |
-| `explain solution/provider` | ✅ Implemented | |
+| `explain <kind>` | ✅ Implemented | Schema docs for resource kinds (provider, action, resolver) |
+| `inspect solution [--usage]` | ✅ Implemented | Instance structure; `--usage` for the user-facing usage view |
 | `config *` | ✅ Implemented | view, get, set, unset, add-catalog, remove-catalog, use-catalog, init, schema, validate |
 | `snapshot show/diff` | ✅ Implemented | |
 | `solution diff` | ✅ Implemented | Structural comparison of two solution files |
@@ -609,40 +610,67 @@ scafctl get solutions --catalog=production
 
 ---
 
-## Explaining Resources
+## Inspecting and Explaining Resources
 
-Get detailed metadata and documentation for solutions and providers:
+scafctl separates schema documentation from instance inspection (see
+`docs/design/information-command-taxonomy.md`):
 
-### Explain Solution
+- `explain <kind>` -- schema documentation for a resource *kind* (from struct
+  tags), e.g. `explain provider`, `explain action`, `explain resolver`. Drill
+  into fields with `explain provider.schema`.
+- `inspect <resource>` -- structure and metadata of a specific *instance*
+  (kvx-native), e.g. `inspect solution`.
+
+### Inspect Solution (structure)
 
 ~~~bash
 # From file
-scafctl explain solution -f solution.yaml
+scafctl inspect solution -f solution.yaml
 
 # From catalog
-scafctl explain solution example
-scafctl explain solution example@1.0.0
+scafctl inspect solution example
+scafctl inspect solution example@1.0.0
+
+# Structured output
+scafctl inspect solution -f solution.yaml -o json
 ~~~
 
-Outputs:
-- Name, version, description
-- List of resolvers with their providers
-- List of actions with types
-- Required parameters
-- Dependency summary
+Outputs the solution's resolvers, actions, parameters, file dependencies, and
+the inferred run command.
 
-### Explain Provider
+### Inspect Solution (usage view)
+
+Use `--usage` for the user-facing "how do I run this?" view -- a synopsis, the
+user-supplied parameters (with types, defaults, and discovered allowed values),
+and each runnable action with the exact command to invoke it:
 
 ~~~bash
-scafctl explain provider github
-scafctl explain provider static
+scafctl inspect solution -f solution.yaml --usage
+
+# Structured output for tooling
+scafctl inspect solution -f solution.yaml --usage -o json
 ~~~
 
-Outputs:
-- Provider description
-- Configuration schema with types and validation
-- Example configurations
-- Supported features
+Authors can enrich the view with an optional `metadata.usage` block (synopsis
+and curated examples). When absent, the view is generated from parameters and
+actions.
+
+### Explain Schema Kinds
+
+~~~bash
+# Provider descriptor schema
+scafctl explain provider
+
+# Drill into a field
+scafctl explain provider.schema
+
+# Action / resolver schema
+scafctl explain action
+scafctl explain resolver
+~~~
+
+Outputs the struct definition, field types, validation rules, and documentation
+extracted from Go struct tags.
 
 ---
 
@@ -1030,7 +1058,7 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl run resolver` | run | resolver |
 | `scafctl get solution` | get | solution |
 | `scafctl render solution` | render | solution |
-| `scafctl explain solution` | explain | solution |
+| `scafctl inspect solution` | inspect | solution |
 | `scafctl package solution` | package | solution |
 | `scafctl new solution` | new | solution |
 | `scafctl push solution` | push | solution |

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
@@ -41,6 +42,14 @@ type ParamInfo struct {
 	Type        string `json:"type,omitempty" yaml:"type,omitempty" doc:"Parameter type" maxLength:"64" example:"string"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty" doc:"Parameter description" maxLength:"512" example:"Name of the project to create"`
 	Example     any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value"`
+
+	// Default is the literal default value declared on the parameter provider
+	// (its "default" input), when present.
+	Default any `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value when the parameter is not supplied"`
+
+	// Required is true when the parameter has no default value and must be
+	// supplied by the user.
+	Required bool `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether the parameter must be supplied"`
 }
 
 // BuildRunCommand analyzes a solution and returns the exact CLI command to run it,
@@ -83,11 +92,14 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 				continue
 			}
 			if rslvr.Resolve.With[0].Provider == "parameter" {
+				def := parameterDefault(rslvr.Resolve.With[0].Inputs)
 				parameters = append(parameters, ParamInfo{
 					Name:        name,
 					Type:        string(rslvr.Type),
 					Description: rslvr.Description,
 					Example:     rslvr.Example,
+					Default:     def,
+					Required:    def == nil,
 				})
 			}
 		}
@@ -123,4 +135,18 @@ func BuildRunCommand(sol *solution.Solution, path, binaryName string) (*RunComma
 		HasWorkflow:  hasWorkflow,
 		HasResolvers: hasResolvers,
 	}, nil
+}
+
+// parameterDefault extracts the literal "default" input from a parameter
+// provider's inputs, if declared. Returns nil when there is no default or when
+// the default is not a literal (e.g. an expression/template resolved at runtime).
+func parameterDefault(inputs map[string]*resolver.ValueRef) any {
+	if inputs == nil {
+		return nil
+	}
+	ref, ok := inputs["default"]
+	if !ok || ref == nil {
+		return nil
+	}
+	return ref.Literal
 }
