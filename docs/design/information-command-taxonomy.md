@@ -21,7 +21,7 @@ the surface revealed genuine duplication and a few misfiled commands:
    - `explain solution` -- fixed-text dump of the solution's structure.
    - `inspect solution` -- kvx-rendered view of the **same** structure, plus the
      inferred run command.
-    - `diff solution` -- pairwise structural comparison.
+   - `diff solution` -- pairwise structural comparison.
 
    `explain solution` and `inspect solution` build the **same** data object
    (`pkg/solution/inspect.BuildSolutionExplanation` -> `SolutionExplanation`)
