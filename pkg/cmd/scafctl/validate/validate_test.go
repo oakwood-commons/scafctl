@@ -43,3 +43,26 @@ func TestCommandValidate_EmbedderBinaryName(t *testing.T) {
 	cmd := CommandValidate(cliParams, streams, "mycli")
 	assert.Contains(t, cmd.Short, "mycli")
 }
+
+// TestCommandValidate_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandValidate_UnknownSubcommandErrors(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	streams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandValidate(cliParams, streams, "scafctl")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandValidate(cliParams, streams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+}

@@ -9164,7 +9164,7 @@ func TestIntegration_OldDiffPaths_HardRemoved(t *testing.T) {
 func TestIntegration_BareGroups_ShowHelpExitZero(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{"bundle", "snapshot"}
+	cases := []string{"bundle", "snapshot", "catalog", "config", "auth", "secrets", "cache", "render"}
 
 	for _, group := range cases {
 		t.Run(group, func(t *testing.T) {
@@ -9172,6 +9172,52 @@ func TestIntegration_BareGroups_ShowHelpExitZero(t *testing.T) {
 			stdout, _, exitCode := runScafctl(t, group)
 			assert.Equal(t, 0, exitCode, "bare %q must show help and exit 0", group)
 			assert.Contains(t, stdout, "Usage:", "bare %q must print help", group)
+		})
+	}
+}
+
+// TestIntegration_UnknownSubcommand_ErrorsNonZero verifies that every parent
+// command group converted to cmdutil.MakeHelpOnlyGroup rejects an unknown
+// subcommand with a non-zero exit AND an "unknown command" error, rather than
+// silently falling back to parent help and exiting 0 (issue #655). Nested
+// groups are covered too.
+func TestIntegration_UnknownSubcommand_ErrorsNonZero(t *testing.T) {
+	t.Parallel()
+
+	cases := [][]string{
+		{"catalog", "bogus-xyz"},
+		{"config", "bogus-xyz"},
+		{"auth", "bogus-xyz"},
+		{"secrets", "bogus-xyz"},
+		{"state", "bogus-xyz"},
+		{"cache", "bogus-xyz"},
+		{"kube", "bogus-xyz"},
+		{"plugins", "bogus-xyz"},
+		{"mcp", "bogus-xyz"},
+		{"get", "bogus-xyz"},
+		{"run", "bogus-xyz"},
+		{"validate", "bogus-xyz"},
+		{"new", "bogus-xyz"},
+		{"eval", "bogus-xyz"},
+		{"vendor", "bogus-xyz"},
+		{"inspect", "bogus-xyz"},
+		{"package", "bogus-xyz"},
+		{"credential-helper", "bogus-xyz"},
+		{"diff", "bogus-xyz"},
+		{"render", "bogus-xyz"},
+		// Nested groups.
+		{"auth", "alias", "bogus-xyz"},
+		{"catalog", "index", "bogus-xyz"},
+	}
+
+	for _, args := range cases {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctl(t, args...)
+			assert.NotEqual(t, 0, exitCode,
+				"unknown subcommand %v must exit non-zero", args)
+			assert.Contains(t, stderr, "unknown command",
+				"unknown subcommand %v must fail with an unknown-command error", args)
 		})
 	}
 }

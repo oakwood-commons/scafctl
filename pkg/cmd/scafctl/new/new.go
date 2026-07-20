@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -15,14 +16,14 @@ import (
 
 // CommandNew creates the 'new' command group.
 func CommandNew(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cCmd := &cobra.Command{
+	cCmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:   "new",
 		Short: fmt.Sprintf("Create new %s resources", path),
 		Long: strings.ReplaceAll(`Create new solutions, templates, and other scafctl resources from scratch.
 
 Generates well-structured YAML scaffolds with best practices built in.`, settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -16,7 +17,7 @@ import (
 // CommandKube creates the 'kube' command group for Kubernetes / OpenShift
 // cluster operations.
 func CommandKube(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "kube",
 		Aliases: []string{"k8s"},
 		Short:   "Manage Kubernetes / OpenShift cluster access",
@@ -35,7 +36,7 @@ func CommandKube(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			'scafctl kube status' to inspect the current kubeconfig context.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandLogin(cliParams, ioStreams, cmdPath))

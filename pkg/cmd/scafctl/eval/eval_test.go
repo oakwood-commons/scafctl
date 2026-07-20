@@ -38,13 +38,14 @@ func TestCommandEval(t *testing.T) {
 	assert.Contains(t, cmdNames, "refs")
 }
 
-func TestCommandEval_NoRunE(t *testing.T) {
+func TestCommandEval_HasHelpOnlyRunE(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
 	cmd := CommandEval(cliParams, ioStreams, "scafctl")
 
-	assert.Nil(t, cmd.RunE, "parent eval command should not have RunE, it is a group command")
+	assert.NotNil(t, cmd.RunE, "parent eval command needs a help-only RunE so NoArgs rejects unknown subcommands")
+	assert.NotNil(t, cmd.Args, "parent eval command must reject unknown subcommands via Args")
 }
 
 func BenchmarkCommandEval(b *testing.B) {
@@ -55,4 +56,25 @@ func BenchmarkCommandEval(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandEval(cliParams, ioStreams, "scafctl")
 	}
+}
+
+// TestCommandEval_UnknownSubcommandErrors verifies that an unknown subcommand
+// errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandEval_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandEval(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandEval(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }

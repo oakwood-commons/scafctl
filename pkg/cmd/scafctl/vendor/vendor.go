@@ -6,6 +6,7 @@ package vendor
 
 import (
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -13,7 +14,7 @@ import (
 
 // CommandVendor creates the vendor command group.
 func CommandVendor(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "vendor",
 		Aliases:      []string{"vend"},
 		Short:        "Manage vendored solution dependencies",
@@ -22,7 +23,7 @@ func CommandVendor(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			Commands for managing vendored catalog dependencies
 			used by solution bundles.
 		`),
-	}
+	})
 
 	cmd.AddCommand(CommandUpdate(cliParams, ioStreams, path))
 

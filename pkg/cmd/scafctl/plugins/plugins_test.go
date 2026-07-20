@@ -20,7 +20,7 @@ func TestCommandPlugins(t *testing.T) {
 	assert.Equal(t, "plugins", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.True(t, cmd.SilenceUsage)
-	assert.Nil(t, cmd.RunE, "parent plugins command should not have RunE")
+	assert.NotNil(t, cmd.RunE, "parent plugins command needs a help-only RunE so NoArgs rejects unknown subcommands")
 	subCmds := cmd.Commands()
 	require.Len(t, subCmds, 4, "should have 4 subcommands: install, list, update, prune")
 	cmdNames := make([]string, len(subCmds))
@@ -89,4 +89,25 @@ func BenchmarkCommandPlugins(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandPlugins(cliParams, ioStreams, "scafctl")
 	}
+}
+
+// TestCommandPlugins_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandPlugins_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandPlugins(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandPlugins(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }

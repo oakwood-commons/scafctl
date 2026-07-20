@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -16,7 +17,7 @@ import (
 
 // CommandCache creates the cache command group.
 func CommandCache(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "cache",
 		Short:        fmt.Sprintf("Manage the %s cache", path),
 		SilenceUsage: true,
@@ -30,7 +31,7 @@ func CommandCache(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			  - macOS: ~/.cache/scafctl/
 			  - Windows: %LOCALAPPDATA%\cache\scafctl\
 		`), settings.CliBinaryName, cliParams.BinaryName),
-	}
+	})
 
 	cmd.AddCommand(CommandClear(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandInfo(cliParams, ioStreams, path))

@@ -34,12 +34,13 @@ func TestCommandNew(t *testing.T) {
 	assert.Contains(t, names, "solution")
 }
 
-func TestCommandNew_NoRunE(t *testing.T) {
+func TestCommandNew_HasHelpOnlyRunE(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 
 	cmd := CommandNew(cliParams, ioStreams, "scafctl")
-	assert.Nil(t, cmd.RunE, "parent new command should not have RunE")
+	assert.NotNil(t, cmd.RunE, "parent new command needs a help-only RunE so NoArgs rejects unknown subcommands")
+	assert.NotNil(t, cmd.Args, "parent new command must reject unknown subcommands via Args")
 }
 
 func TestCommandSolution(t *testing.T) {
@@ -131,4 +132,25 @@ func BenchmarkCommandSolution(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandSolution(cliParams, ioStreams, "scafctl/new")
 	}
+}
+
+// TestCommandNew_UnknownSubcommandErrors verifies that an unknown subcommand
+// errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandNew_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandNew(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandNew(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }
