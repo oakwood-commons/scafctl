@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package solution
+package diff
 
 import (
 	"bytes"
@@ -77,14 +77,14 @@ spec:
               value: "new"
 `
 
-func TestCommandDiff_TableOutput(t *testing.T) {
+func TestCommandDiffSolution_TableOutput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
 	fileB := writeSolution(t, dir, "v2.yaml", solutionV2)
 
 	out, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", fileA, "-f", fileB})
 
 	err := cmd.Execute()
@@ -98,14 +98,14 @@ func TestCommandDiff_TableOutput(t *testing.T) {
 	assert.Contains(t, output, "Summary:")
 }
 
-func TestCommandDiff_JSONOutput(t *testing.T) {
+func TestCommandDiffSolution_JSONOutput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
 	fileB := writeSolution(t, dir, "v2.yaml", solutionV2)
 
 	out, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "json"})
 
 	err := cmd.Execute()
@@ -119,14 +119,14 @@ func TestCommandDiff_JSONOutput(t *testing.T) {
 	assert.Greater(t, summary["total"].(float64), float64(0))
 }
 
-func TestCommandDiff_YAMLOutput(t *testing.T) {
+func TestCommandDiffSolution_YAMLOutput(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
 	fileB := writeSolution(t, dir, "v2.yaml", solutionV2)
 
 	out, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "yaml"})
 
 	err := cmd.Execute()
@@ -137,41 +137,41 @@ func TestCommandDiff_YAMLOutput(t *testing.T) {
 	assert.Contains(t, output, "changes:")
 }
 
-func TestCommandDiff_InvalidFormat(t *testing.T) {
+func TestCommandDiffSolution_InvalidFormat(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
 	fileB := writeSolution(t, dir, "v2.yaml", solutionV2)
 
 	_, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "invalid"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 }
 
-func TestCommandDiff_MissingFile(t *testing.T) {
+func TestCommandDiffSolution_MissingFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
 
 	_, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", fileA, "-f", "/nonexistent/file.yaml"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 }
 
-func TestCommandDiff_IdenticalSolutions(t *testing.T) {
+func TestCommandDiffSolution_IdenticalSolutions(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	fileA := writeSolution(t, dir, "v1.yaml", solutionV1)
 	fileB := writeSolution(t, dir, "v1-copy.yaml", solutionV1)
 
 	out, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", fileA, "-f", fileB})
 
 	err := cmd.Execute()
@@ -180,34 +180,19 @@ func TestCommandDiff_IdenticalSolutions(t *testing.T) {
 	assert.Contains(t, out.String(), "No structural differences found.")
 }
 
-func TestCommandDiff_WrongArgCount(t *testing.T) {
+func TestCommandDiffSolution_WrongArgCount(t *testing.T) {
 	t.Parallel()
 	_, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"-f", "only-one.yaml"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
 }
 
-func TestCommandSolution_HasDiffSubcommand(t *testing.T) {
-	t.Parallel()
-	_, ioStreams := makeIOStreams()
-	cmd := CommandSolution(&settings.Run{}, ioStreams, "scafctl")
-
-	found := false
-	for _, sub := range cmd.Commands() {
-		if sub.Name() == "diff" {
-			found = true
-			break
-		}
-	}
-	assert.True(t, found, "solution command should have diff subcommand")
-}
-
 // ── Benchmarks ──────────────────────────────────────────────────────
 
-func BenchmarkCommandDiff_Table(b *testing.B) {
+func BenchmarkCommandDiffSolution_Table(b *testing.B) {
 	dir := b.TempDir()
 	fileA := filepath.Join(dir, "v1.yaml")
 	fileB := filepath.Join(dir, "v2.yaml")
@@ -219,13 +204,13 @@ func BenchmarkCommandDiff_Table(b *testing.B) {
 	for b.Loop() {
 		out := &bytes.Buffer{}
 		ioStreams := terminal.IOStreams{In: os.Stdin, Out: out, ErrOut: out}
-		cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+		cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 		cmd.SetArgs([]string{"-f", fileA, "-f", fileB})
 		_ = cmd.Execute()
 	}
 }
 
-func BenchmarkCommandDiff_JSON(b *testing.B) {
+func BenchmarkCommandDiffSolution_JSON(b *testing.B) {
 	dir := b.TempDir()
 	fileA := filepath.Join(dir, "v1.yaml")
 	fileB := filepath.Join(dir, "v2.yaml")
@@ -237,7 +222,7 @@ func BenchmarkCommandDiff_JSON(b *testing.B) {
 	for b.Loop() {
 		out := &bytes.Buffer{}
 		ioStreams := terminal.IOStreams{In: os.Stdin, Out: out, ErrOut: out}
-		cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+		cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 		cmd.SetArgs([]string{"-f", fileA, "-f", fileB, "-o", "json"})
 		_ = cmd.Execute()
 	}
@@ -245,9 +230,9 @@ func BenchmarkCommandDiff_JSON(b *testing.B) {
 
 // ── resolveDiffSlotOrder tests ──────────────────────────────────────
 
-// newTestDiffFlags builds a FlagSet that mirrors the diff command's flags.
+// newTestDiffFlags builds a FlagSet that mirrors the diff solution command's flags.
 func newTestDiffFlags() *pflag.FlagSet {
-	fs := pflag.NewFlagSet("diff", pflag.ContinueOnError)
+	fs := pflag.NewFlagSet("solution", pflag.ContinueOnError)
 	fs.StringArrayP("file", "f", nil, "")
 	fs.StringP("output", "o", "table", "")
 	return fs
@@ -266,47 +251,50 @@ func TestResolveDiffSlotOrder(t *testing.T) {
 	}{
 		{
 			name:   "two -f flags",
-			osArgs: []string{"scafctl", "solution", "diff", "-f", "old.yaml", "-f", "new.yaml"},
+			osArgs: []string{"scafctl", "diff", "solution", "-f", "old.yaml", "-f", "new.yaml"},
 			files:  []string{"old.yaml", "new.yaml"},
 			wantA:  "old.yaml",
 			wantB:  "new.yaml",
 		},
 		{
 			name:    "two positional catalog refs",
-			osArgs:  []string{"scafctl", "solution", "diff", "my-app@1.0.0", "my-app@2.0.0"},
+			osArgs:  []string{"scafctl", "diff", "solution", "my-app@1.0.0", "my-app@2.0.0"},
 			posArgs: []string{"my-app@1.0.0", "my-app@2.0.0"},
 			wantA:   "my-app@1.0.0",
 			wantB:   "my-app@2.0.0",
 		},
 		{
-			name:    "file first then catalog",
-			osArgs:  []string{"scafctl", "solution", "diff", "-f", "modified.yaml", "my-app@1.0.0"},
+			// Regression for the polymorphic verb path: the top-level "diff"
+			// token must NOT be used as the sentinel; the subcommand token
+			// "solution" is. Otherwise startIdx points at "solution" and the
+			// first mixed source is mis-parsed.
+			name:    "file first then catalog (new path)",
+			osArgs:  []string{"scafctl", "diff", "solution", "-f", "modified.yaml", "my-app@1.0.0"},
 			files:   []string{"modified.yaml"},
 			posArgs: []string{"my-app@1.0.0"},
 			wantA:   "modified.yaml",
 			wantB:   "my-app@1.0.0",
 		},
 		{
-			name:    "catalog first then file",
-			osArgs:  []string{"scafctl", "solution", "diff", "my-app@1.0.0", "-f", "modified.yaml"},
+			name:    "catalog first then file (new path)",
+			osArgs:  []string{"scafctl", "diff", "solution", "my-app@1.0.0", "-f", "modified.yaml"},
 			files:   []string{"modified.yaml"},
 			posArgs: []string{"my-app@1.0.0"},
 			wantA:   "my-app@1.0.0",
 			wantB:   "modified.yaml",
 		},
 		{
-			name:   "with output flag",
-			osArgs: []string{"scafctl", "solution", "diff", "-f", "a.yaml", "-f", "b.yaml", "-o", "json"},
+			name:   "with output flag (new path)",
+			osArgs: []string{"scafctl", "diff", "solution", "-f", "a.yaml", "-f", "b.yaml", "-o", "json"},
 			files:  []string{"a.yaml", "b.yaml"},
 			wantA:  "a.yaml",
 			wantB:  "b.yaml",
 		},
 		{
-			// Regression: shorthand -o was not looked up via ShorthandLookup,
-			// so its value token could be misread as a positional source,
-			// inverting the A/B order when the catalog ref shared the flag value.
+			// Regression: shorthand -o must be looked up via ShorthandLookup,
+			// so its value token is not misread as a positional source.
 			name:    "shorthand output flag before mixed file and catalog",
-			osArgs:  []string{"scafctl", "solution", "diff", "-o", "json", "-f", "a.yaml", "json"},
+			osArgs:  []string{"scafctl", "diff", "solution", "-o", "json", "-f", "a.yaml", "json"},
 			files:   []string{"a.yaml"},
 			posArgs: []string{"json"},
 			wantA:   "a.yaml",
@@ -324,10 +312,10 @@ func TestResolveDiffSlotOrder(t *testing.T) {
 	}
 }
 
-func TestCommandDiff_RejectsPositionalFilePaths(t *testing.T) {
+func TestCommandDiffSolution_RejectsPositionalFilePaths(t *testing.T) {
 	t.Parallel()
 	_, ioStreams := makeIOStreams()
-	cmd := CommandDiff(&settings.Run{}, ioStreams, "scafctl")
+	cmd := CommandDiffSolution(&settings.Run{}, ioStreams, "scafctl")
 	cmd.SetArgs([]string{"./solution.yaml", "my-app@1.0.0"})
 
 	err := cmd.Execute()

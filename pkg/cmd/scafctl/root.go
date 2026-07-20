@@ -22,6 +22,7 @@ import (
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
 	credhelpercmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/credentialhelper"
+	diffcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/diff"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
@@ -38,7 +39,6 @@ import (
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
 	servecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/serve"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
-	solutioncmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/solution"
 	statecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/state"
 	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
 	validatecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/validate"
@@ -881,7 +881,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddCommand(withGroup(groupInspect, explain.CommandExplain(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, inspectcmd.CommandInspect(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupInspect, solutioncmd.CommandSolution(cliParams, *ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupInspect, diffcmd.CommandDiff(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, binaryName)))
 
 	// Scaffolding Commands — create and package artifacts

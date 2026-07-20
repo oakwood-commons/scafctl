@@ -98,4 +98,4 @@ When you build this solution:
 
 - See the [Catalog Tutorial](../../../docs/tutorials/catalog-tutorial.md#advanced-bundling) for more details
 - Try modifying `bundle.include`/`bundle.exclude` and rebuilding
-- Use `scafctl bundle diff` to compare versions after changes
+- Use `scafctl diff bundle` to compare versions after changes

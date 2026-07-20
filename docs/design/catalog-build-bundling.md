@@ -998,14 +998,14 @@ Verification failed: 2 errors
 
 ---
 
-## Bundle Diffing (`scafctl bundle diff`)
+## Bundle Diffing (`scafctl diff bundle`)
 
 Show what changed between two versions of a bundled artifact, enabling informed upgrade decisions and change auditing.
 
 ### Command Specification
 
 ```bash
-scafctl bundle diff <ref-a> <ref-b>
+scafctl diff bundle <ref-a> <ref-b>
 ```
 
 | Argument | Description |
@@ -1030,7 +1030,7 @@ scafctl bundle diff <ref-a> <ref-b>
 ### Output
 
 ```bash
-$ scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0
+$ scafctl diff bundle my-solution@1.0.0 my-solution@2.0.0
 
 Comparing my-solution@1.0.0 → my-solution@2.0.0
 
@@ -1402,7 +1402,7 @@ plugins:
 - CLI integration tests
 
 ### Phase 8: Bundle Diffing
-- Implement `scafctl bundle diff` command
+- Implement `scafctl diff bundle` command
 - Structural solution YAML comparison (resolvers, actions, metadata)
 - Bundled file diff with line-count summaries
 - Vendored dependency and plugin diff
@@ -1496,4 +1496,4 @@ Cache can be cleared with `scafctl cache clear --kind build`.
 
 ## Summary
 
-Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle verification (`scafctl bundle verify`) validates artifact completeness, bundle diffing (`scafctl bundle diff`) enables change auditing between versions, and selective extraction (`scafctl bundle extract`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.
+Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle verification (`scafctl bundle verify`) validates artifact completeness, bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl bundle extract`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.

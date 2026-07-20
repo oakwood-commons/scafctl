@@ -309,7 +309,7 @@ scafctl render solution -f examples/snapshots/basic-snapshot.yaml \
 scafctl snapshot show /tmp/snapshot.json
 
 # Compare two snapshots
-scafctl snapshot diff /tmp/snap-a.json /tmp/snap-b.json
+scafctl diff snapshot /tmp/snap-a.json /tmp/snap-b.json
 ```
 
 ---

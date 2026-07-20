@@ -21,7 +21,7 @@ the surface revealed genuine duplication and a few misfiled commands:
    - `explain solution` -- fixed-text dump of the solution's structure.
    - `inspect solution` -- kvx-rendered view of the **same** structure, plus the
      inferred run command.
-   - `solution diff` -- pairwise structural comparison.
+   - `diff solution` -- pairwise structural comparison.
 
    `explain solution` and `inspect solution` build the **same** data object
    (`pkg/solution/inspect.BuildSolutionExplanation` -> `SolutionExplanation`)
@@ -120,7 +120,7 @@ Rules that follow from this split:
 - `explain <kind>` schema browser for kinds.
 - `eval` (expression sandbox) and `snapshot` (execution artifacts) -- confirmed
   distinct, out of scope.
-- `solution diff` -- distinct pairwise comparison.
+- `diff solution` -- distinct pairwise comparison.
 
 ## Sequencing
 

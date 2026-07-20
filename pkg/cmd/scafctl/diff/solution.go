@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package solution
+package diff
 
 import (
 	"context"
@@ -32,8 +32,8 @@ var (
 	summaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF"))
 )
 
-// DiffOptions holds options for the solution diff command.
-type DiffOptions struct {
+// SolutionDiffOptions holds options for the diff solution command.
+type SolutionDiffOptions struct {
 	Files  []string
 	Output string
 }
@@ -43,12 +43,12 @@ type diffSource struct {
 	Value string // Path or catalog name
 }
 
-// CommandDiff creates the solution diff subcommand.
-func CommandDiff(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
-	opts := &DiffOptions{}
+// CommandDiffSolution creates the `diff solution` subcommand.
+func CommandDiffSolution(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+	opts := &SolutionDiffOptions{}
 
 	cmd := &cobra.Command{
-		Use:          "diff [catalog-ref-a] [catalog-ref-b]",
+		Use:          subSolution + " [catalog-ref-a] [catalog-ref-b]",
 		Short:        "Compare two solution files structurally",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
@@ -78,19 +78,19 @@ func CommandDiff(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryNa
 		`),
 		Example: heredoc.Docf(`
 			# Compare two local files
-			$ %[1]s solution diff -f solution-v1.yaml -f solution-v2.yaml
+			$ %[1]s diff solution -f solution-v1.yaml -f solution-v2.yaml
 
 			# Compare two catalog versions
-			$ %[1]s solution diff my-app@1.0.0 my-app@2.0.0
+			$ %[1]s diff solution my-app@1.0.0 my-app@2.0.0
 
 			# Compare a local file with a catalog version
-			$ %[1]s solution diff -f modified.yaml my-app@1.0.0
+			$ %[1]s diff solution -f modified.yaml my-app@1.0.0
 
 			# Output as JSON
-			$ %[1]s solution diff -f solution-v1.yaml -f solution-v2.yaml -o json
+			$ %[1]s diff solution -f solution-v1.yaml -f solution-v2.yaml -o json
 
 			# Output as YAML
-			$ %[1]s solution diff -f solution-v1.yaml -f solution-v2.yaml -o yaml
+			$ %[1]s diff solution -f solution-v1.yaml -f solution-v2.yaml -o yaml
 		`, binaryName),
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -105,7 +105,7 @@ func CommandDiff(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryNa
 
 			// Validate positional args are catalog references
 			for _, arg := range args {
-				if err := get.ValidatePositionalRef(arg, "", binaryName+" solution diff"); err != nil {
+				if err := get.ValidatePositionalRef(arg, "", binaryName+" diff solution"); err != nil {
 					w.Errorf("%v", err)
 					return exitcode.WithCode(err, exitcode.InvalidInput)
 				}
@@ -122,7 +122,7 @@ func CommandDiff(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryNa
 			// user's intended A→B ordering when mixing -f and positional args.
 			sources := resolveDiffSlotOrder(os.Args, cmd.Flags(), opts.Files, args)
 
-			return runDiff(cmd.Context(), sources[0].Value, sources[1].Value, opts.Output)
+			return runSolutionDiff(cmd.Context(), sources[0].Value, sources[1].Value, opts.Output)
 		},
 	}
 
@@ -152,10 +152,14 @@ func resolveDiffSlotOrder(osArgs []string, flags *pflag.FlagSet, flagFiles, posi
 	sources := make([]diffSource, 0, len(flagFiles)+len(positionalArgs))
 	fileIdx, posIdx := 0, 0
 
-	// Find the start of our args: skip past "diff" subcommand token.
+	// Find the start of our args: skip past the "solution" subcommand token.
+	// Under the polymorphic verb path (`scafctl diff solution ...`), the
+	// "diff" token is the top-level verb, so we key off the actual
+	// subcommand name to locate where the user's flags/args begin. Falling
+	// back to "diff" here would point startIdx at "solution" and mis-parse.
 	startIdx := 0
 	for i, arg := range osArgs {
-		if arg == "diff" {
+		if arg == subSolution {
 			startIdx = i + 1
 			break
 		}
@@ -223,7 +227,7 @@ func filesThenPositional(flagFiles, positionalArgs []string) []diffSource {
 	return sources
 }
 
-func runDiff(ctx context.Context, refA, refB, outputFmt string) error {
+func runSolutionDiff(ctx context.Context, refA, refB, outputFmt string) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 

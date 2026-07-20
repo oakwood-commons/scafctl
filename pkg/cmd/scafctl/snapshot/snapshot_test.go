@@ -24,24 +24,42 @@ func TestCommandSnapshot(t *testing.T) {
 	assert.NotEmpty(t, cmd.Long)
 	assert.NotEmpty(t, cmd.Example)
 
-	// Verify subcommands are added (save was moved to render solution --snapshot)
+	// Verify subcommands are added (save was moved to render solution --snapshot,
+	// diff was moved to the top-level `diff snapshot` command)
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 2, "should have 2 subcommands (show, diff)")
+	assert.Len(t, subcommands, 1, "should have 1 subcommand (show)")
 
 	foundShow := false
-	foundDiff := false
 
 	for _, sub := range subcommands {
-		switch sub.Name() {
-		case "show":
+		if sub.Name() == "show" {
 			foundShow = true
-		case "diff":
-			foundDiff = true
 		}
 	}
 
 	assert.True(t, foundShow, "show subcommand should be present")
-	assert.True(t, foundDiff, "diff subcommand should be present")
+}
+
+// TestCommandSnapshot_UnknownSubcommandErrors verifies that an unknown
+// subcommand (e.g. the hard-removed 'snapshot diff') errors, while a bare
+// invocation shows help and exits 0.
+func TestCommandSnapshot_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := &settings.Run{}
+	ioStreams := terminal.IOStreams{}
+
+	cmd := CommandSnapshot(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"diff", "a", "b"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandSnapshot(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }
 
 func TestCommandSnapshot_ExampleContainsBinaryName(t *testing.T) {

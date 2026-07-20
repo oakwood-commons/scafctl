@@ -68,7 +68,7 @@ Source: [catalog-build-bundling.md](catalog-build-bundling.md)
 - **Semver constraint resolution** — Catalog refs support full semver constraints (`^`, `~`, `>=`, etc.) resolved at build time to the highest matching version
 - **Version conflict detection** — Conflicting transitive dependency versions are detected and rejected at build time
 - **`scafctl bundle verify`** — Validate built artifacts
-- **Bundle diffing between versions** — `scafctl bundle diff`
+- **Bundle diffing between versions** — `scafctl diff bundle`
 - **Selective extraction** — `scafctl bundle extract`
 
 ---

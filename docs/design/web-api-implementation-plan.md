@@ -507,7 +507,7 @@ Delegates to `pkg/dryrun/` and `pkg/scaffold/`.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | POST | `/v1/explain` | Detailed solution analysis (mirrors `scafctl explain`) | Yes |
-| POST | `/v1/diff` | Solution diff (mirrors `scafctl solution diff`) | Yes |
+| POST | `/v1/diff` | Solution diff (mirrors `scafctl diff solution`) | Yes |
 
 Delegates to existing domain packages.
 
