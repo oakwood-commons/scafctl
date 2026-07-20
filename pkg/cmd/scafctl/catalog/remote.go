@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -22,7 +23,7 @@ import (
 
 // CommandRemote creates the 'catalog remote' command group.
 func CommandRemote(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "remote",
 		Short:        "Manage remote catalog registries",
 		SilenceUsage: true,
@@ -32,7 +33,7 @@ func CommandRemote(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			Add, remove, and list configured remote registries for pushing and
 			pulling artifacts.
 		`),
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(commandRemoteAdd(cliParams, ioStreams, cmdPath))

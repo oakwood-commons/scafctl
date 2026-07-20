@@ -6,6 +6,7 @@ package run
 import (
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -13,7 +14,7 @@ import (
 
 // CommandRun creates the 'run' command that executes solutions and other runnable artifacts.
 func CommandRun(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cCmd := &cobra.Command{
+	cCmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "run",
 		Aliases: []string{"r"},
 		Short:   fmt.Sprintf("Runs %s solutions, resolvers, actions, and providers", path),
@@ -28,7 +29,7 @@ SUBCOMMANDS:
   resolver  Run resolvers only (for debugging/inspection)
   provider  Run a single provider directly (for testing/debugging)`,
 		SilenceUsage: true,
-	}
+	})
 
 	runPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 	cCmd.AddCommand(CommandSolution(cliParams, ioStreams, runPath))

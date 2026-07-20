@@ -10,6 +10,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -37,7 +38,7 @@ var aliasListSchema = []byte(`{
 // CommandAlias creates the 'auth alias' command group for managing static
 // hostname aliases (auth.handlers.<name>.hostname.aliases).
 func CommandAlias(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:   "alias",
 		Short: "Manage static hostname aliases for an auth handler",
 		Long: strings.ReplaceAll(heredoc.Doc(`
@@ -63,7 +64,7 @@ func CommandAlias(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			  scafctl auth alias remove openshift prod
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(commandAliasSet(cliParams, ioStreams, cmdPath))

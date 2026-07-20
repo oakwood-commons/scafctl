@@ -907,3 +907,25 @@ func TestSplitFingerprintKey(t *testing.T) {
 		})
 	}
 }
+
+// TestCommandState_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandState_UnknownSubcommandErrors(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{BinaryName: "testcli"}
+	ios := &terminal.IOStreams{}
+
+	cmd := CommandState(cliParams, ios, "testcli")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandState(cliParams, ios, "testcli")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+}

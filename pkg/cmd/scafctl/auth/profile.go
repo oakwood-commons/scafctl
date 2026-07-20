@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -15,7 +16,7 @@ import (
 
 // CommandProfile creates the 'auth profile' command group.
 func CommandProfile(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:   "profile",
 		Short: "Manage auth profiles",
 		Long: strings.ReplaceAll(heredoc.Doc(`
@@ -27,7 +28,7 @@ func CommandProfile(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			Use 'scafctl auth profile delete <handler> <profile>' to remove a profile.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandProfileDelete(cliParams, ioStreams, cmdPath))

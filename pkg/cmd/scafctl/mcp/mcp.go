@@ -6,6 +6,7 @@ package mcp
 import (
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -13,12 +14,12 @@ import (
 
 // CommandMCP creates the `scafctl mcp` parent command.
 func CommandMCP(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "mcp",
 		Short:        "MCP (Model Context Protocol) server for AI agent integration",
 		Long:         `Manage the MCP server that exposes scafctl capabilities to AI agents like GitHub Copilot, Claude, and Cursor.`,
 		SilenceUsage: true,
-	}
+	})
 	cmd.AddCommand(CommandServe(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
 	cmd.AddCommand(CommandList(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cmd.Use)))
 	return cmd

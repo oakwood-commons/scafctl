@@ -1229,3 +1229,72 @@ func TestAuthHandlerName_NonNil(t *testing.T) {
 	mock := auth.NewMockHandler("entra")
 	assert.Equal(t, "entra", authHandlerName(mock))
 }
+
+// TestCommandCatalog_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandCatalog_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandCatalog(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandCatalog(cliParams, ioStreams, "scafctl/catalog")
+	var out bytes.Buffer
+	cmd2.SetArgs([]string{})
+	cmd2.SetOut(&out)
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+	assert.Contains(t, out.String(), "Usage:", "bare catalog must render help")
+}
+
+// TestCommandIndex_UnknownSubcommandErrors verifies the nested 'catalog index'
+// group rejects unknown subcommands while bare invocation shows help.
+func TestCommandIndex_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandIndex(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandIndex(cliParams, ioStreams, "scafctl/catalog")
+	var out bytes.Buffer
+	cmd2.SetArgs([]string{})
+	cmd2.SetOut(&out)
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+	assert.Contains(t, out.String(), "Usage:", "bare catalog index must render help")
+}
+
+// TestCommandRemote_UnknownSubcommandErrors verifies the nested 'catalog
+// remote' group rejects unknown subcommands while bare invocation shows help.
+func TestCommandRemote_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandRemote(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandRemote(cliParams, ioStreams, "scafctl/catalog")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+}

@@ -7,6 +7,7 @@ package diff
 
 import (
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -22,7 +23,7 @@ const (
 // CommandDiff creates the top-level `diff` command group. It is a polymorphic
 // verb whose subcommands compare different scafctl artifact kinds.
 func CommandDiff(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "diff",
 		Short:        "Compare two artifacts (solutions, bundles, snapshots)",
 		SilenceUsage: true,
@@ -44,10 +45,7 @@ func CommandDiff(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryN
 			# Compare two snapshots
 			$ %[1]s diff snapshot before.json after.json
 		`, binaryName),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Help()
-		},
-	}
+	})
 
 	cmd.AddCommand(CommandDiffSolution(cliParams, *ioStreams, binaryName))
 	cmd.AddCommand(CommandDiffBundle(cliParams, ioStreams, binaryName))

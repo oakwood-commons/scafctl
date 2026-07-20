@@ -5,6 +5,7 @@ package snapshot
 
 import (
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -12,17 +13,11 @@ import (
 
 // CommandSnapshot creates the snapshot command
 func CommandSnapshot(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "snapshot",
 		Aliases:      []string{"snap"},
 		Short:        "Manage resolver execution snapshots",
 		SilenceUsage: true,
-		// Args: NoArgs + a RunE that shows help makes bare 'snapshot' print
-		// help and exit 0, while an unknown subcommand (e.g. the hard-removed
-		// 'snapshot diff') errors with "unknown command". A RunE is required:
-		// cobra returns flag.ErrHelp (help, exit 0) for a non-runnable parent
-		// *before* validating args, so NoArgs alone would never fire.
-		Args: cobra.NoArgs,
 		Long: heredoc.Doc(`
 			Manage resolver execution snapshots for debugging, testing, and comparison.
 			
@@ -42,10 +37,7 @@ func CommandSnapshot(cliParams *settings.Run, ioStreams terminal.IOStreams, bina
 			# Compare two snapshots
 			$ %s diff snapshot before.json after.json
 		`, binaryName, binaryName, binaryName),
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Help()
-		},
-	}
+	})
 
 	cmd.AddCommand(CommandShow(cliParams, ioStreams, binaryName))
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/celfunction"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/commands"
 	getexamples "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/examples"
@@ -19,7 +20,7 @@ import (
 )
 
 func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cCmd := &cobra.Command{
+	cCmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "get",
 		Aliases: []string{"g"},
 		Short:   "List resources, or show one by name",
@@ -37,7 +38,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 			  explain solution          Schema of the Solution kind (what fields are valid)
 		`),
 		SilenceUsage: true,
-	}
+	})
 	cCmd.AddCommand(provider.CommandProvider(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(solution.CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(getexamples.CommandExamples(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))

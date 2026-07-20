@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -15,7 +16,7 @@ import (
 
 // CommandPackage creates the package command group.
 func CommandPackage(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "package",
 		Aliases:      []string{"build", "b"},
 		Short:        "Package artifacts into the local catalog",
@@ -33,7 +34,7 @@ func CommandPackage(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			  - macOS: ~/.local/share/scafctl/catalog/
 			  - Windows: %LOCALAPPDATA%\scafctl\catalog\
 		`), settings.CliBinaryName, cliParams.BinaryName),
-	}
+	})
 
 	cmd.AddCommand(CommandPackageSolution(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandPackagePlugin(cliParams, ioStreams, path))
