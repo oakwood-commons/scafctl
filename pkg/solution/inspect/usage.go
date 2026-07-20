@@ -19,14 +19,18 @@ import (
 // projection over a solution's metadata, parameters, and actions, rendered via
 // the kvx pipeline (table/json/yaml/tui).
 type UsageInfo struct {
-	Name     string              `json:"name" yaml:"name" doc:"Solution name" maxLength:"256"`
-	Version  string              `json:"version,omitempty" yaml:"version,omitempty" doc:"Solution version" maxLength:"64"`
-	Synopsis string              `json:"synopsis,omitempty" yaml:"synopsis,omitempty" doc:"How to consume this solution" maxLength:"5000"`
-	Source   string              `json:"source,omitempty" yaml:"source,omitempty" doc:"Resolved solution path" maxLength:"1024"`
-	Run      string              `json:"run,omitempty" yaml:"run,omitempty" doc:"Base command to run the solution" maxLength:"2048"`
-	Params   []ParamUsage        `json:"parameters,omitempty" yaml:"parameters,omitempty" doc:"User-supplied parameters" maxItems:"100"`
-	Actions  []ActionUsage       `json:"actions,omitempty" yaml:"actions,omitempty" doc:"Runnable actions with commands" maxItems:"200"`
-	Examples []spec.UsageExample `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Curated usage examples" maxItems:"50"`
+	Name        string              `json:"name" yaml:"name" doc:"Solution name" maxLength:"256"`
+	DisplayName string              `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name" maxLength:"256"`
+	Version     string              `json:"version,omitempty" yaml:"version,omitempty" doc:"Solution version" maxLength:"64"`
+	Synopsis    string              `json:"synopsis,omitempty" yaml:"synopsis,omitempty" doc:"How to consume this solution" maxLength:"5000"`
+	Details     string              `json:"details,omitempty" yaml:"details,omitempty" doc:"Long-form description of how the solution works and when to use it" maxLength:"20000"`
+	Source      string              `json:"source,omitempty" yaml:"source,omitempty" doc:"Resolved solution path" maxLength:"1024"`
+	Run         string              `json:"run,omitempty" yaml:"run,omitempty" doc:"Base command to run the solution" maxLength:"2048"`
+	Tags        []string            `json:"tags,omitempty" yaml:"tags,omitempty" doc:"Searchable tags" maxItems:"100"`
+	Links       []LinkInfo          `json:"links,omitempty" yaml:"links,omitempty" doc:"Related documentation and resources" maxItems:"10"`
+	Params      []ParamUsage        `json:"parameters,omitempty" yaml:"parameters,omitempty" doc:"User-supplied parameters" maxItems:"100"`
+	Actions     []ActionUsage       `json:"actions,omitempty" yaml:"actions,omitempty" doc:"Runnable actions with commands" maxItems:"200"`
+	Examples    []spec.UsageExample `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Curated usage examples" maxItems:"50"`
 }
 
 // ParamUsage describes a single user-supplied parameter in the usage view.
@@ -34,6 +38,7 @@ type ParamUsage struct {
 	Name          string `json:"name" yaml:"name" doc:"Parameter name" maxLength:"256"`
 	Type          string `json:"type,omitempty" yaml:"type,omitempty" doc:"Parameter type" maxLength:"64"`
 	Description   string `json:"description,omitempty" yaml:"description,omitempty" doc:"Parameter description" maxLength:"512"`
+	Example       any    `json:"example,omitempty" yaml:"example,omitempty" doc:"Example value for the parameter"`
 	Default       any    `json:"default,omitempty" yaml:"default,omitempty" doc:"Default value when omitted"`
 	Required      bool   `json:"required,omitempty" yaml:"required,omitempty" doc:"Whether the parameter must be supplied"`
 	AllowedValues []any  `json:"allowedValues,omitempty" yaml:"allowedValues,omitempty" doc:"Discovered allowed values (best-effort)" maxItems:"100"`
@@ -64,15 +69,19 @@ func BuildUsage(ctx context.Context, sol *solution.Solution, path, binaryName st
 	}
 
 	info := &UsageInfo{
-		Name:     sol.Metadata.Name,
-		Synopsis: usageSynopsis(sol),
-		Source:   sol.Metadata.Source,
-		Run:      runInfo.Subcommand,
+		Name:        sol.Metadata.Name,
+		DisplayName: sol.Metadata.DisplayName,
+		Synopsis:    usageSynopsis(sol),
+		Source:      sol.Metadata.Source,
+		Run:         runInfo.Subcommand,
+		Tags:        sol.Metadata.Tags,
+		Links:       usageLinks(sol.Metadata.Links),
 	}
 	if sol.Metadata.Version != nil {
 		info.Version = sol.Metadata.Version.String()
 	}
 	if sol.Metadata.Usage != nil {
+		info.Details = sol.Metadata.Usage.Details
 		info.Examples = sol.Metadata.Usage.Examples
 	}
 
@@ -141,6 +150,18 @@ func discoverAllowedValues(ctx context.Context, sol *solution.Solution) map[stri
 	return agg
 }
 
+// usageLinks converts solution metadata links into the inspect view's link shape.
+func usageLinks(links []solution.Link) []LinkInfo {
+	if len(links) == 0 {
+		return nil
+	}
+	out := make([]LinkInfo, 0, len(links))
+	for _, l := range links {
+		out = append(out, LinkInfo{Name: l.Name, URL: l.URL})
+	}
+	return out
+}
+
 // buildParamUsage merges run-command parameter info with discovered allowed
 // values. Allowed values are discovered keyed by RESOLVER name (what a
 // when-clause references), so they are looked up by ParamInfo.ResolverName; the
@@ -155,6 +176,7 @@ func buildParamUsage(params []ParamInfo, allowedByResolver map[string][]any) []P
 			Name:          p.Name,
 			Type:          p.Type,
 			Description:   p.Description,
+			Example:       p.Example,
 			Default:       p.Default,
 			Required:      p.Required,
 			AllowedValues: allowedByResolver[p.ResolverName],

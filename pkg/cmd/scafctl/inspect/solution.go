@@ -227,15 +227,31 @@ func (o *SolutionOptions) renderUsageText(ctx context.Context, u *inspect.UsageI
 		return nil
 	}
 
-	// Header: name (version) + synopsis.
-	title := u.Name
+	// Header: display name / name (version) + synopsis.
+	displayTitle := u.Name
+	if u.DisplayName != "" {
+		displayTitle = u.DisplayName
+	}
+	title := displayTitle
 	if u.Version != "" {
-		title = fmt.Sprintf("%s (%s)", u.Name, u.Version)
+		title = fmt.Sprintf("%s (%s)", displayTitle, u.Version)
 	}
 	w.Plainlnf("%s", title)
 	if u.Synopsis != "" {
 		w.Plainlnf("%s", u.Synopsis)
 	}
+	if len(u.Tags) > 0 {
+		w.Plainlnf("Tags: %s", strings.Join(u.Tags, ", "))
+	}
+
+	// Long-form details (author prose), if provided.
+	if u.Details != "" {
+		w.Plainln("")
+		for _, line := range strings.Split(strings.TrimRight(u.Details, "\n"), "\n") {
+			w.Plainlnf("%s", line)
+		}
+	}
+
 	if u.Run != "" {
 		w.Plainln("")
 		w.Plainlnf("Run: %s", u.Run)
@@ -261,6 +277,9 @@ func (o *SolutionOptions) renderUsageText(ctx context.Context, u *inspect.UsageI
 			}
 			if len(p.AllowedValues) > 0 {
 				w.Plainlnf("      values: %s", joinAny(p.AllowedValues))
+			}
+			if p.Example != nil {
+				w.Plainlnf("      example: %v", p.Example)
 			}
 		}
 	}
@@ -291,6 +310,19 @@ func (o *SolutionOptions) renderUsageText(ctx context.Context, u *inspect.UsageI
 				w.Plainlnf("  # %s", ex.Description)
 			}
 			w.Plainlnf("  %s", ex.Command)
+		}
+	}
+
+	// Links.
+	if len(u.Links) > 0 {
+		w.Plainln("")
+		w.Plainln("LINKS")
+		for _, l := range u.Links {
+			if l.Name != "" {
+				w.Plainlnf("  %s: %s", l.Name, l.URL)
+			} else {
+				w.Plainlnf("  %s", l.URL)
+			}
 		}
 	}
 

@@ -12,6 +12,11 @@ type Usage struct {
 	// When set it takes precedence over the metadata description in the usage view.
 	Synopsis string `json:"synopsis,omitempty" yaml:"synopsis,omitempty" doc:"One-line description of how to consume the solution" maxLength:"500" example:"Registry index for Terraform modules and providers"`
 
+	// Details is free-form, multi-paragraph prose describing how the solution
+	// works and when to use it -- the long-form counterpart to the one-line
+	// description/synopsis (analogous to a command's long help or a README body).
+	Details string `json:"details,omitempty" yaml:"details,omitempty" doc:"Long-form description of how the solution works and when to use it" maxLength:"20000"`
+
 	// Examples are curated command examples shown in the usage view.
 	Examples []UsageExample `json:"examples,omitempty" yaml:"examples,omitempty" doc:"Curated usage examples" maxItems:"50"`
 }
