@@ -40,6 +40,28 @@ func TestCommandSnapshot(t *testing.T) {
 	assert.True(t, foundShow, "show subcommand should be present")
 }
 
+// TestCommandSnapshot_UnknownSubcommandErrors verifies that an unknown
+// subcommand (e.g. the hard-removed 'snapshot diff') errors, while a bare
+// invocation shows help and exits 0.
+func TestCommandSnapshot_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := &settings.Run{}
+	ioStreams := terminal.IOStreams{}
+
+	cmd := CommandSnapshot(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"diff", "a", "b"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandSnapshot(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+}
+
 func TestCommandSnapshot_ExampleContainsBinaryName(t *testing.T) {
 	cliParams := &settings.Run{}
 	ioStreams := terminal.IOStreams{}

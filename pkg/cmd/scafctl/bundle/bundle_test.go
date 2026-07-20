@@ -26,7 +26,37 @@ func TestCommandBundle(t *testing.T) {
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotEmpty(t, cmd.Long)
 	assert.True(t, cmd.SilenceUsage)
-	assert.Nil(t, cmd.RunE, "parent bundle command should not have RunE, it is a group command")
+	// The parent has a RunE (shows help when bare) plus Args: NoArgs so that
+	// unknown subcommands (e.g. the hard-removed 'bundle diff') error instead
+	// of falling back to help/exit-0. A non-runnable parent would return
+	// flag.ErrHelp before args are validated, swallowing the error.
+	assert.NotNil(t, cmd.RunE, "parent bundle command needs a RunE so NoArgs is enforced on unknown subcommands")
+	assert.NotNil(t, cmd.Args, "parent bundle command must reject unknown subcommands via Args")
+}
+
+// TestCommandBundle_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandBundle_UnknownSubcommandErrors(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	// Unknown subcommand must error.
+	cmd := CommandBundle(cliParams, ioStreams, "")
+	cmd.SetArgs([]string{"diff", "a", "b"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	// Bare invocation shows help and does not error.
+	cmd2 := CommandBundle(cliParams, ioStreams, "")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }
 
 func TestCommandBundle_Subcommands(t *testing.T) {

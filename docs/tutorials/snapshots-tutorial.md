@@ -385,7 +385,7 @@ scafctl snapshot save -f solution.yaml --output current.json
 
 # 4. Compare (ignore timing differences)
 scafctl diff snapshot baseline.json current.json \
-  --ignore-fields duration,providerCalls --format json
+  --ignore-fields duration,providerCalls -o json
 
 # 5. Use exit code in CI
 if ! scafctl diff snapshot baseline.json current.json \
@@ -409,7 +409,7 @@ scafctl snapshot save -f solution.yaml --output current.json
 
 # 4. Compare (ignore timing differences)
 scafctl diff snapshot baseline.json current.json `
-  --ignore-fields duration,providerCalls --format json
+  --ignore-fields duration,providerCalls -o json
 
 # 5. Use exit code in CI
 scafctl diff snapshot baseline.json current.json `
