@@ -11,10 +11,19 @@ kind: Solution
 
 metadata:
   name: registry-index
+  displayName: Registry Index
   version: 1.0.0
   description: Query and refresh a small registry index.
+  tags: [registry, discovery]
+  links:
+    - name: Documentation
+      url: https://example.com/registry-index/docs
   usage:
     synopsis: Query and refresh a registry index of modules and providers
+    details: |
+      This solution maintains a local index of Terraform modules and
+      providers. Use the 'action' parameter to choose what to do: show the
+      cached summary, refresh from live data, or emit the raw JSON index.
     examples:
       - description: Show the registry summary (default)
         command: scafctl run solution
@@ -26,6 +35,7 @@ spec:
     action:
       description: What the solution should do
       type: string
+      example: refresh
       resolve:
         with:
           - provider: parameter

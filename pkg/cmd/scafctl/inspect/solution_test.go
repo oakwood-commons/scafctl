@@ -310,10 +310,18 @@ const usageInspectSolution = `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: usage-test
+  displayName: Usage Test Solution
   version: 2.0.0
   description: Fallback description
+  tags: [demo, usage]
+  links:
+    - name: Docs
+      url: https://example.com/docs
+    - url: https://example.com/nameless
   usage:
     synopsis: Do useful things with this solution
+    details: |
+      Extended prose describing the solution.
     examples:
       - description: Refresh
         command: scafctl run solution -r action=refresh
@@ -321,6 +329,7 @@ spec:
   resolvers:
     action:
       type: string
+      example: refresh
       resolve:
         with:
           - provider: parameter
@@ -365,12 +374,18 @@ func TestCommandInspectSolution_UsageJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &usage))
 
 	assert.Equal(t, "usage-test", usage.Name)
+	assert.Equal(t, "Usage Test Solution", usage.DisplayName)
 	assert.Equal(t, "2.0.0", usage.Version)
 	assert.Equal(t, "Do useful things with this solution", usage.Synopsis)
+	assert.Contains(t, usage.Details, "Extended prose describing the solution.")
 	assert.Equal(t, "scafctl run solution", usage.Run)
+	assert.Equal(t, []string{"demo", "usage"}, usage.Tags)
+	require.Len(t, usage.Links, 2)
+	assert.Equal(t, "https://example.com/docs", usage.Links[0].URL)
 	require.Len(t, usage.Params, 1)
 	assert.Equal(t, "action", usage.Params[0].Name)
 	assert.Equal(t, "show", usage.Params[0].Default)
+	assert.Equal(t, "refresh", usage.Params[0].Example)
 	assert.ElementsMatch(t, []any{"refresh", "show"}, usage.Params[0].AllowedValues)
 	assert.Len(t, usage.Actions, 2)
 	assert.Len(t, usage.Examples, 1)
@@ -395,13 +410,20 @@ func TestCommandInspectSolution_UsageText(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 
 	got := out.String()
-	assert.Contains(t, got, "usage-test (2.0.0)")
+	assert.Contains(t, got, "Usage Test Solution (2.0.0)")
 	assert.Contains(t, got, "Do useful things with this solution")
+	assert.Contains(t, got, "Extended prose describing the solution.")
+	assert.Contains(t, got, "Tags: demo, usage")
 	assert.Contains(t, got, "PARAMETERS")
 	assert.Contains(t, got, "values: refresh, show")
+	assert.Contains(t, got, "example: refresh")
 	assert.Contains(t, got, "ACTIONS")
 	assert.Contains(t, got, "scafctl run solution -r action=refresh")
 	assert.Contains(t, got, "EXAMPLES")
+	assert.Contains(t, got, "LINKS")
+	assert.Contains(t, got, "Docs: https://example.com/docs")
+	// Nameless link renders as a bare URL.
+	assert.Contains(t, got, "  https://example.com/nameless")
 }
 
 func TestCommandInspect(t *testing.T) {

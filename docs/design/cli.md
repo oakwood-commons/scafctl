@@ -651,9 +651,15 @@ scafctl inspect solution -f solution.yaml --usage
 scafctl inspect solution -f solution.yaml --usage -o json
 ~~~
 
-Authors can enrich the view with an optional `metadata.usage` block (synopsis
-and curated examples). When absent, the view is generated from parameters and
-actions.
+Authors can enrich the view with an optional `metadata.usage` block:
+
+- `synopsis` -- a one-line usage summary (overrides the metadata description)
+- `details` -- long-form prose about how the solution works and when to use it
+- `examples` -- curated `description`/`command` pairs
+
+Along with the auto-projected `displayName`, `tags`, `links`, per-parameter
+`description`/`example`, and per-action `description`. When `metadata.usage` is
+absent, the view is generated entirely from parameters and actions.
 
 ### Explain Schema Kinds
 

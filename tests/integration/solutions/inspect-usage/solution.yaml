@@ -3,8 +3,13 @@ kind: Solution
 
 metadata:
   name: test-inspect-usage
+  displayName: Inspect Usage Test
   version: 1.0.0
   description: A registry-style solution routed by an 'action' parameter.
+  tags: [registry, test]
+  links:
+    - name: Docs
+      url: https://example.com/docs
   usage:
     synopsis: Query and refresh a small registry index
     examples:
@@ -53,6 +58,11 @@ spec:
           - expression: __exitCode == 0
           - expression: __output.synopsis == "Query and refresh a small registry index"
             message: "Synopsis should come from metadata.usage"
+          - expression: __output.displayName == "Inspect Usage Test"
+          - expression: __output.tags.exists(tg, tg == "registry")
+            message: "Tags should be surfaced"
+          - expression: __output.links[0].url == "https://example.com/docs"
+            message: "Links should be surfaced"
           - expression: __output.parameters[0].name == "action"
           - expression: __output.parameters[0].default == "show"
           - expression: __output.parameters[0].allowedValues.exists(v, v == "refresh")
@@ -69,6 +79,8 @@ spec:
         tags: [inspect, usage]
         assertions:
           - expression: __exitCode == 0
+          - expression: '__stdout.contains("Tags: registry, test")'
           - expression: __stdout.contains("PARAMETERS")
           - expression: __stdout.contains("ACTIONS")
           - expression: __stdout.contains("-r action=refresh")
+          - expression: __stdout.contains("LINKS")
