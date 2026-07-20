@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -14,7 +15,7 @@ import (
 
 // CommandRender creates the 'render' command that renders artifacts for external execution.
 func CommandRender(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cCmd := &cobra.Command{
+	cCmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "render",
 		Aliases: []string{"rn"},
 		Short:   fmt.Sprintf("Renders %s artifacts for external execution", path),
@@ -35,7 +36,7 @@ The rendered artifact includes:
   - Dependency information for each action
   - Metadata including generation timestamp and statistics`, settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cCmd.AddCommand(CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 

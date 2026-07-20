@@ -9164,7 +9164,7 @@ func TestIntegration_OldDiffPaths_HardRemoved(t *testing.T) {
 func TestIntegration_BareGroups_ShowHelpExitZero(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{"bundle", "snapshot", "catalog", "config", "auth", "secrets", "cache"}
+	cases := []string{"bundle", "snapshot", "catalog", "config", "auth", "secrets", "cache", "render"}
 
 	for _, group := range cases {
 		t.Run(group, func(t *testing.T) {
@@ -9204,6 +9204,7 @@ func TestIntegration_UnknownSubcommand_ErrorsNonZero(t *testing.T) {
 		{"package", "bogus-xyz"},
 		{"credential-helper", "bogus-xyz"},
 		{"diff", "bogus-xyz"},
+		{"render", "bogus-xyz"},
 		// Nested groups.
 		{"auth", "alias", "bogus-xyz"},
 		{"catalog", "index", "bogus-xyz"},
