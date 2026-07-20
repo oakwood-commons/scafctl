@@ -330,3 +330,65 @@ func TestBuildUsage_ShellQuotesValues(t *testing.T) {
 	require.Len(t, usage.Actions, 1)
 	assert.Equal(t, "scafctl run solution -f ./solution.yaml -r mode='dry run'", usage.Actions[0].Command)
 }
+
+// #345 completeness: the usage view surfaces displayName, tags, links, and
+// per-parameter example.
+func TestBuildUsage_MetadataFields(t *testing.T) {
+	t.Parallel()
+
+	// parameter resolver with an example.
+	actionResolver := &resolver.Resolver{
+		Type:        "string",
+		Description: "What to do",
+		Example:     "refresh",
+		Resolve: &resolver.ResolvePhase{
+			With: []resolver.ProviderSource{
+				{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+					"key":     {Literal: "action"},
+					"default": {Literal: "show"},
+				}},
+			},
+		},
+	}
+	sol := &solution.Solution{
+		Metadata: solution.Metadata{
+			Name:        "tf-registry",
+			DisplayName: "Terraform Registry",
+			Description: "Discovers modules",
+			Tags:        []string{"terraform", "registry"},
+			Links: []solution.Link{
+				{Name: "Docs", URL: "https://example.com/docs"},
+				{Name: "Source", URL: "https://github.com/example/tf"},
+				{URL: "https://example.com/nameless"}, // nameless link
+			},
+			Usage: &spec.Usage{
+				Details: "Long-form prose about how this works.",
+			},
+		},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{"action": actionResolver},
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"go": {Description: "Go", When: whenCondition(`_.action == "go"`)},
+				},
+			},
+		},
+	}
+
+	usage, err := BuildUsage(context.Background(), sol, "solution.yaml", "scafctl")
+	require.NoError(t, err)
+
+	assert.Equal(t, "Terraform Registry", usage.DisplayName)
+	assert.Equal(t, []string{"terraform", "registry"}, usage.Tags)
+	require.Len(t, usage.Links, 3)
+	assert.Equal(t, "Docs", usage.Links[0].Name)
+	assert.Equal(t, "https://example.com/docs", usage.Links[0].URL)
+	// Nameless link is preserved with an empty name.
+	assert.Empty(t, usage.Links[2].Name)
+	assert.Equal(t, "https://example.com/nameless", usage.Links[2].URL)
+
+	require.Len(t, usage.Params, 1)
+	assert.Equal(t, "refresh", usage.Params[0].Example)
+
+	assert.Equal(t, "Long-form prose about how this works.", usage.Details)
+}
