@@ -5239,7 +5239,8 @@ func TestIntegration_BundleHelp(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "bundle")
 	assert.Contains(t, stdout, "verify")
-	assert.Contains(t, stdout, "extract")
+	// extract was moved out of the bundle group to the top-level `extract` verb.
+	assert.NotContains(t, stdout, "\n  extract ")
 	// diff was moved out of the bundle group to the top-level `diff` verb.
 	assert.NotContains(t, stdout, "\n  diff ")
 }
@@ -5266,7 +5267,7 @@ func TestIntegration_BundleDiffHelp(t *testing.T) {
 
 func TestIntegration_BundleExtractHelp(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "bundle", "extract", "--help")
+	stdout, _, exitCode := runScafctl(t, "extract", "bundle", "--help")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Extract files from a bundled solution artifact")
@@ -5294,7 +5295,7 @@ func TestIntegration_BundleDiff_MissingArgs(t *testing.T) {
 
 func TestIntegration_BundleExtract_MissingRef(t *testing.T) {
 	t.Parallel()
-	_, _, exitCode := runScafctl(t, "bundle", "extract")
+	_, _, exitCode := runScafctl(t, "extract", "bundle")
 
 	assert.NotEqual(t, 0, exitCode)
 }
@@ -5332,7 +5333,7 @@ func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
 
 	// Extract the built artifact
 	extractDir := filepath.Join(tmpDir, "extracted")
-	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "extract", "resolver-demo@1.0.0", "--output-dir", extractDir)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "extract", "bundle", "resolver-demo@1.0.0", "--output-dir", extractDir)
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
@@ -5351,7 +5352,7 @@ func TestIntegration_BundleExtract_ListOnly(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// List files — may have no bundle layer if the solution has no bundle config
-	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "extract", "resolver-demo@1.0.0", "--list-only")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "extract", "bundle", "resolver-demo@1.0.0", "--list-only")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
@@ -8630,7 +8631,7 @@ func TestIntegration_Snapshot_Show_Summary(t *testing.T) {
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
 	// Show summary (default format)
-	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile)
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile)
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Snapshot Summary")
 	assert.Contains(t, stdout, "resolver-demo")
@@ -8652,7 +8653,7 @@ func TestIntegration_Snapshot_Show_JSON(t *testing.T) {
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
 	// Show as JSON
-	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile, "--format", "json")
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--format", "json")
 	assert.Equal(t, 0, exitCode)
 
 	// Verify valid JSON
@@ -8677,7 +8678,7 @@ func TestIntegration_Snapshot_Show_Resolvers(t *testing.T) {
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
 	// Show resolvers format
-	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile, "--format", "resolvers")
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--format", "resolvers")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Resolvers")
 	// resolver-demo.yaml has environment, region, port, exposedPort, hostname, config
@@ -8700,7 +8701,7 @@ func TestIntegration_Snapshot_Show_Verbose(t *testing.T) {
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
 	// Show resolvers with verbose flag
-	stdout, _, exitCode := runScafctl(t, "snapshot", "show", snapshotFile, "--format", "resolvers", "--verbose")
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--format", "resolvers", "--verbose")
 	assert.Equal(t, 0, exitCode)
 	// Verbose should show values
 	assert.Contains(t, stdout, "Value:")
@@ -8708,13 +8709,13 @@ func TestIntegration_Snapshot_Show_Verbose(t *testing.T) {
 
 func TestIntegration_Snapshot_Show_MissingFile(t *testing.T) {
 	t.Parallel()
-	_, _, exitCode := runScafctl(t, "snapshot", "show", "/nonexistent/path/snapshot.json")
+	_, _, exitCode := runScafctl(t, "get", "snapshot", "/nonexistent/path/snapshot.json")
 	assert.NotEqual(t, 0, exitCode, "should fail when snapshot file does not exist")
 }
 
 func TestIntegration_Snapshot_Show_NoArgs(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "snapshot", "show")
+	_, stderr, exitCode := runScafctl(t, "get", "snapshot")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "accepts 1 arg")
 }
@@ -8978,11 +8979,12 @@ func TestIntegration_Snapshot_Diff_NoArgs(t *testing.T) {
 
 func TestIntegration_Snapshot_Help(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "snapshot", "--help")
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", "--help")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "show")
-	// diff was moved out of the snapshot group to the top-level `diff` verb.
-	assert.NotContains(t, stdout, "\n  diff ")
+	assert.Contains(t, stdout, "Load and display the contents of a snapshot file")
+	assert.Contains(t, stdout, "--format")
+	// -f is not bound on 'get snapshot' (it means --file elsewhere).
+	assert.NotContains(t, stdout, "-f, --format")
 }
 
 // ============================================================================
@@ -9156,6 +9158,33 @@ func TestIntegration_OldDiffPaths_HardRemoved(t *testing.T) {
 	}
 }
 
+// TestIntegration_OldExtractSnapshotPaths_HardRemoved locks in the grammar
+// migration phase 3 hard cutover: `bundle extract` moved to `extract bundle`
+// and `snapshot show` moved to `get snapshot`, with the entire `snapshot`
+// command group (and its `snap` alias) deleted. There are no aliases or shims
+// -- invoking the old paths must fail with a non-zero exit AND an "unknown
+// command" error.
+func TestIntegration_OldExtractSnapshotPaths_HardRemoved(t *testing.T) {
+	t.Parallel()
+
+	cases := [][]string{
+		{"bundle", "extract", "my-solution@1.0.0"},
+		{"snapshot", "show", "snapshot.json"},
+		{"snapshot"},
+		{"snap"},
+	}
+
+	for _, args := range cases {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctl(t, args...)
+			assert.NotEqual(t, 0, exitCode, "old path %v must no longer exist", args)
+			assert.Contains(t, stderr, "unknown command",
+				"old path %v must fail with an unknown-command error, not fall back to help/exit-0", args)
+		})
+	}
+}
+
 // TestIntegration_BareGroups_ShowHelpExitZero verifies that a BARE invocation
 // of an existing command group (no subcommand) still shows help and exits 0 --
 // this is CLI grammar Rule 8 and must not regress when we make the group error
@@ -9164,7 +9193,7 @@ func TestIntegration_OldDiffPaths_HardRemoved(t *testing.T) {
 func TestIntegration_BareGroups_ShowHelpExitZero(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{"bundle", "snapshot", "catalog", "config", "auth", "secrets", "cache", "render"}
+	cases := []string{"bundle", "extract", "catalog", "config", "auth", "secrets", "cache", "render"}
 
 	for _, group := range cases {
 		t.Run(group, func(t *testing.T) {
@@ -9204,6 +9233,7 @@ func TestIntegration_UnknownSubcommand_ErrorsNonZero(t *testing.T) {
 		{"package", "bogus-xyz"},
 		{"credential-helper", "bogus-xyz"},
 		{"diff", "bogus-xyz"},
+		{"extract", "bogus-xyz"},
 		{"render", "bogus-xyz"},
 		// Nested groups.
 		{"auth", "alias", "bogus-xyz"},

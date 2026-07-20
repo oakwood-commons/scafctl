@@ -109,7 +109,8 @@ pkg/cmd/scafctl/
 │   │   ├── solution.go
 │   │   └── solution_test.go
 │   ├── provider/        # 'get provider' subcommand
-│   └── catalog/         # 'get catalog' subcommand
+│   ├── catalog/         # 'get catalog' subcommand
+│   └── snapshot/        # 'get snapshot' display saved snapshot
 ├── run/                 # 'run' verb
 │   ├── run.go           # Parent command
 │   ├── solution.go      # 'run solution' (resolvers + actions)
@@ -151,9 +152,9 @@ pkg/cmd/scafctl/
 │   ├── explain.go
 │   ├── solution.go      # 'explain solution' metadata
 │   └── provider.go      # 'explain provider' schema
-├── snapshot/            # 'snapshot' verb (analysis only)
-│   ├── snapshot.go
-│   └── show.go          # 'snapshot show' display saved snapshot
+├── extract/             # 'extract' verb (polymorphic extraction)
+│   ├── extract.go
+│   └── bundle.go        # 'extract bundle' extract bundle contents
 ├── diff/                # 'diff' verb (polymorphic comparison)
 │   ├── diff.go
 │   ├── solution.go      # 'diff solution' compare solution files
@@ -1179,7 +1180,7 @@ This section tracks which commands from the design are implemented and what work
 | `catalog load` | ✅ | Import artifact from tar |
 | `inspect solution` | ✅ | Show solution structure/metadata (was `explain solution`; `--usage` for the usage view) |
 | `explain provider` | ✅ | Show provider schema/docs |
-| `snapshot show` | ✅ | Display saved snapshot |
+| `get snapshot` | ✅ | Display saved snapshot |
 | `diff snapshot` | ✅ | Compare two snapshots |
 | `config view` | ✅ | View current configuration |
 | `config get` | ✅ | Get specific config value |
@@ -1205,7 +1206,7 @@ This section tracks which commands from the design are implemented and what work
 | `examples get` | ✅ | Get an example |
 | `bundle verify` | ✅ | Verify bundle integrity |
 | `diff bundle` | ✅ | Diff two bundles |
-| `bundle extract` | ✅ | Extract bundle contents |
+| `extract bundle` | ✅ | Extract bundle contents |
 | `vendor update` | ✅ | Update vendored dependencies |
 | `secrets list` | ✅ | List secrets |
 | `secrets get` | ✅ | Get a secret |

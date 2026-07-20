@@ -85,19 +85,19 @@ scafctl run resolver -f my-solution.yaml `
 
 This is useful when you want to inspect resolver execution without triggering actions.
 
-### From `snapshot save`
+### With `render solution --snapshot`
 
-Or use the dedicated save command:
+Or capture a snapshot as part of a render:
 
 {{< tabs "snapshots-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot save -f my-solution.yaml --output snapshot.json
+scafctl render solution -f my-solution.yaml --snapshot --snapshot-file snapshot.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot save -f my-solution.yaml --output snapshot.json
+scafctl render solution -f my-solution.yaml --snapshot --snapshot-file snapshot.json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -147,12 +147,12 @@ scafctl render solution -f my-solution.yaml `
 {{< tabs "snapshots-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot show snapshot.json
+scafctl get snapshot snapshot.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot show snapshot.json
+scafctl get snapshot snapshot.json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -181,12 +181,12 @@ Parameters:
 {{< tabs "snapshots-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot show snapshot.json --format resolvers
+scafctl get snapshot snapshot.json --format resolvers
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot show snapshot.json --format resolvers
+scafctl get snapshot snapshot.json --format resolvers
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -198,12 +198,12 @@ Shows each resolver's name, status, value, duration, and provider calls.
 {{< tabs "snapshots-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot show snapshot.json --format json
+scafctl get snapshot snapshot.json --format json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot show snapshot.json --format json
+scafctl get snapshot snapshot.json --format json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -215,12 +215,12 @@ Full snapshot data for programmatic processing.
 {{< tabs "snapshots-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot show snapshot.json --verbose
+scafctl get snapshot snapshot.json --verbose
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot show snapshot.json --verbose
+scafctl get snapshot snapshot.json --verbose
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -339,13 +339,13 @@ scafctl diff snapshot before.json after.json -o json > diff-report.json
 {{% tab "Bash" %}}
 ```bash
 # 1. Capture the failing state
-scafctl snapshot save -f broken-solution.yaml --output failing.json
+scafctl render solution -f broken-solution.yaml --snapshot --snapshot-file failing.json
 
 # 2. Inspect what went wrong
-scafctl snapshot show failing.json --format resolvers --verbose
+scafctl get snapshot failing.json --format resolvers --verbose
 
 # 3. Fix the issue and re-capture
-scafctl snapshot save -f fixed-solution.yaml --output fixed.json
+scafctl render solution -f fixed-solution.yaml --snapshot --snapshot-file fixed.json
 
 # 4. Verify the fix
 scafctl diff snapshot failing.json fixed.json
@@ -354,13 +354,13 @@ scafctl diff snapshot failing.json fixed.json
 {{% tab "PowerShell" %}}
 ```powershell
 # 1. Capture the failing state
-scafctl snapshot save -f broken-solution.yaml --output failing.json
+scafctl render solution -f broken-solution.yaml --snapshot --snapshot-file failing.json
 
 # 2. Inspect what went wrong
-scafctl snapshot show failing.json --format resolvers --verbose
+scafctl get snapshot failing.json --format resolvers --verbose
 
 # 3. Fix the issue and re-capture
-scafctl snapshot save -f fixed-solution.yaml --output fixed.json
+scafctl render solution -f fixed-solution.yaml --snapshot --snapshot-file fixed.json
 
 # 4. Verify the fix
 scafctl diff snapshot failing.json fixed.json
@@ -374,14 +374,13 @@ scafctl diff snapshot failing.json fixed.json
 {{% tab "Bash" %}}
 ```bash
 # 1. Capture baseline
-scafctl snapshot save -f solution.yaml --output baseline.json \
-  --ignore-fields duration
+scafctl render solution -f solution.yaml --snapshot --snapshot-file baseline.json
 
 # 2. Make changes to the solution
 # ...
 
 # 3. Capture new state
-scafctl snapshot save -f solution.yaml --output current.json
+scafctl render solution -f solution.yaml --snapshot --snapshot-file current.json
 
 # 4. Compare (ignore timing differences)
 scafctl diff snapshot baseline.json current.json \
@@ -398,14 +397,13 @@ fi
 {{% tab "PowerShell" %}}
 ```powershell
 # 1. Capture baseline
-scafctl snapshot save -f solution.yaml --output baseline.json `
-  --ignore-fields duration
+scafctl render solution -f solution.yaml --snapshot --snapshot-file baseline.json
 
 # 2. Make changes to the solution
 # ...
 
 # 3. Capture new state
-scafctl snapshot save -f solution.yaml --output current.json
+scafctl render solution -f solution.yaml --snapshot --snapshot-file current.json
 
 # 4. Compare (ignore timing differences)
 scafctl diff snapshot baseline.json current.json `
@@ -461,13 +459,13 @@ scafctl diff snapshot staging.json production.json --ignore-unchanged
 {{% tab "Bash" %}}
 ```bash
 # Redact secrets before sharing
-scafctl snapshot save -f solution.yaml --output shareable.json --redact
+scafctl render solution -f solution.yaml --snapshot --snapshot-file shareable.json --redact
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Redact secrets before sharing
-scafctl snapshot save -f solution.yaml --output shareable.json --redact
+scafctl render solution -f solution.yaml --snapshot --snapshot-file shareable.json --redact
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -484,10 +482,9 @@ scafctl snapshot save -f solution.yaml --output shareable.json --redact
 
 | Command | Description |
 |---------|-------------|
-| `scafctl snapshot show <file>` | Display a saved snapshot |
+| `scafctl get snapshot <file>` | Display a saved snapshot |
 | `scafctl diff snapshot <a> <b>` | Compare two snapshots |
-| `scafctl snapshot save -f <solution>` | Run resolvers and save snapshot |
-| `scafctl render solution --snapshot` | Create snapshot during render |
+| `scafctl render solution --snapshot` | Run resolvers and save snapshot during render |
 
 ### Flags
 
@@ -505,7 +502,7 @@ scafctl snapshot save -f solution.yaml --output shareable.json --redact
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server provides snapshot tools:
 
-- **`show_snapshot`** — Display snapshot contents with structured output (same as `scafctl snapshot show`)
+- **`show_snapshot`** — Display snapshot contents with structured output (same as `scafctl get snapshot`)
 - **`diff_snapshots`** — Compare two snapshots and return structured diffs showing added, removed, modified, and unchanged resolvers
 
 The `analyze_execution` prompt automatically suggests using snapshots for debugging.

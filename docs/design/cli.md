@@ -31,7 +31,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `explain <kind>` | ✅ Implemented | Schema docs for resource kinds (provider, action, resolver) |
 | `inspect solution [--usage]` | ✅ Implemented | Instance structure; `--usage` for the user-facing usage view |
 | `config *` | ✅ Implemented | view, get, set, unset, add-catalog, remove-catalog, use-catalog, init, schema, validate |
-| `snapshot show` | ✅ Implemented | |
+| `get snapshot` | ✅ Implemented | |
 | `diff solution` | ✅ Implemented | Structural comparison of two solution files |
 | `secrets *` | ✅ Implemented | list, get, set, delete, exists, export, import, rotate |
 | `auth *` | ✅ Implemented | login, logout, status, token |
@@ -440,7 +440,7 @@ Snapshots can be analyzed with dedicated commands:
 
 ~~~bash
 # Display a saved snapshot
-scafctl snapshot show output.json
+scafctl get snapshot output.json
 
 # Compare two snapshots
 scafctl diff snapshot before.json after.json
@@ -1087,7 +1087,7 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl config get` | config | get |
 | `scafctl catalog list` | catalog | list |
 | `scafctl catalog inspect` | catalog | inspect |
-| `scafctl snapshot show` | snapshot | show |
+| `scafctl get snapshot` | get | snapshot |
 | `scafctl diff snapshot` | diff | snapshot |
 | `scafctl diff solution` | diff | solution |
 | `scafctl lint rules` | lint | rules |

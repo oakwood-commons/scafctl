@@ -1,7 +1,7 @@
 # Run: scafctl render solution -f examples/snapshots/redacted-snapshot.yaml --snapshot --snapshot-file=/tmp/redacted.json --redact
 # Run: scafctl render solution -f examples/snapshots/redacted-snapshot.yaml --snapshot --snapshot-file=/tmp/full.json
-# Run: scafctl snapshot show /tmp/redacted.json
-# Run: scafctl snapshot show /tmp/full.json
+# Run: scafctl get snapshot /tmp/redacted.json
+# Run: scafctl get snapshot /tmp/full.json
 
 apiVersion: scafctl.io/v1
 kind: Solution

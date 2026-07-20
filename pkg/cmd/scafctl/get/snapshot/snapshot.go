@@ -1,6 +1,8 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
+// Package snapshot provides the `get snapshot` subcommand, which loads and
+// displays the contents of a resolver execution snapshot file.
 package snapshot
 
 import (
@@ -18,7 +20,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ShowOptions holds options for the show command
+// ShowOptions holds options for the get snapshot command.
 type ShowOptions struct {
 	BinaryName   string
 	SnapshotFile string
@@ -26,17 +28,21 @@ type ShowOptions struct {
 	Verbose      bool
 }
 
-// CommandShow creates the snapshot show command
-func CommandShow(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+// CommandSnapshot creates the `get snapshot` subcommand.
+func CommandSnapshot(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	opts := &ShowOptions{}
+	binaryName := cliParams.BinaryName
+	if binaryName == "" {
+		binaryName = settings.CliBinaryName
+	}
 
 	cmd := &cobra.Command{
-		Use:          "show [snapshot-file]",
+		Use:          "snapshot [snapshot-file]",
 		Short:        "Display snapshot contents",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Load and display the contents of a snapshot file.
-			
+
 			Supports multiple output formats:
 			  - summary: High-level overview (default)
 			  - json: Full JSON output
@@ -44,29 +50,29 @@ func CommandShow(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryNa
 		`),
 		Example: heredoc.Docf(`
 			# Show snapshot summary
-			$ %s snapshot show snapshot.json
-			
+			$ %s get snapshot snapshot.json
+
 			# Show full JSON
-			$ %s snapshot show snapshot.json --format json
-			
+			$ %s get snapshot snapshot.json --format json
+
 			# Show resolver details
-			$ %s snapshot show snapshot.json --format resolvers --verbose
+			$ %s get snapshot snapshot.json --format resolvers --verbose
 		`, binaryName, binaryName, binaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.SnapshotFile = args[0]
-			opts.BinaryName = binaryName
+			opts.BinaryName = cliParams.BinaryName
 			opts.Verbose = cliParams.Verbose
 			return runShow(cmd.Context(), opts, ioStreams)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Format, "format", "f", "summary", "Output format: summary, json, resolvers")
+	cmd.Flags().StringVar(&opts.Format, "format", "summary", "Output format: summary, json, resolvers")
 
 	return cmd
 }
 
-func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStreams) error {
+func runShow(ctx context.Context, opts *ShowOptions, ioStreams *terminal.IOStreams) error {
 	if opts.BinaryName == "" {
 		opts.BinaryName = settings.CliBinaryName
 	}
@@ -76,12 +82,17 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 
 	// Create a fallback Writer if one isn't in context (e.g., in tests)
 	if w == nil {
-		// Ensure ErrOut is non-nil to avoid panics in error paths
-		streams := &ioStreams
+		// Copy into a local so the ErrOut fixup below never mutates the
+		// caller's shared IOStreams (ioStreams is a pointer).
+		var streams terminal.IOStreams
+		if ioStreams != nil {
+			streams = *ioStreams
+		}
+		// Ensure ErrOut is non-nil to avoid panics in error paths.
 		if streams.ErrOut == nil {
 			streams.ErrOut = streams.Out
 		}
-		w = writer.New(streams, settings.NewCliParams())
+		w = writer.New(&streams, settings.NewCliParams())
 	}
 
 	// Helper to write error

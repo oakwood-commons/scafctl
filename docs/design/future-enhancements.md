@@ -69,7 +69,7 @@ Source: [catalog-build-bundling.md](catalog-build-bundling.md)
 - **Version conflict detection** — Conflicting transitive dependency versions are detected and rejected at build time
 - **`scafctl bundle verify`** — Validate built artifacts
 - **Bundle diffing between versions** — `scafctl diff bundle`
-- **Selective extraction** — `scafctl bundle extract`
+- **Selective extraction** — `scafctl extract bundle`
 
 ---
 

@@ -49,7 +49,7 @@ The MCP server currently exposes 26 tools, 9 prompts, and 5 resources. After ana
 
 1. **MCP-only tools that should also be CLI commands.** Several tools were built exclusively for the MCP server (`evaluate_cel`, `scaffold_solution`, `diff_solution`, etc.) but provide value to developers working without AI/MCP. These should be exposed as first-class CLI commands via a shared library layer.
 
-2. **CLI capabilities not yet exposed via MCP.** Existing CLI commands like `eval refs`, `test init`, `test list`, `snapshot show/diff`, `catalog inspect`, `auth list`, and `config paths` provide high-value read-only operations that AI agents currently cannot use.
+2. **CLI capabilities not yet exposed via MCP.** Existing CLI commands like `eval refs`, `test init`, `test list`, `get snapshot`, `diff snapshot`, `catalog inspect`, `auth list`, and `config paths` provide high-value read-only operations that AI agents currently cannot use.
 
 Additionally, several cross-cutting improvements (batch validation, structured errors, new prompts for post-execution analysis) would improve the overall developer and agent experience.
 
@@ -660,7 +660,7 @@ mcp.NewTool("show_snapshot",
 
 **Shared code:** `resolver.LoadSnapshot()` from `pkg/resolver/snapshot.go`.
 
-**CLI counterpart:** Already exists as `scafctl snapshot show`. No new CLI command needed.
+**CLI counterpart:** Already exists as `scafctl get snapshot`. No new CLI command needed.
 
 ---
 
