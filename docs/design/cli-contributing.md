@@ -153,8 +153,12 @@ pkg/cmd/scafctl/
 │   └── provider.go      # 'explain provider' schema
 ├── snapshot/            # 'snapshot' verb (analysis only)
 │   ├── snapshot.go
-│   ├── show.go          # 'snapshot show' display saved snapshot
-│   └── diff.go          # 'snapshot diff' compare snapshots
+│   └── show.go          # 'snapshot show' display saved snapshot
+├── diff/                # 'diff' verb (polymorphic comparison)
+│   ├── diff.go
+│   ├── solution.go      # 'diff solution' compare solution files
+│   ├── bundle.go        # 'diff bundle' compare two bundles
+│   └── snapshot.go      # 'diff snapshot' compare snapshots
 ├── delete/              # 'delete' verb
 │   ├── delete.go
 │   └── solution.go      # 'delete solution' from catalog
@@ -1176,7 +1180,7 @@ This section tracks which commands from the design are implemented and what work
 | `inspect solution` | ✅ | Show solution structure/metadata (was `explain solution`; `--usage` for the usage view) |
 | `explain provider` | ✅ | Show provider schema/docs |
 | `snapshot show` | ✅ | Display saved snapshot |
-| `snapshot diff` | ✅ | Compare two snapshots |
+| `diff snapshot` | ✅ | Compare two snapshots |
 | `config view` | ✅ | View current configuration |
 | `config get` | ✅ | Get specific config value |
 | `config set` | ✅ | Set config value |
@@ -1200,7 +1204,7 @@ This section tracks which commands from the design are implemented and what work
 | `examples list` | ✅ | List available examples |
 | `examples get` | ✅ | Get an example |
 | `bundle verify` | ✅ | Verify bundle integrity |
-| `bundle diff` | ✅ | Diff two bundles |
+| `diff bundle` | ✅ | Diff two bundles |
 | `bundle extract` | ✅ | Extract bundle contents |
 | `vendor update` | ✅ | Update vendored dependencies |
 | `secrets list` | ✅ | List secrets |

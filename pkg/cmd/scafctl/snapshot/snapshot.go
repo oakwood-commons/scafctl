@@ -34,12 +34,11 @@ func CommandSnapshot(cliParams *settings.Run, ioStreams terminal.IOStreams, bina
 			$ %s snapshot show snapshot.json
 			
 			# Compare two snapshots
-			$ %s snapshot diff before.json after.json
+			$ %s diff snapshot before.json after.json
 		`, binaryName, binaryName, binaryName),
 	}
 
 	cmd.AddCommand(CommandShow(cliParams, ioStreams, binaryName))
-	cmd.AddCommand(CommandDiff(cliParams, ioStreams, binaryName))
 
 	return cmd
 }

@@ -38,14 +38,13 @@ func TestCommandBundle_Subcommands(t *testing.T) {
 	cmd := CommandBundle(cliParams, ioStreams, "")
 
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 3, "should have 3 subcommands: verify, diff, extract")
+	require.Len(t, subCmds, 2, "should have 2 subcommands: verify, extract")
 
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
 		cmdNames[i] = c.Name()
 	}
 	assert.Contains(t, cmdNames, "verify")
-	assert.Contains(t, cmdNames, "diff")
 	assert.Contains(t, cmdNames, "extract")
 }
 
@@ -104,80 +103,6 @@ func TestCommandVerify_RequiresExactlyOneArg(t *testing.T) {
 	cmd2.SilenceErrors = true
 	cmd2.SetArgs([]string{"ref1", "ref2"})
 	err = cmd2.Execute()
-	assert.Error(t, err)
-}
-
-func TestCommandDiff(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	cmd := CommandDiff(cliParams, ioStreams, "")
-
-	require.NotNil(t, cmd)
-	assert.Equal(t, "diff <ref-a> <ref-b>", cmd.Use)
-	assert.NotEmpty(t, cmd.Short)
-	assert.NotEmpty(t, cmd.Long)
-	assert.True(t, cmd.SilenceUsage)
-	assert.NotNil(t, cmd.RunE)
-}
-
-func TestCommandDiff_Flags(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	cmd := CommandDiff(cliParams, ioStreams, "")
-
-	filesOnlyFlag := cmd.Flags().Lookup("files-only")
-	require.NotNil(t, filesOnlyFlag, "files-only flag should exist")
-	assert.Equal(t, "false", filesOnlyFlag.DefValue)
-
-	solutionOnlyFlag := cmd.Flags().Lookup("solution-only")
-	require.NotNil(t, solutionOnlyFlag, "solution-only flag should exist")
-	assert.Equal(t, "false", solutionOnlyFlag.DefValue)
-
-	ignoreFlag := cmd.Flags().Lookup("ignore")
-	require.NotNil(t, ignoreFlag, "ignore flag should exist")
-	assert.Equal(t, "[]", ignoreFlag.DefValue)
-
-	outputFlag := cmd.Flags().Lookup("output")
-	require.NotNil(t, outputFlag, "output flag should exist")
-
-	interactiveFlag := cmd.Flags().Lookup("interactive")
-	require.NotNil(t, interactiveFlag, "interactive flag should exist")
-
-	expressionFlag := cmd.Flags().Lookup("expression")
-	require.NotNil(t, expressionFlag, "expression flag should exist")
-}
-
-func TestCommandDiff_RequiresExactlyTwoArgs(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	// No args should fail
-	cmd := CommandDiff(cliParams, ioStreams, "")
-	cmd.SilenceErrors = true
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	assert.Error(t, err)
-
-	// One arg should fail
-	cmd2 := CommandDiff(cliParams, ioStreams, "")
-	cmd2.SilenceErrors = true
-	cmd2.SetArgs([]string{"ref1"})
-	err = cmd2.Execute()
-	assert.Error(t, err)
-
-	// Three args should fail
-	cmd3 := CommandDiff(cliParams, ioStreams, "")
-	cmd3.SilenceErrors = true
-	cmd3.SetArgs([]string{"ref1", "ref2", "ref3"})
-	err = cmd3.Execute()
 	assert.Error(t, err)
 }
 
@@ -298,16 +223,6 @@ func BenchmarkCommandVerify(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		CommandVerify(cliParams, ioStreams, "")
-	}
-}
-
-func BenchmarkCommandDiff(b *testing.B) {
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		CommandDiff(cliParams, ioStreams, "")
 	}
 }
 

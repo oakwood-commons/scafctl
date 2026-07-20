@@ -24,24 +24,20 @@ func TestCommandSnapshot(t *testing.T) {
 	assert.NotEmpty(t, cmd.Long)
 	assert.NotEmpty(t, cmd.Example)
 
-	// Verify subcommands are added (save was moved to render solution --snapshot)
+	// Verify subcommands are added (save was moved to render solution --snapshot,
+	// diff was moved to the top-level `diff snapshot` command)
 	subcommands := cmd.Commands()
-	assert.Len(t, subcommands, 2, "should have 2 subcommands (show, diff)")
+	assert.Len(t, subcommands, 1, "should have 1 subcommand (show)")
 
 	foundShow := false
-	foundDiff := false
 
 	for _, sub := range subcommands {
-		switch sub.Name() {
-		case "show":
+		if sub.Name() == "show" {
 			foundShow = true
-		case "diff":
-			foundDiff = true
 		}
 	}
 
 	assert.True(t, foundShow, "show subcommand should be present")
-	assert.True(t, foundDiff, "diff subcommand should be present")
 }
 
 func TestCommandSnapshot_ExampleContainsBinaryName(t *testing.T) {

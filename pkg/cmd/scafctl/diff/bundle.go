@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package bundle
+package diff
 
 import (
 	"context"
@@ -19,8 +19,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// DiffOptions holds options for the bundle diff command.
-type DiffOptions struct {
+// BundleDiffOptions holds options for the diff bundle command.
+type BundleDiffOptions struct {
 	RefA         string
 	RefB         string
 	FilesOnly    bool
@@ -32,19 +32,19 @@ type DiffOptions struct {
 	flags.KvxOutputFlags
 }
 
-// CommandDiff creates the bundle diff command.
-func CommandDiff(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
-	opts := &DiffOptions{
+// CommandDiffBundle creates the `diff bundle` subcommand.
+func CommandDiffBundle(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
+	opts := &BundleDiffOptions{
 		CliParams: cliParams,
 		IOStreams: ioStreams,
 	}
 	opts.AppName = cliParams.BinaryName
 
 	cmd := &cobra.Command{
-		Use:          "diff <ref-a> <ref-b>",
+		Use:          subBundle + " <ref-a> <ref-b>",
 		Short:        "Show changes between two bundled solution versions",
 		SilenceUsage: true,
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Show what changed between two versions of a bundled artifact,
 			enabling informed upgrade decisions and change auditing.
 
@@ -56,22 +56,22 @@ func CommandDiff(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			Examples:
 			  # Compare two versions
-			  scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0
+			  %[1]s diff bundle my-solution@1.0.0 my-solution@2.0.0
 
 			  # Show only file changes
-			  scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0 --files-only
+			  %[1]s diff bundle my-solution@1.0.0 my-solution@2.0.0 --files-only
 
 			  # Show only solution structure changes
-			  scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0 --solution-only
+			  %[1]s diff bundle my-solution@1.0.0 my-solution@2.0.0 --solution-only
 
 			  # JSON output for scripting
-			  scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0 -o json
-		`),
+			  %[1]s diff bundle my-solution@1.0.0 my-solution@2.0.0 -o json
+		`, binaryName),
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.RefA = args[0]
 			opts.RefB = args[1]
-			return runDiff(cmd.Context(), opts)
+			return runBundleDiff(cmd.Context(), opts)
 		},
 	}
 
@@ -85,19 +85,19 @@ func CommandDiff(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 // Type aliases pointing to the domain types in the bundler package.
 type (
-	DiffResult      = bundler.DiffResult
-	SolutionDiff    = bundler.SolutionDiff
-	DiffSets        = bundler.DiffSets
-	FilesDiff       = bundler.FilesDiff
-	FileDiffEntry   = bundler.FileDiffEntry
-	VendoredDiff    = bundler.VendoredDiff
-	VendoredEntry   = bundler.VendoredEntry
-	VendoredUpgrade = bundler.VendoredUpgrade
-	PluginsDiff     = bundler.PluginsDiff
-	PluginDiffEntry = bundler.PluginDiffEntry
+	bundleDiffResult = bundler.DiffResult
+	SolutionDiff     = bundler.SolutionDiff
+	bundleDiffSets   = bundler.DiffSets
+	FilesDiff        = bundler.FilesDiff
+	FileDiffEntry    = bundler.FileDiffEntry
+	VendoredDiff     = bundler.VendoredDiff
+	VendoredEntry    = bundler.VendoredEntry
+	VendoredUpgrade  = bundler.VendoredUpgrade
+	PluginsDiff      = bundler.PluginsDiff
+	PluginDiffEntry  = bundler.PluginDiffEntry
 )
 
-func runDiff(ctx context.Context, opts *DiffOptions) error {
+func runBundleDiff(ctx context.Context, opts *BundleDiffOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -122,7 +122,7 @@ func runDiff(ctx context.Context, opts *DiffOptions) error {
 	}
 	defer solB.Cleanup()
 
-	result := &DiffResult{
+	result := &bundleDiffResult{
 		RefA: opts.RefA,
 		RefB: opts.RefB,
 	}
@@ -184,7 +184,7 @@ func printSolutionDiff(w *writer.Writer, diff *SolutionDiff) {
 	printDiffSets(w, "  workflow.actions:", diff.Actions)
 }
 
-func printDiffSets(w *writer.Writer, label string, ds DiffSets) {
+func printDiffSets(w *writer.Writer, label string, ds bundleDiffSets) {
 	if len(ds.Added) == 0 && len(ds.Removed) == 0 {
 		return
 	}

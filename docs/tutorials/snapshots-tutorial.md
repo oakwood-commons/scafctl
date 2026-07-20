@@ -28,7 +28,7 @@ Snapshots are **flag-triggered** (`--snapshot`), never automatically created. He
 | Use Case | Scenario | How | Why Not Just Logs? |
 |----------|----------|-----|-------------------|
 | **Debugging a failed run** | A resolver fails or returns an unexpected value | `--snapshot` captures full state even when execution fails — you see which resolvers succeeded, which failed, and the exact error for each | Logs show temporal events; snapshots show the complete picture — every resolver's value, status, and timing in one structured file |
-| **Regression detection** | You changed a solution, provider config, or parameter and need to verify nothing broke | Capture a known-good baseline, then diff after changes | `git diff` shows YAML changes; `snapshot diff` shows what those changes *did to the output* |
+| **Regression detection** | You changed a solution, provider config, or parameter and need to verify nothing broke | Capture a known-good baseline, then diff after changes | `git diff` shows YAML changes; `diff snapshot` shows what those changes *did to the output* |
 | **Environment comparison** | You need to see exactly which resolver values differ between staging and production | Snapshot with `-r env=staging` vs `-r env=production` and diff | Environment differences are computed at runtime by providers — they can't be seen by inspecting the solution YAML |
 | **Golden-file testing** | Automated CI checks that resolver outputs haven't drifted | The `soltesting` package compares execution output against stored snapshots, normalizing timestamps and UUIDs | Manual inspection doesn't scale; golden files catch regressions automatically |
 | **Audit trail** | Record what values were resolved at a specific point in time (before/after a deployment or config change) | Capture and archive snapshots with timestamps | Logs are ephemeral; snapshots are portable JSON files you can store and revisit |
@@ -39,7 +39,7 @@ Snapshots are **flag-triggered** (`--snapshot`), never automatically created. He
 - **Captures failures too** — Unlike normal output that stops on error, snapshots record partial state. A snapshot from a failed run shows you exactly which resolvers succeeded before the failure.
 - **Structured data** — Every resolver's value, status, duration, phase, provider calls, and errors in one JSON file. Supports programmatic processing (`-o json`), CI pipeline assertions, and diff operations.
 - **Redaction-safe** — Resolvers marked `sensitive: true` in the solution YAML have their values replaced with `<redacted>` when using `--redact`, making snapshots safe to share or store in version control.
-- **Deterministic diff** — `snapshot diff` with `--ignore-fields duration,providerCalls` strips non-deterministic timing data, leaving only meaningful value and status changes.
+- **Deterministic diff** -- `diff snapshot` with `--ignore-fields duration,providerCalls` strips non-deterministic timing data, leaving only meaningful value and status changes.
 
 ## Creating Snapshots
 
@@ -234,12 +234,12 @@ Includes additional details like individual provider call timing.
 {{< tabs "snapshots-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot diff before.json after.json
+scafctl diff snapshot before.json after.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot diff before.json after.json
+scafctl diff snapshot before.json after.json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -269,13 +269,13 @@ Filter out non-deterministic fields:
 {{< tabs "snapshots-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot diff before.json after.json \
+scafctl diff snapshot before.json after.json \
   --ignore-fields duration,providerCalls
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot diff before.json after.json `
+scafctl diff snapshot before.json after.json `
   --ignore-fields duration,providerCalls
 ```
 {{% /tab %}}
@@ -286,12 +286,12 @@ scafctl snapshot diff before.json after.json `
 {{< tabs "snapshots-tutorial-cmd-12" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl snapshot diff before.json after.json --ignore-unchanged
+scafctl diff snapshot before.json after.json --ignore-unchanged
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl snapshot diff before.json after.json --ignore-unchanged
+scafctl diff snapshot before.json after.json --ignore-unchanged
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -302,31 +302,31 @@ scafctl snapshot diff before.json after.json --ignore-unchanged
 {{% tab "Bash" %}}
 ```bash
 # Human-readable (default)
-scafctl snapshot diff before.json after.json --format human
+scafctl diff snapshot before.json after.json -o human
 
 # JSON for CI pipelines
-scafctl snapshot diff before.json after.json --format json
+scafctl diff snapshot before.json after.json -o json
 
 # Unified diff format
-scafctl snapshot diff before.json after.json --format unified
+scafctl diff snapshot before.json after.json -o unified
 
-# Save diff to file
-scafctl snapshot diff before.json after.json --output diff-report.json --format json
+# Save diff to file with shell redirection
+scafctl diff snapshot before.json after.json -o json > diff-report.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # Human-readable (default)
-scafctl snapshot diff before.json after.json --format human
+scafctl diff snapshot before.json after.json -o human
 
 # JSON for CI pipelines
-scafctl snapshot diff before.json after.json --format json
+scafctl diff snapshot before.json after.json -o json
 
 # Unified diff format
-scafctl snapshot diff before.json after.json --format unified
+scafctl diff snapshot before.json after.json -o unified
 
-# Save diff to file
-scafctl snapshot diff before.json after.json --output diff-report.json --format json
+# Save diff to file with shell redirection
+scafctl diff snapshot before.json after.json -o json > diff-report.json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -348,7 +348,7 @@ scafctl snapshot show failing.json --format resolvers --verbose
 scafctl snapshot save -f fixed-solution.yaml --output fixed.json
 
 # 4. Verify the fix
-scafctl snapshot diff failing.json fixed.json
+scafctl diff snapshot failing.json fixed.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -363,7 +363,7 @@ scafctl snapshot show failing.json --format resolvers --verbose
 scafctl snapshot save -f fixed-solution.yaml --output fixed.json
 
 # 4. Verify the fix
-scafctl snapshot diff failing.json fixed.json
+scafctl diff snapshot failing.json fixed.json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -384,11 +384,11 @@ scafctl snapshot save -f solution.yaml --output baseline.json \
 scafctl snapshot save -f solution.yaml --output current.json
 
 # 4. Compare (ignore timing differences)
-scafctl snapshot diff baseline.json current.json \
+scafctl diff snapshot baseline.json current.json \
   --ignore-fields duration,providerCalls --format json
 
 # 5. Use exit code in CI
-if ! scafctl snapshot diff baseline.json current.json \
+if ! scafctl diff snapshot baseline.json current.json \
   --ignore-fields duration,providerCalls --ignore-unchanged; then
   echo "Snapshot regression detected!"
   exit 1
@@ -408,11 +408,11 @@ scafctl snapshot save -f solution.yaml --output baseline.json `
 scafctl snapshot save -f solution.yaml --output current.json
 
 # 4. Compare (ignore timing differences)
-scafctl snapshot diff baseline.json current.json `
+scafctl diff snapshot baseline.json current.json `
   --ignore-fields duration,providerCalls --format json
 
 # 5. Use exit code in CI
-scafctl snapshot diff baseline.json current.json `
+scafctl diff snapshot baseline.json current.json `
   --ignore-fields duration,providerCalls --ignore-unchanged
 if ($LASTEXITCODE -ne 0) {
   Write-Output "Snapshot regression detected!"
@@ -436,7 +436,7 @@ scafctl render solution -f solution.yaml -r env=production \
   --snapshot --snapshot-file=production.json
 
 # Compare configurations
-scafctl snapshot diff staging.json production.json --ignore-unchanged
+scafctl diff snapshot staging.json production.json --ignore-unchanged
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -450,7 +450,7 @@ scafctl render solution -f solution.yaml -r env=production `
   --snapshot --snapshot-file=production.json
 
 # Compare configurations
-scafctl snapshot diff staging.json production.json --ignore-unchanged
+scafctl diff snapshot staging.json production.json --ignore-unchanged
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -485,7 +485,7 @@ scafctl snapshot save -f solution.yaml --output shareable.json --redact
 | Command | Description |
 |---------|-------------|
 | `scafctl snapshot show <file>` | Display a saved snapshot |
-| `scafctl snapshot diff <a> <b>` | Compare two snapshots |
+| `scafctl diff snapshot <a> <b>` | Compare two snapshots |
 | `scafctl snapshot save -f <solution>` | Run resolvers and save snapshot |
 | `scafctl render solution --snapshot` | Create snapshot during render |
 

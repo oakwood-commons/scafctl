@@ -20,13 +20,12 @@ func CommandBundle(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 		Short:        "Inspect and manage solution bundles",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
-			Commands for inspecting, verifying, diffing, and extracting
+			Commands for inspecting, verifying, and extracting
 			solution bundles built by 'scafctl build solution'.
 		`),
 	}
 
 	cmd.AddCommand(CommandVerify(cliParams, ioStreams, path))
-	cmd.AddCommand(CommandDiff(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandExtract(cliParams, ioStreams, path))
 
 	return cmd

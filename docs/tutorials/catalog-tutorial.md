@@ -1847,7 +1847,7 @@ rm -rf extracted/ config-only/
 
 ## Comparing Bundle Versions
 
-When you release a new version of a bundled solution, `bundle diff` shows exactly what changed.
+When you release a new version of a bundled solution, `diff bundle` shows exactly what changed.
 
 ### Step 1: Create a v2 with Changes
 
@@ -1900,12 +1900,12 @@ Notice it now bundles 4 files (the new staging config was picked up by `configs/
 {{< tabs "catalog-tutorial-cmd-52" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1917,12 +1917,12 @@ The output shows files added, modified, and removed between the two versions.
 {{< tabs "catalog-tutorial-cmd-53" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --files-only
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 --files-only
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --files-only
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 --files-only
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1932,12 +1932,12 @@ scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --files-only
 {{< tabs "catalog-tutorial-cmd-54" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --solution-only
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 --solution-only
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 --solution-only
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 --solution-only
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1949,12 +1949,12 @@ This shows only changes to the solution YAML itself (resolvers added/removed, ac
 {{< tabs "catalog-tutorial-cmd-55" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle diff deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
+scafctl diff bundle deploy-app@1.0.0 deploy-app@2.0.0 -o yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1982,7 +1982,7 @@ rm -rf deploy-app/
 
 ### What You Learned
 
-- `scafctl bundle diff REF_A REF_B` compares two versions of a bundled solution
+- `scafctl diff bundle REF_A REF_B` compares two versions of a bundled solution
 - `--files-only` shows only file-level changes (added, modified, removed)
 - `--solution-only` shows only solution structure changes (resolvers, actions)
 - `-o yaml` or `-o json` gives machine-readable diff output

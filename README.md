@@ -475,7 +475,7 @@ scafctl catalog inspect my-solution@1.0.0
 
 # Bundle verification and diffing
 scafctl bundle verify my-solution@1.0.0
-scafctl bundle diff my-solution@1.0.0 my-solution@2.0.0
+scafctl diff bundle my-solution@1.0.0 my-solution@2.0.0
 scafctl bundle extract my-solution@1.0.0
 
 # Inspect providers and solutions
@@ -490,7 +490,7 @@ scafctl lint -f solution.yaml
 # Snapshots
 scafctl snapshot save -f solution.yaml --name baseline
 scafctl snapshot show --name baseline
-scafctl snapshot diff --from baseline --to current
+scafctl diff snapshot --from baseline --to current
 
 # Resolver dependency graph
 scafctl run resolver -f solution.yaml --graph

@@ -89,13 +89,13 @@ scafctl snapshot show snapshot.json --format resolvers
 scafctl snapshot show snapshot.json --format resolvers --verbose
 ```
 
-### `scafctl snapshot diff`
+### `scafctl diff snapshot`
 
 Compares two snapshots to identify changes in resolver behavior.
 
 **Usage:**
 ```bash
-scafctl snapshot diff <before-snapshot> <after-snapshot> [--format <format>] [--ignore-unchanged] [--ignore-fields <fields>] [--output <file>]
+scafctl diff snapshot <before-snapshot> <after-snapshot> [--output <format>] [--ignore-unchanged] [--ignore-fields <fields>]
 ```
 
 **Flags:**
@@ -108,17 +108,17 @@ scafctl snapshot diff <before-snapshot> <after-snapshot> [--format <format>] [--
 
 **Human** - Readable comparison with status indicators:
 ```bash
-scafctl snapshot diff before.json after.json
+scafctl diff snapshot before.json after.json
 ```
 
 **JSON** - Structured diff data for programmatic processing:
 ```bash
-scafctl snapshot diff before.json after.json --format json
+scafctl diff snapshot before.json after.json -o json
 ```
 
 **Unified** - Git-style unified diff format:
 ```bash
-scafctl snapshot diff before.json after.json --format unified
+scafctl diff snapshot before.json after.json -o unified
 ```
 
 ## Troubleshooting Workflows
@@ -159,7 +159,7 @@ scafctl snapshot save --output before.json
 scafctl snapshot save --output after.json
 
 # Compare the snapshots
-scafctl snapshot diff before.json after.json --ignore-unchanged
+scafctl diff snapshot before.json after.json --ignore-unchanged
 ```
 
 **What to look for:**
@@ -215,7 +215,7 @@ scafctl snapshot save --output baseline.json
 scafctl snapshot save --output current.json
 
 # Compare durations
-scafctl snapshot diff baseline.json current.json --format json | jq '.resolvers[] | select(.duration_changed) | {name, before_duration, after_duration}'
+scafctl diff snapshot baseline.json current.json -o json | jq '.resolvers[] | select(.duration_changed) | {name, before_duration, after_duration}'
 ```
 
 **What to look for:**
@@ -308,9 +308,9 @@ Example GitHub Actions workflow:
 - name: Compare with baseline
   if: github.event_name == 'pull_request'
   run: |
-    scafctl snapshot diff baseline.json snapshot-${{ github.sha }}.json \
+    scafctl diff snapshot baseline.json snapshot-${{ github.sha }}.json \
       --ignore-fields duration,timestamp \
-      --format json > diff.json
+      -o json > diff.json
     
 - name: Upload snapshot artifact
   uses: actions/upload-artifact@v3
