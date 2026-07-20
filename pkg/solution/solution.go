@@ -189,8 +189,16 @@ func (b Bundle) IsEmpty() bool {
 
 // PluginDependency declares an external plugin required by a solution.
 type PluginDependency struct {
-	// Name is the plugin's catalog reference (e.g., "aws-provider").
-	Name string `json:"name" yaml:"name" doc:"Plugin catalog reference" example:"aws-provider" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$" patternDescription:"lowercase alphanumeric with hyphens"`
+	// Name is the plugin's reference key as used in `provider:` fields
+	// (e.g., "aws-provider"). It is the lookup/alias key, not necessarily the
+	// name of the fetched catalog artifact -- see Artifact.
+	Name string `json:"name" yaml:"name" doc:"Plugin reference key used in provider fields" example:"aws-provider" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$" patternDescription:"lowercase alphanumeric with hyphens"`
+
+	// Artifact is the real catalog artifact name to fetch. When omitted it
+	// defaults to Name (see ArtifactName). Set this when the reference key
+	// differs from the published artifact (e.g., Name "echo" -> Artifact
+	// "echo-provider").
+	Artifact string `json:"artifact,omitempty" yaml:"artifact,omitempty" doc:"Catalog artifact name to fetch (defaults to name)" example:"echo-provider" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$" patternDescription:"lowercase alphanumeric with hyphens"`
 
 	// Kind is the plugin type.
 	Kind PluginKind `json:"kind" yaml:"kind" doc:"Plugin type" example:"provider"`
@@ -198,11 +206,52 @@ type PluginDependency struct {
 	// Version is a semver constraint (e.g., "^1.5.0", ">=2.0.0", "3.1.2") or "latest".
 	Version string `json:"version" yaml:"version" doc:"Semver version constraint or 'latest'" example:"^1.5.0" maxLength:"50" pattern:"^([~^>=<]*[0-9]|latest$)" patternDescription:"semver constraint or 'latest'"`
 
-	Catalog string `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Optional catalog name (OCI registry prefix) fetch the plugin from" example:"registry.example.com:5000/myorg/" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$"`
+	Catalog string `json:"catalog,omitempty" yaml:"catalog,omitempty" doc:"Optional catalog name or OCI registry prefix to fetch the plugin from" example:"ghcr.io/myorg" maxLength:"100" pattern:"^[a-z0-9][a-z0-9._:/-]*[a-z0-9]$" patternDescription:"catalog name or registry prefix (lowercase alphanumeric with dots, colons, slashes, hyphens)"`
 
 	// Defaults provides default values for plugin inputs.
 	// These are shallow-merged beneath inline provider inputs (inline always wins).
 	Defaults map[string]*spec.ValueRef `json:"defaults,omitempty" yaml:"defaults,omitempty" doc:"Default input values for this plugin (supports ValueRef)"`
+}
+
+// ArtifactName returns the catalog artifact name to fetch for this dependency.
+// It implements the identity-mapping default: when Artifact is empty, the
+// reference Name is used as the artifact name.
+func (d PluginDependency) ArtifactName() string {
+	if d.Artifact != "" {
+		return d.Artifact
+	}
+	return d.Name
+}
+
+// PluginDependencyFromRef synthesizes a PluginDependency from a parsed provider
+// reference. It normalizes the lexical sections of a `provider:` string into the
+// structured dependency shape that prepare/pool resolution consumes.
+//
+// Mapping (Rule A identity semantics):
+//   - Name maps directly to the reference key.
+//   - Artifact is left empty; ArtifactName defaults it to Name. Callers set
+//     Artifact explicitly only when the reference key differs from the
+//     published artifact.
+//   - Version passes through as-is (a semver constraint or "latest").
+//   - Registry maps to Catalog for qualified references, pinning the catalog
+//     and bypassing the resolution chain. Short references leave Catalog empty.
+//
+// Digest is intentionally ignored for now; PluginDependency has no digest field.
+// The parts are validated before synthesis; an invalid reference is an error.
+func PluginDependencyFromRef(parts spec.ProviderRefParts, kind PluginKind) (PluginDependency, error) {
+	if err := parts.Validate(); err != nil {
+		return PluginDependency{}, fmt.Errorf("invalid provider reference: %w", err)
+	}
+
+	dep := PluginDependency{
+		Name:    parts.Name,
+		Kind:    kind,
+		Version: parts.Version,
+	}
+	if parts.IsQualified() {
+		dep.Catalog = parts.Registry
+	}
+	return dep, nil
 }
 
 // PluginKind is the type of plugin (provider, auth-handler).

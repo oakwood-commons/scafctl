@@ -8,6 +8,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -437,6 +438,96 @@ func TestPluginKind_IsValid(t *testing.T) {
 	assert.True(t, PluginKindAuthHandler.IsValid())
 	assert.False(t, PluginKind("invalid").IsValid())
 	assert.False(t, PluginKind("").IsValid())
+}
+
+func TestPluginDependency_ArtifactName(t *testing.T) {
+	tests := []struct {
+		name string
+		dep  PluginDependency
+		want string
+	}{
+		{
+			name: "defaults to name when artifact empty",
+			dep:  PluginDependency{Name: "echo"},
+			want: "echo",
+		},
+		{
+			name: "uses artifact when set",
+			dep:  PluginDependency{Name: "echo", Artifact: "echo-provider"},
+			want: "echo-provider",
+		},
+		{
+			name: "artifact equal to name",
+			dep:  PluginDependency{Name: "aws-provider", Artifact: "aws-provider"},
+			want: "aws-provider",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.dep.ArtifactName())
+		})
+	}
+}
+
+func TestPluginDependencyFromRef(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  spec.ProviderRef
+		kind PluginKind
+		want PluginDependency
+	}{
+		{
+			name: "bare name",
+			ref:  "echo",
+			kind: PluginKindProvider,
+			want: PluginDependency{Name: "echo", Kind: PluginKindProvider},
+		},
+		{
+			name: "name with version",
+			ref:  "echo@^1.0.0",
+			kind: PluginKindProvider,
+			want: PluginDependency{Name: "echo", Kind: PluginKindProvider, Version: "^1.0.0"},
+		},
+		{
+			name: "qualified reference pins catalog",
+			ref:  "ghcr.io/myorg/echo@^1.0.0",
+			kind: PluginKindProvider,
+			want: PluginDependency{Name: "echo", Kind: PluginKindProvider, Version: "^1.0.0", Catalog: "ghcr.io/myorg"},
+		},
+		{
+			name: "qualified with port",
+			ref:  "registry.example.com:5000/myorg/echo@1.2.3",
+			kind: PluginKindProvider,
+			want: PluginDependency{Name: "echo", Kind: PluginKindProvider, Version: "1.2.3", Catalog: "registry.example.com:5000/myorg"},
+		},
+		{
+			name: "auth handler kind",
+			ref:  "oidc@latest",
+			kind: PluginKindAuthHandler,
+			want: PluginDependency{Name: "oidc", Kind: PluginKindAuthHandler, Version: "latest"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parts, err := tt.ref.Parse()
+			require.NoError(t, err)
+
+			got, err := PluginDependencyFromRef(parts, tt.kind)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			// Rule A: Artifact is empty and defaults to Name.
+			assert.Empty(t, got.Artifact)
+			assert.Equal(t, tt.want.Name, got.ArtifactName())
+		})
+	}
+}
+
+func TestPluginDependencyFromRef_Invalid(t *testing.T) {
+	// A structurally-parseable ref whose sections fail validation.
+	parts := spec.ProviderRefParts{Name: "Echo"} // uppercase is invalid
+	_, err := PluginDependencyFromRef(parts, PluginKindProvider)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid provider reference")
 }
 
 func TestSolution_ToJSONPretty(t *testing.T) {

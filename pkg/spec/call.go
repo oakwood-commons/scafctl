@@ -39,7 +39,7 @@ type Call struct {
 	Args map[string]*ArgDef `json:"args,omitempty" yaml:"args,omitempty" doc:"Named, typed argument declarations keyed by argument name"`
 
 	// Provider is the provider name executed when the call is invoked.
-	Provider string `json:"provider" yaml:"provider" doc:"Provider name to execute" maxLength:"100" example:"http" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	Provider string `json:"provider" yaml:"provider" doc:"Provider name or reference to execute" maxLength:"100" example:"http" pattern:"^[a-zA-Z0-9][a-zA-Z0-9._:/@^~><=+*-]*$" patternDescription:"A provider name or reference: bare name, name@version, or registry/name@version"`
 
 	// Inputs are the provider inputs. They reference arguments via the args
 	// namespace and are resolved after arguments are bound.
