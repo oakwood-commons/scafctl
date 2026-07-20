@@ -63,7 +63,7 @@ to codify that and repair the seams -- not to force a single global ordering
 
 ## Decision
 
-### Two lanes, chosen by command class
+### Lanes, chosen by command class
 
 **Lane 1 -- Operation verbs: `<verb> [noun] [name] [flags]`**
 
@@ -111,13 +111,28 @@ The subsystem is a group; its children are verbs.
 - Children are verbs: `list`, `get`, `set`, `delete`, `login`, `push`, `pull`, ...
 - A bare subsystem shows help (it has no default action).
 
+**Lane 3 -- Meta / self commands: `<verb> [flags]` (flat, top-level)**
+
+Commands that operate on *the tool itself or the user's environment* -- not on a
+domain object (Lane 1) and not on a managed subsystem (Lane 2) -- are flat
+top-level verbs. They take no solution and have no noun.
+
+- Verbs: `version`, `update` (self-update), `completion`, `options`, and future
+  diagnostics such as `doctor` / `env` / `status`.
+- These are the "tool about the tool" commands every mature CLI has
+  (`brew doctor`, `gh extension upgrade`, `rustup update`, `kubectl completion`).
+- Keep this lane small and obvious; if a command starts needing sub-verbs or a
+  managed resource, it belongs in Lane 2 instead.
+
 **Deciding the lane:** if the command *does something to a domain object*
 ("test it", "lint it", "run a solution", "diff two solutions"), it is an
 operation verb (Lane 1). If it is a bag of management operations with no single
-primary action ("manage config", "manage auth"), it is a subsystem (Lane 2).
-Within Lane 1, a verb that has a single natural target defaults to the solution
-(`lint`, `test`); a verb that spans several nouns (or is kept extensible)
-requires the noun explicitly (`run`, `get`, `validate`, `diff`, ...).
+primary action ("manage config", "manage auth"), it is a subsystem (Lane 2). If
+it operates on the tool or the environment itself ("update scafctl", "print the
+version", "diagnose my setup"), it is a meta command (Lane 3). Within Lane 1,
+a verb that has a single natural target defaults to the solution (`lint`,
+`test`); a verb that spans several nouns (or is kept extensible) requires the
+noun explicitly (`run`, `get`, `validate`, `diff`, ...).
 
 ### Rules that apply to both lanes
 
@@ -166,6 +181,34 @@ Note the two existing "validate" surfaces are reconciled by the lanes:
 `validate <noun>` (solution/resolver/schema) is the operation-verb form;
 `eval validate` (CEL/template syntax) stays under the `eval` sandbox subsystem
 because it validates ad-hoc expressions, not domain artifacts.
+
+## Future fit
+
+A grammar is only useful if new commands slot in without debate. The
+capabilities scafctl is likely to grow -- several already requested -- map onto
+the three lanes as follows. This is illustrative, not a commitment to build.
+
+| Anticipated capability | Lane / form | Prior art |
+|------------------------|-------------|-----------|
+| Self-update (#239) | Lane 3: `update` (alias `upgrade`) | `brew upgrade`, `rustup update` |
+| Setup diagnostics | Lane 3: `doctor` / `env` | `brew doctor`, `npm doctor` |
+| Shell completion | Lane 3: `completion` (exists) | universal |
+| Inspect a provider (#319) | Lane 1 multi-noun: `inspect provider <name>` | `kubectl describe` |
+| Replay / verify / drift (#242) | Lane 1: `verify solution`, `replay solution` | `terraform plan` |
+| Format a solution file | Lane 1 single-target: `fmt` (defaults to solution) | `gofmt`, `terraform fmt` |
+| Edit in `$EDITOR` | Lane 1 single-target: `edit` | `kubectl edit` |
+| Live-follow output | Flag, not a verb: `-w`/`--watch` on operation verbs | `kubectl get -w` |
+| Execution logs / history | Lane 1 or `run` sub-verb: `logs` / `run logs` | `docker logs` |
+| Graph / visualize | Extend existing `render solution -o mermaid` | `terraform graph` |
+| Plugins search (#535) | Lane 2: `plugins search` | `brew search` |
+| MCP inspector (#419) | Lane 2: `mcp tools` / `mcp call` / `mcp ping` | -- |
+| Schema/UI generation (#243) | Lane 1 multi-noun: `get schema` / `generate schema` | -- |
+
+**Open question -- `pipeline` (#60):** catalog-regression testing does not fit
+cleanly. Options: a `test` sub-verb (`test catalog`), a Lane 2 subsystem
+(`pipeline run`/`test`), or fold into `catalog` (`catalog test`). Decide when
+that feature is designed; noting it here so the grammar is not assumed to have
+already answered it.
 
 ## Consequences
 
