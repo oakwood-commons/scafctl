@@ -1,12 +1,11 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package snapshot
+package diff
 
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -18,22 +17,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// DiffOptions holds options for the diff command
-type DiffOptions struct {
+// SnapshotDiffOptions holds options for the diff snapshot command.
+type SnapshotDiffOptions struct {
 	BeforeFile      string
 	AfterFile       string
 	Format          string
 	IgnoreUnchanged bool
 	IgnoreFields    []string
-	Output          string
 }
 
-// CommandDiff creates the snapshot diff command
-func CommandDiff(_ *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
-	opts := &DiffOptions{}
+// CommandDiffSnapshot creates the `diff snapshot` subcommand.
+func CommandDiffSnapshot(_ *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+	opts := &SnapshotDiffOptions{}
 
 	cmd := &cobra.Command{
-		Use:          "diff [before-snapshot] [after-snapshot]",
+		Use:          subSnapshot + " [before-snapshot] [after-snapshot]",
 		Short:        "Compare two snapshots",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
@@ -52,40 +50,39 @@ func CommandDiff(_ *settings.Run, ioStreams terminal.IOStreams, binaryName strin
 		`),
 		Example: heredoc.Docf(`
 			# Compare two snapshots
-			$ %s snapshot diff before.json after.json
+			$ %[1]s diff snapshot before.json after.json
 			
 			# Show only changed resolvers
-			$ %s snapshot diff before.json after.json --ignore-unchanged
+			$ %[1]s diff snapshot before.json after.json --ignore-unchanged
 			
 			# Ignore timing fields
-			$ %s snapshot diff before.json after.json --ignore-fields duration,providerCalls
+			$ %[1]s diff snapshot before.json after.json --ignore-fields duration,providerCalls
 			
 			# Output as JSON
-			$ %s snapshot diff before.json after.json --format json
+			$ %[1]s diff snapshot before.json after.json -o json
 			
 			# Output unified diff format
-			$ %s snapshot diff before.json after.json --format unified
+			$ %[1]s diff snapshot before.json after.json -o unified
 			
-			# Save diff to file
-			$ %s snapshot diff before.json after.json --output diff.txt
-		`, binaryName, binaryName, binaryName, binaryName, binaryName, binaryName),
+			# Save diff to a file with shell redirection
+			$ %[1]s diff snapshot before.json after.json -o json > diff.json
+		`, binaryName),
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.BeforeFile = args[0]
 			opts.AfterFile = args[1]
-			return runDiff(cmd.Context(), opts, ioStreams)
+			return runSnapshotDiff(cmd.Context(), opts, ioStreams)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Format, "format", "f", "human", "Output format: human, json, unified")
+	cmd.Flags().StringVarP(&opts.Format, "output", "o", "human", "Output format: human, json, unified")
 	cmd.Flags().BoolVar(&opts.IgnoreUnchanged, "ignore-unchanged", false, "Omit unchanged resolvers from output")
 	cmd.Flags().StringSliceVar(&opts.IgnoreFields, "ignore-fields", []string{}, "Fields to ignore (e.g., duration,providerCalls)")
-	cmd.Flags().StringVarP(&opts.Output, "output", "o", "", "Write output to file instead of stdout")
 
 	return cmd
 }
 
-func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStreams) error {
+func runSnapshotDiff(ctx context.Context, opts *SnapshotDiffOptions, ioStreams terminal.IOStreams) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -124,19 +121,6 @@ func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStream
 	lgr.V(-1).Info("computing diff")
 	diff := resolver.DiffSnapshotsWithOptions(before, after, diffOpts)
 
-	// Determine output writer
-	out := ioStreams.Out
-	if opts.Output != "" {
-		file, err := os.Create(opts.Output)
-		if err != nil {
-			err = fmt.Errorf("failed to create output file: %w", err)
-			writeErr(err)
-			return exitcode.WithCode(err, exitcode.GeneralError)
-		}
-		defer file.Close()
-		out = file
-	}
-
 	// Format and output diff
 	var output string
 	switch opts.Format {
@@ -161,21 +145,10 @@ func runDiff(ctx context.Context, opts *DiffOptions, ioStreams terminal.IOStream
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	if _, err := fmt.Fprint(out, output); err != nil {
+	if _, err := fmt.Fprint(ioStreams.Out, output); err != nil {
 		err = fmt.Errorf("failed to write output: %w", err)
 		writeErr(err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
-	}
-
-	// Print summary to stderr if output is redirected
-	if opts.Output != "" && w != nil {
-		w.WarnStderrf("Diff saved to %s", opts.Output)
-		w.WarnStderrf("Total: %d | Added: %d | Removed: %d | Modified: %d | Unchanged: %d",
-			diff.Summary.TotalResolvers,
-			diff.Summary.Added,
-			diff.Summary.Removed,
-			diff.Summary.Modified,
-			diff.Summary.Unchanged)
 	}
 
 	return nil

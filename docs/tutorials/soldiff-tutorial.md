@@ -35,12 +35,12 @@ Solution diffing answers the question: **"What structurally changed between two 
 {{< tabs "soldiff-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl solution diff -f solution-v1.yaml -f solution-v2.yaml
+scafctl diff solution -f solution-v1.yaml -f solution-v2.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl solution diff -f solution-v1.yaml -f solution-v2.yaml
+scafctl diff solution -f solution-v1.yaml -f solution-v2.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -64,12 +64,12 @@ Summary: 5 total | 2 added | 0 removed | 3 changed
 {{< tabs "soldiff-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl solution diff -f solution-v1.yaml -f solution-v2.yaml -o json
+scafctl diff solution -f solution-v1.yaml -f solution-v2.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl solution diff -f solution-v1.yaml -f solution-v2.yaml -o json
+scafctl diff solution -f solution-v1.yaml -f solution-v2.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -95,12 +95,12 @@ cat examples/soldiff/solution-v2.yaml
 {{< tabs "soldiff-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
+scafctl diff solution -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
+scafctl diff solution -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -120,7 +120,7 @@ In a CI pipeline, use JSON output to assert no unexpected changes:
 {{% tab "Bash" %}}
 ```bash
 # Fail if any resolvers were removed
-diff_output=$(scafctl solution diff -f baseline.yaml -f current.yaml -o json)
+diff_output=$(scafctl diff solution -f baseline.yaml -f current.yaml -o json)
 removed=$(echo "$diff_output" | jq '.summary.removed')
 if [ "$removed" -gt 0 ]; then
   echo "ERROR: Resolvers were removed!"
@@ -131,7 +131,7 @@ fi
 {{% tab "PowerShell" %}}
 ```powershell
 # Fail if any resolvers were removed
-$diff_output = scafctl solution diff -f baseline.yaml -f current.yaml -o json
+$diff_output = scafctl diff solution -f baseline.yaml -f current.yaml -o json
 $parsed = $diff_output | ConvertFrom-Json
 if ($parsed.summary.removed -gt 0) {
   Write-Output "ERROR: Resolvers were removed!"
@@ -184,23 +184,23 @@ Solution diff compares *structure* (YAML schema), while snapshot diff compares *
 {{% tab "Bash" %}}
 ```bash
 # 1. Compare structure
-scafctl solution diff -f v1.yaml -f v2.yaml
+scafctl diff solution -f v1.yaml -f v2.yaml
 
 # 2. Compare runtime behavior
 scafctl run resolver -f v1.yaml --snapshot --snapshot-file=before.json
 scafctl run resolver -f v2.yaml --snapshot --snapshot-file=after.json
-scafctl snapshot diff before.json after.json
+scafctl diff snapshot before.json after.json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
 # 1. Compare structure
-scafctl solution diff -f v1.yaml -f v2.yaml
+scafctl diff solution -f v1.yaml -f v2.yaml
 
 # 2. Compare runtime behavior
 scafctl run resolver -f v1.yaml --snapshot --snapshot-file=before.json
 scafctl run resolver -f v2.yaml --snapshot --snapshot-file=after.json
-scafctl snapshot diff before.json after.json
+scafctl diff snapshot before.json after.json
 ```
 {{% /tab %}}
 {{< /tabs >}}

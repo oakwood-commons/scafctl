@@ -136,6 +136,7 @@ func TestRoot_CommandGroups(t *testing.T) {
 		"lint":    "core",
 		"get":     "inspect",
 		"explain": "inspect",
+		"diff":    "inspect",
 		"new":     "scaffold",
 		"package": "scaffold",
 		"config":  "config",

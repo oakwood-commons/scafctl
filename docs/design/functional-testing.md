@@ -723,7 +723,7 @@ The `output` variable structure depends on the command:
 | `run resolver` | Resolver map: `__output.<resolverName>` = resolved value |
 | `run solution` | Execution result: `__output.status`, `__output.actions`, `__output.duration` |
 | `lint` | Lint result: `__output.findings`, `__output.errorCount`, `__output.warnCount` |
-| `snapshot diff` | Diff result: `__output.added`, `__output.removed`, `__output.modified` |
+| `diff snapshot` | Diff result: `__output.added`, `__output.removed`, `__output.modified` |
 
 > **Note**: This table is non-exhaustive. For commands not listed, `output` follows the command's `-o json` schema. Use verbose mode (`-v`) to inspect the raw JSON structure for any command.
 

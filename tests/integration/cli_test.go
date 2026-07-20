@@ -5239,8 +5239,9 @@ func TestIntegration_BundleHelp(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "bundle")
 	assert.Contains(t, stdout, "verify")
-	assert.Contains(t, stdout, "diff")
 	assert.Contains(t, stdout, "extract")
+	// diff was moved out of the bundle group to the top-level `diff` verb.
+	assert.NotContains(t, stdout, "\n  diff ")
 }
 
 func TestIntegration_BundleVerifyHelp(t *testing.T) {
@@ -5254,7 +5255,7 @@ func TestIntegration_BundleVerifyHelp(t *testing.T) {
 
 func TestIntegration_BundleDiffHelp(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "bundle", "diff", "--help")
+	stdout, _, exitCode := runScafctl(t, "diff", "bundle", "--help")
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Show what changed between two versions")
@@ -5286,7 +5287,7 @@ func TestIntegration_BundleVerify_MissingRef(t *testing.T) {
 
 func TestIntegration_BundleDiff_MissingArgs(t *testing.T) {
 	t.Parallel()
-	_, _, exitCode := runScafctl(t, "bundle", "diff")
+	_, _, exitCode := runScafctl(t, "diff", "bundle")
 
 	assert.NotEqual(t, 0, exitCode)
 }
@@ -5375,7 +5376,7 @@ func TestIntegration_BundleDiff_SameVersion(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Diff them
-	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "diff", "resolver-demo@1.0.0", "resolver-demo@2.0.0")
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "diff", "bundle", "resolver-demo@1.0.0", "resolver-demo@2.0.0")
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 	assert.Equal(t, 0, exitCode)
@@ -8779,7 +8780,7 @@ spec:
 	require.Equal(t, 0, exitCode, "failed to create after snapshot")
 
 	// Diff in human format (default)
-	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile)
+	stdout, _, exitCode := runScafctl(t, "diff", "snapshot", beforeFile, afterFile)
 	assert.Equal(t, 0, exitCode)
 	// Human diff should contain some output (could be changes or summary)
 	assert.NotEmpty(t, stdout, "diff output should not be empty")
@@ -8809,13 +8810,13 @@ func TestIntegration_Snapshot_Diff_JSON(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// JSON format diff
-	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile, "--format", "json")
+	stdout, _, exitCode := runScafctl(t, "diff", "snapshot", beforeFile, afterFile, "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
 	// Should be valid JSON
 	var parsed map[string]interface{}
 	err := json.Unmarshal([]byte(stdout), &parsed)
-	assert.NoError(t, err, "diff --format json should produce valid JSON")
+	assert.NoError(t, err, "diff -o json should produce valid JSON")
 	assert.Contains(t, parsed, "summary")
 }
 
@@ -8843,7 +8844,7 @@ func TestIntegration_Snapshot_Diff_Unified(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// Unified diff format
-	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile, "--format", "unified")
+	stdout, _, exitCode := runScafctl(t, "diff", "snapshot", beforeFile, afterFile, "-o", "unified")
 	assert.Equal(t, 0, exitCode)
 	// Output may be empty if nothing changed — that's fine
 	t.Logf("unified diff output: %s", stdout)
@@ -8873,7 +8874,7 @@ func TestIntegration_Snapshot_Diff_IgnoreUnchanged(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 
 	// With --ignore-unchanged, identical snapshots should produce minimal output
-	stdout, _, exitCode := runScafctl(t, "snapshot", "diff", beforeFile, afterFile, "--ignore-unchanged")
+	stdout, _, exitCode := runScafctl(t, "diff", "snapshot", beforeFile, afterFile, "--ignore-unchanged")
 	assert.Equal(t, 0, exitCode)
 	t.Logf("ignore-unchanged diff output: %s", stdout)
 }
@@ -8902,19 +8903,21 @@ func TestIntegration_Snapshot_Diff_IgnoreFields(t *testing.T) {
 
 	// Ignore duration and providerCalls fields
 	stdout, _, exitCode := runScafctl(t,
-		"snapshot", "diff", beforeFile, afterFile,
+		"diff", "snapshot", beforeFile, afterFile,
 		"--ignore-fields", "duration,providerCalls",
 	)
 	assert.Equal(t, 0, exitCode)
 	t.Logf("ignore-fields diff output: %s", stdout)
 }
 
-func TestIntegration_Snapshot_Diff_OutputFile(t *testing.T) {
+// TestIntegration_Snapshot_Diff_OutputToStdout verifies that `diff snapshot`
+// writes its output to stdout (users redirect with the shell). The former
+// `--output <file>` file-write flag was removed; `-o` now selects the format.
+func TestIntegration_Snapshot_Diff_OutputToStdout(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 	beforeFile := filepath.Join(tmpDir, "before.json")
 	afterFile := filepath.Join(tmpDir, "after.json")
-	outputFile := filepath.Join(tmpDir, "diff-output.txt")
 
 	_, _, exitCode := runScafctl(t,
 		"run", "resolver",
@@ -8932,17 +8935,17 @@ func TestIntegration_Snapshot_Diff_OutputFile(t *testing.T) {
 	)
 	require.Equal(t, 0, exitCode)
 
-	// Write diff to file
-	_, _, exitCode = runScafctl(t,
-		"snapshot", "diff", beforeFile, afterFile,
-		"--output", outputFile,
+	// Diff output goes to stdout; capture and assert it is valid JSON.
+	stdout, _, exitCode := runScafctl(t,
+		"diff", "snapshot", beforeFile, afterFile,
+		"-o", "json",
 	)
 	assert.Equal(t, 0, exitCode)
 
-	// Verify output file was created
-	data, err := os.ReadFile(outputFile)
-	require.NoError(t, err)
-	assert.NotEmpty(t, data, "diff output file should not be empty")
+	var parsed map[string]interface{}
+	err := json.Unmarshal([]byte(stdout), &parsed)
+	require.NoError(t, err, "diff -o json should write valid JSON to stdout")
+	assert.Contains(t, parsed, "summary")
 }
 
 func TestIntegration_Snapshot_Diff_MissingFile(t *testing.T) {
@@ -8961,14 +8964,14 @@ func TestIntegration_Snapshot_Diff_MissingFile(t *testing.T) {
 
 	// Diff with missing second file
 	_, _, exitCode = runScafctl(t,
-		"snapshot", "diff", snapshotFile, "/nonexistent/after.json",
+		"diff", "snapshot", snapshotFile, "/nonexistent/after.json",
 	)
 	assert.NotEqual(t, 0, exitCode, "should fail when snapshot file does not exist")
 }
 
 func TestIntegration_Snapshot_Diff_NoArgs(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "snapshot", "diff")
+	_, stderr, exitCode := runScafctl(t, "diff", "snapshot")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "accepts 2 arg")
 }
@@ -8978,7 +8981,8 @@ func TestIntegration_Snapshot_Help(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "snapshot", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "show")
-	assert.Contains(t, stdout, "diff")
+	// diff was moved out of the snapshot group to the top-level `diff` verb.
+	assert.NotContains(t, stdout, "\n  diff ")
 }
 
 // ============================================================================
@@ -9049,7 +9053,7 @@ func TestIntegration_CwdFlag_ShortFlag(t *testing.T) {
 func TestIntegration_SolutionDiff_Table(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
-		"solution", "diff",
+		"diff", "solution",
 		"-f", "examples/soldiff/solution-v1.yaml",
 		"-f", "examples/soldiff/solution-v2.yaml",
 	)
@@ -9062,7 +9066,7 @@ func TestIntegration_SolutionDiff_Table(t *testing.T) {
 func TestIntegration_SolutionDiff_JSON(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
-		"solution", "diff",
+		"diff", "solution",
 		"-f", "examples/soldiff/solution-v1.yaml",
 		"-f", "examples/soldiff/solution-v2.yaml",
 		"-o", "json",
@@ -9078,7 +9082,7 @@ func TestIntegration_SolutionDiff_JSON(t *testing.T) {
 func TestIntegration_SolutionDiff_YAML(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
-		"solution", "diff",
+		"diff", "solution",
 		"-f", "examples/soldiff/solution-v1.yaml",
 		"-f", "examples/soldiff/solution-v2.yaml",
 		"-o", "yaml",
@@ -9110,7 +9114,7 @@ func TestIntegration_CacheInfo_ShowsArtifactCache(t *testing.T) {
 func TestIntegration_SolutionDiff_MissingFile(t *testing.T) {
 	t.Parallel()
 	_, _, exitCode := runScafctl(t,
-		"solution", "diff",
+		"diff", "solution",
 		"-f", "examples/soldiff/solution-v1.yaml",
 		"-f", "/nonexistent/solution.yaml",
 	)
@@ -9119,19 +9123,57 @@ func TestIntegration_SolutionDiff_MissingFile(t *testing.T) {
 
 func TestIntegration_SolutionDiff_NoArgs(t *testing.T) {
 	t.Parallel()
-	_, _, exitCode := runScafctl(t, "solution", "diff")
+	_, _, exitCode := runScafctl(t, "diff", "solution")
 	assert.NotEqual(t, 0, exitCode)
 }
 
-func TestIntegration_SolutionDiff_Alias(t *testing.T) {
+// TestIntegration_OldDiffPaths_HardRemoved locks in the grammar migration
+// phase 2 hard cutover: the pre-migration paths (`solution diff`, `sol diff`,
+// `bundle diff`, `snapshot diff`) and the entire `solution` command group no
+// longer exist. There are no aliases or shims -- invoking them must fail with
+// a non-zero exit AND an "unknown command" error (not merely fall back to
+// showing parent help and exiting 0).
+func TestIntegration_OldDiffPaths_HardRemoved(t *testing.T) {
 	t.Parallel()
-	stdout, stderr, exitCode := runScafctl(t,
-		"sol", "diff",
-		"-f", "examples/soldiff/solution-v1.yaml",
-		"-f", "examples/soldiff/solution-v2.yaml",
-	)
-	assert.Equal(t, 0, exitCode, "stderr: %s", stderr)
-	assert.Contains(t, stdout, "Solution Diff:")
+
+	cases := [][]string{
+		{"solution", "diff", "-f", "a.yaml", "-f", "b.yaml"},
+		{"sol", "diff", "-f", "a.yaml", "-f", "b.yaml"},
+		{"solution"},
+		{"sol"},
+		{"bundle", "diff", "a@1.0.0", "b@2.0.0"},
+		{"snapshot", "diff", "before.json", "after.json"},
+	}
+
+	for _, args := range cases {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctl(t, args...)
+			assert.NotEqual(t, 0, exitCode, "old path %v must no longer exist", args)
+			assert.Contains(t, stderr, "unknown command",
+				"old path %v must fail with an unknown-command error, not fall back to help/exit-0", args)
+		})
+	}
+}
+
+// TestIntegration_BareGroups_ShowHelpExitZero verifies that a BARE invocation
+// of an existing command group (no subcommand) still shows help and exits 0 --
+// this is CLI grammar Rule 8 and must not regress when we make the group error
+// on unknown subcommands. Note `solution` was deleted entirely, so it is NOT
+// listed here (see TestIntegration_OldDiffPaths_HardRemoved).
+func TestIntegration_BareGroups_ShowHelpExitZero(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{"bundle", "snapshot"}
+
+	for _, group := range cases {
+		t.Run(group, func(t *testing.T) {
+			t.Parallel()
+			stdout, _, exitCode := runScafctl(t, group)
+			assert.Equal(t, 0, exitCode, "bare %q must show help and exit 0", group)
+			assert.Contains(t, stdout, "Usage:", "bare %q must print help", group)
+		})
+	}
 }
 
 // ============================================================================
@@ -9170,7 +9212,7 @@ func TestIntegration_RunResolver_PositionalArgsAreNames(t *testing.T) {
 
 func TestIntegration_SolutionDiff_PositionalPathRejected(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t, "solution", "diff", "./v1.yaml", "./v2.yaml")
+	_, stderr, exitCode := runScafctl(t, "diff", "solution", "./v1.yaml", "./v2.yaml")
 	assert.NotEqual(t, 0, exitCode)
 	assert.Contains(t, stderr, "local file paths must use -f/--file flag")
 }
@@ -9190,7 +9232,7 @@ func TestIntegration_VendorUpdate_RejectsPositionalArgs(t *testing.T) {
 func TestIntegration_SolutionDiff_MixedFlagAndPositional(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
-		"solution", "diff",
+		"diff", "solution",
 		"-f", "examples/soldiff/solution-v1.yaml",
 		"my-app@1.0.0",
 	)
