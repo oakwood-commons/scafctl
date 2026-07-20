@@ -21,7 +21,7 @@ func TestCommandSecrets(t *testing.T) {
 	assert.Contains(t, cmd.Aliases, "secret")
 	assert.NotEmpty(t, cmd.Short)
 	assert.True(t, cmd.SilenceUsage)
-	assert.Nil(t, cmd.RunE, "parent secrets command should not have RunE")
+	assert.NotNil(t, cmd.RunE, "parent secrets command needs a help-only RunE so NoArgs rejects unknown subcommands")
 	subCmds := cmd.Commands()
 	require.Len(t, subCmds, 8, "should have 8 subcommands")
 	cmdNames := make([]string, len(subCmds))
@@ -142,4 +142,25 @@ func BenchmarkCommandSecrets(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandSecrets(cliParams, ioStreams, "scafctl")
 	}
+}
+
+// TestCommandSecrets_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandSecrets_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandSecrets(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandSecrets(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }

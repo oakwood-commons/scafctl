@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -25,7 +26,7 @@ import (
 
 // CommandCatalog creates the catalog command group.
 func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "catalog",
 		Aliases:      []string{"cat"},
 		Short:        "Manage the local artifact catalog",
@@ -41,7 +42,7 @@ func CommandCatalog(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			  - macOS: ~/.local/share/scafctl/catalog/
 			  - Windows: %LOCALAPPDATA%\scafctl\catalog\
 		`),
-	}
+	})
 
 	cmd.AddCommand(CommandList(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandInspect(cliParams, ioStreams, path))

@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/catalog/search"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -78,7 +79,7 @@ type IndexDiffItem struct {
 
 // CommandIndex creates the catalog index command group.
 func CommandIndex(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:   "index",
 		Short: "Manage the catalog discovery index",
 		Long: heredoc.Doc(`
@@ -91,7 +92,7 @@ func CommandIndex(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			Supported artifact kinds: solution, provider, auth-handler.
 		`),
 		SilenceUsage: true,
-	}
+	})
 
 	cmd.AddCommand(commandIndexPush(cliParams, ioStreams))
 	cmd.AddCommand(commandIndexShow(cliParams, ioStreams))

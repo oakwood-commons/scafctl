@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -16,7 +17,7 @@ import (
 
 // CommandState creates the 'state' command group.
 func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:   "state",
 		Short: "Manage solution state files",
 		Long: strings.ReplaceAll(heredoc.Doc(`
@@ -29,7 +30,7 @@ func CommandState(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			directory. Use an absolute path to reference files in other locations.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))

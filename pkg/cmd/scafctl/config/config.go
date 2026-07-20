@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -16,7 +17,7 @@ import (
 
 // CommandConfig creates the 'config' command.
 func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cCmd := &cobra.Command{
+	cCmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "config",
 		Aliases: []string{"cfg"},
 		Short:   fmt.Sprintf("Manage %s configuration", path),
@@ -39,7 +40,7 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			Use 'scafctl config paths' to see all resolved paths.
 		`)),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 	cCmd.AddCommand(CommandInit(cliParams, ioStreams, cmdPath))

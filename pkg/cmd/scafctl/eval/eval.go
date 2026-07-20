@@ -7,6 +7,7 @@ package eval
 import (
 	"fmt"
 
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -14,7 +15,7 @@ import (
 
 // CommandEval creates the 'eval' command group.
 func CommandEval(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cCmd := &cobra.Command{
+	cCmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "eval",
 		Aliases: []string{"e"},
 		Short:   "Evaluate, validate, and analyze CEL expressions and Go templates",
@@ -28,7 +29,7 @@ func CommandEval(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 Useful for testing and analyzing expressions and templates before using them
 in solutions.`,
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 

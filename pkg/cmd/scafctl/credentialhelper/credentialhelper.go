@@ -18,6 +18,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/credentialhelper"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -28,7 +29,7 @@ import (
 
 // CommandCredentialHelper returns the credential-helper command group.
 func CommandCredentialHelper(_ *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:   "credential-helper",
 		Short: "Docker/Podman credential helper protocol",
 		Long: fmt.Sprintf(`Implements the Docker credential helper protocol, exposing %[1]s's
@@ -40,7 +41,7 @@ Configure Docker to use %[1]s as a credential helper:
 
 Or add manually to ~/.docker/config.json:
   { "credsStore": "%[1]s" }`, path),
-	}
+	})
 
 	cmd.AddCommand(commandGet())
 	cmd.AddCommand(commandStore())

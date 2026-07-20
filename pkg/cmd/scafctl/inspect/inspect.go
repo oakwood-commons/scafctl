@@ -5,6 +5,7 @@ package inspect
 
 import (
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -12,7 +13,7 @@ import (
 
 // CommandInspect creates the top-level 'inspect' command group.
 func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, binaryName string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "inspect",
 		Short:        "Inspect a specific resource instance (add --usage for how to run it)",
 		SilenceUsage: true,
@@ -42,7 +43,7 @@ func CommandInspect(cliParams *settings.Run, ioStreams *terminal.IOStreams, bina
 			# Interactive TUI for exploring solution structure
 			$ %[1]s inspect solution -f ./my-solution.yaml -i
 		`, binaryName),
-	}
+	})
 
 	cmd.AddCommand(CommandInspectSolution(cliParams, ioStreams, binaryName))
 

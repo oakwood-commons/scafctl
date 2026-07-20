@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -16,7 +17,7 @@ import (
 
 // CommandPlugins creates the plugins command group.
 func CommandPlugins(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:          "plugins",
 		Short:        fmt.Sprintf("Manage %s plugins", path),
 		SilenceUsage: true,
@@ -32,7 +33,7 @@ func CommandPlugins(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			  update   - Update cached plugins to newer versions
 			  prune    - Remove old cached plugin versions
 		`), settings.CliBinaryName, cliParams.BinaryName),
-	}
+	})
 
 	cmd.AddCommand(CommandInstall(cliParams, ioStreams, path))
 	cmd.AddCommand(CommandList(cliParams, ioStreams, path))

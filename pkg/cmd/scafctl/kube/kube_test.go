@@ -43,3 +43,24 @@ func TestCommandKube_LongHelpUsesBinaryName(t *testing.T) {
 	assert.Contains(t, cmd.Long, "mycli kube login")
 	assert.NotContains(t, cmd.Long, "scafctl kube login")
 }
+
+// TestCommandKube_UnknownSubcommandErrors verifies that an unknown subcommand
+// errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandKube_UnknownSubcommandErrors(t *testing.T) {
+	t.Parallel()
+	ioStreams := terminal.NewIOStreams(nil, nil, nil, false)
+
+	cmd := CommandKube(embedderParams(), ioStreams, "mycli")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandKube(embedderParams(), ioStreams, "mycli")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
+}

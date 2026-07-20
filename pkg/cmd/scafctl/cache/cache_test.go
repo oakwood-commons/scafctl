@@ -20,7 +20,7 @@ func TestCommandCache(t *testing.T) {
 	assert.Equal(t, "cache", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 	assert.True(t, cmd.SilenceUsage)
-	assert.Nil(t, cmd.RunE, "parent cache command should not have RunE")
+	assert.NotNil(t, cmd.RunE, "parent cache command needs a help-only RunE so NoArgs rejects unknown subcommands")
 	subCmds := cmd.Commands()
 	require.Len(t, subCmds, 2, "should have 2 subcommands: clear, info")
 	cmdNames := make([]string, len(subCmds))
@@ -84,4 +84,25 @@ func BenchmarkCommandCache(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		CommandCache(cliParams, ioStreams, "scafctl")
 	}
+}
+
+// TestCommandCache_UnknownSubcommandErrors verifies that an unknown
+// subcommand errors (non-zero) while a bare invocation shows help and exits 0.
+func TestCommandCache_UnknownSubcommandErrors(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+
+	cmd := CommandCache(cliParams, ioStreams, "scafctl")
+	cmd.SetArgs([]string{"bogus-xyz"})
+	cmd.SilenceErrors = true
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown command")
+
+	cmd2 := CommandCache(cliParams, ioStreams, "scafctl")
+	cmd2.SetArgs([]string{})
+	cmd2.SilenceErrors = true
+	cmd2.SilenceUsage = true
+	assert.NoError(t, cmd2.Execute())
 }

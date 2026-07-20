@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/secrets"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -29,7 +30,7 @@ func newStoreFromContext(ctx context.Context) (secrets.Store, error) {
 
 // CommandSecrets creates the 'secrets' command.
 func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	cmd := &cobra.Command{
+	cmd := cmdutil.MakeHelpOnlyGroup(&cobra.Command{
 		Use:     "secrets",
 		Aliases: []string{"secret"},
 		Short:   "Manage encrypted secrets",
@@ -48,7 +49,7 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			  By default they are hidden. Use --all on subcommands to include them.
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		SilenceUsage: true,
-	}
+	})
 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandList(cliParams, ioStreams, cmdPath))
