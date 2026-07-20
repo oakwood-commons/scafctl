@@ -65,28 +65,40 @@ to codify that and repair the seams -- not to force a single global ordering
 
 ### Two lanes, chosen by command class
 
-**Lane 1 -- Operation verbs: `<verb> [target] [flags]` (verb acts by default)**
+**Lane 1 -- Operation verbs: `<verb> [noun] [name] [flags]`**
 
-Commands that *do something to a domain object* are verb-first, and the verb
-performs its action directly -- the way `go test`, `cargo build`, `git commit`,
-and `npm test` work. A developer types the verb and it does the obvious thing.
+Commands that *do something to a domain object* are verb-first. Within Lane 1
+there are two shapes, distinguished by how many nouns the verb operates on:
 
-- Verbs: `run`, `render`, `get`, `inspect`, `explain`, `validate`, `lint`,
-  `test`, `diff`, `new`, `package`.
-- The verb's **default target is the solution**, auto-discovered when not given:
-  `scafctl test` tests the solution, `scafctl lint` lints it, `scafctl run`
-  runs it. A positional names a specific target (`scafctl test my-app`), and
-  `-f` always points at a file (`scafctl lint -f ./sol.yaml`).
-- **A verb may also host closely-related sub-verbs** for auxiliary operations on
-  the same domain (e.g. `test list`, `test init`, `lint rules`). This mirrors
-  `git stash` / `git stash list`.
-- **Where a verb operates on more than one noun**, the noun is explicit:
-  `run solution` / `run resolver` / `run provider` / `run action`;
-  `validate solution` / `validate resolver` / `validate schema`. When there is a
-  single natural target (solution), the noun may be omitted.
-- A new operation slots in obviously. Validating arbitrary data against a schema
-  is `validate schema` -- a sibling of `validate solution`, not a new top-level
-  command.
+- **Single-target verbs** act directly, defaulting to the solution -- the way
+  `go test`, `cargo build`, `git commit`, and `npm test` work. A developer types
+  the verb and it does the obvious thing.
+  - Verbs: `lint`, `test`.
+  - `scafctl test` tests the solution, `scafctl lint` lints it. A positional
+    names a specific target (`scafctl test my-app`); `-f` always points at a
+    file (`scafctl lint -f ./sol.yaml`).
+  - A single-target verb **may also host closely-related sub-verbs** for
+    auxiliary operations on the same domain (e.g. `test list`, `test init`,
+    `lint rules`). This mirrors `git stash` / `git stash list`.
+
+- **Multi-noun verbs** operate on more than one kind of object, so the noun is
+  **explicit** -- these are parent dispatchers, not solution-defaulting verbs. A
+  bare invocation shows help (it lists the nouns), not a default action.
+  - Verbs and their nouns: `run solution|resolver|provider|action`,
+    `render solution`, `get solution|provider|example|...`,
+    `inspect solution`, `explain <kind>`, `validate solution|resolver|schema`,
+    `diff solution`, `new solution`, `package solution|plugin`.
+  - `scafctl run` shows help; `scafctl run solution` runs a solution.
+    `diff` takes an explicit noun (`diff solution <a> <b>`) so it can grow to
+    other diffable nouns (e.g. `diff snapshot`) later.
+
+A new operation slots in obviously: validating arbitrary data against a schema
+is `validate schema` -- a sibling of `validate solution` under the existing
+multi-noun `validate` verb, not a new top-level command.
+
+Note: some multi-noun verbs already accept a positional solution ref as a
+convenience on their solution subcommand (e.g. `inspect solution my-app`). That
+is the *noun's* argument, not a verb-level default; the noun is still required.
 
 **Lane 2 -- Subsystem management: `<subsystem> <verb> [args] [flags]`**
 
@@ -99,10 +111,13 @@ The subsystem is a group; its children are verbs.
 - Children are verbs: `list`, `get`, `set`, `delete`, `login`, `push`, `pull`, ...
 - A bare subsystem shows help (it has no default action).
 
-**Deciding the lane:** if there is one obvious primary action ("test it", "lint
-it", "run it"), it is an operation verb (Lane 1). If it is a bag of management
-operations with no primary action ("manage config", "manage auth"), it is a
-subsystem (Lane 2).
+**Deciding the lane:** if the command *does something to a domain object*
+("test it", "lint it", "run a solution", "diff two solutions"), it is an
+operation verb (Lane 1). If it is a bag of management operations with no single
+primary action ("manage config", "manage auth"), it is a subsystem (Lane 2).
+Within Lane 1, a verb that has a single natural target defaults to the solution
+(`lint`, `test`); a verb that spans several nouns (or is kept extensible)
+requires the noun explicitly (`run`, `get`, `validate`, `diff`, ...).
 
 ### Rules that apply to both lanes
 
@@ -123,9 +138,10 @@ subsystem (Lane 2).
    not `get cel-functions`. A hyphen is acceptable only when it is part of a
    single established compound term (`credential-helper`, `go-template`) -- the
    same way git keeps `cherry-pick`. Hyphenated *flag* names are always fine.
-4. **Bare invocation never errors with a raw cobra message.** A subsystem or a
-   verb with no discoverable target shows help or a clear, actionable error
-   (see the silent-failure fix in `inspect solution`, PR #646) -- not
+4. **Bare invocation never errors with a raw cobra message.** A subsystem, a
+   multi-noun verb (a parent that dispatches to nouns), or a single-target verb
+   with no discoverable target shows help or a clear, actionable error (see the
+   silent-failure fix in `inspect solution`, PR #646) -- not
    `requires at least 1 arg`.
 5. **Schema/kind documentation lives under `explain`.** The schema of a kind and
    its field docs are `explain <kind>` (e.g. `explain solution`, `explain
