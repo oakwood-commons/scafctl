@@ -9,7 +9,8 @@ auto-loaded by opencode via `opencode.json`:
 
 ## Git safety & commit signing
 
-The AI **may** create commits and push (with approval), but must follow these rules:
+The AI **may** create commits, push, and open/merge PRs (with approval), but
+must follow these rules:
 
 1. **Publishing is approval-gated; amend is blocked.** Creating commits,
    pushing, and opening/merging PRs all require the user's explicit approval
@@ -18,19 +19,24 @@ The AI **may** create commits and push (with approval), but must follow these ru
    exact commands it intends to run), and on approval may run that sequence
    without stopping again for each step. If anything material changes after
    approval (different files, a failing gate), re-ask. `git commit --amend` is
-   **denied** outright -- the user rewrites history manually. (Enforced in
-   `opencode.json`: `git commit *` -> `ask`, `git push*` -> `ask`,
-   `gh pr create*`/`gh pr merge*` -> `ask`, `git commit --amend *` -> `deny`;
-   plus `.opencode/plugins/publish-consent-guard.ts` hard-blocks push/PR until
-   approval is recorded in-band as `PUBLISH_APPROVED=1`.)
+   **denied** outright -- the user rewrites history manually.
+   - **Enforcement is opencode's `permission` `ask` rules** (in `opencode.json`:
+     `git commit *`, `git push*`, `gh pr create*`, `gh pr merge*` -> `ask`;
+     `git commit --amend *` -> `deny`). The `ask` prompt is the real consent
+     gate: it is surfaced to the user and cannot be self-approved by the agent.
+     (There is deliberately no in-band "approval marker" -- a marker in the
+     command text would be asserted by the agent, not the user, so it proves
+     nothing.)
    - **Never push or open a PR without asking.** The AI must not chain
      branch/commit/push/PR autonomously. Present the summary, ask, and only
      then run the approved sequence.
-2. **Never `sleep`/block to wait for CI or long jobs.** Do not run `sleep` (or
-   otherwise idle) to wait for pipeline results. If waiting is genuinely needed,
-   **ask the user first**; even then, prefer short **loop-polling** (e.g. a
-   bounded `gh pr checks` poll with a tight interval) over a single long sleep,
-   and hand control back promptly rather than blocking the session.
+2. **Do not `sleep` to wait for CI; ask first, then loop-poll.** After
+   pushing or opening a PR, do not silently idle on a long `sleep` waiting for
+   pipeline results, and do not silently move on either -- **ask the user
+   whether to wait**. If the user wants to wait, poll in a **bounded loop**
+   (e.g. repeated `gh pr checks` with a short interval) rather than a single
+   long sleep, and hand control back promptly once there is a result or the
+   user says to stop.
 3. **Commits must be signed AND DCO signed-off.**
    - The repo sets `commit.gpgsign=true` (SSH signing).
    - The DCO check requires a `Signed-off-by:` trailer, so always commit with
