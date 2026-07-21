@@ -119,6 +119,10 @@ func TestCommandSolution_FlagDefaults(t *testing.T) {
 	outputDir, err := flags.GetString("output-dir")
 	require.NoError(t, err)
 	assert.Empty(t, outputDir)
+
+	noState, err := flags.GetBool("no-state")
+	require.NoError(t, err)
+	assert.False(t, noState)
 }
 
 func TestSolutionOptions_getEffectiveActionConfig_OutputDir(t *testing.T) {

@@ -55,6 +55,7 @@ State does not:
 | `http` provider state operations | Done | `pkg/provider/builtin/httpprovider/http_state.go` |
 | `github` provider state operations | External | Separate repository (not part of this project) |
 | State loading lifecycle (pre-execution) | Done | `pkg/cmd/scafctl/run/solution.go`, `resolver.go` |
+| `--no-state` lifecycle bypass | Done | `pkg/cmd/scafctl/run/`, `pkg/cmd/scafctl/render/solution.go` |
 | `scafctl state` CLI commands | Done | `pkg/cmd/scafctl/state/` |
 | Validation rules (backend, sensitive warnings) | Done | `pkg/lint/` |
 | Immutable resolver support | Done | `pkg/resolver/resolver.go` (field), `pkg/state/manager.go` (enforcement), `pkg/lint/` (rules) |
@@ -215,6 +216,17 @@ state:
 ~~~
 
 Here, `project_name` is a CLI parameter passed via `-r project_name=myapp`. Project A and Project B each get their own state file.
+
+### Bypassing State (`--no-state`)
+
+The `run solution`, `run resolver`, `run action`, and `render solution` commands accept a `--no-state` flag that bypasses the state lifecycle entirely for a single invocation. When set, the command-layer wiring simply does not construct a `state.Manager`, so:
+
+- `Load` is never called (no pre-execution read, no parameter replay).
+- `VerifyImmutables` / immutable-lock commits are skipped.
+- `Save` is never called (no post-execution write).
+
+Because the gate lives in the command layer (the `stateMgr` stays `nil`), no changes are required in `pkg/state`. When the solution declares a `state` block and `--no-state` is passed, a one-line stderr notice is emitted (respecting `--quiet`). Resolvers that read the `state` provider receive the provider's no-state fallback. The flag is intended for CI/offline runs; it deliberately disables immutability enforcement for that run.
+
 
 ---
 

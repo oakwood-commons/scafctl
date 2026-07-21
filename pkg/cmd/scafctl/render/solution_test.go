@@ -137,6 +137,18 @@ func TestCommandSolution(t *testing.T) {
 				require.NotNil(t, flag)
 			},
 		},
+		{
+			name: "has_no_state_flag",
+			validate: func(t *testing.T) {
+				ioStreams, _, _ := terminal.NewTestIOStreams()
+				cliParams := &settings.Run{}
+				cmd := CommandSolution(cliParams, ioStreams, "render")
+
+				flag := cmd.Flags().Lookup("no-state")
+				require.NotNil(t, flag)
+				assert.Equal(t, "false", flag.DefValue)
+			},
+		},
 	}
 
 	for _, tc := range tests {
