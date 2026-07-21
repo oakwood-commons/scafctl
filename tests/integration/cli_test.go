@@ -5400,6 +5400,31 @@ func TestIntegration_PackageSolution_IncompleteBundleFails(t *testing.T) {
 			"--no-vendor", "--skip-lint", "--skip-tests", "--no-verify")
 		assert.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
 	})
+
+	t.Run("--no-verify does not poison the build cache", func(t *testing.T) {
+		t.Parallel()
+		dir := incompleteSolutionFixture(t)
+		tmpDir := t.TempDir()
+		env := map[string]string{"XDG_DATA_HOME": tmpDir, "XDG_CACHE_HOME": tmpDir}
+
+		// First: package the incomplete artifact with --no-verify (succeeds,
+		// but must NOT write a build-cache entry for the unverified artifact).
+		_, _, exitCode := runScafctlWithEnvInDir(t, dir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+			"--no-vendor", "--skip-lint", "--skip-tests", "--no-verify")
+		require.Equal(t, 0, exitCode, "--no-verify package should succeed")
+
+		// Then: package again WITH verification enabled, same env. If the first
+		// run had cached the artifact, this would hit the "Build cache hit" fast
+		// path and exit 0 without verifying -- the poisoning bug. It must instead
+		// re-verify and FAIL on the incomplete bundle.
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, dir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+			"--no-vendor", "--skip-lint", "--skip-tests")
+		assert.NotEqual(t, 0, exitCode,
+			"verify-enabled rerun must re-verify (not hit a poisoned cache); stdout: %s stderr: %s", stdout, stderr)
+		assert.Contains(t, stdout+stderr, "incomplete")
+	})
 }
 
 // TestIntegration_PackageSolution_IncompleteBundle_EmbedderBinaryName verifies

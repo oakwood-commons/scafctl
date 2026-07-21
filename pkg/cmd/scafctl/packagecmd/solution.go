@@ -618,12 +618,21 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		if verr := verifyBuiltBundle(ctx, localCatalog, info.Reference, opts, w, lgr); verr != nil {
 			return verr
 		}
-	}
 
-	// Verification passed (or was skipped) — now it is safe to commit the
-	// build-cache entry so a future unchanged rebuild can be a fast cache hit.
-	if builder.WriteBuildCacheEntry(ctx, storeResult) {
-		w.Verbose("Build cache entry written")
+		// Verification passed -- now it is safe to commit the build-cache entry
+		// so a future unchanged rebuild can be a fast cache hit.
+		//
+		// The cache entry is written ONLY when verification ran. With
+		// --no-verify we deliberately skip the cache write: the "Build cache
+		// hit" fast path assumes a cached artifact was verified when first
+		// built, so writing a cache entry for an unverified artifact would let a
+		// later verify-enabled run hit the cache and skip verification too --
+		// one --no-verify would permanently poison the cache.
+		if builder.WriteBuildCacheEntry(ctx, storeResult) {
+			w.Verbose("Build cache entry written")
+		}
+	} else {
+		w.Verbose("Skipping build-cache entry (--no-verify): unverified artifacts are not cached")
 	}
 
 	return nil
