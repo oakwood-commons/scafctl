@@ -68,14 +68,13 @@ func TestCommandBundle_Subcommands(t *testing.T) {
 	cmd := CommandBundle(cliParams, ioStreams, "")
 
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 2, "should have 2 subcommands: verify, extract")
+	require.Len(t, subCmds, 1, "should have 1 subcommand: verify")
 
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
 		cmdNames[i] = c.Name()
 	}
 	assert.Contains(t, cmdNames, "verify")
-	assert.Contains(t, cmdNames, "extract")
 }
 
 func TestCommandVerify(t *testing.T) {
@@ -136,76 +135,6 @@ func TestCommandVerify_RequiresExactlyOneArg(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestCommandExtract(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	cmd := CommandExtract(cliParams, ioStreams, "")
-
-	require.NotNil(t, cmd)
-	assert.Equal(t, "extract <artifact-ref>", cmd.Use)
-	assert.NotEmpty(t, cmd.Short)
-	assert.NotEmpty(t, cmd.Long)
-	assert.True(t, cmd.SilenceUsage)
-	assert.NotNil(t, cmd.RunE)
-}
-
-func TestCommandExtract_Flags(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	cmd := CommandExtract(cliParams, ioStreams, "")
-
-	outputDirFlag := cmd.Flags().Lookup("output-dir")
-	require.NotNil(t, outputDirFlag, "output-dir flag should exist")
-	assert.Equal(t, ".", outputDirFlag.DefValue)
-
-	resolverFlag := cmd.Flags().Lookup("resolver")
-	require.NotNil(t, resolverFlag, "resolver flag should exist")
-	assert.Equal(t, "[]", resolverFlag.DefValue)
-
-	actionFlag := cmd.Flags().Lookup("action")
-	require.NotNil(t, actionFlag, "action flag should exist")
-	assert.Equal(t, "[]", actionFlag.DefValue)
-
-	includeFlag := cmd.Flags().Lookup("include")
-	require.NotNil(t, includeFlag, "include flag should exist")
-	assert.Equal(t, "[]", includeFlag.DefValue)
-
-	listOnlyFlag := cmd.Flags().Lookup("list-only")
-	require.NotNil(t, listOnlyFlag, "list-only flag should exist")
-	assert.Equal(t, "false", listOnlyFlag.DefValue)
-
-	flattenFlag := cmd.Flags().Lookup("flatten")
-	require.NotNil(t, flattenFlag, "flatten flag should exist")
-	assert.Equal(t, "false", flattenFlag.DefValue)
-}
-
-func TestCommandExtract_RequiresExactlyOneArg(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	// No args should fail
-	cmd := CommandExtract(cliParams, ioStreams, "")
-	cmd.SilenceErrors = true
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	assert.Error(t, err)
-
-	// Two args should fail
-	cmd2 := CommandExtract(cliParams, ioStreams, "")
-	cmd2.SilenceErrors = true
-	cmd2.SetArgs([]string{"ref1", "ref2"})
-	err = cmd2.Execute()
-	assert.Error(t, err)
-}
-
 func TestHasPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -253,15 +182,5 @@ func BenchmarkCommandVerify(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		CommandVerify(cliParams, ioStreams, "")
-	}
-}
-
-func BenchmarkCommandExtract(b *testing.B) {
-	cliParams := settings.NewCliParams()
-	ioStreams, _, _ := terminal.NewTestIOStreams()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		CommandExtract(cliParams, ioStreams, "")
 	}
 }

@@ -305,15 +305,18 @@ feature is designed.
 
 ## Migration (phased PRs)
 
-Too large for one PR. Suggested sequence, each its own PR with aliases:
+Too large for one PR. Suggested sequence, each its own PR. This project is
+pre-production, so phases that move commands choose a hard cutover (remove the
+old path outright) over aliasing.
 
 1. **Grammar doc** (this document) -- ratify the rule set. No code.
-2. **`diff <object>`** -- add the polymorphic `diff` verb; alias
-   `solution diff` / `bundle diff` / `snapshot diff` -> it; retire those top-level
-   groups. Resolves #648.
+2. **`diff <object>`** -- add the polymorphic `diff` verb; hard-remove
+   `solution diff` / `bundle diff` / `snapshot diff` (no aliases); retire those
+   top-level groups. Resolves #648.
 3. **`extract` / `get` for artifacts** -- move `bundle extract` ->
    `extract bundle`, `snapshot show` -> `get snapshot` (detail via `-o`/
-   `--detail`); retire `inspect` (folded into `get`); alias old paths.
+   `--detail`); retire `inspect` (folded into `get`); hard-remove old paths
+   (no aliases).
 4. **Retire `verify`; fold completeness into `package` + `install`** -- remove the
    standalone `bundle verify`; make `package` fail on an incomplete build and
    `install`/`pull` refuse/warn on a broken bundle (`--strict` for deep checks).

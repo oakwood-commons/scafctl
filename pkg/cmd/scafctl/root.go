@@ -25,6 +25,7 @@ import (
 	diffcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/diff"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
+	extractcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/extract"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
 	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
 	kubecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/kube"
@@ -38,7 +39,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
 	servecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/serve"
-	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/snapshot"
 	statecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/state"
 	testcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/test"
 	validatecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/validate"
@@ -106,7 +106,7 @@ Use "{{.Root.Name}} options" for a list of global command-line options (applies 
 const (
 	groupCore     = "core"
 	groupInspect  = "inspect"
-	groupScaffold = "scaffold"
+	groupArtifact = "artifact"
 	groupConfig   = "config"
 	groupPlugin   = "plugin"
 	groupServer   = "server"
@@ -838,7 +838,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddGroup(
 		&cobra.Group{ID: groupCore, Title: "Core Commands:"},
 		&cobra.Group{ID: groupInspect, Title: "Inspection Commands:"},
-		&cobra.Group{ID: groupScaffold, Title: "Scaffolding Commands:"},
+		&cobra.Group{ID: groupArtifact, Title: "Packaging & Distribution Commands:"},
 		&cobra.Group{ID: groupConfig, Title: "Configuration & Security Commands:"},
 		&cobra.Group{ID: groupPlugin, Title: "Plugin Commands:"},
 		&cobra.Group{ID: groupServer, Title: "Server Commands:"},
@@ -870,6 +870,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 		return nil, func() {}
 	}
 	// Core Commands — primary workflows
+	cCmd.AddCommand(withGroup(groupCore, newcmd.CommandNew(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, run.CommandRun(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, render.CommandRender(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, lint.CommandLint(cliParams, ioStreams, binaryName)))
@@ -882,14 +883,13 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddCommand(withGroup(groupInspect, eval.CommandEval(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, inspectcmd.CommandInspect(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupInspect, diffcmd.CommandDiff(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupInspect, snapshot.CommandSnapshot(cliParams, *ioStreams, binaryName)))
 
-	// Scaffolding Commands — create and package artifacts
-	cCmd.AddCommand(withGroup(groupScaffold, newcmd.CommandNew(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, packagecmd.CommandPackage(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, bundlecmd.CommandBundle(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, vendorcmd.CommandVendor(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupScaffold, catalogcmd.CommandCatalog(cliParams, ioStreams, binaryName)))
+	// Packaging & Distribution Commands — build, store, and distribute artifacts
+	cCmd.AddCommand(withGroup(groupArtifact, packagecmd.CommandPackage(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupArtifact, bundlecmd.CommandBundle(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupArtifact, extractcmd.CommandExtract(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupArtifact, vendorcmd.CommandVendor(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupArtifact, catalogcmd.CommandCatalog(cliParams, ioStreams, binaryName)))
 
 	// Configuration & Security Commands
 	cCmd.AddCommand(withGroup(groupConfig, configcmd.CommandConfig(cliParams, ioStreams, binaryName)))

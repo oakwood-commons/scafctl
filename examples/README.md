@@ -306,7 +306,7 @@ scafctl render solution -f examples/snapshots/basic-snapshot.yaml \
   --snapshot --snapshot-file=/tmp/snapshot.json
 
 # View the snapshot
-scafctl snapshot show /tmp/snapshot.json
+scafctl get snapshot /tmp/snapshot.json
 
 # Compare two snapshots
 scafctl diff snapshot /tmp/snap-a.json /tmp/snap-b.json

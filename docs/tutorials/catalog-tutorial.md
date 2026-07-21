@@ -1757,12 +1757,12 @@ See what files are inside the bundle without extracting them:
 {{< tabs "catalog-tutorial-cmd-48" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle extract deploy-app@1.0.0 --list-only
+scafctl extract bundle deploy-app@1.0.0 --list-only
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle extract deploy-app@1.0.0 --list-only
+scafctl extract bundle deploy-app@1.0.0 --list-only
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1783,12 +1783,12 @@ Extract the bundled files to inspect them:
 {{< tabs "catalog-tutorial-cmd-49" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle extract deploy-app@1.0.0 --output-dir ./extracted
+scafctl extract bundle deploy-app@1.0.0 --output-dir ./extracted
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle extract deploy-app@1.0.0 --output-dir ./extracted
+scafctl extract bundle deploy-app@1.0.0 --output-dir ./extracted
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1817,12 +1817,12 @@ You can extract only the files needed by a specific resolver:
 {{< tabs "catalog-tutorial-cmd-50" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl bundle extract deploy-app@1.0.0 --resolver config --output-dir ./config-only
+scafctl extract bundle deploy-app@1.0.0 --resolver config --output-dir ./config-only
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl bundle extract deploy-app@1.0.0 --resolver config --output-dir ./config-only
+scafctl extract bundle deploy-app@1.0.0 --resolver config --output-dir ./config-only
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -1838,8 +1838,8 @@ rm -rf extracted/ config-only/
 ### What You Learned
 
 - `scafctl bundle verify` checks that a bundle contains all required files
-- `scafctl bundle extract --list-only` shows bundle contents without extracting
-- `scafctl bundle extract --output-dir DIR` extracts files to a directory
+- `scafctl extract bundle --list-only` shows bundle contents without extracting
+- `scafctl extract bundle --output-dir DIR` extracts files to a directory
 - `--resolver NAME` extracts only files needed by a specific resolver
 - Use `--flatten` to extract all files to a single directory (no subdirectories)
 

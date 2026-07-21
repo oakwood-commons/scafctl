@@ -1,7 +1,7 @@
 # Run: scafctl render solution -f examples/snapshots/basic-snapshot.yaml --snapshot --snapshot-file=/tmp/snapshot.json
-# Run: scafctl snapshot show /tmp/snapshot.json
-# Run: scafctl snapshot show /tmp/snapshot.json --format json
-# Run: scafctl snapshot show /tmp/snapshot.json --format resolvers
+# Run: scafctl get snapshot /tmp/snapshot.json
+# Run: scafctl get snapshot /tmp/snapshot.json -o json
+# Run: scafctl get snapshot /tmp/snapshot.json --detail
 
 apiVersion: scafctl.io/v1
 kind: Solution
