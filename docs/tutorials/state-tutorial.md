@@ -612,6 +612,26 @@ Use `render solution` to preview what an action graph would look like with curre
 | `run action` | Yes | Yes | After actions succeed |
 | `render solution` | Yes | No (read-only) | -- |
 
+### Skipping State (`--no-state`)
+
+Pass `--no-state` to `run solution`, `run resolver`, `run action`, or `render solution` to skip the **entire** state lifecycle for that invocation:
+
+- State is **not loaded** before resolvers run.
+- Immutable values are **neither verified nor locked**.
+- State is **not saved** afterward.
+
+This is intended for CI pipelines and offline environments where the state backend is unavailable or persistence is undesirable. When the solution declares a `state` block and `--no-state` is set, a one-line notice is written to stderr (suppressed by `--quiet`).
+
+Two consequences to keep in mind:
+
+- Resolvers that read the `state` provider fall back to their defaults, since no prior values are loaded.
+- Immutability is **not enforced** while `--no-state` is active -- values that are normally locked can change freely. Use the flag deliberately.
+
+~~~bash
+# Run without touching the state backend
+scafctl run solution -f ./solution.yaml --no-state
+~~~
+
 ---
 
 ## Save-Time Overrides
