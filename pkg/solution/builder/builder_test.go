@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -249,6 +250,41 @@ func TestStoreSolutionArtifact_WithBuildFingerprint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fp-sol", result.Info.Reference.Name)
 	assert.True(t, result.CacheWritten)
+}
+
+func TestStoreSolutionArtifact_DeferBuildCacheThenWrite(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.NewLocalCatalogAt(t.TempDir(), logr.Discard())
+	require.NoError(t, err)
+
+	buildCacheDir := filepath.Join(t.TempDir(), "build-cache")
+	br := &BuildResult{
+		TarData:          []byte("tar"),
+		BuildFingerprint: "deferfp",
+		BuildCacheDir:    buildCacheDir,
+		InputFileCount:   3,
+	}
+
+	// With DeferBuildCache, the store must NOT write the build-cache entry.
+	result, err := StoreSolutionArtifact(ctx, cat, "defer-sol", semver.MustParse("1.0.0"),
+		[]byte("content"), br, StoreOptions{DeferBuildCache: true})
+	require.NoError(t, err)
+	assert.False(t, result.CacheWritten, "deferred store must not write the cache entry")
+	_, hit := bundler.CheckBuildCache(buildCacheDir, "deferfp")
+	assert.False(t, hit, "no cache entry should exist until verification passes")
+
+	// After verification passes, the caller commits the entry.
+	assert.True(t, WriteBuildCacheEntry(ctx, result))
+	assert.True(t, result.CacheWritten)
+	_, hit = bundler.CheckBuildCache(buildCacheDir, "deferfp")
+	assert.True(t, hit, "cache entry must exist after the deferred write")
+}
+
+func TestWriteBuildCacheEntry_NoFingerprintNoOp(t *testing.T) {
+	ctx := context.Background()
+	result := &StoreResult{br: &BuildResult{}}
+	assert.False(t, WriteBuildCacheEntry(ctx, result))
+	assert.False(t, result.CacheWritten)
 }
 
 func TestStoreSolutionArtifact_NilVersionReturnsError(t *testing.T) {

@@ -575,6 +575,12 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		Annotations:      sol.Metadata.Annotations,
 		ArtifactCacheDir: paths.ArtifactCacheDir(),
 		ArtifactCacheTTL: settings.DefaultArtifactCacheTTL,
+		// Defer the build-cache write until AFTER completeness verification
+		// passes: a build-cache entry must only exist for a verified artifact,
+		// otherwise a rerun after a failed verify would hit the cache and exit 0
+		// without re-verifying the broken artifact. The stored catalog artifact
+		// is intentionally left in place on verify failure (no rollback).
+		DeferBuildCache: true,
 	})
 	if err != nil {
 		if catalog.IsExists(err) {
@@ -589,9 +595,6 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 	w.Successf("Built %s@%s", info.Reference.Name, info.Reference.Version.String())
 	w.Infof("  Digest: %s", info.Digest)
 	w.Infof("  Catalog: %s", localCatalog.Path())
-	if storeResult.CacheWritten {
-		w.Verbose("Build cache entry written")
-	}
 	if br != nil && br.BuildFingerprint != "" {
 		w.Verbosef("Fingerprint: %s (%d input files)", br.BuildFingerprint, br.InputFileCount)
 	}
@@ -606,10 +609,21 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 	//
 	// A pure build-cache hit returns earlier (it was verified when first built),
 	// so this code runs only on fresh builds and cache-miss re-stores.
-	if !opts.NoBundle && !opts.NoVerify {
+	//
+	// Verification runs BEFORE the build-cache entry is written (the store above
+	// deferred it): on failure we return without writing the cache entry, so a
+	// rerun re-builds and re-verifies instead of hitting a cached broken
+	// artifact and exiting 0. The stored catalog artifact is left in place.
+	if !opts.NoVerify {
 		if verr := verifyBuiltBundle(ctx, localCatalog, info.Reference, opts, w, lgr); verr != nil {
 			return verr
 		}
+	}
+
+	// Verification passed (or was skipped) — now it is safe to commit the
+	// build-cache entry so a future unchanged rebuild can be a fast cache hit.
+	if builder.WriteBuildCacheEntry(ctx, storeResult) {
+		w.Verbose("Build cache entry written")
 	}
 
 	return nil
@@ -621,21 +635,29 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *SolutionOptions, w *writer.Writer, lgr *logr.Logger) error {
 	content, bundleData, _, ferr := localCatalog.FetchWithBundle(ctx, ref)
 	if ferr != nil {
-		return exitcode.WithCode(fmt.Errorf("verifying built bundle: %w", ferr), exitcode.GeneralError)
-	}
-	// No bundle data is a legitimately bundle-less artifact; nothing to verify.
-	if len(bundleData) == 0 {
-		return nil
+		// Producer errors are always fatal: we cannot confirm a good build.
+		err := fmt.Errorf("fetching built bundle for verification: %w", ferr)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	var vsol solution.Solution
 	if err := vsol.LoadFromBytes(content); err != nil {
-		return exitcode.WithCode(fmt.Errorf("verifying built bundle: %w", err), exitcode.GeneralError)
+		err = fmt.Errorf("parsing built solution for verification: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
+	// Pass the (possibly empty) bundleData through to VerifyBundle: the empty
+	// case is handled by verifyNoBundleCase, which surfaces warnings for local
+	// files and unvendored catalog deps. An early return on len==0 would let
+	// --strict wrongly succeed on a bundle-less-but-incomplete artifact (e.g. a
+	// --no-vendor package whose only deps are catalog refs).
 	vr, err := bundler.VerifyBundle(ctx, &vsol, bundleData, *lgr)
 	if err != nil {
-		return exitcode.WithCode(fmt.Errorf("verifying built bundle: %w", err), exitcode.GeneralError)
+		err = fmt.Errorf("verifying built bundle: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	cmdutil.RenderVerifyResult(w, vr)

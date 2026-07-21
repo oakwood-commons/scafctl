@@ -4353,6 +4353,42 @@ func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
 	assert.Contains(t, stderr, "failed to resolve artifact")
 }
 
+// TestIntegration_CatalogPull_StrictFailsOnIncompleteBundle verifies the
+// consumer verification hook (Fix 1/Fix 2): pulling an incomplete solution
+// bundle with --strict fails closed, while the default (warn) mode succeeds.
+func TestIntegration_CatalogPull_StrictFailsOnIncompleteBundle(t *testing.T) {
+	t.Parallel()
+	registryAddr, _ := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	dir := incompleteSolutionFixture(t)
+
+	// Package the incomplete artifact locally, skipping verification so it
+	// stores despite being incomplete.
+	_, stderr, exitCode := runScafctlWithEnvInDir(t, dir, env,
+		"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+		"--no-vendor", "--skip-lint", "--skip-tests", "--no-verify")
+	require.Equal(t, 0, exitCode, "package failed: %s", stderr)
+
+	// Push it to the local registry.
+	_, stderr, exitCode = runScafctlWithEnv(t, env, "catalog", "push",
+		"incomplete-demo@1.0.0", "--catalog", registryAddr+"/scafctl", "--insecure")
+	require.Equal(t, 0, exitCode, "push failed: %s", stderr)
+
+	// Pull with --strict into a fresh catalog: must fail closed.
+	pullEnv := isolatedCatalogEnv(t)
+	stdout, stderr, exitCode := runScafctlWithEnv(t, pullEnv, "catalog", "pull",
+		registryAddr+"/scafctl/solutions/incomplete-demo@1.0.0", "--insecure", "--strict")
+	assert.NotEqual(t, 0, exitCode, "strict pull of incomplete bundle must fail; out: %s err: %s", stdout, stderr)
+	assert.Contains(t, stdout+stderr, "incomplete")
+
+	// Pull without --strict into another fresh catalog: warns but succeeds.
+	warnEnv := isolatedCatalogEnv(t)
+	stdout, stderr, exitCode = runScafctlWithEnv(t, warnEnv, "catalog", "pull",
+		registryAddr+"/scafctl/solutions/incomplete-demo@1.0.0", "--insecure")
+	assert.Equal(t, 0, exitCode, "non-strict pull must succeed; out: %s err: %s", stdout, stderr)
+}
+
 // =============================================================================
 // Catalog Delete Remote Tests
 // =============================================================================
@@ -5397,6 +5433,32 @@ func TestIntegration_PackageSolution_IncompleteBundle_EmbedderBinaryName(t *test
 	require.ErrorAs(t, err, &exitErr, "expected non-zero exit for incomplete bundle")
 	assert.NotEqual(t, 0, exitErr.ExitCode())
 	assert.Contains(t, outBuf.String()+errBuf.String(), "incomplete")
+}
+
+// TestIntegration_PackageSolution_RerunAfterFailedVerify verifies Fix 4: a
+// failed completeness verification must NOT leave a build-cache entry, so a
+// rerun re-builds and re-verifies (and fails again) instead of hitting a cached
+// broken artifact and exiting 0.
+func TestIntegration_PackageSolution_RerunAfterFailedVerify(t *testing.T) {
+	t.Parallel()
+	dir := incompleteSolutionFixture(t)
+	tmpDir := t.TempDir()
+	env := map[string]string{"XDG_DATA_HOME": tmpDir, "XDG_CACHE_HOME": tmpDir}
+
+	// First run: fails verification.
+	_, _, exitCode := runScafctlWithEnvInDir(t, dir, env,
+		"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+		"--no-vendor", "--skip-lint", "--skip-tests")
+	require.NotEqual(t, 0, exitCode, "first run should fail verification")
+
+	// Second run: must ALSO fail (no cached broken artifact short-circuits it).
+	stdout, stderr, exitCode := runScafctlWithEnvInDir(t, dir, env,
+		"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+		"--no-vendor", "--skip-lint", "--skip-tests", "--force")
+	assert.NotEqual(t, 0, exitCode,
+		"rerun must re-verify, not exit 0 from a build-cache hit; stdout: %s stderr: %s", stdout, stderr)
+	assert.NotContains(t, stdout+stderr, "Build cache hit",
+		"a failed verify must not produce a cache hit on rerun")
 }
 
 func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {

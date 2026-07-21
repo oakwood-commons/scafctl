@@ -321,7 +321,11 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	// FetchWithBundle (avoids a second network round-trip). Consumer policy is
 	// warn-by-default; only --strict makes incompleteness fatal.
 	if !opts.NoVerify && ref.Kind == catalog.ArtifactKindSolution {
-		if verr := verifyPulledBundle(ctx, localCatalog, ref, opts, w, lgr); verr != nil {
+		// Verify against the reference that was actually stored locally: with
+		// --as the artifact lives under the renamed target ref, and the source
+		// ref may not exist in the local catalog at all.
+		storedRef := result.Reference
+		if verr := verifyPulledBundle(ctx, localCatalog, storedRef, opts, w, lgr); verr != nil {
 			return verr
 		}
 	}
@@ -353,25 +357,22 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 // warn-by-default on incompleteness; only --strict makes it fatal.
 func verifyPulledBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *PullOptions, w *writer.Writer, lgr *logr.Logger) error {
 	content, bundleData, _, ferr := localCatalog.FetchWithBundle(ctx, ref)
-	// Warn-only: a fetch error or a bundle-less artifact skips verification
-	// rather than failing the pull.
-	if ferr != nil || len(bundleData) == 0 {
-		if ferr != nil {
-			lgr.V(1).Info("skipping pulled-bundle verification", "error", ferr.Error())
-		}
-		return nil
+	if ferr != nil {
+		return failOrWarnPull(w, opts.Strict, fmt.Errorf("fetching pulled bundle for verification: %w", ferr))
 	}
 
 	var sol solution.Solution
 	if err := sol.LoadFromBytes(content); err != nil {
-		lgr.V(1).Info("skipping pulled-bundle verification: parse failed", "error", err.Error())
-		return nil
+		return failOrWarnPull(w, opts.Strict, fmt.Errorf("parsing pulled solution for verification: %w", err))
 	}
 
+	// Pass the (possibly empty) bundleData through to VerifyBundle: the empty
+	// case is handled by verifyNoBundleCase, which surfaces warnings for local
+	// files and unvendored catalog deps. Skipping it here would let --strict
+	// wrongly succeed on a bundle-less-but-incomplete artifact.
 	vr, err := bundler.VerifyBundle(ctx, &sol, bundleData, *lgr)
 	if err != nil {
-		lgr.V(1).Info("skipping pulled-bundle verification: verify failed", "error", err.Error())
-		return nil
+		return failOrWarnPull(w, opts.Strict, fmt.Errorf("verifying pulled bundle: %w", err))
 	}
 
 	cmdutil.RenderVerifyResult(w, vr)
@@ -380,7 +381,23 @@ func verifyPulledBundle(ctx context.Context, localCatalog catalog.Catalog, ref c
 	if warnMsg != "" {
 		w.Warningf("%s", warnMsg)
 	}
+	if failErr != nil {
+		w.Errorf("%v", failErr)
+	}
 	return failErr
+}
+
+// failOrWarnPull applies the consumer fail-closed policy for infrastructure,
+// parse, and verify errors. Under --strict these fail closed with a printed,
+// exit-coded error; otherwise they warn and return nil so a transient infra
+// hiccup does not break the pull.
+func failOrWarnPull(w *writer.Writer, strict bool, err error) error {
+	if strict {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	w.Warningf("%v (skipping verification; run with --strict to fail)", err)
+	return nil
 }
 
 // pullVerifyDecision applies the consumer verification policy to a verify
