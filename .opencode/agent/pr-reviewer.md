@@ -56,7 +56,7 @@ For each unresolved review thread, classify it:
 |----------|--------|
 | **Actionable** | Code change needed -- fix it |
 | **Question** | Reviewer asked a question -- answer it |
-| **Nit/Style** | Minor style preference -- fix if trivial, otherwise explain |
+| **Nit/Style** | Minor style/wording/display-only preference with no behavioral impact -- do NOT push a fix commit (that triggers a fresh review on this re-review-on-push repo); reply acknowledging it as a non-blocking nit and resolve the thread |
 | **Already addressed** | Fixed in a subsequent commit -- respond and resolve |
 | **Disagree** | Explain reasoning in reply and resolve |
 | **Outdated** | Code has changed, comment no longer applies -- note and resolve |

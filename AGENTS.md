@@ -131,7 +131,14 @@ round:
   resolving does not create a commit, so it does not trigger a new review.
 - **The stop signal:** when a review round is **all nits** (no substantive
   findings), state that explicitly with the reasoning, reply-and-resolve the
-  nit threads, and -- on green CI -- recommend merging. Do not keep pushing.
+  nit threads, and -- once **CI is green AND the PR's `reviewDecision` is not
+  blocking** -- recommend merging. Do not keep pushing. Note that resolving
+  threads does NOT clear a `CHANGES_REQUESTED` review decision on GitHub, and
+  `main` requires an approving review (`required_approving_review_count: 1`,
+  `require_last_push_approval: true`): so if the decision is still
+  `CHANGES_REQUESTED` or `REVIEW_REQUIRED`, the merge stays blocked on green CI
+  alone. In that case say so and ask the user to approve (or request a
+  re-review) rather than implying the PR is mergeable.
 
 
 ### Identity for this worktree
