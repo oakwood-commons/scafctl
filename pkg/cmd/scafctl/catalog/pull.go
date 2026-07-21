@@ -375,7 +375,10 @@ func verifyPulledBundle(ctx context.Context, localCatalog catalog.Catalog, ref c
 		return failOrWarnPull(w, opts.Strict, fmt.Errorf("verifying pulled bundle: %w", err))
 	}
 
-	cmdutil.RenderVerifyResult(w, vr)
+	// Consumer: in non-strict mode incompleteness is a warning (the pull still
+	// succeeds), so render missing items as warnings rather than errors to avoid
+	// contradicting the success result. Under --strict they render as errors.
+	cmdutil.RenderVerifyResult(w, vr, !opts.Strict)
 
 	warnMsg, failErr := pullVerifyDecision(vr, opts.Strict)
 	if warnMsg != "" {

@@ -660,7 +660,8 @@ func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref ca
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
-	cmdutil.RenderVerifyResult(w, vr)
+	// Producer: incompleteness fails the build, so render failures as errors.
+	cmdutil.RenderVerifyResult(w, vr, false)
 
 	if failErr := packageVerifyDecision(vr, opts.Strict); failErr != nil {
 		w.Errorf("%v", failErr)

@@ -16,9 +16,26 @@ import (
 // renders bare (uncategorized) warnings at the end. It is shared by the
 // producer (package solution) and consumer (catalog pull) verification hooks so
 // both render a VerifyResult identically.
-func RenderVerifyResult(w *writer.Writer, result *bundler.VerifyResult) {
+//
+// When errorsAsWarnings is true, missing/failed items (VerifyResult.Errors) are
+// rendered as warnings rather than errors. The consumer (catalog pull) uses this
+// in non-strict mode, where incompleteness is a warning, not a failure -- so the
+// output does not contradict the "pull succeeded" result with red error lines.
+// The producer (package) and any --strict path pass false so failures render as
+// errors.
+func RenderVerifyResult(w *writer.Writer, result *bundler.VerifyResult, errorsAsWarnings bool) {
 	if w == nil || result == nil {
 		return
+	}
+
+	// renderFail prints a failed/missing item as either an error or a warning
+	// depending on the caller's policy.
+	renderFail := func(format string, args ...any) {
+		if errorsAsWarnings {
+			w.Warningf(format, args...)
+		} else {
+			w.Errorf(format, args...)
+		}
 	}
 
 	// Static paths
@@ -40,7 +57,7 @@ func RenderVerifyResult(w *writer.Writer, result *bundler.VerifyResult) {
 				w.Plain("  Static paths:")
 				hasStatic = true
 			}
-			w.Errorf("    ✗ %s -- %s", e.Path, e.Reason)
+			renderFail("    ✗ %s -- %s", e.Path, e.Reason)
 		}
 	}
 

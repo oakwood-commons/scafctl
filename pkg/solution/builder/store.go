@@ -152,10 +152,9 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 
 	// Write build cache entry after successful store (unless deferred to the
 	// caller, which writes it only after post-store verification passes).
+	// WriteBuildCacheEntry sets result.CacheWritten on success.
 	if !opts.DeferBuildCache {
-		if WriteBuildCacheEntry(ctx, result) {
-			result.CacheWritten = true
-		}
+		WriteBuildCacheEntry(ctx, result)
 	}
 
 	return result, nil

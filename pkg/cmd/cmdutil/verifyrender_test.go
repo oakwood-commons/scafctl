@@ -30,6 +30,17 @@ func newRenderWriter() (*bytes.Buffer, *writer.Writer) {
 	return buf, writer.New(ioStreams, cliParams)
 }
 
+// newSplitRenderWriter returns a Writer with separate stdout and stderr buffers
+// so tests can distinguish error output (stderr) from success/warning output.
+func newSplitRenderWriter() (out, errOut *bytes.Buffer, w *writer.Writer) {
+	out = &bytes.Buffer{}
+	errOut = &bytes.Buffer{}
+	ioStreams := &terminal.IOStreams{In: os.Stdin, Out: out, ErrOut: errOut}
+	cliParams := settings.NewCliParams()
+	cliParams.NoColor = true
+	return out, errOut, writer.New(ioStreams, cliParams)
+}
+
 func TestRenderVerifyResult(t *testing.T) {
 	t.Parallel()
 
@@ -96,7 +107,7 @@ func TestRenderVerifyResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			buf, w := newRenderWriter()
-			cmdutil.RenderVerifyResult(w, tt.result)
+			cmdutil.RenderVerifyResult(w, tt.result, false)
 			out := buf.String()
 			for _, want := range tt.wantSubstr {
 				assert.Contains(t, out, want)
@@ -108,11 +119,36 @@ func TestRenderVerifyResult(t *testing.T) {
 	}
 }
 
+// TestRenderVerifyResult_ErrorsAsWarnings verifies that failed items render to
+// stderr (as errors) when errorsAsWarnings is false, and NOT to stderr (as
+// warnings) when it is true -- the consumer non-strict rendering path.
+func TestRenderVerifyResult_ErrorsAsWarnings(t *testing.T) {
+	t.Parallel()
+	result := &bundler.VerifyResult{
+		Errors: []bundler.VerifyError{{Path: "templates/missing.tmpl", Reason: "not found in bundle"}},
+	}
+
+	// errorsAsWarnings=false: the failed item is an ERROR (stderr).
+	_, errOut, w := newSplitRenderWriter()
+	cmdutil.RenderVerifyResult(w, result, false)
+	assert.Contains(t, errOut.String(), "templates/missing.tmpl",
+		"failed item should be rendered as an error to stderr")
+
+	// errorsAsWarnings=true: the failed item is a WARNING (not an error on stderr).
+	out2, errOut2, w2 := newSplitRenderWriter()
+	cmdutil.RenderVerifyResult(w2, result, true)
+	combined := out2.String() + errOut2.String()
+	assert.Contains(t, combined, "templates/missing.tmpl",
+		"failed item should still be shown, as a warning")
+	assert.NotContains(t, errOut2.String(), "Error",
+		"in warnings mode the failed item should not be rendered as an Error")
+}
+
 func TestRenderVerifyResult_NilSafe(t *testing.T) {
 	t.Parallel()
 	buf, w := newRenderWriter()
-	cmdutil.RenderVerifyResult(w, nil)
+	cmdutil.RenderVerifyResult(w, nil, false)
 	assert.Empty(t, buf.String())
 	// nil writer must not panic
-	cmdutil.RenderVerifyResult(nil, &bundler.VerifyResult{})
+	cmdutil.RenderVerifyResult(nil, &bundler.VerifyResult{}, false)
 }
