@@ -287,6 +287,14 @@ func TestWriteBuildCacheEntry_NoFingerprintNoOp(t *testing.T) {
 	assert.False(t, result.CacheWritten)
 }
 
+func TestWriteBuildCacheEntry_NilResultNoOp(t *testing.T) {
+	ctx := context.Background()
+	// Exported helper must not panic on a nil result.
+	assert.NotPanics(t, func() {
+		assert.False(t, WriteBuildCacheEntry(ctx, nil))
+	})
+}
+
 func TestStoreSolutionArtifact_NilVersionReturnsError(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()

@@ -153,6 +153,9 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 // artifact. It returns true when an entry was written.
 func WriteBuildCacheEntry(ctx context.Context, result *StoreResult) bool {
 	lgr := logger.FromContext(ctx)
+	if result == nil {
+		return false
+	}
 	br := result.br
 	if br == nil || br.BuildFingerprint == "" || br.BuildCacheDir == "" {
 		return false
