@@ -224,7 +224,7 @@ func TestIntegration_Help(t *testing.T) {
 	// Command groups
 	assert.Contains(t, stdout, "Core Commands:")
 	assert.Contains(t, stdout, "Inspection Commands:")
-	assert.Contains(t, stdout, "Scaffolding Commands:")
+	assert.Contains(t, stdout, "Packaging & Distribution Commands:")
 	assert.Contains(t, stdout, "Configuration & Security Commands:")
 	assert.Contains(t, stdout, "Plugin Commands:")
 	assert.Contains(t, stdout, "Additional Commands:")
@@ -8659,7 +8659,7 @@ func TestIntegration_Snapshot_Show_JSON(t *testing.T) {
 	// Verify valid JSON
 	var parsed map[string]interface{}
 	err := json.Unmarshal([]byte(stdout), &parsed)
-	assert.NoError(t, err, "snapshot show -o json should produce valid JSON")
+	assert.NoError(t, err, "get snapshot ... -o json should produce valid JSON")
 	assert.Contains(t, parsed, "metadata")
 	assert.Contains(t, parsed, "resolvers")
 }

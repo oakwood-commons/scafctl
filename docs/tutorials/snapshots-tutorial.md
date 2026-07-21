@@ -181,12 +181,12 @@ Parameters:
 {{< tabs "snapshots-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get snapshot snapshot.json --format resolvers
+scafctl get snapshot snapshot.json --detail
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get snapshot snapshot.json --format resolvers
+scafctl get snapshot snapshot.json --detail
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -198,12 +198,12 @@ Shows each resolver's name, status, value, duration, and provider calls.
 {{< tabs "snapshots-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get snapshot snapshot.json --format json
+scafctl get snapshot snapshot.json -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get snapshot snapshot.json --format json
+scafctl get snapshot snapshot.json -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -342,7 +342,7 @@ scafctl diff snapshot before.json after.json -o json > diff-report.json
 scafctl render solution -f broken-solution.yaml --snapshot --snapshot-file failing.json
 
 # 2. Inspect what went wrong
-scafctl get snapshot failing.json --format resolvers --verbose
+scafctl get snapshot failing.json --detail --verbose
 
 # 3. Fix the issue and re-capture
 scafctl render solution -f fixed-solution.yaml --snapshot --snapshot-file fixed.json
@@ -357,7 +357,7 @@ scafctl diff snapshot failing.json fixed.json
 scafctl render solution -f broken-solution.yaml --snapshot --snapshot-file failing.json
 
 # 2. Inspect what went wrong
-scafctl get snapshot failing.json --format resolvers --verbose
+scafctl get snapshot failing.json --detail --verbose
 
 # 3. Fix the issue and re-capture
 scafctl render solution -f fixed-solution.yaml --snapshot --snapshot-file fixed.json
@@ -490,11 +490,12 @@ scafctl render solution -f solution.yaml --snapshot --snapshot-file shareable.js
 
 | Flag | Commands | Description |
 |------|----------|-------------|
-| `--format` | show, diff | Output format (summary/json/resolvers/human/unified) |
-| `--verbose` | show | Include additional detail |
+| `-o`, `--output` | get snapshot, diff | Structured output format (get snapshot: table/json/yaml/quiet; diff: human/json/unified) |
+| `--detail` | get snapshot | Show the per-resolver detail view |
+| `--verbose` | get snapshot | Include additional detail |
 | `--ignore-unchanged` | diff | Only show differences |
 | `--ignore-fields` | diff | Comma-separated fields to ignore |
-| `--output` | save, diff | Output file path |
+| `--output` | save | Output file path |
 | `--redact` | save, render | Redact sensitive resolver values |
 | `-r key=value` | save | Pass resolver parameters (also supports `@file.yaml` and `@-` for stdin) |
 
