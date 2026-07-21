@@ -6,8 +6,6 @@ package catalog
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
@@ -61,17 +59,6 @@ func newTestWriter() *writer.Writer {
 	return writer.New(ioStreams, settings.NewCliParams())
 }
 
-// chdirWithLocalFile creates a temp dir containing the local file that
-// solutionReferencingLocalFile references, and chdirs into it so the no-bundle
-// verify (which discovers relative to ".") sees the file and emits a warning.
-func chdirWithLocalFile(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "templates"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "templates", "main.tmpl"), []byte("hi"), 0o644))
-	t.Chdir(dir)
-}
-
 func TestVerifyPulledBundle_FetchErrorStrictFailsClosed(t *testing.T) {
 	w := newTestWriter()
 	ctx := writer.WithWriter(context.Background(), w)
@@ -98,13 +85,14 @@ func TestVerifyPulledBundle_FetchErrorNonStrictWarns(t *testing.T) {
 }
 
 func TestVerifyPulledBundle_BundleLessIncompleteStrictFails(t *testing.T) {
-	chdirWithLocalFile(t)
 	w := newTestWriter()
 	ctx := writer.WithWriter(context.Background(), w)
 	lgr := logger.FromContext(ctx)
 
 	// Empty bundleData with a solution that references a local file -> the
-	// no-bundle case produces a warning, which is fatal under --strict.
+	// no-bundle case produces a warning (spec-based, so no file needs to exist
+	// on disk and the result is independent of the CWD), which is fatal under
+	// --strict.
 	cat := &fetchBundleCatalog{content: []byte(solutionReferencingLocalFile), bundleData: nil}
 	opts := &PullOptions{Strict: true}
 
@@ -114,7 +102,6 @@ func TestVerifyPulledBundle_BundleLessIncompleteStrictFails(t *testing.T) {
 }
 
 func TestVerifyPulledBundle_BundleLessNonStrictWarns(t *testing.T) {
-	chdirWithLocalFile(t)
 	w := newTestWriter()
 	ctx := writer.WithWriter(context.Background(), w)
 	lgr := logger.FromContext(ctx)
