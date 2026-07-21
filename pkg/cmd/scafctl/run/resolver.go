@@ -596,7 +596,9 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// the state provider can serve previously saved values.
 	var stateMgr *state.Manager
 	var stateData *state.Data
-	if sol.State != nil {
+	if o.NoState {
+		warnStateSkipped(ctx, sol)
+	} else if sol.State != nil {
 		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run resolver", params)
 		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)

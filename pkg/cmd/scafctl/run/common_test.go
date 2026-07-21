@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -210,4 +211,48 @@ func TestHandleStateLoadError_GenericError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "state load: disk full")
 	assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err))
+}
+
+func TestWarnStateSkipped(t *testing.T) {
+	stateSol := &solution.Solution{
+		Metadata: solution.Metadata{Name: "demo"},
+		State:    &state.Config{},
+	}
+
+	t.Run("emits notice for state-enabled solution", func(t *testing.T) {
+		var buf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+		w := writer.New(ioStreams, settings.NewCliParams())
+		ctx := writer.WithWriter(context.Background(), w)
+
+		warnStateSkipped(ctx, stateSol)
+		assert.Contains(t, buf.String(), "--no-state")
+		assert.Contains(t, buf.String(), "demo")
+	})
+
+	t.Run("no-op when solution is nil", func(t *testing.T) {
+		var buf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+		w := writer.New(ioStreams, settings.NewCliParams())
+		ctx := writer.WithWriter(context.Background(), w)
+
+		warnStateSkipped(ctx, nil)
+		assert.Empty(t, buf.String())
+	})
+
+	t.Run("no-op when solution has no state block", func(t *testing.T) {
+		var buf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+		w := writer.New(ioStreams, settings.NewCliParams())
+		ctx := writer.WithWriter(context.Background(), w)
+
+		warnStateSkipped(ctx, &solution.Solution{Metadata: solution.Metadata{Name: "nostate"}})
+		assert.Empty(t, buf.String())
+	})
+
+	t.Run("no panic when no writer in context", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			warnStateSkipped(context.Background(), stateSol)
+		})
+	})
 }

@@ -63,6 +63,11 @@ type SolutionOptions struct {
 	NoTimestamp     bool
 	NoCache         bool
 
+	// NoState disables state loading. render is read-only (it never saves), so
+	// this only skips reading persisted state; resolvers that read the state
+	// provider fall back to their defaults.
+	NoState bool
+
 	// Mode flags (mutually exclusive)
 	ActionGraph  bool   // --action-graph: Show action dependency graph
 	GraphFormat  string // --graph-format: Graph format (ascii, dot, mermaid, json)
@@ -225,6 +230,7 @@ Examples:
 	cCmd.Flags().DurationVar(&options.ResolverTimeout, "resolver-timeout", settings.DefaultResolverTimeout, "Timeout per resolver")
 	cCmd.Flags().DurationVar(&options.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per phase")
 	cCmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
+	cCmd.Flags().BoolVar(&options.NoState, "no-state", false, "Skip loading persisted state (for CI/offline runs)")
 
 	// Graph mode flags
 	cCmd.Flags().BoolVar(&options.ActionGraph, "action-graph", false, "Show action dependency graph (ASCII, DOT, Mermaid, JSON)")
@@ -769,6 +775,16 @@ type solutionResolverRegistryAdapter = solrender.ResolverRegistryAdapter
 // so the parameter provider can replay previously saved values.
 func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) (context.Context, map[string]any, error) {
 	if sol.State == nil {
+		return ctx, params, nil
+	}
+
+	// --no-state skips reading persisted state entirely. render never saves, so
+	// this only affects the load side. Emit a one-line stderr notice (respects
+	// --quiet) since the solution actually declares a state block.
+	if o.NoState {
+		if w := writer.FromContext(ctx); w != nil {
+			w.WarnStderrf("--no-state: skipping state load for solution %q", sol.Metadata.Name)
+		}
 		return ctx, params, nil
 	}
 

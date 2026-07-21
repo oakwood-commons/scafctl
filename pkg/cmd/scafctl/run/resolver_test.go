@@ -93,6 +93,10 @@ func TestCommandResolver_FlagDefaults(t *testing.T) {
 	phaseTimeout, err := ff.GetDuration("phase-timeout")
 	require.NoError(t, err)
 	assert.Equal(t, 5*time.Minute, phaseTimeout)
+
+	noState, err := ff.GetBool("no-state")
+	require.NoError(t, err)
+	assert.False(t, noState)
 }
 
 func TestResolverOptions_Run_NoFile(t *testing.T) {

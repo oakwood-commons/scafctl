@@ -1057,6 +1057,165 @@ spec:
 	assert.Contains(t, stateDoc.Resolvers, "region", "immutable region should be locked after a passing run")
 }
 
+// TestIntegration_RunSolution_NoStateFlag verifies that --no-state skips the
+// entire state lifecycle: no state file is written, immutable values are not
+// locked or verified, the action still runs, and a one-line stderr notice is
+// emitted because the solution declares a state block.
+func TestIntegration_RunSolution_NoStateFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-state-flag
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    region:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Run 1 with --no-state: action runs, no state file written, warning shown.
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "--no-state")
+	assert.Equal(t, 0, exitCode, "run with --no-state should exit zero")
+	assert.Contains(t, stdout, "ACTION_RAN", "action should still run with --no-state")
+	assert.NoFileExists(t, statePath, "state file must not be written when --no-state is set")
+	assert.Contains(t, stderr, "--no-state", "a stderr notice should be emitted when skipping a state-enabled solution")
+
+	// Run 2 with --no-state and a DIFFERENT immutable value: because nothing was
+	// locked, immutable verification is skipped and the run succeeds.
+	_, _, exitCode = runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "--no-state", "-r", "region=eu-west1")
+	assert.Equal(t, 0, exitCode, "immutable checks must be skipped under --no-state")
+	assert.NoFileExists(t, statePath, "state file must still not exist after a second --no-state run")
+}
+
+// TestIntegration_RunResolver_NoStateFlag verifies that --no-state on
+// `run resolver` skips the state lifecycle: no state file is written, immutable
+// values are not locked or verified, and a one-line stderr notice is emitted.
+func TestIntegration_RunResolver_NoStateFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-state-resolver
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    region:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Run 1 with --no-state: resolvers run, no state file written, warning shown.
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "--no-state")
+	assert.Equal(t, 0, exitCode, "run resolver with --no-state should exit zero")
+	assert.Contains(t, stdout, "us-east1", "resolver should still resolve with --no-state")
+	assert.NoFileExists(t, statePath, "state file must not be written when --no-state is set")
+	assert.Contains(t, stderr, "--no-state", "a stderr notice should be emitted when skipping a state-enabled solution")
+
+	// Run 2 with --no-state and a DIFFERENT immutable value: nothing was locked,
+	// so immutable verification is skipped and the run succeeds.
+	_, _, exitCode = runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "--no-state", "-r", "region=eu-west1")
+	assert.Equal(t, 0, exitCode, "immutable checks must be skipped under --no-state")
+	assert.NoFileExists(t, statePath, "state file must still not exist after a second --no-state run")
+}
+
+// TestIntegration_RunAction_NoStateFlag verifies that --no-state on
+// `run action` skips the state lifecycle: the action still runs, no state file
+// is written, and a one-line stderr notice is emitted.
+func TestIntegration_RunAction_NoStateFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: no-state-action
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    region:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// Run 1 with --no-state: action runs, no state file written, warning shown.
+	stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "action", "notify", "-f", solutionPath, "--no-state")
+	assert.Equal(t, 0, exitCode, "run action with --no-state should exit zero")
+	assert.Contains(t, stdout, "ACTION_RAN", "action should still run with --no-state")
+	assert.NoFileExists(t, statePath, "state file must not be written when --no-state is set")
+	assert.Contains(t, stderr, "--no-state", "a stderr notice should be emitted when skipping a state-enabled solution")
+
+	// Run 2 with --no-state and a DIFFERENT immutable value: nothing was locked,
+	// so immutable verification is skipped and the run succeeds.
+	_, _, exitCode = runScafctlInDir(t, tmpDir, "run", "action", "notify", "-f", solutionPath, "--no-state", "-r", "region=eu-west1")
+	assert.Equal(t, 0, exitCode, "immutable checks must be skipped under --no-state")
+	assert.NoFileExists(t, statePath, "state file must still not exist after a second --no-state run")
+}
+
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,

@@ -493,7 +493,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// parameters via __params in CEL expressions (e.g. __params.appName).
 	var stateMgr *state.Manager
 	var stateData *state.Data
-	if sol.State != nil {
+	if o.NoState {
+		warnStateSkipped(ctx, sol)
+	} else if sol.State != nil {
 		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run solution", params)
 		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)

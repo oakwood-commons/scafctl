@@ -201,6 +201,12 @@ type sharedResolverOptions struct {
 	// declare them explicitly in bundle.plugins.
 	Strict bool
 
+	// NoState disables the entire state lifecycle for the run: state is not
+	// loaded before resolvers, immutable values are neither verified nor
+	// locked, and no state is saved afterward. Resolvers that read the state
+	// provider fall back to their defaults. Intended for CI/offline runs.
+	NoState bool
+
 	// nonFatalValidation, when true, makes executeResolvers treat resolver
 	// validation-only failures as non-fatal: it returns the populated values
 	// and resolver context alongside the error instead of discarding them.
@@ -886,6 +892,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().StringVar(&o.BaseDir, "base-dir", "", "Override base directory for resolver path resolution (when unset, paths resolve from the solution file's directory when known, otherwise the current directory; use '.' for CWD)")
 	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
 	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
+	cCmd.Flags().BoolVar(&o.NoState, "no-state", false, "Skip the entire state lifecycle: do not load, verify immutables, or save state (for CI/offline runs)")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
@@ -964,6 +971,19 @@ func buildStateSolutionMeta(sol *solution.Solution) state.SolutionMeta {
 		meta.Version = sol.Metadata.Version.String()
 	}
 	return meta
+}
+
+// warnStateSkipped emits a one-line stderr notice when --no-state disables the
+// state lifecycle for a solution that actually declares a state block. It is a
+// no-op when the solution has no state or when no writer is in context. The
+// underlying WarnStderrf respects --quiet.
+func warnStateSkipped(ctx context.Context, sol *solution.Solution) {
+	if sol == nil || sol.State == nil {
+		return
+	}
+	if w := writer.FromContext(ctx); w != nil {
+		w.WarnStderrf("--no-state: skipping state load, immutable checks, and save for solution %q", sol.Metadata.Name)
+	}
 }
 
 // buildParamFlagHint formats missing param names as -r flags for user hints.

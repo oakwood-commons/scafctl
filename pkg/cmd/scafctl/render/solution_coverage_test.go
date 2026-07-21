@@ -530,7 +530,34 @@ func TestSolutionOptions_loadStateIntoContext_DisabledState(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// ── formatParams tests ──────────────────────────────────────────────────────
+func TestSolutionOptions_loadStateIntoContext_NoStateFlag(t *testing.T) {
+	t.Parallel()
+
+	opts := &SolutionOptions{NoState: true}
+	sol := &solution.Solution{
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Literal: "test.json"},
+				},
+			},
+		},
+	}
+	sol.Metadata.Name = "no-state-render"
+	reg := provider.NewRegistry()
+
+	ctx := setupWriterContext()
+	result, params, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
+
+	require.NoError(t, err)
+	// --no-state must skip loading entirely: no state data in context.
+	data, ok := state.FromContext(result)
+	assert.False(t, ok)
+	assert.Nil(t, data)
+	assert.Nil(t, params, "params should be unchanged when state load is skipped")
+}
 
 func TestFormatParams(t *testing.T) {
 	t.Parallel()

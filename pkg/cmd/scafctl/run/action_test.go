@@ -85,6 +85,10 @@ func TestCommandAction_FlagDefaults(t *testing.T) {
 	backup, err := flags.GetBool("backup")
 	require.NoError(t, err)
 	assert.False(t, backup)
+
+	noState, err := flags.GetBool("no-state")
+	require.NoError(t, err)
+	assert.False(t, noState)
 }
 
 func TestParseActionArgs(t *testing.T) {
