@@ -17,7 +17,6 @@ import (
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
-	bundlecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/bundle"
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
 	catalogcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/catalog"
 	configcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/config"
@@ -886,7 +885,6 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 	// Packaging & Distribution Commands — build, store, and distribute artifacts
 	cCmd.AddCommand(withGroup(groupArtifact, packagecmd.CommandPackage(cliParams, ioStreams, binaryName)))
-	cCmd.AddCommand(withGroup(groupArtifact, bundlecmd.CommandBundle(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupArtifact, extractcmd.CommandExtract(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupArtifact, vendorcmd.CommandVendor(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupArtifact, catalogcmd.CommandCatalog(cliParams, ioStreams, binaryName)))

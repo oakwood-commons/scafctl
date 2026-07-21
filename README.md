@@ -473,8 +473,9 @@ scafctl catalog push my-solution@1.0.0
 scafctl catalog pull my-solution@1.0.0
 scafctl catalog inspect my-solution@1.0.0
 
-# Bundle verification and diffing
-scafctl bundle verify my-solution@1.0.0
+# Bundle diffing and extraction
+# (bundle completeness is verified automatically: package fails the build if
+# incomplete, and catalog pull warns by default -- use --strict to fail)
 scafctl diff bundle my-solution@1.0.0 my-solution@2.0.0
 scafctl extract bundle my-solution@1.0.0
 

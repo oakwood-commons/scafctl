@@ -8,12 +8,16 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/format"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -32,6 +36,8 @@ type PullOptions struct {
 	DryRun            bool   // Show what would be pulled without pulling (--dry-run)
 	Insecure          bool   // Allow HTTP (--insecure)
 	NoCache           bool   // Invalidate artifact cache after pull (--no-cache)
+	Strict            bool   // Fail if the pulled bundle is incomplete (--strict)
+	NoVerify          bool   // Skip pulled-bundle completeness verification (--no-verify)
 	CliParams         *settings.Run
 	IOStreams         *terminal.IOStreams
 }
@@ -94,6 +100,8 @@ func CommandPull(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().BoolVar(&options.DryRun, "dry-run", false, "Show what would be pulled without actually pulling")
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Invalidate the artifact cache for this artifact after pulling")
+	cmd.Flags().BoolVar(&options.Strict, "strict", false, "Fail if the pulled bundle is incomplete")
+	cmd.Flags().BoolVar(&options.NoVerify, "no-verify", false, "Skip pulled-bundle completeness verification")
 
 	return cmd
 }
@@ -307,6 +315,21 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	warnStaleCredentials(ctx, w, remoteCatalog)
 	verboseCredentialSource(w, remoteCatalog)
 
+	// === Pulled-bundle completeness verification (solution kind only) ===
+	//
+	// Verify against the FETCHED bundle reassembled by the local catalog's
+	// FetchWithBundle (avoids a second network round-trip). Consumer policy is
+	// warn-by-default; only --strict makes incompleteness fatal.
+	if !opts.NoVerify && ref.Kind == catalog.ArtifactKindSolution {
+		// Verify against the reference that was actually stored locally: with
+		// --as the artifact lives under the renamed target ref, and the source
+		// ref may not exist in the local catalog at all.
+		storedRef := result.Reference
+		if verr := verifyPulledBundle(ctx, localCatalog, storedRef, opts, w, lgr); verr != nil {
+			return verr
+		}
+	}
+
 	// When --no-cache is set, invalidate any stale artifact cache entry so that
 	// subsequent run/render/get commands fetch the freshly pulled artifact from
 	// the local catalog rather than a cached copy.
@@ -327,4 +350,72 @@ func runPull(ctx context.Context, opts *PullOptions) error {
 	}
 
 	return nil
+}
+
+// verifyPulledBundle fetches the pulled bundle from the local catalog, verifies
+// its completeness, renders the result, and enforces consumer policy:
+// warn-by-default on incompleteness; only --strict makes it fatal.
+func verifyPulledBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *PullOptions, w *writer.Writer, lgr *logr.Logger) error {
+	content, bundleData, _, ferr := localCatalog.FetchWithBundle(ctx, ref)
+	if ferr != nil {
+		return failOrWarnPull(w, opts.Strict, fmt.Errorf("fetching pulled bundle for verification: %w", ferr))
+	}
+
+	var sol solution.Solution
+	if err := sol.LoadFromBytes(content); err != nil {
+		return failOrWarnPull(w, opts.Strict, fmt.Errorf("parsing pulled solution for verification: %w", err))
+	}
+
+	// Pass the (possibly empty) bundleData through to VerifyBundle: the empty
+	// case is handled by verifyNoBundleCase, which surfaces warnings for local
+	// files and unvendored catalog deps. Skipping it here would let --strict
+	// wrongly succeed on a bundle-less-but-incomplete artifact.
+	vr, err := bundler.VerifyBundle(ctx, &sol, bundleData, *lgr)
+	if err != nil {
+		return failOrWarnPull(w, opts.Strict, fmt.Errorf("verifying pulled bundle: %w", err))
+	}
+
+	// Consumer: in non-strict mode incompleteness is a warning (the pull still
+	// succeeds), so render missing items as warnings rather than errors to avoid
+	// contradicting the success result. Under --strict they render as errors.
+	cmdutil.RenderVerifyResult(w, vr, !opts.Strict)
+
+	warnMsg, failErr := pullVerifyDecision(vr, opts.Strict)
+	if warnMsg != "" {
+		w.Warningf("%s", warnMsg)
+	}
+	if failErr != nil {
+		w.Errorf("%v", failErr)
+	}
+	return failErr
+}
+
+// failOrWarnPull applies the consumer fail-closed policy for infrastructure,
+// parse, and verify errors. Under --strict these fail closed with a printed,
+// exit-coded error; otherwise they warn and return nil so a transient infra
+// hiccup does not break the pull.
+func failOrWarnPull(w *writer.Writer, strict bool, err error) error {
+	if strict {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	w.Warningf("%v (skipping verification; run with --strict to fail)", err)
+	return nil
+}
+
+// pullVerifyDecision applies the consumer verification policy to a verify
+// result. Consumer policy is warn-by-default: incompleteness only becomes fatal
+// under --strict, and warnings become fatal only under --strict. It returns a
+// warning message to emit (empty for none) and the error to fail the pull with
+// (nil to continue). The two returns are mutually exclusive.
+func pullVerifyDecision(vr *bundler.VerifyResult, strict bool) (warnMsg string, failErr error) {
+	switch {
+	case !vr.Passed() && strict:
+		return "", exitcode.Errorf("pulled bundle is incomplete: %d error(s) (strict)", len(vr.Errors))
+	case !vr.Passed():
+		return fmt.Sprintf("pulled bundle is incomplete: %d error(s) -- run with --strict to fail", len(vr.Errors)), nil
+	case len(vr.Warnings) > 0 && strict:
+		return "", exitcode.Errorf("pulled bundle has %d warning(s) (strict)", len(vr.Warnings))
+	}
+	return "", nil
 }
