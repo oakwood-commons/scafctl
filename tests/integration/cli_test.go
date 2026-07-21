@@ -8653,13 +8653,13 @@ func TestIntegration_Snapshot_Show_JSON(t *testing.T) {
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
 	// Show as JSON
-	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--format", "json")
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "-o", "json")
 	assert.Equal(t, 0, exitCode)
 
 	// Verify valid JSON
 	var parsed map[string]interface{}
 	err := json.Unmarshal([]byte(stdout), &parsed)
-	assert.NoError(t, err, "snapshot show --format json should produce valid JSON")
+	assert.NoError(t, err, "snapshot show -o json should produce valid JSON")
 	assert.Contains(t, parsed, "metadata")
 	assert.Contains(t, parsed, "resolvers")
 }
@@ -8677,8 +8677,8 @@ func TestIntegration_Snapshot_Show_Resolvers(t *testing.T) {
 	)
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
-	// Show resolvers format
-	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--format", "resolvers")
+	// Show resolvers detail view
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--detail")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Resolvers")
 	// resolver-demo.yaml has environment, region, port, exposedPort, hostname, config
@@ -8701,7 +8701,7 @@ func TestIntegration_Snapshot_Show_Verbose(t *testing.T) {
 	require.Equal(t, 0, exitCode, "failed to create snapshot")
 
 	// Show resolvers with verbose flag
-	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--format", "resolvers", "--verbose")
+	stdout, _, exitCode := runScafctl(t, "get", "snapshot", snapshotFile, "--detail", "--verbose")
 	assert.Equal(t, 0, exitCode)
 	// Verbose should show values
 	assert.Contains(t, stdout, "Value:")
@@ -8982,9 +8982,12 @@ func TestIntegration_Snapshot_Help(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "get", "snapshot", "--help")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Load and display the contents of a snapshot file")
-	assert.Contains(t, stdout, "--format")
+	assert.Contains(t, stdout, "--detail")
+	assert.Contains(t, stdout, "--output")
+	// --format was removed in favor of the kvx -o/--output convention.
+	assert.NotContains(t, stdout, "--format")
 	// -f is not bound on 'get snapshot' (it means --file elsewhere).
-	assert.NotContains(t, stdout, "-f, --format")
+	assert.NotContains(t, stdout, "-f, --output")
 }
 
 // ============================================================================

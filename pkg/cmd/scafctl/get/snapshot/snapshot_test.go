@@ -36,11 +36,19 @@ func TestCommandSnapshot(t *testing.T) {
 	assert.NotEmpty(t, cmd.Long)
 	assert.NotEmpty(t, cmd.Example)
 
-	// Verify --format is present as a long-only flag.
-	formatFlag := cmd.Flags().Lookup("format")
-	require.NotNil(t, formatFlag, "format flag should exist")
-	assert.Equal(t, "", formatFlag.Shorthand, "format must be long-only")
-	assert.Equal(t, "summary", formatFlag.DefValue)
+	// --format must be gone; replaced by the kvx -o/--output convention.
+	assert.Nil(t, cmd.Flags().Lookup("format"), "format flag must be removed")
+
+	// -o/--output must exist (from flags.AddKvxOutputFlagsToStruct).
+	outputFlag := cmd.Flags().Lookup("output")
+	require.NotNil(t, outputFlag, "output flag should exist")
+	assert.Equal(t, "o", outputFlag.Shorthand, "output must be bound to -o")
+
+	// --detail must exist as a long-only bool flag.
+	detailFlag := cmd.Flags().Lookup("detail")
+	require.NotNil(t, detailFlag, "detail flag should exist")
+	assert.Equal(t, "", detailFlag.Shorthand, "detail must be long-only")
+	assert.Equal(t, "false", detailFlag.DefValue)
 
 	// -f must NOT be bound (it means --file elsewhere).
 	assert.Nil(t, cmd.Flags().ShorthandLookup("f"), "-f shorthand must not be bound")
@@ -67,7 +75,6 @@ func TestRunShow_MissingFile(t *testing.T) {
 	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
 	opts := &ShowOptions{
 		SnapshotFile: "/nonexistent/snapshot.json",
-		Format:       "summary",
 	}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
@@ -80,24 +87,23 @@ func TestRunShow_MissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to load snapshot")
 }
 
-func TestRunShow_InvalidFormat(t *testing.T) {
-	ctx := logger.WithLogger(context.Background(), logger.Get(-1))
+func TestCommandSnapshot_InvalidOutputFormat(t *testing.T) {
+	t.Parallel()
 
 	tmpDir := t.TempDir()
 	snapshotFile := filepath.Join(tmpDir, "snapshot.json")
 	snapshot := createTestSnapshot()
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "invalid-format"}
-	var stdout, stderr bytes.Buffer
-	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
-	w := writer.New(ioStreams, &settings.Run{})
-	testCtx := writer.WithWriter(ctx, w)
+	cliParams := &settings.Run{}
+	ioStreams := &terminal.IOStreams{}
+	cmd := CommandSnapshot(cliParams, ioStreams, "get")
+	cmd.SilenceErrors = true
+	cmd.SetArgs([]string{snapshotFile, "-o", "invalid-format"})
 
-	err := runShow(testCtx, opts, ioStreams)
-
+	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported format")
+	assert.Contains(t, err.Error(), "invalid output format")
 }
 
 func TestRunShow_Summary(t *testing.T) {
@@ -108,7 +114,7 @@ func TestRunShow_Summary(t *testing.T) {
 	snapshot := createTestSnapshot()
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "summary"}
+	opts := &ShowOptions{SnapshotFile: snapshotFile}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
 	w := writer.New(ioStreams, &settings.Run{})
@@ -136,7 +142,7 @@ func TestRunShow_SummaryVerbose(t *testing.T) {
 	snapshot.Parameters = map[string]any{"env": "test", "region": "us-west-2"}
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "summary", Verbose: true}
+	opts := &ShowOptions{SnapshotFile: snapshotFile, Verbose: true}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
 	w := writer.New(ioStreams, &settings.Run{})
@@ -157,9 +163,10 @@ func TestRunShow_JSON(t *testing.T) {
 	snapshot := createTestSnapshot()
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "json"}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
+	opts := &ShowOptions{SnapshotFile: snapshotFile, IOStreams: ioStreams}
+	opts.Output = "json"
 	w := writer.New(ioStreams, &settings.Run{})
 	testCtx := writer.WithWriter(ctx, w)
 
@@ -179,7 +186,7 @@ func TestRunShow_Resolvers(t *testing.T) {
 	snapshot := createTestSnapshot()
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "resolvers"}
+	opts := &ShowOptions{SnapshotFile: snapshotFile, Detail: true}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
 	w := writer.New(ioStreams, &settings.Run{})
@@ -204,7 +211,7 @@ func TestRunShow_ResolversVerbose(t *testing.T) {
 	snapshot.Resolvers["test_resolver"].Sensitive = true
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "resolvers", Verbose: true}
+	opts := &ShowOptions{SnapshotFile: snapshotFile, Detail: true, Verbose: true}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
 	w := writer.New(ioStreams, &settings.Run{})
@@ -235,7 +242,7 @@ func TestRunShow_ResolversWithErrors(t *testing.T) {
 	}
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "resolvers", Verbose: true}
+	opts := &ShowOptions{SnapshotFile: snapshotFile, Detail: true, Verbose: true}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
 	w := writer.New(ioStreams, &settings.Run{})
@@ -258,7 +265,7 @@ func TestRunShow_NilWriterFallback(t *testing.T) {
 	snapshot := createTestSnapshot()
 	require.NoError(t, resolver.SaveSnapshot(snapshot, snapshotFile))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "summary"}
+	opts := &ShowOptions{SnapshotFile: snapshotFile}
 	var stdout bytes.Buffer
 	// No ErrOut, and no writer in context: exercises the nil-Writer fallback.
 	ioStreams := &terminal.IOStreams{Out: &stdout}
@@ -318,7 +325,7 @@ func TestCommandSnapshot_InvalidSnapshotJSON(t *testing.T) {
 	snapshotFile := filepath.Join(tmpDir, "invalid.json")
 	require.NoError(t, os.WriteFile(snapshotFile, []byte("{invalid json content"), 0o600))
 
-	opts := &ShowOptions{SnapshotFile: snapshotFile, Format: "summary"}
+	opts := &ShowOptions{SnapshotFile: snapshotFile}
 	var stdout, stderr bytes.Buffer
 	ioStreams := &terminal.IOStreams{Out: &stdout, ErrOut: &stderr}
 	w := writer.New(ioStreams, &settings.Run{})

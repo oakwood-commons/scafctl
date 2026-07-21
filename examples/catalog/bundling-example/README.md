@@ -46,7 +46,7 @@ scafctl bundle verify bundling-example@1.0.0
 ### 4. List Bundle Contents
 
 ```bash
-scafctl extract bundle bundling-example@1.0.0 --list
+scafctl extract bundle bundling-example@1.0.0 --list-only
 ```
 
 ### 5. Run the Solution
