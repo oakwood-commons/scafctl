@@ -9,18 +9,39 @@ auto-loaded by opencode via `opencode.json`:
 
 ## Git safety & commit signing
 
-The AI **may** create commits and push (with approval), but must follow these rules:
+The AI **may** create commits, push, and open/merge PRs (with approval), but
+must follow these rules:
 
-1. **Commit and push are ask-gated; amend is blocked.** The AI may run
-   `git commit` and `git push` only after explicit per-action user approval.
-   `git commit --amend` is **denied** outright -- the user rewrites history
-   manually. (Enforced in `opencode.json`: `git commit *` -> `ask`,
-   `git push *` -> `ask`, `git commit --amend *` -> `deny`.)
-2. **Commits must be signed AND DCO signed-off.**
+1. **Publishing is approval-gated; amend is blocked.** Creating commits,
+   pushing, and opening/merging PRs all require the user's explicit approval
+   FIRST. A **single approval may cover the whole `commit` -> `push` -> PR
+   sequence** -- the AI asks once (presenting the consolidated summary and the
+   exact commands it intends to run), and on approval may run that sequence
+   without stopping again for each step. If anything material changes after
+   approval (different files, a failing gate), re-ask. `git commit --amend` is
+   **denied** outright -- the user rewrites history manually.
+   - **Enforcement is opencode's `permission` `ask` rules** (in `opencode.json`:
+     `git commit*`, `git push*`, `gh pr create*`, `gh pr merge*` -> `ask`;
+     `git commit --amend*` -> `deny`). The `ask` prompt is the real consent
+     gate: it is surfaced to the user and cannot be self-approved by the agent.
+     (There is deliberately no in-band "approval marker" -- a marker in the
+     command text would be asserted by the agent, not the user, so it proves
+     nothing.)
+   - **Never push or open a PR without asking.** The AI must not chain
+     branch/commit/push/PR autonomously. Present the summary, ask, and only
+     then run the approved sequence.
+2. **Do not `sleep` to wait for CI; ask first, then loop-poll.** After
+   pushing or opening a PR, do not silently idle on a long `sleep` waiting for
+   pipeline results, and do not silently move on either -- **ask the user
+   whether to wait**. If the user wants to wait, poll in a **bounded loop**
+   (e.g. repeated `gh pr checks` with a short interval) rather than a single
+   long sleep, and hand control back promptly once there is a result or the
+   user says to stop.
+3. **Commits must be signed AND DCO signed-off.**
    - The repo sets `commit.gpgsign=true` (SSH signing).
    - The DCO check requires a `Signed-off-by:` trailer, so always commit with
      `-s` (or ensure the trailer is present).
-3. **Verify the signing key is available before committing.** The SSH signing
+4. **Verify the signing key is available before committing.** The SSH signing
    key is passphrase-protected; if it is not loaded in the ssh-agent, the commit
    fails mid-operation and no commit object is written. Check with:
 
@@ -28,7 +49,7 @@ The AI **may** create commits and push (with approval), but must follow these ru
    ssh-add -l
    ```
 
-4. **If no key is loaded, prompt the user to load it** instead of retrying a
+5. **If no key is loaded, prompt the user to load it** instead of retrying a
    doomed commit. Give them these instructions:
 
    ```
