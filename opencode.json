@@ -19,8 +19,8 @@
   "permission": {
     "bash": {
       "*": "allow",
-      "git commit *": "ask",
-      "git commit --amend *": "deny",
+      "git commit*": "ask",
+      "git commit --amend*": "deny",
       "git push*": "ask",
       "gh pr create*": "ask",
       "gh pr merge*": "ask"

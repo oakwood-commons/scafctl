@@ -21,8 +21,8 @@ must follow these rules:
    approval (different files, a failing gate), re-ask. `git commit --amend` is
    **denied** outright -- the user rewrites history manually.
    - **Enforcement is opencode's `permission` `ask` rules** (in `opencode.json`:
-     `git commit *`, `git push*`, `gh pr create*`, `gh pr merge*` -> `ask`;
-     `git commit --amend *` -> `deny`). The `ask` prompt is the real consent
+     `git commit*`, `git push*`, `gh pr create*`, `gh pr merge*` -> `ask`;
+     `git commit --amend*` -> `deny`). The `ask` prompt is the real consent
      gate: it is surfaced to the user and cannot be self-approved by the agent.
      (There is deliberately no in-band "approval marker" -- a marker in the
      command text would be asserted by the agent, not the user, so it proves
