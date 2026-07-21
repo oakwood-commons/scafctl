@@ -13,6 +13,7 @@ import (
 	getexamples "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/examples"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/gotmplfunction"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/snapshot"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/solution"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -41,6 +42,7 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	})
 	cCmd.AddCommand(provider.CommandProvider(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(solution.CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(snapshot.CommandSnapshot(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(getexamples.CommandExamples(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(celfunction.CommandCelFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(gotmplfunction.CommandGotmplFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))

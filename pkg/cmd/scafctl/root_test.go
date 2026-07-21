@@ -115,7 +115,7 @@ func TestRoot_CommandGroups(t *testing.T) {
 		t.Fatal("Expected command groups to be defined")
 	}
 
-	wantGroups := []string{"core", "inspect", "scaffold", "config", "plugin"}
+	wantGroups := []string{"core", "inspect", "artifact", "config", "plugin"}
 	gotIDs := make(map[string]bool)
 	for _, g := range groups {
 		gotIDs[g.ID] = true
@@ -137,8 +137,8 @@ func TestRoot_CommandGroups(t *testing.T) {
 		"get":     "inspect",
 		"explain": "inspect",
 		"diff":    "inspect",
-		"new":     "scaffold",
-		"package": "scaffold",
+		"new":     "core",
+		"package": "artifact",
 		"config":  "config",
 		"auth":    "config",
 		"plugins": "plugin",

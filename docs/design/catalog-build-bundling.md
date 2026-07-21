@@ -1103,14 +1103,14 @@ Summary: 2 resolvers changed, 3 files changed, 1 dependency upgraded, 1 plugin u
 
 ---
 
-## Selective Extraction (`scafctl bundle extract`)
+## Selective Extraction (`scafctl extract bundle`)
 
 Extract only the files needed for a specific resolver or action, enabling partial bundle inspection and reduced extraction for large bundles.
 
 ### Command Specification
 
 ```bash
-scafctl bundle extract <artifact-ref> [--output-dir <dir>]
+scafctl extract bundle <artifact-ref> [--output-dir <dir>]
 ```
 
 | Flag | Default | Description |
@@ -1131,7 +1131,7 @@ scafctl bundle extract <artifact-ref> [--output-dir <dir>]
 ### Output
 
 ```bash
-$ scafctl bundle extract my-solution@1.0.0 --resolver mainTfTemplate --list-only
+$ scafctl extract bundle my-solution@1.0.0 --resolver mainTfTemplate --list-only
 
 Files needed for resolver 'mainTfTemplate':
   templates/main.tf.tmpl       (1.2 KB)
@@ -1139,7 +1139,7 @@ Files needed for resolver 'mainTfTemplate':
 
 Total: 2 files, 1.6 KB
 
-$ scafctl bundle extract my-solution@1.0.0 --resolver mainTfTemplate --output-dir ./extracted
+$ scafctl extract bundle my-solution@1.0.0 --resolver mainTfTemplate --output-dir ./extracted
 
 Extracted 2 files (1.6 KB) to ./extracted/
 ```
@@ -1410,7 +1410,7 @@ plugins:
 - CLI integration tests
 
 ### Phase 9: Selective Extraction
-- Implement `scafctl bundle extract` command
+- Implement `scafctl extract bundle` command
 - DAG-based file dependency tracing per resolver/action
 - Transitive dependency following for sub-solutions
 - `--list-only`, `--flatten`, `--include` flag support
@@ -1496,4 +1496,4 @@ Cache can be cleared with `scafctl cache clear --kind build`.
 
 ## Summary
 
-Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle verification (`scafctl bundle verify`) validates artifact completeness, bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl bundle extract`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.
+Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle verification (`scafctl bundle verify`) validates artifact completeness, bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl extract bundle`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.

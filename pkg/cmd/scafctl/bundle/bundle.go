@@ -27,7 +27,6 @@ func CommandBundle(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	})
 
 	cmd.AddCommand(CommandVerify(cliParams, ioStreams, path))
-	cmd.AddCommand(CommandExtract(cliParams, ioStreams, path))
 
 	return cmd
 }

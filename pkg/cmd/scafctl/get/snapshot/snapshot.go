@@ -1,74 +1,97 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
+// Package snapshot provides the `get snapshot` subcommand, which loads and
+// displays the contents of a resolver execution snapshot file.
 package snapshot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
 
-// ShowOptions holds options for the show command
+// ShowOptions holds options for the get snapshot command.
 type ShowOptions struct {
 	BinaryName   string
 	SnapshotFile string
-	Format       string
 	Verbose      bool
+	NoColor      bool
+	IOStreams    *terminal.IOStreams
+
+	// Detail switches the default summary view to the per-resolver detail list.
+	Detail bool
+
+	// kvx output integration (-o/--output, -i/--interactive, -e/--expression, -w/--where)
+	flags.KvxOutputFlags
 }
 
-// CommandShow creates the snapshot show command
-func CommandShow(cliParams *settings.Run, ioStreams terminal.IOStreams, binaryName string) *cobra.Command {
+// CommandSnapshot creates the `get snapshot` subcommand.
+func CommandSnapshot(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	opts := &ShowOptions{}
+	binaryName := cliParams.BinaryName
+	if binaryName == "" {
+		binaryName = settings.CliBinaryName
+	}
 
 	cmd := &cobra.Command{
-		Use:          "show [snapshot-file]",
+		Use:          "snapshot [snapshot-file]",
 		Short:        "Display snapshot contents",
 		SilenceUsage: true,
 		Long: heredoc.Doc(`
 			Load and display the contents of a snapshot file.
-			
-			Supports multiple output formats:
-			  - summary: High-level overview (default)
-			  - json: Full JSON output
-			  - resolvers: List of all resolvers with status
+
+			By default, a high-level human-readable summary is shown (metadata,
+			resolver counts, and phases). Use --detail to list every resolver
+			with its status, or -o/--output to emit structured data (json, yaml,
+			table, etc.).
 		`),
 		Example: heredoc.Docf(`
-			# Show snapshot summary
-			$ %s snapshot show snapshot.json
-			
-			# Show full JSON
-			$ %s snapshot show snapshot.json --format json
-			
-			# Show resolver details
-			$ %s snapshot show snapshot.json --format resolvers --verbose
+			# Show snapshot summary (default)
+			$ %s get snapshot snapshot.json
+
+			# Emit the full snapshot as JSON
+			$ %s get snapshot snapshot.json -o json
+
+			# List all resolvers with status
+			$ %s get snapshot snapshot.json --detail --verbose
 		`, binaryName, binaryName, binaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.SnapshotFile = args[0]
-			opts.BinaryName = binaryName
+			opts.BinaryName = cliParams.BinaryName
 			opts.Verbose = cliParams.Verbose
+			opts.NoColor = cliParams.NoColor
+			opts.IOStreams = ioStreams
 			return runShow(cmd.Context(), opts, ioStreams)
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Format, "format", "f", "summary", "Output format: summary, json, resolvers")
+	// Add kvx output flags (-o, -i, -e, -w).
+	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
+
+	// --detail switches the default view to the per-resolver listing.
+	cmd.Flags().BoolVar(&opts.Detail, "detail", false, "List every resolver with its status")
 
 	return cmd
 }
 
-func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStreams) error {
+func runShow(ctx context.Context, opts *ShowOptions, ioStreams *terminal.IOStreams) error {
 	if opts.BinaryName == "" {
 		opts.BinaryName = settings.CliBinaryName
+	}
+	if opts.IOStreams == nil {
+		opts.IOStreams = ioStreams
 	}
 
 	lgr := logger.FromContext(ctx)
@@ -76,12 +99,17 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 
 	// Create a fallback Writer if one isn't in context (e.g., in tests)
 	if w == nil {
-		// Ensure ErrOut is non-nil to avoid panics in error paths
-		streams := &ioStreams
+		// Copy into a local so the ErrOut fixup below never mutates the
+		// caller's shared IOStreams (ioStreams is a pointer).
+		var streams terminal.IOStreams
+		if ioStreams != nil {
+			streams = *ioStreams
+		}
+		// Ensure ErrOut is non-nil to avoid panics in error paths.
 		if streams.ErrOut == nil {
 			streams.ErrOut = streams.Out
 		}
-		w = writer.New(streams, settings.NewCliParams())
+		w = writer.New(&streams, settings.NewCliParams())
 	}
 
 	// Helper to write error
@@ -98,29 +126,33 @@ func runShow(ctx context.Context, opts *ShowOptions, ioStreams terminal.IOStream
 		return exitcode.WithCode(err, exitcode.FileNotFound)
 	}
 
-	switch opts.Format {
-	case "summary":
-		return showSummary(snapshot, opts, w)
-
-	case "json":
-		encoder := json.NewEncoder(ioStreams.Out)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(snapshot); err != nil {
-			err = fmt.Errorf("failed to encode JSON: %w", err)
+	// Structured output requested via -o (or -i/-e/-w): emit through kvx.
+	if opts.Interactive || (opts.Output != "" && opts.Output != "auto") {
+		if err := opts.writeOutput(ctx, snapshot); err != nil {
+			err = fmt.Errorf("failed to write output: %w", err)
 			writeErr(err)
 			return exitcode.WithCode(err, exitcode.GeneralError)
 		}
-
-	case "resolvers":
-		return showResolvers(snapshot, opts, w)
-
-	default:
-		err := fmt.Errorf("unsupported format: %s (supported: summary, json, resolvers)", opts.Format)
-		writeErr(err)
-		return exitcode.WithCode(err, exitcode.InvalidInput)
+		return nil
 	}
 
-	return nil
+	// Default human-readable views.
+	if opts.Detail {
+		return showResolvers(snapshot, opts, w)
+	}
+	return showSummary(snapshot, opts, w)
+}
+
+// writeOutput writes the structured snapshot using the shared kvx pipeline.
+func (o *ShowOptions) writeOutput(ctx context.Context, snapshot *resolver.Snapshot) error {
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.NoColor),
+		kvx.WithOutputAppName(o.BinaryName+" get snapshot"),
+		kvx.WithIOStreams(o.IOStreams),
+	)
+
+	return kvxOpts.Write(snapshot)
 }
 
 func showSummary(snapshot *resolver.Snapshot, opts *ShowOptions, w *writer.Writer) error {

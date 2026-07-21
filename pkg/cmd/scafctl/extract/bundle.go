@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Oakwood Commons
 // SPDX-License-Identifier: Apache-2.0
 
-package bundle
+package extract
 
 import (
 	"context"
@@ -22,8 +22,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ExtractOptions holds options for the bundle extract command.
-type ExtractOptions struct {
+// Options holds options for the extract bundle command.
+type Options struct {
 	BinaryName  string
 	ArtifactRef string
 	OutputDir   string
@@ -36,15 +36,15 @@ type ExtractOptions struct {
 	IOStreams   *terminal.IOStreams
 }
 
-// CommandExtract creates the bundle extract command.
-func CommandExtract(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
-	opts := &ExtractOptions{
+// CommandExtractBundle creates the `extract bundle` subcommand.
+func CommandExtractBundle(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+	opts := &Options{
 		CliParams: cliParams,
 		IOStreams: ioStreams,
 	}
 
 	cmd := &cobra.Command{
-		Use:          "extract <artifact-ref>",
+		Use:          subBundle + " <artifact-ref>",
 		Short:        "Extract files from a bundled solution artifact",
 		SilenceUsage: true,
 		Long: strings.ReplaceAll(heredoc.Doc(`
@@ -57,22 +57,22 @@ func CommandExtract(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 
 			Examples:
 			  # Extract all files to current directory
-			  scafctl bundle extract my-solution@1.0.0
+			  scafctl extract bundle my-solution@1.0.0
 
 			  # Extract to a specific directory
-			  scafctl bundle extract my-solution@1.0.0 --output-dir ./extracted
+			  scafctl extract bundle my-solution@1.0.0 --output-dir ./extracted
 
 			  # Extract only files needed by a resolver
-			  scafctl bundle extract my-solution@1.0.0 --resolver mainTfTemplate
+			  scafctl extract bundle my-solution@1.0.0 --resolver mainTfTemplate
 
 			  # List files without extracting
-			  scafctl bundle extract my-solution@1.0.0 --list-only
+			  scafctl extract bundle my-solution@1.0.0 --list-only
 
 			  # Extract files matching a glob pattern
-			  scafctl bundle extract my-solution@1.0.0 --include "templates/*.tmpl"
+			  scafctl extract bundle my-solution@1.0.0 --include "templates/*.tmpl"
 
 			  # Flatten directory structure
-			  scafctl bundle extract my-solution@1.0.0 --flatten
+			  scafctl extract bundle my-solution@1.0.0 --flatten
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -92,7 +92,7 @@ func CommandExtract(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ st
 	return cmd
 }
 
-func runExtract(ctx context.Context, opts *ExtractOptions) error {
+func runExtract(ctx context.Context, opts *Options) error {
 	if opts.BinaryName == "" {
 		opts.BinaryName = settings.CliBinaryName
 	}
