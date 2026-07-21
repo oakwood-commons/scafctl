@@ -601,6 +601,51 @@ Enable with `-i` or `--interactive`:
 scafctl run solution -f config.yaml -i
 ```
 
+### Display Schemas for Array Output
+
+`kvx.OutputOptions` has **two distinct schema slots**, and they do different things:
+
+| Option | Slot | Effect |
+|--------|------|--------|
+| `kvx.WithOutputSchemaJSON` | column-hint schema | Tunes the **table** view only (column titles, widths). |
+| `kvx.WithOutputDisplaySchemaJSON` | display schema | Drives the **interactive TUI** (`-i`): a card list plus a sectioned detail pane. |
+
+**Rule of thumb:** a command that emits an **array of objects** should attach a
+**display schema** by default so `-i` renders a rich card/detail view instead of
+falling back to a plain KEY/VALUE table. A command that emits a **single object**
+or a scalar (for example `auth token`) does not need one -- a KEY/VALUE table
+renders fine, and the author may add a schema only if they want to.
+
+Prefer a `go:embed`-ed `<cmd>_schema.json` file. The schema is a JSON Schema whose
+root `type` is `array`, decorated with `x-kvx-*` vendor extensions:
+
+- `x-kvx-icon`, `x-kvx-collectionTitle` -- collection-level chrome.
+- `x-kvx-list` -- card rendering (`titleField`, `subtitleField`, `badgeFields`).
+- `x-kvx-detail` -- detail pane (`titleField`, `hiddenFields`, `sections[]` with a
+  per-section `layout` of `inline`, `paragraph`, `tags`, or `table`).
+- `items` -- a standard JSON Schema object describing each element.
+
+The canonical example is `get provider`:
+
+```go
+//go:embed provider_schema.json
+var providerSchemaJSON []byte
+
+func (o *Options) writeOutput(ctx context.Context, data any) error {
+    kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+        kvx.WithOutputContext(ctx),
+        kvx.WithOutputAppName(o.BinaryName+" get provider"),
+        kvx.WithOutputDisplaySchemaJSON(providerSchemaJSON), // interactive card/detail
+        kvx.WithIOStreams(o.IOStreams),
+    )
+    return kvxOpts.Write(data)
+}
+```
+
+See `pkg/cmd/scafctl/get/provider/provider.go` and its `provider_schema.json` for
+the full schema. You can attach **both** slots -- a column-hint schema for the table
+and a display schema for `-i` -- when you want to tune both views.
+
 ### CEL Filtering
 
 Use `-e` or `--expression` to filter/transform output:
