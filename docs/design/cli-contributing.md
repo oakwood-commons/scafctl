@@ -1168,9 +1168,9 @@ This section tracks which commands from the design are implemented and what work
 | `run solution` | ✅ | Executes resolvers AND actions |
 | `run resolver` | ✅ | Executes resolvers only (for debugging and inspection) |
 | `render solution` | ✅ | Includes `--action-graph`, `--snapshot`, `--redact` flags |
-| `package solution` | ✅ | Package solution into local catalog |
+| `package solution` | ✅ | Package solution into local catalog (verifies bundle completeness; `--strict`/`--no-verify`) |
 | `catalog push` | ✅ | Push artifacts to remote catalog |
-| `catalog pull` | ✅ | Pull artifacts from remote catalog |
+| `catalog pull` | ✅ | Pull artifacts from remote catalog (re-checks bundle completeness; warns, or `--strict` to fail) |
 | `catalog list` | ✅ | List catalog contents |
 | `catalog inspect` | ✅ | Inspect artifact metadata |
 | `catalog delete` | ✅ | Delete artifact from catalog |
@@ -1204,7 +1204,6 @@ This section tracks which commands from the design are implemented and what work
 | `test init` | ✅ | Scaffold test suite |
 | `examples list` | ✅ | List available examples |
 | `examples get` | ✅ | Get an example |
-| `bundle verify` | ✅ | Verify bundle integrity |
 | `diff bundle` | ✅ | Diff two bundles |
 | `extract bundle` | ✅ | Extract bundle contents |
 | `vendor update` | ✅ | Update vendored dependencies |

@@ -712,7 +712,7 @@ Bundled sub-solutions (referenced via the `solution` provider) can themselves co
 
 5. **Nested tar extraction** — When extracting a bundle that contains nested `.bundle.tar` files (from sub-solutions that were independently built), `ExtractBundleTar` recursively extracts them into the appropriate subdirectories. Circular nested tars are detected via content digest tracking.
 
-6. **Nested bundle verification** — `scafctl bundle verify` validates that all files referenced by sub-solutions are present in the bundle, checking recursively through the sub-solution chain.
+6. **Nested bundle completeness** -- Completeness checking validates that all files referenced by sub-solutions are present in the bundle, checking recursively through the sub-solution chain. This runs automatically during `scafctl package solution` (the build fails if incomplete; `--strict` makes warnings fatal, `--no-verify` skips) and again on `scafctl catalog pull` (warns by default, or fails with `--strict`).
 
 **Example: Nested directory structure after bundling**
 ```
@@ -918,27 +918,22 @@ Require the author to list every file, even those with literal paths. Safest but
 
 ---
 
-## Bundle Verification (`scafctl bundle verify`)
+## Bundle Completeness (automatic)
 
-Validate that a built artifact contains all files needed for execution by performing a dry-run resolve against the bundled files.
+Bundle completeness is verified automatically -- there is no standalone verify
+command. Completeness checking confirms that a built artifact contains all files
+needed for execution by performing a dry-run resolve against the bundled files.
+It runs in two places:
 
-### Command Specification
+- **Producer side -- `scafctl package solution`:** completeness is checked as
+  part of building the artifact. The build **fails** if the bundle is incomplete.
+- **Consumer side -- `scafctl catalog pull`:** completeness is re-checked when
+  acquiring an artifact. It **warns** by default, or fails with `--strict`.
 
-```bash
-scafctl bundle verify <artifact-ref>
-```
+Both commands accept `--strict` (make warnings fatal) and `--no-verify` (skip the
+completeness check).
 
-| Argument | Description |
-|----------|-------------|
-| `<artifact-ref>` | Catalog reference (e.g., `my-solution@1.0.0`) or path to a local `.tar` bundle |
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--params` | `{}` | JSON object of parameter values to use during verification |
-| `--params-file` | — | Path to a YAML/JSON file containing parameter values |
-| `--strict` | `false` | Fail on warnings (e.g., unreachable dynamic paths) |
-
-### Verification Steps
+### Completeness Checks
 
 1. **Extract bundle** to a temporary directory.
 2. **Parse** the solution YAML and construct the resolver/action DAG.
@@ -946,40 +941,15 @@ scafctl bundle verify <artifact-ref>
 4. **Glob coverage check:** For every `bundle.include` pattern, verify at least one matching file exists.
 5. **Vendored dependency check:** For every catalog reference rewritten to a vendored path, verify the vendored file exists.
 6. **Plugin availability check:** For every `bundle.plugins` entry, verify the plugin can be resolved (local cache or registry).
-7. **Dry-run resolve (optional with `--params`):** Execute resolvers in dry-run mode to catch runtime path errors that depend on parameter values.
+7. **Dry-run resolve:** Execute resolvers in dry-run mode to catch runtime path errors that depend on parameter values.
 
 ### Output
 
-```bash
-$ scafctl bundle verify my-solution@1.0.0 --params '{"env": "prod"}'
+When a completeness problem is detected during `scafctl catalog pull` (warning by
+default) or during `scafctl package solution` (fatal), the missing items are
+reported:
 
-Verifying my-solution@1.0.0...
-
-  Static paths:
-    ✓ templates/main.tf.tmpl
-    ✓ child.yaml
-    ✓ configs/base.yaml
-
-  Dynamic paths (with --params):
-    ✓ configs/prod.yaml (from expr: 'configs/' + _.env + '.yaml')
-
-  Vendored dependencies:
-    ✓ .scafctl/vendor/deploy-to-k8s@2.0.0.yaml
-
-  Plugins:
-    ✓ aws-provider@1.5.3 (provider)
-    ✓ vault-auth@1.2.4 (auth-handler)
-
-Verification passed: 6 files, 1 vendored dependency, 2 plugins
-```
-
-### Error Example
-
-```bash
-$ scafctl bundle verify broken-solution@1.0.0
-
-Verifying broken-solution@1.0.0...
-
+~~~text
   Static paths:
     ✓ templates/main.tf.tmpl
     ✗ templates/missing.tf.tmpl — not found in bundle
@@ -987,14 +957,14 @@ Verifying broken-solution@1.0.0...
   Vendored dependencies:
     ✗ .scafctl/vendor/old-dep@0.5.0.yaml — not found in bundle
 
-Verification failed: 2 errors
-```
+Completeness check failed: 2 errors
+~~~
 
 ### Implementation Notes
 
 - Reuses the static analysis walker from `pkg/solution/bundler`.
 - Dry-run resolve executes resolvers normally (they are side-effect-free) and uses the WhatIf model for action descriptions.
-- Exit code 0 on success, 1 on verification failure.
+- On the producer side an incomplete bundle fails the build; on the consumer side it warns (or fails under `--strict`).
 
 ---
 
@@ -1394,11 +1364,11 @@ plugins:
 - ValueRef defaults merge implementation (shallow merge beneath inline inputs, DAG-aware)
 - CLI integration tests for plugin declaration and resolution
 
-### Phase 7: Bundle Verification
-- Implement `scafctl bundle verify` command
+### Phase 7: Bundle Completeness
+- Implement automatic completeness checking folded into `scafctl package solution` (fails the build if incomplete) and `scafctl catalog pull` (warns, or fails with `--strict`); both gain `--strict` and `--no-verify` flags
 - Static path, glob coverage, and vendored dependency checks
 - Plugin availability check
-- Dry-run resolve with `--params` support
+- Dry-run resolve
 - CLI integration tests
 
 ### Phase 8: Bundle Diffing
@@ -1496,4 +1466,4 @@ Cache can be cleared with `scafctl cache clear --kind build`.
 
 ## Summary
 
-Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle verification (`scafctl bundle verify`) validates artifact completeness, bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl extract bundle`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.
+Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle completeness is verified automatically -- when you `package` a solution (the build fails if incomplete) and when you `pull` one (warns, or fails with `--strict`) -- bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl extract bundle`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.

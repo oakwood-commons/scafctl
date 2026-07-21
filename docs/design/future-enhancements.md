@@ -67,7 +67,7 @@ Source: [catalog-build-bundling.md](catalog-build-bundling.md)
 - **Nested bundle support** — Bundled sub-solutions can themselves contain bundles
 - **Semver constraint resolution** — Catalog refs support full semver constraints (`^`, `~`, `>=`, etc.) resolved at build time to the highest matching version
 - **Version conflict detection** — Conflicting transitive dependency versions are detected and rejected at build time
-- **`scafctl bundle verify`** — Validate built artifacts
+- **Automatic bundle completeness** -- Verified when a solution is packaged (`scafctl package solution` fails the build if incomplete; `--strict`/`--no-verify`) and when it is pulled (`scafctl catalog pull` warns by default, or fails with `--strict`)
 - **Bundle diffing between versions** — `scafctl diff bundle`
 - **Selective extraction** — `scafctl extract bundle`
 

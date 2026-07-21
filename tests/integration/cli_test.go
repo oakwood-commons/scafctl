@@ -3145,6 +3145,8 @@ func TestIntegration_PackageSolutionHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--no-vendor")
 	assert.Contains(t, stdout, "--bundle-max-size")
 	assert.Contains(t, stdout, "--dry-run")
+	assert.Contains(t, stdout, "--strict")
+	assert.Contains(t, stdout, "--no-verify")
 }
 
 // TestIntegration_PackageSolution_Canonical verifies the canonical "package
@@ -4331,6 +4333,8 @@ func TestIntegration_CatalogPullHelp(t *testing.T) {
 	assert.Contains(t, stdout, "Pull a catalog artifact from a remote OCI registry")
 	assert.Contains(t, stdout, "--as")
 	assert.Contains(t, stdout, "--force")
+	assert.Contains(t, stdout, "--strict")
+	assert.Contains(t, stdout, "--no-verify")
 }
 
 func TestIntegration_CatalogPull_InvalidReference(t *testing.T) {
@@ -5232,28 +5236,6 @@ func TestIntegration_SolutionResolver_AuthProviderUnavailable(t *testing.T) {
 // Bundle Command Tests
 // ============================================================================
 
-func TestIntegration_BundleHelp(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "bundle", "--help")
-
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "bundle")
-	assert.Contains(t, stdout, "verify")
-	// extract was moved out of the bundle group to the top-level `extract` verb.
-	assert.NotContains(t, stdout, "\n  extract ")
-	// diff was moved out of the bundle group to the top-level `diff` verb.
-	assert.NotContains(t, stdout, "\n  diff ")
-}
-
-func TestIntegration_BundleVerifyHelp(t *testing.T) {
-	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "bundle", "verify", "--help")
-
-	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "Validate that a built artifact")
-	assert.Contains(t, stdout, "--strict")
-}
-
 func TestIntegration_BundleDiffHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "diff", "bundle", "--help")
@@ -5279,13 +5261,6 @@ func TestIntegration_BundleExtractHelp(t *testing.T) {
 	assert.Contains(t, stdout, "--flatten")
 }
 
-func TestIntegration_BundleVerify_MissingRef(t *testing.T) {
-	t.Parallel()
-	_, _, exitCode := runScafctl(t, "bundle", "verify")
-
-	assert.NotEqual(t, 0, exitCode)
-}
-
 func TestIntegration_BundleDiff_MissingArgs(t *testing.T) {
 	t.Parallel()
 	_, _, exitCode := runScafctl(t, "diff", "bundle")
@@ -5300,23 +5275,128 @@ func TestIntegration_BundleExtract_MissingRef(t *testing.T) {
 	assert.NotEqual(t, 0, exitCode)
 }
 
-func TestIntegration_BundleVerify_AfterBuild(t *testing.T) {
+// TestIntegration_BundleCommand_HardRemoved verifies the standalone `bundle`
+// command group (and `bundle verify`) was retired in the grammar migration.
+// Both now resolve as unknown commands and exit non-zero.
+func TestIntegration_BundleCommand_HardRemoved(t *testing.T) {
 	t.Parallel()
-	tmpDir := t.TempDir()
-	env := map[string]string{
-		"XDG_DATA_HOME":  tmpDir,
-		"XDG_CACHE_HOME": tmpDir,
+
+	t.Run("bundle group removed", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctl(t, "bundle")
+		assert.NotEqual(t, 0, exitCode)
+		assert.Contains(t, stderr, "unknown command")
+	})
+
+	t.Run("bundle verify removed", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctl(t, "bundle", "verify", "x")
+		assert.NotEqual(t, 0, exitCode)
+		assert.Contains(t, stderr, "unknown command")
+	})
+}
+
+// incompleteSolutionFixture writes a solution that references an unvendored
+// catalog dependency (which will not be present in the bundle) alongside a
+// local file (so a bundle layer is actually produced). Packaging with
+// --no-vendor therefore yields a bundle that fails completeness verification.
+// It returns the directory containing the solution file.
+func incompleteSolutionFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.txt"), []byte("hello\n"), 0o644))
+	solution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: incomplete-demo
+  version: "1.0.0"
+  description: Solution referencing an unvendored catalog dependency
+spec:
+  resolvers:
+    localfile:
+      description: Reads a local file so a bundle layer is produced
+      type: string
+      resolve:
+        with:
+          - provider: file
+            inputs:
+              operation: read
+              path: ./data.txt
+    dep:
+      description: References an unvendored catalog solution dependency
+      type: string
+      resolve:
+        with:
+          - provider: solution
+            inputs:
+              source: nonexistent-dep@1.0.0
+              resolver: value
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "solution.yaml"), []byte(solution), 0o644))
+	return dir
+}
+
+// TestIntegration_PackageSolution_IncompleteBundleFails verifies the producer
+// verification hook: packaging a solution whose built bundle is incomplete
+// fails by default, and --no-verify skips the check.
+func TestIntegration_PackageSolution_IncompleteBundleFails(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fails on incomplete bundle", func(t *testing.T) {
+		t.Parallel()
+		dir := incompleteSolutionFixture(t)
+		tmpDir := t.TempDir()
+		env := map[string]string{"XDG_DATA_HOME": tmpDir, "XDG_CACHE_HOME": tmpDir}
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, dir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+			"--no-vendor", "--skip-lint", "--skip-tests")
+		assert.NotEqual(t, 0, exitCode)
+		assert.Contains(t, stdout+stderr, "incomplete")
+	})
+
+	t.Run("--no-verify skips the check", func(t *testing.T) {
+		t.Parallel()
+		dir := incompleteSolutionFixture(t)
+		tmpDir := t.TempDir()
+		env := map[string]string{"XDG_DATA_HOME": tmpDir, "XDG_CACHE_HOME": tmpDir}
+		stdout, stderr, exitCode := runScafctlWithEnvInDir(t, dir, env,
+			"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+			"--no-vendor", "--skip-lint", "--skip-tests", "--no-verify")
+		assert.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
+	})
+}
+
+// TestIntegration_PackageSolution_IncompleteBundle_EmbedderBinaryName verifies
+// that the producer verification failure is surfaced when the binary is invoked
+// under a non-default (embedder) name via an argv[0] symlink.
+func TestIntegration_PackageSolution_IncompleteBundle_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink dispatch test is POSIX-only")
 	}
 
-	// Build first
-	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
-	require.Equal(t, 0, exitCode)
+	dir := incompleteSolutionFixture(t)
+	linkDir := t.TempDir()
+	linkPath := filepath.Join(linkDir, "mycli")
+	require.NoError(t, os.Symlink(binaryPath, linkPath))
 
-	// Verify the built artifact
-	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "bundle", "verify", "resolver-demo@1.0.0")
-	t.Logf("stdout: %s", stdout)
-	t.Logf("stderr: %s", stderr)
-	assert.Equal(t, 0, exitCode)
+	tmpDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, linkPath,
+		"package", "solution", "-f", "solution.yaml", "--version", "1.0.0",
+		"--no-vendor", "--skip-lint", "--skip-tests")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "XDG_DATA_HOME="+tmpDir, "XDG_CACHE_HOME="+tmpDir)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, "expected non-zero exit for incomplete bundle")
+	assert.NotEqual(t, 0, exitErr.ExitCode())
+	assert.Contains(t, outBuf.String()+errBuf.String(), "incomplete")
 }
 
 func TestIntegration_BundleExtract_AfterBuild(t *testing.T) {
@@ -9196,7 +9276,7 @@ func TestIntegration_OldExtractSnapshotPaths_HardRemoved(t *testing.T) {
 func TestIntegration_BareGroups_ShowHelpExitZero(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{"bundle", "extract", "catalog", "config", "auth", "secrets", "cache", "render"}
+	cases := []string{"extract", "catalog", "config", "auth", "secrets", "cache", "render"}
 
 	for _, group := range cases {
 		t.Run(group, func(t *testing.T) {

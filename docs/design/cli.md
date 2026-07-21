@@ -1097,7 +1097,6 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl get examples` | get | examples |
 | `scafctl cache clean` | cache | clean |
 | `scafctl plugins list` | plugins | list |
-| `scafctl bundle create` | bundle | create |
 | `scafctl vendor sync` | vendor | sync |
 
 **Standalone** (no sub-noun or sub-verb):
@@ -1160,7 +1159,7 @@ The deciding question: **"Is this a core workflow action the user came here to d
 scafctl already follows the established delineation:
 
 - **Verb-noun** for core domain operations — `run`, `get`, `render`, `explain`, `build`, `new`, `push`, `pull`, `tag` all act on domain kinds (solution, provider, resolver).
-- **Noun-verb** for infrastructure/services — `config`, `secrets`, `auth`, `catalog`, `snapshot`, `lint`, `eval`, `examples`, `cache`, `plugins`, `bundle`, `vendor` are all subsystem groups with their own actions.
+- **Noun-verb** for infrastructure/services — `config`, `secrets`, `auth`, `catalog`, `snapshot`, `lint`, `eval`, `examples`, `cache`, `plugins`, `vendor` are all subsystem groups with their own actions.
 - **Standalone** for single-purpose utilities — `version`, `mcp`, `test`.
 
 This matches how kubectl, docker, git, gh, and helm structure their CLIs. Attempting to "unify" to pure verb-noun or pure noun-verb would:

@@ -37,11 +37,14 @@ scafctl package solution -f examples/catalog/bundling-example/solution.yaml --dr
 scafctl package solution -f examples/catalog/bundling-example/solution.yaml --version 1.0.0
 ```
 
-### 3. Verify the Bundle
+### 3. Bundle Completeness
 
-```bash
-scafctl bundle verify bundling-example@1.0.0
-```
+Bundle completeness is verified automatically -- there is no standalone verify
+command. The `scafctl package solution` step above already checked that the
+bundle contains all required files and fails the build if it is incomplete (use
+`--strict` to make warnings fatal, or `--no-verify` to skip). It is re-checked
+when you `scafctl catalog pull` the artifact (warns by default, or fails with
+`--strict`).
 
 ### 4. List Bundle Contents
 

@@ -1717,40 +1717,18 @@ scafctl run resolver -f nested-demo -o json
 
 ---
 
-## Verifying and Extracting Bundles
+## Examining Bundles
 
-After building a bundle, you can verify its integrity and examine its contents.
+Bundle completeness is verified automatically -- you do not run a standalone
+verify command. When you `scafctl package solution`, the build checks that all
+files referenced in the solution exist in the bundle and that `bundle.include`
+glob patterns cover the expected files; the build fails if the bundle is
+incomplete (use `--strict` to make warnings fatal, or `--no-verify` to skip the
+check). Completeness is re-checked when a consumer runs `scafctl catalog pull`
+(warns by default, or fails with `--strict`). After building, you can examine
+the bundle's contents.
 
-### Step 1: Verify the Bundle
-
-{{< tabs "catalog-tutorial-cmd-47" >}}
-{{% tab "Bash" %}}
-```bash
-scafctl bundle verify deploy-app@1.0.0
-```
-{{% /tab %}}
-{{% tab "PowerShell" %}}
-```powershell
-scafctl bundle verify deploy-app@1.0.0
-```
-{{% /tab %}}
-{{< /tabs >}}
-
-Expected output:
-
-```
- 💡 Verifying deploy-app@1.0.0...
-  Static paths:
-  Bundle includes (glob coverage): ✅
-    ✓ configs/**/*.yaml
- ✅ Verification passed: 1 item(s) checked
-```
-
-This checks that:
-- All files referenced in the solution exist in the bundle
-- Glob patterns in `bundle.include` cover the expected files
-
-### Step 2: List Bundle Contents
+### Step 1: List Bundle Contents
 
 See what files are inside the bundle without extracting them:
 
@@ -1776,7 +1754,7 @@ Expected output:
 💡 Total: 3 file(s), 705 B
 ```
 
-### Step 3: Extract to a Directory
+### Step 2: Extract to a Directory
 
 Extract the bundled files to inspect them:
 
@@ -1810,7 +1788,7 @@ extracted/
     └── deployment.yaml
 ```
 
-### Step 4: Extract Files for a Specific Resolver
+### Step 3: Extract Files for a Specific Resolver
 
 You can extract only the files needed by a specific resolver:
 
@@ -1829,7 +1807,7 @@ scafctl extract bundle deploy-app@1.0.0 --resolver config --output-dir ./config-
 
 This uses static analysis to determine which files the `config` resolver references.
 
-### Step 5: Clean Up
+### Step 4: Clean Up
 
 ```bash
 rm -rf extracted/ config-only/
@@ -1837,7 +1815,7 @@ rm -rf extracted/ config-only/
 
 ### What You Learned
 
-- `scafctl bundle verify` checks that a bundle contains all required files
+- Bundle completeness is verified automatically -- `scafctl package solution` fails the build if the bundle is incomplete (use `--strict`/`--no-verify`), and `scafctl catalog pull` re-checks it (warns by default, or fails with `--strict`)
 - `scafctl extract bundle --list-only` shows bundle contents without extracting
 - `scafctl extract bundle --output-dir DIR` extracts files to a directory
 - `--resolver NAME` extracts only files needed by a specific resolver

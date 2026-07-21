@@ -14,7 +14,9 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/git"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -54,6 +56,8 @@ type SolutionOptions struct {
 	NoGitMetadata   bool
 	BaseDir         string
 	Bump            string
+	Strict          bool
+	NoVerify        bool
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -247,6 +251,8 @@ func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	cmd.Flags().BoolVar(&options.NoGitMetadata, "no-git-metadata", false, "Skip git commit and dirty-state annotations on the built artifact")
 	cmd.Flags().StringVar(&options.BaseDir, "base-dir", "", "Override base directory for resolving relative paths in the solution (default: solution file's directory)")
 	cmd.Flags().StringVar(&options.Bump, "bump", "", "Auto-increment version based on last published version (patch, minor, major)")
+	cmd.Flags().BoolVar(&options.Strict, "strict", false, "Fail if the built bundle has completeness warnings")
+	cmd.Flags().BoolVar(&options.NoVerify, "no-verify", false, "Skip built-bundle completeness verification")
 
 	return cmd
 }
@@ -590,6 +596,69 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		w.Verbosef("Fingerprint: %s (%d input files)", br.BuildFingerprint, br.InputFileCount)
 	}
 
+	// === Built-bundle completeness verification ===
+	//
+	// Verify against the STORED bundle (reassembled by FetchWithBundle), not
+	// br.TarData: the default dedup path stores layers separately and only
+	// FetchWithBundle reassembles a single bundle tar that VerifyBundle can
+	// consume. Verifying br.TarData directly would silently skip verification
+	// on the default dedup build.
+	//
+	// A pure build-cache hit returns earlier (it was verified when first built),
+	// so this code runs only on fresh builds and cache-miss re-stores.
+	if !opts.NoBundle && !opts.NoVerify {
+		if verr := verifyBuiltBundle(ctx, localCatalog, info.Reference, opts, w, lgr); verr != nil {
+			return verr
+		}
+	}
+
+	return nil
+}
+
+// verifyBuiltBundle fetches the stored bundle for ref, verifies its
+// completeness, renders the result, and enforces producer policy: fail on
+// errors, and (under --strict) fail on warnings.
+func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *SolutionOptions, w *writer.Writer, lgr *logr.Logger) error {
+	content, bundleData, _, ferr := localCatalog.FetchWithBundle(ctx, ref)
+	if ferr != nil {
+		return exitcode.WithCode(fmt.Errorf("verifying built bundle: %w", ferr), exitcode.GeneralError)
+	}
+	// No bundle data is a legitimately bundle-less artifact; nothing to verify.
+	if len(bundleData) == 0 {
+		return nil
+	}
+
+	var vsol solution.Solution
+	if err := vsol.LoadFromBytes(content); err != nil {
+		return exitcode.WithCode(fmt.Errorf("verifying built bundle: %w", err), exitcode.GeneralError)
+	}
+
+	vr, err := bundler.VerifyBundle(ctx, &vsol, bundleData, *lgr)
+	if err != nil {
+		return exitcode.WithCode(fmt.Errorf("verifying built bundle: %w", err), exitcode.GeneralError)
+	}
+
+	cmdutil.RenderVerifyResult(w, vr)
+
+	if failErr := packageVerifyDecision(vr, opts.Strict); failErr != nil {
+		w.Errorf("%v", failErr)
+		return failErr
+	}
+
+	return nil
+}
+
+// packageVerifyDecision applies the producer verification policy to a verify
+// result. Producer policy fails on completeness errors by default, and (under
+// --strict) also fails on completeness warnings. It returns the error to fail
+// the package with, or nil if the bundle is acceptable under the policy.
+func packageVerifyDecision(vr *bundler.VerifyResult, strict bool) error {
+	if !vr.Passed() {
+		return exitcode.Errorf("built bundle is incomplete: %d error(s)", len(vr.Errors))
+	}
+	if strict && len(vr.Warnings) > 0 {
+		return exitcode.Errorf("built bundle has %d warning(s) (strict)", len(vr.Warnings))
+	}
 	return nil
 }
 
