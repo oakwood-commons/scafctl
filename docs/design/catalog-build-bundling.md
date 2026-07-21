@@ -951,11 +951,11 @@ reported:
 
 ~~~text
   Static paths:
-    ✓ templates/main.tf.tmpl
-    ✗ templates/missing.tf.tmpl — not found in bundle
+    [ok] templates/main.tf.tmpl
+    [x]  templates/missing.tf.tmpl -- not found in bundle
 
   Vendored dependencies:
-    ✗ .scafctl/vendor/old-dep@0.5.0.yaml — not found in bundle
+    [x]  .scafctl/vendor/old-dep@0.5.0.yaml -- not found in bundle
 
 Completeness check failed: 2 errors
 ~~~
@@ -1466,4 +1466,4 @@ Cache can be cleared with `scafctl cache clear --kind build`.
 
 ## Summary
 
-Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime — with ValueRef-aware defaults reducing repetition across provider usages. Bundle completeness is verified automatically -- when you `package` a solution (the build fails if incomplete) and when you `pull` one (warns, or fails with `--strict`) -- bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl extract bundle`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.
+Solution file bundling makes solutions portable by collecting all dependencies into the OCI artifact at build time. Multi-file composition lets developers split large solutions across files while producing a single merged YAML in the artifact. Static analysis handles the common case for local files automatically, while `bundle.include` gives explicit control over dynamically referenced files. Catalog reference vendoring embeds remote dependencies for offline, reproducible execution. Plugin dependencies declared in `bundle.plugins` ensure external providers and auth handlers are versioned, recorded in the lock file, and resolvable at runtime -- with ValueRef-aware defaults reducing repetition across provider usages. Bundle completeness is verified automatically -- when you `package` a solution (the build fails if incomplete) and when you `pull` one (warns, or fails with `--strict`) -- bundle diffing (`scafctl diff bundle`) enables change auditing between versions, and selective extraction (`scafctl extract bundle`) supports targeted file inspection. Content-addressable deduplication reduces registry storage by sharing identical files across solutions, and `scafctl vendor update` enables dependency management without full rebuilds. The design preserves backward compatibility, requires no changes to existing providers, and follows OCI conventions by using multi-layer manifests.

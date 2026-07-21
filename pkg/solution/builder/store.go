@@ -64,10 +64,19 @@ type StoreResult struct {
 	// CacheWritten indicates whether a build cache entry was written.
 	CacheWritten bool `json:"cacheWritten,omitempty" yaml:"cacheWritten,omitempty" doc:"Whether the build cache entry was written"`
 
-	// br is the build result associated with this store, retained so a deferred
-	// WriteBuildCacheEntry can construct the build-cache entry after the caller
-	// has verified the stored artifact.
-	br *BuildResult
+	// cache holds just the metadata needed to write a deferred build-cache
+	// entry after the caller has verified the stored artifact. It deliberately
+	// does NOT retain the full *BuildResult, whose TarData/Dedup payload can be
+	// large and is not needed once the artifact is stored.
+	cache deferredCacheInfo
+}
+
+// deferredCacheInfo carries the minimal fields WriteBuildCacheEntry needs to
+// construct a build-cache entry without retaining the whole build result.
+type deferredCacheInfo struct {
+	fingerprint    string
+	cacheDir       string
+	inputFileCount int
 }
 
 // StoreSolutionArtifact stores a built solution artifact in the local catalog,
@@ -116,7 +125,14 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 		return nil, err
 	}
 
-	result := &StoreResult{Info: info, br: br}
+	result := &StoreResult{Info: info}
+	if br != nil {
+		result.cache = deferredCacheInfo{
+			fingerprint:    br.BuildFingerprint,
+			cacheDir:       br.BuildCacheDir,
+			inputFileCount: br.InputFileCount,
+		}
+	}
 
 	lgr.V(1).Info("built solution",
 		"name", info.Reference.Name,
@@ -156,24 +172,24 @@ func WriteBuildCacheEntry(ctx context.Context, result *StoreResult) bool {
 	if result == nil {
 		return false
 	}
-	br := result.br
-	if br == nil || br.BuildFingerprint == "" || br.BuildCacheDir == "" {
+	ci := result.cache
+	if ci.fingerprint == "" || ci.cacheDir == "" {
 		return false
 	}
 	info := result.Info
 	cacheEntry := &bundler.BuildCacheEntry{
-		Fingerprint:     br.BuildFingerprint,
+		Fingerprint:     ci.fingerprint,
 		ArtifactName:    info.Reference.Name,
 		ArtifactVersion: info.Reference.Version.String(),
 		ArtifactDigest:  info.Digest,
 		CreatedAt:       time.Now(),
-		InputFiles:      br.InputFileCount,
+		InputFiles:      ci.inputFileCount,
 	}
-	if cacheErr := bundler.WriteBuildCache(br.BuildCacheDir, br.BuildFingerprint, cacheEntry); cacheErr != nil {
+	if cacheErr := bundler.WriteBuildCache(ci.cacheDir, ci.fingerprint, cacheEntry); cacheErr != nil {
 		lgr.V(1).Info("failed to write build cache (non-fatal)", "error", cacheErr)
 		return false
 	}
-	lgr.V(1).Info("wrote build cache entry", "fingerprint", br.BuildFingerprint)
+	lgr.V(1).Info("wrote build cache entry", "fingerprint", ci.fingerprint)
 	result.CacheWritten = true
 	return true
 }

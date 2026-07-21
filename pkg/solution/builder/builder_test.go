@@ -282,7 +282,8 @@ func TestStoreSolutionArtifact_DeferBuildCacheThenWrite(t *testing.T) {
 
 func TestWriteBuildCacheEntry_NoFingerprintNoOp(t *testing.T) {
 	ctx := context.Background()
-	result := &StoreResult{br: &BuildResult{}}
+	// Empty deferredCacheInfo (no fingerprint) -> no-op.
+	result := &StoreResult{}
 	assert.False(t, WriteBuildCacheEntry(ctx, result))
 	assert.False(t, result.CacheWritten)
 }
