@@ -26,6 +26,7 @@ When invoked directly (not via a prompt), run this procedure:
 
 - **Terminal output**: Must use `writer.FromContext(ctx)`, never `fmt.Fprintf` directly
 - **Structured data output**: Must use `kvx.OutputOptions` with table/json/yaml support
+- **Array output display schema**: A command that emits an **array of objects** via kvx should attach an interactive display schema (`kvx.WithOutputDisplaySchemaJSON`, a `go:embed`-ed `<cmd>_schema.json` with `x-kvx-list`/`x-kvx-detail` extensions) so `-i` renders a card/detail view rather than a plain KEY/VALUE table. Note `WithOutputSchemaJSON` only tunes table column hints; it is not a substitute. Single-object/scalar output does not need one. Canonical example: `pkg/cmd/scafctl/get/provider/provider.go` + `provider_schema.json`
 - **Business logic placement**: Must be in `pkg/`, never in `pkg/cmd/scafctl/...` or `pkg/mcp/tools_*.go`
 - **Struct tags**: Must have JSON/YAML tags and Huma validation tags (`doc`, `maxLength`, `example`, etc.)
 - **Constants**: No magic strings or numbers -- use constants or settings
