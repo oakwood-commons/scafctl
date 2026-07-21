@@ -45,7 +45,7 @@ The project uses `task` (go-task/task) for builds and linting. **Always use `tas
 - **After any change**: Run `task test:e2e` to ensure everything passes. E2E is slow -- run it **once**, redirect output to a file (`task test:e2e 2>&1 | tee /tmp/e2e-results.txt`), and grep the file to check results. Never re-run just to read output differently.
 - **Test coverage**: Every new or changed file must have tests. Target 70%+ patch coverage. Never submit a new file with 0% test coverage
 - **No magic values**: Always define constants or use settings for configuration values
-- **Git safety**: The AI may commit and push, but must **ask for approval first** every time (never commit or push without explicit per-action approval); `git commit --amend` is **denied** and run manually by the user. Before committing, verify a signing key is loaded (`ssh-add -l`); if none is loaded, prompt the user to run `ssh-add --apple-use-keychain ~/.ssh/id_ecdsa_public_github` (drop the flag on non-macOS; on Windows first `Start-Service ssh-agent` in PowerShell) rather than attempting a doomed commit. All commits must be signed (`-S`) and DCO signed-off (`-s`). See `AGENTS.md` for details.
+- **Git safety**: The AI may commit, push, and open PRs, but must **ask for approval first**; a **single approval covers the whole commit -> push -> PR sequence** (never publish any step without having asked). `git commit --amend` is **denied** and run manually by the user. Before committing, verify a signing key is loaded (`ssh-add -l`); if none is loaded, prompt the user to run `ssh-add --apple-use-keychain ~/.ssh/id_ecdsa_public_github` (drop the flag on non-macOS; on Windows first `Start-Service ssh-agent` in PowerShell) rather than attempting a doomed commit. All commits must be signed (`-S`) and DCO signed-off (`-s`). **Never `sleep` to wait for CI**; if waiting is needed, ask first and loop-poll. See `AGENTS.md` for details.
 
 ## Issue Definition of Done (automatic quality gate)
 
@@ -60,8 +60,16 @@ continuous pass. Do NOT pause between implementation, review, and fixing.
 Interrupt only to ask a genuine judgment-call question (see "Ask vs. proceed").
 Then present a **single consolidated summary** (what changed, review findings and
 how they were resolved, coverage, test results) and **ask once for approval to
-commit**. Commit and push remain separate approval-gated steps
+publish**. That one approval covers the whole `commit` -> `push` -> open-PR
+sequence: on approval the AI may run all three without stopping again, unless
+something material changed (different files, a failing gate), in which case it
+re-asks. It must **never** push or open a PR without having asked
 (`/pr-review` is run by the user afterward).
+
+**Never `sleep` to wait for CI.** After pushing/opening a PR, do not idle or
+`sleep` waiting for pipeline results. If waiting is genuinely needed, ask the
+user first; even then loop-poll briefly (e.g. `gh pr checks`) rather than
+sleeping, and hand control back promptly.
 
 Once the code changes for the issue are complete and local tests pass, and
 **before proposing a commit**:
