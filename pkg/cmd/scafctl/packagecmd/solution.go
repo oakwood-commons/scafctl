@@ -14,7 +14,9 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/git"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -54,6 +56,8 @@ type SolutionOptions struct {
 	NoGitMetadata   bool
 	BaseDir         string
 	Bump            string
+	Strict          bool
+	NoVerify        bool
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -247,6 +251,8 @@ func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	cmd.Flags().BoolVar(&options.NoGitMetadata, "no-git-metadata", false, "Skip git commit and dirty-state annotations on the built artifact")
 	cmd.Flags().StringVar(&options.BaseDir, "base-dir", "", "Override base directory for resolving relative paths in the solution (default: solution file's directory)")
 	cmd.Flags().StringVar(&options.Bump, "bump", "", "Auto-increment version based on last published version (patch, minor, major)")
+	cmd.Flags().BoolVar(&options.Strict, "strict", false, "Fail if the built bundle has completeness warnings")
+	cmd.Flags().BoolVar(&options.NoVerify, "no-verify", false, "Skip built-bundle completeness verification")
 
 	return cmd
 }
@@ -569,6 +575,12 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		Annotations:      sol.Metadata.Annotations,
 		ArtifactCacheDir: paths.ArtifactCacheDir(),
 		ArtifactCacheTTL: settings.DefaultArtifactCacheTTL,
+		// Defer the build-cache write until AFTER completeness verification
+		// passes: a build-cache entry must only exist for a verified artifact,
+		// otherwise a rerun after a failed verify would hit the cache and exit 0
+		// without re-verifying the broken artifact. The stored catalog artifact
+		// is intentionally left in place on verify failure (no rollback).
+		DeferBuildCache: true,
 	})
 	if err != nil {
 		if catalog.IsExists(err) {
@@ -583,13 +595,102 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 	w.Successf("Built %s@%s", info.Reference.Name, info.Reference.Version.String())
 	w.Infof("  Digest: %s", info.Digest)
 	w.Infof("  Catalog: %s", localCatalog.Path())
-	if storeResult.CacheWritten {
-		w.Verbose("Build cache entry written")
-	}
 	if br != nil && br.BuildFingerprint != "" {
 		w.Verbosef("Fingerprint: %s (%d input files)", br.BuildFingerprint, br.InputFileCount)
 	}
 
+	// === Built-bundle completeness verification ===
+	//
+	// Verify against the STORED bundle (reassembled by FetchWithBundle), not
+	// br.TarData: the default dedup path stores layers separately and only
+	// FetchWithBundle reassembles a single bundle tar that VerifyBundle can
+	// consume. Verifying br.TarData directly would silently skip verification
+	// on the default dedup build.
+	//
+	// A pure build-cache hit returns earlier (it was verified when first built),
+	// so this code runs only on fresh builds and cache-miss re-stores.
+	//
+	// Verification runs BEFORE the build-cache entry is written (the store above
+	// deferred it): on failure we return without writing the cache entry, so a
+	// rerun re-builds and re-verifies instead of hitting a cached broken
+	// artifact and exiting 0. The stored catalog artifact is left in place.
+	if !opts.NoVerify {
+		if verr := verifyBuiltBundle(ctx, localCatalog, info.Reference, opts, w, lgr); verr != nil {
+			return verr
+		}
+
+		// Verification passed -- now it is safe to commit the build-cache entry
+		// so a future unchanged rebuild can be a fast cache hit.
+		//
+		// The cache entry is written ONLY when verification ran. With
+		// --no-verify we deliberately skip the cache write: the "Build cache
+		// hit" fast path assumes a cached artifact was verified when first
+		// built, so writing a cache entry for an unverified artifact would let a
+		// later verify-enabled run hit the cache and skip verification too --
+		// one --no-verify would permanently poison the cache.
+		if builder.WriteBuildCacheEntry(ctx, storeResult) {
+			w.Verbose("Build cache entry written")
+		}
+	} else {
+		w.Verbose("Skipping build-cache entry (--no-verify): unverified artifacts are not cached")
+	}
+
+	return nil
+}
+
+// verifyBuiltBundle fetches the stored bundle for ref, verifies its
+// completeness, renders the result, and enforces producer policy: fail on
+// errors, and (under --strict) fail on warnings.
+func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *SolutionOptions, w *writer.Writer, lgr *logr.Logger) error {
+	content, bundleData, _, ferr := localCatalog.FetchWithBundle(ctx, ref)
+	if ferr != nil {
+		// Producer errors are always fatal: we cannot confirm a good build.
+		err := fmt.Errorf("fetching built bundle for verification: %w", ferr)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	var vsol solution.Solution
+	if err := vsol.LoadFromBytes(content); err != nil {
+		err = fmt.Errorf("parsing built solution for verification: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	// Pass the (possibly empty) bundleData through to VerifyBundle: the empty
+	// case is handled by verifyNoBundleCase, which surfaces warnings for local
+	// files and unvendored catalog deps. An early return on len==0 would let
+	// --strict wrongly succeed on a bundle-less-but-incomplete artifact (e.g. a
+	// --no-vendor package whose only deps are catalog refs).
+	vr, err := bundler.VerifyBundle(ctx, &vsol, bundleData, *lgr)
+	if err != nil {
+		err = fmt.Errorf("verifying built bundle: %w", err)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+
+	// Producer: incompleteness fails the build, so render failures as errors.
+	cmdutil.RenderVerifyResult(w, vr, false)
+
+	if failErr := packageVerifyDecision(vr, opts.Strict); failErr != nil {
+		w.Errorf("%v", failErr)
+		return failErr
+	}
+
+	return nil
+}
+
+// packageVerifyDecision applies the producer verification policy to a verify
+// result. Producer policy fails on completeness errors by default, and (under
+// --strict) also fails on completeness warnings. It returns the error to fail
+// the package with, or nil if the bundle is acceptable under the policy.
+func packageVerifyDecision(vr *bundler.VerifyResult, strict bool) error {
+	if !vr.Passed() {
+		return exitcode.Errorf("built bundle is incomplete: %d error(s)", len(vr.Errors))
+	}
+	if strict && len(vr.Warnings) > 0 {
+		return exitcode.Errorf("built bundle has %d warning(s) (strict)", len(vr.Warnings))
+	}
 	return nil
 }
 

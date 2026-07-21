@@ -47,6 +47,13 @@ type StoreOptions struct {
 	// ArtifactCacheTTL is the TTL for the artifact cache.
 	// Required when ArtifactCacheDir is set.
 	ArtifactCacheTTL time.Duration `json:"-" yaml:"-" doc:"Artifact cache TTL"`
+
+	// DeferBuildCache, when true, skips writing the build-cache entry during the
+	// store. The caller is expected to call WriteBuildCacheEntry only after any
+	// post-store verification passes, so a failed verification does not leave a
+	// build-cache entry that would let a rerun hit a cached broken artifact and
+	// exit 0 without re-verifying.
+	DeferBuildCache bool `json:"-" yaml:"-" doc:"Skip writing the build cache entry during store"`
 }
 
 // StoreResult holds the outcome of a store operation.
@@ -56,6 +63,20 @@ type StoreResult struct {
 
 	// CacheWritten indicates whether a build cache entry was written.
 	CacheWritten bool `json:"cacheWritten,omitempty" yaml:"cacheWritten,omitempty" doc:"Whether the build cache entry was written"`
+
+	// cache holds just the metadata needed to write a deferred build-cache
+	// entry after the caller has verified the stored artifact. It deliberately
+	// does NOT retain the full *BuildResult, whose TarData/Dedup payload can be
+	// large and is not needed once the artifact is stored.
+	cache deferredCacheInfo
+}
+
+// deferredCacheInfo carries the minimal fields WriteBuildCacheEntry needs to
+// construct a build-cache entry without retaining the whole build result.
+type deferredCacheInfo struct {
+	fingerprint    string
+	cacheDir       string
+	inputFileCount int
 }
 
 // StoreSolutionArtifact stores a built solution artifact in the local catalog,
@@ -105,6 +126,13 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 	}
 
 	result := &StoreResult{Info: info}
+	if br != nil {
+		result.cache = deferredCacheInfo{
+			fingerprint:    br.BuildFingerprint,
+			cacheDir:       br.BuildCacheDir,
+			inputFileCount: br.InputFileCount,
+		}
+	}
 
 	lgr.V(1).Info("built solution",
 		"name", info.Reference.Name,
@@ -122,23 +150,45 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 		}
 	}
 
-	// Write build cache entry after successful store
-	if br != nil && br.BuildFingerprint != "" && br.BuildCacheDir != "" {
-		cacheEntry := &bundler.BuildCacheEntry{
-			Fingerprint:     br.BuildFingerprint,
-			ArtifactName:    info.Reference.Name,
-			ArtifactVersion: info.Reference.Version.String(),
-			ArtifactDigest:  info.Digest,
-			CreatedAt:       time.Now(),
-			InputFiles:      br.InputFileCount,
-		}
-		if cacheErr := bundler.WriteBuildCache(br.BuildCacheDir, br.BuildFingerprint, cacheEntry); cacheErr != nil {
-			lgr.V(1).Info("failed to write build cache (non-fatal)", "error", cacheErr)
-		} else {
-			lgr.V(1).Info("wrote build cache entry", "fingerprint", br.BuildFingerprint)
-			result.CacheWritten = true
-		}
+	// Write build cache entry after successful store (unless deferred to the
+	// caller, which writes it only after post-store verification passes).
+	// WriteBuildCacheEntry sets result.CacheWritten on success.
+	if !opts.DeferBuildCache {
+		WriteBuildCacheEntry(ctx, result)
 	}
 
 	return result, nil
+}
+
+// WriteBuildCacheEntry writes the build-cache entry for a stored artifact. It is
+// separated from StoreSolutionArtifact so callers can defer the cache write
+// until after post-store verification passes (see StoreOptions.DeferBuildCache):
+// a build-cache entry must only exist for artifacts that verified successfully,
+// otherwise a rerun would hit the cache and exit 0 without re-verifying a broken
+// artifact. It returns true when an entry was written.
+func WriteBuildCacheEntry(ctx context.Context, result *StoreResult) bool {
+	lgr := logger.FromContext(ctx)
+	if result == nil {
+		return false
+	}
+	ci := result.cache
+	if ci.fingerprint == "" || ci.cacheDir == "" {
+		return false
+	}
+	info := result.Info
+	cacheEntry := &bundler.BuildCacheEntry{
+		Fingerprint:     ci.fingerprint,
+		ArtifactName:    info.Reference.Name,
+		ArtifactVersion: info.Reference.Version.String(),
+		ArtifactDigest:  info.Digest,
+		CreatedAt:       time.Now(),
+		InputFiles:      ci.inputFileCount,
+	}
+	if cacheErr := bundler.WriteBuildCache(ci.cacheDir, ci.fingerprint, cacheEntry); cacheErr != nil {
+		lgr.V(1).Info("failed to write build cache (non-fatal)", "error", cacheErr)
+		return false
+	}
+	lgr.V(1).Info("wrote build cache entry", "fingerprint", ci.fingerprint)
+	result.CacheWritten = true
+	return true
 }

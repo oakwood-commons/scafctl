@@ -59,17 +59,20 @@ func VerifyBundle(ctx context.Context, sol *solution.Solution, bundleData []byte
 }
 
 // verifyNoBundleCase handles verification when no bundle data is present.
-func verifyNoBundleCase(sol *solution.Solution, result *VerifyResult, lgr logr.Logger) (*VerifyResult, error) {
-	discovery, err := DiscoverFiles(sol, ".")
-	if err != nil {
-		lgr.V(1).Info("discovery failed during no-bundle verify", "error", err)
-		return result, nil
+func verifyNoBundleCase(sol *solution.Solution, result *VerifyResult, _ logr.Logger) (*VerifyResult, error) {
+	// Analyze the solution SPEC directly rather than DiscoverFiles(sol, "."):
+	// discovery stats files against the current working directory, so a
+	// bundle-less solution run from an unrelated CWD (e.g. `package solution -f
+	// path/...` or any `catalog pull`) would discover nothing and emit no
+	// warnings -- letting --strict wrongly succeed on an incomplete artifact.
+	// analyzeProviderInputs is purely spec-based (no filesystem stat), so the
+	// warnings are deterministic and independent of the caller's CWD.
+	localFiles, catalogRefs := analyzeProviderInputs(sol)
+	if len(localFiles) > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("solution references %d local files but has no bundle", len(localFiles)))
 	}
-	if len(discovery.LocalFiles) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("solution references %d local files but has no bundle", len(discovery.LocalFiles)))
-	}
-	if len(discovery.CatalogRefs) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("solution references %d catalog dependencies but has no vendored copies", len(discovery.CatalogRefs)))
+	if len(catalogRefs) > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("solution references %d catalog dependencies but has no vendored copies", len(catalogRefs)))
 	}
 	return result, nil
 }
