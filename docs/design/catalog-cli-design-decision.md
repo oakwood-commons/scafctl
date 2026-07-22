@@ -230,7 +230,7 @@ scafctl catalog pull ghcr.io/myorg/custom-path/deploy:1.0.0
 
 ### Rationale
 
-Option B offers the lowest learning curve, least typing after initial setup, and requires no new commands. It integrates naturally with the existing `scafctl catalog remote add` / `scafctl catalog remote set-default` CLI. Kind inference from local catalog metadata ensures correctness without user-facing complexity.
+Option B offers the lowest learning curve, least typing after initial setup, and requires no new commands. It integrates naturally with the existing `scafctl catalog remote add` / `scafctl catalog remote default` CLI. Kind inference from local catalog metadata ensures correctness without user-facing complexity.
 
 ### Implementation Summary
 

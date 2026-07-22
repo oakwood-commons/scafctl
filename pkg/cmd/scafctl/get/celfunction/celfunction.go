@@ -34,7 +34,7 @@ type FunctionSummary struct {
 	Custom      bool   `json:"custom" yaml:"custom"`
 }
 
-// Options holds configuration for the get cel-functions command
+// Options holds configuration for the get cel functions command
 type Options struct {
 	BinaryName string
 	IOStreams  *terminal.IOStreams
@@ -54,13 +54,33 @@ type Options struct {
 	builtInFn func() celexp.ExtFunctionList
 }
 
-// CommandCelFunction creates the 'get cel-functions' subcommand
-func CommandCelFunction(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+// CommandFunctions creates the canonical 'get cel functions' subcommand,
+// wired as a child of the 'get cel' group.
+func CommandFunctions(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	return newCommand(cliParams, ioStreams, path, "functions", nil, "", false)
+}
+
+// CommandCelFunctionDeprecated creates the hidden, deprecated 'get cel-functions'
+// leaf command. It shares the same RunE/flags as the canonical
+// 'get cel functions' child via newCommand.
+func CommandCelFunctionDeprecated(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+	deprecated := fmt.Sprintf(`use "%s get cel functions" instead`, name)
+	return newCommand(cliParams, ioStreams, path, "cel-functions", []string{"cel-funcs", "cf"}, deprecated, true)
+}
+
+// newCommand is the shared builder for both the canonical 'get cel functions'
+// child and the deprecated 'get cel-functions' leaf. Both forms wire identical
+// Options, RunE, and flags so their behavior is guaranteed to match.
+func newCommand(cliParams *settings.Run, ioStreams *terminal.IOStreams, path, use string, aliases []string, deprecated string, hidden bool) *cobra.Command {
 	options := &Options{}
 
 	cCmd := &cobra.Command{
-		Use:     "cel-functions",
-		Aliases: []string{"cel-funcs", "cel", "cf"},
+		Use:     use,
+		Aliases: aliases,
 		Short:   "List available CEL extension functions",
 		Long: `List all available CEL extension functions, including built-in cel-go
 extensions and custom scafctl-specific functions.
@@ -75,22 +95,24 @@ OUTPUT FORMATS:
 
 Examples:
   # List all CEL functions
-  scafctl get cel-functions
+  scafctl get cel functions
 
   # List only custom scafctl functions
-  scafctl get cel-functions --custom
+  scafctl get cel functions --custom
 
   # List only built-in cel-go functions
-  scafctl get cel-functions --builtin
+  scafctl get cel functions --builtin
 
   # Output as JSON
-  scafctl get cel-functions -o json
+  scafctl get cel functions -o json
 
   # Get details about a specific function
-  scafctl get cel-functions map.merge
+  scafctl get cel functions map.merge
 
   # Browse interactively
-  scafctl get cel-functions -i`,
+  scafctl get cel functions -i`,
+		Deprecated: deprecated,
+		Hidden:     hidden,
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
@@ -323,7 +345,7 @@ func (o *Options) writeOutput(ctx context.Context, data any) error {
 	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.BinaryName+" get cel-functions"),
+		kvx.WithOutputAppName(o.BinaryName+" get cel functions"),
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputDisplaySchemaJSON(celFunctionSchemaJSON),
 		kvx.WithOutputColumnOrder([]string{"name", "functions", "description"}),

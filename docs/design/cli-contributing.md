@@ -1233,7 +1233,7 @@ This section tracks which commands from the design are implemented and what work
 | `config unset` | ✅ | Remove config value |
 | `catalog remote add` | ✅ | Add catalog configuration |
 | `catalog remote remove` | ✅ | Remove catalog |
-| `catalog remote set-default` | ✅ | Set default catalog |
+| `catalog remote default` | ✅ | Set default catalog |
 | `config init` | ✅ | Initialize configuration |
 | `config schema` | ✅ | Show config schema |
 | `config validate` | ✅ | Validate config file |

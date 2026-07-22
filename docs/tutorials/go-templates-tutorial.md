@@ -2316,12 +2316,12 @@ List all available functions:
 {{< tabs "go-templates-tutorial-cmd-29" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get go-template-functions
+scafctl get template functions
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get go-template-functions
+scafctl get template functions
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -2331,12 +2331,12 @@ Filter to custom functions only:
 {{< tabs "go-templates-tutorial-cmd-30" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get go-template-functions --custom
+scafctl get template functions --custom
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get go-template-functions --custom
+scafctl get template functions --custom
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -2346,12 +2346,12 @@ Filter to Sprig functions only:
 {{< tabs "go-templates-tutorial-cmd-31" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get go-template-functions --sprig
+scafctl get template functions --sprig
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get go-template-functions --sprig
+scafctl get template functions --sprig
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -2361,12 +2361,12 @@ Get details for a specific function:
 {{< tabs "go-templates-tutorial-cmd-32" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get go-template-functions toHcl
+scafctl get template functions toHcl
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get go-template-functions toHcl
+scafctl get template functions toHcl
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -2376,12 +2376,12 @@ Output as JSON:
 {{< tabs "go-templates-tutorial-cmd-33" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl get go-template-functions -o json
+scafctl get template functions -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl get go-template-functions -o json
+scafctl get template functions -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -2397,7 +2397,7 @@ The AI calls `list_go_template_functions` and returns a curated list of matching
 
 ### What You Learned
 
-- **CLI discovery** — `scafctl get go-template-functions` lists all available functions with `--custom`, `--sprig`, and `-o json` flags.
+- **CLI discovery** — `scafctl get template functions` lists all available functions with `--custom`, `--sprig`, and `-o json` flags.
 - **MCP discovery** — The `list_go_template_functions` tool lets AI agents search and filter functions.
 - **Function detail** — Pass a function name as an argument to see its full description, signature, and examples.
 

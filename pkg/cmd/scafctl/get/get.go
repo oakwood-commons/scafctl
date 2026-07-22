@@ -8,6 +8,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
+	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/cel"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/celfunction"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/commands"
 	getexamples "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/examples"
@@ -15,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/provider"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/snapshot"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/solution"
+	gettemplate "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get/template"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -44,8 +46,10 @@ func CommandGet(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 	cCmd.AddCommand(solution.CommandSolution(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(snapshot.CommandSnapshot(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(getexamples.CommandExamples(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
-	cCmd.AddCommand(celfunction.CommandCelFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
-	cCmd.AddCommand(gotmplfunction.CommandGotmplFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(cel.CommandCel(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(gettemplate.CommandTemplate(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(celfunction.CommandCelFunctionDeprecated(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(gotmplfunction.CommandGotmplFunctionDeprecated(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(commands.CommandCommands(cliParams, ioStreams, path))
 	return cCmd
 }

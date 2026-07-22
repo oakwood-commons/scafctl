@@ -219,7 +219,7 @@ We would essentially be creating thin adapters from MCP tool handlers → existi
 - Providers, resolvers, and solutions all have well-defined interfaces
 - `context.Context` is used throughout, so cancellation propagates naturally
 - The KVX output system already supports JSON, making tool responses trivial
-- The `scafctl get cel-functions` command proves the `ext.All()` API works end-to-end for the `list_cel_functions` MCP tool
+- The `scafctl get cel functions` command proves the `ext.All()` API works end-to-end for the `list_cel_functions` MCP tool
 
 ### What Makes It Harder
 

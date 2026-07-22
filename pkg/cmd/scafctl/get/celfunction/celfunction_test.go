@@ -6,6 +6,7 @@ package celfunction
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -236,21 +237,76 @@ func TestBuildFunctionListOutput(t *testing.T) {
 	assert.Equal(t, "test.builtin", result[1]["name"])
 }
 
-func TestCommandCelFunction_Creation(t *testing.T) {
+func TestCommandFunctions_Creation(t *testing.T) {
 	t.Parallel()
 	cliParams := &settings.Run{}
 	ioStreams := &terminal.IOStreams{}
-	cmd := CommandCelFunction(cliParams, ioStreams, "test/path")
+	cmd := CommandFunctions(cliParams, ioStreams, "test/path")
 
-	assert.Equal(t, "cel-functions", cmd.Use)
-	assert.Contains(t, cmd.Aliases, "cel")
-	assert.Contains(t, cmd.Aliases, "cf")
+	assert.Equal(t, "functions", cmd.Use)
+	assert.Empty(t, cmd.Aliases)
+	assert.False(t, cmd.Hidden)
+	assert.Empty(t, cmd.Deprecated)
 	assert.NotNil(t, cmd.RunE)
 	assert.NotNil(t, cmd.Flags().Lookup("output"))
 	assert.NotNil(t, cmd.Flags().Lookup("interactive"))
 	assert.NotNil(t, cmd.Flags().Lookup("expression"))
 	assert.NotNil(t, cmd.Flags().Lookup("custom"))
 	assert.NotNil(t, cmd.Flags().Lookup("builtin"))
+}
+
+func TestCommandCelFunctionDeprecated_Creation(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{BinaryName: "scafctl"}
+	ioStreams := &terminal.IOStreams{}
+	cmd := CommandCelFunctionDeprecated(cliParams, ioStreams, "test/path")
+
+	assert.Equal(t, "cel-functions", cmd.Use)
+	assert.Contains(t, cmd.Aliases, "cel-funcs")
+	assert.Contains(t, cmd.Aliases, "cf")
+	assert.NotContains(t, cmd.Aliases, "cel", "bare 'cel' alias is now claimed by the group")
+	assert.True(t, cmd.Hidden)
+	assert.NotEmpty(t, cmd.Deprecated)
+	assert.Contains(t, cmd.Deprecated, "get cel functions")
+	assert.NotNil(t, cmd.RunE)
+	assert.NotNil(t, cmd.Flags().Lookup("custom"))
+	assert.NotNil(t, cmd.Flags().Lookup("builtin"))
+}
+
+// TestCanonicalAndDeprecated_ShareRunE verifies the canonical child and the
+// deprecated leaf produce identical output for the same args, since both share
+// the newCommand builder / RunE.
+func TestCanonicalAndDeprecated_ShareRunE(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{BinaryName: "scafctl"}
+
+	var outC, errC, outD, errD bytes.Buffer
+	ioC := terminal.NewIOStreams(nil, &outC, &errC, false)
+	ioD := terminal.NewIOStreams(nil, &outD, &errD, false)
+
+	canonical := CommandFunctions(cliParams, ioC, "scafctl/get/cel")
+	deprecated := CommandCelFunctionDeprecated(cliParams, ioD, "scafctl/get")
+
+	canonical.SetOut(&outC)
+	canonical.SetErr(&errC)
+	canonical.SetArgs([]string{"-o", "json"})
+	require.NoError(t, canonical.Execute())
+
+	deprecated.SetOut(&outD)
+	deprecated.SetErr(&errD)
+	deprecated.SetArgs([]string{"-o", "json"})
+	require.NoError(t, deprecated.Execute())
+
+	// The deprecated leaf emits a cobra deprecation warning before the output.
+	// Strip that leading warning line, then the rendered function list must be
+	// byte-identical to the canonical child's output (shared RunE).
+	depOut := outD.String()
+	assert.Contains(t, depOut, "deprecated")
+	if idx := strings.Index(depOut, "\n"); idx >= 0 {
+		depOut = depOut[idx+1:]
+	}
+	assert.Equal(t, outC.String(), depOut)
+	assert.Contains(t, outC.String(), "\"name\"")
 }
 
 func TestRunListFunctions_SearchByFunctionName(t *testing.T) {
@@ -349,7 +405,7 @@ func TestCommandCelFunction_SearchFlag(t *testing.T) {
 	t.Parallel()
 	cliParams := &settings.Run{}
 	ioStreams := &terminal.IOStreams{}
-	cmd := CommandCelFunction(cliParams, ioStreams, "test/path")
+	cmd := CommandFunctions(cliParams, ioStreams, "test/path")
 
 	f := cmd.Flags().Lookup("search")
 	assert.NotNil(t, f)

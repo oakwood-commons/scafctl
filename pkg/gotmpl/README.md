@@ -676,19 +676,19 @@ Identical to `toYaml` and `fromYaml` respectively. In Go templates, errors alway
 
 ```bash
 # List all available functions
-scafctl get go-template-functions
+scafctl get template functions
 
 # List only custom (non-sprig) functions
-scafctl get go-template-functions --custom
+scafctl get template functions --custom
 
 # List only sprig functions
-scafctl get go-template-functions --sprig
+scafctl get template functions --sprig
 
 # Get details for a specific function
-scafctl get go-template-functions toHcl
+scafctl get template functions toHcl
 
 # Output as JSON
-scafctl get go-template-functions -o json
+scafctl get template functions -o json
 ```
 
 #### MCP Server

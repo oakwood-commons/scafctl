@@ -4,6 +4,8 @@
 package gotmplfunction
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
@@ -13,23 +15,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommandGotmplFunction(t *testing.T) {
+func TestCommandFunctions(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+	cmd := CommandFunctions(cliParams, ioStreams, "scafctl/get/template")
+	require.NotNil(t, cmd)
+	assert.Equal(t, "functions", cmd.Use)
+	assert.Empty(t, cmd.Aliases)
+	assert.False(t, cmd.Hidden)
+	assert.Empty(t, cmd.Deprecated)
+	assert.NotEmpty(t, cmd.Short)
+	assert.NotNil(t, cmd.RunE)
+}
+
+func TestCommandGotmplFunctionDeprecated(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "scafctl"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandGotmplFunctionDeprecated(cliParams, ioStreams, "scafctl/get")
 	require.NotNil(t, cmd)
 	assert.Equal(t, "go-template-functions", cmd.Use)
 	assert.Contains(t, cmd.Aliases, "gotmpl-funcs")
 	assert.Contains(t, cmd.Aliases, "gotmpl")
 	assert.Contains(t, cmd.Aliases, "gtf")
+	assert.True(t, cmd.Hidden)
+	assert.NotEmpty(t, cmd.Deprecated)
+	assert.Contains(t, cmd.Deprecated, "get template functions")
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }
 
-func TestCommandGotmplFunction_Flags(t *testing.T) {
+func TestCommandFunctions_Flags(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+	cmd := CommandFunctions(cliParams, ioStreams, "scafctl/get/template")
 	flags := []string{"output", "interactive", "expression", "custom", "sprig"}
 	for _, name := range flags {
 		t.Run(name, func(t *testing.T) {
@@ -39,10 +58,10 @@ func TestCommandGotmplFunction_Flags(t *testing.T) {
 	}
 }
 
-func TestCommandGotmplFunction_Shorthands(t *testing.T) {
+func TestCommandFunctions_Shorthands(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+	cmd := CommandFunctions(cliParams, ioStreams, "scafctl/get/template")
 	shorthands := map[string]string{
 		"o": "output",
 		"i": "interactive",
@@ -55,26 +74,26 @@ func TestCommandGotmplFunction_Shorthands(t *testing.T) {
 	}
 }
 
-func TestCommandGotmplFunction_NoSubcommands(t *testing.T) {
+func TestCommandFunctions_NoSubcommands(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
-	assert.Len(t, cmd.Commands(), 0, "gotmplfunction should have no subcommands")
+	cmd := CommandFunctions(cliParams, ioStreams, "scafctl/get/template")
+	assert.Len(t, cmd.Commands(), 0, "functions should have no subcommands")
 }
 
-func BenchmarkCommandGotmplFunction(b *testing.B) {
+func BenchmarkCommandFunctions(b *testing.B) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+		CommandFunctions(cliParams, ioStreams, "scafctl/get/template")
 	}
 }
 
-func TestCommandGotmplFunction_SearchFlag(t *testing.T) {
+func TestCommandFunctions_SearchFlag(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandGotmplFunction(cliParams, ioStreams, "scafctl/get")
+	cmd := CommandFunctions(cliParams, ioStreams, "scafctl/get/template")
 
 	f := cmd.Flags().Lookup("search")
 	assert.NotNil(t, f, "search flag should exist")
@@ -107,4 +126,40 @@ func TestFilterBySearch(t *testing.T) {
 			assert.Len(t, result, tt.wantLen)
 		})
 	}
+}
+
+// TestCanonicalAndDeprecated_ShareRunE verifies the canonical child and the
+// deprecated leaf produce identical output for the same args, since both share
+// the newCommand builder / RunE.
+func TestCanonicalAndDeprecated_ShareRunE(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{BinaryName: "scafctl"}
+
+	var outC, errC, outD, errD bytes.Buffer
+	ioC := terminal.NewIOStreams(nil, &outC, &errC, false)
+	ioD := terminal.NewIOStreams(nil, &outD, &errD, false)
+
+	canonical := CommandFunctions(cliParams, ioC, "scafctl/get/template")
+	deprecated := CommandGotmplFunctionDeprecated(cliParams, ioD, "scafctl/get")
+
+	canonical.SetOut(&outC)
+	canonical.SetErr(&errC)
+	canonical.SetArgs([]string{"-o", "json"})
+	require.NoError(t, canonical.Execute())
+
+	deprecated.SetOut(&outD)
+	deprecated.SetErr(&errD)
+	deprecated.SetArgs([]string{"-o", "json"})
+	require.NoError(t, deprecated.Execute())
+
+	// The deprecated leaf emits a cobra deprecation warning before the output.
+	// Strip that leading warning line, then the rendered function list must be
+	// byte-identical to the canonical child's output (shared RunE).
+	depOut := outD.String()
+	assert.Contains(t, depOut, "deprecated")
+	if idx := strings.Index(depOut, "\n"); idx >= 0 {
+		depOut = depOut[idx+1:]
+	}
+	assert.Equal(t, outC.String(), depOut)
+	assert.Contains(t, outC.String(), "\"name\"")
 }
