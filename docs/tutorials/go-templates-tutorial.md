@@ -2397,9 +2397,9 @@ The AI calls `list_go_template_functions` and returns a curated list of matching
 
 ### What You Learned
 
-- **CLI discovery** — `scafctl get template functions` lists all available functions with `--custom`, `--sprig`, and `-o json` flags.
-- **MCP discovery** — The `list_go_template_functions` tool lets AI agents search and filter functions.
-- **Function detail** — Pass a function name as an argument to see its full description, signature, and examples.
+- **CLI discovery** -- `scafctl get template functions` lists all available functions with `--custom`, `--sprig`, and `-o json` flags.
+- **MCP discovery** -- The `list_go_template_functions` tool lets AI agents search and filter functions.
+- **Function detail** -- Pass a function name as an argument to see its full description, signature, and examples.
 
 ---
 

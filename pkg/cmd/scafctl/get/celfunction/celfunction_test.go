@@ -412,3 +412,19 @@ func TestCommandCelFunction_SearchFlag(t *testing.T) {
 	assert.NotNil(t, f)
 	assert.Equal(t, "s", f.Shorthand)
 }
+
+// TestWriteOutput_EmptyBinaryNameFallback verifies writeOutput does not blank
+// the kvx app name when BinaryName is unset (embedder didn't set it): the
+// local fallback to settings.CliBinaryName keeps the name non-blank.
+func TestWriteOutput_EmptyBinaryNameFallback(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := mkTestOpts(&buf) // BinaryName intentionally empty
+	require.Empty(t, opts.BinaryName)
+	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	err := opts.writeOutput(ctx, []FunctionSummary{{Name: "x"}})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "x")
+}

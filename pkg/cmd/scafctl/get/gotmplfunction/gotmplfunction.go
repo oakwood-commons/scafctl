@@ -96,7 +96,7 @@ OUTPUT FORMATS:
   table     Table view with key information (default)
   json      Full function information as JSON
   yaml      Full function information as YAML
-  quiet     Function names only (one per line)
+  quiet     Suppress output (exit code only)
 
 Examples:
   # List all Go template functions
@@ -322,10 +322,14 @@ func (o *Options) printFunctionDetail(ctx context.Context, fn *gotmpl.ExtFunctio
 
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
+	bin := o.BinaryName
+	if bin == "" {
+		bin = settings.CliBinaryName
+	}
 	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.BinaryName+" get template functions"),
+		kvx.WithOutputAppName(bin+" get template functions"),
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputDisplaySchemaJSON(gotmplFunctionSchemaJSON),
 		kvx.WithOutputColumnOrder([]string{"name", "description"}),
