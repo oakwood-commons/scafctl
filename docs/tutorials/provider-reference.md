@@ -2170,7 +2170,7 @@ Access CLI parameters passed via `-r` flags.
 | `key` | string | ❌ | Parameter name (exact match). Provide either `key` or `keys`; `key` takes precedence over `keys` when both are set. |
 | `keys` | array of string | ❌ | Ordered list of parameter names (aliases) for a single logical parameter. The first name provided via CLI wins. Evaluated after `key`. |
 | `default` | any | ❌ | Value returned when the parameter is not provided. |
-| `type` | string | ❌ | How the value is coerced. One of `auto` (default), `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`. See the table below. |
+| `type` | string | ❌ | How the value is coerced. One of `auto` (default), `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`, `fetch`. See the table below. |
 
 At least one of `key` or `keys` must be provided.
 
@@ -2178,7 +2178,7 @@ At least one of `key` or `keys` must be provided.
 
 | Value | Behavior |
 |-------|----------|
-| `auto` | Default. Infers booleans, numbers, JSON, and `file://` + `http://` sources, falling back to the literal string. Comma-separated values are **not** split into a list -- opt in with `csv`. |
+| `auto` | Default. Infers booleans, numbers, JSON, and `file://` sources, falling back to the literal string. `http://`/`https://` values are **not** fetched (they stay literal strings -- use `fetch`), and comma-separated values are **not** split into a list (opt in with `csv`). |
 | `string` | Coerces the value to a string, stripping surrounding quotes. Use to keep a numeric-looking value (leading zeros, or a value used with CEL `matches()`) as a string. |
 | `raw` | Returns the value untouched -- no coercion or quote-stripping. A numeric YAML default stays numeric; a CLI string stays verbatim. The escape hatch to disable inference. |
 | `int` | Forces integer parsing. A non-integer value is an error. |
@@ -2186,6 +2186,7 @@ At least one of `key` or `keys` must be provided.
 | `bool` | Forces boolean parsing, accepting only `true`/`false` (case-insensitive). Any other value is an error. |
 | `json` | Parses a string value as JSON. Invalid JSON is an error; non-string values pass through unchanged. |
 | `csv` | Splits a comma-separated string into a list of trimmed strings. Non-string values pass through unchanged. |
+| `fetch` | Performs an SSRF-guarded HTTP GET on an `http://`/`https://` value and returns the response body. A non-URL value is an error. For anything beyond a plain GET (auth, headers, methods, retries), use the `http` provider. |
 
 ### Output
 
@@ -2222,7 +2223,8 @@ resolve:
 
 ```yaml
 # Coerce values with the "type" input. "auto" (default) infers bools,
-# numbers, JSON, and file://+http:// sources; other types force one coercion.
+# numbers, JSON, and file:// sources; http(s):// URLs stay literal strings
+# (use "fetch" to GET them); other types force one coercion.
 resolve:
   with:
     # Keep a numeric-looking ID as a string (leading zeros survive).
