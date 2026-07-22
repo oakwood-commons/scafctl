@@ -353,7 +353,7 @@ func commandRemoteSetDefaultDeprecated(cliParams *settings.Run, ioStreams *termi
 
 			  # Clear default catalog
 			  %[1]s catalog remote set-default ""
-		`, settings.CliBinaryName),
+		`, name),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
