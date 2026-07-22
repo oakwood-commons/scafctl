@@ -131,3 +131,83 @@ func TestCommandValidateSolution_MissingFile(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
 }
+
+// TestCommandValidateSolution_QuietEmptyStdout verifies that `-o quiet` on a
+// clean solution produces NO stdout (quiet's exit-code-only contract).
+func TestCommandValidateSolution_QuietEmptyStdout(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(cleanSolution), 0o600))
+
+	streams, _, out := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
+	cmd.SetArgs([]string{"-f", p, "-o", "quiet"})
+	require.NoError(t, cmd.Execute())
+	assert.Empty(t, out.String(), "quiet must produce no stdout on a clean solution")
+}
+
+// TestCommandValidateSolution_PositionalCatalogRef verifies a positional
+// catalog reference is accepted (routed to opts.File) rather than being
+// rejected as a local path.
+func TestCommandValidateSolution_PositionalCatalogRef(t *testing.T) {
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
+	// A bare catalog name (not a local path). It won't resolve to a real
+	// solution here, but PreRunE must accept it (no "must use -f" error).
+	cmd.SetArgs([]string{"nonexistent-catalog-ref", "-o", "quiet"})
+	err := cmd.Execute()
+	// Execution fails at load time (catalog miss), NOT at arg validation.
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "must use -f/--file")
+	assert.NotContains(t, err.Error(), "cannot use both")
+}
+
+// TestCommandValidateSolution_PositionalConflictsWithFile verifies that
+// supplying both a positional arg and -f is rejected clearly.
+func TestCommandValidateSolution_PositionalConflictsWithFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(cleanSolution), 0o600))
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
+	cmd.SetArgs([]string{"some-ref", "-f", p})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot use both")
+}
+
+// TestCommandValidateSolution_PositionalLocalPathRejected verifies that a
+// positional local file path is rejected in favor of -f (mirroring lint).
+func TestCommandValidateSolution_PositionalLocalPathRejected(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(p, []byte(cleanSolution), 0o600))
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
+	cmd.SetArgs([]string{"./" + filepath.Base(p)})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "-f/--file")
+}
+
+// TestCommandValidateSolution_NoStdinClaim verifies the file flag help no
+// longer advertises stdin support (which the loader does not implement).
+func TestCommandValidateSolution_NoStdinClaim(t *testing.T) {
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateSolution(cliParams, streams, "scafctl/validate")
+	fileFlag := cmd.Flags().Lookup("file")
+	require.NotNil(t, fileFlag)
+	assert.NotContains(t, fileFlag.Usage, "stdin")
+}

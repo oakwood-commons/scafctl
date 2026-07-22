@@ -785,7 +785,7 @@ func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solutio
 			// Force a human-readable table render; do not inherit the
 			// resolver's -o json/yaml format for the lint findings block.
 			lintFlags := cmdflags.KvxOutputFlags{Output: "table"}
-			if renderErr := cmdlint.RenderResult(ctx, result, appName+" lint", errStreams, lintFlags, noColor); renderErr != nil {
+			if renderErr := cmdlint.RenderResult(ctx, result, appName+" validate resolver", errStreams, lintFlags, noColor); renderErr != nil {
 				return renderErr
 			}
 		}

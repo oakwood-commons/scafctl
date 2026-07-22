@@ -54,7 +54,7 @@ func (s *Server) registerSchemaTools() {
 
 	// validate_schema — validate arbitrary data against a JSON Schema
 	validateSchemaTool := mcp.NewTool("validate_schema",
-		mcp.WithDescription("Validate arbitrary data against a JSON Schema. Both the schema and the data may be JSON or YAML. Returns the list of violations (path + message), or confirms the data is valid. This is the low-level data-conformance gate: it does NOT run lint. To validate a scafctl solution end-to-end (load + lint, including schema conformance), use lint_solution instead."),
+		mcp.WithDescription(fmt.Sprintf("Validate arbitrary data against a JSON Schema. Both the schema and the data may be JSON or YAML. Returns the list of violations (path + message), or confirms the data is valid. This is a general-purpose, low-level data-conformance gate: it does NOT run lint and is not specific to solutions. To validate a %s solution end-to-end (load + lint, including schema conformance), use lint_solution instead.", s.name)),
 		mcp.WithTitleAnnotation("Validate Data Against Schema"),
 		mcp.WithToolIcons(toolIcons["schema"]),
 		mcp.WithReadOnlyHintAnnotation(true),

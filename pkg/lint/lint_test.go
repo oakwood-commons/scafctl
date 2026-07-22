@@ -808,8 +808,8 @@ func BenchmarkLintNullResolver(b *testing.B) {
 
 func TestLintSchema_FileNotFound(t *testing.T) {
 	result := &Result{Findings: make([]*Finding, 0)}
-	lintSchema("/nonexistent/path/solution.yaml", result)
-	// Should silently skip when file cannot be read
+	lintSchema(nil, "/nonexistent/path/solution.yaml", result)
+	// Should silently skip when there is no raw content and the file cannot be read.
 	assert.Empty(t, result.Findings)
 }
 
@@ -818,7 +818,7 @@ func TestLintSchema_ValidYAML(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "solution.yaml")
 	require.NoError(t, os.WriteFile(tmpFile, []byte("name: test\nkind: Solution\napiVersion: v1\n"), 0o600))
 	result := &Result{Findings: make([]*Finding, 0)}
-	lintSchema(tmpFile, result)
+	lintSchema(nil, tmpFile, result)
 	// Might have findings or none, but should not panic
 }
 
@@ -827,9 +827,53 @@ func TestLintSchema_InvalidYAML(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "solution.yaml")
 	require.NoError(t, os.WriteFile(tmpFile, []byte("{\ninvalid: [yaml\n"), 0o600))
 	result := &Result{Findings: make([]*Finding, 0)}
-	lintSchema(tmpFile, result)
+	lintSchema(nil, tmpFile, result)
 	// Should silently skip invalid YAML
 	assert.Empty(t, result.Findings)
+}
+
+// TestLintSchema_RawContentPreferred verifies that when raw content is present,
+// schema validation runs against it regardless of the (possibly bogus) file
+// path -- so URL/catalog-sourced solutions with schema violations are caught
+// instead of being silently skipped.
+func TestLintSchema_RawContentPreferred(t *testing.T) {
+	// Unknown top-level field "bogusField" violates the solution schema.
+	raw := []byte("name: test\nkind: Solution\napiVersion: v1\nbogusField: nope\n")
+	result := &Result{Findings: make([]*Finding, 0)}
+	// A file path that does not exist on disk: the old behavior would read
+	// this path, fail, and silently skip. With raw content preferred, the
+	// violation must still be reported.
+	lintSchema(raw, "/nonexistent/from-url/solution.yaml", result)
+
+	found := false
+	for _, f := range result.Findings {
+		if f.RuleName == "schema-violation" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected a schema-violation finding from raw content, got %+v", result.Findings)
+}
+
+// TestLintSchema_RawContentFromNonFileSolution verifies the end-to-end path:
+// a solution loaded from bytes (no file on disk) with an unknown top-level
+// field still produces a schema-violation finding through lint.Solution.
+func TestLintSchema_RawContentFromNonFileSolution(t *testing.T) {
+	raw := []byte("apiVersion: scaffolding.oakwood-commons.io/v1\nkind: Solution\nmetadata:\n  name: test-sol\nspec:\n  resolvers:\n    r1:\n      value: hello\nbogusTopLevel: nope\n")
+	sol := &solution.Solution{}
+	require.NoError(t, sol.FromYAML(raw))
+
+	// Path points at a non-existent file to simulate a URL/catalog source.
+	result := Solution(sol, "https://example.com/solution.yaml", nil)
+
+	found := false
+	for _, f := range result.Findings {
+		if f.RuleName == "schema-violation" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected schema-violation from non-file source, got %+v", result.Findings)
 }
 
 func TestLintExpressions_AllPaths(t *testing.T) {

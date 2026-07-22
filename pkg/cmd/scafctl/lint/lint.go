@@ -267,6 +267,9 @@ func runLint(ctx context.Context, opts *Options) error {
 //
 // When the output format is a human-readable (non-structured) table and there
 // are no findings, a success message is emitted and nil is returned.
+//
+// The 'quiet' format renders NOTHING to stdout (its contract is exit-code
+// only); all callers get this behavior consistently through this function.
 func RenderResult(
 	ctx context.Context,
 	result *Result,
@@ -276,6 +279,12 @@ func RenderResult(
 	noColor bool,
 ) error {
 	if result == nil {
+		return nil
+	}
+
+	// Quiet is exit-code only: emit no output regardless of findings. The
+	// caller is responsible for translating findings into an exit code.
+	if outputFlags.Output == "quiet" {
 		return nil
 	}
 

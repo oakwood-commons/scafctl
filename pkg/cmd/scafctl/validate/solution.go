@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	pkgvalidate "github.com/oakwood-commons/scafctl/pkg/validate"
@@ -71,6 +72,9 @@ Examples:
 		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(_ *cobra.Command, args []string) error {
 			if len(args) > 0 {
+				if err := get.ValidatePositionalRef(args[0], opts.File, binaryName+" validate solution"); err != nil {
+					return err
+				}
 				opts.File = args[0]
 			}
 			return nil
@@ -92,7 +96,7 @@ Examples:
 		SilenceUsage: true,
 	}
 
-	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
+	cCmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
 	cCmd.Flags().BoolVar(&opts.Strict, "strict", false, "Treat lint warnings as fatal (errors and schema violations are always fatal)")
 	flags.AddKvxOutputFlagsToStruct(cCmd, &opts.KvxOutputFlags)
 

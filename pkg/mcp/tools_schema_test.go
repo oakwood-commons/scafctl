@@ -174,6 +174,32 @@ func extractText(t *testing.T, result *mcp.CallToolResult) string {
 	return tc.Text
 }
 
+// validateSchemaToolDescription returns the registered validate_schema tool
+// description for the given server, or "" if not found.
+func validateSchemaToolDescription(s *Server) string {
+	for _, st := range s.mcpServer.ListTools() {
+		if st.Tool.Name == "validate_schema" {
+			return st.Tool.Description
+		}
+	}
+	return ""
+}
+
+// TestValidateSchemaTool_DescriptionEmbedderSafe verifies the validate_schema
+// tool description is built from the configured server name (not a hardcoded
+// "scafctl") and describes a general JSON-schema validator rather than a
+// solution-specific one.
+func TestValidateSchemaTool_DescriptionEmbedderSafe(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"), WithServerName("mycli"))
+	require.NoError(t, err)
+
+	desc := validateSchemaToolDescription(srv)
+	require.NotEmpty(t, desc, "validate_schema tool must be registered")
+	assert.NotContains(t, desc, "scafctl", "description must not hardcode scafctl")
+	assert.Contains(t, desc, "mycli", "description must use the configured server name")
+	assert.Contains(t, desc, "arbitrary data", "description must present a general schema validator")
+}
+
 func TestHandleValidateSchema(t *testing.T) {
 	const jsonSchema = `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`
 
