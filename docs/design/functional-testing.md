@@ -385,6 +385,8 @@ Compose-file order affects `testing.config.setup`, `testing.config.cleanup`, `te
 
 > **Note**: `SkipBuiltinsValue` requires both `UnmarshalYAML` and `MarshalYAML` implementations to survive the `deepCopySolution` YAML round-trip used in compose.
 
+> **Note**: `deepCopySolution` restores the source solution's original authored bytes into `rawContent` after the round-trip (via `Solution.SetRawContent`). The struct still round-trips, but schema-lint validates the primary file's authored bytes rather than the regenerated YAML -- otherwise zero-value fields without `omitempty` (e.g. an action's empty `name`) would be materialized into the validated content and produce false-positive `schema-violation` findings.
+
 ---
 
 ## Init Scripts
