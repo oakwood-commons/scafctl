@@ -287,6 +287,11 @@ func commandRemoteDefault(cliParams *settings.Run, ioStreams *terminal.IOStreams
 		CliParams: cliParams,
 	}
 
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+
 	cmd := &cobra.Command{
 		Use:   "default <name>",
 		Short: "Set the default catalog",
@@ -301,7 +306,7 @@ func commandRemoteDefault(cliParams *settings.Run, ioStreams *terminal.IOStreams
 
 			  # Clear default catalog
 			  %[1]s catalog remote default ""
-		`, settings.CliBinaryName),
+		`, name),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]

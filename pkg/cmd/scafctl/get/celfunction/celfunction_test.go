@@ -6,7 +6,6 @@ package celfunction
 import (
 	"bytes"
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
@@ -287,26 +286,28 @@ func TestCanonicalAndDeprecated_ShareRunE(t *testing.T) {
 	canonical := CommandFunctions(cliParams, ioC, "scafctl/get/cel")
 	deprecated := CommandCelFunctionDeprecated(cliParams, ioD, "scafctl/get")
 
-	canonical.SetOut(&outC)
+	canonical.SetOut(&errC)
 	canonical.SetErr(&errC)
 	canonical.SetArgs([]string{"-o", "json"})
 	require.NoError(t, canonical.Execute())
 
-	deprecated.SetOut(&outD)
+	deprecated.SetOut(&errD)
 	deprecated.SetErr(&errD)
 	deprecated.SetArgs([]string{"-o", "json"})
 	require.NoError(t, deprecated.Execute())
 
-	// The deprecated leaf emits a cobra deprecation warning before the output.
-	// Strip that leading warning line, then the rendered function list must be
-	// byte-identical to the canonical child's output (shared RunE).
-	depOut := outD.String()
-	assert.Contains(t, depOut, "deprecated")
-	if idx := strings.Index(depOut, "\n"); idx >= 0 {
-		depOut = depOut[idx+1:]
-	}
-	assert.Equal(t, outC.String(), depOut)
+	// The rendered function list is written through IOStreams.Out (outC/outD),
+	// which is independent of cobra's own writer. Cobra emits its deprecation
+	// notice through the command's writer (pointed at errC/errD here), so the
+	// two streams stay cleanly separated: the deprecated leaf's stdout must be
+	// byte-identical to the canonical child's stdout (shared RunE), with no
+	// stripping required.
+	assert.Equal(t, outC.String(), outD.String())
 	assert.Contains(t, outC.String(), "\"name\"")
+	// The deprecation notice must be emitted on the deprecated leaf's cobra
+	// writer (errD), not mixed into the function-list output on stdout.
+	assert.Contains(t, errD.String(), `is deprecated`)
+	assert.NotContains(t, outD.String(), `is deprecated`)
 }
 
 func TestRunListFunctions_SearchByFunctionName(t *testing.T) {

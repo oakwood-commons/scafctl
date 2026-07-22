@@ -78,11 +78,16 @@ func CommandCelFunctionDeprecated(cliParams *settings.Run, ioStreams *terminal.I
 func newCommand(cliParams *settings.Run, ioStreams *terminal.IOStreams, path, use string, aliases []string, deprecated string, hidden bool) *cobra.Command {
 	options := &Options{}
 
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+
 	cCmd := &cobra.Command{
 		Use:     use,
 		Aliases: aliases,
 		Short:   "List available CEL extension functions",
-		Long: `List all available CEL extension functions, including built-in cel-go
+		Long: fmt.Sprintf(`List all available CEL extension functions, including built-in cel-go
 extensions and custom scafctl-specific functions.
 
 By default, lists all functions. Use --custom or --builtin to filter.
@@ -95,22 +100,22 @@ OUTPUT FORMATS:
 
 Examples:
   # List all CEL functions
-  scafctl get cel functions
+  %[1]s get cel functions
 
   # List only custom scafctl functions
-  scafctl get cel functions --custom
+  %[1]s get cel functions --custom
 
   # List only built-in cel-go functions
-  scafctl get cel functions --builtin
+  %[1]s get cel functions --builtin
 
   # Output as JSON
-  scafctl get cel functions -o json
+  %[1]s get cel functions -o json
 
   # Get details about a specific function
-  scafctl get cel functions map.merge
+  %[1]s get cel functions map.merge
 
   # Browse interactively
-  scafctl get cel functions -i`,
+  %[1]s get cel functions -i`, name),
 		Deprecated: deprecated,
 		Hidden:     hidden,
 		RunE: func(cCmd *cobra.Command, args []string) error {

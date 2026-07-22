@@ -78,11 +78,16 @@ func CommandGotmplFunctionDeprecated(cliParams *settings.Run, ioStreams *termina
 func newCommand(cliParams *settings.Run, ioStreams *terminal.IOStreams, path, use string, aliases []string, deprecated string, hidden bool) *cobra.Command {
 	options := &Options{}
 
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+
 	cCmd := &cobra.Command{
 		Use:     use,
 		Aliases: aliases,
 		Short:   "List available Go template extension functions",
-		Long: `List all available Go template extension functions, including sprig
+		Long: fmt.Sprintf(`List all available Go template extension functions, including sprig
 library functions and custom scafctl-specific functions.
 
 By default, lists all functions. Use --custom or --sprig to filter.
@@ -95,22 +100,22 @@ OUTPUT FORMATS:
 
 Examples:
   # List all Go template functions
-  scafctl get template functions
+  %[1]s get template functions
 
   # List only custom scafctl functions
-  scafctl get template functions --custom
+  %[1]s get template functions --custom
 
   # List only sprig library functions
-  scafctl get template functions --sprig
+  %[1]s get template functions --sprig
 
   # Output as JSON
-  scafctl get template functions -o json
+  %[1]s get template functions -o json
 
   # Get details about a specific function
-  scafctl get template functions toHcl
+  %[1]s get template functions toHcl
 
   # Browse interactively
-  scafctl get template functions -i`,
+  %[1]s get template functions -i`, name),
 		Deprecated: deprecated,
 		Hidden:     hidden,
 		RunE: func(cCmd *cobra.Command, args []string) error {

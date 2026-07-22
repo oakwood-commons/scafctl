@@ -71,4 +71,13 @@ func TestEmbedderBinaryName(t *testing.T) {
 	require.NotNil(t, cmd)
 	assert.Contains(t, cmd.Deprecated, "mycli")
 	assert.NotContains(t, cmd.Deprecated, "scafctl")
+
+	// The canonical child's Long/Examples must also honor the embedder binary
+	// name for command-prefix tokens, while product-name prose stays literal.
+	canonical := celfunction.CommandFunctions(cliParams, ioStreams, "mycli/get/cel")
+	require.NotNil(t, canonical)
+	assert.Contains(t, canonical.Long, "mycli get cel functions")
+	assert.NotContains(t, canonical.Long, "scafctl get cel functions")
+	// Product-name prose must NOT be rewritten to the binary name.
+	assert.Contains(t, canonical.Long, "scafctl-specific")
 }
