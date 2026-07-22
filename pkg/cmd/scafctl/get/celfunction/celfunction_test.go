@@ -236,21 +236,78 @@ func TestBuildFunctionListOutput(t *testing.T) {
 	assert.Equal(t, "test.builtin", result[1]["name"])
 }
 
-func TestCommandCelFunction_Creation(t *testing.T) {
+func TestCommandFunctions_Creation(t *testing.T) {
 	t.Parallel()
 	cliParams := &settings.Run{}
 	ioStreams := &terminal.IOStreams{}
-	cmd := CommandCelFunction(cliParams, ioStreams, "test/path")
+	cmd := CommandFunctions(cliParams, ioStreams, "test/path")
 
-	assert.Equal(t, "cel-functions", cmd.Use)
-	assert.Contains(t, cmd.Aliases, "cel")
-	assert.Contains(t, cmd.Aliases, "cf")
+	assert.Equal(t, "functions", cmd.Use)
+	assert.Empty(t, cmd.Aliases)
+	assert.False(t, cmd.Hidden)
+	assert.Empty(t, cmd.Deprecated)
 	assert.NotNil(t, cmd.RunE)
 	assert.NotNil(t, cmd.Flags().Lookup("output"))
 	assert.NotNil(t, cmd.Flags().Lookup("interactive"))
 	assert.NotNil(t, cmd.Flags().Lookup("expression"))
 	assert.NotNil(t, cmd.Flags().Lookup("custom"))
 	assert.NotNil(t, cmd.Flags().Lookup("builtin"))
+}
+
+func TestCommandCelFunctionDeprecated_Creation(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{BinaryName: "scafctl"}
+	ioStreams := &terminal.IOStreams{}
+	cmd := CommandCelFunctionDeprecated(cliParams, ioStreams, "test/path")
+
+	assert.Equal(t, "cel-functions", cmd.Use)
+	assert.Contains(t, cmd.Aliases, "cel-funcs")
+	assert.Contains(t, cmd.Aliases, "cf")
+	assert.NotContains(t, cmd.Aliases, "cel", "bare 'cel' alias is now claimed by the group")
+	assert.True(t, cmd.Hidden)
+	assert.NotEmpty(t, cmd.Deprecated)
+	assert.Contains(t, cmd.Deprecated, "get cel functions")
+	assert.NotNil(t, cmd.RunE)
+	assert.NotNil(t, cmd.Flags().Lookup("custom"))
+	assert.NotNil(t, cmd.Flags().Lookup("builtin"))
+}
+
+// TestCanonicalAndDeprecated_ShareRunE verifies the canonical child and the
+// deprecated leaf produce identical output for the same args, since both share
+// the newCommand builder / RunE.
+func TestCanonicalAndDeprecated_ShareRunE(t *testing.T) {
+	t.Parallel()
+	cliParams := &settings.Run{BinaryName: "scafctl"}
+
+	var outC, errC, outD, errD bytes.Buffer
+	ioC := terminal.NewIOStreams(nil, &outC, &errC, false)
+	ioD := terminal.NewIOStreams(nil, &outD, &errD, false)
+
+	canonical := CommandFunctions(cliParams, ioC, "scafctl/get/cel")
+	deprecated := CommandCelFunctionDeprecated(cliParams, ioD, "scafctl/get")
+
+	canonical.SetOut(&errC)
+	canonical.SetErr(&errC)
+	canonical.SetArgs([]string{"-o", "json"})
+	require.NoError(t, canonical.Execute())
+
+	deprecated.SetOut(&errD)
+	deprecated.SetErr(&errD)
+	deprecated.SetArgs([]string{"-o", "json"})
+	require.NoError(t, deprecated.Execute())
+
+	// The rendered function list is written through IOStreams.Out (outC/outD),
+	// which is independent of cobra's own writer. Cobra emits its deprecation
+	// notice through the command's writer (pointed at errC/errD here), so the
+	// two streams stay cleanly separated: the deprecated leaf's stdout must be
+	// byte-identical to the canonical child's stdout (shared RunE), with no
+	// stripping required.
+	assert.Equal(t, outC.String(), outD.String())
+	assert.Contains(t, outC.String(), "\"name\"")
+	// The deprecation notice must be emitted on the deprecated leaf's cobra
+	// writer (errD), not mixed into the function-list output on stdout.
+	assert.Contains(t, errD.String(), `is deprecated`)
+	assert.NotContains(t, outD.String(), `is deprecated`)
 }
 
 func TestRunListFunctions_SearchByFunctionName(t *testing.T) {
@@ -349,9 +406,25 @@ func TestCommandCelFunction_SearchFlag(t *testing.T) {
 	t.Parallel()
 	cliParams := &settings.Run{}
 	ioStreams := &terminal.IOStreams{}
-	cmd := CommandCelFunction(cliParams, ioStreams, "test/path")
+	cmd := CommandFunctions(cliParams, ioStreams, "test/path")
 
 	f := cmd.Flags().Lookup("search")
 	assert.NotNil(t, f)
 	assert.Equal(t, "s", f.Shorthand)
+}
+
+// TestWriteOutput_EmptyBinaryNameFallback verifies writeOutput does not blank
+// the kvx app name when BinaryName is unset (embedder didn't set it): the
+// local fallback to settings.CliBinaryName keeps the name non-blank.
+func TestWriteOutput_EmptyBinaryNameFallback(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	opts := mkTestOpts(&buf) // BinaryName intentionally empty
+	require.Empty(t, opts.BinaryName)
+	ctx := settings.IntoContext(context.Background(), opts.CliParams)
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	err := opts.writeOutput(ctx, []FunctionSummary{{Name: "x"}})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "x")
 }

@@ -769,7 +769,7 @@ scafctl catalog remote add internal --type oci --url oci://registry.example.com/
 scafctl catalog remote remove internal
 
 # Set the default catalog
-scafctl catalog remote set-default internal
+scafctl catalog remote default internal
 ~~~
 
 ### Environment Variables

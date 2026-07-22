@@ -411,6 +411,198 @@ func TestIntegration_GetGoTemplateFunctionDetailToYaml(t *testing.T) {
 }
 
 // ============================================================================
+// Get CEL Functions Tests (canonical 'get cel functions' path)
+// ============================================================================
+
+func TestIntegration_GetCelFunctionsCanonical(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel", "functions")
+
+	assert.Equal(t, 0, exitCode)
+	// Should list both built-in and custom functions
+	assert.Contains(t, stdout, "strings")
+	assert.Contains(t, stdout, "map.merge")
+}
+
+func TestIntegration_GetCelFunctionsCanonicalCustom(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel", "functions", "--custom")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "map.merge")
+	assert.Contains(t, stdout, "guid.new")
+}
+
+func TestIntegration_GetCelFunctionsCanonicalBuiltin(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel", "functions", "--builtin")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "strings")
+}
+
+func TestIntegration_GetCelFunctionsCanonicalJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel", "functions", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"name\"")
+	assert.Contains(t, stdout, "\"custom\"")
+}
+
+func TestIntegration_GetCelFunctionsCanonicalQuiet(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel", "functions", "-o", "quiet")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, stdout, "quiet format should suppress all output")
+}
+
+func TestIntegration_GetCelFunctionCanonicalDetail(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel", "functions", "map.merge")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "map.merge")
+}
+
+// TestIntegration_GetCelBareHelp verifies a bare 'get cel' group shows help
+// (exit 0) and advertises its 'functions' child.
+func TestIntegration_GetCelBareHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "cel")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "functions")
+}
+
+// TestIntegration_GetCelFunctionsDeprecatedNotice verifies the hidden
+// deprecated 'get cel-functions' path still exits 0 and emits cobra's
+// deprecation notice on stderr pointing at the canonical path.
+func TestIntegration_GetCelFunctionsDeprecatedNotice(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "get", "cel-functions")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, `Command "cel-functions" is deprecated`)
+	assert.Contains(t, stderr, "get cel functions")
+	// Deprecated path still produces the functional listing.
+	assert.Contains(t, stdout, "map.merge")
+}
+
+// TestIntegration_GetCelFunctionsCanonicalMatchesDeprecated verifies the
+// canonical and deprecated paths produce identical JSON output.
+func TestIntegration_GetCelFunctionsCanonicalMatchesDeprecated(t *testing.T) {
+	t.Parallel()
+	canonical, _, canonicalExit := runScafctl(t, "get", "cel", "functions", "-o", "json")
+	deprecated, _, deprecatedExit := runScafctl(t, "get", "cel-functions", "-o", "json")
+
+	assert.Equal(t, 0, canonicalExit)
+	assert.Equal(t, 0, deprecatedExit)
+	assert.Equal(t, canonical, deprecated,
+		"canonical 'get cel functions' and deprecated 'get cel-functions' must list the same functions")
+}
+
+// ============================================================================
+// Get Template Functions Tests (canonical 'get template functions' path)
+// ============================================================================
+
+func TestIntegration_GetTemplateFunctionsCanonical(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template", "functions")
+
+	assert.Equal(t, 0, exitCode)
+	// Should list both sprig and custom functions
+	assert.Contains(t, stdout, "upper")
+	assert.Contains(t, stdout, "toHcl")
+	assert.Contains(t, stdout, "toYaml")
+	assert.Contains(t, stdout, "fromYaml")
+}
+
+func TestIntegration_GetTemplateFunctionsCanonicalCustom(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template", "functions", "--custom")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "toHcl")
+	assert.Contains(t, stdout, "toYaml")
+	assert.Contains(t, stdout, "fromYaml")
+	assert.Contains(t, stdout, "mustToYaml")
+	assert.Contains(t, stdout, "mustFromYaml")
+}
+
+func TestIntegration_GetTemplateFunctionsCanonicalSprig(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template", "functions", "--sprig")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "upper")
+	assert.Contains(t, stdout, "lower")
+}
+
+func TestIntegration_GetTemplateFunctionsCanonicalJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template", "functions", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "\"name\"")
+	assert.Contains(t, stdout, "\"custom\"")
+}
+
+func TestIntegration_GetTemplateFunctionsCanonicalQuiet(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template", "functions", "-o", "quiet")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, stdout, "quiet format should suppress all output")
+}
+
+func TestIntegration_GetTemplateFunctionCanonicalDetail(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template", "functions", "toHcl")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "toHcl")
+}
+
+// TestIntegration_GetTemplateBareHelp verifies a bare 'get template' group
+// shows help (exit 0) and advertises its 'functions' child.
+func TestIntegration_GetTemplateBareHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "get", "template")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "functions")
+}
+
+// TestIntegration_GetGoTemplateFunctionsDeprecatedNotice verifies the hidden
+// deprecated 'get go-template-functions' path still exits 0 and emits cobra's
+// deprecation notice on stderr pointing at the canonical path.
+func TestIntegration_GetGoTemplateFunctionsDeprecatedNotice(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "get", "go-template-functions")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, `Command "go-template-functions" is deprecated`)
+	assert.Contains(t, stderr, "get template functions")
+	// Deprecated path still produces the functional listing.
+	assert.Contains(t, stdout, "toHcl")
+}
+
+// TestIntegration_GetTemplateFunctionsCanonicalMatchesDeprecated verifies the
+// canonical and deprecated paths produce identical JSON output.
+func TestIntegration_GetTemplateFunctionsCanonicalMatchesDeprecated(t *testing.T) {
+	t.Parallel()
+	canonical, _, canonicalExit := runScafctl(t, "get", "template", "functions", "-o", "json")
+	deprecated, _, deprecatedExit := runScafctl(t, "get", "go-template-functions", "-o", "json")
+
+	assert.Equal(t, 0, canonicalExit)
+	assert.Equal(t, 0, deprecatedExit)
+	assert.Equal(t, canonical, deprecated,
+		"canonical 'get template functions' and deprecated 'get go-template-functions' must list the same functions")
+}
+
+// ============================================================================
 // Explain Schema Tests
 // ============================================================================
 
@@ -4960,6 +5152,60 @@ func TestIntegration_CatalogRemoteList_Empty(t *testing.T) {
 
 	_, _, exitCode := runScafctlWithEnv(t, env, "catalog", "remote", "list")
 	assert.Equal(t, 0, exitCode)
+}
+
+// TestIntegration_CatalogRemoteDefault sets the default catalog via the
+// canonical 'catalog remote default <name>' path and verifies it takes effect.
+func TestIntegration_CatalogRemoteDefault(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	}
+
+	// Add a filesystem catalog to make the default target.
+	_, _, addExit := runScafctlWithEnv(t, env, "catalog", "remote", "add",
+		"mycat", "--type", "filesystem", "--path", "./catalogs")
+	require.Equal(t, 0, addExit)
+
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "remote", "default", "mycat")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "mycat")
+
+	// Verify the default is reflected in list output.
+	listOut, _, listExit := runScafctlWithEnv(t, env, "catalog", "remote", "list", "-o", "json")
+	assert.Equal(t, 0, listExit)
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(listOut), &items))
+	var defaulted string
+	for _, it := range items {
+		if d, ok := it["default"].(bool); ok && d {
+			defaulted, _ = it["name"].(string)
+		}
+	}
+	assert.Equal(t, "mycat", defaulted, "mycat should be the default catalog")
+}
+
+// TestIntegration_CatalogRemoteSetDefaultDeprecatedNotice verifies the hidden
+// deprecated 'catalog remote set-default <name>' path still exits 0, sets the
+// default, and emits cobra's deprecation notice on stderr pointing at the
+// canonical path.
+func TestIntegration_CatalogRemoteSetDefaultDeprecatedNotice(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	}
+
+	_, _, addExit := runScafctlWithEnv(t, env, "catalog", "remote", "add",
+		"mycat", "--type", "filesystem", "--path", "./catalogs")
+	require.Equal(t, 0, addExit)
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "remote", "set-default", "mycat")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, `Command "set-default" is deprecated`)
+	assert.Contains(t, stderr, "catalog remote default")
+	assert.Contains(t, stdout, "mycat")
 }
 
 // =============================================================================

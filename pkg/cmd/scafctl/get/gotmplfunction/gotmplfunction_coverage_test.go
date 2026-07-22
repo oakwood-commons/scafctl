@@ -355,3 +355,16 @@ func BenchmarkRunGetFunction(b *testing.B) {
 		_ = opts.RunGetFunction(ctx, "testFunc")
 	}
 }
+
+// TestWriteOutput_EmptyBinaryNameFallback verifies writeOutput does not blank
+// the kvx app name when BinaryName is unset (embedder didn't set it): the
+// local fallback to settings.CliBinaryName keeps the name non-blank.
+func TestWriteOutput_EmptyBinaryNameFallback(t *testing.T) {
+	t.Parallel()
+	ctx, buf, opts := newGotmplCtx(t) // BinaryName intentionally empty
+	require.Empty(t, opts.BinaryName)
+
+	err := opts.writeOutput(ctx, []FunctionSummary{{Name: "x"}})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "x")
+}

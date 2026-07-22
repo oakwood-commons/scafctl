@@ -15,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/kvx"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,8 +44,39 @@ func TestCommandRemote_SubcommandRegistration(t *testing.T) {
 
 	assert.Contains(t, subCmdNames, "add")
 	assert.Contains(t, subCmdNames, "remove")
+	assert.Contains(t, subCmdNames, "default")
 	assert.Contains(t, subCmdNames, "set-default")
 	assert.Contains(t, subCmdNames, "list")
+}
+
+// TestCommandRemote_DefaultCanonicalAndDeprecated verifies the canonical
+// 'default' command and the hidden deprecated 'set-default' twin.
+func TestCommandRemote_DefaultCanonicalAndDeprecated(t *testing.T) {
+	t.Parallel()
+
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandRemote(cliParams, ioStreams, "scafctl/catalog")
+
+	var canonical, deprecated *cobra.Command
+	for _, c := range cmd.Commands() {
+		switch c.Name() {
+		case "default":
+			canonical = c
+		case "set-default":
+			deprecated = c
+		}
+	}
+
+	require.NotNil(t, canonical, "canonical 'default' command must be registered")
+	assert.False(t, canonical.Hidden)
+	assert.Empty(t, canonical.Deprecated)
+
+	require.NotNil(t, deprecated, "deprecated 'set-default' twin must be registered")
+	assert.True(t, deprecated.Hidden)
+	assert.NotEmpty(t, deprecated.Deprecated)
+	assert.Contains(t, deprecated.Deprecated, "catalog remote default")
 }
 
 func TestRunRemoteAdd(t *testing.T) {
@@ -421,6 +453,33 @@ func TestCommandRemote_EmbedderBinaryName(t *testing.T) {
 
 	assert.Equal(t, "remote", cmd.Use)
 	assert.NotEmpty(t, cmd.Commands(), "subcommands should be registered for embedder binary")
+
+	// Both the canonical 'default' command and the hidden deprecated
+	// 'set-default' twin must render their help examples with the embedder
+	// binary name, never a hardcoded "scafctl".
+	var defaultCmd, setDefaultCmd *cobra.Command
+	for _, sub := range cmd.Commands() {
+		switch sub.Name() {
+		case "default":
+			defaultCmd = sub
+		case "set-default":
+			setDefaultCmd = sub
+		}
+	}
+	require.NotNil(t, defaultCmd, "canonical 'default' command must be registered")
+	require.NotNil(t, setDefaultCmd, "deprecated 'set-default' twin must be registered")
+
+	assert.Contains(t, defaultCmd.Long, "mycli catalog remote default",
+		"canonical Long examples must use the embedder binary name")
+	assert.NotContains(t, defaultCmd.Long, "scafctl catalog remote",
+		"canonical Long must not hardcode scafctl")
+
+	assert.Contains(t, setDefaultCmd.Long, "mycli catalog remote set-default",
+		"deprecated twin Long examples must use the embedder binary name")
+	assert.NotContains(t, setDefaultCmd.Long, "scafctl catalog remote",
+		"deprecated twin Long must not hardcode scafctl")
+	assert.Contains(t, setDefaultCmd.Deprecated, "mycli catalog remote default",
+		"deprecation message must point at the embedder binary")
 }
 
 func TestRunRemoteList_Empty(t *testing.T) {

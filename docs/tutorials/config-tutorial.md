@@ -261,12 +261,12 @@ scafctl catalog remote remove my-catalog
 {{< tabs "config-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl catalog remote set-default my-catalog
+scafctl catalog remote default my-catalog
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl catalog remote set-default my-catalog
+scafctl catalog remote default my-catalog
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -500,7 +500,7 @@ scafctl config validate
 {{% tab "Bash" %}}
 ```bash
 # Use staging catalog
-scafctl catalog remote set-default staging
+scafctl catalog remote default staging
 
 # Increase logging for debugging
 scafctl config set logging.level debug
@@ -512,7 +512,7 @@ scafctl config unset logging.level
 {{% tab "PowerShell" %}}
 ```powershell
 # Use staging catalog
-scafctl catalog remote set-default staging
+scafctl catalog remote default staging
 
 # Increase logging for debugging
 scafctl config set logging.level debug

@@ -38,7 +38,8 @@ func CommandRemote(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	cmdPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(commandRemoteAdd(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(commandRemoteRemove(cliParams, ioStreams, cmdPath))
-	cmd.AddCommand(commandRemoteSetDefault(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(commandRemoteDefault(cliParams, ioStreams, cmdPath))
+	cmd.AddCommand(commandRemoteSetDefaultDeprecated(cliParams, ioStreams, cmdPath))
 	cmd.AddCommand(commandRemoteList(cliParams, ioStreams, cmdPath))
 
 	return cmd
@@ -270,9 +271,9 @@ func runRemoteRemove(ctx context.Context, opts *RemoteRemoveOptions) error {
 	return nil
 }
 
-// --- remote set-default ---
+// --- remote default ---
 
-// RemoteSetDefaultOptions holds options for the remote set-default command.
+// RemoteSetDefaultOptions holds options for the remote default command.
 type RemoteSetDefaultOptions struct {
 	IOStreams  *terminal.IOStreams
 	CliParams  *settings.Run
@@ -280,15 +281,67 @@ type RemoteSetDefaultOptions struct {
 	Name       string
 }
 
-func commandRemoteSetDefault(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+func commandRemoteDefault(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	opts := &RemoteSetDefaultOptions{
 		IOStreams: ioStreams,
 		CliParams: cliParams,
 	}
 
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+
 	cmd := &cobra.Command{
-		Use:   "set-default <name>",
+		Use:   "default <name>",
 		Short: "Set the default catalog",
+		Long: heredoc.Docf(`
+			Set a catalog as the default.
+
+			The default catalog is used when no --catalog flag is specified.
+
+			Examples:
+			  # Set default catalog
+			  %[1]s catalog remote default my-registry
+
+			  # Clear default catalog
+			  %[1]s catalog remote default ""
+		`, name),
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.Name = args[0]
+
+			if configFlag := cmd.Root().Flag("config"); configFlag != nil && configFlag.Value.String() != "" {
+				opts.ConfigPath = configFlag.Value.String()
+			}
+
+			return runRemoteSetDefault(cmd.Context(), opts)
+		},
+		SilenceUsage: true,
+	}
+
+	return cmd
+}
+
+// commandRemoteSetDefaultDeprecated is the hidden, deprecated twin of
+// 'catalog remote default'. It shares the same runRemoteSetDefault logic.
+func commandRemoteSetDefaultDeprecated(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
+	opts := &RemoteSetDefaultOptions{
+		IOStreams: ioStreams,
+		CliParams: cliParams,
+	}
+
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+
+	cmd := &cobra.Command{
+		Use:    "set-default <name>",
+		Short:  "Set the default catalog",
+		Hidden: true,
+		Deprecated: fmt.Sprintf(`use "%s catalog remote default" instead`,
+			name),
 		Long: heredoc.Docf(`
 			Set a catalog as the default.
 
@@ -300,7 +353,7 @@ func commandRemoteSetDefault(cliParams *settings.Run, ioStreams *terminal.IOStre
 
 			  # Clear default catalog
 			  %[1]s catalog remote set-default ""
-		`, settings.CliBinaryName),
+		`, name),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]

@@ -33,7 +33,7 @@ type FunctionSummary struct {
 	Custom      bool   `json:"custom" yaml:"custom"`
 }
 
-// Options holds configuration for the get go-template-functions command
+// Options holds configuration for the get template functions command
 type Options struct {
 	BinaryName string
 	IOStreams  *terminal.IOStreams
@@ -53,15 +53,41 @@ type Options struct {
 	sprigFn  func() gotmpl.ExtFunctionList
 }
 
-// CommandGotmplFunction creates the 'get go-template-functions' subcommand
-func CommandGotmplFunction(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+// CommandFunctions creates the canonical 'get template functions' subcommand,
+// wired as a child of the 'get template' group.
+func CommandFunctions(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	return newCommand(cliParams, ioStreams, path, "functions", nil, "", false)
+}
+
+// CommandGotmplFunctionDeprecated creates the hidden, deprecated
+// 'get go-template-functions' leaf command. It shares the same RunE/flags as the
+// canonical 'get template functions' child via newCommand.
+func CommandGotmplFunctionDeprecated(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+	deprecated := fmt.Sprintf(`use "%s get template functions" instead`, name)
+	return newCommand(cliParams, ioStreams, path, "go-template-functions", []string{"gotmpl-funcs", "gotmpl", "gtf"}, deprecated, true)
+}
+
+// newCommand is the shared builder for both the canonical
+// 'get template functions' child and the deprecated 'get go-template-functions'
+// leaf. Both forms wire identical Options, RunE, and flags so their behavior is
+// guaranteed to match.
+func newCommand(cliParams *settings.Run, ioStreams *terminal.IOStreams, path, use string, aliases []string, deprecated string, hidden bool) *cobra.Command {
 	options := &Options{}
 
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+
 	cCmd := &cobra.Command{
-		Use:     "go-template-functions",
-		Aliases: []string{"gotmpl-funcs", "gotmpl", "gtf"},
+		Use:     use,
+		Aliases: aliases,
 		Short:   "List available Go template extension functions",
-		Long: `List all available Go template extension functions, including sprig
+		Long: fmt.Sprintf(`List all available Go template extension functions, including sprig
 library functions and custom scafctl-specific functions.
 
 By default, lists all functions. Use --custom or --sprig to filter.
@@ -70,26 +96,28 @@ OUTPUT FORMATS:
   table     Table view with key information (default)
   json      Full function information as JSON
   yaml      Full function information as YAML
-  quiet     Function names only (one per line)
+  quiet     Suppress output (exit code only)
 
 Examples:
   # List all Go template functions
-  scafctl get go-template-functions
+  %[1]s get template functions
 
   # List only custom scafctl functions
-  scafctl get go-template-functions --custom
+  %[1]s get template functions --custom
 
   # List only sprig library functions
-  scafctl get go-template-functions --sprig
+  %[1]s get template functions --sprig
 
   # Output as JSON
-  scafctl get go-template-functions -o json
+  %[1]s get template functions -o json
 
   # Get details about a specific function
-  scafctl get go-template-functions toHcl
+  %[1]s get template functions toHcl
 
   # Browse interactively
-  scafctl get go-template-functions -i`,
+  %[1]s get template functions -i`, name),
+		Deprecated: deprecated,
+		Hidden:     hidden,
 		RunE: func(cCmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
 			ctx := settings.IntoContext(cCmd.Context(), cliParams)
@@ -294,10 +322,14 @@ func (o *Options) printFunctionDetail(ctx context.Context, fn *gotmpl.ExtFunctio
 
 // writeOutput writes the output using kvx
 func (o *Options) writeOutput(ctx context.Context, data any) error {
+	bin := o.BinaryName
+	if bin == "" {
+		bin = settings.CliBinaryName
+	}
 	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.BinaryName+" get go-template-functions"),
+		kvx.WithOutputAppName(bin+" get template functions"),
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputDisplaySchemaJSON(gotmplFunctionSchemaJSON),
 		kvx.WithOutputColumnOrder([]string{"name", "description"}),
