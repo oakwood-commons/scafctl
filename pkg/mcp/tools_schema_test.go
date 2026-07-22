@@ -258,7 +258,7 @@ func TestHandleValidateSchema(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)
 
-		result, err := srv.handleValidateSchema(context.Background(), newReq("this: is: bad: yaml:", `{}`))
+		result, err := srv.handleValidateSchema(context.Background(), newReq("type: 123", `{}`))
 		require.NoError(t, err)
 		require.NotNil(t, result)
 		assert.True(t, result.IsError)

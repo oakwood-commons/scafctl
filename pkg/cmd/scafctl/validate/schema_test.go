@@ -117,7 +117,7 @@ func TestCommandValidateSchema_OneFlagMissingErrors(t *testing.T) {
 
 func TestCommandValidateSchema_BadSchema(t *testing.T) {
 	dir := t.TempDir()
-	schemaPath := writeFile(t, dir, "schema.json", "this: is: bad: yaml:")
+	schemaPath := writeFile(t, dir, "schema.json", "type: 123")
 	dataPath := writeFile(t, dir, "data.json", `{"name":"hi"}`)
 
 	streams, _, _ := terminal.NewTestIOStreams()

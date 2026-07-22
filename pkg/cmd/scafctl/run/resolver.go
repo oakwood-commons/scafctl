@@ -751,7 +751,9 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solution, reg *provider.Registry) error {
 	result := pkglint.Solution(sol, sol.GetPath(), reg)
 
-	if len(result.Findings) > 0 {
+	// Honor -o quiet: exit-code-only, no lint block (header or findings). The
+	// pass/fail policy below still applies via ErrorCount/WarnCount.
+	if len(result.Findings) > 0 && o.Output != "quiet" {
 		w := writer.FromContext(ctx)
 		if w == nil && o.IOStreams != nil {
 			cliParams := o.CliParams
@@ -782,8 +784,6 @@ func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solutio
 			if o.CliParams != nil {
 				noColor = o.CliParams.NoColor
 			}
-			// Force a human-readable table render; do not inherit the
-			// resolver's -o json/yaml format for the lint findings block.
 			lintFlags := cmdflags.KvxOutputFlags{Output: "table"}
 			if renderErr := cmdlint.RenderResult(ctx, result, appName+" validate resolver", errStreams, lintFlags, noColor); renderErr != nil {
 				return renderErr

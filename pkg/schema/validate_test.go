@@ -234,7 +234,10 @@ func TestValidateDataAgainstSchema(t *testing.T) {
 	})
 
 	t.Run("malformed schema returns error", func(t *testing.T) {
-		bad := []byte("this: is: not: valid: json: or: yaml:")
+		// A structurally-invalid schema (type must be a string, not a number)
+		// deterministically fails schema compilation, unlike a fixture that
+		// merely relies on a YAML parse quirk.
+		bad := []byte("type: 123")
 		violations, err := ValidateDataAgainstSchema(bad, map[string]any{})
 		require.Error(t, err)
 		assert.Nil(t, violations)
