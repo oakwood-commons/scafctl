@@ -330,6 +330,14 @@ spec:
 		"composed RawContent must equal the source's authored bytes")
 	// The merge itself must still have happened on the typed struct.
 	assert.NotNil(t, result.Spec.Testing, "composed tests should be merged into the struct")
+
+	// rawContent and the source map must stay consistent: the composed result's
+	// source map must be the source's map (built from the authored bytes), not
+	// one derived from the round-tripped struct. Both non-nil here since the
+	// source was parsed from bytes.
+	require.NotNil(t, sol.SourceMap(), "source solution should have a source map")
+	assert.Same(t, sol.SourceMap(), result.SourceMap(),
+		"composed result must reuse the source's source map to stay consistent with restored rawContent")
 }
 
 // TestCompose_PreservesRawContent_ComposedAction verifies the exact contract the

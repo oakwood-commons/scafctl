@@ -3577,8 +3577,53 @@ func TestIntegration_Lint_SchemaValid(t *testing.T) {
 // content that schema-lint validates.
 func TestIntegration_Lint_ComposedWorkflow_NoSchemaFalsePositive(t *testing.T) {
 	t.Parallel()
-	stdout, _, exitCode := runScafctl(t, "lint", "-f",
-		"tests/integration/solutions/composed-workflow/solution.yaml", "-o", "json")
+	// Build the composed solution in a temp dir so the functional-test harness
+	// (which walks tests/integration/solutions/**) never discovers the partial
+	// compose file as a standalone solution.
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "tests"), 0o755))
+
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: composed-workflow
+  version: 1.0.0
+compose:
+  - tests/cases.yaml
+spec:
+  resolvers:
+    hello:
+      description: A greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+  workflow:
+    actions:
+      greet:
+        description: Say hello
+        provider: message
+        inputs:
+          message: hello
+`
+	// Partial compose file: only spec.testing, no metadata.name. Its name comes
+	// from the action map key, which the compose round-trip previously injected
+	// into rawContent as name: "" and tripped schema-lint.
+	casesYAML := `spec:
+  testing:
+    cases:
+      basic:
+        description: basic composed test
+        command: [run, resolver]
+        assertions:
+          - expression: __exitCode == 0
+`
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "tests", "cases.yaml"), []byte(casesYAML), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionFile, "-o", "json")
 
 	assert.NotContains(t, stdout, "schema-violation",
 		"composed solution with a workflow action must not trip a schema-violation")

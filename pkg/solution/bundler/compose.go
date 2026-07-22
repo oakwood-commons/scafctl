@@ -349,17 +349,25 @@ func deepCopySolution(sol *solution.Solution) (*solution.Solution, error) {
 		return nil, fmt.Errorf("failed to marshal solution: %w", err)
 	}
 	var cp solution.Solution
+	cp.SetPath(sol.GetPath())
 	if err := cp.UnmarshalFromBytes(data); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal solution copy: %w", err)
 	}
-	cp.SetPath(sol.GetPath())
-	// Preserve the source's original authored bytes. The marshal/unmarshal
-	// round-trip above regenerates rawContent from the typed struct, which
-	// materializes zero-value fields (e.g. an action's empty name) that were
-	// never in the user's file. Schema-lint validates rawContent, so leaving
-	// the round-tripped bytes here produces false-positive violations (e.g.
-	// spec.workflow.actions.name pattern). Restoring the original bytes keeps
-	// lint validating what the user actually wrote.
+	// Preserve the source's original authored bytes AND its matching source map.
+	// The marshal/unmarshal round-trip above regenerates rawContent from the
+	// typed struct, which materializes zero-value fields (e.g. an action's empty
+	// name) that were never in the user's file. Schema-lint validates rawContent,
+	// so leaving the round-tripped bytes here produces false-positive violations
+	// (e.g. the spec.workflow.actions.name pattern). Restoring the original bytes
+	// keeps lint validating what the user actually wrote.
+	//
+	// rawContent and the source map must stay consistent: lint parses inline
+	// suppression directives from rawContent and enriches findings with
+	// line/column positions from the source map. Restoring rawContent from the
+	// source without also restoring the source map would map directives and
+	// positions against mismatched byte streams, breaking block-scoped
+	// suppressions and line reporting. So we restore both from the source.
 	cp.SetRawContent(sol.RawContent())
+	cp.SetSourceMap(sol.SourceMap())
 	return &cp, nil
 }

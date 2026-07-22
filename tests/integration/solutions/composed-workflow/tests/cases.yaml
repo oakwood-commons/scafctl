@@ -1,8 +1,0 @@
-spec:
-  testing:
-    cases:
-      basic:
-        description: basic composed test
-        command: [run, resolver]
-        assertions:
-          - expression: __exitCode == 0
