@@ -47,7 +47,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `validate schema` | ✅ Implemented | Validate arbitrary data (JSON/YAML, `--data -` for stdin) against a JSON Schema |
 | `new solution` | ✅ Implemented | Scaffold a new solution from template |
 | `lint rules` | ✅ Implemented | List all available lint rules |
-| `lint explain` | ✅ Implemented | Explain a specific lint rule |
+| `lint rule` | ✅ Implemented | Explain a specific lint rule |
 | `lint` | ✅ Implemented | Advisory subset of `validate`: reports authoring warnings/findings without being the pass/fail gate |
 | `examples list` | ✅ Implemented | List available example configurations |
 | `examples get` | ✅ Implemented | Get/download an example file |
@@ -1066,11 +1066,15 @@ Get a detailed explanation of a specific lint rule:
 
 ~~~bash
 # Show rule details, examples, and fix guidance
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 
 # Output as JSON
-scafctl lint explain <rule-id> -o json
+scafctl lint rule <rule-id> -o json
 ~~~
+
+> The former `scafctl lint explain <rule-id>` still works as a hidden,
+> deprecated alias for `scafctl lint rule <rule-id>`.
+
 
 ---
 
@@ -1149,7 +1153,7 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl diff snapshot` | diff | snapshot |
 | `scafctl diff solution` | diff | solution |
 | `scafctl lint rules` | lint | rules |
-| `scafctl lint explain` | lint | explain |
+| `scafctl lint rule` | lint | rule |
 | `scafctl eval cel` | eval | cel |
 | `scafctl eval template` | eval | template |
 | `scafctl validate solution` | validate | solution |

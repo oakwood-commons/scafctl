@@ -390,12 +390,12 @@ Get a detailed explanation of a specific rule:
 {{< tabs "eval-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 ```
 {{% /tab %}}
 {{< /tabs >}}

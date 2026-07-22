@@ -8236,6 +8236,41 @@ func TestIntegration_LintRules_JSON(t *testing.T) {
 	assert.Contains(t, rules[0], "severity")
 }
 
+func TestIntegration_LintRule_KnownRule(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lint", "rule", "missing-description")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "missing-description")
+	assert.Contains(t, stdout, "severity")
+}
+
+func TestIntegration_LintRule_UnknownRule(t *testing.T) {
+	t.Parallel()
+	_, _, exitCode := runScafctl(t, "lint", "rule", "nonexistent-rule")
+	assert.NotEqual(t, 0, exitCode)
+}
+
+func TestIntegration_LintRule_JSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lint", "rule", "missing-description", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, "missing-description", result["rule"])
+}
+
+// TestIntegration_LintExplain_DeprecatedAlias verifies the old 'lint explain'
+// alias still works and prints a deprecation notice on stderr, while producing
+// the same rule output on stdout as the canonical 'lint rule'.
+func TestIntegration_LintExplain_DeprecatedAlias(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "lint", "explain", "missing-description")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "missing-description")
+	assert.Contains(t, stderr, "deprecated", "deprecated alias must emit a deprecation notice on stderr")
+}
+
 func TestIntegration_LintExplain_KnownRule(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lint", "explain", "missing-description")

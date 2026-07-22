@@ -34,12 +34,13 @@ func TestCommandLint(t *testing.T) {
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE, "lint command should have RunE")
 	subCmds := cmd.Commands()
-	require.Len(t, subCmds, 2, "should have 2 subcommands: rules, explain")
+	require.Len(t, subCmds, 3, "should have 3 subcommands: rules, rule, explain")
 	cmdNames := make([]string, len(subCmds))
 	for i, c := range subCmds {
 		cmdNames[i] = c.Name()
 	}
 	assert.Contains(t, cmdNames, "rules")
+	assert.Contains(t, cmdNames, "rule")
 	assert.Contains(t, cmdNames, "explain")
 }
 
@@ -192,23 +193,83 @@ func TestRulesRun_SeverityFilter(t *testing.T) {
 	}
 }
 
-func TestCommandExplainRule(t *testing.T) {
+func TestCommandRule(t *testing.T) {
 	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandExplainRule(cliParams, ioStreams, "scafctl/lint")
+	cmd := CommandRule(cliParams, ioStreams, "scafctl/lint")
 	require.NotNil(t, cmd)
-	assert.Equal(t, "explain <rule-name>", cmd.Use)
+	assert.Equal(t, "rule <rule-name>", cmd.Use)
+	assert.True(t, strings.HasPrefix(cmd.Use, "rule"))
+	assert.False(t, cmd.Hidden, "canonical rule command must not be hidden")
+	assert.Empty(t, cmd.Deprecated, "canonical rule command must not be deprecated")
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotNil(t, cmd.RunE)
+	// Embedder-safe help: Long must use the configured binary name, not scafctl.
+	assert.Contains(t, cmd.Long, "mycli lint rule")
+	assert.NotContains(t, cmd.Long, "scafctl lint rule")
 }
 
-func TestCommandExplainRule_RequiresArg(t *testing.T) {
+func TestCommandRule_RequiresArg(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
-	cmd := CommandExplainRule(cliParams, ioStreams, "scafctl/lint")
+	cmd := CommandRule(cliParams, ioStreams, "scafctl/lint")
 	cmd.SetArgs([]string{})
 	err := cmd.Execute()
 	assert.Error(t, err, "should fail without rule-name argument")
+}
+
+func TestCommandExplainRuleDeprecated(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandExplainRuleDeprecated(cliParams, ioStreams, "scafctl/lint")
+	require.NotNil(t, cmd)
+	assert.Equal(t, "explain <rule-name>", cmd.Use)
+	assert.True(t, cmd.Hidden, "deprecated explain alias must be hidden")
+	assert.NotEmpty(t, cmd.Deprecated)
+	assert.Contains(t, cmd.Deprecated, "mycli lint rule", "deprecation should point at canonical command")
+	assert.NotNil(t, cmd.RunE)
+}
+
+func TestCommandExplainRuleDeprecated_RequiresArg(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandExplainRuleDeprecated(cliParams, ioStreams, "scafctl/lint")
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+	assert.Error(t, err, "should fail without rule-name argument")
+}
+
+// TestCanonicalAndDeprecated_ShareRunE verifies the canonical 'lint rule'
+// command and the deprecated 'lint explain' alias produce identical stdout for
+// the same args (shared RunE), and that the deprecation notice is emitted on
+// the deprecated command's stderr (cobra writer), not on stdout.
+func TestCanonicalAndDeprecated_ShareRunE(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "scafctl"
+
+	ioC, outC, errC := terminal.NewTestIOStreams()
+	ioD, outD, errD := terminal.NewTestIOStreams()
+
+	canonical := CommandRule(cliParams, ioC, "scafctl/lint")
+	deprecated := CommandExplainRuleDeprecated(cliParams, ioD, "scafctl/lint")
+
+	canonical.SetOut(errC)
+	canonical.SetErr(errC)
+	canonical.SetArgs([]string{"empty-solution", "-o", "json"})
+	require.NoError(t, canonical.Execute())
+
+	deprecated.SetOut(errD)
+	deprecated.SetErr(errD)
+	deprecated.SetArgs([]string{"empty-solution", "-o", "json"})
+	require.NoError(t, deprecated.Execute())
+
+	assert.Equal(t, outC.String(), outD.String(), "canonical and deprecated stdout must match")
+	assert.Contains(t, outC.String(), "empty-solution")
+	// Deprecation notice goes to the cobra writer (errD), not stdout.
+	assert.Contains(t, errD.String(), "is deprecated")
+	assert.NotContains(t, outD.String(), "is deprecated")
 }
 
 // ── ExplainRun output format tests ───────────────────────────────────────────
@@ -219,7 +280,7 @@ func TestExplainRun_JSONOutput(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -247,7 +308,7 @@ func TestExplainRun_YAMLOutput(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -269,7 +330,7 @@ func TestExplainRun_TableOutput(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -291,7 +352,7 @@ func TestExplainRun_ListOutput(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -312,7 +373,7 @@ func TestExplainRun_CSVOutput(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -333,7 +394,7 @@ func TestExplainRun_UnknownRule(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -353,7 +414,7 @@ func TestExplainRun_EmbedderBinaryName(t *testing.T) {
 	cliParams.BinaryName = "mycli"
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "mycli",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,
@@ -371,7 +432,7 @@ func TestExplainRun_DefaultFormat(t *testing.T) {
 	cliParams := testCliParams()
 	ctx := testContext(ioStreams)
 
-	opts := &ExplainOptions{
+	opts := &RuleOptions{
 		BinaryName:     "scafctl",
 		IOStreams:      ioStreams,
 		CliParams:      cliParams,

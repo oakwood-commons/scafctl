@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
@@ -25,34 +24,59 @@ import (
 //go:embed lint_explain_schema.json
 var lintExplainSchemaJSON []byte
 
-// ExplainOptions holds options for the lint explain command.
-type ExplainOptions struct {
+// RuleOptions holds options for the 'lint rule' command (and its deprecated
+// 'lint explain' alias).
+type RuleOptions struct {
 	BinaryName     string
 	IOStreams      *terminal.IOStreams
 	CliParams      *settings.Run
 	KvxOutputFlags flags.KvxOutputFlags
 }
 
-// CommandExplainRule creates the 'lint explain' command.
-func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	opts := &ExplainOptions{}
+// CommandRule creates the canonical 'lint rule' command.
+func CommandRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	return newRuleCommand(cliParams, ioStreams, path, "rule <rule-name>", "", false)
+}
+
+// CommandExplainRuleDeprecated creates the hidden, deprecated 'lint explain'
+// alias. It shares the same RunE/flags as the canonical 'lint rule' command via
+// newRuleCommand.
+func CommandExplainRuleDeprecated(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
+	deprecated := fmt.Sprintf(`use "%s lint rule" instead`, name)
+	return newRuleCommand(cliParams, ioStreams, path, "explain <rule-name>", deprecated, true)
+}
+
+// newRuleCommand is the shared builder for both the canonical 'lint rule'
+// command and the deprecated 'lint explain' alias. Both forms wire identical
+// Options, RunE, and flags so their behavior is guaranteed to match.
+func newRuleCommand(cliParams *settings.Run, ioStreams *terminal.IOStreams, path, use, deprecated string, hidden bool) *cobra.Command {
+	opts := &RuleOptions{}
+
+	name := cliParams.BinaryName
+	if name == "" {
+		name = settings.CliBinaryName
+	}
 
 	cCmd := &cobra.Command{
-		Use:   "explain <rule-name>",
+		Use:   use,
 		Short: "Explain a specific lint rule in detail",
-		Long: heredoc.Doc(`
-			Show detailed information about a specific lint rule, including
-			its severity, category, description, why it matters, how to fix it,
-			and examples that would trigger it.
+		Long: fmt.Sprintf(`Show detailed information about a specific lint rule, including
+its severity, category, description, why it matters, how to fix it,
+and examples that would trigger it.
 
-			Examples:
-			  # Explain a rule
-			  scafctl lint explain missing-description
+Examples:
+  # Explain a rule
+  %[1]s lint rule missing-description
 
-			  # Explain with JSON output
-			  scafctl lint explain unknown-provider-input -o json
-		`),
-		Args: cobra.ExactArgs(1),
+  # Explain with JSON output
+  %[1]s lint rule unknown-provider-input -o json`, name),
+		Deprecated: deprecated,
+		Hidden:     hidden,
+		Args:       cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
 			ctx := settings.IntoContext(cmd.Context(), cliParams)
@@ -85,8 +109,8 @@ func CommandExplainRule(cliParams *settings.Run, ioStreams *terminal.IOStreams, 
 // explainColumnOrder controls field display order in KVX visual output.
 var explainColumnOrder = []string{"rule", "severity", "category", "description", "why", "fix", "examples"}
 
-// Run executes the lint explain command.
-func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
+// Run executes the lint rule command.
+func (o *RuleOptions) Run(ctx context.Context, ruleName string) error {
 	if o.BinaryName == "" {
 		o.BinaryName = settings.CliBinaryName
 	}
@@ -107,7 +131,7 @@ func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputContext(ctx),
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.CliParams.BinaryName+" lint explain"),
+		kvx.WithOutputAppName(o.BinaryName+" lint rule"),
 		kvx.WithOutputDisplaySchemaJSON(lintExplainSchemaJSON),
 		kvx.WithOutputColumnOrder(explainColumnOrder),
 	)
@@ -124,7 +148,7 @@ func (o *ExplainOptions) Run(ctx context.Context, ruleName string) error {
 			kvx.WithIOStreams(o.IOStreams),
 			kvx.WithOutputContext(ctx),
 			kvx.WithOutputNoColor(o.CliParams.NoColor),
-			kvx.WithOutputAppName(o.CliParams.BinaryName+" lint explain"),
+			kvx.WithOutputAppName(o.BinaryName+" lint rule"),
 			kvx.WithOutputDisplaySchemaJSON(lintRulesSchemaJSON),
 		)
 		return interactiveOpts.Write([]any{projectRule(rule)})
