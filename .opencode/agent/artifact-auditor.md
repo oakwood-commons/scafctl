@@ -30,7 +30,10 @@ prompt's steps. This agent file provides the shared procedure and checklist.
    - New/changed provider (`pkg/provider/**`) -> docs, example, solution
      integration test, benchmark, `mock.go`, MCP schema exposure.
    - New/changed CLI command (`pkg/cmd/scafctl/**`) -> docs, CLI integration
-     test, `--help` coverage.
+     test, `--help` coverage. If the command emits an **array of objects** via
+     kvx, an interactive display schema (`kvx.WithOutputDisplaySchemaJSON`,
+     typically a `go:embed`-ed `<cmd>_schema.json` with `x-kvx-list`/`x-kvx-detail`)
+     is an expected artifact; single-object/scalar output is exempt.
    - New/changed exported type or interface -> unit tests in `*_test.go`,
      doc comments on exported symbols, mock updates if an interface changed.
    - New/changed feature or behavior -> docs, tutorial (if user-facing), example.

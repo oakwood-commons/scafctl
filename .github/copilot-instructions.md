@@ -6,7 +6,7 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 ## Key Patterns
 
 - **CLI Output**: Use `writer.FromContext(ctx)` -- never `fmt.Fprintf` directly. See `pkg/terminal/writer/`
-- **Data Output**: Use `kvx.OutputOptions` for structured table/json/yaml/quiet output. See `pkg/terminal/kvx/`
+- **Data Output**: Use `kvx.OutputOptions` for structured table/json/yaml/quiet output. See `pkg/terminal/kvx/`. Commands that emit an **array of objects** should attach an interactive display schema via `kvx.WithOutputDisplaySchemaJSON` (a `go:embed`-ed `<cmd>_schema.json` with `x-kvx-list`/`x-kvx-detail` extensions) so `-i` renders a card/detail view; single-object output does not need one. See `.github/instructions/cli-commands.instructions.md`.
 - **HTTP Client**: See `pkg/httpc/README.md`
 - **Paths**: Use xdg paths via `pkg/paths`
 - **Configuration**: `pkg/settings` for defaults, `pkg/config/` for app configuration

@@ -12,6 +12,17 @@ Commands are **thin wiring only** -- they parse flags, call domain packages, and
 - **No business logic** -- delegate to packages in `pkg/`
 - Use `writer.FromContext(ctx)` for all terminal output, never `fmt.Fprintf`
 - Use `kvx.OutputOptions` for structured data (table/json/yaml/quiet)
+- **Array output ships an interactive display schema by default** -- when a command
+  emits an **array of objects** via kvx, attach an interactive display schema with
+  `kvx.WithOutputDisplaySchemaJSON` so `-i` renders a card list + detail pane instead
+  of a raw KEY/VALUE table. Prefer a `go:embed`-ed `<cmd>_schema.json` (a JSON Schema
+  whose root `type` is `array`, decorated with `x-kvx-list`/`x-kvx-detail` extensions).
+  See `pkg/cmd/scafctl/get/provider/provider.go` + `provider_schema.json` for the
+  canonical pattern. Note the two distinct slots: `kvx.WithOutputSchemaJSON` only tunes
+  **table column hints**, while `kvx.WithOutputDisplaySchemaJSON` drives the **interactive
+  TUI** -- an array command wants the display schema (and may add both). **Single-object
+  or scalar output does not need a schema** (e.g. `auth token`) -- the author may still
+  add one, but it is not required.
 - Use `cobra.Command` for command definition and flag binding
 - Wire up `settings.Run` parameters from flags
 - Always add new commands to CLI integration tests (`tests/integration/cli_test.go`)
