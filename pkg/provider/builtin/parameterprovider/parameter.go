@@ -31,8 +31,9 @@ const (
 	Version = "1.0.0"
 
 	// TypeAuto is the default value for the "type" input. It infers booleans,
-	// numbers, JSON, and file://+http:// sources, falling back to the literal
-	// string. Comma-separated values are NOT auto-split; use TypeCSV for that.
+	// numbers, JSON, and file:// sources, falling back to the literal string.
+	// http://+https:// values are NOT fetched; use TypeFetch for that.
+	// Comma-separated values are NOT auto-split; use TypeCSV for that.
 	TypeAuto = "auto"
 	// TypeString forces the value to a string, stripping surrounding quotes and
 	// coercing non-string values to their string representation.
@@ -51,6 +52,11 @@ const (
 	TypeJSON = "json"
 	// TypeCSV splits a comma-separated value into a list of trimmed strings.
 	TypeCSV = "csv"
+	// TypeFetch performs an SSRF-guarded HTTP(S) GET and returns the response
+	// body. The value must be an http:// or https:// URL. This is the explicit
+	// opt-in for network fetching; auto never fetches. For anything beyond a
+	// plain GET (auth, headers, methods, retries), use the http provider.
+	TypeFetch = "fetch"
 )
 
 // paramTypes lists every value accepted by the "type" input, in schema
@@ -65,6 +71,7 @@ var paramTypes = []string{
 	TypeBool,
 	TypeJSON,
 	TypeCSV,
+	TypeFetch,
 }
 
 // paramTypeEnum is paramTypes converted to []any for the descriptor's enum
@@ -156,7 +163,7 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					schemahelper.WithMaxItems(50)),
 				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
 					schemahelper.WithExample("fallback")),
-				"type": schemahelper.StringProp("Controls how the parameter value is coerced. \"auto\" (default) infers booleans, numbers, JSON, and file://+http:// sources, falling back to the literal string. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\".",
+				"type": schemahelper.StringProp("Controls how the parameter value is coerced. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources, falling back to the literal string. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
 					schemahelper.WithEnum(paramTypeEnum...),
 					schemahelper.WithExample(TypeString)),
 			}),
@@ -229,6 +236,14 @@ inputs:
 inputs:
   key: token
   type: raw`,
+				},
+				{
+					Name:        "Fetch remote content over HTTP",
+					Description: "Perform an SSRF-guarded HTTP GET and store the response body (opt in with type: fetch). auto never fetches; a URL value stays a literal string.",
+					YAML: `provider: parameter
+inputs:
+  key: configUrl
+  type: fetch`,
 				},
 			},
 		},
@@ -352,6 +367,12 @@ func (p *ParameterProvider) resolveValue(ctx context.Context, value any, paramTy
 		return coerceJSON(value)
 	case TypeCSV:
 		return coerceCSV(value), nil
+	case TypeFetch:
+		str, ok := value.(string)
+		if !ok || !isHTTPURL(str) {
+			return nil, fmt.Errorf("%s: type %q requires an http:// or https:// value, got %q (%T)", ProviderName, TypeFetch, fmt.Sprintf("%v", value), value)
+		}
+		return p.fetchURL(ctx, str)
 	case TypeAuto:
 		return p.parseValue(ctx, value)
 	default:
@@ -522,8 +543,11 @@ func coerceCSV(value any) any {
 	return result
 }
 
-// parseValue applies the auto inference pipeline to a parameter value.
-func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, error) {
+// parseValue applies the auto inference pipeline to a parameter value. It is
+// purely local (no network I/O); http(s):// values are not fetched under auto
+// -- use TypeFetch for that. The context parameter is retained for signature
+// symmetry with the rest of the value-resolution pipeline.
+func (p *ParameterProvider) parseValue(_ context.Context, value any) (any, error) {
 	// If value is already parsed (not a string), return as-is
 	str, ok := value.(string)
 	if !ok {
@@ -545,32 +569,7 @@ func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, err
 		return string(content), nil
 	}
 
-	// 3. HTTP protocol
-	if strings.HasPrefix(str, "http://") || strings.HasPrefix(str, "https://") {
-		// Block requests to private/loopback/link-local IP addresses unless explicitly permitted.
-		if !httpc.PrivateIPsAllowed(ctx) {
-			if err := httpc.ValidateURLNotPrivate(str); err != nil {
-				return nil, fmt.Errorf("resolver parameter URL blocked: %w", err)
-			}
-		}
-		resp, err := p.httpClient.Get(ctx, str)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch URL %q: %w", str, err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("HTTP request to %q failed with status %d", str, resp.StatusCode)
-		}
-
-		content, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read response from %q: %w", str, err)
-		}
-		return string(content), nil
-	}
-
-	// 4. JSON parse
+	// 3. JSON parse
 	if strings.HasPrefix(str, "{") || strings.HasPrefix(str, "[") {
 		var result any
 		if err := json.Unmarshal([]byte(str), &result); err == nil {
@@ -579,7 +578,7 @@ func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, err
 		// If JSON parsing fails, continue to next rule
 	}
 
-	// 5. Boolean parse
+	// 4. Boolean parse
 	lowerStr := strings.ToLower(str)
 	if lowerStr == "true" {
 		return true, nil
@@ -588,7 +587,7 @@ func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, err
 		return false, nil
 	}
 
-	// 6. Number parse
+	// 5. Number parse
 	// Try integer first
 	if intVal, err := strconv.ParseInt(str, 10, 64); err == nil {
 		return intVal, nil
@@ -598,13 +597,44 @@ func (p *ParameterProvider) parseValue(ctx context.Context, value any) (any, err
 		return floatVal, nil
 	}
 
-	// 7. Literal string (fallback)
+	// 6. Literal string (fallback)
 	// Remove surrounding quotes if present
 	if isQuoted(str) {
 		return strings.Trim(str, `"`), nil
 	}
 
 	return str, nil
+}
+
+// isHTTPURL reports whether s is an http:// or https:// URL.
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// fetchURL performs an SSRF-guarded HTTP GET and returns the response body as a
+// string. It backs TypeFetch; auto never fetches. Requests to
+// private/loopback/link-local addresses are blocked unless explicitly permitted.
+func (p *ParameterProvider) fetchURL(ctx context.Context, url string) (string, error) {
+	if !httpc.PrivateIPsAllowed(ctx) {
+		if err := httpc.ValidateURLNotPrivate(url); err != nil {
+			return "", fmt.Errorf("resolver parameter URL blocked: %w", err)
+		}
+	}
+	resp, err := p.httpClient.Get(ctx, url)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch URL %q: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP request to %q failed with status %d", url, resp.StatusCode)
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response from %q: %w", url, err)
+	}
+	return string(content), nil
 }
 
 // isQuoted checks if a string is surrounded by double quotes

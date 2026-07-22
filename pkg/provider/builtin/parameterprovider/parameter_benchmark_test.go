@@ -53,6 +53,7 @@ func BenchmarkParameterProvider_Execute_TypedCoercion(b *testing.B) {
 		typeIn string
 	}{
 		{"auto_int", "8080", TypeAuto},
+		{"auto_url_literal", "https://example.com/config", TypeAuto},
 		{"int", "8080", TypeInt},
 		{"float", "3.14", TypeFloat},
 		{"bool", "true", TypeBool},

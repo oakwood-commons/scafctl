@@ -1,6 +1,11 @@
 # Run: scafctl run resolver -f examples/providers/parameter-types.yaml \
 #        billingId=00042 port=8080 ratio=1.5 enabled=true \
-#        config='{"replicas":3}' regions=us-east-1,us-west-2 -o json
+#        config='{"replicas":3}' regions=us-east-1,us-west-2 \
+#        repoUrl=https://github.com/org/repo -o json
+#
+# Fetch remote content explicitly (performs an HTTP GET):
+#   scafctl run resolver -f examples/providers/parameter-types.yaml \
+#        configUrl=https://example.com/config.json fetchedConfig -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -15,14 +20,16 @@ metadata:
   description: |
     Demonstrates the parameter provider's "type" input, which controls how a
     raw CLI value (or default) is coerced. "auto" (the default) infers bools,
-    numbers, JSON, and file://+http:// sources but does NOT split
-    comma-separated values -- opt in with "csv". Every other type forces a
+    numbers, JSON, and file:// sources. It does NOT fetch http://+https:// URLs
+    (they stay literal strings -- use "fetch") and does NOT split
+    comma-separated values (opt in with "csv"). Every other type forces a
     single coercion and errors if the value does not match.
 
 spec:
   resolvers:
-    # auto (default): infers bool, number, JSON, file://, http://.
-    # Comma-separated values are NOT split -- they stay a literal string.
+    # auto (default): infers bool, number, JSON, file://.
+    # Comma-separated values are NOT split and http(s):// URLs are NOT
+    # fetched -- they stay literal strings.
     inferred:
       description: Automatic inference (numeric-looking value becomes a number)
       resolve:
@@ -31,6 +38,34 @@ spec:
             inputs:
               key: port
               default: 8080
+
+    # auto keeps a URL as a literal string -- no network I/O based on the
+    # value's shape. This is the common case (store the URL, not its body).
+    repoUrl:
+      description: A URL stored verbatim under auto (never fetched)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: repoUrl
+              default: "https://github.com/oakwood-commons/scafctl"
+
+    # fetch: explicit, SSRF-guarded HTTP GET that stores the response body.
+    # Use only when you want the remote content; for auth/headers/methods/
+    # retries use the http provider. continueOnError keeps this runnable
+    # offline by falling back when no configUrl is provided or it is unreachable.
+    fetchedConfig:
+      description: Remote content fetched explicitly with type fetch
+      resolve:
+        with:
+          - provider: parameter
+            continueOnError: true
+            inputs:
+              key: configUrl
+              type: fetch
+          - provider: static
+            inputs:
+              value: "<no configUrl provided; pass -r configUrl=https://...>"
 
     # string: keep a numeric-looking value as a string (e.g. an ID with
     # leading zeros, or a value used with CEL matches()).

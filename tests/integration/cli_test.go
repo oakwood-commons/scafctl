@@ -6605,6 +6605,7 @@ func TestIntegration_Run_Resolver_ParameterTypes(t *testing.T) {
 		"-r", "enabled=true",
 		"-r", `config={"replicas":3}`,
 		"-r", "regions=us-east-1, us-west-2",
+		"-r", "repoUrl=https://github.com/org/repo",
 	)
 	require.Equal(t, 0, exitCode, "stdout: %s\nstderr: %s", stdout, stderr)
 
@@ -6613,6 +6614,10 @@ func TestIntegration_Run_Resolver_ParameterTypes(t *testing.T) {
 
 	// auto (default): numeric-looking value infers to a JSON number.
 	assert.InDelta(t, float64(8080), out["inferred"], 0, "auto should infer a number")
+	// auto: a URL value is stored verbatim, never fetched.
+	assert.Equal(t, "https://github.com/org/repo", out["repoUrl"], "auto should keep a URL literal")
+	// fetch: no configUrl provided, so the static fallback is used (no network).
+	assert.Equal(t, "<no configUrl provided; pass -r configUrl=https://...>", out["fetchedConfig"], "fetch should fall back when configUrl is absent")
 	// string: keep leading zeros as a string.
 	assert.Equal(t, "00042", out["billingId"], "type string should preserve leading zeros")
 	// raw: returned verbatim, no coercion.

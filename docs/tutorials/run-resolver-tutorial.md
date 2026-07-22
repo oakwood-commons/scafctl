@@ -1292,16 +1292,17 @@ scafctl run resolver -f param-demo.yaml unknown=value
 
 By default the parameter provider infers a type from the raw value: `true`/`false`
 become booleans, numeric strings become numbers, JSON objects/arrays are parsed,
-and `file://`/`http://` values are loaded. When automatic inference produces the
-wrong type -- for example a numeric ID with leading zeros that should stay a
-string, or a value that must be parsed a specific way -- set the `type` input to
-take explicit control.
+and `file://` values are loaded. `http://`/`https://` values are kept as literal
+strings -- they are not fetched. When automatic inference produces the wrong type
+-- for example a numeric ID with leading zeros that should stay a string, or a
+value that must be parsed a specific way -- set the `type` input to take explicit
+control.
 
 The `type` input accepts these values:
 
 | Type     | Behavior                                                                 |
 | -------- | ------------------------------------------------------------------------ |
-| `auto`   | Default. Infers bool, number, JSON, and `file://`/`http://` values.      |
+| `auto`   | Default. Infers bool, number, JSON, and `file://` values.                |
 | `string` | Coerces the value to a string (strips surrounding quotes).               |
 | `raw`    | Returns the value exactly as received, with no coercion or quote strip.  |
 | `int`    | Parses the value as an integer; errors if it is not a whole number.      |
@@ -1309,11 +1310,13 @@ The `type` input accepts these values:
 | `bool`   | Parses `true`/`false` (case-insensitive); errors on any other value.     |
 | `json`   | Parses the value as JSON; errors on invalid JSON.                        |
 | `csv`    | Splits the value on commas into a trimmed list of strings.               |
+| `fetch`  | Performs an SSRF-guarded HTTP GET and returns the response body.         |
 
-> **Breaking change:** Comma-separated values are no longer split into lists
-> automatically. A value like `a,b,c` now stays the string `"a,b,c"` under `auto`.
-> Set `type: csv` when you want a list. This removes a surprising footgun where
-> any value containing a comma silently became an array.
+> [!NOTE]
+> `auto` never triggers network I/O or list-splitting. A `http://`/`https://`
+> value stays the literal string (use `type: fetch` to retrieve the content, or
+> the `http` provider for anything beyond a plain GET), and a comma-separated
+> value like `a,b,c` stays the string `"a,b,c"` (use `type: csv` to get a list).
 
 An explicit `type` applies to both CLI-supplied values and the `default` input.
 When a typed value cannot be parsed (for example `type: int` on `abc`), the
