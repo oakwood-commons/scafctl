@@ -1405,32 +1405,50 @@ scafctl run resolver -f solution.yaml -r body=@request.json
 
 ### URL References
 
+By default a URL value is stored as a literal string -- scafctl does **not**
+fetch it. To fetch remote content, opt in explicitly with `type: fetch` on the
+parameter resolver (an SSRF-guarded HTTP GET), or use the `http` provider for
+anything beyond a plain GET (auth, headers, methods, retries):
+
 ~~~bash
+# Stored as the literal string "https://example.com/data.json"
 -r data=https://example.com/data.json
+~~~
+
+~~~yaml
+# Fetch the body explicitly
+resolvers:
+  remoteConfig:
+    from:
+      provider: parameter
+      inputs:
+        key: data
+        type: fetch
 ~~~
 
 ### Parsing Precedence
 
-When multiple formats are ambiguous, scafctl applies the following parsing order:
+When multiple formats are ambiguous, scafctl applies the following parsing order
+for the default `auto` type:
 
 1. **Stdin check**: If value is exactly `-`, read from stdin
 2. **File protocol**: If value starts with `file://`, treat as file reference
-3. **HTTP protocol**: If value starts with `http://` or `https://`, treat as URL reference
-4. **JSON parse**: If value starts with `{` or `[`, attempt JSON parse
-5. **Boolean parse**: If value is exactly `true` or `false` (case-insensitive), parse as boolean
-6. **Number parse**: Attempt to parse as integer or float
-7. **CSV detection**: If value contains `,` and not enclosed in quotes, split as CSV list
-8. **Literal string**: Fallback to treating value as literal string
+3. **JSON parse**: If value starts with `{` or `[`, attempt JSON parse
+4. **Boolean parse**: If value is exactly `true` or `false` (case-insensitive), parse as boolean
+5. **Number parse**: Attempt to parse as integer or float
+6. **Literal string**: Fallback to treating value as literal string
+
+`http://`/`https://` values are **not** fetched under `auto` (use `type: fetch`),
+and comma-separated values are **not** auto-split (use `type: csv`).
 
 **Examples:**
 
-- `-r url=https://example.com` → URL reference (rule 3)
-- `-r url="https://example.com"` → Literal string (quotes override protocol detection)
-- `-r count=42` → Integer (rule 6)
-- `-r items=a,b,c` → Array `["a", "b", "c"]` (rule 7)
-- `-r items=a -r items=b -r items=c` → Array `["a", "b", "c"]` (rule 7)
-- `-r flag=true` → Boolean `true` (rule 5)
-- `-r config={"key":"value"}` → JSON object (rule 4)
+- `-r url=https://example.com` -> literal string `"https://example.com"` (no fetch)
+- `-r url=https://example.com` + `type: fetch` -> the fetched response body
+- `-r count=42` -> Integer (rule 5)
+- `-r items=a,b,c` -> literal string `"a,b,c"` (use `type: csv` for a list)
+- `-r flag=true` -> Boolean `true` (rule 4)
+- `-r config={"key":"value"}` -> JSON object (rule 3)
 
 ---
 

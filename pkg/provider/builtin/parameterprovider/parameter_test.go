@@ -865,11 +865,11 @@ func TestWithHTTPClient_ExercisesOption(t *testing.T) {
 
 	mock := &MockHTTPClient{Err: errors.New("mock-error")}
 	p := NewParameterProvider(WithHTTPClient(mock))
-	_, err := p.parseValue(ctx, "http://127.0.0.1/data")
+	_, err := p.resolveValue(ctx, "http://127.0.0.1/data", TypeFetch)
 	assert.ErrorContains(t, err, "mock-error")
 }
 
-func TestParameterProvider_ParseValue_HTTP_Success(t *testing.T) {
+func TestParameterProvider_Fetch_Success(t *testing.T) {
 	t.Parallel()
 	allow := true
 	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}
@@ -882,12 +882,12 @@ func TestParameterProvider_ParseValue_HTTP_Success(t *testing.T) {
 		},
 	}
 	p := NewParameterProvider(WithHTTPClient(mock))
-	result, err := p.parseValue(ctx, "http://127.0.0.1/data")
+	result, err := p.resolveValue(ctx, "http://127.0.0.1/data", TypeFetch)
 	require.NoError(t, err)
 	assert.Equal(t, "remote-value", result)
 }
 
-func TestParameterProvider_ParseValue_HTTP_NonOKStatus(t *testing.T) {
+func TestParameterProvider_Fetch_NonOKStatus(t *testing.T) {
 	t.Parallel()
 	allow := true
 	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}
@@ -900,8 +900,114 @@ func TestParameterProvider_ParseValue_HTTP_NonOKStatus(t *testing.T) {
 		},
 	}
 	p := NewParameterProvider(WithHTTPClient(mock))
-	_, err := p.parseValue(ctx, "http://127.0.0.1/data")
+	_, err := p.resolveValue(ctx, "http://127.0.0.1/data", TypeFetch)
 	assert.ErrorContains(t, err, "404")
+}
+
+// TestParameterProvider_Fetch_SSRFBlocked verifies that fetch blocks a
+// private/loopback address when private IPs are not permitted, without issuing
+// the request (the mock fails if called).
+func TestParameterProvider_Fetch_SSRFBlocked(t *testing.T) {
+	t.Parallel()
+	deny := false
+	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &deny}}
+	ctx := config.WithConfig(context.Background(), cfg)
+	mock := &MockHTTPClient{Err: errors.New("network should not be called")}
+	p := NewParameterProvider(WithHTTPClient(mock))
+
+	_, err := p.resolveValue(ctx, "http://127.0.0.1/data", TypeFetch)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "resolver parameter URL blocked")
+}
+
+// TestParameterProvider_Auto_DoesNotFetchURL is the core regression guard for
+// the breaking change: under auto, an http(s):// value is stored as a literal
+// string and no network I/O occurs. The mock client is configured to fail if
+// called, so a fetch would surface as an error.
+func TestParameterProvider_Auto_DoesNotFetchURL(t *testing.T) {
+	t.Parallel()
+	mock := &MockHTTPClient{Err: errors.New("network should not be called")}
+	p := NewParameterProvider(WithHTTPClient(mock))
+	ctx := context.Background()
+
+	for _, url := range []string{"http://example.com/data", "https://example.com/data"} {
+		result, err := p.parseValue(ctx, url)
+		require.NoError(t, err)
+		assert.Equal(t, url, result)
+	}
+}
+
+// TestParameterProvider_Fetch_RequiresURL verifies type: fetch rejects a
+// non-URL value with a descriptive error instead of silently falling through.
+func TestParameterProvider_Fetch_RequiresURL(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := context.Background()
+
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{"plain string", "not-a-url"},
+		{"ftp scheme", "ftp://example.com"},
+		{"non-string", 42},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := p.resolveValue(ctx, tt.value, TypeFetch)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "requires an http:// or https:// value")
+		})
+	}
+}
+
+// TestParameterProvider_Execute_Fetch fetches remote content through the full
+// Execute path when type: fetch is requested for a URL parameter.
+func TestParameterProvider_Execute_Fetch(t *testing.T) {
+	t.Parallel()
+	allow := true
+	cfg := &config.Config{HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow}}
+	ctx := config.WithConfig(context.Background(), cfg)
+	ctx = provider.WithParameters(ctx, map[string]any{
+		"configUrl": "http://127.0.0.1/config",
+	})
+
+	mock := &MockHTTPClient{
+		Response: &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("remote-body")),
+		},
+	}
+	p := NewParameterProvider(WithHTTPClient(mock))
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "configUrl",
+		"type": TypeFetch,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "remote-body", output.Data)
+	assert.Equal(t, true, output.Metadata["exists"])
+}
+
+// TestParameterProvider_Execute_Fetch_DryRunNoNetwork ensures dry-run never
+// performs the fetch: the mock is configured to fail if called.
+func TestParameterProvider_Execute_Fetch_DryRunNoNetwork(t *testing.T) {
+	t.Parallel()
+	mock := &MockHTTPClient{Err: errors.New("network should not be called")}
+	p := NewParameterProvider(WithHTTPClient(mock))
+	ctx := provider.WithDryRun(context.Background(), true)
+	ctx = provider.WithParameters(ctx, map[string]any{
+		"configUrl": "http://127.0.0.1/config",
+	})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"key":  "configUrl",
+		"type": TypeFetch,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "[DRY-RUN] Not retrieved", output.Data)
 }
 
 func TestDefaultFileOps_ReadFile(t *testing.T) {
