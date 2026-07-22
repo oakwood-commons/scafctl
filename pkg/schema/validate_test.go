@@ -177,6 +177,87 @@ func conditionSolution(sourceExtra map[string]any) map[string]any {
 	}
 }
 
+func TestValidateDataAgainstSchema(t *testing.T) {
+	// A small self-contained schema: an object with a required string "name"
+	// and an integer "count" with a minimum.
+	jsonSchema := []byte(`{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string"},
+			"count": {"type": "integer", "minimum": 1}
+		},
+		"required": ["name"],
+		"additionalProperties": false
+	}`)
+
+	yamlSchema := []byte("type: object\n" +
+		"properties:\n" +
+		"  name:\n" +
+		"    type: string\n" +
+		"  count:\n" +
+		"    type: integer\n" +
+		"    minimum: 1\n" +
+		"required:\n" +
+		"  - name\n" +
+		"additionalProperties: false\n")
+
+	t.Run("valid data passes with JSON schema", func(t *testing.T) {
+		data := map[string]any{"name": "hi", "count": 3}
+		violations, err := ValidateDataAgainstSchema(jsonSchema, data)
+		require.NoError(t, err)
+		assert.Nil(t, violations)
+	})
+
+	t.Run("valid data passes with YAML schema", func(t *testing.T) {
+		data := map[string]any{"name": "hi", "count": 3}
+		violations, err := ValidateDataAgainstSchema(yamlSchema, data)
+		require.NoError(t, err)
+		assert.Nil(t, violations)
+	})
+
+	t.Run("invalid data returns violations", func(t *testing.T) {
+		// Missing required "name" and count below minimum.
+		data := map[string]any{"count": 0}
+		violations, err := ValidateDataAgainstSchema(jsonSchema, data)
+		require.NoError(t, err)
+		assert.NotEmpty(t, violations)
+		for _, v := range violations {
+			assert.NotEmpty(t, v.Message, "violation should carry a message")
+		}
+	})
+
+	t.Run("unknown key is flagged with path", func(t *testing.T) {
+		data := map[string]any{"name": "hi", "extra": "nope"}
+		violations, err := ValidateDataAgainstSchema(jsonSchema, data)
+		require.NoError(t, err)
+		require.NotEmpty(t, violations)
+	})
+
+	t.Run("malformed schema returns error", func(t *testing.T) {
+		// A structurally-invalid schema (type must be a string, not a number)
+		// deterministically fails schema compilation, unlike a fixture that
+		// merely relies on a YAML parse quirk.
+		bad := []byte("type: 123")
+		violations, err := ValidateDataAgainstSchema(bad, map[string]any{})
+		require.Error(t, err)
+		assert.Nil(t, violations)
+	})
+
+	t.Run("empty data against required schema returns violations", func(t *testing.T) {
+		violations, err := ValidateDataAgainstSchema(jsonSchema, map[string]any{})
+		require.NoError(t, err)
+		assert.NotEmpty(t, violations)
+	})
+
+	t.Run("nil data does not panic", func(t *testing.T) {
+		// A permissive schema accepts anything, including null.
+		permissive := []byte(`{"type": ["object", "null"]}`)
+		violations, err := ValidateDataAgainstSchema(permissive, nil)
+		require.NoError(t, err)
+		_ = violations
+	})
+}
+
 func TestJsonPointerToDotPath(t *testing.T) {
 	tests := []struct {
 		pointer  string

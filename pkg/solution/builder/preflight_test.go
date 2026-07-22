@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/lint"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,8 +110,11 @@ func TestRunPreflight_LintClean(t *testing.T) {
 	// Create a minimal valid solution to pass lint.
 	sol := buildMinimalValidSolution(t)
 
+	reg, regErr := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, regErr)
 	result, err := RunPreflight(context.Background(), sol, "test.yaml", PreflightOptions{
 		SkipTests: true,
+		Registry:  reg,
 		Logger:    logr.Discard(),
 	})
 
@@ -144,8 +148,11 @@ func TestRunPreflight_LintWarnings_NotBlocked(t *testing.T) {
 	// We test the logic by running with a valid solution that may produce warnings.
 	sol := buildMinimalValidSolution(t)
 
+	reg, regErr := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, regErr)
 	result, err := RunPreflight(context.Background(), sol, "test.yaml", PreflightOptions{
 		SkipTests: true,
+		Registry:  reg,
 		Logger:    logr.Discard(),
 	})
 
@@ -237,14 +244,21 @@ metadata:
 spec:
   resolvers:
     greeting:
-      value: hello
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
 `
 	var sol solution.Solution
 	err := sol.LoadFromBytes([]byte(yaml))
 	require.NoError(t, err)
 
-	// Verify it passes lint so the test is meaningful.
-	lintResult := lint.Solution(&sol, "test.yaml", nil)
+	// Verify it passes lint (with the builtin registry so the 'static' provider
+	// resolves) so the test is meaningful.
+	reg, regErr := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, regErr)
+	lintResult := lint.Solution(&sol, "test.yaml", reg)
 	require.Equal(t, 0, lintResult.ErrorCount,
 		"test fixture should pass lint; findings: %v", lintResult.Findings)
 
@@ -261,7 +275,11 @@ metadata:
 spec:
   resolvers:
     greeting:
-      value: hello
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
 `
 	var sol solution.Solution
 	if err := sol.LoadFromBytes([]byte(yaml)); err != nil {

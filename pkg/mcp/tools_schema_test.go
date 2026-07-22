@@ -173,3 +173,106 @@ func extractText(t *testing.T, result *mcp.CallToolResult) string {
 	require.True(t, ok, "expected TextContent")
 	return tc.Text
 }
+
+// validateSchemaToolDescription returns the registered validate_schema tool
+// description for the given server, or "" if not found.
+func validateSchemaToolDescription(s *Server) string {
+	for _, st := range s.mcpServer.ListTools() {
+		if st.Tool.Name == "validate_schema" {
+			return st.Tool.Description
+		}
+	}
+	return ""
+}
+
+// TestValidateSchemaTool_DescriptionEmbedderSafe verifies the validate_schema
+// tool description is built from the configured server name (not a hardcoded
+// "scafctl") and describes a general JSON-schema validator rather than a
+// solution-specific one.
+func TestValidateSchemaTool_DescriptionEmbedderSafe(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"), WithServerName("mycli"))
+	require.NoError(t, err)
+
+	desc := validateSchemaToolDescription(srv)
+	require.NotEmpty(t, desc, "validate_schema tool must be registered")
+	assert.NotContains(t, desc, "scafctl", "description must not hardcode scafctl")
+	assert.Contains(t, desc, "mycli", "description must use the configured server name")
+	assert.Contains(t, desc, "arbitrary data", "description must present a general schema validator")
+}
+
+func TestHandleValidateSchema(t *testing.T) {
+	const jsonSchema = `{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`
+
+	newReq := func(schemaStr, dataStr string) mcp.CallToolRequest {
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "validate_schema"
+		req.Params.Arguments = map[string]any{"schema": schemaStr, "data": dataStr}
+		return req
+	}
+
+	t.Run("valid data reports valid", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		result, err := srv.handleValidateSchema(context.Background(), newReq(jsonSchema, `{"name":"hi"}`))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.False(t, result.IsError)
+
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &doc))
+		assert.Equal(t, true, doc["valid"])
+		assert.Equal(t, float64(0), doc["violationCount"])
+	})
+
+	t.Run("invalid data reports violations", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		result, err := srv.handleValidateSchema(context.Background(), newReq(jsonSchema, `{"extra":"x"}`))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.False(t, result.IsError)
+
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &doc))
+		assert.Equal(t, false, doc["valid"])
+		assert.Greater(t, doc["violationCount"], float64(0))
+	})
+
+	t.Run("yaml schema and data work", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		yamlSchema := "type: object\nproperties:\n  name:\n    type: string\nrequired:\n  - name\n"
+		result, err := srv.handleValidateSchema(context.Background(), newReq(yamlSchema, "name: hi\n"))
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &doc))
+		assert.Equal(t, true, doc["valid"])
+	})
+
+	t.Run("malformed schema errors", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		result, err := srv.handleValidateSchema(context.Background(), newReq("type: 123", `{}`))
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("missing schema argument errors", func(t *testing.T) {
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		req := mcp.CallToolRequest{}
+		req.Params.Name = "validate_schema"
+		req.Params.Arguments = map[string]any{"data": `{}`}
+		result, err := srv.handleValidateSchema(context.Background(), req)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+}

@@ -187,3 +187,147 @@ func TestCommandValidateResolver_EmbedderBinaryName(t *testing.T) {
 	cmd := CommandValidateResolver(cliParams, streams, "")
 	assert.Contains(t, cmd.Long, "mycli validate resolver", "help text must use the embedder binary name")
 }
+
+func TestCommandValidateResolver_HasStrictFlagAndLintGate(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+
+	cmd := CommandValidateResolver(cliParams, streams, "")
+	strict := cmd.Flags().Lookup("strict")
+	require.NotNil(t, strict, "validate resolver must expose --strict")
+	assert.Contains(t, strict.Usage, "lint warnings")
+}
+
+// cleanReferencedSolution has a resolver 'name' referenced by 'greeting', so
+// there are no unused-resolver warnings and resolver validation passes.
+const cleanReferencedSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: clean-referenced
+  version: 1.0.0
+spec:
+  resolvers:
+    name:
+      type: string
+      description: the subject's name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "Bob"
+    greeting:
+      description: a greeting using name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: '"Hello " + _.name'
+`
+
+func TestResolverOptions_Run_LintGatePassesClean(t *testing.T) {
+	t.Parallel()
+
+	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(cleanReferencedSolution), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	opts := newResolverOptions(t, solutionPath, &stdout, &stderr)
+	opts.LintAfterValidate = true
+
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	require.NoError(t, opts.Run(ctx), "clean solution must pass the lint gate")
+}
+
+func TestResolverOptions_Run_LintGateWarningFailsStrict(t *testing.T) {
+	t.Parallel()
+
+	// A lone unused resolver produces an unused-resolver warning while still
+	// passing resolver validation.
+	orphanSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: orphan-warn
+  version: 1.0.0
+spec:
+  resolvers:
+    orphan:
+      type: string
+      description: never referenced
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "x"
+`
+	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(orphanSolution), 0o600))
+
+	// Non-strict: warning does not fail the gate.
+	var so1, se1 bytes.Buffer
+	opts := newResolverOptions(t, solutionPath, &so1, &se1)
+	opts.LintAfterValidate = true
+	require.NoError(t, opts.Run(ctx()), "warning must not fail the lint gate without --strict")
+
+	// Strict: warning fails the gate.
+	var so2, se2 bytes.Buffer
+	strictOpts := newResolverOptions(t, solutionPath, &so2, &se2)
+	strictOpts.LintAfterValidate = true
+	strictOpts.Strict = true
+	err := strictOpts.Run(ctx())
+	require.Error(t, err, "warning must fail the lint gate under --strict")
+	assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
+}
+
+// TestResolverOptions_Run_LintGateQuietSuppressesOutput verifies that -o quiet
+// suppresses the lint gate's output entirely (header and findings) while still
+// applying the pass/fail policy via the exit code.
+func TestResolverOptions_Run_LintGateQuietSuppressesOutput(t *testing.T) {
+	t.Parallel()
+
+	orphanSolution := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: orphan-quiet
+  version: 1.0.0
+spec:
+  resolvers:
+    orphan:
+      type: string
+      description: never referenced
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "x"
+`
+	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(orphanSolution), 0o600))
+
+	// Quiet, non-strict: no output, exit 0.
+	var so1, se1 bytes.Buffer
+	opts := newResolverOptions(t, solutionPath, &so1, &se1)
+	opts.LintAfterValidate = true
+	opts.Output = "quiet"
+	require.NoError(t, opts.Run(ctx()))
+	assert.NotContains(t, se1.String(), "lint reported", "quiet must suppress the lint gate header")
+	assert.NotContains(t, se1.String(), "unused-resolver", "quiet must suppress the findings table")
+
+	// Quiet, strict: still fails via exit code, still no output.
+	var so2, se2 bytes.Buffer
+	strictOpts := newResolverOptions(t, solutionPath, &so2, &se2)
+	strictOpts.LintAfterValidate = true
+	strictOpts.Strict = true
+	strictOpts.Output = "quiet"
+	err := strictOpts.Run(ctx())
+	require.Error(t, err)
+	assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
+	assert.NotContains(t, se2.String(), "lint reported", "quiet must suppress output even when failing")
+}
+
+// ctx returns a background context seeded with a logger, for lint-gate tests.
+func ctx() context.Context {
+	return logger.WithLogger(context.Background(), logger.Get(0))
+}

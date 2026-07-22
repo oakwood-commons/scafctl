@@ -648,7 +648,7 @@ spec:
 	solPath := filepath.Join(tmpDir, "solution.yaml")
 	require.NoError(t, os.WriteFile(solPath, []byte(sol), 0o600))
 
-	ioStreams, _, _ := terminal.NewTestIOStreams()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
 	ctx := testContext(ioStreams)
 	opts := &Options{
 		File:           solPath,
@@ -660,6 +660,37 @@ spec:
 	}
 	err := runLint(ctx, opts)
 	assert.NoError(t, err)
+	assert.Empty(t, out.String(), "quiet must produce no stdout on a clean solution")
+}
+
+// TestRenderResult_QuietProducesNoOutput verifies the shared renderer emits
+// nothing for the quiet format, regardless of findings -- so all callers
+// (lint, validate solution, validate resolver's gate) honor quiet's
+// exit-code-only contract consistently.
+func TestRenderResult_QuietProducesNoOutput(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, out, errOut := terminal.NewTestIOStreams()
+	ctx := testContext(ioStreams)
+
+	// A clean result (no findings): must not print "No lint issues found."
+	clean := &Result{Findings: nil}
+	require.NoError(t, RenderResult(ctx, clean, "scafctl lint", ioStreams,
+		flags.KvxOutputFlags{Output: "quiet"}, false))
+	assert.Empty(t, out.String())
+	assert.Empty(t, errOut.String())
+
+	// A result WITH findings: still no output under quiet.
+	withFindings := &Result{Findings: []*Finding{{
+		Severity: SeverityError,
+		RuleName: "schema-violation",
+		Location: "spec",
+		Message:  "boom",
+	}}}
+	require.NoError(t, RenderResult(ctx, withFindings, "scafctl lint", ioStreams,
+		flags.KvxOutputFlags{Output: "quiet"}, false))
+	assert.Empty(t, out.String())
+	assert.Empty(t, errOut.String())
 }
 
 func TestRunLint_FileNotFound(t *testing.T) {

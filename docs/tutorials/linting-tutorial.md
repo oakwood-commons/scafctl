@@ -20,6 +20,13 @@ flowchart LR
   A["Solution<br/>YAML"] --> B["scafctl<br/>lint"] --> C["Findings<br/>(warnings, errors)"]
 ```
 
+> **`lint` is the advisory subset of `validate`.** `scafctl lint` reports
+> authoring findings but is not itself the pass/fail gate. When you want a
+> single pass/fail gate for CI or pre-commit, use `scafctl validate solution`
+> (which runs lint internally: errors fail, warnings surface, `--strict` makes
+> warnings fatal). See the [Validation Patterns tutorial](../validation-patterns-tutorial/#the-validate-gate)
+> for the gate commands.
+
 ## 1. Linting a Solution
 
 ### Basic Lint

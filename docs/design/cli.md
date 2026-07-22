@@ -42,9 +42,13 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 | `eval cel` | ✅ Implemented | Evaluate CEL expressions from CLI |
 | `eval template` | ✅ Implemented | Evaluate Go templates from CLI |
 | `eval validate` | ✅ Implemented | Validate solution files from CLI |
+| `validate solution` | ✅ Implemented | Primary gate: loads a solution and runs lint (errors fail, warnings surface, `--strict` makes warnings fatal) |
+| `validate resolver` | ✅ Implemented | Validates resolvers, then runs lint as a gate (`--strict` makes lint warnings fatal) |
+| `validate schema` | ✅ Implemented | Validate arbitrary data (JSON/YAML, `--data -` for stdin) against a JSON Schema |
 | `new solution` | ✅ Implemented | Scaffold a new solution from template |
 | `lint rules` | ✅ Implemented | List all available lint rules |
 | `lint explain` | ✅ Implemented | Explain a specific lint rule |
+| `lint` | ✅ Implemented | Advisory subset of `validate`: reports authoring warnings/findings without being the pass/fail gate |
 | `examples list` | ✅ Implemented | List available example configurations |
 | `examples get` | ✅ Implemented | Get/download an example file |
 | `push solution/plugin` | 📋 Planned | Remote catalog feature |
@@ -988,6 +992,60 @@ scafctl new solution --name my-solution --providers static,exec,cel
 
 ---
 
+## Validation Gate
+
+`validate` is THE gate that decides whether a definition is correct and ready.
+It runs lint (which includes a JSON Schema conformance check) and turns findings
+into a pass/fail result suitable for CI pipelines and pre-commit checks. `lint`
+is the advisory subset -- it reports the same authoring findings but is not the
+pass/fail gate on its own.
+
+### Validate a Solution
+
+Loads a solution and runs lint. Lint errors (including schema violations) fail;
+lint warnings are surfaced but do not fail unless `--strict` is passed:
+
+~~~bash
+# Validate the auto-discovered solution (errors fail, warnings surface)
+scafctl validate solution
+
+# Validate a specific file
+scafctl validate solution -f ./my-solution.yaml
+
+# Treat warnings as fatal too
+scafctl validate solution -f ./my-solution.yaml --strict
+~~~
+
+### Validate Resolvers
+
+Executes the resolver phases (resolve, transform, validate) and, after they
+pass, additionally runs lint as part of the gate. `--strict` makes lint
+warnings fatal:
+
+~~~bash
+scafctl validate resolver -f ./my-solution.yaml
+scafctl validate resolver -f ./my-solution.yaml --strict
+~~~
+
+### Validate Data Against a JSON Schema
+
+Validates arbitrary data (JSON or YAML) against a JSON Schema. Unlike
+`validate solution`, this does NOT run lint -- it checks raw data conformance
+only. Pass `--data -` to read the data from stdin:
+
+~~~bash
+# Validate a data file against a schema (both JSON or YAML)
+scafctl validate schema --schema schema.json --data data.json
+
+# Read the data from stdin
+cat data.yaml | scafctl validate schema --schema schema.json --data -
+~~~
+
+Exit codes: `0` conforms, `2` violates the schema, `3` the schema itself is
+invalid, `4` a file was not found.
+
+---
+
 ## Exploring Lint Rules
 
 ### List Rules
@@ -1094,6 +1152,9 @@ scafctl uses two distinct command grammar patterns:
 | `scafctl lint explain` | lint | explain |
 | `scafctl eval cel` | eval | cel |
 | `scafctl eval template` | eval | template |
+| `scafctl validate solution` | validate | solution |
+| `scafctl validate resolver` | validate | resolver |
+| `scafctl validate schema` | validate | schema |
 | `scafctl get examples` | get | examples |
 | `scafctl cache clean` | cache | clean |
 | `scafctl plugins list` | plugins | list |
