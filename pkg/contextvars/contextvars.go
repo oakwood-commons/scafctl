@@ -61,9 +61,11 @@ type ContextVariable struct {
 	// or ".__filePath" for Go-template path parts).
 	Name string `json:"name" yaml:"name"`
 
-	// Language is the expression language the variable applies to (cel or
-	// go-template).
-	Language string `json:"language" yaml:"language"`
+	// Languages lists the expression languages the variable is available in
+	// (cel, go-template, or both). Most scafctl context variables are injected
+	// into both CEL evaluation and Go-template data; a few (the .__file* path
+	// parts) are Go-template only.
+	Languages []string `json:"languages" yaml:"languages"`
 
 	// Phases lists the evaluation phases in which the variable is available.
 	Phases []string `json:"phases" yaml:"phases"`
@@ -75,110 +77,131 @@ type ContextVariable struct {
 	Example string `json:"example,omitempty" yaml:"example,omitempty"`
 }
 
+// clonePhasesAndLangs returns a copy of v with its Languages and Phases slices
+// deep-copied, so callers cannot mutate the package-level registry through a
+// returned value.
+func clonePhasesAndLangs(v ContextVariable) ContextVariable {
+	langs := make([]string, len(v.Languages))
+	copy(langs, v.Languages)
+	phases := make([]string, len(v.Phases))
+	copy(phases, v.Phases)
+	v.Languages = langs
+	v.Phases = phases
+	return v
+}
+
+// langBoth and langTemplateOnly are the common language sets, defined once to
+// keep the registry entries terse.
+var (
+	langBoth         = []string{LangCEL, LangTemplate}
+	langCELOnly      = []string{LangCEL}
+	langTemplateOnly = []string{LangTemplate}
+)
+
 // builtinVariables is the canonical list of context variables. Names are pinned
 // to celexp.Var* constants where available so this registry tracks the engine.
 var builtinVariables = []ContextVariable{
 	{
 		Name:        "_",
-		Language:    LangCEL,
-		Phases:      []string{PhaseResolve, PhaseTransform, PhaseValidate, PhaseAction},
-		Description: "Map of resolved resolver values, keyed by resolver name. The primary way to reference other resolvers' outputs. Referencing _.other also creates an implicit dependency edge.",
+		Languages:   langBoth,
+		Phases:      []string{PhaseResolve, PhaseTransform, PhaseValidate, PhaseForEach, PhaseAction},
+		Description: "Map of resolved resolver values, keyed by resolver name. The primary way to reference other resolvers' outputs. Available in both CEL (_.region) and Go templates ({{ ._.region }}). Referencing _.other also creates an implicit dependency edge. Resolver data is in scope during forEach iterations too.",
 		Example:     "_.region",
 	},
 	{
 		Name:        celexp.VarSelf, // "__self"
-		Language:    LangCEL,
-		Phases:      []string{PhaseTransform, PhaseValidate},
-		Description: "The current resolver's in-progress value: the resolved value in transform steps, and the final value in validate steps. Not available during resolve.",
+		Languages:   langBoth,
+		Phases:      []string{PhaseTransform, PhaseValidate, PhaseForEach},
+		Description: "The current resolver's in-progress value: the resolved value in transform steps, and the final value in validate steps. Also bound during forEach iterations (carrying the transform-phase in-progress value). Available in CEL (__self) and Go templates ({{ .__self }}). Not available during a plain resolve step.",
 		Example:     "__self.trimSpace()",
 	},
 	{
 		Name:        celexp.VarItem, // "__item"
-		Language:    LangCEL,
+		Languages:   langBoth,
 		Phases:      []string{PhaseForEach},
-		Description: "The current element in a forEach iteration (resolve or transform).",
+		Description: "The current element in a forEach iteration (resolve or transform). Available in CEL (__item) and Go templates ({{ .__item }}).",
 		Example:     "__item.name",
 	},
 	{
 		Name:        celexp.VarIndex, // "__index"
-		Language:    LangCEL,
+		Languages:   langBoth,
 		Phases:      []string{PhaseForEach},
-		Description: "The current zero-based index in a forEach iteration (resolve or transform).",
+		Description: "The current zero-based index in a forEach iteration (resolve or transform). Available in CEL (__index) and Go templates ({{ .__index }}).",
 		Example:     "__index == 0",
 	},
 	{
 		Name:        celexp.VarPlan, // "__plan"
-		Language:    LangCEL,
+		Languages:   langCELOnly,
 		Phases:      []string{PhaseResolve},
 		Description: "Pre-execution resolver topology, injected before any resolver runs, so resolver when conditions and provider inputs can reason about the plan. Each entry exposes .phase, .dependsOn, and .dependencyCount.",
 		Example:     "__plan[\"myResolver\"].phase",
 	},
 	{
 		Name:        celexp.VarExecution, // "__execution"
-		Language:    LangCEL,
+		Languages:   langBoth,
 		Phases:      []string{PhaseAction},
-		Description: "Resolver execution metadata available to actions: __execution.resolvers.<name>.status/phase/duration and __execution.summary.{phaseCount,resolverCount,totalDuration}.",
+		Description: "Resolver execution metadata available to actions: __execution.resolvers.<name>.status/phase/duration and __execution.summary.{phaseCount,resolverCount,totalDuration}. Available in CEL and Go templates.",
 		Example:     "__execution.resolvers.build.status",
 	},
 	{
 		Name:        celexp.VarActions, // "__actions"
-		Language:    LangCEL,
+		Languages:   langBoth,
 		Phases:      []string{PhaseAction},
-		Description: "Results of completed actions, keyed by action name: __actions.<name>.results and __actions.<name>.status. Available in downstream action when conditions and inputs.",
+		Description: "Results of completed actions, keyed by action name: __actions.<name>.results and __actions.<name>.status. Available in downstream action when conditions and inputs, in both CEL (__actions.build.results) and Go templates ({{ .__actions.build.results }}).",
 		Example:     "__actions.build.results.exitCode",
 	},
 	{
 		Name:        celexp.VarCwd, // "__cwd"
-		Language:    LangCEL,
+		Languages:   langBoth,
 		Phases:      []string{PhaseAction},
-		Description: "The original working directory, available in ACTIONS ONLY. Useful when --output-dir redirects action output but an action still needs to reference the invocation directory. Not injected into resolvers.",
+		Description: "The original working directory, available in ACTIONS ONLY (in both CEL and Go templates). Useful when --output-dir redirects action output but an action still needs to reference the invocation directory. Not injected into resolvers.",
 		Example:     "__cwd + \"/dist\"",
 	},
 	{
 		Name:        celexp.VarParams, // "__params"
-		Language:    LangCEL,
+		Languages:   langCELOnly,
 		Phases:      []string{PhaseStateBackend},
 		Description: "Raw CLI parameters (-r key=value), available in STATE BACKEND input expressions only. Unlike _, which holds resolver outputs, __params always holds the raw parameters regardless of resolver execution state.",
 		Example:     "__params.gcp_project",
 	},
 	{
 		Name:        celexp.VarError, // "__error"
-		Language:    LangCEL,
+		Languages:   langCELOnly,
 		Phases:      []string{PhaseError},
-		Description: "The error text bound in failure contexts: continueOnError conditions and messages.error, for both resolvers and actions.",
-		Example:     "__error.contains(\"timeout\")",
+		Description: "The error bound in failure contexts. Its SHAPE is context-dependent: in RESOLVER continueOnError conditions and messages.error it is a STRING (the error text), so __error.contains(\"...\") works. In ACTION continueOnError and retryIf conditions it is a structured MAP with fields message, type, statusCode, exitCode, attempt, and maxAttempts -- use __error.message.contains(\"...\") and __error.statusCode there, not __error.contains(...).",
+		Example:     "__error.contains(\"timeout\") // resolver; use __error.message.contains(\"timeout\") in actions",
 	},
 	{
 		Name:        ".__filePath",
-		Language:    LangTemplate,
+		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "Full source path of the current file during directory -> render-tree -> write-tree generation. Available in the file provider's outputPath template for renaming files.",
 		Example:     "{{ .__fileDir }}/{{ .__fileStem }}",
 	},
 	{
 		Name:        ".__fileName",
-		Language:    LangTemplate,
+		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "Base file name (including extension) of the current file during tree generation.",
 		Example:     "{{ .__fileName }}",
 	},
 	{
 		Name:        ".__fileStem",
-		Language:    LangTemplate,
+		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "File name without its extension during tree generation. Commonly used to strip a .tpl suffix.",
 		Example:     "{{ .__fileStem }}",
 	},
 	{
 		Name:        ".__fileExtension",
-		Language:    LangTemplate,
+		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "File extension (including the leading dot) of the current file during tree generation.",
 		Example:     "{{ .__fileExtension }}",
 	},
 	{
 		Name:        ".__fileDir",
-		Language:    LangTemplate,
+		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "Directory portion of the current file's path during tree generation, used to preserve the source tree structure in output.",
 		Example:     "{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}",
@@ -194,19 +217,31 @@ var registry = func() map[string]ContextVariable {
 	return m
 }()
 
-// lessByLangName orders context variables by language then name. It is the
-// shared comparator used by List and ByPhase so their ordering cannot drift.
+// primaryLang returns the variable's first declared language, or "" if none.
+// Used only for stable ordering.
+func primaryLang(v ContextVariable) string {
+	if len(v.Languages) == 0 {
+		return ""
+	}
+	return v.Languages[0]
+}
+
+// lessByLangName orders context variables by primary language then name. It is
+// the shared comparator used by List and ByPhase so their ordering cannot drift.
 func lessByLangName(a, b ContextVariable) bool {
-	if a.Language != b.Language {
-		return a.Language < b.Language
+	if la, lb := primaryLang(a), primaryLang(b); la != lb {
+		return la < lb
 	}
 	return a.Name < b.Name
 }
 
-// List returns all context variables sorted by language then name.
+// List returns all context variables sorted by language then name. Returned
+// values are deep-copied, so callers cannot mutate the package registry.
 func List() []ContextVariable {
 	out := make([]ContextVariable, len(builtinVariables))
-	copy(out, builtinVariables)
+	for i, v := range builtinVariables {
+		out[i] = clonePhasesAndLangs(v)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		return lessByLangName(out[i], out[j])
 	})
@@ -214,20 +249,25 @@ func List() []ContextVariable {
 }
 
 // Get returns a context variable by exact name. The second return value is
-// false if no variable with that name exists.
+// false if no variable with that name exists. The returned value is deep-copied,
+// so mutating its slices cannot corrupt the package registry.
 func Get(name string) (ContextVariable, bool) {
 	v, ok := registry[name]
-	return v, ok
+	if !ok {
+		return ContextVariable{}, false
+	}
+	return clonePhasesAndLangs(v), true
 }
 
 // ByPhase returns all context variables available in the given phase, sorted by
-// language then name. An unknown phase yields an empty slice.
+// language then name. An unknown phase yields an empty slice. Returned values
+// are deep-copied, so callers cannot mutate the package registry.
 func ByPhase(phase string) []ContextVariable {
 	var out []ContextVariable
 	for _, v := range builtinVariables {
 		for _, p := range v.Phases {
 			if p == phase {
-				out = append(out, v)
+				out = append(out, clonePhasesAndLangs(v))
 				break
 			}
 		}

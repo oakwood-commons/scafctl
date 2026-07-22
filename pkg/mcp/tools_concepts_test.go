@@ -90,6 +90,16 @@ func TestHandleListContextVariables(t *testing.T) {
 		result, err := srv.handleListContextVariables(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
+
+		// It is a bad argument, not missing data: lock down the error code.
+		text := result.Content[0].(mcp.TextContent).Text
+		var te struct {
+			Code  string `json:"code"`
+			Field string `json:"field"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &te))
+		assert.Equal(t, ErrCodeInvalidInput, te.Code, "unknown phase is invalid input, not not-found")
+		assert.Equal(t, "phase", te.Field)
 	})
 }
 

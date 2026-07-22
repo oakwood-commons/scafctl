@@ -384,7 +384,9 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 - **__actions** — results of completed actions, available to downstream ACTIONS: __actions.<name>.results and .status.
 - **__cwd** — the original working directory, available in ACTIONS ONLY (useful when --output-dir redirects action output). Not injected into resolvers.
 - **__params** — raw CLI parameters (-r key=value), available in STATE BACKEND input expressions only. Unlike _ (resolver outputs), __params always holds the raw parameters.
-- **__error** — the error text bound in failure contexts: continueOnError conditions and messages.error, for resolvers and actions.
+- **__error** — the error bound in failure contexts (continueOnError conditions and messages.error). Its shape is context-dependent: in RESOLVER contexts it is a string (__error.contains("...")); in ACTION contexts it is a structured map with message, statusCode, attempt, and maxAttempts (__error.message.contains("..."), __error.statusCode).
+
+**Go-template availability** — most of these (_, __self, __item, __index, __actions, __cwd, __execution) are injected into BOTH CEL and Go-template evaluation, so {{ ._.region }}, {{ .__self }}, and {{ .__item }} also work. __plan, __params, and __error are CEL-only; the .__file* path parts below are Go-template only.
 
 **Go-template file-generation variables** (available in the file provider's outputPath during directory -> render-tree -> write-tree generation): .__filePath, .__fileName, .__fileStem, .__fileExtension, .__fileDir — used to rename or restructure output files (e.g. strip a .tpl suffix).
 
@@ -475,7 +477,7 @@ Because Go templates default to rendering a missing key as empty, a typo'd acces
 
 In the test report, a case shown as PASS* is a RELAXED pass: it passed but masks loosened snapshot fidelity, so a masked region was not compared literally. See 'functional-testing' and 'get_solution_schema' for the full spec.testing.cases shape.`,
 		Examples: []string{
-			"spec:\n  testing:\n    cases:\n      - name: render\n        snapshotSource: files\n        masks:\n          - name: build-id\n            pattern: \"build-[0-9]+\"\n            placeholder: \"build-<ID>\"",
+			"spec:\n  testing:\n    cases:\n      render:\n        description: renders with volatile ids masked\n        command: [run, resolver]\n        snapshotSource: files\n        masks:\n          - name: build-id\n            pattern: \"build-[0-9]+\"\n            placeholder: \"build-<ID>\"",
 		},
 		SeeAlso: []string{"functional-testing", "test-assertions", "test-sandbox"},
 	},

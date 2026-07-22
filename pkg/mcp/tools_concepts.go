@@ -67,8 +67,8 @@ func (s *Server) handleListContextVariables(_ context.Context, request mcp.CallT
 	if phase != "" {
 		vars = contextvars.ByPhase(phase)
 		if len(vars) == 0 {
-			return newStructuredError(ErrCodeNotFound,
-				fmt.Sprintf("no context variables available in phase %q", phase),
+			return newStructuredError(ErrCodeInvalidInput,
+				fmt.Sprintf("unknown phase %q; no context variables are available in it", phase),
 				WithSuggestion("Call list_context_variables without a phase to see all variables and their phases"),
 				WithField("phase"),
 			), nil

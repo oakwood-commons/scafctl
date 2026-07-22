@@ -490,12 +490,12 @@ evaluation, and which ones exist depends on the phase. The AI calls
 ```
 In an action's when/inputs you can use:
 
-- **_** — resolved resolver values (_.region)
-- **__execution** — resolver execution metadata (__execution.resolvers.build.status)
-- **__actions** — results of completed actions (__actions.build.results.exitCode)
-- **__cwd** — the original working directory (actions only)
+- **_** -- resolved resolver values (_.region)
+- **__execution** -- resolver execution metadata (__execution.resolvers.build.status)
+- **__actions** -- results of completed actions (__actions.build.results.exitCode)
+- **__cwd** -- the original working directory (actions only)
 
-Note: __self, __item/__index, and __plan are NOT available in actions — they
+Note: __self, __item/__index, and __plan are NOT available in actions -- they
 belong to resolver phases. Call list_context_variables with no phase to see the
 full matrix, or explain_concepts name='context-variables' for guidance.
 ```
