@@ -23,14 +23,14 @@ func TestCommandValidate(t *testing.T) {
 	assert.Equal(t, "validate", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
 
-	// The resolver subcommand must be wired up.
-	var resolverCmd bool
+	// The subcommands must be wired up.
+	subs := map[string]bool{}
 	for _, sub := range cmd.Commands() {
-		if sub.Name() == "resolver" {
-			resolverCmd = true
-		}
+		subs[sub.Name()] = true
 	}
-	require.True(t, resolverCmd, "validate must register the resolver subcommand")
+	require.True(t, subs["resolver"], "validate must register the resolver subcommand")
+	require.True(t, subs["solution"], "validate must register the solution subcommand")
+	require.True(t, subs["schema"], "validate must register the schema subcommand")
 }
 
 func TestCommandValidate_EmbedderBinaryName(t *testing.T) {

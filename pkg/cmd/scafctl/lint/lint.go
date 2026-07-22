@@ -80,7 +80,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	cmd := &cobra.Command{
 		Use:     "lint [name[@version]]",
 		Aliases: []string{"l", "check"},
-		Short:   "Lint a solution file for issues and best practices",
+		Short:   "Report authoring warnings and best practices (the advisory subset of 'validate')",
 		Long: heredoc.Doc(`
 			Analyze a solution file for potential issues, anti-patterns, and best practices.
 
@@ -242,30 +242,62 @@ func runLint(ctx context.Context, opts *Options) error {
 		return nil
 	}
 
-	kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
-		kvx.WithIOStreams(opts.IOStreams),
+	// Render via the shared renderer so 'scafctl lint', 'validate solution',
+	// and 'validate resolver's lint gate all produce identical finding output.
+	// runLint applies severity filtering (above) before rendering; the gate
+	// callers render unfiltered on purpose.
+	if renderErr := RenderResult(ctx, result, opts.BinaryName+" lint", opts.IOStreams, opts.KvxOutputFlags, opts.CliParams.NoColor); renderErr != nil {
+		writeError(opts, fmt.Sprintf("failed to write output: %v", renderErr))
+		return renderErr
+	}
+
+	if result.ErrorCount > 0 {
+		return exitcode.WithCode(fmt.Errorf("found %d errors", result.ErrorCount), exitcode.ValidationFailed)
+	}
+
+	return nil
+}
+
+// RenderResult renders a lint result using the same output path as the 'lint'
+// command, so callers (e.g. 'validate solution') produce identical findings
+// output. It writes findings to the provided IO streams via kvx and returns an
+// error only if writing fails -- it does NOT make a pass/fail decision, leaving
+// exit-code policy to the caller. The appName is used for kvx display context
+// (e.g. "scafctl validate solution").
+//
+// When the output format is a human-readable (non-structured) table and there
+// are no findings, a success message is emitted and nil is returned.
+func RenderResult(
+	ctx context.Context,
+	result *Result,
+	appName string,
+	ioStreams *terminal.IOStreams,
+	outputFlags flags.KvxOutputFlags,
+	noColor bool,
+) error {
+	if result == nil {
+		return nil
+	}
+
+	kvxOpts := flags.ToKvxOutputOptions(&outputFlags,
+		kvx.WithIOStreams(ioStreams),
 		kvx.WithOutputContext(ctx),
-		kvx.WithOutputNoColor(opts.CliParams.NoColor),
-		kvx.WithOutputAppName(opts.BinaryName+" lint"),
+		kvx.WithOutputNoColor(noColor),
+		kvx.WithOutputAppName(appName),
 		kvx.WithOutputDisplaySchemaJSON(lintSchemaJSON),
 		kvx.WithOutputColumnHints(findingsColumnHints()),
 		kvx.WithOutputColumnOrder([]string{"severity", "ruleName", "location", "message"}),
 	)
 
-	// For table output, project findings to the four visible columns so
-	// the columnar renderer sees exactly 4 fields (not the full 9-field
-	// struct) and stays in table mode at narrower terminal widths.
-	// For structured formats (json/yaml), emit the full result with all
-	// fields and summary counts.
 	var outputData any = result
-	if !kvx.IsStructuredFormat(kvxOpts.Format) && opts.KvxOutputFlags.Expression == "" {
+	if !kvx.IsStructuredFormat(kvxOpts.Format) && outputFlags.Expression == "" {
 		if len(result.Findings) == 0 {
-			w := writer.FromContext(ctx)
-			w.Success("No lint issues found.")
+			if w := writer.FromContext(ctx); w != nil {
+				w.Success("No lint issues found.")
+			}
 			return nil
 		}
-		if opts.KvxOutputFlags.Interactive {
-			// Interactive mode: pass full findings for rich detail view.
+		if outputFlags.Interactive {
 			outputData = result.Findings
 		} else {
 			outputData = projectFindings(result.Findings)
@@ -273,12 +305,7 @@ func runLint(ctx context.Context, opts *Options) error {
 	}
 
 	if err := kvxOpts.Write(outputData); err != nil {
-		writeError(opts, fmt.Sprintf("failed to write output: %v", err))
 		return exitcode.WithCode(err, exitcode.GeneralError)
-	}
-
-	if result.ErrorCount > 0 {
-		return exitcode.WithCode(fmt.Errorf("found %d errors", result.ErrorCount), exitcode.ValidationFailed)
 	}
 
 	return nil

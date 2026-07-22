@@ -26,7 +26,8 @@ block-beta
 - **Schema helper tags** — provider-level input constraints (type, length, pattern, enum)
 - **Validation provider** — runtime regex and CEL-based checks on resolver values
 - **Result schemas** — JSON Schema validation of action outputs
-- **Lint rules** — static analysis at `scafctl lint` time
+- **Lint rules** -- static analysis at `scafctl lint` time (the advisory subset)
+- **Validate gate** -- `scafctl validate` runs lint as a pass/fail gate for CI and pre-commit; `scafctl validate schema` checks arbitrary data against a JSON Schema
 
 ---
 
@@ -462,7 +463,78 @@ scafctl lint ./solutions/
 
 ---
 
-## 5. Common Validation Patterns Reference
+## 5. The `validate` Gate
+
+While `scafctl lint` is the **advisory** subset that reports authoring findings,
+`scafctl validate` is THE **gate** that turns those findings into a pass/fail
+result. It runs lint (which includes a JSON Schema conformance check) and exits
+non-zero when the definition is not ready -- ideal for CI pipelines and
+pre-commit checks.
+
+### Validate a Solution
+
+Loads a solution and runs lint. Lint errors (including schema violations) fail;
+lint warnings are surfaced but do not fail unless `--strict` is passed:
+
+{{< tabs "validation-patterns-tutorial-validate-solution" >}}
+{{% tab "Bash" %}}
+```bash
+# Errors fail, warnings surface (exit 0 if only warnings)
+scafctl validate solution -f my-solution.yaml
+
+# Treat warnings as fatal too
+scafctl validate solution -f my-solution.yaml --strict
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Errors fail, warnings surface (exit 0 if only warnings)
+scafctl validate solution -f my-solution.yaml
+
+# Treat warnings as fatal too
+scafctl validate solution -f my-solution.yaml --strict
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+`scafctl validate resolver` behaves the same way but first executes the resolver
+phases (resolve, transform, validate) and then runs lint as part of the gate;
+`--strict` makes lint warnings fatal there too.
+
+### Validate Arbitrary Data Against a JSON Schema
+
+`scafctl validate schema` validates any JSON or YAML document against a JSON
+Schema. Unlike `validate solution`, it does NOT run lint -- it checks raw data
+conformance only, so it works for config files, API payloads, or any document.
+Pass `--data -` to read the data from stdin:
+
+{{< tabs "validation-patterns-tutorial-validate-schema" >}}
+{{% tab "Bash" %}}
+```bash
+# Validate a data file against a schema (both JSON or YAML)
+scafctl validate schema --schema schema.json --data data.json
+
+# Read the data from stdin
+cat data.yaml | scafctl validate schema --schema schema.json --data -
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Validate a data file against a schema (both JSON or YAML)
+scafctl validate schema --schema schema.json --data data.json
+
+# Read the data from stdin
+Get-Content data.yaml | scafctl validate schema --schema schema.json --data -
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+Exit codes: `0` conforms, `2` violates the schema, `3` the schema itself is
+invalid, `4` a file was not found.
+
+---
+
+## 6. Common Validation Patterns Reference
 
 ### String Patterns
 
@@ -560,7 +632,7 @@ validate:
 
 ---
 
-## 6. Dynamic Validation Messages
+## 7. Dynamic Validation Messages
 
 The `message` field supports dynamic evaluation using `expr:` (CEL) or `tmpl:` (Go template) prefixes. This lets you include the actual value or computed context in error messages.
 
@@ -617,7 +689,7 @@ validate:
 
 ---
 
-## 7. Validation Failure Diagnostics
+## 8. Validation Failure Diagnostics
 
 When validation fails, scafctl provides structured error messages. Use the MCP `explain_error` tool or inspect the output directly:
 
@@ -648,7 +720,7 @@ Common validation error patterns and their meaning:
 
 ---
 
-## 8. Cross-Resolver (Two-Phase) Validation
+## 9. Cross-Resolver (Two-Phase) Validation
 
 Most validation rules check a single value against itself with `__self`. Sometimes
 you need to validate one resolver *against another* -- for example, ensuring a

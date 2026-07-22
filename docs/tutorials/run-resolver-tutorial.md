@@ -603,7 +603,7 @@ This reveals the provider returned `60000` — confirming the root cause is the 
 
 ## Validate Resolver
 
-When your primary intent is to **gate on validation** rather than inspect values, use the dedicated `scafctl validate resolver` command. It behaves like `run resolver` but presets fatal validation: validation failures exit `2` (validation failed). It is equivalent to `run resolver --fail-on-validation`, expressed as a first-class verb for clarity in scripts and CI pipelines.
+When your primary intent is to **gate on validation** rather than inspect values, use the dedicated `scafctl validate resolver` command. It behaves like `run resolver` but presets fatal validation: validation failures exit `2` (validation failed). After the resolver phases pass, it additionally runs `lint` as part of the gate -- lint errors (including JSON Schema violations) fail, lint warnings are surfaced, and `--strict` makes lint warnings fatal too. This makes `validate resolver` a first-class gate verb for scripts and CI pipelines.
 
 {{< tabs "run-resolver-tutorial-cmd-validate" >}}
 {{% tab "Bash" %}}
@@ -618,7 +618,7 @@ scafctl validate resolver -f phases-demo.yaml -o json
 {{% /tab %}}
 {{< /tabs >}}
 
-The resolved values are still printed and diagnostics still appear on stderr, but the command exits `2` when any resolver fails validation. Use `run resolver` for day-to-day troubleshooting (exit `0`) and `validate resolver` when a non-zero exit on validation failure is the goal.
+The resolved values are still printed and diagnostics still appear on stderr, but the command exits `2` when any resolver fails validation or when lint reports an error (or a warning under `--strict`). Use `run resolver` for day-to-day troubleshooting (exit `0`) and `validate resolver` when a non-zero exit on validation or lint failure is the goal. To validate a whole solution as a gate without focusing on resolvers, use [`scafctl validate solution`](../../design/cli/#validation-gate).
 
 ---
 
