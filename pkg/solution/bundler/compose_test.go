@@ -277,6 +277,126 @@ spec:
 	assert.Nil(t, result.Compose, "result compose should be cleared")
 }
 
+// TestCompose_PreservesRawContent verifies that composing preserves the
+// source's original authored bytes in the result's RawContent, rather than
+// regenerating them from the typed struct. The struct round-trip in
+// deepCopySolution would otherwise materialize zero-value fields (e.g. an
+// action's empty name) that were never in the user's file, poisoning
+// schema-lint with false positives like the spec.workflow.actions.name
+// pattern violation. Regression test for the compose lint false positive.
+func TestCompose_PreservesRawContent(t *testing.T) {
+	// A solution whose action name is only a map key (never authored inline),
+	// so a struct->YAML round-trip would emit `name: ""`.
+	src := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+spec:
+  workflow:
+    actions:
+      greet:
+        description: Say hello
+        provider: message
+        inputs:
+          message: hello
+`)
+	sol := &solution.Solution{}
+	require.NoError(t, sol.UnmarshalFromBytes(src))
+	sol.Compose = []string{"tests.yaml"}
+
+	readFile := func(path string) ([]byte, error) {
+		if filepath.ToSlash(path) == "/tmp/bundle/tests.yaml" {
+			return []byte(`
+spec:
+  testing:
+    cases:
+      basic:
+        description: basic test
+        command: [run, resolver]
+        exitCode: 0
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+
+	raw := string(result.RawContent())
+	// The authored bytes must be preserved verbatim -- no injected empty name.
+	assert.NotContains(t, raw, `name: ""`,
+		"compose must not inject an empty action name into RawContent")
+	assert.Equal(t, string(src), raw,
+		"composed RawContent must equal the source's authored bytes")
+	// The merge itself must still have happened on the typed struct.
+	assert.NotNil(t, result.Spec.Testing, "composed tests should be merged into the struct")
+
+	// rawContent and the source map must stay consistent: the composed result's
+	// source map must be the source's map (built from the authored bytes), not
+	// one derived from the round-tripped struct. Both non-nil here since the
+	// source was parsed from bytes.
+	require.NotNil(t, sol.SourceMap(), "source solution should have a source map")
+	assert.Same(t, sol.SourceMap(), result.SourceMap(),
+		"composed result must reuse the source's source map to stay consistent with restored rawContent")
+}
+
+// TestCompose_PreservesRawContent_ComposedAction verifies the exact contract the
+// fix depends on when the COMPOSED part (not the primary) contributes a workflow
+// action: the result's RawContent stays byte-identical to the primary's authored
+// source (so it carries no injected empty name and none of the composed action),
+// while the composed action is nonetheless merged into the typed struct.
+func TestCompose_PreservesRawContent_ComposedAction(t *testing.T) {
+	src := []byte(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: test-solution
+spec:
+  workflow:
+    actions:
+      greet:
+        description: Say hello
+        provider: message
+        inputs:
+          message: hello
+`)
+	sol := &solution.Solution{}
+	require.NoError(t, sol.UnmarshalFromBytes(src))
+	sol.Compose = []string{"more-actions.yaml"}
+
+	readFile := func(path string) ([]byte, error) {
+		if filepath.ToSlash(path) == "/tmp/bundle/more-actions.yaml" {
+			return []byte(`
+spec:
+  workflow:
+    actions:
+      farewell:
+        description: Say goodbye
+        provider: message
+        inputs:
+          message: bye
+`), nil
+		}
+		return nil, fmt.Errorf("file not found: %s", path)
+	}
+
+	result, err := Compose(sol, "/tmp/bundle", WithReadFileFunc(readFile))
+	require.NoError(t, err)
+
+	raw := string(result.RawContent())
+	// RawContent is the primary's authored bytes verbatim: no injected empty
+	// name, and no trace of the composed action.
+	assert.Equal(t, string(src), raw,
+		"composed RawContent must equal the primary source, not the merged struct")
+	assert.NotContains(t, raw, `name: ""`, "no injected empty action name")
+	assert.NotContains(t, raw, "farewell",
+		"composed-in action must not appear in the primary's RawContent")
+	// But the merge landed on the typed struct: both actions present.
+	require.NotNil(t, result.Spec.Workflow)
+	assert.Contains(t, result.Spec.Workflow.Actions, "greet")
+	assert.Contains(t, result.Spec.Workflow.Actions, "farewell",
+		"composed action must be merged into the typed struct")
+}
+
 func TestCompose_MergesTests(t *testing.T) {
 	sol := baseSolution()
 	sol.Compose = []string{"tests.yaml"}

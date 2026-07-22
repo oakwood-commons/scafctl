@@ -3569,6 +3569,71 @@ func TestIntegration_Lint_SchemaValid(t *testing.T) {
 	_ = exitCode
 }
 
+// TestIntegration_Lint_ComposedWorkflow_NoSchemaFalsePositive is a regression
+// test for the compose lint false positive: a solution that both defines a
+// workflow action (whose name comes only from the map key) and uses compose
+// must not report a schema-violation on spec.workflow.actions.name. The compose
+// struct round-trip previously injected an empty action name (name: "") into the
+// content that schema-lint validates.
+func TestIntegration_Lint_ComposedWorkflow_NoSchemaFalsePositive(t *testing.T) {
+	t.Parallel()
+	// Build the composed solution in a temp dir so the functional-test harness
+	// (which walks tests/integration/solutions/**) never discovers the partial
+	// compose file as a standalone solution.
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "tests"), 0o755))
+
+	solutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: composed-workflow
+  version: 1.0.0
+compose:
+  - tests/cases.yaml
+spec:
+  resolvers:
+    hello:
+      description: A greeting
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+  workflow:
+    actions:
+      greet:
+        description: Say hello
+        provider: message
+        inputs:
+          message: hello
+`
+	// Partial compose file: only spec.testing, no metadata.name. Its name comes
+	// from the action map key, which the compose round-trip previously injected
+	// into rawContent as name: "" and tripped schema-lint.
+	casesYAML := `spec:
+  testing:
+    cases:
+      basic:
+        description: basic composed test
+        command: [run, resolver]
+        assertions:
+          - expression: __exitCode == 0
+`
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionYAML), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "tests", "cases.yaml"), []byte(casesYAML), 0o644))
+
+	stdout, _, exitCode := runScafctl(t, "lint", "-f", solutionFile, "-o", "json")
+
+	assert.NotContains(t, stdout, "schema-violation",
+		"composed solution with a workflow action must not trip a schema-violation")
+	assert.NotContains(t, stdout, "spec.workflow.actions.name",
+		"the empty-action-name false positive must not appear")
+	assert.Contains(t, stdout, `"errorCount": 0`,
+		"a valid composed solution must lint with zero errors")
+	assert.Equal(t, 0, exitCode, "lint should succeed (exit 0) for a valid composed solution")
+}
+
 func TestIntegration_Lint_AutoDiscovery(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

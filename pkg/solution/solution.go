@@ -339,6 +339,21 @@ func (s *Solution) RawContent() []byte {
 	return out
 }
 
+// SetRawContent overrides the original bytes used to parse this solution.
+//
+// This is used by compose (deepCopySolution) to preserve the user's authored
+// bytes across a struct round-trip. Marshaling the typed struct back to YAML
+// materializes zero-value fields (e.g. an action's empty name) that were never
+// present in the source file, which would otherwise poison schema-lint. Passing
+// nil clears the stored content.
+func (s *Solution) SetRawContent(data []byte) {
+	if data == nil {
+		s.rawContent = nil
+		return
+	}
+	s.rawContent = append([]byte(nil), data...)
+}
+
 // SetPath sets the path for the Solution.
 // It updates the internal path field with the provided value.
 func (s *Solution) SetPath(path string) {
