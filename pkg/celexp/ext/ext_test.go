@@ -300,7 +300,7 @@ func TestCustom(t *testing.T) {
 		"out":         {"out.nil"},
 		"regex":       {"regex.match", "regex.replace", "regex.findAll", "regex.split"},
 		"sort":        {"sort.objects"},
-		"strings":     {"strings.clean", "strings.title"},
+		"strings":     {"strings.clean", "strings.title", "strings.slugify"},
 		"time":        {"time.now"},
 	}
 
