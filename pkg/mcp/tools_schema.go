@@ -13,6 +13,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
+	"sigs.k8s.io/yaml"
 )
 
 // registerSchemaTools registers schema-related MCP tools.
@@ -50,6 +51,68 @@ func (s *Server) registerSchemaTools() {
 		),
 	)
 	s.addTool(explainKindTool, s.handleExplainKind)
+
+	// validate_schema — validate arbitrary data against a JSON Schema
+	validateSchemaTool := mcp.NewTool("validate_schema",
+		mcp.WithDescription(fmt.Sprintf("Validate arbitrary data against a JSON Schema. Both the schema and the data may be JSON or YAML. Returns the list of violations (path + message), or confirms the data is valid. This is a general-purpose, low-level data-conformance gate: it does NOT run lint and is not specific to solutions. To validate a %s solution end-to-end (load + lint, including schema conformance), use lint_solution instead.", s.name)),
+		mcp.WithTitleAnnotation("Validate Data Against Schema"),
+		mcp.WithToolIcons(toolIcons["schema"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("schema",
+			mcp.Required(),
+			mcp.Description("The JSON Schema to validate against, as a JSON or YAML string."),
+		),
+		mcp.WithString("data",
+			mcp.Required(),
+			mcp.Description("The data to validate, as a JSON or YAML string."),
+		),
+	)
+	s.addTool(validateSchemaTool, s.handleValidateSchema)
+}
+
+// handleValidateSchema validates arbitrary data against a JSON Schema and
+// returns any violations. It is a thin wrapper over schema.ValidateDataAgainstSchema.
+func (s *Server) handleValidateSchema(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	schemaStr, err := request.RequireString("schema")
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("schema"),
+			WithSuggestion("Provide a JSON or YAML schema string"),
+		), nil
+	}
+	dataStr, err := request.RequireString("data")
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("data"),
+			WithSuggestion("Provide a JSON or YAML data string"),
+		), nil
+	}
+
+	var data any
+	if err := yaml.Unmarshal([]byte(dataStr), &data); err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("failed to parse data as JSON/YAML: %v", err),
+			WithField("data"),
+			WithSuggestion("Ensure the data is valid JSON or YAML"),
+		), nil
+	}
+
+	violations, err := schema.ValidateDataAgainstSchema([]byte(schemaStr), data)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("invalid schema: %v", err),
+			WithField("schema"),
+			WithSuggestion("Ensure the schema is a valid JSON Schema (JSON or YAML)"),
+		), nil
+	}
+
+	result := map[string]any{
+		"valid":          len(violations) == 0,
+		"violationCount": len(violations),
+		"violations":     violations,
+	}
+	return mcp.NewToolResultJSON(result)
 }
 
 // handleGetSolutionSchema returns the full JSON Schema for a solution YAML file.

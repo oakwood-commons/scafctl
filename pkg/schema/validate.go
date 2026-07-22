@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"sigs.k8s.io/yaml"
 )
 
 // Violation represents a single validation error found when validating
@@ -33,14 +34,35 @@ func ValidateSolutionAgainstSchema(data any) ([]Violation, error) {
 		return nil, fmt.Errorf("generating solution schema: %w", err)
 	}
 
+	return ValidateDataAgainstSchema(schemaBytes, data)
+}
+
+// ValidateDataAgainstSchema validates arbitrary data against a JSON Schema
+// provided as raw bytes. The schemaBytes may be either JSON or YAML -- YAML is
+// normalized to JSON before it is unmarshalled into the jsonschema-go schema
+// type. It returns a list of violations, or an error if the schema itself
+// could not be parsed, resolved, or compiled.
+//
+// The data parameter should be the result of unmarshalling YAML/JSON into a
+// plain any (not into a typed struct), so unknown fields are preserved.
+func ValidateDataAgainstSchema(schemaBytes []byte, data any) ([]Violation, error) {
+	// Normalize YAML-or-JSON schema bytes to JSON so both formats are
+	// accepted. yaml.YAMLToJSON reparses and re-emits the input (it may
+	// reorder map keys); for already-JSON input this is a harmless reformat,
+	// not a byte-identity no-op.
+	jsonBytes, err := yaml.YAMLToJSON(schemaBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing schema: %w", err)
+	}
+
 	var schema jsonschema.Schema
-	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
-		return nil, fmt.Errorf("unmarshalling solution schema: %w", err)
+	if err := json.Unmarshal(jsonBytes, &schema); err != nil {
+		return nil, fmt.Errorf("unmarshalling schema: %w", err)
 	}
 
 	resolved, err := schema.Resolve(nil)
 	if err != nil {
-		return nil, fmt.Errorf("resolving solution schema: %w", err)
+		return nil, fmt.Errorf("resolving schema: %w", err)
 	}
 
 	if err := resolved.Validate(data); err != nil {

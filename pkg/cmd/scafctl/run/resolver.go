@@ -17,9 +17,12 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
+	cmdflags "github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	cmdlint "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/flags"
+	pkglint "github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -77,6 +80,12 @@ type ResolverOptions struct {
 	// resolver fails validation. By default, validation failures are reported as
 	// non-fatal diagnostics (values are still shown) and the command exits 0.
 	FailOnValidation bool
+
+	// LintAfterValidate, when true, runs lint on the solution after resolver
+	// validation passes. It is set by 'validate resolver' so that command acts
+	// as a full gate (resolver validation + lint). 'run resolver' leaves it
+	// false.
+	LintAfterValidate bool
 
 	// DynamicArgs are resolver parameters from positional key=value syntax
 	// (e.g. env=prod region=us-east-1, captured from positional args containing '=').
@@ -287,7 +296,7 @@ Examples:
 // 'run resolver', it does not expose graph/snapshot modes — its sole purpose is
 // to validate resolver outputs and report failures.
 func CommandValidateResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	options := &ResolverOptions{FailOnValidation: true}
+	options := &ResolverOptions{FailOnValidation: true, LintAfterValidate: true}
 
 	cfg := runCommandConfig{
 		cliParams: cliParams,
@@ -307,7 +316,7 @@ func CommandValidateResolver(cliParams *settings.Run, ioStreams *terminal.IOStre
 	cCmd := &cobra.Command{
 		Use:     "resolver [resolver-name...] [key=value...]",
 		Aliases: []string{"res", "resolvers"},
-		Short:   "Validate resolvers and fail when validation does not pass",
+		Short:   "Validate resolvers (then lint) and fail when validation does not pass",
 		Long: strings.ReplaceAll(`Validate a solution's resolvers and exit non-zero on validation failure.
 
 This command executes the resolvers (resolve, transform, and validate phases)
@@ -316,15 +325,20 @@ treats validation failures as non-fatal diagnostics and exits 0, this command
 exits with code 2 when any resolver fails validation. Use it as a validation
 gate in CI pipelines or pre-commit checks.
 
+After resolver validation passes, it additionally runs lint on the solution as
+part of the gate: lint errors (including JSON Schema violations) fail; lint
+warnings are surfaced and, with --strict, are also fatal. Resolver-validation
+failures are reported before lint and are never masked by lint output.
+
 Resolved values are still printed so failures can be inspected. Input
 parameters and solution sources work exactly as in 'run resolver'.
 
 `+ResolverParametersHelp+`
 
 EXIT CODES:
-  0  All resolvers validated successfully
+  0  All resolvers validated and lint passed
   1  Resolver execution failed
-  2  Validation failed
+  2  Validation failed (resolver validation, lint errors, or --strict warnings)
   3  Invalid solution (cycle/parse error)
   4  File not found
 
@@ -337,6 +351,9 @@ Examples:
 
   # Validate with parameters
   scafctl validate resolver -f ./my-solution.yaml env=prod region=us-east1
+
+  # Treat lint warnings as fatal too
+  scafctl validate resolver -f ./my-solution.yaml --strict
 
   # Validate specific resolvers (with their dependencies)
   scafctl validate resolver db config -f ./my-solution.yaml`, settings.CliBinaryName, cliParams.BinaryName),
@@ -356,6 +373,12 @@ Examples:
 	addSharedResolverFlags(cCmd, &options.sharedResolverOptions)
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
 	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope validation to the resolvers consumed by this action (repeatable)")
+	// --strict is registered by addSharedResolverFlags (it also disables
+	// provider auto-resolution). In the validate gate it additionally makes
+	// lint warnings fatal; reflect that combined meaning in the help text.
+	if f := cCmd.Flags().Lookup("strict"); f != nil {
+		f.Usage = "Strict gate: treat lint warnings as fatal and require explicit bundle.plugins (errors and schema violations are always fatal)"
+	}
 
 	setResolverHelpFunc(cCmd)
 
@@ -702,6 +725,83 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// is set, exit non-zero so CI/gating callers detect the failure.
 	if execErr != nil && o.FailOnValidation {
 		return exitcode.WithCode(execErr, exitcode.ValidationFailed)
+	}
+
+	// Gate mode ('validate resolver'): after resolver validation passes, run
+	// lint on the solution as an additional gate. Lint errors fail; lint
+	// warnings are surfaced and, with --strict, are also fatal. This runs only
+	// when resolver validation did not already fail above, so resolver failures
+	// are never masked by lint output.
+	if o.LintAfterValidate {
+		if err := o.runLintGate(ctx, sol, reg); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// runLintGate runs lint on the solution and applies the validate-gate policy:
+// lint errors always fail; lint warnings fail only when --strict is set.
+// Findings are surfaced on stderr so they do not pollute resolver output on
+// stdout. It renders findings through the shared lint renderer
+// (cmdlint.RenderResult) so the finding format is identical to 'scafctl lint'
+// and 'validate solution'; the only difference is the stream (stderr, to keep
+// stdout clean for resolver JSON).
+func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solution, reg *provider.Registry) error {
+	result := pkglint.Solution(sol, sol.GetPath(), reg)
+
+	// Honor -o quiet: exit-code-only, no lint block (header or findings). The
+	// pass/fail policy below still applies via ErrorCount/WarnCount.
+	if len(result.Findings) > 0 && o.Output != "quiet" {
+		w := writer.FromContext(ctx)
+		if w == nil && o.IOStreams != nil {
+			cliParams := o.CliParams
+			if cliParams == nil {
+				cliParams = &settings.Run{}
+			}
+			w = writer.New(o.IOStreams, cliParams)
+		}
+		if w != nil {
+			w.WarnStderrf("lint reported %d error(s), %d warning(s):", result.ErrorCount, result.WarnCount)
+		}
+
+		// Render findings via the shared renderer so the format matches
+		// 'scafctl lint' and 'validate solution'. Redirect the renderer's
+		// stdout to stderr so resolver JSON on stdout stays clean.
+		if o.IOStreams != nil {
+			errStreams := &terminal.IOStreams{
+				In:           o.IOStreams.In,
+				Out:          o.IOStreams.ErrOut,
+				ErrOut:       o.IOStreams.ErrOut,
+				ColorEnabled: o.IOStreams.ColorEnabled,
+			}
+			appName := o.BinaryName
+			if appName == "" {
+				appName = settings.CliBinaryName
+			}
+			noColor := false
+			if o.CliParams != nil {
+				noColor = o.CliParams.NoColor
+			}
+			lintFlags := cmdflags.KvxOutputFlags{Output: "table"}
+			if renderErr := cmdlint.RenderResult(ctx, result, appName+" validate resolver", errStreams, lintFlags, noColor); renderErr != nil {
+				return renderErr
+			}
+		}
+	}
+
+	if result.ErrorCount > 0 {
+		return exitcode.WithCode(
+			fmt.Errorf("lint failed: %d error(s)", result.ErrorCount),
+			exitcode.ValidationFailed,
+		)
+	}
+	if o.Strict && result.WarnCount > 0 {
+		return exitcode.WithCode(
+			fmt.Errorf("lint failed: %d warning(s) (strict mode)", result.WarnCount),
+			exitcode.ValidationFailed,
+		)
 	}
 
 	return nil

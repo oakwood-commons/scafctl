@@ -1498,9 +1498,13 @@ func TestIntegration_Validate_Help(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "validate", "--help")
 
 	assert.Equal(t, 0, exitCode)
-	// Top-level validate command help advertises the resolver subcommand.
+	// Top-level validate command help advertises all three subcommands and
+	// frames validate as the gate that runs lint.
 	assert.Contains(t, stdout, "Validate")
 	assert.Contains(t, stdout, "resolver")
+	assert.Contains(t, stdout, "solution")
+	assert.Contains(t, stdout, "schema")
+	assert.Contains(t, stdout, "lint")
 }
 
 func TestIntegration_ValidateResolver_Help(t *testing.T) {
@@ -1535,6 +1539,206 @@ func TestIntegration_ValidateResolver_FailsNonZero(t *testing.T) {
 	)
 
 	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+}
+
+// --- validate schema ---
+
+// writeValidateSchemaFixtures writes a minimal JSON Schema plus valid and
+// invalid data files into a temp dir and returns their paths.
+func writeValidateSchemaFixtures(t *testing.T) (schemaPath, validPath, invalidPath string) {
+	t.Helper()
+	dir := t.TempDir()
+
+	schemaPath = filepath.Join(dir, "schema.json")
+	schemaContent := `{
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "age": { "type": "integer" }
+  },
+  "required": ["name", "age"]
+}`
+	require.NoError(t, os.WriteFile(schemaPath, []byte(schemaContent), 0o600))
+
+	validPath = filepath.Join(dir, "valid.json")
+	require.NoError(t, os.WriteFile(validPath, []byte(`{"name": "alice", "age": 30}`), 0o600))
+
+	invalidPath = filepath.Join(dir, "invalid.json")
+	// age is a string here, violating the integer constraint.
+	require.NoError(t, os.WriteFile(invalidPath, []byte(`{"name": "alice", "age": "thirty"}`), 0o600))
+
+	return schemaPath, validPath, invalidPath
+}
+
+func TestIntegration_ValidateSchema_ValidData(t *testing.T) {
+	t.Parallel()
+	schemaPath, validPath, _ := writeValidateSchemaFixtures(t)
+
+	_, _, exitCode := runScafctl(t,
+		"validate", "schema",
+		"--schema", schemaPath,
+		"--data", validPath,
+	)
+
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_ValidateSchema_InvalidData(t *testing.T) {
+	t.Parallel()
+	schemaPath, _, invalidPath := writeValidateSchemaFixtures(t)
+
+	_, stderr, exitCode := runScafctl(t,
+		"validate", "schema",
+		"--schema", schemaPath,
+		"--data", invalidPath,
+	)
+
+	// Invalid data violates the schema -> ValidationFailed (2).
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+	// The violation message should name the offending field and the constraint.
+	assert.Contains(t, stderr, "violation")
+	assert.Contains(t, stderr, "age")
+}
+
+func TestIntegration_ValidateSchema_DataFromStdin(t *testing.T) {
+	t.Parallel()
+	schemaPath, validPath, _ := writeValidateSchemaFixtures(t)
+
+	data, err := os.ReadFile(validPath)
+	require.NoError(t, err)
+
+	_, _, exitCode := runScafctlWithStdin(t, bytes.NewReader(data),
+		"validate", "schema",
+		"--schema", schemaPath,
+		"--data", "-",
+	)
+
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_ValidateSchema_MissingSchemaFile(t *testing.T) {
+	t.Parallel()
+	schemaPath, validPath, _ := writeValidateSchemaFixtures(t)
+	missing := filepath.Join(filepath.Dir(schemaPath), "does-not-exist.json")
+
+	_, _, exitCode := runScafctl(t,
+		"validate", "schema",
+		"--schema", missing,
+		"--data", validPath,
+	)
+
+	// A missing schema file -> FileNotFound (4).
+	assert.Equal(t, exitcode.FileNotFound, exitCode)
+}
+
+// --- validate solution ---
+
+func TestIntegration_ValidateSolution_Help(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "validate", "solution", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "solution")
+	assert.Contains(t, stdout, "--strict")
+}
+
+// writeLintWarningSolution writes a solution whose only lint findings are
+// warnings (a hyphenated resolver name and an unused resolver). It never
+// produces a lint error.
+func writeLintWarningSolution(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: validate-warn-sol
+  version: 1.0.0
+  description: "Solution with a hyphenated resolver name to trigger a lint warning"
+spec:
+  resolvers:
+    my-resolver:
+      description: "hyphenated name triggers a hyphenated-name warning"
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+func TestIntegration_ValidateSolution_Clean(t *testing.T) {
+	t.Parallel()
+	// A clean solution fixture (schema-valid, no lint errors) exits 0.
+	_, _, exitCode := runScafctl(t,
+		"validate", "solution",
+		"-f", "tests/integration/solutions/lint-schema/valid-minimal.yaml",
+	)
+
+	assert.Equal(t, 0, exitCode)
+}
+
+func TestIntegration_ValidateSolution_LintWarningPasses(t *testing.T) {
+	t.Parallel()
+	// A solution whose only lint findings are warnings exits 0 by default,
+	// but the warnings are surfaced in the output.
+	path := writeLintWarningSolution(t)
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"validate", "solution",
+		"-f", path,
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout+stderr, "hyphenated-name")
+}
+
+func TestIntegration_ValidateSolution_LintErrorFails(t *testing.T) {
+	t.Parallel()
+	// A solution with a lint ERROR (unknown top-level field ->
+	// schema-violation) fails with ValidationFailed (2).
+	stdout, stderr, exitCode := runScafctl(t,
+		"validate", "solution",
+		"-f", "tests/integration/solutions/lint-schema/unknown-field.yaml",
+	)
+
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+	assert.Contains(t, stdout+stderr, "schema-violation")
+}
+
+func TestIntegration_ValidateSolution_StrictWarningFails(t *testing.T) {
+	t.Parallel()
+	// With --strict, a solution whose only lint findings are warnings fails
+	// with ValidationFailed (2).
+	path := writeLintWarningSolution(t)
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"validate", "solution",
+		"-f", path,
+		"--strict",
+	)
+
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+	assert.Contains(t, stdout+stderr, "hyphenated-name")
+}
+
+func TestIntegration_ValidateResolver_StrictLintWarningFails(t *testing.T) {
+	t.Parallel()
+	// 'validate resolver' also runs lint as a gate. With --strict, a solution
+	// whose resolvers validate cleanly but that has a lint warning
+	// (hyphenated-name) must fail with ValidationFailed (2).
+	path := writeLintWarningSolution(t)
+
+	_, stderr, exitCode := runScafctl(t,
+		"validate", "resolver",
+		"-f", path,
+		"--strict",
+	)
+
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+	assert.Contains(t, stderr, "hyphens")
 }
 
 func TestIntegration_RunResolver_GraphJSON(t *testing.T) {

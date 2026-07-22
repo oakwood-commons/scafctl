@@ -90,7 +90,9 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 
 	// Schema validation: validate the raw YAML against the generated JSON Schema.
 	// This catches unknown fields, type mismatches, pattern violations, etc.
-	lintSchema(filePath, result)
+	// Prefer the already-loaded raw content (works for URL/catalog sources too);
+	// fall back to reading the file from disk only when raw content is absent.
+	lintSchema(sol.RawContent(), filePath, result)
 
 	if !sol.Spec.HasResolvers() && !sol.Spec.HasWorkflow() {
 		result.addFinding(SeverityError, "structure", "spec", "Solution has no resolvers or workflow", "", "empty-solution")
@@ -2047,16 +2049,25 @@ func testFileReachable(solutionDir, entry string) bool {
 	return err == nil
 }
 
-// lintSchema reads the solution file from disk, unmarshals it into a generic
-// map (preserving unknown fields), and validates it against the generated
-// JSON Schema. Any violations are added to the result as schema-violation findings.
-func lintSchema(filePath string, result *Result) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		// If we can't read the file, skip schema validation silently.
-		// The caller already loaded the solution successfully, so this is
-		// likely a non-file source (URL, catalog, etc.).
-		return
+// lintSchema unmarshals the solution's raw content into a generic map
+// (preserving unknown fields) and validates it against the generated JSON
+// Schema. Any violations are added to the result as schema-violation findings.
+//
+// It prefers rawContent (the bytes the solution was actually loaded from,
+// available for file, URL, and catalog sources alike). Only when rawContent is
+// empty does it fall back to reading filePath from disk, so schema violations
+// are never silently skipped for non-file sources.
+func lintSchema(rawContent []byte, filePath string, result *Result) {
+	data := rawContent
+	if len(data) == 0 {
+		var err error
+		data, err = os.ReadFile(filePath)
+		if err != nil {
+			// No raw content and no readable file: nothing to validate.
+			// This should be rare, since the caller already loaded the
+			// solution (which populates raw content for byte-based sources).
+			return
+		}
 	}
 
 	var raw any

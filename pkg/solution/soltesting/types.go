@@ -376,7 +376,7 @@ type InitStep struct {
 // TestCase defines a single functional test for a solution.
 type TestCase struct {
 	// Name is the test name (auto-set from map key).
-	Name string `json:"name" yaml:"name" doc:"Test name (auto-set from map key)" maxLength:"100" pattern:"^[a-zA-Z0-9_][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, digit, or underscore and contain only letters, digits, hyphens, and underscores"`
+	Name string `json:"name,omitempty" yaml:"name,omitempty" doc:"Test name (auto-set from map key; not authored in YAML)" maxLength:"100" pattern:"^[a-zA-Z0-9_][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, digit, or underscore and contain only letters, digits, hyphens, and underscores"`
 
 	// Description is a human-readable test description.
 	Description string `json:"description" yaml:"description" doc:"Human-readable test description" maxLength:"500"`
