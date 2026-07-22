@@ -155,7 +155,8 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 	lintPath := fmt.Sprintf("%s/%s", path, cmd.Use)
 	cmd.AddCommand(CommandRules(cliParams, ioStreams, lintPath))
-	cmd.AddCommand(CommandExplainRule(cliParams, ioStreams, lintPath))
+	cmd.AddCommand(CommandRule(cliParams, ioStreams, lintPath))
+	cmd.AddCommand(CommandExplainRuleDeprecated(cliParams, ioStreams, lintPath))
 
 	return cmd
 }

@@ -276,7 +276,7 @@ scafctl lint -f solution.yaml
 scafctl lint rules
 
 # Explain a lint rule
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
@@ -334,7 +334,7 @@ scafctl lint -f solution.yaml
 scafctl lint rules
 
 # Explain a lint rule
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 ```
 {{% /tab %}}
 {{< /tabs >}}
