@@ -10,6 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestSlugify verifies the dns package delegates to dnslabel.Slugify. The
+// exhaustive transformation cases live in pkg/dnslabel; here we only guard the
+// delegation so the template function stays wired to the shared implementation.
 func TestSlugify(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -17,59 +20,9 @@ func TestSlugify(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "simple lowercase",
-			input: "hello",
-			want:  "hello",
-		},
-		{
-			name:  "mixed case",
-			input: "Hello World",
-			want:  "hello-world",
-		},
-		{
-			name:  "underscores and special chars",
-			input: "hello_world@2024!",
-			want:  "hello-world-2024",
-		},
-		{
-			name:  "consecutive special characters",
-			input: "hello---world___test",
-			want:  "hello-world-test",
-		},
-		{
-			name:  "leading and trailing special chars",
-			input: "---hello---",
-			want:  "hello",
-		},
-		{
-			name:  "unicode characters",
-			input: "h\u00e9llo w\u00f6rld caf\u00e9",
-			want:  "h-llo-w-rld-caf",
-		},
-		{
-			name:  "all special characters",
-			input: "@#$%^&*()",
-			want:  "",
-		},
-		{
-			name:  "empty string",
-			input: "",
-			want:  "",
-		},
-		{
-			name:  "already valid DNS label",
-			input: "my-valid-label",
-			want:  "my-valid-label",
-		},
-		{
-			name:  "digits only",
-			input: "12345",
-			want:  "12345",
-		},
-		{
-			name:  "leading digits",
-			input: "123-abc",
-			want:  "123-abc",
+			name:  "mixed case and special chars",
+			input: "My-GitHub_Org.Name",
+			want:  "my-github-org-name",
 		},
 		{
 			name:  "max length truncation",
@@ -77,39 +30,9 @@ func TestSlugify(t *testing.T) {
 			want:  strings.Repeat("a", 63),
 		},
 		{
-			name:  "truncation at hyphen boundary",
-			input: strings.Repeat("a", 63) + "-extra",
-			want:  strings.Repeat("a", 63),
-		},
-		{
-			name:  "truncation creates trailing hyphen",
-			input: strings.Repeat("a", 62) + "--extra",
-			want:  strings.Repeat("a", 62),
-		},
-		{
-			name:  "dots replaced",
-			input: "my.service.name",
-			want:  "my-service-name",
-		},
-		{
-			name:  "slashes replaced",
-			input: "org/repo/name",
-			want:  "org-repo-name",
-		},
-		{
-			name:  "CamelCase",
-			input: "MyApplicationName",
-			want:  "myapplicationname",
-		},
-		{
-			name:  "kubernetes namespace style",
-			input: "My Kube_Namespace",
-			want:  "my-kube-namespace",
-		},
-		{
-			name:  "github org style",
-			input: "My-GitHub_Org.Name",
-			want:  "my-github-org-name",
+			name:  "empty string",
+			input: "",
+			want:  "",
 		},
 	}
 

@@ -6,6 +6,8 @@ metadata:
   description: |
     Demonstrates the custom Go template functions available in scafctl:
     slugify, toDnsString, where, selectField, cel, toHcl, toYaml, fromYaml.
+    Also shows the CEL strings.slugify function, which shares its
+    implementation with the go-template slugify.
   category: demo
   tags:
     - templates
@@ -52,6 +54,18 @@ spec:
             inputs:
               template: '{{ slugify (index . "project-name") }}'
               name: slugify-demo
+      # Result: "my-cool-project"
+
+    # strings.slugify — the same DNS-safe slug via a CEL expression.
+    # The CEL strings.slugify and the Go template slugify share one
+    # implementation (pkg/dnslabel), so their output is identical.
+    cel-slugified-name:
+      dependsOn: [project-name]
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'strings.slugify(_["project-name"])'
       # Result: "my-cool-project"
 
     # toDnsString — strict RFC 1123 DNS label

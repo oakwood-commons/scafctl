@@ -8723,7 +8723,45 @@ spec:
 	assert.Contains(t, stdout, "my-cool-project")
 }
 
-// TestIntegration_RunResolver_TemplateFunctions_CelInline verifies inline cel template function.
+// TestIntegration_RunResolver_CelFunctions_Slugify verifies the strings.slugify
+// CEL function produces a DNS-safe label, matching the go-template slugify.
+func TestIntegration_RunResolver_CelFunctions_Slugify(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cel-slugify-test
+  version: 1.0.0
+spec:
+  resolvers:
+    input:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "My_Org--Name! (test)"
+    slugified:
+      dependsOn: [input]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: 'strings.slugify(_.input)'
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-e", "_.slugified", "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, "my-org-name-test")
+}
+
 func TestIntegration_RunResolver_TemplateFunctions_CelInline(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

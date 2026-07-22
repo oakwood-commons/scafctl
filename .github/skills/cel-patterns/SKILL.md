@@ -214,6 +214,7 @@ url.decode("hello%20world")                // Also decodes %XX -> "hello world"
 strings.clean(_.messy)                     // Normalize whitespace
 strings.title(_.name)                      // Title Case
 strings.repeat(_.char, 5)                  // Repeat string N times
+strings.slugify(_.orgName)                 // DNS-safe label (RFC 1123), e.g. "My Org!" -> "my-org"
 ```
 
 ### Time (`pkg/celexp/ext/time/`)
