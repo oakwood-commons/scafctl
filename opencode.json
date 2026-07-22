@@ -8,7 +8,7 @@
   "plugin": [
     "opencode-vibeguard",
     "opencode-notify",
-    "opencode-dynamic-context-pruning"
+    "@tarquinen/opencode-dcp@3.1.14"
   ],
   "formatter": {},
   "lsp": {

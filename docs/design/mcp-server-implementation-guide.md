@@ -826,7 +826,7 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 
 **Purpose:** List all available CEL functions — both scafctl custom functions and standard CEL built-ins.
 
-**Maps to:** `scafctl get cel-functions`
+**Maps to:** `scafctl get cel functions`
 
 **Input schema:**
 

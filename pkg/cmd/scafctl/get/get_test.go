@@ -31,7 +31,7 @@ func TestCommandGet(t *testing.T) {
 	for _, c := range cmd.Commands() {
 		names = append(names, c.Name())
 	}
-	for _, want := range []string{"provider", "solution", "examples", "cel-functions", "go-template-functions", "commands"} {
+	for _, want := range []string{"provider", "solution", "examples", "cel", "template", "cel-functions", "go-template-functions", "commands"} {
 		assert.Contains(t, names, want, "get should wire up the %q subcommand", want)
 	}
 }
