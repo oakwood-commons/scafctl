@@ -1243,7 +1243,7 @@ This section tracks which commands from the design are implemented and what work
 | `new solution` | ✅ | Scaffold new solution |
 | `lint` | ✅ | Lint solution files |
 | `lint rules` | ✅ | List lint rules |
-| `lint explain` | ✅ | Explain a lint rule |
+| `lint rule` | ✅ | Explain a lint rule (was `lint explain`, now a hidden deprecated alias) |
 | `test functional` | ✅ | Run functional tests |
 | `test list` | ✅ | List test cases |
 | `test init` | ✅ | Scaffold test suite |

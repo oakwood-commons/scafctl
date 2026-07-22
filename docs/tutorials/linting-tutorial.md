@@ -181,12 +181,12 @@ Get detailed information about any lint rule:
 {{< tabs "linting-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain <rule-id>
+scafctl lint rule <rule-id>
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -196,15 +196,19 @@ For example:
 {{< tabs "linting-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain missing-description
+scafctl lint rule missing-description
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain missing-description
+scafctl lint rule missing-description
 ```
 {{% /tab %}}
 {{< /tabs >}}
+
+> **Migration note:** the older `scafctl lint explain <rule-id>` command still
+> works as a hidden, deprecated alias for `scafctl lint rule <rule-id>`. Prefer
+> `lint rule` in new scripts.
 
 This shows:
 
@@ -220,12 +224,12 @@ This shows:
 {{< tabs "linting-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain missing-description -o json
+scafctl lint rule missing-description -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain missing-description -o json
+scafctl lint rule missing-description -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -265,12 +269,12 @@ Explain the rule for full guidance:
 {{< tabs "linting-tutorial-cmd-orvalue" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain orvalue-on-non-optional
+scafctl lint rule orvalue-on-non-optional
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain orvalue-on-non-optional
+scafctl lint rule orvalue-on-non-optional
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -333,14 +337,14 @@ Explain either rule for full guidance:
 {{< tabs "linting-tutorial-cmd-deprecated" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain deprecated-field
-scafctl lint explain deprecated-field-conflict
+scafctl lint rule deprecated-field
+scafctl lint rule deprecated-field-conflict
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain deprecated-field
-scafctl lint explain deprecated-field-conflict
+scafctl lint rule deprecated-field
+scafctl lint rule deprecated-field-conflict
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -503,12 +507,12 @@ For more details:
 {{< tabs "linting-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain unreachable-test-path
+scafctl lint rule unreachable-test-path
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain unreachable-test-path
+scafctl lint rule unreachable-test-path
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -715,12 +719,12 @@ For more details:
 {{< tabs "linting-tutorial-cmd-12" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain transform-shape-mismatch
+scafctl lint rule transform-shape-mismatch
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain transform-shape-mismatch
+scafctl lint rule transform-shape-mismatch
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -788,12 +792,12 @@ For more details:
 {{< tabs "linting-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain resolver-cycle
+scafctl lint rule resolver-cycle
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain resolver-cycle
+scafctl lint rule resolver-cycle
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -870,12 +874,12 @@ For more details:
 {{< tabs "linting-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl lint explain missing-template-dependency
+scafctl lint rule missing-template-dependency
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl lint explain missing-template-dependency
+scafctl lint rule missing-template-dependency
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -975,7 +979,7 @@ spec:
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 
 - **`lint_solution` tool** -- Same as `scafctl lint` but returns structured JSON to the AI
-- **`explain_lint_rule` tool** -- Same as `scafctl lint explain`
+- **`explain_lint_rule` tool** -- Same as `scafctl lint rule`
 - **`validate_expressions` tool** -- Validate CEL expressions without running them
 
 The AI agent can lint your solution as part of its workflow -- for example, the `debug_solution` and `update_solution` prompts automatically include linting steps.
