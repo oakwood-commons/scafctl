@@ -244,7 +244,7 @@ func DescriptionFromPath(exPath string) string {
 		"solutions/composition/child.yaml":           "Solution composition - child partial solution",
 		"solutions/taskfile/solution.yaml":           "Taskfile-based workflow solution",
 		"solutions/tested-solution/solution.yaml":    "Solution with functional tests defined in spec.testing.cases",
-		"solutions/template-functions/solution.yaml": "Demonstrates custom Go template functions: slugify, where, selectField, cel, toYaml, metadata provider",
+		"solutions/template-functions/solution.yaml": "Demonstrates custom Go template functions (slugify, where, selectField, cel, toYaml, metadata) plus the CEL strings.slugify function",
 
 		// Actions
 		"actions/hello-world.yaml":              "Simple hello world action",

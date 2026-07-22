@@ -6,24 +6,18 @@
 package dns
 
 import (
-	"regexp"
-	"strings"
 	"text/template"
 
+	"github.com/oakwood-commons/scafctl/pkg/dnslabel"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 )
 
-const (
-	// maxDNSLabelLength is the maximum length of a DNS label per RFC 1123.
-	maxDNSLabelLength = 63
-)
-
-var (
-	// nonDNSChars matches any character that is not a lowercase letter, digit, or hyphen.
-	nonDNSChars = regexp.MustCompile(`[^a-z0-9-]`)
-	// multipleHyphens matches consecutive hyphens.
-	multipleHyphens = regexp.MustCompile(`-{2,}`)
-)
+// Slugify converts an arbitrary string into a DNS-safe label (RFC 1123).
+// It delegates to dnslabel.Slugify, the shared implementation used by both
+// the Go template and CEL engines so their output stays identical.
+func Slugify(s string) string {
+	return dnslabel.Slugify(s)
+}
 
 // SlugifyFunc returns an ExtFunction that converts a string into a
 // DNS-safe label (RFC 1123). The output is lowercase, contains only
@@ -88,39 +82,4 @@ func ToDNSStringFunc() gotmpl.ExtFunction {
 			"toDnsString": Slugify,
 		},
 	}
-}
-
-// Slugify converts an arbitrary string into a DNS-safe label (RFC 1123).
-//
-// The transformation:
-//  1. Converts to lowercase
-//  2. Replaces any character not in [a-z0-9-] with a hyphen
-//  3. Collapses consecutive hyphens into a single hyphen
-//  4. Strips leading and trailing hyphens
-//  5. Truncates to 63 characters (the DNS label limit)
-//  6. Strips any trailing hyphen introduced by truncation
-//
-// Returns an empty string if the input is empty or contains no valid characters.
-func Slugify(s string) string {
-	// 1. Lowercase
-	result := strings.ToLower(s)
-
-	// 2. Replace non-DNS characters with hyphens
-	result = nonDNSChars.ReplaceAllString(result, "-")
-
-	// 3. Collapse consecutive hyphens
-	result = multipleHyphens.ReplaceAllString(result, "-")
-
-	// 4. Strip leading/trailing hyphens
-	result = strings.Trim(result, "-")
-
-	// 5. Truncate to max DNS label length
-	if len(result) > maxDNSLabelLength {
-		result = result[:maxDNSLabelLength]
-	}
-
-	// 6. Strip trailing hyphen from truncation
-	result = strings.TrimRight(result, "-")
-
-	return result
 }

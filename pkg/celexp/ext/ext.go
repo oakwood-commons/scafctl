@@ -765,6 +765,7 @@ func Custom() celexp.ExtFunctionList {
 		celstrings.CleanFunc(),
 		celstrings.TitleFunc(),
 		celstrings.RepeatFunc(),
+		celstrings.SlugifyFunc(),
 
 		// Time functions
 		celtime.NowFunc(),

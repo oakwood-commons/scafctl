@@ -466,6 +466,14 @@ strings.title("hello world")
 
 strings.title("the quick brown fox")
 // → "The Quick Brown Fox"
+
+// Slugify — DNS-safe label (RFC 1123): lowercase, [a-z0-9-] only,
+// collapsed hyphens, trimmed, truncated to 63 chars
+strings.slugify("My Org! (test)")
+// → "my-org-test"
+
+strings.slugify("My-GitHub_Org.Name")
+// → "my-github-org-name"
 ```
 
 **Use case — normalize identifiers:**
@@ -1020,6 +1028,7 @@ scafctl run resolver -f examples/resolvers/cel-transforms.yaml -o json
 | `sort.objectsDescending(list, prop)` | Sort objects descending |
 | `strings.clean(str)` | Lowercase + remove separators |
 | `strings.title(str)` | Convert to title case |
+| `strings.slugify(str)` | DNS-safe label (RFC 1123) |
 | `time.now()` | Current timestamp |
 | `time.nowFmt(layout)` | Formatted current time |
 
