@@ -353,5 +353,13 @@ func deepCopySolution(sol *solution.Solution) (*solution.Solution, error) {
 		return nil, fmt.Errorf("failed to unmarshal solution copy: %w", err)
 	}
 	cp.SetPath(sol.GetPath())
+	// Preserve the source's original authored bytes. The marshal/unmarshal
+	// round-trip above regenerates rawContent from the typed struct, which
+	// materializes zero-value fields (e.g. an action's empty name) that were
+	// never in the user's file. Schema-lint validates rawContent, so leaving
+	// the round-tripped bytes here produces false-positive violations (e.g.
+	// spec.workflow.actions.name pattern). Restoring the original bytes keeps
+	// lint validating what the user actually wrote.
+	cp.SetRawContent(sol.RawContent())
 	return &cp, nil
 }
