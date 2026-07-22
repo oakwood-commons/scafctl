@@ -97,6 +97,50 @@ and the individual commit messages on the branch are discarded (GitHub uses the
 - The branch still must be signed and DCO signed-off (the checks run on the
   branch commits, and the DCO trailer must survive into the squash).
 
+**The PR body IS the final commit message -- keep it in sync with every commit.**
+The repo is configured with `squash_merge_commit_title=PR_TITLE` and
+`squash_merge_commit_message=PR_BODY`, so the squash commit on `main` is exactly
+the **PR title + PR body** (the per-commit messages are discarded entirely).
+Because the AI cannot amend (`git commit --amend` is denied) and each review
+fix is a **new commit**, a PR routinely accumulates many noisy fix commits --
+none of which reach `main`. The discipline that makes this clean:
+
+- **Whenever a commit changes what the PR does, update the PR body to match.**
+  Treat the PR body as the living commit message. If a review fix changes
+  behavior, flags, or scope, edit the PR body (via `gh pr edit`) in the same
+  step so the eventual squash commit is accurate and complete -- never a stale
+  description of an earlier version.
+- **Before proposing a merge, do a final pass on the PR title and body** so they
+  read as one coherent change (folding in anything that shifted during review),
+  and show them to the user for approval. The messy fix-commit log is invisible
+  on `main`; only the title/body matter.
+
+**Reviewer-loop judgment: know when to stop.** This repo has Copilot configured
+to **re-review on every push** (`review_on_push: true`), so each new commit --
+including every review fix -- triggers a fresh review that may surface new
+threads. To avoid an endless fix -> push -> new-review loop, classify each review
+round:
+
+- **Substantive** (correctness bugs, fail-open/guarantee-defeating logic, silent
+  failures, security, missing error handling, 0%-covered new logic): **fix it**,
+  accept that pushing triggers another review.
+- **Nitpick** (comment wording, naming, doc phrasing, display-only issues,
+  "consider..." suggestions with no behavioral impact, defensive guards for
+  non-existent callers): **do NOT push another fix**. Instead **reply to the
+  thread acknowledging it as a non-blocking nit and resolve it** -- replying and
+  resolving does not create a commit, so it does not trigger a new review.
+- **The stop signal:** when a review round is **all nits** (no substantive
+  findings), state that explicitly with the reasoning, reply-and-resolve the
+  nit threads, and -- once **CI is green AND the PR's `reviewDecision` is not
+  blocking** -- recommend merging. Do not keep pushing. Note that resolving
+  threads does NOT clear a `CHANGES_REQUESTED` review decision on GitHub, and
+  `main` requires an approving review (`required_approving_review_count: 1`,
+  `require_last_push_approval: true`): so if the decision is still
+  `CHANGES_REQUESTED` or `REVIEW_REQUIRED`, the merge stays blocked on green CI
+  alone. In that case say so and ask the user to approve (or request a
+  re-review) rather than implying the PR is mergeable.
+
+
 ### Identity for this worktree
 
 Repos under the `Public/` folder are signed as **alice@example.com** using
