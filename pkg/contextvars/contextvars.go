@@ -9,8 +9,9 @@
 // No other tool in scafctl enumerates these injected variables or the phase in
 // which each is available: list_cel_functions returns functions, and the
 // solution schema describes shape, not the runtime evaluation environment. This
-// package is the single source of truth consumed by both the MCP
-// list_context_variables tool and the "context-variables" concept prose.
+// package backs the MCP list_context_variables tool; the "context-variables"
+// concept in pkg/concepts documents the same knowledge in prose and points
+// clients at this tool (it does not import this package).
 //
 // The canonical variable names are pinned to the celexp.Var* constants where
 // they exist, so the registry cannot silently drift from the names the engine
