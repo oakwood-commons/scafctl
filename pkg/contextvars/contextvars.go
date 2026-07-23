@@ -4,7 +4,7 @@
 // Package contextvars provides a registry of the special "context variables"
 // injected into scafctl CEL and Go-template evaluation (e.g. _, __self, __item,
 // __plan, __execution, __actions, __cwd, __params, __error, and the Go-template
-// .__file* path parts).
+// __file* path parts).
 //
 // No other tool in scafctl enumerates these injected variables or the phase in
 // which each is available: list_cel_functions returns functions, and the
