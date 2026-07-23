@@ -1612,6 +1612,27 @@ than causing a hard "depends on X but X wasn't present" failure), a bare
 force a resolver dependency, reference it via `_.name` in the `data` expression,
 use `{{ ._.name }}` in the template, or add an explicit `dependsOn` entry.
 
+### Optional (Soft) Dependencies via Optional Access
+
+CEL **optional access** on the `_` map -- `_.?name` or `_[?"name"]` -- is treated
+as a **soft** dependency rather than a hard one. It contributes an ordering edge
+when the target exists (so the referenced resolver runs first), but it never
+blocks loading when the target is absent:
+
+| Accessor | Kind | Behavior when target is undefined |
+|----------|------|-----------------------------------|
+| `_.name`, `_["name"]` | Hard | Load fails (`dag.Build`) -- a typo is caught. |
+| `_.?name`, `_[?"name"]` | Optional (soft) | Edge dropped silently; `.orValue()` supplies the fallback at runtime. |
+
+This mirrors the go-template rule above: unknown **optional** targets are dropped
+as best-effort ordering hints instead of failing the build, so
+`_.?missing.orValue("default")` degrades gracefully. A name that is accessed
+**hard anywhere** remains a strict dependency even if it is also accessed
+optionally elsewhere (the hard occurrence dominates), so genuine typos are still
+caught. The `undefined-optional-reference` lint rule surfaces optional references
+to undefined resolvers as INFO findings. To force a hard dependency, use `_.name`
+or add an explicit `dependsOn` entry.
+
 ### Explicit Dependencies (dependsOn)
 
 When dependencies cannot be auto-extracted (e.g., templates loaded from files), use `dependsOn`:

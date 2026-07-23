@@ -106,6 +106,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			    - missing-description  Action/resolver lacks description
 			    - long-timeout        Timeout exceeds recommended maximum
 			    - unused-finally      Finally actions with no regular actions
+			    - undefined-optional-reference  Optional CEL ref (_.?name) targets an undefined resolver
 
 			SOME OUTPUT FORMATS:
 			  table   Human-readable bordered table

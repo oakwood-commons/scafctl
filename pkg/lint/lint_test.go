@@ -693,6 +693,164 @@ func TestLintEmptyValidateWith(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "empty")
 }
 
+func TestLintUndefinedOptionalReference(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	celProv := newFakeProvider("cel", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+	_ = reg.Register(celProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"profile": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "p"}},
+						}},
+					},
+				},
+				"app": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							// Optional reference to a defined resolver (profile) must not be
+							// flagged; optional reference to an undefined resolver (missing)
+							// must produce a single INFO finding.
+							Inputs: map[string]*spec.ValueRef{
+								"expression": {Expr: exprPtr(`_.?profile.orValue("") + _.?missing.orValue("")`)},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "undefined-optional-reference")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityInfo, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "missing")
+	assert.NotContains(t, findings[0].Message, "profile")
+}
+
+func TestLintUndefinedOptionalReference_HardRefNotFlagged(t *testing.T) {
+	// A hard reference to a defined resolver must never produce an
+	// undefined-optional-reference finding.
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	celProv := newFakeProvider("cel", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+	_ = reg.Register(celProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"profile": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "p"}},
+						}},
+					},
+				},
+				"app": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs: map[string]*spec.ValueRef{
+								"expression": {Expr: exprPtr(`_.profile`)},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "undefined-optional-reference")
+	assert.Empty(t, findings)
+}
+
+func TestLintUndefinedOptionalReference_InjectedKeyNotFlagged(t *testing.T) {
+	// Optional access to an injected context key (e.g. __plan) reachable through
+	// the `_` map must not be reported as an undefined resolver.
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	celProv := newFakeProvider("cel", map[string]*jsonschema.Schema{
+		"expression": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+	_ = reg.Register(celProv)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"app": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "cel",
+							Inputs: map[string]*spec.ValueRef{
+								"expression": {Expr: exprPtr(`_[?"__plan"].orValue({})`)},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "undefined-optional-reference")
+	assert.Empty(t, findings)
+}
+
+func TestLintUndefinedOptionalReference_NoResolvers(t *testing.T) {
+	// A solution with no spec.resolvers block must still have optional
+	// references (here in a workflow action's `when` condition) checked
+	// against the empty defined set, so an undefined optional reference is
+	// reported instead of being silently skipped.
+	reg := provider.NewRegistry()
+	whenExpr := celexp.Expression(`_.?missing.orValue(false)`)
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Workflow: &action.Workflow{
+				Actions: map[string]*action.Action{
+					"main": {
+						Name:        "main",
+						Description: "main action",
+						When:        &spec.Condition{Expr: &whenExpr},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+
+	findings := filterFindingsByRule(result, "undefined-optional-reference")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityInfo, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "missing")
+}
+
 func TestLintNonValidationProvider(t *testing.T) {
 	// "static" has CapabilityFrom, not CapabilityValidation
 	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{

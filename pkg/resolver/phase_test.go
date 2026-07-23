@@ -988,6 +988,23 @@ func TestBuildPhases_KeepsUnknownStrictDeps(t *testing.T) {
 				},
 			},
 		},
+		{
+			// Hard access dominates: a name accessed with hard syntax must fail
+			// fast when undefined even if the same name is also accessed
+			// optionally in a sibling expression.
+			name: "hard reference dominates optional access to same undefined name",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"expression": {Expr: exprPtr(`_.missing + _.?missing.orValue("")`)},
+						},
+					}},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -997,6 +1014,84 @@ func TestBuildPhases_KeepsUnknownStrictDeps(t *testing.T) {
 			assert.Contains(t, err.Error(), "missing")
 		})
 	}
+}
+
+func TestBuildPhases_DropsUnknownOptionalDeps(t *testing.T) {
+	// An optional CEL reference (_.?name / _[?"name"]) to a resolver that is not
+	// defined must NOT hard-fail phase building. Optional access signals the
+	// author tolerates the value being absent (typically paired with .orValue),
+	// so an unknown optional target is a soft edge and is dropped rather than
+	// producing a "depends on X but X wasn't present" DAG error.
+	tests := []struct {
+		name     string
+		resolver *Resolver
+	}{
+		{
+			name: "optional select to unknown target",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"expression": {Expr: exprPtr(`_.?missing.orValue("fallback")`)},
+						},
+					}},
+				},
+			},
+		},
+		{
+			name: "optional index to unknown target",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"expression": {Expr: exprPtr(`_[?"missing"].orValue("fallback")`)},
+						},
+					}},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := BuildPhases([]*Resolver{tt.resolver}, nil)
+			require.NoError(t, err)
+			require.Len(t, result.Phases, 1)
+			assert.Equal(t, 1, result.Phases[0].Phase)
+			assert.Len(t, result.Phases[0].Resolvers, 1)
+		})
+	}
+}
+
+func TestBuildPhases_KeepsKnownOptionalDeps(t *testing.T) {
+	// An optional CEL reference to an existing resolver is retained as an
+	// ordering edge: the target is not required to exist, but when it does the
+	// dependent resolver must run after it so the optional value is available.
+	resolvers := []*Resolver{
+		{
+			Name: "app",
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{{
+					Provider: "cel",
+					Inputs: map[string]*ValueRef{
+						"expression": {Expr: exprPtr(`_.?profile.orValue("")`)},
+					},
+				}},
+			},
+		},
+		{Name: "profile"},
+	}
+
+	result, err := BuildPhases(resolvers, nil)
+	require.NoError(t, err)
+	require.Len(t, result.Phases, 2)
+	// profile has no deps -> phase 1; app optionally depends on profile -> phase 2.
+	assert.Equal(t, "profile", result.Phases[0].Resolvers[0].Name)
+	assert.Equal(t, "app", result.Phases[1].Resolvers[0].Name)
 }
 
 func TestExtractStrictDependencies(t *testing.T) {
@@ -1109,6 +1204,37 @@ func TestExtractStrictDependencies(t *testing.T) {
 				},
 			},
 			want: nil,
+		},
+		{
+			name: "optional cel reference is not strict",
+			resolver: &Resolver{
+				Name: "app",
+				When: &Condition{Expr: exprPtr(`_.?gate.orValue(false)`)},
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"expr": {Expr: exprPtr(`_.?platformProfileID.orValue("")`)},
+						},
+					}},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "hard reference is strict even when name also appears optionally",
+			resolver: &Resolver{
+				Name: "app",
+				Resolve: &ResolvePhase{
+					With: []ProviderSource{{
+						Provider: "cel",
+						Inputs: map[string]*ValueRef{
+							"expr": {Expr: exprPtr(`_.?opt.orValue("") + _.hard`)},
+						},
+					}},
+				},
+			},
+			want: []string{"hard"},
 		},
 		{
 			name: "self reference is excluded",

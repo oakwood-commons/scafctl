@@ -206,6 +206,14 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "Actions with invalid dependencies cannot be scheduled for execution. This usually indicates a typo in the action name.",
 		Fix:         "Check the action names in spec.workflow.actions and ensure all dependsOn references match exactly. Names are case-sensitive.",
 	},
+	"undefined-optional-reference": {
+		Rule:        "undefined-optional-reference",
+		Severity:    string(SeverityInfo),
+		Category:    "dependency",
+		Description: "An optional CEL reference (_.?name or _[?\"name\"]) targets a resolver that is not defined.",
+		Why:         "Optional access never blocks loading -- the value simply resolves to absent -- so a typo in an optional reference passes silently and the fallback is always used. This surfaces the undefined target without failing the lint.",
+		Fix:         "Define a resolver with the referenced name, or remove the optional reference if the value is intentionally always absent.",
+	},
 	"empty-workflow": {
 		Rule:        "empty-workflow",
 		Severity:    string(SeverityWarning),
