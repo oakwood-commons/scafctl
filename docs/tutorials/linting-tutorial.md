@@ -961,7 +961,7 @@ gracefully so it can report the full picture.
 
 For more details:
 
-{{< tabs "linting-tutorial-cmd-14" >}}
+{{< tabs "linting-tutorial-cmd-15" >}}
 {{% tab "Bash" %}}
 ```bash
 scafctl lint rule resolver-undefined-dependency

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -339,6 +340,37 @@ func TestFromLocalFileSystem(t *testing.T) {
 		assert.Equal(t, solution.DefaultAPIVersion, sol.APIVersion)
 		assert.Equal(t, solution.SolutionKind, sol.Kind)
 		assert.Equal(t, "private", sol.Catalog.Visibility)
+	})
+
+	t.Run("source map records the file path", func(t *testing.T) {
+		// The path must be set before unmarshalling so the source map built
+		// during parsing records the correct file in finding positions.
+		yamlSol := "apiVersion: scafctl.io/v1\n" +
+			"kind: Solution\n" +
+			"metadata:\n" +
+			"  name: test-solution\n" +
+			"  version: 1.0.0\n"
+		customReadFile := func(name string) ([]byte, error) {
+			return []byte(yamlSol), nil
+		}
+
+		getter := NewGetter(WithReadFile(customReadFile))
+		ctx := context.Background()
+
+		sol, err := getter.FromLocalFileSystem(ctx, "my-solution.yaml")
+		require.NoError(t, err)
+		require.NotNil(t, sol)
+
+		sm := sol.SourceMap()
+		require.NotNil(t, sm)
+		require.Positive(t, sm.Len())
+		pos, ok := sm.Get("metadata.name")
+		require.True(t, ok)
+		// The path is resolved to an absolute path before unmarshalling, so
+		// the recorded file must be non-empty and reference the solution file.
+		assert.NotEmpty(t, pos.File)
+		assert.True(t, strings.HasSuffix(pos.File, "my-solution.yaml"),
+			"expected source file to end with my-solution.yaml, got %q", pos.File)
 	})
 
 	t.Run("validation failure", func(t *testing.T) {

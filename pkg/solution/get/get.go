@@ -749,6 +749,9 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 	o.logger.V(1).Info("Unmarshalling solution data", "path", path, "size", len(data))
 
 	sol := solution.Solution{}
+	// Set the path before loadBytes so the source map built during
+	// unmarshalling records the correct file in finding positions.
+	sol.SetPath(path)
 	err = o.loadBytes(&sol, data)
 	if err != nil {
 		o.logger.Error(err, "Failed to unmarshal solution", "path", path)
@@ -756,7 +759,6 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 	}
 
 	o.logger.V(1).Info("Successfully loaded solution from local filesystem", "path", path)
-	sol.SetPath(path)
 
 	// Apply compose if the solution references composed files
 	if len(sol.Compose) > 0 {
@@ -823,6 +825,9 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 	o.logger.V(1).Info("Unmarshalling solution data", "url", url, "size", len(data))
 
 	sol := solution.Solution{}
+	// Set the path before loadBytes so the source map built during
+	// unmarshalling records the correct source in finding positions.
+	sol.SetPath(url)
 	err = o.loadBytes(&sol, data)
 	if err != nil {
 		o.logger.Error(err, "Failed to unmarshal solution", "url", url)
@@ -830,7 +835,6 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 	}
 
 	o.logger.Info("Successfully loaded solution from URL", "url", url)
-	sol.SetPath(url)
 	return &sol, nil
 }
 

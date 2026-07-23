@@ -808,10 +808,13 @@ func lintResolverDependencies(sol *solution.Solution, result *Result) {
 		return
 	}
 
-	// Build the set of defined resolver names once.
+	// Build the set of defined resolver names once. A null resolver value is
+	// not a valid dependsOn target (strict validation rejects it and execution
+	// fails), so it does not count as "defined" for dependency resolution — a
+	// dependsOn reference to it is reported as undefined below.
 	defined := make(map[string]bool, len(sol.Spec.Resolvers))
-	for name := range sol.Spec.Resolvers {
-		defined[name] = true
+	for name, res := range sol.Spec.Resolvers {
+		defined[name] = res != nil
 	}
 
 	// Iterate in sorted order so findings are emitted deterministically.

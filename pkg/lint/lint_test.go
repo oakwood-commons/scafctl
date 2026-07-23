@@ -944,6 +944,39 @@ func TestLintResolverUndefinedDependency_NilResolver(t *testing.T) {
 	assert.Empty(t, findings)
 }
 
+func TestLintResolverUndefinedDependency_NilTargetFlagged(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	// A dependsOn reference to a resolver whose value is null must be flagged:
+	// a null resolver is not a valid dependency target and execution fails.
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"nilResolver": nil,
+				"app": {
+					DependsOn: []string{"nilResolver"},
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "a"}},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "resolver-undefined-dependency")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "nilResolver")
+}
+
 func TestLintNonValidationProvider(t *testing.T) {
 	// "static" has CapabilityFrom, not CapabilityValidation
 	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
