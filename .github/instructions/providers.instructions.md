@@ -24,6 +24,7 @@ Implement both methods:
 - Always include benchmark tests (`*_benchmark_test.go`)
 - Register in `pkg/provider/builtin/builtin.go`
 - Add struct tags with Huma validation on all Descriptor fields
+- Verify provider names and input/output schemas against the live catalog with the MCP tools `list_providers` / `list_official_providers` / `get_provider_schema` (rebuild the server first if you just changed a provider) rather than a hand-maintained list
 
 ## Package naming
 

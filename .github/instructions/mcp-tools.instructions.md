@@ -16,3 +16,13 @@ MCP tool handlers are **thin wrappers** -- they parse tool inputs, call domain p
 - Return `mcp.NewToolResultText()` or `mcp.NewToolResultError()` -- never panic
 - Always add Huma-style parameter descriptions and constraints
 - Tool descriptions and server name must use the configured binary name (`s.name`), not hardcoded "scafctl"
+
+## Before Adding a Tool
+
+Confirm the capability is not already covered. The server already exposes broad
+reference tools -- `explain_concepts`, `explain_kind`, `get_solution_schema`,
+`list_providers` / `get_provider_schema`, `list_cel_functions` /
+`list_go_template_functions`, `list_lint_rules` / `explain_lint_rule`, and
+`list_context_variables`. If a new tool would surface spec / CEL / template /
+provider knowledge, prefer extending or pointing at those existing tools over a
+bespoke handler.
