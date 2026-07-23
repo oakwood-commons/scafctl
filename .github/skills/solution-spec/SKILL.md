@@ -5,6 +5,13 @@ description: "Solution YAML specification reference for scafctl. Schema, resolve
 
 # Solution Spec Reference
 
+> The authoritative field schema is not duplicated here. For the exact, version-accurate
+> structure of a solution, resolver, action, or workflow, call the MCP tools
+> **`get_solution_schema`** and **`explain_kind`** (kinds: solution, resolver, action,
+> workflow, spec, provider, schema, retry). Scaffold a valid starting point with
+> **`scaffold_solution`** and validate with **`lint_solution`**. This skill covers the
+> runtime semantics and authoring judgment those tools do not encode.
+
 ## Top-Level Structure
 
 ```yaml
@@ -15,20 +22,8 @@ metadata:
   version: 1.0.0             # Semver
   displayName: My Solution
   description: Short description
-  category: infrastructure
-  tags: [go, cloud]
-  maintainers:
-    - name: Team
-      email: team@example.com
-  links:
-    - name: Docs
-      url: https://example.com
-  icon: https://example.com/icon.png
-  banner: https://example.com/banner.png
 catalog:
   visibility: public         # public | private | internal
-  beta: false
-  disabled: false
 spec:
   resolvers: {}              # map[string]*Resolver
   workflow: {}               # Optional action workflow
@@ -37,126 +32,104 @@ spec:
 
 ## Resolver Structure
 
-Resolvers are the DAG nodes. Map keys are resolver names (DNS-safe).
+Resolvers are the DAG nodes. Map keys are resolver names (DNS-safe). Each has up
+to three phases, each a `with:` list of provider steps.
 
 ```yaml
 spec:
   resolvers:
-    my-resolver:
+    myResolver:
       description: What this resolver does
       type: string           # string|int|float|bool|array|object|time|duration|any
       sensitive: false       # Redact from logs/output
       when: "_.some_flag"    # CEL condition -- skip if false
-      dependsOn: [other]     # Explicit deps (rarely needed — auto-inferred from expr/rslvr/tmpl refs)
+      dependsOn: [other]     # Explicit deps (rarely needed -- auto-inferred)
       timeout: 30s
-      example: "sample"
 
-      # Phase 1: Resolve -- get the value
+      # Phase 1: Resolve -- get the value (first non-null step wins)
       resolve:
-        - provider: parameter  # Provider name
-          with:                # Provider inputs (ValueRef format)
-            prompt: "Enter name"
-            default: "world"
-        - provider: env        # Fallback chain -- first non-null wins
-          with:
-            name: MY_ENV_VAR
-          until: "_ != ''"     # Stop condition (CEL)
+        # 'until' is a peer of 'with' (a CEL condition; __self = candidate).
+        until:
+          expr: "__self != ''"
+        with:
+          - provider: parameter
+            inputs:
+              key: "name"
+              default: "world"
+          - provider: env       # Fallback chain -- first non-null wins
+            inputs:
+              name: MY_ENV_VAR
 
       # Phase 2: Transform -- reshape the value
       transform:
-        - provider: cel
-          with:
-            expression: "_.upperAscii()"
-        - provider: gotmpl
-          with:
-            template: "prefix-{{.}}"
+        with:
+          - provider: cel
+            inputs:
+              expression: "__self.upperAscii()"
 
       # Phase 3: Validate -- check the value
       validate:
-        - provider: validation
-          with:
-            rules:
-              - expr: "size(_) > 0"
-                message: "Must not be empty"
+        with:
+          - provider: validation
+            inputs:
+              expression: "size(__self) > 0"
+              message: "Must not be empty"
 
       messages:
         error: "Failed to resolve {{.name}}"  # Go template
 ```
 
-### Phase Execution Order
+Verify exact field names and types with `get_solution_schema` /
+`explain_kind resolver`.
 
-1. **Resolve**: Providers execute in order. First non-null result wins (`until:` controls early stop).
-2. **Transform**: Applied sequentially. `__self` is the current value. Supports `forEach` for array iteration.
-3. **Validate**: All rules checked. Resolver fails if any validation fails.
+### Phase Execution Order (runtime semantics)
+
+For the full behavioral detail see `explain_concepts name=phase-execution`:
+
+1. **Resolve**: `with:` steps run in order; the **first successful/non-null**
+   result wins and stops the chain. A failing step falls through to the next
+   (fallback chain). `until:` (which can read `__self`) can stop earlier.
+2. **Transform**: steps run **sequentially**, each seeing the prior value via
+   `__self`. Transform defaults to fatal-on-error.
+3. **Validate**: all inline rules are evaluated and failures aggregated;
+   validation is **non-fatal by default** (value still returned, dependents
+   still run). Rules referencing only `__self` run inline; rules referencing
+   another resolver (`_.other`) are deferred and do NOT add DAG edges.
 
 ### forEach (Resolve and Transform Steps)
 
-`forEach` is supported on both `resolve.with` and `transform.with` steps. It is NOT supported on `validate.with`.
-
-**Key difference**: On resolve steps, `forEach.in` is **required** (no `__self` available). On transform steps, `forEach.in` defaults to `__self`.
-
-```yaml
-# Resolve: fan-out HTTP requests directly
-resolve:
-  with:
-    - provider: http
-      forEach:
-        in:             # required on resolve (no __self)
-          rslvr: moduleList
-        item: mod
-        concurrency: 10
-      inputs:
-        url:
-          expr: 'mod.url'
-
-# Transform: double each number
-transform:
-  with:
-    - provider: cel
-      forEach:
-        item: num       # alias for __item (current element)
-        index: i        # alias for __index (current 0-based index)
-      inputs:
-        expression: "num * 2"
-```
-
-**Fields**: `item`, `index`, `in` (ValueRef; required on resolve, defaults to `__self` on transform), `concurrency` (int), `keepSkipped` (bool), `onError` (actions only: `fail`|`continue`).
-
-**Context variables**: `__item` and `__index` are always injected. Custom aliases (`item`, `index` fields) are added alongside them.
+`forEach` is supported on `resolve.with` and `transform.with` (not `validate`).
+On resolve, `forEach.in` is **required** (there is no resolved value to iterate
+yet); on transform it defaults to `__self`. `__item`/`__index` are injected;
+custom `item`/`index` aliases are added alongside. See `explain_concepts name=foreach`
+and `list_context_variables phase=forEach`.
 
 ### Dependency Resolution (DAG)
 
-Dependencies are extracted automatically from:
-- CEL expressions: `_.resolverName` and `_["resolverName"]` references
-- Resolver references: `rslvr: resolverName` in ValueRef inputs
-- Go templates: `{{.resolverName}}` references
-- Explicit `dependsOn` list (merged with auto-inferred deps)
-
-**Important**: `dependsOn` is usually unnecessary because dependencies are auto-inferred from value references. Only add explicit `dependsOn` when a resolver must run after another but does NOT reference its value (pure ordering dependency).
-
-The executor builds a DAG, topologically sorts into phases, then executes phases sequentially with concurrent execution within each phase.
+Dependencies are auto-inferred from value references -- CEL `_.name`, `rslvr:`
+inputs, and `{{ .name }}` template accessors -- plus any explicit `dependsOn`.
+Use `extract_resolver_refs` to see what a given expression/template infers. Only
+add `dependsOn` for pure ordering with no value reference. The executor topo-sorts
+the DAG into phases and runs each phase's nodes concurrently.
 
 ## ValueRef Format
 
-Used everywhere a value can be dynamic (resolver inputs, action inputs, messages):
+Used anywhere a value can be dynamic (resolver inputs, action inputs, messages):
 
 | Format | YAML | When to Use |
 |--------|------|-------------|
-| Literal | `key: value` | Static values |
-| Resolver | `key: {rslvr: resolver-name}` | Reference another resolver's output |
-| CEL | `key: {expr: "_.field.upperAscii()"}` | Dynamic computation |
-| Go Template | `key: {tmpl: "Hello {{.name}}"}` | Text rendering with template logic |
+| Literal | `key: value` | Static values known at authoring time |
+| Resolver | `key: {rslvr: resolver-name}` | Another resolver's raw output |
+| CEL | `key: {expr: "_.field.upperAscii()"}` | Data manipulation, conditionals, coercion |
+| Go Template | `key: {tmpl: "Hello {{.name}}"}` | Text rendering, multi-line, file content |
 
-### Decision Guide
-
-- **Literal**: When the value is known at authoring time
-- **Resolver ref** (`rslvr`): When you need another resolver's raw output
-- **CEL** (`expr`): Data manipulation, conditionals, type coercion, list/map operations
-- **Go Template** (`tmpl`): Text rendering, multi-line output, file content generation
+**Decision guide**: literal for static; `rslvr` for a raw value; `expr` for data
+logic; `tmpl` for text. (CEL for data, templates for text.)
 
 ## Action Workflow
 
-Actions execute after all resolvers complete. They form their own DAG.
+Actions execute after all resolvers complete and form their own DAG. Verify the
+exact shape with `explain_kind workflow` / `explain_kind action`.
 
 ```yaml
 spec:
@@ -168,60 +141,51 @@ spec:
         inputs:
           source: {rslvr: templates-dir}
           destination: {expr: "_.output_path"}
-        dependsOn: []
         when: "_.enabled"         # CEL condition
-        continueOnError: false    # bool or CEL (truthy continues, falsy fails); replaces deprecated onError
+        continueOnError: false    # bool or CEL; replaces deprecated onError
         timeout: 30s
         exclusive: [other-write]  # Mutual exclusion
         retry:
           maxAttempts: 3
           backoff: exponential
-        forEach:
-          source: "_.items"       # CEL expression returning array
-          item: __item            # Variable name for current item
 ```
 
 ### Action-Specific Context
 
-- `__actions`: Map of completed action results (keyed by action name)
-- Each action result has: `success` (bool), plus provider-specific fields
+Actions get extra context variables not available to resolvers: `__actions`
+(completed action results), `__execution` (resolver execution metadata), and
+`__cwd`. In actions, `__error` is a structured map (`__error.message`,
+`__error.statusCode`, `__error.type`, `__error.exitCode`, `__error.attempt`,
+`__error.maxAttempts`). See `list_context_variables phase=action`.
 
 ## Testing
 
-Solutions support functional tests via a separate `tests.yaml` composed into the solution:
+Solutions support functional tests under `spec.testing.cases` (a **map** keyed
+by test name -- not a sequence). Scaffold with `generate_test_scaffold`, run with
+`run_solution_tests`, and see `explain_concepts name=functional-testing`.
 
 ```yaml
-# tests.yaml
-apiVersion: scafctl.io/v1
-kind: Tests
-tests:
-  - name: basic-test
-    command: run solution
-    args: [-f, ./cldctl/solution.yaml]
-    inputs:
-      resolver-name: test-value
-    assertions:
-      - expr: "__output.resolver_name == 'expected'"
-    files:
-      - path: output/file.txt
-        contains: "expected content"
-    exitCode: 0
+spec:
+  testing:
+    cases:
+      basic-test:
+        description: basic run
+        command: [run, solution]
+        assertions:
+          - expression: "__exitCode == 0"
 ```
-
-Compose into solution: `compose: [tests.yaml]`
 
 ### Snapshot masking (golden baselines)
 
-A test case with `snapshot: <path>` compares against a golden file. Built-in
-presets (`timestamp`, `uuid`, `sandbox`) are always normalized. Declare `masks`
-to normalize other volatile values; set `snapshotSource: files` to snapshot the
-tree of rendered files instead of stdout:
+See `explain_concepts name=snapshot-masking` for the full model. Built-in presets
+(`timestamp`, `uuid`, `sandbox`) are on by default; declare `masks` to normalize
+other volatile values; `snapshotSource: files` snapshots the rendered tree.
 
 ```yaml
 cases:
   golden-render:
+    description: renders with volatile ids masked
     command: [run, solution]
-    snapshot: testdata/snapshots/rendered.txt
     snapshotSource: files          # stdout (default) | files
     masks:
       - name: entra-group          # custom regex mask
@@ -233,34 +197,14 @@ cases:
         disabled: true
 ```
 
-Any declared mask makes the test report a relaxed status (`PASS*`) with a
-per-mask match count. Regenerate golden files with `--update-snapshots`.
+Any declared mask makes the test report a relaxed status (`PASS*`). Regenerate
+golden files with `--update-snapshots`.
 
 ## Built-in Providers
 
-| Provider | Capability | Purpose |
-|----------|-----------|---------|
-| parameter | from | Interactive user prompts |
-| env | from | Environment variables |
-| static | from | Hardcoded values |
-| file | from | Read file contents |
-| exec | from | Run external commands |
-| shell | from | Shell command execution |
-| http | from | HTTP requests |
-| git | from | Git operations |
-| github | from | GitHub API |
-| secret | from | Secret management |
-| identity | from | Auth identity tokens |
-| metadata | from | Solution metadata access |
-| solution | from | Cross-solution references |
-| cel | transform | CEL expression evaluation |
-| gotmpl | transform | Go template rendering |
-| hcl | transform | HCL format conversion |
-| validation | validation | Rule-based validation |
-| message | action | User-facing messages |
-| directory | action | Directory/file operations |
-| debug | from | Debug output |
-| sleep | from | Delay execution |
+For the list of built-in and official providers and their capabilities, call the
+MCP tool **`list_providers`** (and `get_provider_schema` for a provider's I/O).
+This is authoritative and version-accurate.
 
 ## Key Types (pkg/spec/)
 
@@ -268,7 +212,7 @@ per-mask match count. Regenerate golden files with `--update-snapshots`.
 - `Resolver`: Name, Type, Phases (Resolve/Transform/Validate), When, DependsOn
 - `ValueRef`: Literal | Resolver | Expr | Tmpl
 - `Workflow`: Actions map, ResultSchemaMode
-- `Action`: Provider, Inputs, DependsOn, When, OnError, Retry, ForEach
+- `Action`: Provider, Inputs, DependsOn, When, ContinueOnError, Retry, ForEach
 
 ## Key Packages
 
@@ -277,3 +221,10 @@ per-mask match count. Regenerate golden files with `--update-snapshots`.
 - `pkg/resolver/`: DAG building, phase execution, dependency extraction
 - `pkg/action/`: Action workflow execution
 - `pkg/provider/`: Provider interface and registry
+
+## See Also
+
+- MCP tools: `get_solution_schema`, `explain_kind`, `scaffold_solution`,
+  `lint_solution`, `list_providers`, `run_solution_tests`, `extract_resolver_refs`.
+- Concepts (`explain_concepts name=<...>`): `phase-execution`, `snapshot-masking`,
+  `context-variables`, `authoring-workflow`.
