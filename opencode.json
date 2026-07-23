@@ -5,6 +5,9 @@
     ".github/copilot-instructions.md",
     ".github/instructions/*.instructions.md"
   ],
+  "skills": {
+    "paths": [".github/skills"]
+  },
   "plugin": [
     "opencode-vibeguard",
     "opencode-notify",

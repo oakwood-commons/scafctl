@@ -236,19 +236,10 @@ func (m *mockOps) DoThing(_ context.Context, _ string) (string, error) {
 
 ## Existing Providers Reference
 
-| Provider | Package | Capability | Key Pattern |
-|----------|---------|-----------|-------------|
-| parameter | parameterprovider | from | Interactive prompts via terminal |
-| env | envprovider | from | Env var reading with expand option |
-| static | staticprovider | from | Pass-through literal values |
-| file | fileprovider | from | File I/O with encoding options |
-| exec | execprovider | from | Command execution with expand |
-| http | httpprovider | from | HTTP client with auth support |
-| cel | celprovider | transform | CEL expression evaluation |
-| gotmpl | gotmplprovider | transform | Go template rendering |
-| validation | validationprovider | validation | Rule-based input validation |
-| directory | directoryprovider | action | File/directory operations |
-| message | messageprovider | action | Terminal output messages |
+To see the built-in and official providers (names, capabilities, categories),
+call the MCP tool **`list_providers`**, and **`get_provider_schema`** for a
+specific provider's input/output schema. This is the authoritative, version-accurate
+source -- a hand-maintained table here would drift out of sync.
 
 ## Key Packages
 
