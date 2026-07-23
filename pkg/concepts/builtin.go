@@ -167,7 +167,7 @@ Use list_cel_functions to see all available CEL functions and evaluate_cel to te
 When forEach is present, the provider executes once per element and results are collected into an output array preserving order.
 
 Key difference between phases:
-- On resolve steps, forEach.in is REQUIRED (no __self available in resolve phase).
+- On resolve steps, forEach.in is REQUIRED (there is no resolved __self value to iterate yet).
 - On transform steps, forEach.in defaults to __self (the current value).
 
 Fields:
@@ -366,5 +366,137 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 			"# Enable state with file backend; parameters replay automatically\nstate:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \"my-app-state.json\"\n\nspec:\n  resolvers:\n    # Locked after the first run -- value is saved and verified on later runs\n    deployment_id:\n      type: string\n      immutable: true\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"deployment_id\"\n    # Mutable -- replayed from saved parameters, overridable via -r\n    region:\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"region\"\n          - provider: static\n            inputs:\n              value: \"us-west-2\"",
 		},
 		SeeAlso: []string{"resolver", "provider", "cel-expression"},
+	},
+	// --- Context / authoring ---
+	{
+		Name:     "context-variables",
+		Title:    "Context Variables",
+		Category: "context",
+		Summary:  "The special variables injected into CEL and Go-template evaluation (_, __self, __item, __plan, __execution, __actions, __cwd, __params, __error, and the Go-template __file* path parts) and the phase each is available in.",
+		Explanation: `Beyond the CEL and template functions, scafctl injects a set of *context variables* into expression evaluation. Which variables exist depends on the phase — a variable available in an action is not necessarily available in a resolver. No function list covers these; use the 'list_context_variables' tool for the full, machine-readable matrix (optionally filtered by phase).
+
+**CEL context variables**
+- **_** — map of resolved resolver values (_.region). Available in resolve inputs/when, transform, validate, and action when/inputs. Referencing _.other also creates an implicit dependency edge.
+- **__self** — the current resolver's in-progress value: the resolved value in transform, the final value in validate, and the current candidate value in a resolve-phase 'until' condition. Not available in a plain resolve provider input.
+- **__item / __index** — the current element / zero-based index inside a forEach iteration (resolve or transform).
+- **__plan** — pre-execution resolver topology injected before any resolver runs, so a resolver's when/inputs can read __plan["name"].phase, .dependsOn, and .dependencyCount.
+- **__execution** — resolver execution metadata available to ACTIONS: __execution.resolvers.<name>.status/phase/duration and __execution.summary.
+- **__actions** — results of completed actions, available to downstream ACTIONS: __actions.<name>.results and .status.
+- **__cwd** — the original working directory, available in ACTIONS ONLY (useful when --output-dir redirects action output). Not injected into resolvers.
+- **__params** — raw CLI parameters (-r key=value), available in STATE BACKEND input expressions only. Unlike _ (resolver outputs), __params always holds the raw parameters.
+- **__error** — the error bound in failure contexts (continueOnError conditions and messages.error). Its shape is context-dependent: in RESOLVER contexts it is a string (__error.contains("...")); in ACTION contexts it is a structured map with message, type, statusCode, exitCode, attempt, and maxAttempts (e.g. __error.message.contains("..."), __error.statusCode == 503, or __error.type == "exec").
+
+**Go-template availability** — most of these (_, __self, __item, __index, __actions, __cwd, __execution) are injected into BOTH CEL and Go-template evaluation, so {{ ._.region }}, {{ .__self }}, and {{ .__item }} also work. __plan, __params, and __error are CEL-only; the __file* path parts below are Go-template only.
+
+**Go-template file-generation variables** (available in the file provider's outputPath during directory -> render-tree -> write-tree generation): __filePath, __fileName, __fileStem, __fileExtension, __fileDir -- injected without a leading dot and accessed in templates as {{ .__fileStem }} etc., used to rename or restructure output files (e.g. strip a .tpl suffix).
+
+Decision guide: prefer _.other to reference another resolver (it also wires the dependency); use __self only to talk about the value currently being built.`,
+		Examples: []string{
+			"# __self in a transform, __plan in a resolver when\nresolvers:\n  name:\n    resolve:\n      with:\n        - provider: parameter\n          inputs: { name: name }\n    transform:\n      with:\n        - provider: cel\n          inputs: { expression: \"__self.trim()\" }\n  gated:\n    when: '__plan[\"name\"].phase == 1'\n    resolve:\n      with:\n        - provider: static\n          inputs: { value: ok }",
+		},
+		SeeAlso: []string{"cel-expression", "resolver", "action", "foreach", "go-template-provider"},
+	},
+	{
+		Name:     "phase-execution",
+		Title:    "Resolver Phase Execution",
+		Category: "context",
+		Summary:  "How the resolve, transform, and validate phases actually execute at runtime — ordering, fallback, and fatality — which the schema shape does not describe.",
+		Explanation: `A resolver runs up to three phases with distinct runtime behavior:
+
+**resolve** — the 'with' steps are tried in order and the FIRST step that produces a value wins and stops the chain; a step that fails is treated as a fallback and evaluation continues to the next step. An optional 'until' condition (which can read __self) can stop earlier. This makes 'with' a fallback chain: parameter first, static default last.
+
+**transform** — steps run SEQUENTIALLY, each seeing the previous value via __self. Transform steps default to FAIL on error (a broken transform is fatal to that resolver).
+
+**validate** — all inline rules are evaluated and their failures are AGGREGATED (you see every failure, not just the first). Validation is NON-FATAL by default: the value is still returned and dependents still run, with failures reported as diagnostics. Rules that reference only the owning resolver (via __self) run inline; rules that reference another resolver (via _.other) are deferred until after all resolvers resolve and do NOT add edges to the resolution DAG (so two resolvers can validate against each other without a false cycle).
+
+**forEach** — 'in' is required on a resolve step but defaults to __self on a transform step; the body runs once per element with __item and __index bound.
+
+**DAG** — resolvers are topologically sorted into phases from explicit dependsOn plus implicit CEL/template references; cycles in resolve/transform/when are rejected at lint.`,
+		Examples: []string{
+			"# resolve = first-success fallback chain; static default is the floor\nresolvers:\n  region:\n    resolve:\n      with:\n        - provider: parameter\n          inputs: { name: region }\n        - provider: static\n          inputs: { value: us-east-1 }",
+		},
+		SeeAlso: []string{"resolver", "foreach", "dag", "cel-expression"},
+	},
+	{
+		Name:     "cel-cost-model",
+		Title:    "CEL Cost Model",
+		Category: "context",
+		Summary:  "How scafctl bounds CEL evaluation cost, the per-solution override, and the anti-patterns that blow the budget.",
+		Explanation: `Every CEL expression is evaluated under a cost limit to guard against runaway or malicious expressions. The default limit is 1,000,000 cost units. When an expression exceeds the limit, evaluation fails with a diagnostic showing the actual cost versus the limit.
+
+**Overriding** — a solution may raise or lower its own limit via spec.options.cel.costLimit (0 = use the global default). The EFFECTIVE limit is min(solution, global): a solution can lower the ceiling but cannot exceed the operator-configured global. When global limiting is disabled (global = 0), solution overrides are ignored.
+
+**Anti-patterns** (conceptual — cost grows with data size):
+- Nested comprehensions over large lists (list.filter(...).map(...) where both are large) are roughly O(n*m); narrow the list before joining.
+- Repeated re-computation of the same sub-expression; use cel.bind to compute once.
+
+Keep expressions small and push heavy shaping into transform steps or dedicated resolvers. See 'list_cel_functions' for the available functions.`,
+		Examples: []string{
+			"spec:\n  options:\n    cel:\n      costLimit: 2000000\n  resolvers:\n    example:\n      resolve:\n        with:\n          - provider: cel\n            inputs: { expression: \"_.items.filter(i, i.active).size()\" }",
+		},
+		SeeAlso: []string{"cel-expression", "authoring-workflow"},
+	},
+	{
+		Name:     "template-dependency-inference",
+		Title:    "Go-Template Dependency Inference",
+		Category: "context",
+		Summary:  "How scafctl decides whether a Go-template accessor is a resolver reference, a data-input key, or a forEach alias — and why unknown accessors silently render empty.",
+		Explanation: `A Go template's root namespace is the UNION of three sources:
+
+1. Resolver values — every resolver in the solution.
+2. The step's 'data' input keys — variables passed explicitly to the template.
+3. forEach aliases — the item/index bindings when the step iterates.
+
+Accessor rules:
+- {{ ._.name }} is ALWAYS a resolver reference (and creates a dependency edge).
+- {{ .field }} is a resolver dependency only when there is no matching 'data' key and it is not a forEach alias.
+- When 'data' is present with statically-known keys, matching keys resolve to the data value; unknown keys still resolve against resolver data.
+- When the data keys are not statically knowable, the whole root is treated as the data context.
+- {{ .__* }} accessors are special context variables, never dependencies.
+
+Because Go templates default to rendering a missing key as empty, a typo'd accessor silently blanks out rather than erroring. The 'template-unknown-accessor' lint rule (WARNING) flags a root accessor that is neither a resolver, a data key, nor an alias. Use 'extract_resolver_refs' to see the inferred references and 'explain_lint_rule template-unknown-accessor' for details.`,
+		Examples: []string{
+			"# .env comes from data; ._.region is a resolver reference\nresolve:\n  with:\n    - provider: go-template\n      inputs:\n        data: { env: prod }\n        template: \"{{ .env }}-{{ ._.region }}\"",
+		},
+		SeeAlso: []string{"go-template-provider", "depends-on", "resolver"},
+	},
+	{
+		Name:     "snapshot-masking",
+		Title:    "Snapshot Masking",
+		Category: "context",
+		Summary:  "How golden/snapshot functional tests normalize volatile output via built-in presets and custom masks so runs stay deterministic.",
+		Explanation: `Snapshot tests compare a solution's output against a stored golden file. Because output often contains volatile regions (timestamps, UUIDs, sandbox paths), scafctl masks those regions before comparison.
+
+**Built-in presets** — 'timestamp', 'uuid', and 'sandbox' are enabled by default. Additional presets ('email', 'ipv4', 'mac') are opt-in. Toggle presets in a test case with masks: [{use: <name>}], and disable a default with {use: <name>, disabled: true}.
+
+**Custom masks** — provide {name, pattern, placeholder, path} to normalize solution-specific volatile content.
+
+**Snapshot source** — snapshotSource: stdout (default) compares captured output; snapshotSource: files compares the rendered file tree (required when a mask is scoped with 'path').
+
+**Updating goldens** — run tests with --update-snapshots to regenerate the stored baselines after an intentional change.
+
+In the test report, a case shown as PASS* is a RELAXED pass: it passed but masks loosened snapshot fidelity, so a masked region was not compared literally. See 'functional-testing' and 'get_solution_schema' for the full spec.testing.cases shape.`,
+		Examples: []string{
+			"spec:\n  testing:\n    cases:\n      render:\n        description: renders with volatile ids masked\n        command: [run, resolver]\n        snapshotSource: files\n        masks:\n          - name: build-id\n            pattern: \"build-[0-9]+\"\n            placeholder: \"build-<ID>\"",
+		},
+		SeeAlso: []string{"functional-testing", "test-assertions", "test-sandbox"},
+	},
+	{
+		Name:     "authoring-workflow",
+		Title:    "Authoring Workflow",
+		Category: "context",
+		Summary:  "The recommended MCP tool loop for authoring a solution: scaffold -> verify shapes -> preview -> lint -> test -> run.",
+		Explanation: `When authoring a solution with AI assistance, drive the scafctl MCP tools in this order rather than hand-writing YAML and guessing:
+
+1. **Scaffold** — 'scaffold_solution' generates a valid skeleton to start from.
+2. **Verify shapes ("what")** — 'get_solution_schema' and 'explain_kind' for the spec; 'get_provider_schema' and 'list_providers' for provider inputs/outputs. Never guess field or provider names.
+3. **Check expressions in isolation** — 'validate_expression', 'evaluate_cel', and 'evaluate_go_template' before wiring them in.
+4. **Preview** — 'preview_resolvers' (use the resolver argument to focus on one) to confirm resolved values; 'preview_action' or 'dry_run_solution' to preview the action graph without side effects.
+5. **Lint** — 'lint_solution' to validate structure; 'list_lint_rules' and 'explain_lint_rule' to resolve findings.
+6. **Test** — 'generate_test_scaffold' then 'run_solution_tests' for functional tests.
+7. **Run** — 'get_run_command' for the exact CLI invocation.
+
+For the runtime evaluation environment these tools operate against, see 'context-variables' and 'phase-execution'. These tools are the source of truth for schemas, functions, and providers — reference them rather than relying on static copies, which drift.`,
+		SeeAlso: []string{"resolver", "provider", "functional-testing", "context-variables", "phase-execution"},
 	},
 }

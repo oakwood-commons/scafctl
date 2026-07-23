@@ -74,6 +74,7 @@ You should see JSON output listing all available tools:
     { "name": "auth_list_tokens", "description": "List all cached access tokens across auth handlers..." },
     { "name": "auth_purge_expired", "description": "Remove expired access tokens from the cache..." },
     { "name": "list_cel_functions", "description": "List all available CEL functions..." },
+    { "name": "list_context_variables", "description": "List the context variables injected into CEL/Go-template evaluation and the phase each is available in..." },
     { "name": "list_go_template_functions", "description": "List all available Go template extension functions..." },
     { "name": "list_examples", "description": "List available scafctl example files..." },
     { "name": "list_providers", "description": "List all available providers..." },
@@ -474,6 +475,35 @@ Here are the custom scafctl CEL functions for string manipulation:
 
 Use `evaluate_cel` to test any of these interactively.
 ```
+
+### Discover Context Variables
+
+No files needed.
+
+> [!NOTE]
+> **You:** "What variables can I use inside an action's `when` condition?"
+
+Beyond functions, scafctl injects *context variables* into CEL and Go-template
+evaluation, and which ones exist depends on the phase. The AI calls
+`list_context_variables` with `phase: "action"` and returns something like:
+
+```
+In an action's when/inputs you can use:
+
+- **_** -- resolved resolver values (_.region)
+- **__execution** -- resolver execution metadata (__execution.resolvers.build.status)
+- **__actions** -- results of completed actions (__actions.build.results.exitCode)
+- **__cwd** -- the original working directory (actions only)
+
+Note: __self, __item/__index, and __plan are NOT available in actions -- they
+belong to resolver phases. Call list_context_variables with no phase to see the
+full matrix, or explain_concepts name='context-variables' for guidance.
+```
+
+For narrative guidance on the runtime evaluation environment -- context
+variables, phase execution order, the CEL cost model, template dependency
+inference, snapshot masking, and the authoring workflow -- use the `context`
+category: `explain_concepts` with `category: "context"`.
 
 ### Discover Go Template Functions
 

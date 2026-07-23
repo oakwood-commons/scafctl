@@ -7879,6 +7879,7 @@ func TestIntegration_MCPServeInfo(t *testing.T) {
 	assert.True(t, toolNames["get_provider_output_shape"], "expected get_provider_output_shape tool")
 	assert.True(t, toolNames["dry_run_solution"], "expected dry_run_solution tool")
 	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool")
+	assert.True(t, toolNames["list_context_variables"], "expected list_context_variables tool")
 }
 
 func TestIntegration_MCPServeProtocol(t *testing.T) {
@@ -9441,6 +9442,28 @@ func TestIntegration_MCPServeInfo_ExplainConcepts(t *testing.T) {
 		toolNames[tool.Name] = true
 	}
 	assert.True(t, toolNames["explain_concepts"], "expected explain_concepts tool to be registered")
+}
+
+// TestIntegration_MCPServeInfo_ListContextVariables verifies the
+// list_context_variables tool is registered.
+func TestIntegration_MCPServeInfo_ListContextVariables(t *testing.T) {
+	t.Parallel()
+
+	stdout, _, exitCode := runScafctl(t, "mcp", "serve", "--info")
+	assert.Equal(t, 0, exitCode)
+
+	var info struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &info))
+
+	toolNames := make(map[string]bool)
+	for _, tool := range info.Tools {
+		toolNames[tool.Name] = true
+	}
+	assert.True(t, toolNames["list_context_variables"], "expected list_context_variables tool to be registered")
 }
 
 func TestIntegration_MCPServeInfo_AuthTokenTools(t *testing.T) {
