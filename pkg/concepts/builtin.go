@@ -392,7 +392,7 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 
 Decision guide: prefer _.other to reference another resolver (it also wires the dependency); use __self only to talk about the value currently being built.`,
 		Examples: []string{
-			"# __self in a transform, __plan in a resolver when\nresolvers:\n  name:\n    resolve:\n      with:\n        - provider: parameter\n          inputs: { name: name }\n    transform:\n      with:\n        - provider: cel\n          inputs: { expression: \"__self.trimSpace()\" }\n  gated:\n    when: '__plan[\"name\"].phase == 1'\n    resolve:\n      with:\n        - provider: static\n          inputs: { value: ok }",
+			"# __self in a transform, __plan in a resolver when\nresolvers:\n  name:\n    resolve:\n      with:\n        - provider: parameter\n          inputs: { name: name }\n    transform:\n      with:\n        - provider: cel\n          inputs: { expression: \"__self.trim()\" }\n  gated:\n    when: '__plan[\"name\"].phase == 1'\n    resolve:\n      with:\n        - provider: static\n          inputs: { value: ok }",
 		},
 		SeeAlso: []string{"cel-expression", "resolver", "action", "foreach", "go-template-provider"},
 	},

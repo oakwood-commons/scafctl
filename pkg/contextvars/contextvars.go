@@ -114,7 +114,7 @@ var builtinVariables = []ContextVariable{
 		Languages:   langBoth,
 		Phases:      []string{PhaseTransform, PhaseValidate, PhaseForEach},
 		Description: "The current resolver's in-progress value: the resolved value in transform steps, and the final value in validate steps. Also bound during forEach iterations (carrying the transform-phase in-progress value). Available in CEL (__self) and Go templates ({{ .__self }}). Not available during a plain resolve step.",
-		Example:     "__self.trimSpace()",
+		Example:     "__self.trim()",
 	},
 	{
 		Name:        celexp.VarItem, // "__item"
