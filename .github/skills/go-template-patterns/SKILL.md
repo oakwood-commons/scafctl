@@ -5,6 +5,13 @@ description: "Go template patterns, built-in functions, custom scafctl functions
 
 # Go Template Patterns in scafctl
 
+> Function reference is not duplicated here. For the authoritative, version-accurate
+> list of Go-template functions (Sprig plus custom scafctl functions like `toHcl`,
+> `toYaml`, `fromYaml`, `cel`, `slugify`), call the MCP tool
+> **`list_go_template_functions`**. Test a template with **`evaluate_go_template`**.
+> This skill covers the knowledge those tools do not: the execution API,
+> dependency inference, file-generation variables, and conventions.
+
 ## Execution API
 
 ```go
@@ -36,19 +43,38 @@ In solution templates, the root data (`.`) contains all resolved values:
 {{.config.database.host}}       <!-- Nested field access -->
 ```
 
-### Built-in Template Variables (for file templates)
+Many context variables are injected into Go templates too (`{{ ._.region }}`,
+`{{ .__self }}`, `{{ .__item }}`, etc.). For the authoritative per-phase matrix
+and which variables reach templates, call **`list_context_variables`** or read
+`explain_concepts name=context-variables`.
 
-When used with the directory provider for file generation:
+### Built-in file-generation variables
 
-| Variable | Contains |
-|----------|----------|
-| `.__filePath` | Full file path being generated |
-| `.__fileName` | File name with extension |
-| `.__fileStem` | File name without extension |
-| `.__fileDir` | Directory containing the file |
-| `.__fileExt` | File extension |
+When rendering a directory tree (directory -> render-tree -> write-tree), the
+file provider injects per-file path parts for the entry being written. They are
+the entry's **relative** path (e.g. `k8s/deployment.yaml.tpl`), not an absolute
+path, and are injected **without a leading dot** -- the dot is Go-template
+accessor syntax, so you write `{{ .__fileStem }}` (see
+`pkg/provider/builtin/fileprovider/file.go`):
+
+| Injected name | Accessed as | Contains |
+|---------------|-------------|----------|
+| `__filePath` | `{{ .__filePath }}` | Relative path of the entry (forward slashes) |
+| `__fileName` | `{{ .__fileName }}` | Base file name, including extension |
+| `__fileStem` | `{{ .__fileStem }}` | File name with only the **last** extension removed (`deployment.yaml.tpl` -> `deployment.yaml`) |
+| `__fileExtension` | `{{ .__fileExtension }}` | The **last** extension, including the leading dot (`.tpl`) |
+| `__fileDir` | `{{ .__fileDir }}` | Directory portion of the relative path (empty for a top-level file) |
+
+A common `outputPath` that strips a `.tpl` suffix while preserving the tree:
+
+```gotemplate
+{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+```
 
 ## Dependency Inference (resolver ref vs data context)
+
+For the full model, see `explain_concepts name=template-dependency-inference`;
+to see the references a template actually produces, use **`extract_resolver_refs`**.
 
 A go-template render step's template root namespace is the **union** of three
 sources:
@@ -67,7 +93,7 @@ root accessors. It disambiguates them as follows:
 | `{{ .field }}`, **no** `data` input | Yes, unless `field` is a `forEach` alias. |
 | `{{ .field }}` where `field` is a statically-known `data` key | No -- it is local data context. |
 | `{{ .field }}` with a **dynamic** `data` input (keys not statically known) | No -- assumed to come from `data`. |
-| `{{ .__self }}`, `{{ .__item }}`, `{{ .__fan.* }}` and other `.__` vars | No -- internal/special variables. |
+| `{{ .__self }}`, `{{ .__item }}`, and other `.__` vars | No -- internal/special variables. |
 
 A `data` input's keys are statically known when it is a literal map or a CEL
 **map literal** expression (e.g. `expr: '{"appName": _.appName}'`). A `data`
@@ -83,8 +109,8 @@ the template, or add an explicit `dependsOn` entry.
 
 ```yaml
 # The forEach alias `proj` and the data keys (projects, appName) are NOT
-# resolver dependencies. `platformAppName`/`appName` become dependencies only
-# because the data expression references them via `_.`.
+# resolver dependencies. `appName` becomes a dependency only because the data
+# expression references it via `_.`.
 resolve:
   with:
     - provider: go-template
@@ -104,102 +130,7 @@ resolve:
 The `template-unknown-accessor` lint rule warns when a bare `{{ .field }}` or
 `{{ ._.name }}` accessor cannot resolve to any known resolver, data key, or
 forEach alias -- a likely typo, since such accessors render empty at runtime
-rather than failing.
-
-## Functions
-
-### Sprig v3 (100+ functions)
-
-All [Sprig v3](http://masterminds.github.io/sprig/) functions are available:
-
-**String:**
-```gotemplate
-{{trim .name}}                  <!-- Strip whitespace -->
-{{upper .name}}                 <!-- Uppercase -->
-{{lower .name}}                 <!-- Lowercase -->
-{{title .name}}                 <!-- Title case -->
-{{snakecase .name}}             <!-- snake_case -->
-{{camelcase .name}}             <!-- CamelCase -->
-{{kebabcase .name}}             <!-- kebab-case -->
-{{repeat 3 .char}}              <!-- Repeat string -->
-{{substr 0 5 .name}}            <!-- Substring -->
-{{replace "old" "new" .input}}  <!-- Replace -->
-{{contains "sub" .name}}        <!-- Contains check -->
-{{hasPrefix "pre" .name}}       <!-- Prefix check -->
-{{hasSuffix "suf" .name}}       <!-- Suffix check -->
-{{quote .name}}                 <!-- Add quotes -->
-{{squote .name}}                <!-- Add single quotes -->
-{{nospace .name}}               <!-- Remove spaces -->
-{{indent 4 .block}}             <!-- Indent text -->
-{{nindent 4 .block}}            <!-- Newline + indent -->
-```
-
-**Collections:**
-```gotemplate
-{{join "," .items}}             <!-- Join list -->
-{{first .items}}                <!-- First element -->
-{{last .items}}                 <!-- Last element -->
-{{slice .items 1 3}}            <!-- Sub-slice -->
-{{has .items "value"}}          <!-- List contains -->
-{{uniq .items}}                 <!-- Remove duplicates -->
-{{sortAlpha .items}}            <!-- Sort strings -->
-```
-
-**Dictionary:**
-```gotemplate
-{{keys .config}}                <!-- Map keys -->
-{{values .config}}              <!-- Map values -->
-{{hasKey .config "key"}}        <!-- Key exists -->
-{{pluck "name" .items}}         <!-- Extract field from list of maps -->
-{{pick .config "key1" "key2"}}  <!-- Select keys -->
-{{omit .config "secret"}}       <!-- Exclude keys -->
-```
-
-**Math:**
-```gotemplate
-{{add 1 2}}                     <!-- Addition -->
-{{sub 10 3}}                    <!-- Subtraction -->
-{{mul 2 5}}                     <!-- Multiplication -->
-{{div 10 3}}                    <!-- Division -->
-{{mod 10 3}}                    <!-- Modulo -->
-{{max 3 5 1}}                   <!-- Maximum -->
-{{min 3 5 1}}                   <!-- Minimum -->
-```
-
-**Type/Logic:**
-```gotemplate
-{{empty .value}}                <!-- Is zero/nil/empty -->
-{{default "fallback" .value}}   <!-- Default if empty -->
-{{ternary "yes" "no" .flag}}    <!-- Ternary -->
-{{typeOf .value}}               <!-- Go type name -->
-{{kindOf .value}}               <!-- Go kind name -->
-```
-
-**Encoding:**
-```gotemplate
-{{b64enc .data}}                <!-- Base64 encode -->
-{{b64dec .encoded}}             <!-- Base64 decode -->
-{{sha256sum .data}}             <!-- SHA256 hash -->
-```
-
-**UUID:**
-```gotemplate
-{{uuidv4}}                      <!-- Generate UUID v4 -->
-```
-
-### Custom scafctl Functions
-
-```gotemplate
-{{cel "_.name.upperAscii()"}}   <!-- Inline CEL evaluation -->
-{{toHcl .config}}               <!-- Convert to HCL body (attributes + blocks) -->
-{{toHclValue .bindings}}        <!-- Convert to HCL value expression (RHS of =) -->
-{{fromYaml .yamlString}}        <!-- Parse YAML string to object -->
-{{toYaml .data}}                <!-- Convert to YAML string -->
-{{slugify .title}}              <!-- URL-safe slug -->
-{{toDNSString .name}}           <!-- DNS-safe string -->
-{{where .items "condition"}}    <!-- Filter array -->
-{{select .items "mapping"}}     <!-- Transform array elements -->
-```
+rather than failing. Use `explain_lint_rule template-unknown-accessor` for details.
 
 ## CEL vs Go Template Decision Guide
 
@@ -236,3 +167,11 @@ All [Sprig v3](http://masterminds.github.io/sprig/) functions are available:
 
 - `pkg/gotmpl/`: Template execution, options, missing key modes
 - `pkg/provider/builtin/gotmplprovider/`: Go template provider for transform phase
+
+## See Also
+
+- MCP tools: `list_go_template_functions`, `evaluate_go_template`,
+  `extract_resolver_refs`, `list_context_variables`.
+- Concepts (`explain_concepts name=<...>`): `template-dependency-inference`,
+  `context-variables`, `go-template-provider`.
+- The `cel-patterns` skill for the CEL side.

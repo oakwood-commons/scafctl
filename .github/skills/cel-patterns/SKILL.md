@@ -5,224 +5,37 @@ description: "CEL expression patterns, context variables, built-in functions, an
 
 # CEL Patterns in scafctl
 
+> Function reference is not duplicated here. For the authoritative, version-accurate
+> list of CEL functions (built-in and custom scafctl functions), call the MCP tool
+> **`list_cel_functions`** (filter with `custom_only: true` for scafctl extensions).
+> Test any expression with **`evaluate_cel`** / **`validate_expression`**. This skill
+> covers the knowledge those tools do not: context variables, patterns, pitfalls,
+> and the cost model.
+
 ## Context Variables
 
-Available during expression evaluation (defined as `celexp.Var*` constants):
+Context variables are the special values injected into CEL evaluation (they are
+**not** functions, so `list_cel_functions` does not cover them). For the
+authoritative per-phase matrix -- which variable is available in resolve vs.
+transform vs. validate vs. forEach vs. action vs. state-backend vs. error
+contexts -- call the MCP tool **`list_context_variables`** (optionally filtered
+by `phase`), or read the narrative in `explain_concepts name=context-variables`.
 
-| Variable | Available In | Contains |
-|----------|-------------|----------|
-| `_` | All contexts | Root data -- all resolved values as a map |
-| `__self` | Transform, Validate | Current resolver value being transformed/validated |
-| `__item` | forEach loops | Current array element |
-| `__index` | forEach loops | Current iteration index (0-based) |
-| `__actions` | Action `when` clauses | Map of completed action results |
-| `__cwd` | All contexts | Original working directory |
-| `__execution` | Post-resolve | Resolver execution metadata |
-| `__plan` | Pre-execution | Resolver topology/plan |
+Quick orientation (see the tool for the full, correct scoping):
 
-### Root Data (`_`)
+- `_` -- map of all resolved values (`_.my_resolver`, `_.config.database.host`).
+  Referencing `_.other` also creates an implicit dependency edge.
+- `__self` -- the current resolver's in-progress value (transform, validate, a
+  resolve-phase `until` condition, and forEach).
+- `__item` / `__index` -- current element / 0-based index inside `forEach`.
+- `__plan` -- pre-execution resolver topology (`__plan["name"].phase`).
+- `__execution` / `__actions` / `__cwd` -- available to actions.
+- `__params` -- raw CLI params, state-backend inputs only.
+- `__error` -- failure contexts (a string in resolvers; a structured map in
+  actions -- use `__error.message`, `__error.statusCode`).
 
-The root data map contains all resolved values keyed by resolver name:
-
-```cel
-_.my_resolver              // Access resolved value
-_.config.database.host     // Nested access (if resolver returns object)
-has(_.optional_resolver)   // Check if resolver exists/resolved
-```
-
-## Built-in Functions
-
-### String Operations (CEL strings v4)
-
-```cel
-_.name.upperAscii()           // "HELLO"
-_.name.lowerAscii()           // "hello"
-_.name.trim()                 // Strip whitespace (NOT trimSpace!)
-_.name.replace("old", "new")  // Replace all occurrences
-_.name.split("-")             // Split to list
-_.name.substring(0, 5)        // Substring
-_.name.contains("sub")        // Boolean check
-_.name.startsWith("pre")      // Prefix check
-_.name.endsWith("suf")        // Suffix check
-_.name.charAt(0)              // Single character
-_.name.indexOf("x")           // First index (-1 if not found)
-_.name.reverse()              // Reverse string
-_.name.join("-")              // Join list to string (on list type)
-size(_.name)                  // String length
-```
-
-### List Operations (CEL lists v3)
-
-```cel
-_.items.filter(x, x > 10)            // Filter
-_.items.map(x, x * 2)                // Map/transform
-_.items.exists(x, x == "target")     // Any match
-_.items.all(x, x > 0)               // All match
-_.items.size()                        // Length
-_.items.distinct()                    // Remove duplicates
-_.items.flatten()                     // Flatten nested lists
-_.items.reverse()                     // Reverse order
-_.items.slice(0, 5)                   // Sub-list
-_.items.sort()                        // Sort ascending
-_.items.sortBy(x, x.name)            // Sort by field
-```
-
-### Map Operations
-
-```cel
-_.config.key                     // Direct access
-has(_.config.key)                // Key exists check
-_.config.size()                  // Number of keys
-```
-
-### Math (CEL math extension)
-
-```cel
-math.ceil(3.2)    // 4
-math.floor(3.8)   // 3
-math.round(3.5)   // 4
-math.min(a, b)    // Minimum
-math.max(a, b)    // Maximum
-```
-
-### Encoding
-
-```cel
-base64.encode(bytes("hello"))   // Base64 encode
-base64.decode("aGVsbG8=")      // Base64 decode
-url.encode("hello world")      // URL form-encode -> "hello+world"
-url.decode("hello+world")      // URL form-decode -> "hello world"
-```
-
-### Bindings
-
-```cel
-cel.bind(x, _.long_expression, x + "_suffix")  // Bind intermediate values
-```
-
-## Custom scafctl Functions
-
-Registered via `ext.Custom()` in `pkg/celexp/ext/`. Only functions listed here
-are implemented. Check `ext.Custom()` for the authoritative list.
-
-### Arrays (`pkg/celexp/ext/arrays/`)
-
-```cel
-arrays.strings.add(["a", "b"], "c")       // Append string -> ["a","b","c"]
-arrays.strings.unique(["a", "b", "a"])     // Deduplicate -> ["a","b"]
-arrays.groupBy([{"k":"a","v":1},{"k":"b","v":2},{"k":"a","v":3}], "k")
-// -> {"a": [{"k":"a","v":1},{"k":"a","v":3}], "b": [{"k":"b","v":2}]}
-// O(n) single-pass grouping -- avoids quadratic CEL comprehension cost
-```
-
-### Debug (`pkg/celexp/ext/debug/`)
-
-```cel
-debug.out(_.value)                         // Print value to writer (requires Writer)
-debug.throw("something went wrong")       // Throw error for debugging
-debug.sleep(1000)                          // Sleep N milliseconds (testing only)
-```
-
-Note: `debug.out` is NOT included in `ext.Custom()` / `ext.All()` because it
-requires a Writer parameter. It is added separately via `debug.DebugOutFunc(w)`.
-
-### Filepath (`pkg/celexp/ext/filepath/`)
-
-```cel
-filepath.dir("/path/to/file.txt")          // Directory: "/path/to"
-filepath.normalize("path//to/../file")     // Clean path
-filepath.exists("/path/to/file")           // File exists check
-filepath.join("path", "to", "file")        // Join segments
-```
-
-### GUID (`pkg/celexp/ext/guid/`)
-
-```cel
-guid.new()                                 // UUID v4
-```
-
-### Host paths (`pkg/celexp/ext/host/`)
-
-```cel
-host.configDir()                           // Resolved config dir (branding-aware)
-hostConfigDir()                            // Portable alias; matches the Go template function
-host.configDir() + "/config.d/x.yaml"      // Build a config.d drop-in path
-```
-
-`host.configDir()` returns the host's resolved XDG config directory via
-`paths.ConfigDir()`, so it honors `paths.SetAppName` (a `mycli` embedder gets
-`~/.config/mycli`, not a hardcoded `scafctl` path). It is also registered under
-the dotless alias `hostConfigDir()` so the same name works in Go templates
-(`{{ hostConfigDir }}`).
-
-### Map (`pkg/celexp/ext/map/`)
-
-```cel
-map.add(_.config, "key", "value")          // Add key-value pair
-map.addFailIfExists(_.m, "k", "v")         // Add, error if key exists
-map.addIfMissing(_.m, "k", "v")            // Add only if key missing
-map.select(_.config, ["key1", "key2"])     // Pick keys
-map.omit(_.config, ["secret"])             // Remove keys
-map.merge(_.base, _.overrides)             // Merge maps (right wins)
-map.recurse(_.nested, "children", expr)    // Recursive tree operation
-map.fromEntries(_.list, "name")            // List of objects -> map keyed by field
-```
-
-### Marshalling (`pkg/celexp/ext/marshalling/`)
-
-```cel
-json.marshal(_.data)                       // Compact JSON string
-json.marshalPretty(_.data)                 // Pretty-printed JSON
-json.unmarshal(_.jsonString)               // Parse JSON string
-yaml.marshal(_.data)                       // YAML string
-yaml.unmarshal(_.yamlString)               // Parse YAML string
-```
-
-### Output (`pkg/celexp/ext/out/`)
-
-```cel
-out.nil()                                  // Returns null value
-```
-
-### Regex (`pkg/celexp/ext/regex/`)
-
-```cel
-regex.match("^[a-z]+$", _.name)            // Boolean match
-regex.replace("[0-9]+", _.input, "X")      // Replace matches
-regex.findAll("[a-z]+", _.input)           // List of matches
-regex.split("[,;]", _.input)               // Split by pattern
-```
-
-### Sort (`pkg/celexp/ext/sort/`)
-
-```cel
-sort.objects(_.items, "name")              // Sort objects by field (ascending)
-sort.objectsDescending(_.items, "score")   // Sort objects by field (descending)
-```
-
-### URL (`pkg/celexp/ext/url/`)
-
-```cel
-url.encode("hello world")                  // Form-encode -> "hello+world"
-url.decode("hello+world")                  // Form-decode -> "hello world"
-url.decode("hello%20world")                // Also decodes %XX -> "hello world"
-```
-
-### Strings (`pkg/celexp/ext/strings/`)
-
-```cel
-strings.clean(_.messy)                     // Normalize whitespace
-strings.title(_.name)                      // Title Case
-strings.repeat(_.char, 5)                  // Repeat string N times
-strings.slugify(_.orgName)                 // DNS-safe label (RFC 1123), e.g. "My Org!" -> "my-org"
-```
-
-### Time (`pkg/celexp/ext/time/`)
-
-```cel
-time.now()                                 // Current UTC timestamp (RFC3339)
-time.nowFmt("2006-01-02")                  // Current time with Go layout format
-```
+Most of these are injected into **both** CEL and Go templates. See
+`explain_concepts name=context-variables` for the exact language/phase details.
 
 ## Common Patterns
 
@@ -284,10 +97,12 @@ has(_.config) && has(_.config.database) && has(_.config.database.host)
 
 ## Reference Extraction
 
-`pkg/celexp/refs.go` provides static analysis of an expression's AST:
+To see which resolver references an expression produces (for dependency
+inference), use the MCP tool **`extract_resolver_refs`**. The underlying static
+analysis lives in `pkg/celexp/refs.go`:
 
 - `RequiredVariables(ctx)` / `GetUnderscoreVariables(ctx)` -- extract variable
-  and `_.` resolver references (used for dependency inference).
+  and `_.` resolver references.
 - `MapLiteralKeys(ctx) ([]string, bool)` -- when the expression's top-level node
   is a **map literal** with constant string keys (e.g.
   `{"appName": _.appName}`), returns those keys and `true`. Returns `nil, false`
@@ -306,31 +121,13 @@ has(_.config) && has(_.config.database) && has(_.config.database.host)
 
 ## Cost Limits
 
-CEL expressions have a runtime cost limit (default: 1,000,000) to prevent
-runaway computations. The limit is enforced by cel-go's cost tracker.
+CEL expressions run under a cost limit (default 1,000,000) to prevent runaway
+computations, enforced by cel-go's cost tracker. For the full model -- the
+`spec.options.cel.costLimit` override, the `min(solution, global)` semantics,
+and the high-cost anti-patterns -- see `explain_concepts name=cel-cost-model`.
 
-### Error Diagnostics
-
-When a cost limit is exceeded, the error includes actual cost, limit, and expression:
-
-```
-CEL expression cost limit exceeded (actual cost: 1500000, limit: 1000000)
-for expression "[large].map(x, x.filter(...))": runtime cost limit exceeded
-```
-
-### Per-Solution Override
-
-Solutions can lower the cost limit via `spec.options.cel.costLimit`:
-
-```yaml
-spec:
-  options:
-    cel:
-      costLimit: 500000  # Tighter limit for this solution
-```
-
-The effective limit is `min(solutionLimit, globalLimit)` -- solutions cannot
-raise the limit above the operator-configured global default.
+Quick reference: a solution can only *lower* the limit
+(`spec.options.cel.costLimit`), never raise it above the operator global.
 
 ### Avoiding High-Cost Patterns
 
@@ -339,3 +136,11 @@ raise the limit above the operator-configured global default.
 | `list.filter(x, list2.exists(y, ...))` | O(n*m) | Use `arrays.groupBy` + lookup |
 | `list.map(x, list.filter(...))` | O(n^2) | Pre-group with `arrays.groupBy` |
 | Nested `map` + `filter` | Multiplicative | Single-pass with custom extension |
+
+## See Also
+
+- MCP tools: `list_cel_functions`, `evaluate_cel`, `validate_expression`,
+  `list_context_variables`, `extract_resolver_refs`.
+- Concepts (`explain_concepts name=<...>`): `context-variables`, `cel-cost-model`,
+  `phase-execution`.
+- The `go-template-patterns` skill for the Go-template side.
