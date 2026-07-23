@@ -7,7 +7,7 @@ import type { Plugin } from "@opencode-ai/plugin"
  *   - SSH/GPG signed (repo has commit.gpgsign=true), and
  *   - DCO signed-off (`-s`, enforced by the DCO GitHub check).
  *
- * The SSH signing key is passphrase protected. If it is not loaded into the
+ * The SSH signing key is passphrase-protected. If it is not loaded into the
  * ssh-agent, `git commit` fails mid-operation with a cryptic passphrase error
  * and no commit object is written.
  *
@@ -87,7 +87,11 @@ export const GitSigningGuard: Plugin = async ({ $ }) => {
             "loaded in the ssh-agent. Signed commits will fail without it.",
             "",
             "Load your signing key into the ssh-agent per your local setup",
-            "(you will be prompted for its passphrase), then verify and retry:",
+            "(you will be prompted for its passphrase), for example:",
+            "",
+            "    ssh-add ~/.ssh/YOUR_SIGNING_KEY",
+            "",
+            "Then verify it is loaded and retry the commit:",
             "",
             "    ssh-add -l",
           ].join("\n"),
