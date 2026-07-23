@@ -14,8 +14,8 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 
 ## MCP Tools Are the Source of Truth
 
-scafctl ships an MCP server whose tools return live, version-accurate facts about
-the solution spec, functions, providers, and lint rules. When authoring or
+scafctl ships an MCP server whose tools return facts about the solution spec,
+functions, providers, and lint rules straight from the code. When authoring or
 reasoning about solutions -- or writing docs/skills -- **consult these tools
 instead of relying on (or hand-maintaining) inline catalogs**, which drift:
 
@@ -33,6 +33,12 @@ instead of relying on (or hand-maintaining) inline catalogs**, which drift:
 
 Prose in the skills (`.github/skills/`) should POINT at these tools, not mirror
 their output.
+
+**Caveat:** the MCP server reflects the **built binary** (`dist/scafctl`), not
+your uncommitted working tree. If you just changed a function, provider, spec
+field, or lint rule, **rebuild and restart the server** before querying it --
+otherwise the tool output can omit the very change you are authoring. When in
+doubt, the source code is the ultimate authority.
 
 ## Conventions
 
