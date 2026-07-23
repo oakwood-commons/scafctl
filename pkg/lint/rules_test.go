@@ -32,8 +32,8 @@ func TestKnownRulesHaveRequiredFields(t *testing.T) {
 }
 
 func TestKnownRulesCount(t *testing.T) {
-	// We expect exactly 64 rules — update this when new rules are added
-	assert.Equal(t, 64, len(KnownRules), "expected 64 known lint rules")
+	// We expect exactly 65 rules — update this when new rules are added
+	assert.Equal(t, 65, len(KnownRules), "expected 65 known lint rules")
 }
 
 func TestListRules(t *testing.T) {

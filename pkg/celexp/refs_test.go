@@ -329,6 +329,96 @@ func BenchmarkGetUnderscoreVariables_Complex(b *testing.B) {
 	}
 }
 
+func BenchmarkGetUnderscoreVariablesByOptionality_Simple(b *testing.B) {
+	expr := Expression(`_.?platformProfileID.orValue("") + _.moduleSource`)
+	b.ResetTimer()
+	for b.Loop() {
+		_, _, _ = expr.GetUnderscoreVariablesByOptionality(context.Background())
+	}
+}
+
+func BenchmarkGetUnderscoreVariablesByOptionality_Complex(b *testing.B) {
+	expr := Expression(`_.config.enabled && _.?fallbackRole.orValue(_.requiredRole) && _.items.filter(i, i.active).size() > _.?threshold.orValue(0)`)
+	b.ResetTimer()
+	for b.Loop() {
+		_, _, _ = expr.GetUnderscoreVariablesByOptionality(context.Background())
+	}
+}
+
+func TestGetUnderscoreVariablesByOptionality(t *testing.T) {
+	tests := []struct {
+		name         string
+		expression   string
+		wantHard     []string
+		wantOptional []string
+		wantError    bool
+	}{
+		{
+			name:         "all hard",
+			expression:   "_.user.name + _.config.value",
+			wantHard:     []string{"config", "user"},
+			wantOptional: []string{},
+		},
+		{
+			name:         "optional select only",
+			expression:   `_.?platformProfileID.orValue("")`,
+			wantHard:     []string{},
+			wantOptional: []string{"platformProfileID"},
+		},
+		{
+			name:         "optional index only",
+			expression:   `_[?"my-resolver"]`,
+			wantHard:     []string{},
+			wantOptional: []string{"my-resolver"},
+		},
+		{
+			name:         "mixed hard and optional",
+			expression:   `_.?platformProfileID.orValue("") + _.moduleSource`,
+			wantHard:     []string{"moduleSource"},
+			wantOptional: []string{"platformProfileID"},
+		},
+		{
+			name:         "hard dominates when name appears both ways",
+			expression:   `_.a + _.?a.orValue("") + _.?b.orValue("")`,
+			wantHard:     []string{"a"},
+			wantOptional: []string{"b"},
+		},
+		{
+			name:         "hard bracket is not optional",
+			expression:   `_["resolverName"]`,
+			wantHard:     []string{"resolverName"},
+			wantOptional: []string{},
+		},
+		{
+			name:       "unclosed parenthesis",
+			expression: "_.value + (_.other",
+			wantError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := Expression(tt.expression)
+			hard, optional, err := expr.GetUnderscoreVariablesByOptionality(context.Background())
+
+			if tt.wantError {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+
+			sort.Strings(hard)
+			sort.Strings(optional)
+			sort.Strings(tt.wantHard)
+			sort.Strings(tt.wantOptional)
+
+			assert.Equal(t, tt.wantHard, hard, "hard refs")
+			assert.Equal(t, tt.wantOptional, optional, "optional-only refs")
+		})
+	}
+}
+
 func TestGetVariablesWithPrefix(t *testing.T) {
 	tests := []struct {
 		name       string

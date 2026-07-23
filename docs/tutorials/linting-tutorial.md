@@ -884,7 +884,39 @@ scafctl lint rule missing-template-dependency
 {{% /tab %}}
 {{< /tabs >}}
 
-## 12. Suppressing Findings
+## 12. Undefined Optional References
+
+The `undefined-optional-reference` rule reports **optional** CEL access
+(`_.?name` or `_[?"name"]`) that targets a resolver which is not defined.
+
+Optional access is a **soft** dependency: unlike a hard `_.name` reference (which
+fails the build when `name` is missing so typos are caught), an optional
+reference to an undefined resolver loads successfully and lets `.orValue()`
+supply a fallback at runtime. That is useful on purpose, but it also hides
+genuine typos -- so this rule surfaces them as **info**-level findings.
+
+```yaml
+# INFO: optional reference targets an undefined resolver
+spec:
+  resolvers:
+    app:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              # 'profil' is a typo for 'profile' -- this silently falls back
+              expression: '_.?profil.orValue("default")'
+```
+
+**Fix**: correct the name, define the resolver, or -- if the fallback is
+intentional -- suppress the finding. A name accessed **hard anywhere** stays a
+strict dependency even when it is also accessed optionally, so the safest fix for
+a required value is to reference it with `_.name`.
+
+This is an **info**-level finding because optional access is valid and often
+deliberate; it exists to catch accidental typos in optional references.
+
+## 13. Suppressing Findings
 
 When a finding is a deliberate, reviewed exception, you can suppress it with an
 inline YAML comment directive instead of disabling the rule globally. Directives
@@ -974,7 +1006,7 @@ spec:
 > `disable-file`. Targeted suppressions keep the rest of the file linted and make
 > the intent obvious to reviewers.
 
-## 13. Using Lint with the MCP Server
+## 14. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 

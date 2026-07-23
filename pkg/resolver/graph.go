@@ -183,7 +183,7 @@ func extractStrictDependencies(r *Resolver) map[string]bool {
 	}
 
 	if r.When != nil && r.When.Expr != nil {
-		extractDepsFromExpression(string(*r.When.Expr), deps)
+		extractHardDepsFromExpression(string(*r.When.Expr), deps)
 	}
 
 	extractStrictFromResolvePhase(r.Resolve, deps)
@@ -205,20 +205,20 @@ func extractStrictFromResolvePhase(phase *ResolvePhase, deps map[string]bool) {
 		return
 	}
 	if phase.When != nil && phase.When.Expr != nil {
-		extractDepsFromExpression(string(*phase.When.Expr), deps)
+		extractHardDepsFromExpression(string(*phase.When.Expr), deps)
 	}
 	if phase.Until != nil && phase.Until.Expr != nil {
-		extractDepsFromExpression(string(*phase.Until.Expr), deps)
+		extractHardDepsFromExpression(string(*phase.Until.Expr), deps)
 	}
 	for _, source := range phase.With {
 		for _, arg := range source.Args {
 			extractStrictFromValueRef(arg, deps)
 		}
 		if source.When != nil && source.When.Expr != nil {
-			extractDepsFromExpression(string(*source.When.Expr), deps)
+			extractHardDepsFromExpression(string(*source.When.Expr), deps)
 		}
 		if source.ContinueOnError != nil && source.ContinueOnError.Expr != nil {
-			extractDepsFromExpression(string(*source.ContinueOnError.Expr), deps)
+			extractHardDepsFromExpression(string(*source.ContinueOnError.Expr), deps)
 		}
 		if source.ForEach != nil && source.ForEach.In != nil {
 			extractStrictFromValueRef(source.ForEach.In, deps)
@@ -233,17 +233,17 @@ func extractStrictFromTransformPhase(phase *TransformPhase, deps map[string]bool
 		return
 	}
 	if phase.When != nil && phase.When.Expr != nil {
-		extractDepsFromExpression(string(*phase.When.Expr), deps)
+		extractHardDepsFromExpression(string(*phase.When.Expr), deps)
 	}
 	for _, transform := range phase.With {
 		for _, arg := range transform.Args {
 			extractStrictFromValueRef(arg, deps)
 		}
 		if transform.When != nil && transform.When.Expr != nil {
-			extractDepsFromExpression(string(*transform.When.Expr), deps)
+			extractHardDepsFromExpression(string(*transform.When.Expr), deps)
 		}
 		if transform.ContinueOnError != nil && transform.ContinueOnError.Expr != nil {
-			extractDepsFromExpression(string(*transform.ContinueOnError.Expr), deps)
+			extractHardDepsFromExpression(string(*transform.ContinueOnError.Expr), deps)
 		}
 		if transform.ForEach != nil && transform.ForEach.In != nil {
 			extractStrictFromValueRef(transform.ForEach.In, deps)
@@ -265,9 +265,11 @@ func extractStrictFromInputs(inputs map[string]*ValueRef, deps map[string]bool) 
 }
 
 // extractStrictFromValueRef collects only strict references from a ValueRef:
-// direct rslvr references, CEL expressions, and rslvr/expr forms nested inside
-// literal values. tmpl: ValueRefs and {{ .field }} accessors in literal strings
-// are intentionally skipped.
+// direct rslvr references, hard CEL expressions, and rslvr/expr forms nested
+// inside literal values. tmpl: ValueRefs, {{ .field }} accessors in literal
+// strings, and optional CEL access (_.?name, _[?"name"]) are intentionally
+// skipped -- optional access signals the value may be absent, so it must not
+// create a load-blocking strict edge.
 func extractStrictFromValueRef(ref *ValueRef, deps map[string]bool) {
 	if ref == nil {
 		return
@@ -276,7 +278,7 @@ func extractStrictFromValueRef(ref *ValueRef, deps map[string]bool) {
 	case ref.Resolver != nil:
 		deps[*ref.Resolver] = true
 	case ref.Expr != nil:
-		extractDepsFromExpression(string(*ref.Expr), deps)
+		extractHardDepsFromExpression(string(*ref.Expr), deps)
 	case ref.Tmpl != nil:
 		// Template ValueRef: inferred best-effort, not a strict reference.
 	case ref.Literal != nil:
@@ -285,13 +287,13 @@ func extractStrictFromValueRef(ref *ValueRef, deps map[string]bool) {
 }
 
 // extractStrictFromLiteral recursively collects strict references from a literal
-// value: rslvr keys, expr (CEL) keys, and CEL patterns in strings. tmpl keys and
-// {{ .field }} template accessors are skipped.
+// value: rslvr keys, expr (CEL) keys, and hard CEL patterns in strings. tmpl
+// keys, {{ .field }} template accessors, and optional CEL access are skipped.
 func extractStrictFromLiteral(literal any, deps map[string]bool) {
 	switch v := literal.(type) {
 	case string:
 		if strings.Contains(v, "_.") || strings.Contains(v, "_[") {
-			extractDepsFromExpression(v, deps)
+			extractHardDepsFromExpression(v, deps)
 		}
 	case map[string]any:
 		isValueRef := false
@@ -300,7 +302,7 @@ func extractStrictFromLiteral(literal any, deps map[string]bool) {
 			isValueRef = true
 		}
 		if expr, ok := v["expr"].(string); ok {
-			extractDepsFromExpression(expr, deps)
+			extractHardDepsFromExpression(expr, deps)
 			isValueRef = true
 		}
 		if _, ok := v["tmpl"].(string); ok {
@@ -336,6 +338,26 @@ func extractDepsFromExpression(expr string, deps map[string]bool) {
 
 	// Add all found variables to the deps map
 	for _, v := range vars {
+		deps[v] = true
+	}
+}
+
+// extractHardDepsFromExpression extracts only HARD resolver references
+// (_.name, _["name"]) from a CEL expression, ignoring optional access
+// (_.?name, _[?"name"]). Optional access signals the author tolerates the
+// referenced resolver being absent (typically paired with .orValue(...)), so it
+// must not contribute a strict, load-blocking dependency edge. A resolver
+// referenced with hard syntax anywhere in the expression is still returned even
+// if it also appears with optional syntax.
+func extractHardDepsFromExpression(expr string, deps map[string]bool) {
+	celExpr := celexp.Expression(expr)
+	hard, _, err := celExpr.GetUnderscoreVariablesByOptionality(context.TODO())
+	if err != nil {
+		// If parsing fails, skip dependency extraction for this expression.
+		// This is a non-fatal error - the resolver may still be valid.
+		return
+	}
+	for _, v := range hard {
 		deps[v] = true
 	}
 }
@@ -397,6 +419,80 @@ func ExtractRefsFromValueRef(ref *ValueRef, deps map[string]bool) {
 		return
 	}
 	extractDepsFromValueRef(ref, deps)
+}
+
+// ExtractOptionalRefsFromValueRef collects resolver names that a ValueRef
+// references via optional CEL access (_.?name, _[?"name"]), accumulating them
+// into the provided optional set. Optional access is a CEL-only concept, so
+// direct rslvr: references and Go-template (tmpl:) accessors -- which are always
+// hard -- contribute nothing. Within a single CEL expression, a name also
+// accessed with hard syntax is excluded (hard access dominates). Passing a nil
+// ref or optional map is a no-op (optional must be non-nil to collect results).
+func ExtractOptionalRefsFromValueRef(ref *ValueRef, optional map[string]bool) {
+	if optional == nil {
+		return
+	}
+	extractOptionalFromValueRef(ref, optional)
+}
+
+func extractOptionalFromValueRef(ref *ValueRef, optional map[string]bool) {
+	if ref == nil {
+		return
+	}
+	switch {
+	case ref.Expr != nil:
+		addOptionalFromExpression(string(*ref.Expr), optional)
+	case ref.Literal != nil:
+		extractOptionalFromLiteral(ref.Literal, optional)
+	}
+}
+
+// extractOptionalFromLiteral recursively collects optional CEL references from a
+// literal value: expr (CEL) keys and CEL patterns in strings. rslvr keys, tmpl
+// keys, and Go-template accessors carry no optional access and are skipped.
+func extractOptionalFromLiteral(literal any, optional map[string]bool) {
+	switch v := literal.(type) {
+	case string:
+		if strings.Contains(v, "_.") || strings.Contains(v, "_[") {
+			addOptionalFromExpression(v, optional)
+		}
+	case map[string]any:
+		isValueRef := false
+		if expr, ok := v["expr"].(string); ok {
+			addOptionalFromExpression(expr, optional)
+			isValueRef = true
+		}
+		if _, ok := v["rslvr"].(string); ok {
+			isValueRef = true
+		}
+		if _, ok := v["tmpl"].(string); ok {
+			isValueRef = true
+		}
+		if isValueRef {
+			return
+		}
+		for _, mapVal := range v {
+			extractOptionalFromLiteral(mapVal, optional)
+		}
+	case []any:
+		for _, arrVal := range v {
+			extractOptionalFromLiteral(arrVal, optional)
+		}
+	}
+}
+
+// addOptionalFromExpression parses a CEL expression and adds its optional-only
+// resolver references to the optional set. Parse failures are non-fatal and
+// yield no references.
+func addOptionalFromExpression(expr string, optional map[string]bool) {
+	celExpr := celexp.Expression(expr)
+	_, opt, err := celExpr.GetUnderscoreVariablesByOptionality(context.TODO())
+	if err != nil {
+		return
+	}
+	for _, v := range opt {
+		optional[v] = true
+	}
 }
 
 // extractDepsFromLiteral recursively extracts dependencies from literal values
