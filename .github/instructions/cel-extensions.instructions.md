@@ -9,6 +9,9 @@ CEL extensions are custom functions that extend the CEL expression language
 with scafctl-specific capabilities. They are registered at startup and
 available in all CEL evaluation contexts (resolvers, conditions, transforms).
 
+Before adding a function, check the live catalog with the MCP tool
+**`list_cel_functions`** so you do not duplicate an existing one.
+
 ## File Layout
 
 ```
@@ -154,9 +157,17 @@ func BenchmarkGroupByFunc(b *testing.B) {
 
 ## Documentation
 
-After adding a function, update the cel-patterns skill:
-`.github/skills/cel-patterns/SKILL.md` -- add the function under the correct
-namespace heading in "Custom scafctl Functions".
+The authoritative catalog of implemented CEL functions is the MCP tool
+**`list_cel_functions`** (filter with `custom_only: true` for scafctl
+extensions) -- it is generated from the registry, so it never drifts. Do **not**
+hand-maintain a per-function catalog in the skills or docs.
 
-Only document implemented functions. Never add planned/aspirational functions
-to the skill file.
+After adding a function:
+
+- Register it in `Custom()` (`pkg/celexp/ext/ext.go`) so `list_cel_functions`
+  picks it up automatically.
+- Only update the `cel-patterns` skill if it carries **narrative** about the new
+  function (a pattern, pitfall, or cost note) -- not a mirror of the function
+  signature, which the tool already provides.
+
+Only expose implemented functions. Never register planned/aspirational functions.
