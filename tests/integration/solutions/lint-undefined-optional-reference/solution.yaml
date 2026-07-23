@@ -1,0 +1,84 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-undefined-optional-reference
+  version: 1.0.0
+  description: |
+    Tests optional CEL access (_.?name / _[?"name"]) as a SOFT dependency.
+    An optional reference to an undefined resolver must not block loading -- it
+    resolves to absent and .orValue() supplies the fallback -- and the
+    undefined-optional-reference lint rule surfaces it as an INFO finding.
+
+spec:
+  resolvers:
+    # A concrete resolver that IS defined; referenced optionally below.
+    profile:
+      description: A defined resolver referenced optionally
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: prod-profile
+
+    # Optional reference to an UNDEFINED resolver (missingProfile). This must
+    # load successfully and fall back to the .orValue() default rather than
+    # failing on a missing hard dependency.
+    resolvedFromOptional:
+      description: Falls back when an optional reference targets an undefined resolver
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.?missingProfile.orValue("fallback-value")'
+
+    # Optional reference to a DEFINED resolver (profile). This must resolve to
+    # the target's value and must NOT be flagged by the lint rule.
+    resolvedFromDefinedOptional:
+      description: Resolves through an optional reference to a defined resolver
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.?profile.orValue("no-profile")'
+
+  testing:
+    cases:
+      optional-undefined-falls-back:
+        description: Optional access to an undefined resolver loads and uses the fallback
+        command: [run, resolver]
+        args: ["resolvedFromOptional", "-o", "json"]
+        tags: [lint, resolver, optional-dependency, smoke]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Optional reference to an undefined resolver must not block loading"
+          - expression: '__output.resolvedFromOptional == "fallback-value"'
+            message: "Undefined optional reference must fall back to .orValue()"
+
+      optional-defined-resolves:
+        description: Optional access to a defined resolver resolves to its value
+        command: [run, resolver]
+        args: ["resolvedFromDefinedOptional", "-o", "json"]
+        tags: [resolver, optional-dependency]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output.resolvedFromDefinedOptional == "prod-profile"'
+            message: "Optional reference to a defined resolver must resolve to its value"
+
+      undefined-optional-reference-detected:
+        description: Lint reports the undefined optional reference as an INFO finding
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, undefined-optional-reference]
+        assertions:
+          - expression: __exitCode == 0
+            message: "undefined-optional-reference is info-level, must not cause non-zero exit"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "undefined-optional-reference" && f.severity == "info")
+            message: "Should detect the undefined optional reference as INFO"
+          - expression: >
+              __output.findings.filter(f, f.ruleName == "undefined-optional-reference").size() == 1
+            message: "Should flag only the undefined optional target, not the defined one"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "undefined-optional-reference" && f.message.contains("missingProfile"))
+            message: "Finding should name the undefined resolver"

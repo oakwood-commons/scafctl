@@ -2009,6 +2009,81 @@ func TestExtractRefsFromValueRef_NilDepsIsNoOp(t *testing.T) {
 	})
 }
 
+func TestExtractOptionalRefsFromValueRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  *ValueRef
+		want map[string]bool
+	}{
+		{
+			name: "nil ref is a no-op",
+			ref:  nil,
+			want: map[string]bool{},
+		},
+		{
+			name: "optional select in cel expression",
+			ref:  &ValueRef{Expr: celExpPtr(`_.?platformProfileID.orValue("")`)},
+			want: map[string]bool{"platformProfileID": true},
+		},
+		{
+			name: "optional index in cel expression",
+			ref:  &ValueRef{Expr: celExpPtr(`_[?"my-resolver"].orValue("")`)},
+			want: map[string]bool{"my-resolver": true},
+		},
+		{
+			name: "hard reference contributes no optional",
+			ref:  &ValueRef{Expr: celExpPtr("_.config.host")},
+			want: map[string]bool{},
+		},
+		{
+			name: "hard dominates within one expression",
+			ref:  &ValueRef{Expr: celExpPtr(`_.a + _.?a.orValue("")`)},
+			want: map[string]bool{},
+		},
+		{
+			name: "direct resolver reference is hard",
+			ref:  &ValueRef{Resolver: stringPtr("environment")},
+			want: map[string]bool{},
+		},
+		{
+			name: "template reference is hard",
+			ref:  &ValueRef{Tmpl: tmplPtr("Hello {{ ._.username }}")},
+			want: map[string]bool{},
+		},
+		{
+			name: "optional select nested in literal map expr",
+			ref: &ValueRef{Literal: map[string]any{
+				"ID": map[string]any{"expr": `_.?profile.orValue("")`},
+			}},
+			want: map[string]bool{"profile": true},
+		},
+		{
+			name: "optional select in literal string",
+			ref:  &ValueRef{Literal: `_.?zone.orValue("us")`},
+			want: map[string]bool{"zone": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			optional := make(map[string]bool)
+			ExtractOptionalRefsFromValueRef(tt.ref, optional)
+			assert.Equal(t, tt.want, optional)
+		})
+	}
+}
+
+func TestExtractOptionalRefsFromValueRef_NilOptionalIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	assert.NotPanics(t, func() {
+		ExtractOptionalRefsFromValueRef(&ValueRef{Expr: celExpPtr(`_.?x.orValue("")`)}, nil)
+	})
+}
+
 func TestExtractRefsFromValueRefs_NestedValueRefMaps(t *testing.T) {
 	t.Parallel()
 

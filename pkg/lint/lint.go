@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,6 +114,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
 	lintResolverCycles(sol, result, registry)
+	lintUndefinedOptionalRefs(sol, result)
 	lintDeferredValidation(sol, result, registry)
 	lintTemplateAccessors(sol, result)
 	lintWorkflow(sol, result, registry)
@@ -1482,6 +1484,64 @@ func hyphensToCamelCase(name string) string {
 // functions are registered during parsing, matching runtime behavior.
 func validateTemplateSyntax(tmpl string) error {
 	return gotmpl.ValidateSyntax(tmpl, "", "")
+}
+
+// lintUndefinedOptionalRefs emits an INFO finding for each optional CEL
+// reference (_.?name / _[?"name"]) whose target resolver is not defined.
+// Optional access never blocks loading -- the value resolves to absent -- so a
+// typo'd optional reference would otherwise pass silently. This surfaces it
+// without failing the lint. A name that is a defined resolver is not reported.
+func lintUndefinedOptionalRefs(sol *solution.Solution, result *Result) {
+	// Note: we intentionally do not early-return when Spec.Resolvers is nil.
+	// The rule flags optional references to *undefined* resolvers, so a
+	// solution with zero defined resolvers should still have its optional
+	// references (e.g. in workflow conditions) checked against an empty set.
+	defined := make(map[string]bool, len(sol.Spec.Resolvers))
+	for name := range sol.Spec.Resolvers {
+		defined[name] = true
+	}
+
+	// Dedupe by resolver name so a name referenced optionally in several places
+	// yields a single finding, located at the first occurrence encountered.
+	seen := make(map[string]bool)
+	report := func(path string, optional map[string]bool) {
+		names := make([]string, 0, len(optional))
+		for n := range optional {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			if defined[n] || seen[n] {
+				continue
+			}
+			// Injected context keys (e.g. __plan) are reachable through the `_`
+			// map but are not resolvers, so an optional access to one is not an
+			// undefined-resolver reference.
+			if strings.HasPrefix(n, "__") {
+				continue
+			}
+			seen[n] = true
+			result.addFinding(SeverityInfo, "dependency", path,
+				fmt.Sprintf("optional reference to resolver '%s' which is not defined; it will always resolve to absent", n),
+				fmt.Sprintf("Define a resolver named '%s' or remove the optional reference if the absence is intentional", n),
+				"undefined-optional-reference")
+		}
+	}
+
+	_ = walk.Walk(sol, &walk.Visitor{
+		ValueRef: func(path string, vr *spec.ValueRef) error {
+			optional := make(map[string]bool)
+			resolver.ExtractOptionalRefsFromValueRef(vr, optional)
+			report(path, optional)
+			return nil
+		},
+		Condition: func(path, _ string, expr *celexp.Expression) error {
+			optional := make(map[string]bool)
+			resolver.ExtractOptionalRefsFromValueRef(&spec.ValueRef{Expr: expr}, optional)
+			report(path, optional)
+			return nil
+		},
+	})
 }
 
 func collectReferencedResolvers(sol *solution.Solution) map[string]bool {
