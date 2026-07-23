@@ -1,0 +1,81 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-resolve-foreach-missing-in
+  version: 1.0.0
+  description: |
+    Tests the resolve-foreach-missing-in lint rule. A forEach on a resolve step
+    is a valid fan-out, but it requires forEach.in because the resolve phase has
+    no __self to default the iteration source to (the executor hard-fails
+    without it). The rule fires as an error only when in is missing; a resolve
+    forEach that supplies in, and any transform forEach, must not be flagged.
+
+spec:
+  resolvers:
+    urls:
+      description: Source list to fan out over
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ["https://a.example", "https://b.example"]
+
+    # Valid: resolve forEach WITH in -> no finding
+    fannedOk:
+      description: Fan out over urls with an explicit in source
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            forEach:
+              item: u
+              in:
+                expr: "_.urls"
+            inputs:
+              expression: "u + '-ok'"
+
+    # Invalid: resolve forEach MISSING in -> resolve-foreach-missing-in error
+    fannedBad:
+      description: Fan out on resolve with no in source (invalid)
+      type: array
+      resolve:
+        with:
+          - provider: cel
+            forEach:
+              item: u
+            inputs:
+              expression: "u + '-bad'"
+
+  testing:
+    config:
+      # lint: solution intentionally has a resolve forEach missing in
+      # resolve-defaults: fannedBad cannot resolve (executor requires in)
+      skipBuiltins: [lint, resolve-defaults]
+
+    cases:
+      missing-in-flagged:
+        description: Resolve forEach without in is reported as an error finding
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, resolve-foreach-missing-in]
+        assertions:
+          - expression: __exitCode == 2
+            message: "resolve-foreach-missing-in is an error finding, so lint exits 2"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "resolve-foreach-missing-in" && f.severity == "error")
+            message: "Missing in on a resolve forEach must be an error finding"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "resolve-foreach-missing-in" && f.location.contains("fannedBad"))
+            message: "The finding should point at the fannedBad resolver step"
+
+      valid-foreach-not-flagged:
+        description: A resolve forEach that supplies in is not flagged
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, resolve-foreach-missing-in]
+        assertions:
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "resolve-foreach-missing-in" && f.location.contains("fannedOk"))
+            message: "A resolve forEach with in must not be flagged"

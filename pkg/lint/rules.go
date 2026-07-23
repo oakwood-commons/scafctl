@@ -402,15 +402,15 @@ var KnownRules = map[string]RuleMeta{
 			"validate:\n  with:\n    - provider: validation\n      inputs:\n        expression: size(__self) > 0",
 		},
 	},
-	"resolve-foreach": {
-		Rule:        "resolve-foreach",
-		Severity:    string(SeverityWarning),
+	"resolve-foreach-missing-in": {
+		Rule:        "resolve-foreach-missing-in",
+		Severity:    string(SeverityError),
 		Category:    "structure",
-		Description: "A resolve.with step uses forEach, which is not supported in the resolve phase.",
-		Why:         "During the resolve phase, __self is not yet available because the resolver is still obtaining its initial value. forEach requires an iterable input, and the resolve phase cannot provide one from the current resolver. Use forEach in the transform phase instead.",
-		Fix:         "Move the forEach clause to a transform step, or use a separate resolver to iterate over an array.",
+		Description: "A resolve.with step uses forEach without the required 'in' source.",
+		Why:         "forEach on a resolve step is a valid fan-out (it runs the provider once per element and collects an ordered array). But unlike a transform step -- which defaults forEach.in to __self -- the resolve phase has no __self to default to, so 'in' is mandatory. Without it the executor fails at runtime with 'forEach.in is required on resolve steps'.",
+		Fix:         "Add a forEach.in source that yields the array to iterate, e.g. 'in: {rslvr: urls}', 'in: {expr: _.items}', or a literal list.",
 		Examples: []string{
-			"# Wrong (forEach in resolve):\nresolve:\n  with:\n    - provider: http\n      forEach:\n        in:\n          expr: items\n\n# Correct (forEach in transform):\ntransform:\n  with:\n    - provider: cel\n      forEach:\n        in:\n          expr: __self\n        item: item",
+			"# Wrong (resolve forEach with no 'in'):\nresolve:\n  with:\n    - provider: http\n      forEach:\n        item: url\n\n# Correct (resolve forEach fans out over 'in'):\nresolve:\n  with:\n    - provider: http\n      forEach:\n        item: url\n        in:\n          expr: _.urls",
 		},
 	},
 	"empty-validate-with": {
