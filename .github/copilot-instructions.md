@@ -12,6 +12,28 @@ Go-based CLI tool using CEL (Common Expression Language) for dynamic configurati
 - **Configuration**: `pkg/settings` for defaults, `pkg/config/` for app configuration
 - **CEL**: Use `celexp.EvaluateExpression()`. Prefer `expression` field over `expr`
 
+## MCP Tools Are the Source of Truth
+
+scafctl ships an MCP server whose tools return live, version-accurate facts about
+the solution spec, functions, providers, and lint rules. When authoring or
+reasoning about solutions -- or writing docs/skills -- **consult these tools
+instead of relying on (or hand-maintaining) inline catalogs**, which drift:
+
+- **Spec / fields**: `get_solution_schema`, `explain_kind` (solution, resolver,
+  action, workflow, spec, provider, schema, retry).
+- **Functions**: `list_cel_functions`, `list_go_template_functions`.
+- **Providers**: `list_providers`, `list_official_providers`, `get_provider_schema`.
+- **Lint**: `list_lint_rules`, `explain_lint_rule`.
+- **Concepts / runtime**: `explain_concepts` -- including the `context` category
+  (`context-variables`, `phase-execution`, `cel-cost-model`,
+  `template-dependency-inference`, `snapshot-masking`, `authoring-workflow`) --
+  and `list_context_variables` for the injected-variable-per-phase matrix.
+- **Validate before shipping**: `validate_expression`, `evaluate_cel`,
+  `evaluate_go_template`, `lint_solution`, `extract_resolver_refs`.
+
+Prose in the skills (`.github/skills/`) should POINT at these tools, not mirror
+their output.
+
 ## Conventions
 
 - **Commits**: Use [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#specification)

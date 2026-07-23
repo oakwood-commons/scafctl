@@ -23,6 +23,10 @@ Implement both methods:
 - Place mocks in `mock.go`
 - Always include benchmark tests (`*_benchmark_test.go`)
 - Register in `pkg/provider/builtin/builtin.go`
+
+Verify provider names and input/output schemas against the live catalog with the
+MCP tools `list_providers` / `list_official_providers` / `get_provider_schema`
+rather than a hand-maintained list.
 - Add struct tags with Huma validation on all Descriptor fields
 
 ## Package naming
