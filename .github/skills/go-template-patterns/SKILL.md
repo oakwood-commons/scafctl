@@ -51,17 +51,19 @@ and which variables reach templates, call **`list_context_variables`** or read
 ### Built-in file-generation variables
 
 When rendering a directory tree (directory -> render-tree -> write-tree), the
-file provider injects per-file path parts. They are injected **without a leading
-dot** -- the dot is Go-template accessor syntax, so you write `{{ .__fileStem }}`
-(see `pkg/provider/builtin/fileprovider/file.go`):
+file provider injects per-file path parts for the entry being written. They are
+the entry's **relative** path (e.g. `k8s/deployment.yaml.tpl`), not an absolute
+path, and are injected **without a leading dot** -- the dot is Go-template
+accessor syntax, so you write `{{ .__fileStem }}` (see
+`pkg/provider/builtin/fileprovider/file.go`):
 
 | Injected name | Accessed as | Contains |
 |---------------|-------------|----------|
-| `__filePath` | `{{ .__filePath }}` | Full source path of the file |
-| `__fileName` | `{{ .__fileName }}` | File name including extension |
-| `__fileStem` | `{{ .__fileStem }}` | File name without extension |
-| `__fileExtension` | `{{ .__fileExtension }}` | Extension including the leading dot |
-| `__fileDir` | `{{ .__fileDir }}` | Directory portion of the path |
+| `__filePath` | `{{ .__filePath }}` | Relative path of the entry (forward slashes) |
+| `__fileName` | `{{ .__fileName }}` | Base file name, including extension |
+| `__fileStem` | `{{ .__fileStem }}` | File name with only the **last** extension removed (`deployment.yaml.tpl` -> `deployment.yaml`) |
+| `__fileExtension` | `{{ .__fileExtension }}` | The **last** extension, including the leading dot (`.tpl`) |
+| `__fileDir` | `{{ .__fileDir }}` | Directory portion of the relative path (empty for a top-level file) |
 
 A common `outputPath` that strips a `.tpl` suffix while preserving the tree:
 

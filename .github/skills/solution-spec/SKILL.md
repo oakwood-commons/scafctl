@@ -32,8 +32,11 @@ spec:
 
 ## Resolver Structure
 
-Resolvers are the DAG nodes. Map keys are resolver names (DNS-safe). Each has up
-to three phases, each a `with:` list of provider steps.
+Resolvers are the DAG nodes. Map keys are resolver names. A name must not be a
+reserved variable (`_`, `__self`, `__item`, `__index`, `__actions`, `__error`,
+etc.) and should avoid hyphens -- prefer camelCase so it is usable in CEL as
+`_.myResolver` rather than the bracket form `_["my-resolver"]`. Each resolver
+has up to three phases, each a `with:` list of provider steps.
 
 ```yaml
 spec:
