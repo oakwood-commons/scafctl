@@ -167,7 +167,7 @@ Use list_cel_functions to see all available CEL functions and evaluate_cel to te
 When forEach is present, the provider executes once per element and results are collected into an output array preserving order.
 
 Key difference between phases:
-- On resolve steps, forEach.in is REQUIRED (no __self available in resolve phase).
+- On resolve steps, forEach.in is REQUIRED (there is no resolved __self value to iterate yet).
 - On transform steps, forEach.in defaults to __self (the current value).
 
 Fields:
@@ -377,7 +377,7 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 
 **CEL context variables**
 - **_** — map of resolved resolver values (_.region). Available in resolve inputs/when, transform, validate, and action when/inputs. Referencing _.other also creates an implicit dependency edge.
-- **__self** — the current resolver's in-progress value. Available in transform (the resolved value) and validate (the final value) only; NOT during resolve.
+- **__self** — the current resolver's in-progress value: the resolved value in transform, the final value in validate, and the current candidate value in a resolve-phase 'until' condition. Not available in a plain resolve provider input.
 - **__item / __index** — the current element / zero-based index inside a forEach iteration (resolve or transform).
 - **__plan** — pre-execution resolver topology injected before any resolver runs, so a resolver's when/inputs can read __plan["name"].phase, .dependsOn, and .dependencyCount.
 - **__execution** — resolver execution metadata available to ACTIONS: __execution.resolvers.<name>.status/phase/duration and __execution.summary.

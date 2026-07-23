@@ -43,7 +43,8 @@ func TestGet(t *testing.T) {
 	assert.Equal(t, celexp.VarSelf, v.Name)
 	// __self is available in both CEL and Go templates.
 	assert.ElementsMatch(t, []string{LangCEL, LangTemplate}, v.Languages)
-	assert.ElementsMatch(t, []string{PhaseTransform, PhaseValidate, PhaseForEach}, v.Phases)
+	// __self is bound in transform, validate, forEach, and resolve-phase until conditions.
+	assert.ElementsMatch(t, []string{PhaseResolve, PhaseTransform, PhaseValidate, PhaseForEach}, v.Phases)
 
 	_, ok = Get("__nonexistent")
 	assert.False(t, ok)
