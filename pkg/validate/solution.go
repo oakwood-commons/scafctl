@@ -85,10 +85,13 @@ func LoadedSolution(sol *solution.Solution, filePath string, registry *provider.
 
 // newGetter builds a solution getter wired with the local (and any remote)
 // catalog resolver so bare catalog names resolve, mirroring the lint command.
+// It loads leniently so structural problems (e.g. an undefined dependsOn
+// target) surface as lint findings rather than aborting the load; the error
+// severity of those findings still drives a non-zero validation result.
 func newGetter(ctx context.Context) *get.Getter {
 	lgr := logger.FromContext(ctx)
 
-	var getterOpts []get.Option
+	getterOpts := []get.Option{get.WithLenientValidation()}
 	if localCatalog, err := catalog.NewLocalCatalog(*lgr); err == nil {
 		resolver := catalog.NewSolutionResolver(localCatalog, *lgr,
 			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),

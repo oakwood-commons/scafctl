@@ -91,6 +91,7 @@ type Getter struct {
 	discoveryMode     settings.DiscoveryMode
 	customActionFiles []string
 	lastDiscovery     DiscoveryResult
+	lenient           bool
 }
 
 // Option defines a function type that modifies a Getter instance.
@@ -148,6 +149,18 @@ func WithCatalogResolver(resolver CatalogResolver) Option {
 func WithRemoteResolver(resolver RemoteResolver) Option {
 	return func(g *Getter) {
 		g.remoteResolver = resolver
+	}
+}
+
+// WithLenientValidation returns an Option that makes the Getter load solutions
+// leniently: the solution is parsed and defaulted, but the fatal spec Validate()
+// gate is skipped so structural problems (e.g. an undefined dependsOn target) do
+// not abort the load. This is intended for advisory tooling (lint / validate)
+// that must report all problems in a single pass rather than failing on the
+// first one. Execution paths (run / build) must NOT enable this.
+func WithLenientValidation() Option {
+	return func(g *Getter) {
+		g.lenient = true
 	}
 }
 
@@ -248,6 +261,17 @@ type Interface interface {
 	// bundleData is nil when the solution has no bundle or comes from a local file.
 	GetWithBundle(ctx context.Context, path string) (sol *solution.Solution, bundleData []byte, err error)
 	FindSolution() string
+}
+
+// loadBytes parses solution content into sol, honoring the Getter's lenient
+// mode. In lenient mode the fatal spec Validate() gate is skipped so advisory
+// tooling can report structural problems as findings instead of aborting the
+// load; parse errors are still returned in both modes.
+func (o *Getter) loadBytes(sol *solution.Solution, content []byte) error {
+	if o.lenient {
+		return sol.LoadFromBytesLenient(content)
+	}
+	return sol.LoadFromBytes(content)
 }
 
 // Get retrieves a Solution from the specified path, which can be a local file or a URL.
@@ -396,7 +420,7 @@ func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion stri
 		}
 
 		sol := solution.Solution{}
-		if err := sol.LoadFromBytes(content); err != nil {
+		if err := o.loadBytes(&sol, content); err != nil {
 			return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
 		}
 
@@ -411,7 +435,7 @@ func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion stri
 	}
 
 	sol := solution.Solution{}
-	if err := sol.LoadFromBytes(content); err != nil {
+	if err := o.loadBytes(&sol, content); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
 	}
 
@@ -633,7 +657,7 @@ func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solu
 	}
 
 	sol := solution.Solution{}
-	if err := sol.LoadFromBytes(content); err != nil {
+	if err := o.loadBytes(&sol, content); err != nil {
 		return nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
 	}
 
@@ -651,7 +675,7 @@ func (o *Getter) fromRemoteRef(ctx context.Context, ref string) (*solution.Solut
 	}
 
 	sol := solution.Solution{}
-	if err := sol.LoadFromBytes(content); err != nil {
+	if err := o.loadBytes(&sol, content); err != nil {
 		return nil, fmt.Errorf("failed to parse solution from remote: %w", err)
 	}
 
@@ -668,7 +692,7 @@ func (o *Getter) fromRemoteRefWithBundle(ctx context.Context, ref string) (*solu
 	}
 
 	sol := solution.Solution{}
-	if err := sol.LoadFromBytes(content); err != nil {
+	if err := o.loadBytes(&sol, content); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse solution from remote: %w", err)
 	}
 
@@ -725,14 +749,16 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 	o.logger.V(1).Info("Unmarshalling solution data", "path", path, "size", len(data))
 
 	sol := solution.Solution{}
-	err = sol.LoadFromBytes(data)
+	// Set the path before loadBytes so the source map built during
+	// unmarshalling records the correct file in finding positions.
+	sol.SetPath(path)
+	err = o.loadBytes(&sol, data)
 	if err != nil {
 		o.logger.Error(err, "Failed to unmarshal solution", "path", path)
 		return &solution.Solution{}, fmt.Errorf("failed to load solution from '%s': %w", path, err)
 	}
 
 	o.logger.V(1).Info("Successfully loaded solution from local filesystem", "path", path)
-	sol.SetPath(path)
 
 	// Apply compose if the solution references composed files
 	if len(sol.Compose) > 0 {
@@ -799,14 +825,16 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 	o.logger.V(1).Info("Unmarshalling solution data", "url", url, "size", len(data))
 
 	sol := solution.Solution{}
-	err = sol.LoadFromBytes(data)
+	// Set the path before loadBytes so the source map built during
+	// unmarshalling records the correct source in finding positions.
+	sol.SetPath(url)
+	err = o.loadBytes(&sol, data)
 	if err != nil {
 		o.logger.Error(err, "Failed to unmarshal solution", "url", url)
 		return nil, fmt.Errorf("failed to load solution from '%s': %w", url, err)
 	}
 
 	o.logger.Info("Successfully loaded solution from URL", "url", url)
-	sol.SetPath(url)
 	return &sol, nil
 }
 

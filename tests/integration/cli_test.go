@@ -1460,15 +1460,19 @@ func TestIntegration_RunSolution_NullResolver(t *testing.T) {
 
 func TestIntegration_Lint_NullResolver(t *testing.T) {
 	t.Parallel()
-	_, stderr, exitCode := runScafctl(t,
+	stdout, _, exitCode := runScafctl(t,
 		"lint",
 		"-f", "tests/integration/solutions/edge-cases/null-resolver/solution.yaml",
 		"-o", "json",
 	)
 
-	// Lint returns exit code 1 because spec validation rejects the null resolver
-	assert.Equal(t, 1, exitCode)
-	assert.Contains(t, stderr, "null value")
+	// Lint loads leniently, so a null resolver is reported as a null-resolver
+	// finding (exit 2 for error-severity findings) instead of aborting the load.
+	// Unrelated findings surface in the same pass (no "onion peeling").
+	assert.Equal(t, 2, exitCode)
+	assert.Contains(t, stdout, "null-resolver")
+	assert.Contains(t, stdout, "has a null value")
+	assert.Contains(t, stdout, "unused-resolver")
 }
 
 func TestIntegration_RunSolution_DryRun(t *testing.T) {

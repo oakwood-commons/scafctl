@@ -322,6 +322,27 @@ func (s *Solution) LoadFromBytes(bytes []byte) error {
 	return s.Validate()
 }
 
+// LoadFromBytesLenient unmarshals the provided bytes and applies defaults, but
+// deliberately skips the fatal Validate() gate. It is used by advisory tooling
+// (lint / validate) that must degrade gracefully: a structural problem such as
+// an undefined dependsOn target should surface as a reported finding rather than
+// aborting the load and hiding every other issue behind the first one. Parse
+// errors (malformed YAML/JSON) are still returned, since without a parsed
+// solution there is nothing to inspect. Callers that require a fully valid
+// solution (run / build) must use LoadFromBytes instead.
+func (s *Solution) LoadFromBytesLenient(bytes []byte) error {
+	if s == nil {
+		return errors.New("solution is nil")
+	}
+
+	if err := s.UnmarshalFromBytes(bytes); err != nil {
+		return err
+	}
+
+	s.ApplyDefaults()
+	return nil
+}
+
 // GetPath returns the file system path associated with the Solution.
 func (s *Solution) GetPath() string {
 	return s.path

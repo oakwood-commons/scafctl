@@ -5,9 +5,11 @@ metadata:
   name: lint-resolver-cycle
   version: 1.0.0
   description: |
-    Tests the resolver-cycle lint rule. Resolver cycles are caught during
-    solution loading (spec validation), so the lint command fails with an
-    error message before producing JSON findings output.
+    Tests the resolver-cycle lint rule. Lint loads the solution leniently, so a
+    resolver cycle is reported as a resolver-cycle finding (exit 2) alongside
+    every other finding in the same pass, instead of aborting the load and
+    hiding the rest behind the first error ("onion peeling"). Execution paths
+    (run resolver) still fail strictly on the cycle.
 
 spec:
   resolvers:
@@ -47,26 +49,29 @@ spec:
 
     cases:
       cycle-detected:
-        description: Lint fails with cycle error during solution load
+        description: Lint reports the cycle as a finding alongside unrelated findings
         command: [lint]
         args: ["-o", "json"]
         tags: [lint, resolver-cycle]
         assertions:
-          - expression: __exitCode != 0
-            message: "Resolver cycle should cause non-zero exit"
+          - expression: __exitCode == 2
+            message: "Resolver cycle is an error finding, so lint exits 2"
           - expression: >
-              __stderr.contains("cycle detected")
-            message: "Error message should mention cycle detected"
+              __output.findings.exists(f, f.ruleName == "resolver-cycle" && f.severity == "error")
+            message: "Cycle should be reported as a resolver-cycle error finding"
           - expression: >
-              __stderr.contains("alpha") && __stderr.contains("beta")
-            message: "Error message should mention the resolvers involved in the cycle"
+              __output.findings.exists(f, f.ruleName == "resolver-cycle" && f.message.contains("alpha") && f.message.contains("beta"))
+            message: "Finding should name the resolvers involved in the cycle"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "unused-resolver")
+            message: "Unrelated findings must also surface in the same pass (no onion peeling)"
 
-      standalone-not-in-error:
-        description: Standalone resolver should not appear in the cycle error
+      standalone-not-in-cycle:
+        description: Standalone resolver should not be part of the cycle finding
         command: [lint]
         args: ["-o", "json"]
         tags: [lint, resolver-cycle]
         assertions:
           - expression: >
-              !__stderr.contains("standalone")
-            message: "Standalone resolver should not appear in cycle error message"
+              !__output.findings.exists(f, f.ruleName == "resolver-cycle" && f.message.contains("standalone"))
+            message: "Standalone resolver should not appear in the cycle finding"

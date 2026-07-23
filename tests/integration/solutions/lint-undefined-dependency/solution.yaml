@@ -1,0 +1,73 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-undefined-dependency
+  version: 1.0.0
+  description: |
+    Tests that an undefined dependsOn target degrades gracefully. Instead of a
+    hard LOAD_FAILED that hides every other problem behind the first one
+    ("onion peeling"), lint loads leniently and reports the undefined dependency
+    as a resolver-undefined-dependency error alongside all other findings.
+    Execution paths (run resolver) still fail strictly.
+
+spec:
+  resolvers:
+    # Undefined dependsOn target -> reported as an error finding by lint, but
+    # a hard load failure for run/build.
+    app:
+      dependsOn: [doesNotExist]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    # An unrelated hyphenated name -> a separate warning that must ALSO surface
+    # in the same lint pass, proving lint no longer stops at the first problem.
+    my-service-name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+
+  testing:
+    config:
+      # The 'app' resolver has an intentional undefined dependsOn target, so the
+      # strict builtins (parse / lint / resolve-defaults) would fail by design.
+      skipBuiltins: true
+
+    cases:
+      lint-reports-all-problems-in-one-pass:
+        description: Lint surfaces the undefined dependency AND unrelated findings together
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, resolver-undefined-dependency]
+        assertions:
+          - expression: __exitCode == 2
+            message: "Lint must fail (exit 2) because the undefined dependency is an error"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "resolver-undefined-dependency" && f.severity == "error")
+            message: "Should report the undefined dependency as an error finding"
+          - expression: >
+              __output.findings.filter(f, f.ruleName == "resolver-undefined-dependency").size() == 1
+            message: "Should flag exactly one undefined dependency"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "resolver-undefined-dependency" && f.message.contains("doesNotExist"))
+            message: "Finding should name the undefined resolver"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "hyphenated-name")
+            message: "Unrelated findings must also surface in the same pass (no onion peeling)"
+
+      run-still-fails-strict:
+        description: Execution paths still fail strictly on the undefined dependency
+        command: [run, resolver]
+        args: ["app", "-o", "json"]
+        tags: [resolver, negative]
+        expectFailure: true
+        assertions:
+          - expression: __exitCode != 0
+            message: "run resolver must fail strictly when a dependsOn target is undefined"
+          - expression: '__stderr.contains("doesNotExist")'
+            message: "The strict failure should name the undefined resolver"
