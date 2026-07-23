@@ -115,3 +115,58 @@ func TestValidateSolution_MissingFile(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, res)
 }
+
+func TestValidateSolution_UndefinedDependencyAggregates(t *testing.T) {
+	// An undefined dependsOn target used to abort the strict load and hide every
+	// other finding behind it. validate now loads leniently, so it reports the
+	// undefined dependency AND an unrelated finding in the same pass, while still
+	// failing (error-severity finding).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.yaml")
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: undefined-dep
+  version: 1.0.0
+spec:
+  resolvers:
+    app:
+      dependsOn: [doesNotExist]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+    my-service-name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	reg, err := builtin.DefaultRegistry(context.Background())
+	require.NoError(t, err)
+
+	res, err := Solution(context.Background(), path, reg)
+	require.NoError(t, err, "lenient load must not abort on an undefined dependsOn")
+	require.NotNil(t, res)
+	require.NotNil(t, res.Lint)
+
+	var undefinedDep, hyphenated bool
+	for _, f := range res.Lint.Findings {
+		switch f.RuleName {
+		case "resolver-undefined-dependency":
+			undefinedDep = true
+			assert.Equal(t, lint.SeverityError, f.Severity)
+			assert.Contains(t, f.Message, "doesNotExist")
+		case "hyphenated-name":
+			hyphenated = true
+		}
+	}
+	assert.True(t, undefinedDep, "should report the undefined dependency as a finding")
+	assert.True(t, hyphenated, "an unrelated finding must also surface in the same pass")
+	assert.Positive(t, res.Lint.ErrorCount, "error-severity finding drives a non-zero result")
+	assert.False(t, res.Passed(false), "validate must still fail")
+}

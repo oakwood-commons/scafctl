@@ -424,6 +424,52 @@ bundle:
 	})
 }
 
+func TestSolution_LoadFromBytesLenient(t *testing.T) {
+	// A solution whose dependsOn references an undefined resolver fails the
+	// strict LoadFromBytes but must load successfully in lenient mode so
+	// advisory tooling can report the problem as a finding.
+	data := []byte(`metadata:
+  name: lenient-test
+  version: 1.0.0
+spec:
+  resolvers:
+    app:
+      dependsOn: [doesNotExist]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`)
+
+	t.Run("strict load fails on undefined dependsOn", func(t *testing.T) {
+		var s Solution
+		err := s.LoadFromBytes(data)
+		require.Error(t, err)
+	})
+
+	t.Run("lenient load parses and defaults without validating spec", func(t *testing.T) {
+		var s Solution
+		require.NoError(t, s.LoadFromBytesLenient(data))
+		assert.Equal(t, DefaultAPIVersion, s.APIVersion)
+		assert.Equal(t, SolutionKind, s.Kind)
+		assert.Equal(t, "lenient-test", s.Metadata.Name)
+		require.Contains(t, s.Spec.Resolvers, "app")
+	})
+
+	t.Run("lenient load still returns parse errors", func(t *testing.T) {
+		var s Solution
+		err := s.LoadFromBytesLenient([]byte("nope"))
+		require.Error(t, err)
+	})
+
+	t.Run("nil receiver", func(t *testing.T) {
+		var s *Solution
+		err := s.LoadFromBytesLenient([]byte("{}"))
+		require.Error(t, err)
+	})
+}
+
 func TestBundle_IsEmpty(t *testing.T) {
 	b := Bundle{}
 	assert.True(t, b.IsEmpty())

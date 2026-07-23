@@ -851,6 +851,132 @@ func TestLintUndefinedOptionalReference_NoResolvers(t *testing.T) {
 	assert.Contains(t, findings[0].Message, "missing")
 }
 
+func TestLintResolverUndefinedDependency(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+
+	newSol := func(deps []string) *solution.Solution {
+		return &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"base": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"value": {Literal: "b"}},
+							}},
+						},
+					},
+					"app": {
+						DependsOn: deps,
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"value": {Literal: "a"}},
+							}},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	tests := []struct {
+		name          string
+		deps          []string
+		wantFindings  int
+		wantSubstring string
+	}{
+		{name: "defined dependency is not flagged", deps: []string{"base"}, wantFindings: 0},
+		{name: "undefined dependency is flagged", deps: []string{"doesNotExist"}, wantFindings: 1, wantSubstring: "doesNotExist"},
+		{name: "empty dependency is flagged", deps: []string{""}, wantFindings: 1, wantSubstring: "empty"},
+		{name: "self dependency is flagged", deps: []string{"app"}, wantFindings: 1, wantSubstring: "itself"},
+		{name: "multiple undefined deps are all flagged", deps: []string{"missingA", "missingB"}, wantFindings: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Solution(newSol(tt.deps), "test.yaml", reg)
+			findings := filterFindingsByRule(result, "resolver-undefined-dependency")
+			require.Len(t, findings, tt.wantFindings)
+			for _, f := range findings {
+				assert.Equal(t, SeverityError, f.Severity)
+			}
+			if tt.wantSubstring != "" {
+				require.Len(t, findings, 1)
+				assert.Contains(t, findings[0].Message, tt.wantSubstring)
+			}
+		})
+	}
+}
+
+func TestLintResolverUndefinedDependency_NilResolver(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	// A nil resolver entry must be skipped without panicking and must not
+	// produce a resolver-undefined-dependency finding.
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"nilResolver": nil,
+				"app": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "a"}},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "resolver-undefined-dependency")
+	assert.Empty(t, findings)
+}
+
+func TestLintResolverUndefinedDependency_NilTargetFlagged(t *testing.T) {
+	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+		"value": {Type: "string"},
+	})
+	reg := provider.NewRegistry()
+	_ = reg.Register(staticProv)
+
+	// A dependsOn reference to a resolver whose value is null must be flagged:
+	// a null resolver is not a valid dependency target and execution fails.
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"nilResolver": nil,
+				"app": {
+					DependsOn: []string{"nilResolver"},
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{
+							Provider: "static",
+							Inputs:   map[string]*spec.ValueRef{"value": {Literal: "a"}},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "resolver-undefined-dependency")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+	assert.Contains(t, findings[0].Message, "nilResolver")
+}
+
 func TestLintNonValidationProvider(t *testing.T) {
 	// "static" has CapabilityFrom, not CapabilityValidation
 	staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{

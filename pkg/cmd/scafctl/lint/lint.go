@@ -88,6 +88,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			  Errors (will cause execution failures):
 			    - unused-resolver          Resolver defined but never referenced
 			    - invalid-dependency       Action depends on non-existent action
+			    - resolver-undefined-dependency  Resolver dependsOn references an undefined resolver
 			    - missing-provider         Referenced provider not registered
 			    - invalid-expression       Invalid CEL expression syntax
 			    - invalid-template         Invalid Go template syntax
@@ -186,8 +187,11 @@ func runLint(ctx context.Context, opts *Options) error {
 
 	lgr := logger.FromContext(ctx)
 
-	// Set up getter with catalog resolver for bare name resolution
-	var getterOpts []get.Option
+	// Set up getter with catalog resolver for bare name resolution.
+	// Lint loads leniently: a structural problem such as an undefined dependsOn
+	// target must surface as a finding rather than aborting the load and hiding
+	// every other issue behind the first one ("onion peeling").
+	getterOpts := []get.Option{get.WithLenientValidation()}
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err == nil {
 		resolver := catalog.NewSolutionResolver(localCatalog, *lgr,

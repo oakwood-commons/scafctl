@@ -1672,6 +1672,14 @@ The `dependsOn` field:
 - Cannot reference itself (self-dependency is an error)
 - Participates in circular dependency detection
 
+> **Undefined `dependsOn` targets.** A `dependsOn` entry that names a resolver
+> which does not exist is a hard error on execution paths: `run` and `build`
+> load the solution strictly and fail. Advisory tooling degrades gracefully
+> instead -- `lint` and `validate` load the solution **leniently** and report
+> the problem as a `resolver-undefined-dependency` **error** finding. Loading
+> leniently lets every other finding surface in the same pass rather than being
+> hidden behind the first structural error ("onion peeling").
+
 ### Circular Dependency Detection
 
 Circular dependencies are detected during graph construction and cause immediate failure.
