@@ -206,6 +206,14 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "Actions with invalid dependencies cannot be scheduled for execution. This usually indicates a typo in the action name.",
 		Fix:         "Check the action names in spec.workflow.actions and ensure all dependsOn references match exactly. Names are case-sensitive.",
 	},
+	"resolver-undefined-dependency": {
+		Rule:        "resolver-undefined-dependency",
+		Severity:    string(SeverityError),
+		Category:    "dependency",
+		Description: "A resolver's dependsOn entry references a resolver that does not exist, is empty, or is a self-reference.",
+		Why:         "An undefined dependsOn target breaks dependency-graph construction. Reporting it as a finding (rather than aborting the load) lets a single lint pass surface every problem at once instead of revealing them one at a time.",
+		Fix:         "Define a resolver with the referenced name, fix the typo, or remove the invalid dependsOn entry. Names are case-sensitive.",
+	},
 	"undefined-optional-reference": {
 		Rule:        "undefined-optional-reference",
 		Severity:    string(SeverityInfo),

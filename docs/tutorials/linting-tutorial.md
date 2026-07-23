@@ -916,7 +916,65 @@ a required value is to reference it with `_.name`.
 This is an **info**-level finding because optional access is valid and often
 deliberate; it exists to catch accidental typos in optional references.
 
-## 13. Suppressing Findings
+## 13. Undefined Dependencies
+
+The `resolver-undefined-dependency` rule reports a `dependsOn` entry that names a
+resolver which does not exist (or is empty, or points at the resolver itself).
+
+A `dependsOn` edge is a **hard** dependency used to order the resolver DAG, so an
+undefined target cannot be satisfied. What makes this rule valuable is *how* it
+reports the problem. Structural errors like this used to abort the whole load,
+so lint could surface only the first one and every other finding stayed hidden
+behind it ("onion peeling"). Lint and `validate` now load the solution
+**leniently** and report the undefined dependency as a finding, so it appears
+**alongside** all other findings in a single pass.
+
+```yaml
+# ERROR: dependsOn targets a resolver that is not defined
+spec:
+  resolvers:
+    app:
+      dependsOn: [doesNotExist] # 'doesNotExist' is never defined
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    # A separate, unrelated issue -- this hyphenated name still surfaces in the
+    # same lint run instead of being hidden behind the dependency error.
+    my-service-name:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+```
+
+**Fix**: correct the name to an existing resolver, define the missing resolver,
+or remove the `dependsOn` entry if the dependency is not needed.
+
+This is an **error**-level finding because an undefined `dependsOn` target can
+never be resolved. Execution paths (`run` and `build`) still fail strictly when a
+dependency is undefined -- only advisory tooling (`lint` / `validate`) degrades
+gracefully so it can report the full picture.
+
+For more details:
+
+{{< tabs "linting-tutorial-cmd-14" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl lint rule resolver-undefined-dependency
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl lint rule resolver-undefined-dependency
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+## 14. Suppressing Findings
 
 When a finding is a deliberate, reviewed exception, you can suppress it with an
 inline YAML comment directive instead of disabling the rule globally. Directives
@@ -1006,7 +1064,7 @@ spec:
 > `disable-file`. Targeted suppressions keep the rest of the file linted and make
 > the intent obvious to reviewers.
 
-## 14. Using Lint with the MCP Server
+## 15. Using Lint with the MCP Server
 
 When using AI agents (VS Code Copilot, Claude, Cursor), the MCP server exposes lint functionality through:
 

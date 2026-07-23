@@ -113,6 +113,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
+	lintResolverDependencies(sol, result)
 	lintResolverCycles(sol, result, registry)
 	lintUndefinedOptionalRefs(sol, result)
 	lintDeferredValidation(sol, result, registry)
@@ -795,6 +796,57 @@ func isNonTrivialGuard(c *resolver.Condition) bool {
 	}
 	expr := strings.TrimSpace(string(*c.Expr))
 	return expr != "" && expr != "true"
+}
+
+// lintResolverDependencies reports explicit dependsOn entries that cannot
+// reference a real resolver: an undefined target, an empty entry, or a
+// self-reference. These are structural errors that would otherwise abort the
+// load; reporting them as findings lets a single lint pass surface every
+// problem instead of failing on the first one ("onion peeling").
+func lintResolverDependencies(sol *solution.Solution, result *Result) {
+	if sol.Spec.Resolvers == nil {
+		return
+	}
+
+	// Build the set of defined resolver names once.
+	defined := make(map[string]bool, len(sol.Spec.Resolvers))
+	for name := range sol.Spec.Resolvers {
+		defined[name] = true
+	}
+
+	// Iterate in sorted order so findings are emitted deterministically.
+	names := make([]string, 0, len(sol.Spec.Resolvers))
+	for name := range sol.Spec.Resolvers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		res := sol.Spec.Resolvers[name]
+		if res == nil {
+			continue
+		}
+		location := fmt.Sprintf("resolvers.%s.dependsOn", name)
+		for _, dep := range res.DependsOn {
+			switch {
+			case dep == "":
+				result.addFinding(SeverityError, "dependency", location,
+					fmt.Sprintf("resolver %q has an empty dependsOn entry", name),
+					"Remove the empty entry or replace it with a valid resolver name",
+					"resolver-undefined-dependency")
+			case dep == name:
+				result.addFinding(SeverityError, "dependency", location,
+					fmt.Sprintf("resolver %q cannot depend on itself", name),
+					"Remove the self-reference from dependsOn",
+					"resolver-undefined-dependency")
+			case !defined[dep]:
+				result.addFinding(SeverityError, "dependency", location,
+					fmt.Sprintf("resolver %q has a dependsOn reference to undefined resolver %q", name, dep),
+					fmt.Sprintf("Define a resolver named %q or fix the typo in dependsOn", dep),
+					"resolver-undefined-dependency")
+			}
+		}
+	}
 }
 
 // lintResolverCycles checks for circular dependencies in the resolver dependency graph.

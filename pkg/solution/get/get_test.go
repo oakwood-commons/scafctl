@@ -356,6 +356,47 @@ func TestFromLocalFileSystem(t *testing.T) {
 		assert.Contains(t, err.Error(), "validation")
 	})
 
+	t.Run("lenient load skips spec validation", func(t *testing.T) {
+		// An undefined dependsOn target fails strict load but must succeed
+		// under WithLenientValidation so advisory tooling can inspect it.
+		undefinedDep := `{
+			"apiVersion": "scafctl.io/v1",
+			"kind": "Solution",
+			"metadata": {"name": "lenient", "version": "1.0.0"},
+			"spec": {"resolvers": {"app": {
+				"dependsOn": ["doesNotExist"],
+				"resolve": {"with": [{"provider": "static", "inputs": {"value": "x"}}]}
+			}}}
+		}`
+		customReadFile := func(name string) ([]byte, error) {
+			return []byte(undefinedDep), nil
+		}
+		ctx := context.Background()
+
+		// Strict getter fails.
+		strict := NewGetter(WithReadFile(customReadFile))
+		_, strictErr := strict.FromLocalFileSystem(ctx, "undefined.json")
+		require.Error(t, strictErr)
+
+		// Lenient getter succeeds and returns the parsed solution.
+		lenient := NewGetter(WithReadFile(customReadFile), WithLenientValidation())
+		sol, err := lenient.FromLocalFileSystem(ctx, "undefined.json")
+		require.NoError(t, err)
+		require.NotNil(t, sol)
+		require.Contains(t, sol.Spec.Resolvers, "app")
+	})
+
+	t.Run("lenient load still returns parse errors", func(t *testing.T) {
+		customReadFile := func(name string) ([]byte, error) {
+			return []byte("not valid yaml: ["), nil
+		}
+		getter := NewGetter(WithReadFile(customReadFile), WithLenientValidation())
+		ctx := context.Background()
+
+		_, err := getter.FromLocalFileSystem(ctx, "broken.yaml")
+		require.Error(t, err)
+	})
+
 	t.Run("file read error", func(t *testing.T) {
 		customReadFile := func(name string) ([]byte, error) {
 			return nil, fmt.Errorf("file not found")
