@@ -384,7 +384,7 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 - **__actions** — results of completed actions, available to downstream ACTIONS: __actions.<name>.results and .status.
 - **__cwd** — the original working directory, available in ACTIONS ONLY (useful when --output-dir redirects action output). Not injected into resolvers.
 - **__params** — raw CLI parameters (-r key=value), available in STATE BACKEND input expressions only. Unlike _ (resolver outputs), __params always holds the raw parameters.
-- **__error** — the error bound in failure contexts (continueOnError conditions and messages.error). Its shape is context-dependent: in RESOLVER contexts it is a string (__error.contains("...")); in ACTION contexts it is a structured map with message, statusCode, attempt, and maxAttempts (__error.message.contains("..."), __error.statusCode).
+- **__error** — the error bound in failure contexts (continueOnError conditions and messages.error). Its shape is context-dependent: in RESOLVER contexts it is a string (__error.contains("...")); in ACTION contexts it is a structured map with message, type, statusCode, exitCode, attempt, and maxAttempts (e.g. __error.message.contains("..."), __error.statusCode == 503, or __error.type == "exec").
 
 **Go-template availability** — most of these (_, __self, __item, __index, __actions, __cwd, __execution) are injected into BOTH CEL and Go-template evaluation, so {{ ._.region }}, {{ .__self }}, and {{ .__item }} also work. __plan, __params, and __error are CEL-only; the __file* path parts below are Go-template only.
 
