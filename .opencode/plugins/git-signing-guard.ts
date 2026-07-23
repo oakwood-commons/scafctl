@@ -7,10 +7,9 @@ import type { Plugin } from "@opencode-ai/plugin"
  *   - SSH/GPG signed (repo has commit.gpgsign=true), and
  *   - DCO signed-off (`-s`, enforced by the DCO GitHub check).
  *
- * The SSH signing key here (~/.ssh/id_ecdsa_public_github) is passphrase
- * protected. If it is not loaded into the ssh-agent, `git commit` fails
- * mid-operation with a cryptic passphrase error and no commit object is
- * written.
+ * The SSH signing key is passphrase-protected. If it is not loaded into the
+ * ssh-agent, `git commit` fails mid-operation with a cryptic passphrase error
+ * and no commit object is written.
  *
  * This hook intercepts `git commit` before it runs and, when a signing key is
  * not available in the agent, blocks the command with actionable instructions
@@ -87,18 +86,14 @@ export const GitSigningGuard: Plugin = async ({ $ }) => {
             "Commit blocked: the SSH signing key required by this repo is not",
             "loaded in the ssh-agent. Signed commits will fail without it.",
             "",
-            "Load the signing key (you will be prompted for its passphrase):",
+            "Load your signing key into the ssh-agent per your local setup",
+            "(you will be prompted for its passphrase), for example:",
             "",
-            "    ssh-add --apple-use-keychain ~/.ssh/id_ecdsa_public_github",
+            "    ssh-add ~/.ssh/YOUR_SIGNING_KEY",
             "",
-            "(On non-macOS hosts, drop the --apple-use-keychain flag.)",
-            "",
-            "Verify it is loaded, then retry the commit:",
+            "Then verify it is loaded and retry the commit:",
             "",
             "    ssh-add -l",
-            "",
-            "Note: for repos under the Public/ folder, sign as alice@example.com",
-            "using ~/.ssh/id_ecdsa_public_github(.pub).",
           ].join("\n"),
         )
       }
