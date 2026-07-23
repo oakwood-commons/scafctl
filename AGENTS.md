@@ -49,33 +49,11 @@ must follow these rules:
    ssh-add -l
    ```
 
-5. **If no key is loaded, prompt the user to load it** instead of retrying a
-   doomed commit. Give them these instructions:
-
-   ```
-   ssh-add --apple-use-keychain ~/.ssh/id_ecdsa_public_github
-   ```
-
-   On macOS, `--apple-use-keychain` stores the passphrase in the Keychain so it
-   is not re-prompted on every ssh-agent restart. On non-macOS hosts, drop the
-   flag and use `ssh-add ~/.ssh/id_ecdsa_public_github`.
-
-   On Windows (OpenSSH), the ssh-agent is a service that is often stopped by
-   default. Start it once (elevated PowerShell), set it to auto-start, then add
-   the key:
-
-   ```powershell
-   Set-Service ssh-agent -StartupType Automatic
-   Start-Service ssh-agent
-   ssh-add $env:USERPROFILE\.ssh\id_ecdsa_public_github
-   ```
-
-   If `ssh-add` reports it cannot connect to the agent, the service is not
-   running -- start it as above and retry.
-
-   Then have them confirm with `ssh-add -l` before you retry the commit.
-   (The `.opencode/plugins/git-signing-guard.ts` plugin enforces this by
-   blocking commits when no key is loaded.)
+5. **If no key is loaded, prompt the user to load it** (per their local machine
+   setup) instead of retrying a doomed commit. Then have them confirm with
+   `ssh-add -l` before you retry the commit. (The
+   `.opencode/plugins/git-signing-guard.ts` plugin enforces this by blocking
+   commits when no key is loaded.)
 
 ### This is a squash-merge repo
 
@@ -143,10 +121,10 @@ round:
 
 ### Identity for this worktree
 
-Repos under the `Public/` folder are signed as **abaker9@gmail.com** using
-`~/.ssh/id_ecdsa_public_github` / `~/.ssh/id_ecdsa_public_github.pub`. The
-repo-local `user.signingkey` should point at the `.pub` file so signing goes
-through the ssh-agent.
+Commits in this repo must be **SSH-signed** and carry a **DCO `Signed-off-by:`**
+trailer (see the Git safety rules above). Contributors configure their own
+signing identity locally (git `user.name` / `user.email` / `user.signingkey`);
+do not hardcode a specific person's key or email here.
 
 ## Conventions (summary; see .github for full detail)
 
