@@ -136,7 +136,7 @@ func TestByPhase_TemplateFile(t *testing.T) {
 	for _, v := range tmpl {
 		assert.Equal(t, []string{LangTemplate}, v.Languages)
 	}
-	_, ok := Get(".__fileStem")
+	_, ok := Get("__fileStem")
 	assert.True(t, ok)
 }
 

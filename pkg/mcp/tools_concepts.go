@@ -35,7 +35,7 @@ func (s *Server) registerConceptTools() {
 	s.addTool(tool, s.handleExplainConcepts)
 
 	ctxVarsTool := mcp.NewTool("list_context_variables",
-		mcp.WithDescription("List the special context variables injected into scafctl CEL and Go-template evaluation (e.g. _, __self, __item, __plan, __execution, __actions, __cwd, __params, __error, and the Go-template .__file* path parts), with the phase each is available in. No function list covers these injected variables. Optionally filter by phase to see only what is available in a given evaluation context. For narrative guidance use explain_concepts name='context-variables'."),
+		mcp.WithDescription("List the special context variables injected into scafctl CEL and Go-template evaluation (e.g. _, __self, __item, __plan, __execution, __actions, __cwd, __params, __error, and the Go-template __file* path parts), with the phase each is available in. No function list covers these injected variables. Optionally filter by phase to see only what is available in a given evaluation context. For narrative guidance use explain_concepts name='context-variables'."),
 		mcp.WithTitleAnnotation("List Context Variables"),
 		mcp.WithToolIcons(toolIcons["help"]),
 		mcp.WithReadOnlyHintAnnotation(true),

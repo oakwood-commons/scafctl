@@ -372,7 +372,7 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 		Name:     "context-variables",
 		Title:    "Context Variables",
 		Category: "context",
-		Summary:  "The special variables injected into CEL and Go-template evaluation (_, __self, __item, __plan, __execution, __actions, __cwd, __params, __error, and the Go-template .__file* path parts) and the phase each is available in.",
+		Summary:  "The special variables injected into CEL and Go-template evaluation (_, __self, __item, __plan, __execution, __actions, __cwd, __params, __error, and the Go-template __file* path parts) and the phase each is available in.",
 		Explanation: `Beyond the CEL and template functions, scafctl injects a set of *context variables* into expression evaluation. Which variables exist depends on the phase — a variable available in an action is not necessarily available in a resolver. No function list covers these; use the 'list_context_variables' tool for the full, machine-readable matrix (optionally filtered by phase).
 
 **CEL context variables**
@@ -386,9 +386,9 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 - **__params** — raw CLI parameters (-r key=value), available in STATE BACKEND input expressions only. Unlike _ (resolver outputs), __params always holds the raw parameters.
 - **__error** — the error bound in failure contexts (continueOnError conditions and messages.error). Its shape is context-dependent: in RESOLVER contexts it is a string (__error.contains("...")); in ACTION contexts it is a structured map with message, statusCode, attempt, and maxAttempts (__error.message.contains("..."), __error.statusCode).
 
-**Go-template availability** — most of these (_, __self, __item, __index, __actions, __cwd, __execution) are injected into BOTH CEL and Go-template evaluation, so {{ ._.region }}, {{ .__self }}, and {{ .__item }} also work. __plan, __params, and __error are CEL-only; the .__file* path parts below are Go-template only.
+**Go-template availability** — most of these (_, __self, __item, __index, __actions, __cwd, __execution) are injected into BOTH CEL and Go-template evaluation, so {{ ._.region }}, {{ .__self }}, and {{ .__item }} also work. __plan, __params, and __error are CEL-only; the __file* path parts below are Go-template only.
 
-**Go-template file-generation variables** (available in the file provider's outputPath during directory -> render-tree -> write-tree generation): .__filePath, .__fileName, .__fileStem, .__fileExtension, .__fileDir — used to rename or restructure output files (e.g. strip a .tpl suffix).
+**Go-template file-generation variables** (available in the file provider's outputPath during directory -> render-tree -> write-tree generation): __filePath, __fileName, __fileStem, __fileExtension, __fileDir -- injected without a leading dot and accessed in templates as {{ .__fileStem }} etc., used to rename or restructure output files (e.g. strip a .tpl suffix).
 
 Decision guide: prefer _.other to reference another resolver (it also wires the dependency); use __self only to talk about the value currently being built.`,
 		Examples: []string{

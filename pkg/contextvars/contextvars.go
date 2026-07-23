@@ -57,13 +57,14 @@ const (
 
 // ContextVariable describes a single injected evaluation variable.
 type ContextVariable struct {
-	// Name is the variable identifier as used in an expression (e.g. "__self",
-	// or ".__filePath" for Go-template path parts).
+	// Name is the canonical injected variable name, without any accessor
+	// syntax (e.g. "__self", "__filePath"). In Go templates it is accessed
+	// with a leading dot ({{ .__filePath }}); in CEL it is used bare (__self).
 	Name string `json:"name" yaml:"name"`
 
 	// Languages lists the expression languages the variable is available in
 	// (cel, go-template, or both). Most scafctl context variables are injected
-	// into both CEL evaluation and Go-template data; a few (the .__file* path
+	// into both CEL evaluation and Go-template data; a few (the __file* path
 	// parts) are Go-template only.
 	Languages []string `json:"languages" yaml:"languages"`
 
@@ -172,35 +173,35 @@ var builtinVariables = []ContextVariable{
 		Example:     "__error.contains(\"timeout\") // resolver; use __error.message.contains(\"timeout\") in actions",
 	},
 	{
-		Name:        ".__filePath",
+		Name:        "__filePath",
 		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "Full source path of the current file during directory -> render-tree -> write-tree generation. Available in the file provider's outputPath template for renaming files.",
 		Example:     "{{ .__fileDir }}/{{ .__fileStem }}",
 	},
 	{
-		Name:        ".__fileName",
+		Name:        "__fileName",
 		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "Base file name (including extension) of the current file during tree generation.",
 		Example:     "{{ .__fileName }}",
 	},
 	{
-		Name:        ".__fileStem",
+		Name:        "__fileStem",
 		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "File name without its extension during tree generation. Commonly used to strip a .tpl suffix.",
 		Example:     "{{ .__fileStem }}",
 	},
 	{
-		Name:        ".__fileExtension",
+		Name:        "__fileExtension",
 		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "File extension (including the leading dot) of the current file during tree generation.",
 		Example:     "{{ .__fileExtension }}",
 	},
 	{
-		Name:        ".__fileDir",
+		Name:        "__fileDir",
 		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
 		Description: "Directory portion of the current file's path during tree generation, used to preserve the source tree structure in output.",
