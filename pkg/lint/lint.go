@@ -436,12 +436,14 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				lintNilInputs(step.Inputs, stepLocation, result)
 				lintExpressions(step.Inputs, stepLocation, result)
 
-				// Warn if forEach is used on a resolve step.
-				if step.ForEach != nil {
-					result.addFinding(SeverityWarning, "structure", stepLocation,
-						"forEach on resolve step is not supported; __self is not available during the resolve phase",
-						"Move forEach to a transform step or use a separate resolver to iterate",
-						"resolve-foreach")
+				// forEach on a resolve step is a valid fan-out, but it requires
+				// forEach.in: the resolve phase has no __self to default the
+				// iteration source to, so the executor hard-fails without it.
+				if step.ForEach != nil && step.ForEach.In == nil {
+					result.addFinding(SeverityError, "structure", stepLocation,
+						"forEach on a resolve step requires 'in'; the resolve phase has no __self to iterate over",
+						"Add a forEach.in source, e.g. 'in: {rslvr: urls}' or 'in: {expr: _.items}'",
+						"resolve-foreach-missing-in")
 				}
 			}
 

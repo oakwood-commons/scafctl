@@ -2202,34 +2202,96 @@ func TestLintResolveForEach(t *testing.T) {
 	reg := provider.NewRegistry()
 	_ = reg.Register(prov)
 
-	sol := &solution.Solution{
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"test-resolver": {
-					Type: "string",
-					Resolve: &resolver.ResolvePhase{
-						With: []resolver.ProviderSource{
-							{
-								Provider: "http",
-								Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
-								ForEach: &resolver.ForEachClause{
-									In:   &spec.ValueRef{Literal: "items"},
-									Item: "item",
-								},
-							},
-						},
+	newResolveForEach := func(withIn bool) *resolver.ForEachClause {
+		fe := &resolver.ForEachClause{Item: "item"}
+		if withIn {
+			expr := celexp.Expression("_.items")
+			fe.In = &spec.ValueRef{Expr: &expr}
+		}
+		return fe
+	}
+	urlsResolver := "urls"
+
+	tests := []struct {
+		name         string
+		sol          *solution.Solution
+		wantFindings int
+	}{
+		{
+			name: "resolve forEach with in is valid (no finding)",
+			sol: &solution.Solution{Spec: solution.Spec{Resolvers: map[string]*resolver.Resolver{
+				"testResolver": {Type: "array", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{
+					Provider: "http",
+					Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+					ForEach:  newResolveForEach(true),
+				}}}},
+			}}},
+			wantFindings: 0,
+		},
+		{
+			name: "resolve forEach missing in is an error",
+			sol: &solution.Solution{Spec: solution.Spec{Resolvers: map[string]*resolver.Resolver{
+				"testResolver": {Type: "array", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{
+					Provider: "http",
+					Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+					ForEach:  newResolveForEach(false),
+				}}}},
+			}}},
+			wantFindings: 1,
+		},
+		{
+			name: "transform forEach without in is fine (defaults to __self)",
+			sol: &solution.Solution{Spec: solution.Spec{Resolvers: map[string]*resolver.Resolver{
+				"testResolver": {Type: "array", Transform: &resolver.TransformPhase{With: []resolver.ProviderTransform{{
+					Provider: "http",
+					Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+					ForEach:  &resolver.ForEachClause{Item: "item"},
+				}}}},
+			}}},
+			wantFindings: 0,
+		},
+		{
+			name: "resolve forEach with rslvr in is valid (no finding)",
+			sol: &solution.Solution{Spec: solution.Spec{Resolvers: map[string]*resolver.Resolver{
+				"testResolver": {Type: "array", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{
+					Provider: "http",
+					Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+					ForEach:  &resolver.ForEachClause{Item: "item", In: &spec.ValueRef{Resolver: &urlsResolver}},
+				}}}},
+			}}},
+			wantFindings: 0,
+		},
+		{
+			name: "only the resolve step missing in is flagged (mixed steps)",
+			sol: &solution.Solution{Spec: solution.Spec{Resolvers: map[string]*resolver.Resolver{
+				"testResolver": {Type: "array", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{
+						Provider: "http",
+						Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+						ForEach:  newResolveForEach(true), // has in -> ok
 					},
-				},
-			},
+					{
+						Provider: "http",
+						Inputs:   map[string]*spec.ValueRef{"url": {Literal: "https://example.com"}},
+						ForEach:  newResolveForEach(false), // missing in -> flagged
+					},
+				}}},
+			}}},
+			wantFindings: 1,
 		},
 	}
 
-	result := Solution(sol, "test.yaml", reg)
-
-	findings := filterFindingsByRule(result, "resolve-foreach")
-	require.Len(t, findings, 1)
-	assert.Contains(t, findings[0].Message, "forEach on resolve step")
-	assert.Equal(t, SeverityWarning, findings[0].Severity)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Solution(tt.sol, "test.yaml", reg)
+			findings := filterFindingsByRule(result, "resolve-foreach-missing-in")
+			require.Len(t, findings, tt.wantFindings)
+			if tt.wantFindings > 0 {
+				assert.Contains(t, findings[0].Message, "requires 'in'")
+				assert.Equal(t, SeverityError, findings[0].Severity)
+			}
+		})
+	}
 }
 
 func TestLintRedundantDependsOn(t *testing.T) {
