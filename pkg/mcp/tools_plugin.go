@@ -173,17 +173,40 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 		}
 	}
 
-	// List provider + auth-handler artifacts from every catalog, tolerating
-	// per-catalog failures (e.g. registries that do not support enumeration).
+	// List provider + auth-handler artifacts from every catalog. Failures are
+	// tolerated only when another catalog succeeds (aggregate 'all' search); if
+	// no catalog can be queried, return a structured error rather than an empty
+	// result so an unreachable/rejected catalog is not misread as "no plugins".
+	// Enumeration-not-supported is benign (the registry simply cannot list) and
+	// is never treated as a hard failure.
 	var artifacts []catalog.ArtifactInfo
+	var okCount int
+	var lastErr error
+	var failedCatalog string
 	for _, cat := range catalogs {
-		infos, err := catalog.ListAcrossKinds(ctx, cat, catalog.PluginKinds(), name)
+		infos, err := catalog.ListAcrossKinds(ctx, cat, catalog.PluginKinds(), name, s.logger)
 		if err != nil {
-			s.logger.V(1).Info("plugin listing failed for catalog, skipping",
+			if catalog.IsEnumerationNotSupported(err) {
+				s.logger.V(1).Info("catalog does not support enumeration, skipping",
+					"catalog", cat.Name())
+				continue
+			}
+			s.logger.V(1).Info("plugin listing failed for catalog",
 				"catalog", cat.Name(), "error", err)
+			lastErr = err
+			failedCatalog = cat.Name()
 			continue
 		}
+		okCount++
 		artifacts = append(artifacts, infos...)
+	}
+
+	// No catalog could be queried and at least one failed hard: surface it.
+	if okCount == 0 && lastErr != nil {
+		return newStructuredError(ErrCodeConfigError,
+			fmt.Sprintf("failed to list plugins from catalog %q: %v", failedCatalog, lastErr),
+			WithSuggestion("Check the catalog is reachable and your credentials are valid (e.g. 'auth login'). Use catalog='all' to search other configured catalogs."),
+		), nil
 	}
 
 	// Apply the optional version constraint, then dedup across catalogs.
@@ -194,6 +217,35 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 		), nil
 	}
 	filtered = catalog.DeduplicateArtifacts(filtered)
+
+	// Deterministic ordering (name, then kind, then semver-descending version)
+	// so repeated calls and cross-run diffs by AI consumers are stable
+	// regardless of catalog iteration order. Version uses a semver-aware compare
+	// (newest first) so 10.0.0 sorts before 2.0.0; entries without a parsed
+	// version fall back to a stable string compare.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		if a.Reference.Name != b.Reference.Name {
+			return a.Reference.Name < b.Reference.Name
+		}
+		if a.Reference.Kind != b.Reference.Kind {
+			return a.Reference.Kind < b.Reference.Kind
+		}
+		vi, vj := a.Reference.Version, b.Reference.Version
+		switch {
+		case vi != nil && vj != nil:
+			if vi.Equal(vj) {
+				return false
+			}
+			return vi.GreaterThan(vj) // newest first
+		case vi != nil:
+			return true // parsed versions sort before unparsed
+		case vj != nil:
+			return false
+		default:
+			return false
+		}
+	})
 
 	entries := make([]pluginCatalogEntry, 0, len(filtered))
 	for _, a := range filtered {
@@ -209,19 +261,6 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 			Digest:  a.Digest,
 		})
 	}
-
-	// Deterministic ordering (name, then kind, then version) so repeated calls
-	// and cross-run diffs by AI consumers are stable regardless of catalog
-	// iteration order.
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Name != entries[j].Name {
-			return entries[i].Name < entries[j].Name
-		}
-		if entries[i].Kind != entries[j].Kind {
-			return entries[i].Kind < entries[j].Kind
-		}
-		return entries[i].Version < entries[j].Version
-	})
 
 	return mcp.NewToolResultJSON(map[string]any{
 		"plugins": entries,

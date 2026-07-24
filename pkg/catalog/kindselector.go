@@ -1,6 +1,13 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package catalog
 
-import "context"
+import (
+	"context"
+
+	"github.com/go-logr/logr"
+)
 
 // KindSelectorPlugin is a user-facing kind *selector* (not a stored artifact
 // kind) that expands to every plugin artifact kind -- providers and auth
@@ -50,21 +57,52 @@ func ExpandKindSelector(sel string) (kinds []ArtifactKind, ok bool) {
 // single List(ctx, "", name) (all kinds); otherwise it calls List once per kind
 // and appends the results.
 //
-// The first error from any per-kind List is returned (partial results are
-// discarded) so callers get deterministic failure behavior identical to a
-// single List call.
-func ListAcrossKinds(ctx context.Context, cat Catalog, kinds []ArtifactKind, name string) ([]ArtifactInfo, error) {
+// Error handling depends on how many kinds are requested:
+//
+//   - Single kind: the error from List is returned directly (strict), so
+//     `catalog list --kind provider --name X` still surfaces a real failure.
+//   - Multiple kinds (e.g. the "plugin" selector expanding to provider +
+//     auth-handler): per-kind errors are tolerated and skipped. A plugin
+//     generally exists under only ONE of providers/<name> or
+//     auth-handlers/<name>, and a remote catalog returns an error for the
+//     absent kind's repository; failing the whole listing on that would drop
+//     the kind that DOES exist. This mirrors RemoteCatalog's own
+//     listAcrossKinds name-search behavior. Errors are surfaced to the provided
+//     logger at V(1) for diagnosis.
+//
+// When every kind in a multi-kind request fails, the last error is returned so
+// the caller is not left with a silently empty result masking a systemic
+// failure (e.g. the whole catalog being unreachable).
+func ListAcrossKinds(ctx context.Context, cat Catalog, kinds []ArtifactKind, name string, logger logr.Logger) ([]ArtifactInfo, error) {
 	if len(kinds) == 0 {
 		return cat.List(ctx, "", name)
 	}
 
+	if len(kinds) == 1 {
+		return cat.List(ctx, kinds[0], name)
+	}
+
 	var results []ArtifactInfo
+	var lastErr error
+	var okCount int
 	for _, kind := range kinds {
 		infos, err := cat.List(ctx, kind, name)
 		if err != nil {
-			return nil, err
+			// Tolerate a per-kind failure (typically the absent kind's
+			// repository) but remember it in case every kind fails.
+			logger.V(1).Info("listing kind failed, skipping",
+				"kind", kind, "name", name, "error", err.Error())
+			lastErr = err
+			continue
 		}
+		okCount++
 		results = append(results, infos...)
+	}
+
+	// Only surface an error when NO kind succeeded -- otherwise a partial
+	// success (the common case for a name present under one kind) is returned.
+	if okCount == 0 && lastErr != nil {
+		return nil, lastErr
 	}
 	return results, nil
 }

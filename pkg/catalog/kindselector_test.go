@@ -1,3 +1,6 @@
+// Copyright 2025-2026 Oakwood Commons
+// SPDX-License-Identifier: Apache-2.0
+
 package catalog
 
 import (
@@ -5,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,11 +96,25 @@ func TestListAcrossKinds_EmptyListsAll(t *testing.T) {
 		return []ArtifactInfo{{Reference: Reference{Kind: ArtifactKindSolution, Name: "a"}}}, nil
 	}
 
-	got, err := ListAcrossKinds(ctx, cat, nil, "")
+	got, err := ListAcrossKinds(ctx, cat, nil, "", logr.Discard())
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
 	assert.Equal(t, 1, called, "empty kinds should call List exactly once")
 	assert.Equal(t, ArtifactKind(""), gotKind, "empty kinds should pass empty kind to List (all)")
+}
+
+func TestListAcrossKinds_SingleKindErrorIsStrict(t *testing.T) {
+	ctx := context.Background()
+	cat := newMockCatalog("test")
+
+	sentinel := errors.New("boom")
+	cat.listFunc = func(_ context.Context, _ ArtifactKind, _ string) ([]ArtifactInfo, error) {
+		return nil, sentinel
+	}
+
+	// A single-kind request must surface the error directly (no tolerance).
+	_, err := ListAcrossKinds(ctx, cat, []ArtifactKind{ArtifactKindProvider}, "x", logr.Discard())
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestListAcrossKinds_MultipleKindsConcatenated(t *testing.T) {
@@ -109,7 +127,7 @@ func TestListAcrossKinds_MultipleKindsConcatenated(t *testing.T) {
 		return []ArtifactInfo{{Reference: Reference{Kind: kind, Name: name + "-" + kind.String()}}}, nil
 	}
 
-	got, err := ListAcrossKinds(ctx, cat, PluginKinds(), "gh")
+	got, err := ListAcrossKinds(ctx, cat, PluginKinds(), "gh", logr.Discard())
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	// Order preserved: provider first, then auth-handler.
@@ -118,19 +136,39 @@ func TestListAcrossKinds_MultipleKindsConcatenated(t *testing.T) {
 	assert.Equal(t, ArtifactKindAuthHandler, got[1].Reference.Kind)
 }
 
-func TestListAcrossKinds_ErrorFromAnyKindIsReturned(t *testing.T) {
+func TestListAcrossKinds_MultiKindToleratesAbsentKind(t *testing.T) {
 	ctx := context.Background()
 	cat := newMockCatalog("test")
 
-	sentinel := errors.New("boom")
+	// A plugin present only under providers/<name>: the auth-handler repo does
+	// not exist, so List returns an error for that kind. The provider result
+	// must still be returned (this is the #482 P1 fix).
+	notFound := errors.New("failed to list tags: name unknown")
 	cat.listFunc = func(_ context.Context, kind ArtifactKind, _ string) ([]ArtifactInfo, error) {
 		if kind == ArtifactKindAuthHandler {
-			return nil, sentinel
+			return nil, notFound
 		}
-		return []ArtifactInfo{{Reference: Reference{Kind: kind, Name: "ok"}}}, nil
+		return []ArtifactInfo{{Reference: Reference{Kind: kind, Name: "github"}}}, nil
 	}
 
-	got, err := ListAcrossKinds(ctx, cat, PluginKinds(), "")
+	got, err := ListAcrossKinds(ctx, cat, PluginKinds(), "github", logr.Discard())
+	require.NoError(t, err, "one absent kind must not fail the whole multi-kind listing")
+	require.Len(t, got, 1)
+	assert.Equal(t, ArtifactKindProvider, got[0].Reference.Kind)
+}
+
+func TestListAcrossKinds_MultiKindAllFailSurfacesError(t *testing.T) {
+	ctx := context.Background()
+	cat := newMockCatalog("test")
+
+	// When EVERY kind fails (e.g. the whole catalog is unreachable), the error
+	// must surface rather than masquerading as an empty result.
+	sentinel := errors.New("catalog unreachable")
+	cat.listFunc = func(_ context.Context, _ ArtifactKind, _ string) ([]ArtifactInfo, error) {
+		return nil, sentinel
+	}
+
+	got, err := ListAcrossKinds(ctx, cat, PluginKinds(), "", logr.Discard())
 	require.ErrorIs(t, err, sentinel)
-	assert.Nil(t, got, "partial results must be discarded on error")
+	assert.Nil(t, got, "no partial success means the error is returned")
 }

@@ -234,7 +234,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	}
 
 	// List local artifacts
-	artifacts, err := catalog.ListAcrossKinds(ctx, localCatalog, kinds, opts.Name)
+	artifacts, err := catalog.ListAcrossKinds(ctx, localCatalog, kinds, opts.Name, *lgr)
 	if err != nil {
 		w.Errorf("failed to list artifacts: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
@@ -402,7 +402,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 
 	w.Verbosef("Listing tags for %s...", remoteRef.Name)
 
-	artifacts, err := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, remoteRef.Name)
+	artifacts, err := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, remoteRef.Name, *lgr)
 	rawResultCount := len(artifacts)
 	if err != nil {
 		w.Errorf("failed to list remote artifacts: %v", err)
@@ -536,7 +536,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog
 		return nil, nil, fmt.Errorf("failed to create remote catalog: %w", err)
 	}
 
-	result, listErr := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, opts.Name)
+	result, listErr := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, opts.Name, *lgr)
 
 	// If stored credentials were rejected the catalog fell back to anonymous
 	// access, so the listing is degraded/incomplete rather than authoritative.

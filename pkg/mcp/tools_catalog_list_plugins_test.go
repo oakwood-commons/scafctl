@@ -131,6 +131,29 @@ func TestHandleCatalogListPlugins_InvalidConstraint(t *testing.T) {
 	assert.True(t, result.IsError, "an invalid version constraint must return an error result")
 }
 
+func TestHandleCatalogListPlugins_SemverVersionOrder(t *testing.T) {
+	setTestXDG(t, t.TempDir())
+
+	ctx := context.Background()
+	cat, err := catalog.NewLocalCatalog(logr.Discard())
+	require.NoError(t, err)
+	for _, v := range []string{"2.0.0", "10.0.0", "9.0.0"} {
+		ref := catalog.Reference{Name: "bigver", Kind: catalog.ArtifactKindProvider, Version: semver.MustParse(v)}
+		_, storeErr := cat.Store(ctx, ref, []byte("bigver "+v), nil, nil, false)
+		require.NoError(t, storeErr)
+	}
+
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	env := decodePluginEnvelope(t, callListPlugins(t, srv, map[string]any{"catalog": "local", "name": "bigver"}))
+	require.Len(t, env.Plugins, 3)
+	// Semver-descending (newest first): 10.0.0 must precede 2.0.0, which a
+	// lexicographic sort would get wrong.
+	assert.Equal(t, []string{"10.0.0", "9.0.0", "2.0.0"},
+		[]string{env.Plugins[0].Version, env.Plugins[1].Version, env.Plugins[2].Version})
+}
+
 func TestHandleCatalogListPlugins_EmptyLocalCatalog(t *testing.T) {
 	setTestXDG(t, t.TempDir())
 
