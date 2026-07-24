@@ -304,9 +304,9 @@ This shows only artifacts with the name `greeting`.
 > <registry>` when no auth handler applies), so a rejected credential is never
 > mistaken for a genuinely empty catalog. When anonymous access still returns some artifacts,
 > those are listed (exit 0) with a warning that the listing is incomplete. In
-> `-o json` mode the results array on stdout is unchanged; a
-> `{"degraded":true,"authError":{...}}` marker is written to stderr so
-> programmatic consumers can detect the degraded state.
+> any structured output mode (`-o json`, `-o yaml`, etc.) the results on stdout
+> are unchanged; a `{"degraded":true,"authError":{...}}` marker is written to
+> stderr so programmatic consumers can detect the degraded state.
 
 ### Step 3: Inspect a Specific Artifact
 
