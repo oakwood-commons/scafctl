@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -30,6 +33,33 @@ func (s *Server) registerPluginTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	s.addTool(listPluginsTool, s.handleListPlugins)
+
+	catalogListPluginsTool := mcp.NewTool("catalog_list_plugins",
+		mcp.WithDescription(
+			"List plugin artifacts (providers and auth handlers) available in catalogs -- "+
+				"the remote counterpart to 'list_plugins' (which shows only locally cached "+
+				"binaries). Searches the local catalog and remote OCI catalog(s) and returns "+
+				"each plugin's name, kind (provider or auth-handler), version, catalog, and digest. "+
+				"Use this to discover what plugins exist, list all versions of a specific plugin "+
+				"(set 'name'), or check whether a newer version is available (combine 'name' with a "+
+				"'version' constraint). Results are deduplicated across catalogs."),
+		mcp.WithTitleAnnotation("Catalog List Plugins"),
+		mcp.WithToolIcons(toolIcons["plugin"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(true),
+		mcp.WithString("name",
+			mcp.Description("Filter by plugin name (exact match). When set, all versions of that plugin are returned."),
+		),
+		mcp.WithString("version",
+			mcp.Description("Semver constraint to filter versions (e.g. '>=1.2.0', '~1.4'). Requires 'name' to be meaningful; applied to the listed versions."),
+		),
+		mcp.WithString("catalog",
+			mcp.Description("Catalog name to list from. Omit for the default catalog, use 'all' for every registered catalog, or 'local' for the local catalog only."),
+		),
+	)
+	s.addTool(catalogListPluginsTool, s.handleCatalogListPlugins)
 
 	pluginCachePathTool := mcp.NewTool("get_plugin_cache_path",
 		mcp.WithDescription(fmt.Sprintf(
@@ -105,6 +135,173 @@ func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*m
 	}
 
 	return mcp.NewToolResultJSON(map[string]any{"plugins": plugins})
+}
+
+// pluginCatalogEntry is the MCP output shape for a plugin artifact discovered in
+// a catalog (as opposed to a locally cached binary, which handleListPlugins
+// reports). It is intentionally flat and stable for AI consumers.
+type pluginCatalogEntry struct {
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Version string `json:"version,omitempty"`
+	Catalog string `json:"catalog,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+}
+
+// pluginSortKey returns a stable string identity for an artifact, used as the
+// final tiebreak in the catalog_list_plugins ordering so entries that are equal
+// on name/kind/semver (or have unparsed versions) still sort deterministically
+// rather than depending on catalog iteration order.
+func pluginSortKey(a catalog.ArtifactInfo) string {
+	if a.Tag != "" {
+		return a.Tag
+	}
+	if a.Reference.Version != nil {
+		return a.Reference.Version.String()
+	}
+	return a.Digest
+}
+
+// handleCatalogListPlugins lists plugin artifacts (provider + auth-handler)
+// available across the local and remote catalog(s). It is a thin wrapper: it
+// gathers the catalogs to query and delegates the multi-kind listing,
+// version-constraint filtering, and dedup to the pkg/catalog domain.
+func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name := request.GetString("name", "")
+	versionConstraint := request.GetString("version", "")
+	catalogFilter := request.GetString("catalog", "")
+
+	// Gather the catalogs to query: local (unless a non-local filter excludes
+	// it) and the requested remote scope.
+	var catalogs []catalog.Catalog
+	var localErr error
+	if catalogFilter == "" || strings.EqualFold(catalogFilter, "local") || strings.EqualFold(catalogFilter, "all") {
+		if localCat, err := catalog.NewLocalCatalog(s.logger); err != nil {
+			localErr = err
+			s.logger.V(1).Info("local catalog not available for plugin listing", "error", err)
+		} else {
+			catalogs = append(catalogs, localCat)
+		}
+	}
+	if !strings.EqualFold(catalogFilter, "local") {
+		for _, rc := range s.buildRemoteCatalogs(catalogFilter) {
+			catalogs = append(catalogs, rc)
+		}
+	}
+
+	// No catalog resolved to query at all. Returning an empty result here would
+	// mislead clients into thinking there are simply no plugins, when in fact
+	// the request could not be serviced -- an unknown --catalog name, a local
+	// catalog that failed to initialize, or no configured/default catalog.
+	if len(catalogs) == 0 {
+		msg := "no catalog available to list plugins"
+		suggestion := "Configure a default catalog, use catalog='all', or check the catalog name."
+		switch {
+		case localErr != nil && (strings.EqualFold(catalogFilter, "local") || catalogFilter == ""):
+			msg = fmt.Sprintf("local catalog is unavailable: %v", localErr)
+			suggestion = "Ensure the local catalog directory is accessible, or query a remote catalog with catalog='all' or a specific name."
+		case catalogFilter != "" && !strings.EqualFold(catalogFilter, "local") && !strings.EqualFold(catalogFilter, "all"):
+			msg = fmt.Sprintf("no catalog named %q is configured", catalogFilter)
+			suggestion = "Check the catalog name, use catalog='all' to search all configured catalogs, or 'local' for the local catalog."
+		}
+		return newStructuredError(ErrCodeConfigError, msg, WithSuggestion(suggestion)), nil
+	}
+
+	// List provider + auth-handler artifacts from every catalog. Failures are
+	// tolerated only when another catalog succeeds (aggregate 'all' search); if
+	// no catalog can be queried, return a structured error rather than an empty
+	// result so an unreachable/rejected catalog is not misread as "no plugins".
+	// Enumeration-not-supported is benign (the registry simply cannot list) and
+	// is never treated as a hard failure.
+	var artifacts []catalog.ArtifactInfo
+	var okCount int
+	var lastErr error
+	var failedCatalog string
+	for _, cat := range catalogs {
+		infos, err := catalog.ListAcrossKinds(ctx, cat, catalog.PluginKinds(), name, s.logger)
+		if err != nil {
+			if catalog.IsEnumerationNotSupported(err) {
+				s.logger.V(1).Info("catalog does not support enumeration, skipping",
+					"catalog", cat.Name())
+				continue
+			}
+			s.logger.V(1).Info("plugin listing failed for catalog",
+				"catalog", cat.Name(), "error", err)
+			lastErr = err
+			failedCatalog = cat.Name()
+			continue
+		}
+		okCount++
+		artifacts = append(artifacts, infos...)
+	}
+
+	// No catalog could be queried and at least one failed hard: surface it.
+	if okCount == 0 && lastErr != nil {
+		return newStructuredError(ErrCodeConfigError,
+			fmt.Sprintf("failed to list plugins from catalog %q: %v", failedCatalog, lastErr),
+			WithSuggestion("Check the catalog is reachable and your credentials are valid (e.g. 'auth login'). Use catalog='all' to search other configured catalogs."),
+		), nil
+	}
+
+	// Apply the optional version constraint, then dedup across catalogs. The
+	// domain error already reads "invalid version constraint ..."; do not
+	// re-prefix it.
+	filtered, err := catalog.FilterByVersionConstraint(artifacts, versionConstraint)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithSuggestion("Use a valid semver constraint such as '>=1.2.0' or '~1.4'."),
+		), nil
+	}
+	filtered = catalog.DeduplicateArtifacts(filtered)
+
+	// Deterministic ordering (name, then kind, then semver-descending version)
+	// so repeated calls and cross-run diffs by AI consumers are stable
+	// regardless of catalog iteration order. Version uses a semver-aware compare
+	// (newest first) so 10.0.0 sorts before 2.0.0; when versions are equal or
+	// unparsed, fall back to a string compare of the raw tag/version so ordering
+	// is fully deterministic rather than dependent on catalog iteration order.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		if a.Reference.Name != b.Reference.Name {
+			return a.Reference.Name < b.Reference.Name
+		}
+		if a.Reference.Kind != b.Reference.Kind {
+			return a.Reference.Kind < b.Reference.Kind
+		}
+		vi, vj := a.Reference.Version, b.Reference.Version
+		switch {
+		case vi != nil && vj != nil:
+			if !vi.Equal(vj) {
+				return vi.GreaterThan(vj) // newest first
+			}
+		case vi != nil:
+			return true // parsed versions sort before unparsed
+		case vj != nil:
+			return false
+		}
+		// Equal semver, or both unparsed: deterministic string tiebreak.
+		return pluginSortKey(a) < pluginSortKey(b)
+	})
+
+	entries := make([]pluginCatalogEntry, 0, len(filtered))
+	for _, a := range filtered {
+		version := ""
+		if a.Reference.Version != nil {
+			version = a.Reference.Version.String()
+		}
+		entries = append(entries, pluginCatalogEntry{
+			Name:    a.Reference.Name,
+			Kind:    a.Reference.Kind.String(),
+			Version: version,
+			Catalog: a.Catalog,
+			Digest:  a.Digest,
+		})
+	}
+
+	return mcp.NewToolResultJSON(map[string]any{
+		"plugins": entries,
+		"count":   len(entries),
+	})
 }
 
 // handleGetPluginCachePath returns the plugin cache directory path.

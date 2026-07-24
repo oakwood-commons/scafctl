@@ -294,6 +294,24 @@ scafctl catalog list --name greeting -o yaml
 
 This shows only artifacts with the name `greeting`.
 
+### Filtering by kind
+
+Use `--kind` to restrict the listing to a single artifact kind (`solution`,
+`provider`, or `auth-handler`). The special selector `--kind plugin` is a
+convenience alias that lists **both** plugin kinds -- providers and auth
+handlers -- so you do not have to run the command twice:
+
+```bash
+# List every plugin (providers + auth handlers) in the catalog
+scafctl catalog list --kind plugin
+
+# All versions of a specific plugin
+scafctl catalog list --kind plugin --name github --all-versions
+```
+
+`plugin` is a selector only; artifacts are still stored as `provider` or
+`auth-handler` and each row's `kind` column reflects the underlying kind.
+
 > [!NOTE]
 > **Private registries and rejected credentials.** If a catalog points at a
 > private OCI registry and your stored credentials are rejected (for example an

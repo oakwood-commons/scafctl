@@ -104,6 +104,12 @@ func TestArrayReturningToolsEmitObjectEnvelope(t *testing.T) {
 		// still be an object with a (possibly empty) plugins array.
 		assertObjectEnvelope(t, call(t, "list_plugins", map[string]any{}, srv.handleListPlugins), "plugins", false)
 	})
+	t.Run("catalog_list_plugins", func(t *testing.T) {
+		// Local catalog is 'local' so no network is required; the local catalog
+		// may be empty in a clean environment, so the plugins array may be empty
+		// -- the envelope must still be a record with a plugins array.
+		assertObjectEnvelope(t, call(t, "catalog_list_plugins", map[string]any{"catalog": "local"}, srv.handleCatalogListPlugins), "plugins", false)
+	})
 	t.Run("list_solutions", func(t *testing.T) {
 		// The local catalog may be empty; the envelope must still be an object
 		// with a (possibly empty) solutions array.

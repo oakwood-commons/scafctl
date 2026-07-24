@@ -478,7 +478,7 @@ Tool Latency Guide (helps optimize tool selection):
     get_plugin_cache_path
   🌐 Variable (may use network or execute code):
     preview_resolvers, preview_action, dry_run_solution, render_solution,
-    run_solution_tests`
+    run_solution_tests, catalog_list_plugins`
 
 // serverInstructions returns the MCP server instructions with the binary name
 // substituted for all "scafctl" references.

@@ -127,6 +127,12 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  # List only solutions
 			  %[1]s catalog list --kind solution
 
+			  # List only plugins (providers and auth handlers)
+			  %[1]s catalog list --kind plugin
+
+			  # List all versions of a plugin
+			  %[1]s catalog list --kind plugin --name github --all-versions
+
 			  # List all artifacts in a remote catalog
 			  %[1]s catalog list --catalog my-registry
 
@@ -155,7 +161,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		},
 	}
 
-	cmd.Flags().StringVar(&options.Kind, "kind", "", "Filter by artifact kind (solution, provider, auth-handler)")
+	cmd.Flags().StringVar(&options.Kind, "kind", "", "Filter by artifact kind (solution, provider, auth-handler, or 'plugin' for providers + auth handlers)")
 	cmd.Flags().StringVar(&options.Name, "name", "", "Filter by artifact name (shows all versions when set)")
 	cmd.Flags().StringVarP(&options.Search, "search", "s", "", "Filter artifacts by name (substring match)")
 	cmd.Flags().StringVarP(&options.Catalog, "catalog", "c", "", catalogFlagUsage)
@@ -206,20 +212,18 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	}
 	opts.Name = name
 
-	// Parse kind filter
-	var kind catalog.ArtifactKind
-	if opts.Kind != "" {
-		kind = catalog.ArtifactKind(opts.Kind)
-		if !kind.IsValid() {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
-		}
+	// Parse kind filter. The empty string means "all kinds"; the "plugin"
+	// selector expands to provider + auth-handler (see catalog.ExpandKindSelector).
+	kinds, ok := catalog.ExpandKindSelector(opts.Kind)
+	if !ok {
+		w.Errorf("invalid kind %q: must be 'solution', 'provider', 'auth-handler', or 'plugin'", opts.Kind)
+		return exitcode.Errorf("invalid kind")
 	}
 
 	// When --catalog names a catalog that is NOT in the user's config (e.g., a
 	// bare registry URL), delegate to the direct remote listing path.
 	if opts.Catalog != "" && !isConfiguredCatalog(ctx, opts.Catalog) {
-		return runListRemote(ctx, opts, kind, outputOpts)
+		return runListRemote(ctx, opts, kinds, outputOpts)
 	}
 
 	// Create local catalog
@@ -230,7 +234,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	}
 
 	// List local artifacts
-	artifacts, err := localCatalog.List(ctx, kind, opts.Name)
+	artifacts, err := catalog.ListAcrossKinds(ctx, localCatalog, kinds, opts.Name, *lgr)
 	if err != nil {
 		w.Errorf("failed to list artifacts: %v", err)
 		return exitcode.WithCode(err, exitcode.CatalogError)
@@ -273,7 +277,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 				CliParams: opts.CliParams,
 				IOStreams: opts.IOStreams,
 			}
-			remoteArtifacts, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kind)
+			remoteArtifacts, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kinds)
 			if remoteErr != nil {
 				if catalog.IsEnumerationNotSupported(remoteErr) {
 					w.Verbosef("Catalog %q does not support enumeration, skipping.", catCfg.Name)
@@ -384,20 +388,21 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
-	var kind catalog.ArtifactKind
-	if opts.Kind != "" {
-		kind = catalog.ArtifactKind(opts.Kind)
-		if !kind.IsValid() {
-			w.Errorf("invalid kind %q: must be 'solution', 'provider', or 'auth-handler'", opts.Kind)
-			return exitcode.Errorf("invalid kind")
-		}
-	} else if remoteRef.Kind != "" {
-		kind = remoteRef.Kind
+	// Resolve the kind selector. An explicit --kind wins (and may be the
+	// "plugin" alias expanding to provider + auth-handler); otherwise fall back
+	// to the kind embedded in the remote reference, if any.
+	kinds, ok := catalog.ExpandKindSelector(opts.Kind)
+	if !ok {
+		w.Errorf("invalid kind %q: must be 'solution', 'provider', 'auth-handler', or 'plugin'", opts.Kind)
+		return exitcode.Errorf("invalid kind")
+	}
+	if opts.Kind == "" && remoteRef.Kind != "" {
+		kinds = []catalog.ArtifactKind{remoteRef.Kind}
 	}
 
 	w.Verbosef("Listing tags for %s...", remoteRef.Name)
 
-	artifacts, err := remoteCatalog.List(ctx, kind, remoteRef.Name)
+	artifacts, err := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, remoteRef.Name, *lgr)
 	rawResultCount := len(artifacts)
 	if err != nil {
 		w.Errorf("failed to list remote artifacts: %v", err)
@@ -429,14 +434,14 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, catalog.NewAuthDegradedError(remoteCatalog), rawResultCount)
 }
 
-func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
+func runListRemote(ctx context.Context, opts *ListOptions, kinds []catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
 	w := writer.FromContext(ctx)
 
 	if opts.Name == "" {
 		w.Verbose("Enumerating all artifacts in catalog (this may take a moment)...")
 	}
 
-	artifacts, degraded, err := listRemoteArtifacts(ctx, opts, kind)
+	artifacts, degraded, err := listRemoteArtifacts(ctx, opts, kinds)
 	rawResultCount := len(artifacts)
 	if err != nil {
 		if catalog.IsEnumerationNotSupported(err) {
@@ -492,7 +497,7 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 // listRemoteArtifacts fetches artifacts from a configured remote catalog.
 // This is shared between runListRemote (explicit --catalog) and the
 // unified all-catalogs search in runList.
-func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind) ([]catalog.ArtifactInfo, *catalog.AuthDegradedError, error) {
+func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kinds []catalog.ArtifactKind) ([]catalog.ArtifactInfo, *catalog.AuthDegradedError, error) {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -531,7 +536,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 		return nil, nil, fmt.Errorf("failed to create remote catalog: %w", err)
 	}
 
-	result, listErr := remoteCatalog.List(ctx, kind, opts.Name)
+	result, listErr := catalog.ListAcrossKinds(ctx, remoteCatalog, kinds, opts.Name, *lgr)
 
 	// If stored credentials were rejected the catalog fell back to anonymous
 	// access, so the listing is degraded/incomplete rather than authoritative.

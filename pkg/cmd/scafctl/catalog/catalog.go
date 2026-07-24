@@ -7,12 +7,10 @@ package catalog
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/Masterminds/semver/v3"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	catversion "github.com/oakwood-commons/scafctl/pkg/catalog/version"
@@ -385,49 +383,7 @@ func resolveVersionConstraint(ctx context.Context, cat catalog.Catalog, ref cata
 // versions are excluded from the result. When constraint is empty, the input
 // is returned unchanged. Results are sorted descending (newest first).
 func filterArtifactsByConstraint(artifacts []catalog.ArtifactInfo, constraint string) ([]catalog.ArtifactInfo, error) {
-	if constraint == "" {
-		return artifacts, nil
-	}
-
-	var versions []*semver.Version
-	for _, a := range artifacts {
-		versions = append(versions, a.Reference.Version)
-	}
-
-	matched, err := catversion.FilterSemver(versions, constraint)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build a set of matching version strings for O(1) lookup.
-	matchedVersions := make(map[string]struct{}, len(matched))
-	for _, v := range matched {
-		matchedVersions[v.Original()] = struct{}{}
-	}
-
-	// Collect all artifacts whose version matches, preserving all kinds.
-	// Then sort by version descending (matching FilterSemver order).
-	result := make([]catalog.ArtifactInfo, 0, len(matched))
-	for _, a := range artifacts {
-		if a.Reference.Version != nil {
-			if _, ok := matchedVersions[a.Reference.Version.Original()]; ok {
-				result = append(result, a)
-			}
-		}
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		vi := result[i].Reference.Version
-		vj := result[j].Reference.Version
-		if vi == nil {
-			return false
-		}
-		if vj == nil {
-			return true
-		}
-		return vj.LessThan(vi) // descending
-	})
-	return result, nil
+	return catalog.FilterByVersionConstraint(artifacts, constraint)
 }
 
 // filterPreReleaseArtifacts removes artifacts with pre-release versions
@@ -470,70 +426,8 @@ func isConfiguredCatalog(ctx context.Context, name string) bool {
 }
 
 // deduplicateArtifacts merges rows with the same name+tag+kind across catalogs.
-// When duplicates exist, the row with richer metadata (digest, createdAt) is
-// preferred and catalog names are combined into a comma-separated string.
+// It delegates to catalog.DeduplicateArtifacts (shared with the MCP
+// catalog_list_plugins tool) so dedup behavior is identical across surfaces.
 func deduplicateArtifacts(artifacts []catalog.ArtifactInfo) []catalog.ArtifactInfo {
-	type dedupKey struct {
-		name string
-		tag  string
-		kind catalog.ArtifactKind
-	}
-
-	keyFor := func(a catalog.ArtifactInfo) dedupKey {
-		tag := a.Tag
-		if tag == "" && a.Reference.Version != nil {
-			tag = a.Reference.Version.String()
-		}
-		return dedupKey{name: a.Reference.Name, tag: tag, kind: a.Reference.Kind}
-	}
-
-	seen := make(map[dedupKey]int, len(artifacts)) // key → index in result
-	result := make([]catalog.ArtifactInfo, 0, len(artifacts))
-
-	catalogSet := func(csv string) map[string]struct{} {
-		set := make(map[string]struct{})
-		for _, name := range strings.Split(csv, ", ") {
-			if name != "" {
-				set[name] = struct{}{}
-			}
-		}
-		return set
-	}
-
-	for _, a := range artifacts {
-		k := keyFor(a)
-		if idx, ok := seen[k]; ok {
-			existing := &result[idx]
-
-			// Combine catalog names using exact set membership (not substring).
-			names := catalogSet(existing.Catalog)
-			if _, found := names[a.Catalog]; !found {
-				existing.Catalog = existing.Catalog + ", " + a.Catalog
-			}
-
-			// Prefer richer metadata.
-			if existing.Digest == "" && a.Digest != "" {
-				existing.Digest = a.Digest
-			}
-			if existing.CreatedAt.IsZero() && !a.CreatedAt.IsZero() {
-				existing.CreatedAt = a.CreatedAt
-			}
-			// Merge annotations: keep existing values, fill gaps from the other catalog.
-			if len(a.Annotations) > 0 {
-				if existing.Annotations == nil {
-					existing.Annotations = make(map[string]string, len(a.Annotations))
-				}
-				for k, v := range a.Annotations {
-					if _, found := existing.Annotations[k]; !found {
-						existing.Annotations[k] = v
-					}
-				}
-			}
-		} else {
-			seen[k] = len(result)
-			result = append(result, a)
-		}
-	}
-
-	return result
+	return catalog.DeduplicateArtifacts(artifacts)
 }
