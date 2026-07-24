@@ -27,6 +27,16 @@ func TestNewCelProvider(t *testing.T) {
 	assert.NotEmpty(t, desc.OutputSchemas[provider.CapabilityTransform].Properties)
 }
 
+// TestCelProvider_ExpressionNoMaxLength verifies the expression input has no
+// maxLength cap. CEL runtime cost limits are the real DoS guard, so a character
+// cap only produces false rejections for large literal expressions.
+func TestCelProvider_ExpressionNoMaxLength(t *testing.T) {
+	desc := NewCelProvider().Descriptor()
+	expr := desc.Schema.Properties["expression"]
+	require.NotNil(t, expr)
+	assert.Nil(t, expr.MaxLength, "expression input must not cap maxLength")
+}
+
 func TestCelProvider_Execute_StringTransform(t *testing.T) {
 	p := NewCelProvider()
 	ctx := provider.WithResolverContext(context.Background(), map[string]any{

@@ -146,6 +146,60 @@ func TestValidateSolutionAgainstSchema_ConditionShorthand(t *testing.T) {
 	})
 }
 
+// TestValidateSolutionAgainstSchema_TransformStepCap verifies the resolver
+// transform phase accepts up to the raised step cap (200) and rejects more.
+// This guards the loosened maxItems boundary against regressions.
+func TestValidateSolutionAgainstSchema_TransformStepCap(t *testing.T) {
+	buildSolution := func(n int) map[string]any {
+		steps := make([]any, 0, n)
+		for range n {
+			steps = append(steps, map[string]any{
+				"provider": "cel",
+				"inputs":   map[string]any{"expression": "_"},
+			})
+		}
+		return map[string]any{
+			"apiVersion": "scafctl.io/v1",
+			"kind":       "Solution",
+			"metadata": map[string]any{
+				"name":    "test-solution",
+				"version": "1.0.0",
+			},
+			"spec": map[string]any{
+				"resolvers": map[string]any{
+					"a": map[string]any{
+						"name":        "a",
+						"description": "d",
+						"resolve": map[string]any{
+							"with": []any{map[string]any{
+								"provider": "static",
+								"inputs":   map[string]any{"value": "hi"},
+							}},
+						},
+						"transform": map[string]any{
+							"with": steps,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("at cap validates", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		violations, err := ValidateSolutionAgainstSchema(buildSolution(200))
+		require.NoError(t, err)
+		assert.Empty(t, violations, "200 transform steps should validate")
+	})
+
+	t.Run("above cap is flagged", func(t *testing.T) {
+		resetSolutionSchemaOnce()
+		violations, err := ValidateSolutionAgainstSchema(buildSolution(201))
+		require.NoError(t, err)
+		assert.NotEmpty(t, violations, "201 transform steps should exceed the cap")
+	})
+}
+
 // conditionSolution builds a minimal solution whose single source carries the
 // supplied extra keys (e.g., a when or continueOnError condition).
 func conditionSolution(sourceExtra map[string]any) map[string]any {
