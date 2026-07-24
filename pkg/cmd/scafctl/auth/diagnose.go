@@ -425,11 +425,14 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 					kvx.WithOutputDisplaySchemaJSON(authDiagnoseDisplaySchema),
 					kvx.WithOutputColumnOrder([]string{"status", "category", "check", "message"}),
 				)
-				return outputOpts.Write(results)
+				if err := outputOpts.Write(results); err != nil {
+					return err
+				}
 			}
 
-			// Only return non-zero when explicitly requested (structured) or
-			// when running in human mode.
+			// Signal failure via a non-zero exit code in every output mode, so
+			// automated preflight (e.g. `auth diagnose -o json`) does not get a
+			// false all-clear when a check reports StatusFail.
 			if failCount > 0 {
 				return exitcode.WithCode(fmt.Errorf("one or more diagnostic checks failed"), exitcode.GeneralError)
 			}

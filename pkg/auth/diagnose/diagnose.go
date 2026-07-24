@@ -353,7 +353,8 @@ func RunSecretsStoreCheck(requireSecureKeyring bool) Check {
 			Message: fmt.Sprintf(
 				"cannot access the master-key keyring: %v -- login and token caching will fail. "+
 					"Ensure the OS keychain (Keychain/Credential Manager/Secret Service) is reachable, "+
-					"or set SCAFCTL_SECRET_KEY to supply the master key explicitly (e.g. on headless/CI hosts)",
+					"set SCAFCTL_SECRET_KEY to supply the master key explicitly (e.g. on headless/CI hosts), "+
+					"or check the file-backend master key under the data dir (master.key, expected mode 0600) is readable",
 				res.err,
 			),
 		}

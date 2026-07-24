@@ -3394,19 +3394,22 @@ func TestIntegration_AuthDiagnoseSecretsStoreCheckJSON(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "auth", "diagnose", "-o", "json")
 
-	if exitCode == 0 && strings.TrimSpace(stdout) != "" {
-		var result []map[string]any
-		require.NoError(t, json.Unmarshal([]byte(stdout), &result), "diagnose -o json must produce valid JSON array")
+	// Structured output must always be a valid JSON array containing the
+	// secrets-store row, regardless of exit code. A StatusFail now yields a
+	// non-zero exit (issue #684), so validation must not be gated on exit==0.
+	require.True(t, exitCode == 0 || exitCode == 1, "expected exit code 0 or 1, got %d", exitCode)
 
-		var found bool
-		for _, row := range result {
-			if row["category"] == "secrets" && row["check"] == "secrets store" {
-				found = true
-				break
-			}
+	var result []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result), "diagnose -o json must produce valid JSON array")
+
+	var found bool
+	for _, row := range result {
+		if row["category"] == "secrets" && row["check"] == "secrets store" {
+			found = true
+			break
 		}
-		assert.True(t, found, "expected a secrets-store check row in JSON output")
 	}
+	assert.True(t, found, "expected a secrets-store check row in JSON output")
 }
 
 func TestIntegration_AuthDiagnoseHelpDocumentsSecretsCheck(t *testing.T) {
