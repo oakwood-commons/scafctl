@@ -31,10 +31,8 @@ func TestArrayReturningToolsEmitObjectEnvelope(t *testing.T) {
 	require.NoError(t, err)
 
 	// assertObjectEnvelope checks the result is a top-level JSON object whose
-	// `key` holds a JSON array. requireNonEmpty toggles whether the array must
-	// contain at least one element (some lists are legitimately empty in a clean
-	// test environment, e.g. no cached plugins).
-	assertObjectEnvelope := func(t *testing.T, result *mcp.CallToolResult, key string, requireNonEmpty bool) {
+	// `key` holds a non-empty JSON array.
+	assertObjectEnvelope := func(t *testing.T, result *mcp.CallToolResult, key string) {
 		t.Helper()
 		require.False(t, result.IsError, "tool returned an error result")
 		text := extractJSONContent(t, result)
@@ -52,9 +50,7 @@ func TestArrayReturningToolsEmitObjectEnvelope(t *testing.T) {
 
 		var arr []json.RawMessage
 		require.NoErrorf(t, json.Unmarshal(raw, &arr), "key %q must hold a JSON array", key)
-		if requireNonEmpty {
-			assert.NotEmptyf(t, arr, "key %q should list at least one item", key)
-		}
+		assert.NotEmptyf(t, arr, "key %q should list at least one item", key)
 	}
 
 	call := func(t *testing.T, name string, args map[string]any, handler func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)) *mcp.CallToolResult {
@@ -68,31 +64,32 @@ func TestArrayReturningToolsEmitObjectEnvelope(t *testing.T) {
 	}
 
 	t.Run("list_providers", func(t *testing.T) {
-		assertObjectEnvelope(t, call(t, "list_providers", map[string]any{}, srv.handleListProviders), "providers", true)
+		assertObjectEnvelope(t, call(t, "list_providers", map[string]any{}, srv.handleListProviders), "providers")
 	})
 	t.Run("list_providers with capability filter", func(t *testing.T) {
-		assertObjectEnvelope(t, call(t, "list_providers", map[string]any{"capability": "from"}, srv.handleListProviders), "providers", true)
+		assertObjectEnvelope(t, call(t, "list_providers", map[string]any{"capability": "from"}, srv.handleListProviders), "providers")
 	})
 	t.Run("list_cel_functions", func(t *testing.T) {
-		assertObjectEnvelope(t, call(t, "list_cel_functions", map[string]any{}, srv.handleListCELFunctions), "functions", true)
+		assertObjectEnvelope(t, call(t, "list_cel_functions", map[string]any{}, srv.handleListCELFunctions), "functions")
 	})
 	t.Run("list_cel_functions custom_only", func(t *testing.T) {
-		assertObjectEnvelope(t, call(t, "list_cel_functions", map[string]any{"custom_only": true}, srv.handleListCELFunctions), "functions", true)
+		assertObjectEnvelope(t, call(t, "list_cel_functions", map[string]any{"custom_only": true}, srv.handleListCELFunctions), "functions")
 	})
 	t.Run("list_go_template_functions", func(t *testing.T) {
-		assertObjectEnvelope(t, call(t, "list_go_template_functions", map[string]any{}, srv.handleListGoTemplateFunctions), "functions", true)
+		assertObjectEnvelope(t, call(t, "list_go_template_functions", map[string]any{}, srv.handleListGoTemplateFunctions), "functions")
 	})
 	t.Run("list_official_providers", func(t *testing.T) {
 		// Official providers come from a fixed manifest; expect a non-empty list.
-		assertObjectEnvelope(t, call(t, "list_official_providers", map[string]any{}, srv.handleListOfficialProviders), "providers", true)
+		assertObjectEnvelope(t, call(t, "list_official_providers", map[string]any{}, srv.handleListOfficialProviders), "providers")
 	})
-	t.Run("list_plugins", func(t *testing.T) {
-		// The plugin cache may be empty in a clean environment; only require the
-		// object envelope, not a non-empty list.
-		assertObjectEnvelope(t, call(t, "list_plugins", map[string]any{}, srv.handleListPlugins), "plugins", false)
-	})
+	// Note: list_plugins is intentionally not covered here. When the plugin cache
+	// is empty (the norm in CI) it returns a plain-text message, not a JSON
+	// envelope, so a bare "must be an object" assertion is environment-dependent.
+	// Its populated JSON path (the one that could carry the bare-array bug) is
+	// covered by TestHandleListPlugins/returns_plugins_when_cache_populated, which
+	// seeds a plugin and asserts the {"plugins": [...]} envelope.
 	t.Run("get_command_help no-arg", func(t *testing.T) {
-		assertObjectEnvelope(t, call(t, "get_command_help", map[string]any{}, srv.handleGetCommandHelp), "commands", true)
+		assertObjectEnvelope(t, call(t, "get_command_help", map[string]any{}, srv.handleGetCommandHelp), "commands")
 	})
 }
 
