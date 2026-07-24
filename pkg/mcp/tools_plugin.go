@@ -148,6 +148,20 @@ type pluginCatalogEntry struct {
 	Digest  string `json:"digest,omitempty"`
 }
 
+// pluginSortKey returns a stable string identity for an artifact, used as the
+// final tiebreak in the catalog_list_plugins ordering so entries that are equal
+// on name/kind/semver (or have unparsed versions) still sort deterministically
+// rather than depending on catalog iteration order.
+func pluginSortKey(a catalog.ArtifactInfo) string {
+	if a.Tag != "" {
+		return a.Tag
+	}
+	if a.Reference.Version != nil {
+		return a.Reference.Version.String()
+	}
+	return a.Digest
+}
+
 // handleCatalogListPlugins lists plugin artifacts (provider + auth-handler)
 // available across the local and remote catalog(s). It is a thin wrapper: it
 // gathers the catalogs to query and delegates the multi-kind listing,
@@ -229,10 +243,12 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 		), nil
 	}
 
-	// Apply the optional version constraint, then dedup across catalogs.
+	// Apply the optional version constraint, then dedup across catalogs. The
+	// domain error already reads "invalid version constraint ..."; do not
+	// re-prefix it.
 	filtered, err := catalog.FilterByVersionConstraint(artifacts, versionConstraint)
 	if err != nil {
-		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("invalid version constraint: %v", err),
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
 			WithSuggestion("Use a valid semver constraint such as '>=1.2.0' or '~1.4'."),
 		), nil
 	}
@@ -241,8 +257,9 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 	// Deterministic ordering (name, then kind, then semver-descending version)
 	// so repeated calls and cross-run diffs by AI consumers are stable
 	// regardless of catalog iteration order. Version uses a semver-aware compare
-	// (newest first) so 10.0.0 sorts before 2.0.0; entries without a parsed
-	// version fall back to a stable string compare.
+	// (newest first) so 10.0.0 sorts before 2.0.0; when versions are equal or
+	// unparsed, fall back to a string compare of the raw tag/version so ordering
+	// is fully deterministic rather than dependent on catalog iteration order.
 	sort.SliceStable(filtered, func(i, j int) bool {
 		a, b := filtered[i], filtered[j]
 		if a.Reference.Name != b.Reference.Name {
@@ -254,17 +271,16 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 		vi, vj := a.Reference.Version, b.Reference.Version
 		switch {
 		case vi != nil && vj != nil:
-			if vi.Equal(vj) {
-				return false
+			if !vi.Equal(vj) {
+				return vi.GreaterThan(vj) // newest first
 			}
-			return vi.GreaterThan(vj) // newest first
 		case vi != nil:
 			return true // parsed versions sort before unparsed
 		case vj != nil:
 			return false
-		default:
-			return false
 		}
+		// Equal semver, or both unparsed: deterministic string tiebreak.
+		return pluginSortKey(a) < pluginSortKey(b)
 	})
 
 	entries := make([]pluginCatalogEntry, 0, len(filtered))
