@@ -35,9 +35,16 @@ func TestHandleListPlugins(t *testing.T) {
 		result, err := srv.handleListPlugins(context.Background(), request)
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
-		// Should indicate no plugins found
-		text := result.Content[0].(mcp.TextContent).Text
-		assert.Contains(t, text, "No cached plugins")
+		// Empty cache still returns a JSON envelope (not plain text) so strict
+		// MCP clients receive a valid structuredContent record.
+		text := extractJSONContent(t, result)
+		var envelope struct {
+			Plugins []plugin.CachedPlugin `json:"plugins"`
+			Message string                `json:"message"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		assert.Empty(t, envelope.Plugins, "empty cache should yield an empty plugins array")
+		assert.Contains(t, envelope.Message, "No cached plugins")
 	})
 
 	t.Run("returns plugins when cache populated", func(t *testing.T) {

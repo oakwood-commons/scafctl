@@ -96,7 +96,12 @@ func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*m
 	}
 
 	if len(plugins) == 0 {
-		return mcp.NewToolResultText("No cached plugins found. Use 'plugins install -f <solution>' to fetch plugins from catalogs, or copy plugin binaries to the plugin cache directory."), nil
+		// Return an empty envelope (not plain text) so strict MCP clients still
+		// receive a valid structuredContent record.
+		return mcp.NewToolResultJSON(map[string]any{
+			"plugins": []any{},
+			"message": "No cached plugins found. Use 'plugins install -f <solution>' to fetch plugins from catalogs, or copy plugin binaries to the plugin cache directory.",
+		})
 	}
 
 	return mcp.NewToolResultJSON(map[string]any{"plugins": plugins})
