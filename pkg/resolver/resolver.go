@@ -38,6 +38,22 @@ const (
 	ErrorBehaviorContinue = spec.OnErrorContinue
 )
 
+// Phase step-count caps. These bound the number of provider steps allowed in a
+// resolver phase, guarding against pathological solutions while leaving ample
+// headroom for values assembled from many sequential steps. They must stay in
+// sync with the maxItems struct tags on ResolvePhase.With, TransformPhase.With,
+// and ValidatePhase.With (enforced by a drift-guard test). They are unexported
+// because the tags do the enforcing; the constants exist only to document the
+// value and guard against drift.
+const (
+	// maxResolveSteps is the maximum number of steps in a resolve phase.
+	maxResolveSteps = 200
+	// maxTransformSteps is the maximum number of steps in a transform phase.
+	maxTransformSteps = 200
+	// maxValidateSteps is the maximum number of steps in a validate phase.
+	maxValidateSteps = 200
+)
+
 // Condition is a resolver-specific condition type with custom YAML/JSON unmarshalling.
 // Unlike spec.Condition, this type only wraps the expr field, keeping backward
 // compatibility with existing resolver YAML files.
@@ -236,20 +252,20 @@ type Messages struct {
 
 // ResolvePhase defines how to obtain an initial value
 type ResolvePhase struct {
-	With  []ProviderSource `json:"with" yaml:"with" doc:"Ordered list of value sources" minItems:"1" maxItems:"50"`
+	With  []ProviderSource `json:"with" yaml:"with" doc:"Ordered list of value sources" minItems:"1" maxItems:"200"`
 	Until *Condition       `json:"until,omitempty" yaml:"until,omitempty" doc:"Stop condition (default: first non-null)"`
 	When  *Condition       `json:"when,omitempty" yaml:"when,omitempty" doc:"Phase-level condition"`
 }
 
 // TransformPhase defines how to derive a new value
 type TransformPhase struct {
-	With []ProviderTransform `json:"with" yaml:"with" doc:"Ordered list of transformations" minItems:"1" maxItems:"50"`
+	With []ProviderTransform `json:"with" yaml:"with" doc:"Ordered list of transformations" minItems:"1" maxItems:"200"`
 	When *Condition          `json:"when,omitempty" yaml:"when,omitempty" doc:"Phase-level condition"`
 }
 
 // ValidatePhase defines validation constraints
 type ValidatePhase struct {
-	With []ProviderValidation `json:"with" yaml:"with" doc:"Validation rules" minItems:"1" maxItems:"20"`
+	With []ProviderValidation `json:"with" yaml:"with" doc:"Validation rules" minItems:"1" maxItems:"200"`
 	When *Condition           `json:"when,omitempty" yaml:"when,omitempty" doc:"Phase-level condition"`
 }
 

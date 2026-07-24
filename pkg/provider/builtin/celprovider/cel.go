@@ -14,7 +14,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/schemahelper"
-	"github.com/oakwood-commons/scafctl/pkg/ptrs"
 )
 
 const (
@@ -62,8 +61,7 @@ func NewCelProvider() *CelProvider {
 			},
 			Schema: schemahelper.ObjectSchema([]string{"expression"}, map[string]*jsonschema.Schema{
 				"expression": schemahelper.StringProp("CEL expression to evaluate. Resolver data is available under the '_' variable (e.g., _.name).",
-					schemahelper.WithExample("_.name.upperAscii()"),
-					schemahelper.WithMaxLength(*ptrs.IntPtr(8192))),
+					schemahelper.WithExample("_.name.upperAscii()")),
 				"variables": schemahelper.AnyProp("Additional variables to make available in the CEL expression context",
 					schemahelper.WithExample(map[string]any{"prefix": "Mr.", "suffix": "Jr."})),
 			}),

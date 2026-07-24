@@ -22,6 +22,16 @@ func TestNewDebugProvider(t *testing.T) {
 	assert.Equal(t, "Debug Provider", p.Descriptor().DisplayName)
 }
 
+// TestDebugProvider_ExpressionNoMaxLength verifies the expression input has no
+// maxLength cap. CEL runtime cost limits are the real DoS guard, so a character
+// cap only produces false rejections for large literal expressions.
+func TestDebugProvider_ExpressionNoMaxLength(t *testing.T) {
+	desc := NewDebugProvider().Descriptor()
+	expr := desc.Schema.Properties[fieldExpression]
+	require.NotNil(t, expr)
+	assert.Nil(t, expr.MaxLength, "expression input must not cap maxLength")
+}
+
 func TestDebugProvider_Execute_AllResolverData(t *testing.T) {
 	p := NewDebugProvider()
 	ctx := logger.WithLogger(context.Background(), logger.Get(0))

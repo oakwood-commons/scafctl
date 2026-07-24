@@ -5,6 +5,8 @@ package resolver
 
 import (
 	"encoding/json"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -13,6 +15,41 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+// TestPhaseStepCaps_TagsMatchConstants guards against drift between the phase
+// step-count constants and the maxItems struct tags they document. The tags
+// must be literals (Go struct tags cannot reference constants), so this test
+// is the single source of truth keeping the two in sync.
+func TestPhaseStepCaps_TagsMatchConstants(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      reflect.Type
+		field    string
+		expected int
+	}{
+		{"resolve phase", reflect.TypeOf(ResolvePhase{}), "With", maxResolveSteps},
+		{"transform phase", reflect.TypeOf(TransformPhase{}), "With", maxTransformSteps},
+		{"validate phase", reflect.TypeOf(ValidatePhase{}), "With", maxValidateSteps},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field, ok := tt.typ.FieldByName(tt.field)
+			require.True(t, ok, "field %s not found on %s", tt.field, tt.typ.Name())
+			tag := field.Tag.Get("maxItems")
+			require.NotEmpty(t, tag, "maxItems tag missing on %s.%s", tt.typ.Name(), tt.field)
+			assert.Equal(t, tt.expected, mustAtoi(t, tag),
+				"maxItems tag on %s.%s must match the documented constant", tt.typ.Name(), tt.field)
+		})
+	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	require.NoError(t, err, "maxItems tag %q is not an integer", s)
+	return n
+}
 
 func TestResolverType_Constants(t *testing.T) {
 	tests := []struct {
