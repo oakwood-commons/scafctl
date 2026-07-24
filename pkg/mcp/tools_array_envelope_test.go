@@ -21,6 +21,10 @@ import (
 // to an array, which strict (zod) MCP clients reject with "expected record,
 // received array", making the tool unusable over MCP.
 func TestArrayReturningToolsEmitObjectEnvelope(t *testing.T) {
+	// Sandbox XDG so the plugin cache / catalog handlers read an isolated temp
+	// directory instead of the developer's or CI user's real XDG paths.
+	setTestXDG(t, t.TempDir())
+
 	reg, err := builtin.DefaultRegistry(context.Background())
 	require.NoError(t, err)
 	root := buildTestCommandTree()
