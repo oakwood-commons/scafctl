@@ -135,6 +135,61 @@ func runScafctlWithEnvInDir(t *testing.T, dir string, env map[string]string, arg
 	return runScafctlWithOpts(t, dir, nil, env, args...)
 }
 
+// runScafctlIsolatedEnv runs the binary with a fully controlled environment
+// derived from os.Environ() but with the keys in unset removed and the pairs
+// in env applied (overriding any inherited value). Unlike runScafctlWithEnv,
+// this can REMOVE inherited variables (e.g. SCAFCTL_SECRET_KEY), which is
+// required for deterministic secrets-backend tests.
+func runScafctlIsolatedEnv(t *testing.T, unset []string, env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	cmd.Dir = findProjectRoot()
+
+	drop := make(map[string]struct{}, len(unset))
+	for _, k := range unset {
+		drop[k] = struct{}{}
+	}
+	base := os.Environ()
+	filtered := make([]string, 0, len(base)+len(env))
+	for _, kv := range base {
+		key := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			key = kv[:i]
+		}
+		if _, skip := drop[key]; skip {
+			continue
+		}
+		if _, overridden := env[key]; overridden {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	for k, v := range env {
+		filtered = append(filtered, k+"="+v)
+	}
+	cmd.Env = filtered
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
+	stdout = outBuf.String()
+	stderr = errBuf.String()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	return stdout, stderr, exitCode
+}
+
 func runScafctlWithOpts(t *testing.T, dir string, stdin io.Reader, env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	return runScafctlWithTimeout(t, 90*time.Second, dir, stdin, env, args...)
@@ -2602,6 +2657,68 @@ func TestIntegration_SecretsHelp(t *testing.T) {
 	assert.Contains(t, stdout, "get")
 	assert.Contains(t, stdout, "list")
 	assert.Contains(t, stdout, "delete")
+}
+
+// TestIntegration_SecretsFileFallback is a regression test for issue 683: on a
+// host with no OS keyring (headless/WSL/CI Linux, no org.freedesktop.secrets),
+// `secrets set`/`secrets get` must still work by degrading to the file-based
+// master.key backend instead of hard-failing.
+func TestIntegration_SecretsFileFallback(t *testing.T) {
+	t.Parallel()
+
+	// This regression reproduces the headless-Linux condition: no reachable
+	// org.freedesktop.secrets Secret Service. We force that deterministically
+	// on Linux by pointing D-Bus at an unreachable session bus, which makes
+	// zalando/go-keyring's Secret Service lookup fail with the "not provided
+	// by any .service" activation error the fix classifies as unavailable.
+	//
+	// On macOS/Windows the OS keychain/credential manager is always present and
+	// cannot be disabled from a subprocess (there is no backend selector by
+	// design), so the deterministic file-fallback path is exercised by the
+	// store-level unit test TestNew_KeyringUnavailableFallsBackToFile instead.
+	if runtime.GOOS != "linux" {
+		t.Skipf("cannot deterministically disable the OS keyring on %s; "+
+			"file fallback is covered by pkg/secrets unit tests", runtime.GOOS)
+	}
+
+	dataHome := t.TempDir()
+	// Override XDG_DATA_HOME (isolate storage), force D-Bus to an unreachable
+	// socket (no Secret Service), and drop any inherited SCAFCTL_SECRET_KEY so
+	// the env backend cannot satisfy the request -- leaving only the file
+	// backend. SCAFCTL_REQUIRE_SECURE_KEYRING=false keeps the file fallback
+	// non-fatal regardless of the host's config.
+	env := map[string]string{
+		"XDG_DATA_HOME":                  dataHome,
+		"DBUS_SESSION_BUS_ADDRESS":       "unix:path=/nonexistent/scafctl-test-no-dbus",
+		"SCAFCTL_REQUIRE_SECURE_KEYRING": "false",
+	}
+	unset := []string{"SCAFCTL_SECRET_KEY"}
+
+	// Set a secret -- must succeed even without an OS keyring.
+	_, setErr, setExit := runScafctlIsolatedEnv(t, unset, env, "secrets", "set", "issue683", "--value", "hello")
+	require.Equal(t, 0, setExit, "secrets set should succeed via file fallback; stderr: %s", setErr)
+
+	// Get it back.
+	getOut, getErr, getExit := runScafctlIsolatedEnv(t, unset, env, "secrets", "get", "issue683")
+	require.Equal(t, 0, getExit, "secrets get should succeed; stderr: %s", getErr)
+	assert.Contains(t, getOut, "hello")
+
+	// The master key must have been persisted to the file backend.
+	masterKey := filepath.Join(dataHome, "scafctl", "master.key")
+	info, statErr := os.Stat(masterKey)
+	require.NoError(t, statErr, "master.key should be written to the file backend")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "master.key must be mode 0600")
+}
+
+func TestIntegration_SecretsHelpDocumentsFallbacks(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "secrets", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// Help must advertise the env and file fallbacks, not just the OS keychain
+	// (issue 683 doc gap).
+	assert.Contains(t, stdout, "SECRET_KEY")
+	assert.Contains(t, stdout, "master.key")
 }
 
 // ============================================================================

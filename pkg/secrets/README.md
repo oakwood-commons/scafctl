@@ -5,7 +5,8 @@ Package `secrets` provides secure secret storage operations using AES-256-GCM en
 ## Overview
 
 The package uses a hybrid approach for secret storage:
-- **Master encryption key** is stored in the OS keychain (or environment variable fallback)
+
+- **Master encryption key** is stored via a three-tier fallback chain: the OS keychain, then the `SCAFCTL_SECRET_KEY` environment variable, then a `master.key` file (mode `0600`) in the data directory
 - **Secrets** are encrypted with AES-256-GCM and stored as individual files
 
 This allows for storing large secrets (e.g., authentication tokens up to ~100KB) that wouldn't fit in the OS keychain directly, while still leveraging secure key storage.
@@ -127,11 +128,16 @@ Invalid examples: `.hidden`, `-invalid`, `my..secret`
 ## Encryption Details
 
 ### Master Key
+
 - **Algorithm:** 256-bit random key (32 bytes)
-- **Storage:** OS keychain (service: `scafctl`, account: `master-key`)
-- **Fallback:** `SCAFCTL_SECRET_KEY` environment variable (base64-encoded)
+- **Storage:** a three-tier fallback chain, tried in order:
+  1. **OS keychain** (service: `scafctl`, account: `master-key`) -- most secure.
+  2. **`SCAFCTL_SECRET_KEY` environment variable** (base64-encoded) -- explicit intent, e.g. CI.
+  3. **`master.key` file** (mode `0600`, in the data directory) -- automatic last-resort fallback so first-run works on headless/WSL/CI Linux where the OS Secret Service (`org.freedesktop.secrets`) is absent.
+- **`requireSecureKeyring`** (config `settings.requireSecureKeyring` / `SCAFCTL_REQUIRE_SECURE_KEYRING`): when enabled, initialization fails rather than silently degrading to the env or file backend.
 
 ### Secret Files
+
 - **Algorithm:** AES-256-GCM (authenticated encryption)
 - **File format:** `[version:1 byte][nonce:12 bytes][ciphertext+tag:N bytes]`
 - **File extension:** `.enc`
@@ -153,6 +159,10 @@ if err != nil {
         // Secret file is corrupted (auto-deleted)
     case errors.Is(err, secrets.ErrKeyringAccess):
         // Cannot access OS keychain
+    case errors.Is(err, secrets.ErrKeyringUnavailable):
+        // OS keyring provider is entirely absent (e.g. no Secret Service on
+        // headless/WSL/CI Linux); the chain falls through to the env/file
+        // backend automatically, so this is normally handled internally.
     default:
         // Other error (filesystem, etc.)
     }
@@ -201,12 +211,26 @@ func TestWithCustomKeyring(t *testing.T) {
 
 In CI environments where OS keychain access is unavailable:
 
-1. Set `SCAFCTL_SECRET_KEY` environment variable with a base64-encoded 32-byte key:
+1. **Recommended -- set an explicit key.** Set `SCAFCTL_SECRET_KEY` with a
+   base64-encoded 32-byte key so the master key is stable across runs:
+
    ```bash
    export SCAFCTL_SECRET_KEY=$(openssl rand -base64 32)
    ```
 
-2. The store will automatically fall back to using this key.
+   The store falls back to this key automatically (the `env` backend).
+
+2. **Automatic file fallback.** If neither the OS keychain nor
+   `SCAFCTL_SECRET_KEY` is available, the store transparently generates and
+   persists a `master.key` file (mode `0600`) in the data directory. This means
+   first-run on headless/WSL/CI Linux (where `org.freedesktop.secrets` is
+   absent) no longer fails hard. Note that a per-run ephemeral filesystem will
+   generate a fresh key each run, so prefer option 1 when secrets must survive
+   across CI jobs.
+
+3. **Enforce secure storage.** To *require* the OS keychain and fail rather than
+   silently degrade to the env/file backend, enable
+   `settings.requireSecureKeyring` (or `SCAFCTL_REQUIRE_SECURE_KEYRING`).
 
 ## Thread Safety
 
@@ -221,6 +245,7 @@ go test -bench=. -benchmem ./pkg/secrets/...
 ```
 
 Example results:
+
 ```
 BenchmarkEncrypt/100B-10          500000    2345 ns/op   42.65 MB/s
 BenchmarkEncrypt/1KB-10           200000    5678 ns/op  180.23 MB/s
