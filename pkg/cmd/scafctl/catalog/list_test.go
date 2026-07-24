@@ -12,6 +12,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
+	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -898,4 +899,121 @@ func TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, outBuf.String(), "[]", "stdout should contain a parseable empty array")
+}
+
+func TestDefaultListCatalogs(t *testing.T) {
+	t.Parallel()
+
+	const (
+		officialURL = "oci://ghcr.io/oakwood-commons"
+		privateURL  = "oci://private.example.com/catalog"
+	)
+
+	officialCat := appconfig.CatalogConfig{
+		Name: appconfig.CatalogNameOfficial,
+		Type: appconfig.CatalogTypeOCI,
+		URL:  officialURL,
+	}
+	privateCat := appconfig.CatalogConfig{
+		Name: "corp",
+		Type: appconfig.CatalogTypeOCI,
+		URL:  privateURL,
+	}
+	localCat := appconfig.CatalogConfig{
+		Name: appconfig.CatalogNameLocal,
+		Type: appconfig.CatalogTypeFilesystem,
+		Path: "/tmp/catalog",
+	}
+
+	tests := []struct {
+		name          string
+		cfg           *appconfig.Config
+		wantNames     []string
+		wantURLsMatch bool // when true, also assert URLs (dedup-by-URL cases)
+	}{
+		{
+			name: "default and official distinct -> primary then official",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: "corp"},
+				Catalogs: []appconfig.CatalogConfig{localCat, privateCat, officialCat},
+			},
+			wantNames: []string{"corp", appconfig.CatalogNameOfficial},
+		},
+		{
+			name: "disableOfficialCatalog -> default only",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: "corp", DisableOfficialCatalog: true},
+				Catalogs: []appconfig.CatalogConfig{localCat, privateCat, officialCat},
+			},
+			wantNames: []string{"corp"},
+		},
+		{
+			name: "default IS official by name -> official once (deduped)",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: appconfig.CatalogNameOfficial},
+				Catalogs: []appconfig.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{appconfig.CatalogNameOfficial},
+		},
+		{
+			name: "default has same URL as official -> deduped to primary",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: "mirror"},
+				Catalogs: []appconfig.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: appconfig.CatalogTypeOCI, URL: officialURL},
+					officialCat,
+				},
+			},
+			wantNames: []string{"mirror"},
+		},
+		{
+			name: "no default configured -> official only",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: ""},
+				Catalogs: []appconfig.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{appconfig.CatalogNameOfficial},
+		},
+		{
+			name: "default is non-OCI -> official only",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: appconfig.CatalogNameLocal},
+				Catalogs: []appconfig.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{appconfig.CatalogNameOfficial},
+		},
+		{
+			name: "official missing from catalogs -> default only",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: "corp"},
+				Catalogs: []appconfig.CatalogConfig{localCat, privateCat},
+			},
+			wantNames: []string{"corp"},
+		},
+		{
+			name: "official present but non-OCI -> default only",
+			cfg: &appconfig.Config{
+				Settings: appconfig.Settings{DefaultCatalog: "corp"},
+				Catalogs: []appconfig.CatalogConfig{
+					localCat,
+					privateCat,
+					{Name: appconfig.CatalogNameOfficial, Type: appconfig.CatalogTypeHTTP, URL: officialURL},
+				},
+			},
+			wantNames: []string{"corp"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := defaultListCatalogs(tt.cfg)
+			gotNames := make([]string, len(got))
+			for i, c := range got {
+				gotNames[i] = c.Name
+			}
+			assert.Equal(t, tt.wantNames, gotNames, "ordered catalog names")
+		})
+	}
 }
