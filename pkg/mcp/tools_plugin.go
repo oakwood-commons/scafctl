@@ -96,10 +96,15 @@ func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*m
 	}
 
 	if len(plugins) == 0 {
-		return mcp.NewToolResultText("No cached plugins found. Use 'plugins install -f <solution>' to fetch plugins from catalogs, or copy plugin binaries to the plugin cache directory."), nil
+		// Return an empty envelope (not plain text) so strict MCP clients still
+		// receive a valid structuredContent record.
+		return mcp.NewToolResultJSON(map[string]any{
+			"plugins": []any{},
+			"message": "No cached plugins found. Use 'plugins install -f <solution>' to fetch plugins from catalogs, or copy plugin binaries to the plugin cache directory.",
+		})
 	}
 
-	return mcp.NewToolResultJSON(plugins)
+	return mcp.NewToolResultJSON(map[string]any{"plugins": plugins})
 }
 
 // handleGetPluginCachePath returns the plugin cache directory path.
@@ -133,7 +138,7 @@ func (s *Server) handleListOfficialProviders(_ context.Context, _ mcp.CallToolRe
 		})
 	}
 
-	return mcp.NewToolResultJSON(items)
+	return mcp.NewToolResultJSON(map[string]any{"providers": items})
 }
 
 // signaturePolicyResponse is the response structure for get_signature_policy.

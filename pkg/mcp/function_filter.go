@@ -68,7 +68,7 @@ func filterAndReturnNamedFunctions[T namedFunction](
 		functions = filtered
 	}
 
-	return mcp.NewToolResultJSON(functions)
+	return mcp.NewToolResultJSON(map[string]any{"functions": functions})
 }
 
 // searchFunctions filters a slice by substring match on both Name and Description.
