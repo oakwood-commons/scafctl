@@ -725,6 +725,11 @@ func TestWriteArtifactList_EmptyStale_FailsLoudly(t *testing.T) {
 	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
 	assert.NotContains(t, outBuf.String(), "No artifacts found in catalog.",
 		"must not assert emptiness when credentials were rejected")
+	// The fatal path emits an explicit error line to stderr (Cobra silences the
+	// returned error), not just a partial-listing warning.
+	assert.Contains(t, errBuf.String(), "Cannot list catalog")
+	assert.NotContains(t, errBuf.String(), "showing anonymous results only",
+		"empty result should use the fatal error framing, not the partial warning")
 	assert.Contains(t, errBuf.String(), "ghcr.io")
 	assert.Contains(t, errBuf.String(), "auth login")
 }
@@ -772,7 +777,8 @@ func TestWriteArtifactList_EmptyStaleJSON_MarkerOnStderr(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
-	// stdout must not contain a bare empty array masquerading as success.
+	// stdout stays a parseable JSON array (an empty [] here); the degraded
+	// signal is on stderr, not asserted as an authoritative empty catalog.
 	assert.NotContains(t, outBuf.String(), "No artifacts found")
 	// The structured degraded marker goes to stderr, preserving stdout's contract.
 	assert.Contains(t, errBuf.String(), `"degraded":true`)

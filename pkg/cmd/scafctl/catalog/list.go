@@ -553,7 +553,7 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 			if structured {
 				writeErr = outputOpts.Write([]ArtifactListItem{})
 			}
-			renderDegradedSignal(ctx, w, degraded, structured, quiet)
+			renderDegradedSignal(ctx, w, degraded, structured, quiet, true /* fatal/empty */)
 			authErr := fmt.Errorf("%w; run %s", degraded, authLoginHint(ctx, degraded.Registry, degraded.Handler))
 			// Surface a stdout write failure alongside the auth-degraded error
 			// (the degraded state remains the primary signal / exit code).
@@ -573,7 +573,7 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 	// from anonymous access, but some content may be hidden. Print the results
 	// (exit 0) and warn that the listing is incomplete.
 	if degraded != nil {
-		renderDegradedSignal(ctx, w, degraded, structured, quiet)
+		renderDegradedSignal(ctx, w, degraded, structured, quiet, false /* partial/non-empty */)
 	}
 
 	// Sort by name, then version descending
@@ -663,17 +663,26 @@ func authLoginHint(ctx context.Context, registry, handler string) string {
 	return fmt.Sprintf("%s catalog login %s", bin, registry)
 }
 
-// renderDegradedSignal emits the human-facing degraded warning and, for
-// structured output, a machine-readable {"degraded":true,...} marker on stderr
-// so -o json consumers can detect the condition without changing the stdout
-// array contract. It emits nothing when quiet output is requested (quiet
-// suppresses all output; the exit code still conveys the failure).
-func renderDegradedSignal(ctx context.Context, w *writer.Writer, degraded *catalog.AuthDegradedError, structured, quiet bool) {
+// renderDegradedSignal emits a human-facing message about the degraded listing
+// and, for structured output, a machine-readable {"degraded":true,...} marker on
+// stderr so -o json consumers can detect the condition without changing the
+// stdout array contract. When fatal is true (an empty result on rejected
+// credentials) it emits an error-framed line, since the command exits non-zero
+// and the returned Cobra error is silenced; otherwise it emits an
+// incomplete-listing warning for a partial (non-empty) result. It emits nothing
+// when quiet output is requested (quiet suppresses all output; the exit code
+// still conveys the failure).
+func renderDegradedSignal(ctx context.Context, w *writer.Writer, degraded *catalog.AuthDegradedError, structured, quiet, fatal bool) {
 	if quiet {
 		return
 	}
-	w.WarnStderrf("Catalog listing is incomplete: rejected %s for %s — showing anonymous results only.",
-		credentialSourceDescription(degraded), degraded.Registry)
+	if fatal {
+		w.Errorf("Cannot list catalog %s: rejected %s, and anonymous access found nothing.",
+			degraded.Registry, credentialSourceDescription(degraded))
+	} else {
+		w.WarnStderrf("Catalog listing is incomplete: rejected %s for %s — showing anonymous results only.",
+			credentialSourceDescription(degraded), degraded.Registry)
+	}
 	w.PlainStderrf("  To fix: %s", authLoginHint(ctx, degraded.Registry, degraded.Handler))
 
 	if structured {
