@@ -303,6 +303,11 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		}
 	}
 
+	// Raw count across local + all remote catalogs, before user filters. Used
+	// to distinguish a genuinely empty (auth-degraded) listing from one emptied
+	// by pre-release/version/catalog filtering.
+	rawResultCount := len(artifacts)
+
 	// Filter pre-release versions unless --pre-release flag is set.
 	if !opts.PreRelease {
 		before := len(artifacts)
@@ -327,7 +332,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		artifacts = filterArtifactsByCatalog(artifacts, opts.Catalog)
 	}
 
-	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, aggregateDegraded)
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, aggregateDegraded, rawResultCount)
 }
 
 // runListFromRemoteRef lists artifacts from a full OCI reference
@@ -393,6 +398,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 	w.Verbosef("Listing tags for %s...", remoteRef.Name)
 
 	artifacts, err := remoteCatalog.List(ctx, kind, remoteRef.Name)
+	rawResultCount := len(artifacts)
 	if err != nil {
 		w.Errorf("failed to list remote artifacts: %v", err)
 		hintOnAuthError(ctx, w, registry, err)
@@ -420,7 +426,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 		w.Verbosef("After version filter %q: %d artifact(s)", opts.VersionConstraint, len(artifacts))
 	}
 
-	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, catalog.NewAuthDegradedError(remoteCatalog))
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, catalog.NewAuthDegradedError(remoteCatalog), rawResultCount)
 }
 
 func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
@@ -431,6 +437,7 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 	}
 
 	artifacts, degraded, err := listRemoteArtifacts(ctx, opts, kind)
+	rawResultCount := len(artifacts)
 	if err != nil {
 		if catalog.IsEnumerationNotSupported(err) {
 			if opts.Name == "" {
@@ -479,7 +486,7 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		}
 	}
 
-	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, degraded)
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, degraded, rawResultCount)
 }
 
 // listRemoteArtifacts fetches artifacts from a configured remote catalog.
@@ -536,16 +543,20 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 	return result, degraded, listErr
 }
 
-func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions, degraded *catalog.AuthDegradedError) error {
+func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions, degraded *catalog.AuthDegradedError, rawResultCount int) error {
 	structured := kvx.IsStructuredFormat(outputOpts.Format)
 	quiet := kvx.IsQuietFormat(outputOpts.Format)
 
 	// Handle empty results.
 	if len(artifacts) == 0 {
-		// Empty + degraded is the "auth failure masquerading as an empty
-		// catalog" case: the listing is not authoritatively empty, credentials
-		// were rejected. Fail loudly instead of printing "No artifacts found".
-		if degraded != nil {
+		// Empty + degraded is treated as fatal ONLY when the raw listing itself
+		// was empty (rawResultCount == 0) -- i.e. rejected credentials produced
+		// a genuinely empty anonymous listing. If the raw listing had artifacts
+		// but user filters (pre-release, version constraint, --catalog) removed
+		// them all, the emptiness is due to filtering, not the auth failure, so
+		// we do not fail the command; we still surface the degraded warning.
+		fatalDegraded := degraded != nil && rawResultCount == 0
+		if fatalDegraded {
 			// For structured output, still write an empty array to stdout so
 			// JSON/YAML consumers get a parseable document even on non-zero
 			// exit; the degraded/authError marker goes to stderr.
@@ -561,6 +572,11 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 				authErr = fmt.Errorf("%w (failed to write empty result: %w)", authErr, writeErr)
 			}
 			return exitcode.WithCode(authErr, exitcode.CatalogError)
+		}
+		// Non-fatal: emptiness came from filtering a degraded-but-non-empty
+		// listing (still warn), or there was no degradation at all.
+		if degraded != nil {
+			renderDegradedSignal(ctx, w, degraded, structured, quiet, false /* non-fatal */)
 		}
 		if structured {
 			return outputOpts.Write([]ArtifactListItem{})

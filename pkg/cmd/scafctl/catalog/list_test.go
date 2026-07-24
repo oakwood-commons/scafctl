@@ -295,7 +295,7 @@ func TestWriteArtifactList_LatestOnly(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 }
 
@@ -331,7 +331,7 @@ func TestWriteArtifactList_AllVersions(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -364,7 +364,7 @@ func TestWriteArtifactList_TagFallsBackToVersion(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -395,7 +395,7 @@ func TestWriteArtifactList_PreservesDigest(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -429,7 +429,7 @@ func TestWriteArtifactList_SortsByNameThenVersionDescending(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -458,7 +458,7 @@ func TestWriteArtifactList_CatalogColumn(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -491,7 +491,7 @@ func TestWriteArtifactList_CrossCatalogDedup(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -531,7 +531,7 @@ func TestWriteArtifactList_LatestOnlyAfterDedup(t *testing.T) {
 
 	w := writer.New(ioStreams, &settings.Run{})
 	// showAll=false → only latest version per name+kind
-	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -550,7 +550,7 @@ func TestWriteArtifactList_EmptyRespectsQuiet(t *testing.T) {
 
 	// With quiet=true, the "No artifacts found" message should be suppressed.
 	w := writer.New(ioStreams, &settings.Run{IsQuiet: true})
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, nil, 0)
 	require.NoError(t, err)
 	assert.Empty(t, errBuf.String(), "quiet mode should suppress info messages")
 }
@@ -625,7 +625,7 @@ func TestWriteArtifactList_NameWithoutAllVersions_ShowsLatestOnly(t *testing.T) 
 	// showAll=false simulates --name without --all-versions.
 	// Previously --name implied --all-versions; now it does not.
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -667,7 +667,7 @@ func TestWriteArtifactList_LatestOnly_AssertsSingleResult(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -696,7 +696,7 @@ func BenchmarkWriteArtifactList(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_ = writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil)
+		_ = writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	}
 }
 
@@ -719,7 +719,7 @@ func TestWriteArtifactList_EmptyStale_FailsLoudly(t *testing.T) {
 	w := writer.New(ioStreams, &settings.Run{})
 
 	degraded := staleDegraded(t)
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 
 	require.Error(t, err, "empty result on stale credentials must return an error")
 	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
@@ -734,12 +734,36 @@ func TestWriteArtifactList_EmptyStale_FailsLoudly(t *testing.T) {
 	assert.Contains(t, errBuf.String(), "auth login")
 }
 
+// When the raw anonymous listing returned artifacts (rawResultCount > 0) but
+// user filters (pre-release, version constraint, --catalog) removed them all,
+// the empty final set is due to filtering, NOT the auth failure. This must be
+// non-fatal (exit 0) even though credentials were rejected: we still warn that
+// the listing was degraded, but we do not claim the auth failure emptied the
+// catalog.
+func TestWriteArtifactList_EmptyStaleButFilteredOut_NonFatal(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	// rawResultCount = 3: the anonymous listing had results, but filters left
+	// nothing in `artifacts`.
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 3)
+
+	require.NoError(t, err, "filter-emptied listing must not be treated as a fatal auth failure")
+	assert.NotContains(t, errBuf.String(), "Cannot list catalog",
+		"must not use the fatal empty-catalog framing when emptiness came from filtering")
+	assert.Contains(t, errBuf.String(), "Catalog listing is incomplete",
+		"should still surface the degraded/partial warning")
+	assert.Contains(t, outBuf.String(), "No artifacts found in catalog.")
+}
+
 func TestWriteArtifactList_EmptyNoStale_Unchanged(t *testing.T) {
 	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
 	outputOpts := kvx.NewOutputOptions(ioStreams)
 	w := writer.New(ioStreams, &settings.Run{})
 
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, nil)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, nil, 0)
 	require.NoError(t, err)
 	assert.Contains(t, outBuf.String(), "No artifacts found in catalog.")
 }
@@ -759,7 +783,7 @@ func TestWriteArtifactList_NonEmptyStale_WarnsButSucceeds(t *testing.T) {
 	}}
 	degraded := staleDegraded(t)
 
-	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, degraded, len(artifacts))
 	require.NoError(t, err, "partial (non-empty) result must still succeed")
 	assert.Contains(t, outBuf.String(), "demo-app")
 	assert.Contains(t, errBuf.String(), "incomplete")
@@ -773,7 +797,7 @@ func TestWriteArtifactList_EmptyStaleJSON_MarkerOnStderr(t *testing.T) {
 	w := writer.New(ioStreams, &settings.Run{})
 
 	degraded := staleDegraded(t)
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 
 	require.Error(t, err)
 	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
@@ -795,7 +819,7 @@ func TestWriteArtifactList_EmptyStale_HandlerOnly(t *testing.T) {
 	// Handler set but no explicit credential source -> "<handler> auth handler
 	// credentials" wording.
 	degraded := &catalogpkg.AuthDegradedError{Registry: "ghcr.io", Handler: "github"}
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 
 	require.Error(t, err)
 	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
@@ -818,7 +842,7 @@ func TestWriteArtifactList_EmptyStale_GenericSourceAndRegistry(t *testing.T) {
 	degraded := catalogpkg.NewAuthDegradedError(rc)
 	require.NotNil(t, degraded)
 
-	wErr := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	wErr := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 	require.Error(t, wErr)
 	assert.Contains(t, errBuf.String(), "stored credentials")
 	assert.Contains(t, errBuf.String(), "private.example.com")
@@ -835,7 +859,7 @@ func TestWriteArtifactList_PrefersRecordedHandler(t *testing.T) {
 
 	// Non-inferable registry, but a handler was recorded on the error.
 	degraded := &catalogpkg.AuthDegradedError{Registry: "private.example.com", Handler: "corp-sso"}
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 
 	require.Error(t, err)
 	assert.Contains(t, errBuf.String(), "auth login corp-sso",
@@ -852,7 +876,7 @@ func TestWriteArtifactList_QuietSuppressesDegradedOutput(t *testing.T) {
 	w := writer.New(ioStreams, &settings.Run{})
 
 	degraded := staleDegraded(t)
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 
 	require.Error(t, err, "exit code still conveys the failure")
 	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
@@ -870,7 +894,7 @@ func TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray(t *testing.T) {
 	w := writer.New(ioStreams, &settings.Run{})
 
 	degraded := staleDegraded(t)
-	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
 
 	require.Error(t, err)
 	assert.Contains(t, outBuf.String(), "[]", "stdout should contain a parseable empty array")
