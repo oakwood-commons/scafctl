@@ -46,6 +46,7 @@ sudo mv scafctl /usr/local/bin/
 ```
 
 > **macOS note:** You may need to remove the quarantine attribute before running:
+>
 > ```bash
 > xattr -dr 'com.apple.quarantine' /usr/local/bin/scafctl
 > ```
@@ -335,7 +336,7 @@ export SCAFCTL_LOG_PATH=/tmp/scafctl.log  # Log to file
 ### Log Levels
 
 | Level | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `none` | No log output (default) |
 | `error` | Errors only |
 | `warn` | Warnings and errors |
@@ -352,7 +353,7 @@ See the [Logging Tutorial](docs/tutorials/logging-tutorial.md) for detailed exam
 
 ## Secrets
 
-scafctl provides encrypted secrets management backed by the OS keyring or the `SCAFCTL_SECRET_KEY` environment variable:
+scafctl provides encrypted secrets management backed by the OS keyring, the `SCAFCTL_SECRET_KEY` environment variable, or an automatic `master.key` file fallback (mode `0600`) so it also works on headless/WSL/CI Linux:
 
 ```bash
 # Store a secret
@@ -529,4 +530,3 @@ Have a question? Start a [GitHub Discussion](https://github.com/oakwood-commons/
 ## License
 
 This project is licensed under the Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
-
