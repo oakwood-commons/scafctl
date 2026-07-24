@@ -165,15 +165,15 @@ func TestEnvKeyring_Get(t *testing.T) {
 func TestEnvKeyring_SetAndDelete(t *testing.T) {
 	kr := newEnvKeyring("TEST_ENV_KEY")
 
-	// Set should return error
+	// Set should return a read-only error so the chain skips to a writable backend
 	err := kr.Set("service", "account", "value")
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKeyringAccess))
+	assert.True(t, errors.Is(err, ErrKeyringReadOnly))
 
-	// Delete should return error
+	// Delete should return a read-only error
 	err = kr.Delete("service", "account")
 	assert.Error(t, err)
-	assert.True(t, errors.Is(err, ErrKeyringAccess))
+	assert.True(t, errors.Is(err, ErrKeyringReadOnly))
 }
 
 func TestGetMasterKeyFromKeyring(t *testing.T) {
@@ -497,12 +497,31 @@ func TestChainKeyring_Get(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrKeyringAccess))
 	})
 
-	t.Run("clean not-found from a lower backend wins over upstream hard error", func(t *testing.T) {
-		// Regression for issue 683: an unavailable OS keyring (hard error) must
-		// not mask a lower backend's clean ErrKeyNotFound, or first-run key
-		// generation never happens on headless/WSL/CI systems.
+	t.Run("genuine hard error surfaces even when a lower backend reports not-found", func(t *testing.T) {
+		// Regression for PR #686: a genuine hard OS error (e.g. permission
+		// denied) must NOT be masked by a downstream clean ErrKeyNotFound.
+		// Masking it would trigger destructive fallback key generation and
+		// orphan cleanup even though the OS keyring is present and failing.
 		kr1 := newMockKeyringForTest()
-		kr1.getErr = NewKeyringError("get", errors.New("os keyring unavailable"))
+		kr1.getErr = NewKeyringError("get", errors.New("permission denied"))
+		kr2 := newMockKeyringForTest() // returns ErrKeyNotFound (empty)
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendFile},
+		)
+
+		_, err := chain.Get("service", "account")
+		assert.ErrorIs(t, err, ErrKeyringAccess)
+	})
+
+	t.Run("unavailable backend falls through to a lower backend's not-found", func(t *testing.T) {
+		// Regression for issue 683: an UNAVAILABLE OS keyring (missing Secret
+		// Service) must fall through so a lower backend's clean ErrKeyNotFound
+		// wins, letting first-run key generation proceed on headless/WSL/CI.
+		kr1 := newMockKeyringForTest()
+		kr1.getErr = fmt.Errorf("%w: %s", ErrKeyringUnavailable,
+			"The name org.freedesktop.secrets was not provided by any .service files")
 		kr2 := newMockKeyringForTest() // returns ErrKeyNotFound (empty)
 
 		chain := newChainKeyring(
@@ -516,7 +535,8 @@ func TestChainKeyring_Get(t *testing.T) {
 
 	t.Run("tracks backend correctly", func(t *testing.T) {
 		kr1 := newMockKeyringForTest()
-		kr1.getErr = NewKeyringError("get", errors.New("os keyring unavailable"))
+		kr1.getErr = fmt.Errorf("%w: %s", ErrKeyringUnavailable,
+			"The name org.freedesktop.secrets was not provided by any .service files")
 		kr2 := newMockKeyringForTest()
 		kr3 := newMockKeyringForTest()
 
@@ -580,6 +600,42 @@ func TestChainKeyring_Set(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "value", val)
 	})
+
+	t.Run("skips read-only backend and records the accepting backend", func(t *testing.T) {
+		// The env backend is read-only (ErrKeyringReadOnly); Set must skip it
+		// and persist to the next writable backend (file).
+		envKr := newEnvKeyring("SCAFCTL_SECRET_KEY_UNSET_FOR_TEST")
+		fileKr := newMockKeyringForTest()
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: envKr, backend: KeyringBackendEnv},
+			keyringEntry{keyring: fileKr, backend: KeyringBackendFile},
+		)
+
+		err := chain.Set(KeyringService, KeyringMasterKeyAccount, "value")
+		require.NoError(t, err)
+		assert.Equal(t, KeyringBackendFile, chain.Backend())
+	})
+
+	t.Run("propagates a genuine hard error without falling through", func(t *testing.T) {
+		// Regression for PR #686 (Fix B): a genuine hard write failure on a
+		// present, writable backend must NOT be silently downgraded to a
+		// less-secure backend. It surfaces immediately.
+		osKr := newMockKeyringForTest()
+		osKr.setErr = NewKeyringError("set", errors.New("permission denied"))
+		fileKr := newMockKeyringForTest()
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: osKr, backend: KeyringBackendOS},
+			keyringEntry{keyring: fileKr, backend: KeyringBackendFile},
+		)
+
+		err := chain.Set("service", "account", "value")
+		assert.ErrorIs(t, err, ErrKeyringAccess)
+		// file backend must NOT have been written to.
+		_, getErr := fileKr.Get("service", "account")
+		assert.ErrorIs(t, getErr, ErrKeyNotFound)
+	})
 }
 
 func TestIsOSKeyringUnavailable(t *testing.T) {
@@ -617,6 +673,21 @@ func TestIsOSKeyringUnavailable(t *testing.T) {
 			name: "wrapped dbus message is unavailable",
 			err:  fmt.Errorf("get: %w", errors.New("org.freedesktop.secrets was not provided by any .service files")),
 			want: true,
+		},
+		{
+			name: "dbus session bus dial failure is unavailable",
+			err:  errors.New("dial unix /run/user/1000/bus: connect: no such file or directory"),
+			want: true,
+		},
+		{
+			name: "dbus connection refused is unavailable",
+			err:  errors.New("dial unix /run/user/1000/bus: connect: connection refused"),
+			want: true,
+		},
+		{
+			name: "permission denied is NOT unavailable (genuine hard failure)",
+			err:  errors.New("org.freedesktop.DBus.Error.AccessDenied: not authorized to access org.freedesktop.secrets"),
+			want: false,
 		},
 	}
 

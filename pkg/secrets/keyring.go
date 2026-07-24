@@ -52,17 +52,29 @@ var ErrKeyNotFound = errors.New("key not found in keyring")
 // to the next backend in the chain, rather than failing hard.
 var ErrKeyringUnavailable = errors.New("keyring provider unavailable")
 
+// ErrKeyringReadOnly is returned by a backend that structurally cannot persist
+// values (e.g. the environment-variable keyring, which reads SCAFCTL_SECRET_KEY
+// but cannot write it back). chainKeyring.Set treats this as "skip this backend
+// and try the next writable one" rather than a genuine hard failure.
+var ErrKeyringReadOnly = errors.New("keyring backend is read-only")
+
 // osKeyringUnavailableMarkers are substrings that identify errors from
-// go-keyring/godbus indicating the OS Secret Service is not available at all.
-// go-keyring does not export a typed sentinel for this D-Bus condition, so we
+// go-keyring/godbus indicating the OS Secret Service is not reachable at all.
+// go-keyring does not export a typed sentinel for these D-Bus conditions, so we
 // match on the stable D-Bus name/text it surfaces.
-// We deliberately match only the D-Bus *activation-failure* phrasing, not the
-// bare service name "org.freedesktop.secrets": a permission-denied error
-// (service present but access blocked) is a genuine hard failure and must NOT
-// be misclassified as "unavailable" and silently downgraded to the file
-// backend.
+//
+// We deliberately match only *service-unreachable* phrasings -- D-Bus activation
+// failure and session-bus connection failure -- and NOT permission/authorization
+// errors. A permission-denied error (service present but access blocked, e.g.
+// D-Bus "AccessDenied"/"not authorized") is a genuine hard failure and must NOT
+// be misclassified as "unavailable" and silently downgraded to the file backend.
+// The bare service name "org.freedesktop.secrets" is likewise excluded because it
+// appears in both activation-failure and permission-denied messages.
 var osKeyringUnavailableMarkers = []string{
-	"was not provided by any .service", // full D-Bus activation failure phrasing
+	"was not provided by any .service",         // D-Bus activation failure (no Secret Service)
+	"dial unix",                                // session bus socket unreachable (no D-Bus session)
+	"connection refused",                       // session bus present but refusing connections
+	"The name org.freedesktop.secrets was not", // explicit activation-failure variant
 }
 
 // isOSKeyringUnavailable reports whether err indicates the OS keyring provider
@@ -95,22 +107,20 @@ func NewOSKeyring() *OSKeyring {
 
 // Get retrieves a value from the OS keyring.
 //
-// Note the intentional asymmetry with Set/Delete: an unavailable Secret Service
-// is collapsed into ErrKeyNotFound here (so the chain falls through to env/file
-// on read), whereas Set surfaces ErrKeyringUnavailable so the chain can pick a
-// writable backend. Do not "fix" this inconsistency: reads want fallthrough,
-// writes want an observable "this backend can't serve" signal.
+// An unavailable Secret Service (headless/WSL/CI Linux) is reported as
+// ErrKeyringUnavailable so that chainKeyring.Get can distinguish "this backend
+// cannot serve, skip it" from a genuine hard access error (e.g. permission
+// denied). A genuine hard error must NOT be masked as key-not-found, since a
+// spurious not-found on read can trigger destructive fallback key generation
+// and orphan cleanup when encrypted secrets already exist.
 func (k *OSKeyring) Get(service, account string) (string, error) {
 	value, err := keyring.Get(service, account)
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return "", ErrKeyNotFound
 		}
-		// The Secret Service itself is unavailable (headless/WSL/CI Linux):
-		// treat as key-not-found so the chain falls through to env/file
-		// backends instead of failing hard.
 		if isOSKeyringUnavailable(err) {
-			return "", ErrKeyNotFound
+			return "", fmt.Errorf("%w: %w", ErrKeyringUnavailable, err)
 		}
 		return "", NewKeyringError("get", err)
 	}
@@ -172,15 +182,15 @@ func (k *envKeyring) Get(service, account string) (string, error) {
 }
 
 // Set is a no-op for envKeyring since we can't modify environment variables persistently.
-// Returns an error indicating the operation is not supported.
+// Returns ErrKeyringReadOnly so the chain skips to the next writable backend.
 func (k *envKeyring) Set(_, _, _ string) error {
-	return NewKeyringError("set", errors.New("cannot set values in environment keyring"))
+	return fmt.Errorf("%w: cannot set values in environment keyring", ErrKeyringReadOnly)
 }
 
 // Delete is a no-op for envKeyring.
-// Returns an error indicating the operation is not supported.
+// Returns ErrKeyringReadOnly so the chain skips to the next writable backend.
 func (k *envKeyring) Delete(_, _ string) error {
-	return NewKeyringError("delete", errors.New("cannot delete values in environment keyring"))
+	return fmt.Errorf("%w: cannot delete values in environment keyring", ErrKeyringReadOnly)
 }
 
 // fileKeyring implements Keyring using a file-based key store.
@@ -311,11 +321,15 @@ func newChainKeyring(entries ...keyringEntry) *chainKeyring {
 }
 
 // Get tries each keyring in order and returns the first successful result.
-// If no backend has a value, a "key not found" result from any backend takes
-// precedence over a hard access error from an upstream backend: an unavailable
-// provider (e.g. a missing OS Secret Service) must not mask the fact that a
-// lower backend cleanly reports the key is simply absent, which is what lets
-// first-run key generation proceed on headless/WSL/CI systems.
+//
+// Error precedence when no backend has a value:
+//  1. A genuine hard access error (e.g. permission denied) from any backend
+//     wins -- it must surface, never be masked as key-not-found, because a
+//     spurious not-found triggers destructive fallback key generation and
+//     orphan cleanup when encrypted secrets already exist.
+//  2. Otherwise, a clean key-not-found (including from a backend that is merely
+//     unavailable, such as a missing OS Secret Service) is returned, which is
+//     what lets first-run key generation proceed on headless/WSL/CI systems.
 func (k *chainKeyring) Get(service, account string) (string, error) {
 	var firstHardErr error
 	sawNotFound := false
@@ -329,42 +343,58 @@ func (k *chainKeyring) Get(service, account string) (string, error) {
 			sawNotFound = true
 			continue
 		}
+		// An unavailable backend (e.g. missing OS Secret Service) is skipped so
+		// the chain falls through to env/file. Any other error is a genuine
+		// hard failure that must not be masked by a downstream not-found.
+		if errors.Is(err, ErrKeyringUnavailable) {
+			continue
+		}
 		if firstHardErr == nil {
 			firstHardErr = err
 		}
 	}
-	// A clean "not found" from any backend wins over an upstream hard error so
-	// the caller can generate and persist a fresh key.
-	if sawNotFound {
-		return "", ErrKeyNotFound
-	}
+	// A genuine hard error takes precedence over a downstream not-found so a
+	// real access failure is never silently downgraded to first-run key-gen.
 	if firstHardErr != nil {
 		return "", firstHardErr
+	}
+	if sawNotFound {
+		return "", ErrKeyNotFound
 	}
 	return "", ErrKeyNotFound
 }
 
 // Set stores a value in the first keyring that accepts it.
-// Backends are tried in order; a backend that cannot store the value (an
-// unavailable provider such as a missing OS Secret Service, or a read-only
-// backend like the environment) is skipped in favor of the next writable one.
-// This is what lets the file backend persist a freshly generated master key
-// when the OS keyring is absent.
+// A backend that structurally cannot store the value -- an unavailable provider
+// (ErrKeyringUnavailable, e.g. a missing OS Secret Service) or a read-only
+// backend (ErrKeyringReadOnly, e.g. the environment) -- is skipped in favor of
+// the next writable one. This is what lets the file backend persist a freshly
+// generated master key when the OS keyring is absent.
+//
+// Any OTHER error (e.g. permission denied, disk full, corruption) is a genuine
+// hard failure: it is returned immediately rather than silently downgrading to
+// a less-secure backend, so a real write failure on a healthy OS keyring is
+// never masked.
 func (k *chainKeyring) Set(service, account, value string) error {
-	var errs []error
+	var skipErrs []error
 	for _, entry := range k.entries {
 		err := entry.keyring.Set(service, account, value)
 		if err == nil {
 			k.resolvedBackend = entry.backend
 			return nil
 		}
-		errs = append(errs, err)
+		if errors.Is(err, ErrKeyringUnavailable) || errors.Is(err, ErrKeyringReadOnly) {
+			skipErrs = append(skipErrs, err)
+			continue
+		}
+		// Genuine hard failure on a backend that is present and writable: do
+		// not silently fall through to a less-secure backend.
+		return err
 	}
-	if len(errs) > 0 {
-		// Join every backend's failure so the diagnostic upstream (OS) cause is
-		// preserved alongside the later env/file errors, rather than surfacing
-		// only the last backend's error.
-		return errors.Join(errs...)
+	if len(skipErrs) > 0 {
+		// Every backend was unavailable or read-only. Join their errors so the
+		// upstream (OS) cause is preserved alongside the env/file errors.
+		return errors.Join(skipErrs...)
 	}
 	return NewKeyringError("set", errors.New("no keyrings configured"))
 }
