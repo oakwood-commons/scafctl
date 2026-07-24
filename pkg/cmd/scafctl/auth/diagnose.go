@@ -53,6 +53,7 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			  - Auth registry health (handlers registered)
 			  - Config file presence and auth sections
 			  - Environment variables for each handler
+			  - Secrets store health (master-key acquisition — auth depends on it)
 			  - Clock skew (compares local time against an HTTPS server)
 			  - Current authentication status (are you logged in?)
 			  - Cached token health (expired tokens, missing tokens)
@@ -239,6 +240,18 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				addCheck(c)
 			}
 
+			// ── 3.4. Secrets store (master-key acquisition) ───────────────────
+			// Auth persists tokens by encrypting them with the master key held
+			// in the secrets store's keyring. If the store cannot init, every
+			// login and token-cache operation fails, so this must be probed
+			// (issue #684). The probe is read-only: it never generates or
+			// persists a key.
+			requireSecureKeyring := false
+			if cfg != nil {
+				requireSecureKeyring = cfg.Settings.RequireSecureKeyring
+			}
+			addCheck(diagnose.RunSecretsStoreCheck(requireSecureKeyring))
+
 			// ── 3.5. Clock skew ───────────────────────────────────────────────
 			addCheck(clockSkewCheckFunc())
 
@@ -253,7 +266,6 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 				handlerNames = []string{handlerName}
 			}
 
-			failCount := 0
 			for _, name := range handlerNames {
 				handler, err := getHandler(ctx, name)
 				if err != nil {
@@ -263,7 +275,6 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						Status:   diagnose.StatusFail,
 						Message:  err.Error(),
 					})
-					failCount++
 					continue
 				}
 
@@ -275,7 +286,6 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 						Status:   diagnose.StatusFail,
 						Message:  err.Error(),
 					})
-					failCount++
 					continue
 				}
 
@@ -356,7 +366,6 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 							Status:   diagnose.StatusFail,
 							Message:  err.Error(),
 						})
-						failCount++
 					} else {
 						addCheck(diagnose.Check{
 							Category: "live",
@@ -369,12 +378,13 @@ func CommandDiagnose(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ s
 			}
 
 			// ── 5. Summary ────────────────────────────────────────────────────
+			failCount := 0
 			warnCount := 0
 			okCount := 0
 			for _, c := range checks {
 				switch c.Status {
 				case diagnose.StatusFail:
-					// counted above
+					failCount++
 				case diagnose.StatusWarn:
 					warnCount++
 				case diagnose.StatusOK:

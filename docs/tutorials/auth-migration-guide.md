@@ -158,5 +158,6 @@ Run `scafctl auth diagnose` for a full health check including:
 - Handler source (built-in vs plugin vs catalog)
 - Plugin startup latency
 - Configuration validation
+- Secrets store health (master-key acquisition -- auth token caching depends on it)
 - Token cache health
 - Network connectivity

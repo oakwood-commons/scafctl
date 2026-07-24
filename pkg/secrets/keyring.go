@@ -410,6 +410,15 @@ func (k *chainKeyring) Delete(service, account string) error {
 	return nil
 }
 
+// BackendReporter is implemented by keyrings that can report which backend
+// last satisfied a Get (e.g. the default chain keyring). Callers can type-assert
+// a Keyring to BackendReporter to learn the resolved backend without mutating.
+type BackendReporter interface {
+	// Backend returns the backend identifier (os/env/file) that last satisfied
+	// a successful Get, or an empty string if no Get has succeeded yet.
+	Backend() string
+}
+
 // Backend returns the backend identifier for the keyring that last satisfied a Get.
 func (k *chainKeyring) Backend() string {
 	return k.resolvedBackend

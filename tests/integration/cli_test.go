@@ -3378,6 +3378,45 @@ func TestIntegration_AuthDiagnoseUnknownHandler(t *testing.T) {
 	assert.Contains(t, stderr, "nonexistent-xyz")
 }
 
+func TestIntegration_AuthDiagnoseSecretsStoreCheck(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "auth", "diagnose")
+
+	// The secrets-store health check (issue #684) must always be present:
+	// auth depends on master-key acquisition, so diagnose without it is a
+	// false all-clear on the exact condition that breaks all login.
+	combined := stdout + stderr
+	assert.True(t, exitCode == 0 || exitCode == 1, "expected exit code 0 or 1, got %d", exitCode)
+	assert.Contains(t, combined, "secrets store", "expected secrets store check in output")
+}
+
+func TestIntegration_AuthDiagnoseSecretsStoreCheckJSON(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "diagnose", "-o", "json")
+
+	if exitCode == 0 && strings.TrimSpace(stdout) != "" {
+		var result []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout), &result), "diagnose -o json must produce valid JSON array")
+
+		var found bool
+		for _, row := range result {
+			if row["category"] == "secrets" && row["check"] == "secrets store" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected a secrets-store check row in JSON output")
+	}
+}
+
+func TestIntegration_AuthDiagnoseHelpDocumentsSecretsCheck(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "auth", "diagnose", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Secrets store health")
+}
+
 // ============================================================================
 // Error Handling Tests
 // ============================================================================
