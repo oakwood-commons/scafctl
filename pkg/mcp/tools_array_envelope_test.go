@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -51,6 +52,12 @@ func TestArrayReturningToolsEmitObjectEnvelope(t *testing.T) {
 
 		raw, ok := obj[key]
 		require.Truef(t, ok, "output must contain the %q envelope key; keys present: %v", key, keysOf(obj))
+
+		// The value must be a JSON array, not null. json.Unmarshal into a slice
+		// also accepts null (yielding a nil slice), so check the raw token first.
+		rawTrimmed := bytes.TrimSpace(raw)
+		require.Truef(t, len(rawTrimmed) > 0 && rawTrimmed[0] == '[',
+			"key %q must hold a JSON array, got: %s", key, string(rawTrimmed))
 
 		var arr []json.RawMessage
 		require.NoErrorf(t, json.Unmarshal(raw, &arr), "key %q must hold a JSON array", key)
