@@ -52,8 +52,11 @@ func TestHandleListCELFunctions(t *testing.T) {
 		assert.Contains(t, summaryText, "# Summary")
 
 		text := extractJSONContent(t, result)
-		var functions []celexp.ExtFunction
-		require.NoError(t, json.Unmarshal([]byte(text), &functions))
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		functions := envelope.Functions
 		assert.NotEmpty(t, functions, "expected at least one CEL function")
 	})
 
@@ -72,8 +75,11 @@ func TestHandleListCELFunctions(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := extractJSONContent(t, result)
-		var functions []celexp.ExtFunction
-		require.NoError(t, json.Unmarshal([]byte(text), &functions))
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		functions := envelope.Functions
 		assert.NotEmpty(t, functions, "expected at least one custom function")
 
 		// All returned should be custom
@@ -97,8 +103,11 @@ func TestHandleListCELFunctions(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := extractJSONContent(t, result)
-		var functions []celexp.ExtFunction
-		require.NoError(t, json.Unmarshal([]byte(text), &functions))
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		functions := envelope.Functions
 		assert.NotEmpty(t, functions, "expected at least one builtin function")
 
 		// All returned should be builtin (not custom)
@@ -122,8 +131,11 @@ func TestHandleListCELFunctions(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var functions []celexp.ExtFunction
-		require.NoError(t, json.Unmarshal([]byte(text), &functions))
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		functions := envelope.Functions
 		assert.NotEmpty(t, functions, "expected at least one function matching 'map'")
 	})
 
@@ -345,8 +357,11 @@ func TestHandleListCELFunctions_Search(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := extractJSONContent(t, result)
-		var functions []celexp.ExtFunction
-		require.NoError(t, json.Unmarshal([]byte(text), &functions))
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		functions := envelope.Functions
 		assert.NotEmpty(t, functions, "expected at least one function matching 'json'")
 	})
 
@@ -365,8 +380,10 @@ func TestHandleListCELFunctions_Search(t *testing.T) {
 		// May or may not find results depending on descriptions, just verify no panic
 		if !result.IsError {
 			text := extractJSONContent(t, result)
-			var functions []celexp.ExtFunction
-			require.NoError(t, json.Unmarshal([]byte(text), &functions))
+			var envelope struct {
+				Functions []celexp.ExtFunction `json:"functions"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(text), &envelope))
 		}
 	})
 
@@ -402,8 +419,11 @@ func TestHandleListCELFunctions_Category(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := extractJSONContent(t, result)
-		var functions []celexp.ExtFunction
-		require.NoError(t, json.Unmarshal([]byte(text), &functions))
+		var envelope struct {
+			Functions []celexp.ExtFunction `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		functions := envelope.Functions
 		assert.NotEmpty(t, functions, "expected at least one encoding function")
 
 		for _, f := range functions {

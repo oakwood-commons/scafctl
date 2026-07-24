@@ -50,8 +50,11 @@ func TestHandleGetCommandHelp_ListAll(t *testing.T) {
 	require.False(t, result.IsError)
 
 	text := result.Content[0].(mcp.TextContent).Text
-	var commands []cmdinfo.CommandInfo
-	require.NoError(t, json.Unmarshal([]byte(text), &commands))
+	var envelope struct {
+		Commands []cmdinfo.CommandInfo `json:"commands"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+	commands := envelope.Commands
 	assert.NotEmpty(t, commands)
 
 	// Should contain top-level commands

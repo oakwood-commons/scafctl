@@ -99,7 +99,7 @@ func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*m
 		return mcp.NewToolResultText("No cached plugins found. Use 'plugins install -f <solution>' to fetch plugins from catalogs, or copy plugin binaries to the plugin cache directory."), nil
 	}
 
-	return mcp.NewToolResultJSON(plugins)
+	return mcp.NewToolResultJSON(map[string]any{"plugins": plugins})
 }
 
 // handleGetPluginCachePath returns the plugin cache directory path.
@@ -133,7 +133,7 @@ func (s *Server) handleListOfficialProviders(_ context.Context, _ mcp.CallToolRe
 		})
 	}
 
-	return mcp.NewToolResultJSON(items)
+	return mcp.NewToolResultJSON(map[string]any{"providers": items})
 }
 
 // signaturePolicyResponse is the response structure for get_signature_policy.

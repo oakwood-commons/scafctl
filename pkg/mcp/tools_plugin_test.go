@@ -63,8 +63,11 @@ func TestHandleListPlugins(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var plugins []plugin.CachedPlugin
-		require.NoError(t, json.Unmarshal([]byte(text), &plugins))
+		var envelope struct {
+			Plugins []plugin.CachedPlugin `json:"plugins"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		plugins := envelope.Plugins
 
 		// Find our test plugin in the results
 		var found bool
@@ -113,8 +116,11 @@ func TestHandleListOfficialProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []officialProviderItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []officialProviderItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 
 		// Should contain all the default official providers
 		assert.Len(t, items, len(official.DefaultProviders()))
@@ -155,8 +161,11 @@ func TestHandleListOfficialProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []officialProviderItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []officialProviderItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 
 		assert.Len(t, items, 2)
 		assert.Equal(t, "custom-one", items[0].Name)
