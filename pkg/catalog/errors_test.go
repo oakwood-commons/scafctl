@@ -133,3 +133,90 @@ func TestIsEnumerationNotSupported(t *testing.T) {
 		assert.False(t, IsEnumerationNotSupported(errors.New("other error")))
 	})
 }
+
+// fakeStaleReporter implements staleCredentialReporter for testing.
+type fakeStaleReporter struct {
+	stale   bool
+	reg     string
+	handler string
+	source  string
+}
+
+func (f fakeStaleReporter) HasStaleCredentials() bool { return f.stale }
+func (f fakeStaleReporter) Registry() string          { return f.reg }
+func (f fakeStaleReporter) AuthHandlerUsed() string   { return f.handler }
+func (f fakeStaleReporter) CredentialSource() string  { return f.source }
+
+func TestAuthDegradedError_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *AuthDegradedError
+		want string
+	}{
+		{
+			name: "with explicit credential source",
+			err:  &AuthDegradedError{Registry: "reg.example.com", CredentialSource: "github auth handler token"},
+			want: `authentication required for registry "reg.example.com": rejected github auth handler token; fell back to anonymous access`,
+		},
+		{
+			name: "handler only (no source)",
+			err:  &AuthDegradedError{Registry: "reg.example.com", Handler: "github"},
+			want: `authentication required for registry "reg.example.com": rejected github auth handler credentials; fell back to anonymous access`,
+		},
+		{
+			name: "no source or handler",
+			err:  &AuthDegradedError{Registry: "reg.example.com"},
+			want: `authentication required for registry "reg.example.com": rejected stored credentials; fell back to anonymous access`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.err.Error())
+		})
+	}
+}
+
+func TestNewAuthDegradedError(t *testing.T) {
+	t.Run("nil when not stale", func(t *testing.T) {
+		assert.Nil(t, NewAuthDegradedError(fakeStaleReporter{stale: false, reg: "reg"}))
+	})
+	t.Run("nil reporter", func(t *testing.T) {
+		assert.Nil(t, NewAuthDegradedError(nil))
+	})
+	t.Run("builds from stale reporter", func(t *testing.T) {
+		e := NewAuthDegradedError(fakeStaleReporter{
+			stale: true, reg: "reg.example.com", handler: "github", source: "github auth handler token",
+		})
+		if assert.NotNil(t, e) {
+			assert.Equal(t, "reg.example.com", e.Registry)
+			assert.Equal(t, "github", e.Handler)
+			assert.Equal(t, "github auth handler token", e.CredentialSource)
+		}
+	})
+}
+
+func TestIsAuthDegraded(t *testing.T) {
+	t.Run("direct", func(t *testing.T) {
+		base := &AuthDegradedError{Registry: "r"}
+		got, ok := IsAuthDegraded(base)
+		assert.True(t, ok)
+		assert.Same(t, base, got)
+	})
+	t.Run("wrapped", func(t *testing.T) {
+		base := &AuthDegradedError{Registry: "r"}
+		wrapped := fmt.Errorf("listing failed: %w", base)
+		got, ok := IsAuthDegraded(wrapped)
+		assert.True(t, ok)
+		assert.Same(t, base, got)
+	})
+	t.Run("unrelated error", func(t *testing.T) {
+		got, ok := IsAuthDegraded(errors.New("nope"))
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	})
+	t.Run("nil", func(t *testing.T) {
+		got, ok := IsAuthDegraded(nil)
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	})
+}
