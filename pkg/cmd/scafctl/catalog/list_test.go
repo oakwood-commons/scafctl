@@ -295,7 +295,7 @@ func TestWriteArtifactList_LatestOnly(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, false, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 }
 
@@ -331,7 +331,7 @@ func TestWriteArtifactList_AllVersions(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, true, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -364,7 +364,7 @@ func TestWriteArtifactList_TagFallsBackToVersion(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, true, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -395,7 +395,7 @@ func TestWriteArtifactList_PreservesDigest(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, true, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -429,7 +429,7 @@ func TestWriteArtifactList_SortsByNameThenVersionDescending(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, true, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -458,7 +458,7 @@ func TestWriteArtifactList_CatalogColumn(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, true, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -491,7 +491,7 @@ func TestWriteArtifactList_CrossCatalogDedup(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, true, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, true, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -531,7 +531,7 @@ func TestWriteArtifactList_LatestOnlyAfterDedup(t *testing.T) {
 
 	w := writer.New(ioStreams, &settings.Run{})
 	// showAll=false → only latest version per name+kind
-	err := writeArtifactList(w, artifacts, false, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -550,7 +550,7 @@ func TestWriteArtifactList_EmptyRespectsQuiet(t *testing.T) {
 
 	// With quiet=true, the "No artifacts found" message should be suppressed.
 	w := writer.New(ioStreams, &settings.Run{IsQuiet: true})
-	err := writeArtifactList(w, nil, false, outputOpts)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, nil, 0)
 	require.NoError(t, err)
 	assert.Empty(t, errBuf.String(), "quiet mode should suppress info messages")
 }
@@ -625,7 +625,7 @@ func TestWriteArtifactList_NameWithoutAllVersions_ShowsLatestOnly(t *testing.T) 
 	// showAll=false simulates --name without --all-versions.
 	// Previously --name implied --all-versions; now it does not.
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, false, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -667,7 +667,7 @@ func TestWriteArtifactList_LatestOnly_AssertsSingleResult(t *testing.T) {
 	}
 
 	w := writer.New(ioStreams, &settings.Run{})
-	err := writeArtifactList(w, artifacts, false, outputOpts)
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	require.NoError(t, err)
 
 	var items []ArtifactListItem
@@ -696,6 +696,206 @@ func BenchmarkWriteArtifactList(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_ = writeArtifactList(w, artifacts, false, outputOpts)
+		_ = writeArtifactList(context.Background(), w, artifacts, false, outputOpts, nil, len(artifacts))
 	}
+}
+
+// staleDegraded builds an AuthDegradedError from a real RemoteCatalog marked
+// stale, exercising the same NewAuthDegradedError path the command uses.
+func staleDegraded(t *testing.T) *catalogpkg.AuthDegradedError {
+	t.Helper()
+	rc, err := catalogpkg.NewRemoteCatalog(catalogpkg.RemoteCatalogConfig{Registry: "ghcr.io"})
+	require.NoError(t, err)
+	rc.SetStaleForTesting()
+	rc.SetCredentialSourceForTest("github auth handler token")
+	d := catalogpkg.NewAuthDegradedError(rc)
+	require.NotNil(t, d)
+	return d
+}
+
+func TestWriteArtifactList_EmptyStale_FailsLoudly(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+
+	require.Error(t, err, "empty result on stale credentials must return an error")
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+	assert.NotContains(t, outBuf.String(), "No artifacts found in catalog.",
+		"must not assert emptiness when credentials were rejected")
+	// The fatal path emits an explicit error line to stderr (Cobra silences the
+	// returned error), not just a partial-listing warning.
+	assert.Contains(t, errBuf.String(), "Cannot list catalog")
+	assert.NotContains(t, errBuf.String(), "showing anonymous results only",
+		"empty result should use the fatal error framing, not the partial warning")
+	assert.Contains(t, errBuf.String(), "ghcr.io")
+	assert.Contains(t, errBuf.String(), "auth login")
+}
+
+// When the raw anonymous listing returned artifacts (rawResultCount > 0) but
+// user filters (pre-release, version constraint, --catalog) removed them all,
+// the empty final set is due to filtering, NOT the auth failure. This must be
+// non-fatal (exit 0) even though credentials were rejected: we still warn that
+// the listing was degraded, but we do not claim the auth failure emptied the
+// catalog.
+func TestWriteArtifactList_EmptyStaleButFilteredOut_NonFatal(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	// rawResultCount = 3: the anonymous listing had results, but filters left
+	// nothing in `artifacts`.
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 3)
+
+	require.NoError(t, err, "filter-emptied listing must not be treated as a fatal auth failure")
+	assert.NotContains(t, errBuf.String(), "Cannot list catalog",
+		"must not use the fatal empty-catalog framing when emptiness came from filtering")
+	assert.Contains(t, errBuf.String(), "Catalog listing is incomplete",
+		"should still surface the degraded/partial warning")
+	assert.Contains(t, outBuf.String(), "No artifacts found in catalog.")
+}
+
+func TestWriteArtifactList_EmptyNoStale_Unchanged(t *testing.T) {
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, nil, 0)
+	require.NoError(t, err)
+	assert.Contains(t, outBuf.String(), "No artifacts found in catalog.")
+}
+
+func TestWriteArtifactList_NonEmptyStale_WarnsButSucceeds(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	artifacts := []catalogpkg.ArtifactInfo{{
+		Reference: catalogpkg.Reference{
+			Name:    "demo-app",
+			Kind:    catalogpkg.ArtifactKindSolution,
+			Version: semver.MustParse("1.0.0"),
+		},
+		Catalog: "remote",
+	}}
+	degraded := staleDegraded(t)
+
+	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, degraded, len(artifacts))
+	require.NoError(t, err, "partial (non-empty) result must still succeed")
+	assert.Contains(t, outBuf.String(), "demo-app")
+	assert.Contains(t, errBuf.String(), "incomplete")
+	assert.Contains(t, errBuf.String(), "auth login")
+}
+
+func TestWriteArtifactList_EmptyStaleJSON_MarkerOnStderr(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+
+	require.Error(t, err)
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+	// stdout stays a parseable JSON array (an empty [] here); the degraded
+	// signal is on stderr, not asserted as an authoritative empty catalog.
+	assert.NotContains(t, outBuf.String(), "No artifacts found")
+	// The structured degraded marker goes to stderr, preserving stdout's contract.
+	assert.Contains(t, errBuf.String(), `"degraded":true`)
+	assert.Contains(t, errBuf.String(), `"authError"`)
+}
+
+// TestWriteArtifactList_EmptyStale_HandlerOnly covers the credential-source
+// fallback when only an auth handler (no explicit source string) is known.
+func TestWriteArtifactList_EmptyStale_HandlerOnly(t *testing.T) {
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	// Handler set but no explicit credential source -> "<handler> auth handler
+	// credentials" wording.
+	degraded := &catalogpkg.AuthDegradedError{Registry: "ghcr.io", Handler: "github"}
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+
+	require.Error(t, err)
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+	assert.Contains(t, errBuf.String(), "auth handler credentials")
+	assert.Contains(t, errBuf.String(), "auth login github")
+}
+
+// TestWriteArtifactList_EmptyStale_GenericSourceAndRegistry covers the generic
+// "stored credentials" wording and the catalog-login fallback for a registry
+// with no inferable auth handler.
+func TestWriteArtifactList_EmptyStale_GenericSourceAndRegistry(t *testing.T) {
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	// An arbitrary private registry with no known handler and no source.
+	rc, err := catalogpkg.NewRemoteCatalog(catalogpkg.RemoteCatalogConfig{Registry: "private.example.com"})
+	require.NoError(t, err)
+	rc.SetStaleForTesting()
+	degraded := catalogpkg.NewAuthDegradedError(rc)
+	require.NotNil(t, degraded)
+
+	wErr := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+	require.Error(t, wErr)
+	assert.Contains(t, errBuf.String(), "stored credentials")
+	assert.Contains(t, errBuf.String(), "private.example.com")
+	assert.Contains(t, errBuf.String(), "catalog login private.example.com")
+}
+
+// TestWriteArtifactList_PrefersRecordedHandler verifies the fix hint uses the
+// handler that actually supplied the rejected credentials, even when the
+// registry host is not one InferAuthHandler recognizes.
+func TestWriteArtifactList_PrefersRecordedHandler(t *testing.T) {
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	// Non-inferable registry, but a handler was recorded on the error.
+	degraded := &catalogpkg.AuthDegradedError{Registry: "private.example.com", Handler: "corp-sso"}
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+
+	require.Error(t, err)
+	assert.Contains(t, errBuf.String(), "auth login corp-sso",
+		"should recommend logging in with the recorded handler, not catalog login")
+	assert.NotContains(t, errBuf.String(), "catalog login")
+}
+
+// TestWriteArtifactList_QuietSuppressesDegradedOutput verifies that quiet output
+// emits no degraded warning while still returning the failing exit code.
+func TestWriteArtifactList_QuietSuppressesDegradedOutput(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = kvx.OutputFormatQuiet
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+
+	require.Error(t, err, "exit code still conveys the failure")
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+	assert.Empty(t, errBuf.String(), "quiet output must suppress the degraded warning")
+	assert.Empty(t, outBuf.String(), "quiet output must suppress stdout")
+}
+
+// TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray verifies the
+// structured (json/yaml) empty+stale path writes a parseable empty array to
+// stdout (so consumers can parse stdout) while the marker goes to stderr.
+func TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray(t *testing.T) {
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded, 0)
+
+	require.Error(t, err)
+	assert.Contains(t, outBuf.String(), "[]", "stdout should contain a parseable empty array")
 }

@@ -294,6 +294,24 @@ scafctl catalog list --name greeting -o yaml
 
 This shows only artifacts with the name `greeting`.
 
+> [!NOTE]
+> **Private registries and rejected credentials.** If a catalog points at a
+> private OCI registry and your stored credentials are rejected (for example an
+> expired token), `catalog list` falls back to anonymous access. When that
+> anonymous listing is **empty**, the command does **not** report an empty
+> catalog -- it exits non-zero with an actionable error naming the registry and
+> the login command to fix it (`auth login <handler>`, or `catalog login
+> <registry>` when no auth handler applies), so a rejected credential is never
+> mistaken for a genuinely empty catalog. This fatal behavior only applies when
+> the raw anonymous listing was itself empty: if it returned artifacts that your
+> filters (`--pre-release`, a version constraint, or `--catalog`) then removed,
+> the empty final result is attributed to filtering, so the command exits 0 with
+> the degraded warning rather than failing. When anonymous access still returns some artifacts,
+> those are listed (exit 0) with a warning that the listing is incomplete. In
+> any structured output mode (`-o json`, `-o yaml`, etc.) the results on stdout
+> are unchanged; a `{"degraded":true,"authError":{...}}` marker is written to
+> stderr so programmatic consumers can detect the degraded state.
+
 ### Step 3: Inspect a Specific Artifact
 
 {{< tabs "catalog-tutorial-cmd-9" >}}
