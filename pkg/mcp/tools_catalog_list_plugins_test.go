@@ -165,6 +165,21 @@ func TestHandleCatalogListPlugins_EmptyLocalCatalog(t *testing.T) {
 	assert.Equal(t, 0, env.Count)
 }
 
+func TestHandleCatalogListPlugins_UnknownCatalogNameErrors(t *testing.T) {
+	setTestXDG(t, t.TempDir())
+	seedLocalPluginCatalog(t)
+
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	// A specific, non-existent catalog name resolves to no catalog to query
+	// (local is skipped for a non-local filter). This must be an error, not an
+	// empty {plugins:[]} that masks the unknown-name mistake.
+	result := callListPlugins(t, srv, map[string]any{"catalog": "does-not-exist"})
+	assert.True(t, result.IsError,
+		"an unknown catalog name must return an error, not an empty result")
+}
+
 func TestCatalogListPluginsToolRegistered(t *testing.T) {
 	srv, err := NewServer(WithServerVersion("test"))
 	require.NoError(t, err)

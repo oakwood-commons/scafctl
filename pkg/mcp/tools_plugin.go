@@ -160,8 +160,10 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 	// Gather the catalogs to query: local (unless a non-local filter excludes
 	// it) and the requested remote scope.
 	var catalogs []catalog.Catalog
+	var localErr error
 	if catalogFilter == "" || strings.EqualFold(catalogFilter, "local") || strings.EqualFold(catalogFilter, "all") {
 		if localCat, err := catalog.NewLocalCatalog(s.logger); err != nil {
+			localErr = err
 			s.logger.V(1).Info("local catalog not available for plugin listing", "error", err)
 		} else {
 			catalogs = append(catalogs, localCat)
@@ -171,6 +173,24 @@ func (s *Server) handleCatalogListPlugins(ctx context.Context, request mcp.CallT
 		for _, rc := range s.buildRemoteCatalogs(catalogFilter) {
 			catalogs = append(catalogs, rc)
 		}
+	}
+
+	// No catalog resolved to query at all. Returning an empty result here would
+	// mislead clients into thinking there are simply no plugins, when in fact
+	// the request could not be serviced -- an unknown --catalog name, a local
+	// catalog that failed to initialize, or no configured/default catalog.
+	if len(catalogs) == 0 {
+		msg := "no catalog available to list plugins"
+		suggestion := "Configure a default catalog, use catalog='all', or check the catalog name."
+		switch {
+		case localErr != nil && (strings.EqualFold(catalogFilter, "local") || catalogFilter == ""):
+			msg = fmt.Sprintf("local catalog is unavailable: %v", localErr)
+			suggestion = "Ensure the local catalog directory is accessible, or query a remote catalog with catalog='all' or a specific name."
+		case catalogFilter != "" && !strings.EqualFold(catalogFilter, "local") && !strings.EqualFold(catalogFilter, "all"):
+			msg = fmt.Sprintf("no catalog named %q is configured", catalogFilter)
+			suggestion = "Check the catalog name, use catalog='all' to search all configured catalogs, or 'local' for the local catalog."
+		}
+		return newStructuredError(ErrCodeConfigError, msg, WithSuggestion(suggestion)), nil
 	}
 
 	// List provider + auth-handler artifacts from every catalog. Failures are
