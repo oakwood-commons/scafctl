@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -235,6 +236,11 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	// aggregateDegraded records the first remote catalog (if any) that fell back
+	// to anonymous access due to rejected credentials. It is only rendered as an
+	// error when the combined result is empty (see writeArtifactList).
+	var aggregateDegraded *catalog.AuthDegradedError
+
 	// Determine which remote catalogs to query.
 	// --catalog: only the named catalog (used as post-filter below).
 	// --all: all configured catalogs.
@@ -267,7 +273,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 				CliParams: opts.CliParams,
 				IOStreams: opts.IOStreams,
 			}
-			remoteArtifacts, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kind)
+			remoteArtifacts, remoteDegraded, remoteErr := listRemoteArtifacts(ctx, remoteOpts, kind)
 			if remoteErr != nil {
 				if catalog.IsEnumerationNotSupported(remoteErr) {
 					w.Verbosef("Catalog %q does not support enumeration, skipping.", catCfg.Name)
@@ -285,6 +291,13 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 					}
 				}
 				continue
+			}
+			// Remember the first catalog that degraded to anonymous access. If
+			// the aggregate result ends up empty, this makes the emptiness
+			// attributable to a rejected credential rather than a truly empty
+			// catalog.
+			if remoteDegraded != nil && aggregateDegraded == nil {
+				aggregateDegraded = remoteDegraded
 			}
 			artifacts = append(artifacts, remoteArtifacts...)
 		}
@@ -314,7 +327,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 		artifacts = filterArtifactsByCatalog(artifacts, opts.Catalog)
 	}
 
-	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts)
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, aggregateDegraded)
 }
 
 // runListFromRemoteRef lists artifacts from a full OCI reference
@@ -407,7 +420,7 @@ func runListFromRemoteRef(ctx context.Context, opts *ListOptions, outputOpts *kv
 		w.Verbosef("After version filter %q: %d artifact(s)", opts.VersionConstraint, len(artifacts))
 	}
 
-	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts)
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, catalog.NewAuthDegradedError(remoteCatalog))
 }
 
 func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind, outputOpts *kvx.OutputOptions) error {
@@ -417,7 +430,7 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		w.Verbose("Enumerating all artifacts in catalog (this may take a moment)...")
 	}
 
-	artifacts, err := listRemoteArtifacts(ctx, opts, kind)
+	artifacts, degraded, err := listRemoteArtifacts(ctx, opts, kind)
 	if err != nil {
 		if catalog.IsEnumerationNotSupported(err) {
 			if opts.Name == "" {
@@ -466,13 +479,13 @@ func runListRemote(ctx context.Context, opts *ListOptions, kind catalog.Artifact
 		}
 	}
 
-	return writeArtifactList(w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts)
+	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, degraded)
 }
 
 // listRemoteArtifacts fetches artifacts from a configured remote catalog.
 // This is shared between runListRemote (explicit --catalog) and the
 // unified all-catalogs search in runList.
-func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind) ([]catalog.ArtifactInfo, error) {
+func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.ArtifactKind) ([]catalog.ArtifactInfo, *catalog.AuthDegradedError, error) {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
 
@@ -480,7 +493,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 
 	catalogURL, err := catalog.ResolveCatalogURL(ctx, opts.Catalog)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	registry, repository := catalog.ParseCatalogURL(catalogURL)
@@ -508,27 +521,48 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 		Logger:            *lgr,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create remote catalog: %w", err)
+		return nil, nil, fmt.Errorf("failed to create remote catalog: %w", err)
 	}
 
 	result, listErr := remoteCatalog.List(ctx, kind, opts.Name)
 
-	// Warn the user about stale credentials so they can fix the issue.
-	warnStaleCredentials(ctx, w, remoteCatalog)
+	// If stored credentials were rejected the catalog fell back to anonymous
+	// access, so the listing is degraded/incomplete rather than authoritative.
+	// Surface that as a typed value so the render layer can decide whether it is
+	// a fatal error (empty result) or a non-fatal warning (partial result).
+	degraded := catalog.NewAuthDegradedError(remoteCatalog)
 	verboseCredentialSource(w, remoteCatalog)
 
-	return result, listErr
+	return result, degraded, listErr
 }
 
-func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions) error {
-	// Handle empty results: structured formats get an empty array,
-	// table/interactive formats get a human-friendly message.
+func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions, degraded *catalog.AuthDegradedError) error {
+	structured := kvx.IsStructuredFormat(outputOpts.Format)
+
+	// Handle empty results.
 	if len(artifacts) == 0 {
-		if kvx.IsStructuredFormat(outputOpts.Format) {
+		// Empty + degraded is the "auth failure masquerading as an empty
+		// catalog" case: the listing is not authoritatively empty, credentials
+		// were rejected. Fail loudly instead of printing "No artifacts found".
+		if degraded != nil {
+			renderDegradedSignal(ctx, w, degraded, structured)
+			return exitcode.WithCode(
+				fmt.Errorf("%w; run %s", degraded, authLoginHint(ctx, degraded.Registry)),
+				exitcode.CatalogError,
+			)
+		}
+		if structured {
 			return outputOpts.Write([]ArtifactListItem{})
 		}
 		w.Infof("No artifacts found in catalog.")
 		return nil
+	}
+
+	// Non-empty + degraded is a partial success: real results were returned
+	// from anonymous access, but some content may be hidden. Print the results
+	// (exit 0) and warn that the listing is incomplete.
+	if degraded != nil {
+		renderDegradedSignal(ctx, w, degraded, structured)
 	}
 
 	// Sort by name, then version descending
@@ -595,4 +629,55 @@ func writeArtifactList(w *writer.Writer, artifacts []catalog.ArtifactInfo, showA
 	}
 
 	return outputOpts.Write(items)
+}
+
+// authLoginHint returns the "<bin> auth login <handler>" (or "<bin> catalog
+// login <registry>") fix command for a degraded registry, using the binary
+// name from context.
+func authLoginHint(ctx context.Context, registry string) string {
+	bin := settings.BinaryNameFromContext(ctx)
+	var customHandlers []appconfig.CustomOAuth2Config
+	if cfg := appconfig.FromContext(ctx); cfg != nil {
+		customHandlers = cfg.Auth.CustomOAuth2
+	}
+	if handler := catalog.InferAuthHandler(registry, customHandlers); handler != "" {
+		return fmt.Sprintf("%s auth login %s", bin, handler)
+	}
+	return fmt.Sprintf("%s catalog login %s", bin, registry)
+}
+
+// renderDegradedSignal emits the human-facing degraded warning (always) and,
+// for structured output, a machine-readable {"degraded":true,...} marker on
+// stderr so -o json consumers can detect the condition without changing the
+// stdout array contract.
+func renderDegradedSignal(ctx context.Context, w *writer.Writer, degraded *catalog.AuthDegradedError, structured bool) {
+	w.WarnStderrf("Catalog listing is incomplete: %s were rejected for %s — showing anonymous results only.",
+		credentialSourceDescription(degraded), degraded.Registry)
+	w.PlainStderrf("  To fix: %s", authLoginHint(ctx, degraded.Registry))
+
+	if structured {
+		marker := map[string]any{
+			"degraded": true,
+			"authError": map[string]any{
+				"registry":         degraded.Registry,
+				"handler":          degraded.Handler,
+				"credentialSource": degraded.CredentialSource,
+			},
+		}
+		if data, err := json.Marshal(marker); err == nil {
+			w.PlainStderrf("%s", string(data))
+		}
+	}
+}
+
+// credentialSourceDescription returns a human-readable description of the
+// rejected credential source for a degraded error.
+func credentialSourceDescription(degraded *catalog.AuthDegradedError) string {
+	if degraded.CredentialSource != "" {
+		return "your " + degraded.CredentialSource
+	}
+	if degraded.Handler != "" {
+		return fmt.Sprintf("your %s auth handler credentials", degraded.Handler)
+	}
+	return "your stored credentials"
 }

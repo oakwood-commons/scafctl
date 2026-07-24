@@ -124,3 +124,69 @@ var ErrEnumerationNotSupported = errors.New("registry does not support repositor
 func IsEnumerationNotSupported(err error) bool {
 	return errors.Is(err, ErrEnumerationNotSupported)
 }
+
+// AuthDegradedError indicates that stored credentials for a registry were
+// rejected and the catalog silently fell back to anonymous access. The listing
+// it produced is therefore degraded/incomplete rather than authoritatively
+// empty. The message is data-only (registry and credential source); callers
+// (e.g. the CLI) are responsible for adding a binary-name-specific fix hint,
+// since the binary name is context-driven.
+type AuthDegradedError struct {
+	// Registry is the registry host whose credentials were rejected.
+	Registry string
+	// Handler is the auth handler that provided the rejected credentials
+	// (may be empty when credentials came from another source).
+	Handler string
+	// CredentialSource is a human-readable description of the rejected
+	// credential source (may be empty).
+	CredentialSource string
+}
+
+// Error implements the error interface with a data-only message.
+func (e *AuthDegradedError) Error() string {
+	source := e.CredentialSource
+	if source == "" {
+		if e.Handler != "" {
+			source = fmt.Sprintf("%s auth handler credentials", e.Handler)
+		} else {
+			source = "stored credentials"
+		}
+	}
+	return fmt.Sprintf("authentication required for registry %q: %s were rejected; fell back to anonymous access", e.Registry, source)
+}
+
+// staleCredentialReporter is the subset of RemoteCatalog needed to build an
+// AuthDegradedError. It lets NewAuthDegradedError be tested without a full
+// RemoteCatalog and keeps the dependency direction clean.
+type staleCredentialReporter interface {
+	HasStaleCredentials() bool
+	Registry() string
+	AuthHandlerUsed() string
+	CredentialSource() string
+}
+
+// NewAuthDegradedError builds an AuthDegradedError from a catalog that fell
+// back to anonymous access. It returns nil when the catalog's credentials are
+// not stale, so callers can write:
+//
+//	if degraded := catalog.NewAuthDegradedError(rc); degraded != nil { ... }
+func NewAuthDegradedError(rc staleCredentialReporter) *AuthDegradedError {
+	if rc == nil || !rc.HasStaleCredentials() {
+		return nil
+	}
+	return &AuthDegradedError{
+		Registry:         rc.Registry(),
+		Handler:          rc.AuthHandlerUsed(),
+		CredentialSource: rc.CredentialSource(),
+	}
+}
+
+// IsAuthDegraded reports whether err (or any error it wraps) is an
+// AuthDegradedError, returning the typed value when it is.
+func IsAuthDegraded(err error) (*AuthDegradedError, bool) {
+	var e *AuthDegradedError
+	if errors.As(err, &e) {
+		return e, true
+	}
+	return nil, false
+}
