@@ -252,13 +252,18 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	// Determine which remote catalogs to query.
 	// --catalog: only the named catalog (used as post-filter below).
 	// --all: all configured catalogs.
-	// default: only the configured defaultCatalog.
+	// default: the default catalog plus the built-in official catalog as an
+	//   ordered fallback (catalog.DefaultListCatalogs).
 	if cfg := appconfig.FromContext(ctx); cfg != nil {
 		var remoteCatalogs []appconfig.CatalogConfig
 		switch {
 		case opts.Catalog != "":
 			// --catalog names a specific configured catalog; query only that one.
-			if cat, ok := cfg.GetCatalog(opts.Catalog); ok && cat.Type == appconfig.CatalogTypeOCI {
+			// The reserved official catalog is treated as unavailable when
+			// settings.disableOfficialCatalog is set, mirroring the resolver
+			// chain (which omits official entirely when disabled).
+			officialDisabled := opts.Catalog == appconfig.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog
+			if cat, ok := cfg.GetCatalog(opts.Catalog); ok && cat.Type == appconfig.CatalogTypeOCI && !officialDisabled {
 				remoteCatalogs = append(remoteCatalogs, *cat)
 			}
 		case opts.ShowAll:
@@ -273,7 +278,7 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 			// catalog -- mirroring the ordered chain the resolver consumes so a
 			// private/unauthenticated default does not hide anonymously-available
 			// official artifacts. See issue #692.
-			remoteCatalogs = defaultListCatalogs(cfg)
+			remoteCatalogs = catalog.DefaultListCatalogs(cfg)
 		}
 
 		for _, catCfg := range remoteCatalogs {
@@ -347,42 +352,6 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	}
 
 	return writeArtifactList(ctx, w, artifacts, opts.AllVersions || opts.VersionConstraint != "", outputOpts, aggregateDegraded, rawResultCount)
-}
-
-// defaultListCatalogs returns the ordered set of OCI catalogs a bare
-// `catalog list` (no --catalog, no --all) should query: the configured default
-// catalog first (primary), followed by the built-in official catalog as an
-// anonymous fallback. This mirrors the ordered chain the resolver consumes so a
-// private or unauthenticated default catalog does not hide artifacts that are
-// anonymously available from the official catalog (issue #692).
-//
-// The official catalog is omitted when settings.disableOfficialCatalog is set,
-// and is de-duplicated when the default catalog IS the official catalog (by
-// reserved name or identical URL).
-func defaultListCatalogs(cfg *appconfig.Config) []appconfig.CatalogConfig {
-	var catalogs []appconfig.CatalogConfig
-
-	defCat, hasDefault := cfg.GetDefaultCatalog()
-	if hasDefault && defCat.Type == appconfig.CatalogTypeOCI {
-		catalogs = append(catalogs, *defCat)
-	}
-
-	if cfg.Settings.DisableOfficialCatalog {
-		return catalogs
-	}
-
-	official, hasOfficial := cfg.GetCatalog(appconfig.CatalogNameOfficial)
-	if !hasOfficial || official.Type != appconfig.CatalogTypeOCI {
-		return catalogs
-	}
-
-	// Skip official if the default already IS official (same reserved name or
-	// identical URL) to avoid querying and listing it twice.
-	if hasDefault && (defCat.Name == appconfig.CatalogNameOfficial || defCat.URL == official.URL) {
-		return catalogs
-	}
-
-	return append(catalogs, *official)
 }
 
 // runListFromRemoteRef lists artifacts from a full OCI reference
