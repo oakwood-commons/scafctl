@@ -49,7 +49,7 @@ func (s *Server) handleGetCommandHelp(_ context.Context, req mcp.CallToolRequest
 	// No command specified: return top-level command list.
 	if commandPath == "" {
 		commands := cmdinfo.CollectCommands(s.rootCmd, false)
-		return mcp.NewToolResultJSON(commands)
+		return mcp.NewToolResultJSON(map[string]any{"commands": commands})
 	}
 
 	// Find the specific command.

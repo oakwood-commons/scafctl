@@ -288,7 +288,7 @@ func (s *Server) handleListSolutions(_ context.Context, request mcp.CallToolRequ
 		})
 	}
 
-	return mcp.NewToolResultJSON(items)
+	return mcp.NewToolResultJSON(map[string]any{"solutions": items})
 }
 
 // handleInspectSolution gets full solution metadata.

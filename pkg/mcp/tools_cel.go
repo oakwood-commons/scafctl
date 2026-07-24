@@ -125,7 +125,7 @@ func (s *Server) handleListCELFunctions(_ context.Context, request mcp.CallToolR
 		return f.FunctionNames
 	})
 
-	result, err := mcp.NewToolResultJSON(functions)
+	result, err := mcp.NewToolResultJSON(map[string]any{"functions": functions})
 	if err != nil {
 		return nil, err
 	}

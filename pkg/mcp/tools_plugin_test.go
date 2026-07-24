@@ -35,9 +35,16 @@ func TestHandleListPlugins(t *testing.T) {
 		result, err := srv.handleListPlugins(context.Background(), request)
 		require.NoError(t, err)
 		assert.False(t, result.IsError)
-		// Should indicate no plugins found
-		text := result.Content[0].(mcp.TextContent).Text
-		assert.Contains(t, text, "No cached plugins")
+		// Empty cache still returns a JSON envelope (not plain text) so strict
+		// MCP clients receive a valid structuredContent record.
+		text := extractJSONContent(t, result)
+		var envelope struct {
+			Plugins []plugin.CachedPlugin `json:"plugins"`
+			Message string                `json:"message"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		assert.Empty(t, envelope.Plugins, "empty cache should yield an empty plugins array")
+		assert.Contains(t, envelope.Message, "No cached plugins")
 	})
 
 	t.Run("returns plugins when cache populated", func(t *testing.T) {
@@ -63,8 +70,11 @@ func TestHandleListPlugins(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var plugins []plugin.CachedPlugin
-		require.NoError(t, json.Unmarshal([]byte(text), &plugins))
+		var envelope struct {
+			Plugins []plugin.CachedPlugin `json:"plugins"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		plugins := envelope.Plugins
 
 		// Find our test plugin in the results
 		var found bool
@@ -113,8 +123,11 @@ func TestHandleListOfficialProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []officialProviderItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []officialProviderItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 
 		// Should contain all the default official providers
 		assert.Len(t, items, len(official.DefaultProviders()))
@@ -155,8 +168,11 @@ func TestHandleListOfficialProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []officialProviderItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []officialProviderItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 
 		assert.Len(t, items, 2)
 		assert.Equal(t, "custom-one", items[0].Name)

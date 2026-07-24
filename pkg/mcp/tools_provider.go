@@ -235,7 +235,7 @@ func (s *Server) handleListProviders(_ context.Context, request mcp.CallToolRequ
 		}
 	}
 
-	result, err := mcp.NewToolResultJSON(items)
+	result, err := mcp.NewToolResultJSON(map[string]any{"providers": items})
 	if err != nil {
 		return nil, err
 	}

@@ -43,8 +43,11 @@ func TestHandleListProviders(t *testing.T) {
 
 		// Verify the response is valid JSON with providers
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []providerItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []providerItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 		assert.NotEmpty(t, items, "expected at least one provider")
 
 		// Verify required fields are populated
@@ -77,8 +80,11 @@ func TestHandleListProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []providerItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []providerItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 
 		// Each returned provider should have the "from" capability
 		for _, item := range items {
@@ -107,8 +113,11 @@ func TestHandleListProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []providerItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []providerItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 		assert.NotEmpty(t, items, "expected at least one filesystem provider")
 
 		for _, item := range items {
@@ -137,8 +146,11 @@ func TestHandleListProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []providerItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []providerItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 		assert.Empty(t, items, "expected no providers for nonexistent category")
 	})
 
@@ -182,8 +194,11 @@ func TestHandleListProviders(t *testing.T) {
 		assert.False(t, result.IsError)
 
 		text := result.Content[0].(mcp.TextContent).Text
-		var items []providerItem
-		require.NoError(t, json.Unmarshal([]byte(text), &items))
+		var envelope struct {
+			Items []providerItem `json:"providers"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		items := envelope.Items
 
 		// Should have built-ins plus official providers
 		foundExec := false
