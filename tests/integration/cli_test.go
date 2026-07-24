@@ -2604,6 +2604,43 @@ func TestIntegration_SecretsHelp(t *testing.T) {
 	assert.Contains(t, stdout, "delete")
 }
 
+// TestIntegration_SecretsFileFallback is a regression test for issue 683: on a
+// host with no OS keyring (headless/WSL/CI Linux, no org.freedesktop.secrets),
+// `secrets set`/`secrets get` must still work by degrading to the file-based
+// master.key backend instead of hard-failing.
+func TestIntegration_SecretsFileFallback(t *testing.T) {
+	t.Parallel()
+
+	dataHome := t.TempDir()
+	env := map[string]string{"XDG_DATA_HOME": dataHome}
+
+	// Set a secret -- must succeed even without an OS keyring.
+	_, setErr, setExit := runScafctlWithEnv(t, env, "secrets", "set", "issue683", "--value", "hello")
+	require.Equal(t, 0, setExit, "secrets set should succeed via file fallback; stderr: %s", setErr)
+
+	// Get it back.
+	getOut, getErr, getExit := runScafctlWithEnv(t, env, "secrets", "get", "issue683")
+	require.Equal(t, 0, getExit, "secrets get should succeed; stderr: %s", getErr)
+	assert.Contains(t, getOut, "hello")
+
+	// The master key must have been persisted to the file backend.
+	masterKey := filepath.Join(dataHome, "scafctl", "master.key")
+	info, statErr := os.Stat(masterKey)
+	require.NoError(t, statErr, "master.key should be written to the file backend")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "master.key must be mode 0600")
+}
+
+func TestIntegration_SecretsHelpDocumentsFallbacks(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "secrets", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	// Help must advertise the env and file fallbacks, not just the OS keychain
+	// (issue 683 doc gap).
+	assert.Contains(t, stdout, "SECRET_KEY")
+	assert.Contains(t, stdout, "master.key")
+}
+
 // ============================================================================
 // Auth Command Tests (basic, non-destructive)
 // ============================================================================

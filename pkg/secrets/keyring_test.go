@@ -6,6 +6,7 @@ package secrets
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 // mockKeyringForTest is an in-memory keyring implementation for testing.
@@ -477,10 +479,13 @@ func TestChainKeyring_Get(t *testing.T) {
 		assert.Equal(t, KeyringBackendOS, chain.Backend())
 	})
 
-	t.Run("returns first error when all fail", func(t *testing.T) {
+	t.Run("returns hard error only when no backend reports not-found", func(t *testing.T) {
+		// Both backends fail with hard (non-not-found) errors: the chain has no
+		// clean "key absent" signal, so it surfaces the first hard error.
 		kr1 := newMockKeyringForTest()
 		kr1.getErr = NewKeyringError("get", errors.New("os keyring error"))
 		kr2 := newMockKeyringForTest()
+		kr2.getErr = NewKeyringError("get", errors.New("env keyring error"))
 
 		chain := newChainKeyring(
 			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
@@ -490,6 +495,23 @@ func TestChainKeyring_Get(t *testing.T) {
 		_, err := chain.Get("service", "account")
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrKeyringAccess))
+	})
+
+	t.Run("clean not-found from a lower backend wins over upstream hard error", func(t *testing.T) {
+		// Regression for issue 683: an unavailable OS keyring (hard error) must
+		// not mask a lower backend's clean ErrKeyNotFound, or first-run key
+		// generation never happens on headless/WSL/CI systems.
+		kr1 := newMockKeyringForTest()
+		kr1.getErr = NewKeyringError("get", errors.New("os keyring unavailable"))
+		kr2 := newMockKeyringForTest() // returns ErrKeyNotFound (empty)
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: kr1, backend: KeyringBackendOS},
+			keyringEntry{keyring: kr2, backend: KeyringBackendFile},
+		)
+
+		_, err := chain.Get("service", "account")
+		assert.ErrorIs(t, err, ErrKeyNotFound)
 	})
 
 	t.Run("tracks backend correctly", func(t *testing.T) {
@@ -535,6 +557,74 @@ func TestChainKeyring_Set(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "value", val)
 	})
+
+	t.Run("skips backend reporting unavailable and records the accepting backend", func(t *testing.T) {
+		// Regression for issue 683: when the OS keyring is unavailable, Set must
+		// fall through to a writable backend (file) rather than hard-failing,
+		// and Backend() must report the backend that actually accepted the write.
+		osKr := newMockKeyringForTest()
+		osKr.setErr = fmt.Errorf("%w: %s", ErrKeyringUnavailable,
+			"The name org.freedesktop.secrets was not provided by any .service files")
+		fileKr := newMockKeyringForTest()
+
+		chain := newChainKeyring(
+			keyringEntry{keyring: osKr, backend: KeyringBackendOS},
+			keyringEntry{keyring: fileKr, backend: KeyringBackendFile},
+		)
+
+		err := chain.Set("service", "account", "value")
+		require.NoError(t, err)
+		assert.Equal(t, KeyringBackendFile, chain.Backend())
+
+		val, err := fileKr.Get("service", "account")
+		require.NoError(t, err)
+		assert.Equal(t, "value", val)
+	})
+}
+
+func TestIsOSKeyringUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error is available",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "unrelated error is available",
+			err:  errors.New("some other failure"),
+			want: false,
+		},
+		{
+			name: "ErrKeyNotFound is available",
+			err:  ErrKeyNotFound,
+			want: false,
+		},
+		{
+			name: "unsupported platform is unavailable",
+			err:  keyring.ErrUnsupportedPlatform,
+			want: true,
+		},
+		{
+			name: "dbus service-not-provided message is unavailable",
+			err:  errors.New("The name org.freedesktop.secrets was not provided by any .service files"),
+			want: true,
+		},
+		{
+			name: "wrapped dbus message is unavailable",
+			err:  fmt.Errorf("get: %w", errors.New("org.freedesktop.secrets was not provided by any .service files")),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isOSKeyringUnavailable(tt.err))
+		})
+	}
 }
 
 func TestChainKeyring_Delete(t *testing.T) {

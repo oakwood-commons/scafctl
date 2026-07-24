@@ -6,6 +6,7 @@ package secrets
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -153,6 +154,72 @@ func TestNew(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "keyring")
 	})
+}
+
+func TestNew_KeyringUnavailableFallsBackToFile(t *testing.T) {
+	// Regression for issue 683: when the OS keyring is entirely unavailable
+	// (e.g. headless/WSL/CI Linux with no org.freedesktop.secrets), store init
+	// must degrade to the file backend, generate+persist a master key there,
+	// and report KeyringBackend() == file -- instead of hard-failing.
+	tmpDir := t.TempDir()
+
+	unavailable := "The name org.freedesktop.secrets was not provided by any .service files"
+	osKr := newTestKeyring()
+	osKr.getErr = fmt.Errorf("%w: %s", ErrKeyringUnavailable, unavailable)
+	osKr.setErr = fmt.Errorf("%w: %s", ErrKeyringUnavailable, unavailable)
+
+	fileKr := newTestKeyring()
+
+	chain := newChainKeyring(
+		keyringEntry{keyring: newUnavailableKeyring(osKr), backend: KeyringBackendOS},
+		keyringEntry{keyring: fileKr, backend: KeyringBackendFile},
+	)
+
+	store, err := New(
+		WithSecretsDir(tmpDir),
+		WithKeyring(chain),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, store)
+	assert.Equal(t, KeyringBackendFile, store.KeyringBackend())
+
+	// The generated master key landed in the file backend, not the OS one.
+	_, err = fileKr.Get(KeyringService, KeyringMasterKeyAccount)
+	require.NoError(t, err)
+
+	// Round-trip a secret to confirm the store is fully usable.
+	ctx := context.Background()
+	require.NoError(t, store.Set(ctx, "token", []byte("value")))
+	got, err := store.Get(ctx, "token")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value"), got)
+}
+
+// unavailableKeyring wraps a testKeyring but maps its configured OS-unavailable
+// errors to ErrKeyNotFound on Get (mirroring OSKeyring.Get), so the chain can
+// fall through to a lower backend as it does in production.
+type unavailableKeyring struct {
+	inner *testKeyring
+}
+
+func newUnavailableKeyring(inner *testKeyring) *unavailableKeyring {
+	return &unavailableKeyring{inner: inner}
+}
+
+func (u *unavailableKeyring) Get(service, account string) (string, error) {
+	val, err := u.inner.Get(service, account)
+	if err != nil && isOSKeyringUnavailable(err) {
+		return "", ErrKeyNotFound
+	}
+	return val, err
+}
+
+func (u *unavailableKeyring) Set(service, account, value string) error {
+	return u.inner.Set(service, account, value)
+}
+
+func (u *unavailableKeyring) Delete(service, account string) error {
+	return u.inner.Delete(service, account)
 }
 
 func TestStore_Get(t *testing.T) {

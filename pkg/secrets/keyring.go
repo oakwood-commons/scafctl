@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/zalando/go-keyring"
@@ -42,6 +43,48 @@ const (
 // ErrKeyNotFound is returned when a key is not found in the keyring.
 var ErrKeyNotFound = errors.New("key not found in keyring")
 
+// ErrKeyringUnavailable is returned when a keyring backend's underlying
+// provider is entirely unavailable (as opposed to the key merely being
+// absent). On Linux this is the common headless/WSL/CI case where the
+// freedesktop Secret Service (org.freedesktop.secrets) is not running, so
+// go-keyring returns a raw D-Bus "not provided by any .service files" error.
+// Callers treat this as "this backend cannot serve requests" and fall through
+// to the next backend in the chain, rather than failing hard.
+var ErrKeyringUnavailable = errors.New("keyring provider unavailable")
+
+// osKeyringUnavailableMarkers are substrings that identify errors from
+// go-keyring/godbus indicating the OS Secret Service is not available at all.
+// go-keyring does not export a typed sentinel for this D-Bus condition, so we
+// match on the stable D-Bus name/text it surfaces.
+// We deliberately match only the D-Bus *activation-failure* phrasing, not the
+// bare service name "org.freedesktop.secrets": a permission-denied error
+// (service present but access blocked) is a genuine hard failure and must NOT
+// be misclassified as "unavailable" and silently downgraded to the file
+// backend.
+var osKeyringUnavailableMarkers = []string{
+	"was not provided by any .service", // full D-Bus activation failure phrasing
+}
+
+// isOSKeyringUnavailable reports whether err indicates the OS keyring provider
+// is unavailable (missing Secret Service, unsupported platform) rather than the
+// requested key simply being absent.
+func isOSKeyringUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	// go-keyring exports this sentinel when the platform has no keyring at all.
+	if errors.Is(err, keyring.ErrUnsupportedPlatform) {
+		return true
+	}
+	msg := err.Error()
+	for _, marker := range osKeyringUnavailableMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // OSKeyring implements Keyring using the OS keychain via go-keyring.
 type OSKeyring struct{}
 
@@ -51,10 +94,22 @@ func NewOSKeyring() *OSKeyring {
 }
 
 // Get retrieves a value from the OS keyring.
+//
+// Note the intentional asymmetry with Set/Delete: an unavailable Secret Service
+// is collapsed into ErrKeyNotFound here (so the chain falls through to env/file
+// on read), whereas Set surfaces ErrKeyringUnavailable so the chain can pick a
+// writable backend. Do not "fix" this inconsistency: reads want fallthrough,
+// writes want an observable "this backend can't serve" signal.
 func (k *OSKeyring) Get(service, account string) (string, error) {
 	value, err := keyring.Get(service, account)
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
+			return "", ErrKeyNotFound
+		}
+		// The Secret Service itself is unavailable (headless/WSL/CI Linux):
+		// treat as key-not-found so the chain falls through to env/file
+		// backends instead of failing hard.
+		if isOSKeyringUnavailable(err) {
 			return "", ErrKeyNotFound
 		}
 		return "", NewKeyringError("get", err)
@@ -65,6 +120,12 @@ func (k *OSKeyring) Get(service, account string) (string, error) {
 // Set stores a value in the OS keyring.
 func (k *OSKeyring) Set(service, account, value string) error {
 	if err := keyring.Set(service, account, value); err != nil {
+		// The Secret Service is unavailable: report a distinct sentinel so the
+		// chain can fall through to a writable backend (env/file) rather than
+		// aborting the write.
+		if isOSKeyringUnavailable(err) {
+			return fmt.Errorf("%w: %w", ErrKeyringUnavailable, err)
+		}
 		return NewKeyringError("set", err)
 	}
 	return nil
@@ -250,36 +311,60 @@ func newChainKeyring(entries ...keyringEntry) *chainKeyring {
 }
 
 // Get tries each keyring in order and returns the first successful result.
+// If no backend has a value, a "key not found" result from any backend takes
+// precedence over a hard access error from an upstream backend: an unavailable
+// provider (e.g. a missing OS Secret Service) must not mask the fact that a
+// lower backend cleanly reports the key is simply absent, which is what lets
+// first-run key generation proceed on headless/WSL/CI systems.
 func (k *chainKeyring) Get(service, account string) (string, error) {
-	var firstErr error
+	var firstHardErr error
+	sawNotFound := false
 	for _, entry := range k.entries {
 		value, err := entry.keyring.Get(service, account)
 		if err == nil {
 			k.resolvedBackend = entry.backend
 			return value, nil
 		}
-		if firstErr == nil {
-			firstErr = err
+		if errors.Is(err, ErrKeyNotFound) {
+			sawNotFound = true
+			continue
+		}
+		if firstHardErr == nil {
+			firstHardErr = err
 		}
 	}
-	if firstErr != nil {
-		return "", firstErr
+	// A clean "not found" from any backend wins over an upstream hard error so
+	// the caller can generate and persist a fresh key.
+	if sawNotFound {
+		return "", ErrKeyNotFound
+	}
+	if firstHardErr != nil {
+		return "", firstHardErr
 	}
 	return "", ErrKeyNotFound
 }
 
-// Set stores a value in the first keyring that supports it.
-// Tries each keyring in order. If a keyring fails with an unsupported
-// operation error, tries the next one. For other errors, returns immediately.
+// Set stores a value in the first keyring that accepts it.
+// Backends are tried in order; a backend that cannot store the value (an
+// unavailable provider such as a missing OS Secret Service, or a read-only
+// backend like the environment) is skipped in favor of the next writable one.
+// This is what lets the file backend persist a freshly generated master key
+// when the OS keyring is absent.
 func (k *chainKeyring) Set(service, account, value string) error {
+	var errs []error
 	for _, entry := range k.entries {
 		err := entry.keyring.Set(service, account, value)
 		if err == nil {
+			k.resolvedBackend = entry.backend
 			return nil
 		}
+		errs = append(errs, err)
 	}
-	if len(k.entries) > 0 {
-		return k.entries[0].keyring.Set(service, account, value)
+	if len(errs) > 0 {
+		// Join every backend's failure so the diagnostic upstream (OS) cause is
+		// preserved alongside the later env/file errors, rather than surfacing
+		// only the last backend's error.
+		return errors.Join(errs...)
 	}
 	return NewKeyringError("set", errors.New("no keyrings configured"))
 }

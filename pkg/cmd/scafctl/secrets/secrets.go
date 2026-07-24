@@ -42,7 +42,13 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			  - macOS:   ~/.local/share/scafctl/secrets/
 			  - Windows: %LOCALAPPDATA%\scafctl\secrets\
 
-			The master encryption key is stored in your OS keychain for security.
+			The master encryption key is stored in your OS keychain when available
+			(macOS Keychain, Windows Credential Manager, or the Linux Secret Service).
+			When no OS keychain is available (common on headless, WSL, or CI Linux),
+			the key falls back to the SCAFCTL_SECRET_KEY environment variable, and then
+			to a 0600-permission file under the data directory (master.key). File and
+			environment backends are less secure than the OS keychain; set
+			settings.requireSecureKeyring to require the OS keychain and refuse the fallback.
 
 			Internal secrets:
 			  Secret names starting with the binary name followed by "." are used internally (e.g. auth tokens).
