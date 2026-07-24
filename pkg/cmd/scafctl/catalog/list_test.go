@@ -702,14 +702,12 @@ func BenchmarkWriteArtifactList(b *testing.B) {
 
 // staleDegraded builds an AuthDegradedError from a real RemoteCatalog marked
 // stale, exercising the same NewAuthDegradedError path the command uses.
-func staleDegraded(t *testing.T, registry, source string) *catalogpkg.AuthDegradedError {
+func staleDegraded(t *testing.T) *catalogpkg.AuthDegradedError {
 	t.Helper()
-	rc, err := catalogpkg.NewRemoteCatalog(catalogpkg.RemoteCatalogConfig{Registry: registry})
+	rc, err := catalogpkg.NewRemoteCatalog(catalogpkg.RemoteCatalogConfig{Registry: "ghcr.io"})
 	require.NoError(t, err)
 	rc.SetStaleForTesting()
-	if source != "" {
-		rc.SetCredentialSourceForTest(source)
-	}
+	rc.SetCredentialSourceForTest("github auth handler token")
 	d := catalogpkg.NewAuthDegradedError(rc)
 	require.NotNil(t, d)
 	return d
@@ -720,7 +718,7 @@ func TestWriteArtifactList_EmptyStale_FailsLoudly(t *testing.T) {
 	outputOpts := kvx.NewOutputOptions(ioStreams)
 	w := writer.New(ioStreams, &settings.Run{})
 
-	degraded := staleDegraded(t, "ghcr.io", "github auth handler token")
+	degraded := staleDegraded(t)
 	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
 
 	require.Error(t, err, "empty result on stale credentials must return an error")
@@ -754,7 +752,7 @@ func TestWriteArtifactList_NonEmptyStale_WarnsButSucceeds(t *testing.T) {
 		},
 		Catalog: "remote",
 	}}
-	degraded := staleDegraded(t, "ghcr.io", "github auth handler token")
+	degraded := staleDegraded(t)
 
 	err := writeArtifactList(context.Background(), w, artifacts, false, outputOpts, degraded)
 	require.NoError(t, err, "partial (non-empty) result must still succeed")
@@ -769,7 +767,7 @@ func TestWriteArtifactList_EmptyStaleJSON_MarkerOnStderr(t *testing.T) {
 	outputOpts.Format = "json"
 	w := writer.New(ioStreams, &settings.Run{})
 
-	degraded := staleDegraded(t, "ghcr.io", "github auth handler token")
+	degraded := staleDegraded(t)
 	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
 
 	require.Error(t, err)
@@ -819,4 +817,55 @@ func TestWriteArtifactList_EmptyStale_GenericSourceAndRegistry(t *testing.T) {
 	assert.Contains(t, errBuf.String(), "stored credentials")
 	assert.Contains(t, errBuf.String(), "private.example.com")
 	assert.Contains(t, errBuf.String(), "catalog login private.example.com")
+}
+
+// TestWriteArtifactList_PrefersRecordedHandler verifies the fix hint uses the
+// handler that actually supplied the rejected credentials, even when the
+// registry host is not one InferAuthHandler recognizes.
+func TestWriteArtifactList_PrefersRecordedHandler(t *testing.T) {
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	w := writer.New(ioStreams, &settings.Run{})
+
+	// Non-inferable registry, but a handler was recorded on the error.
+	degraded := &catalogpkg.AuthDegradedError{Registry: "private.example.com", Handler: "corp-sso"}
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+
+	require.Error(t, err)
+	assert.Contains(t, errBuf.String(), "auth login corp-sso",
+		"should recommend logging in with the recorded handler, not catalog login")
+	assert.NotContains(t, errBuf.String(), "catalog login")
+}
+
+// TestWriteArtifactList_QuietSuppressesDegradedOutput verifies that quiet output
+// emits no degraded warning while still returning the failing exit code.
+func TestWriteArtifactList_QuietSuppressesDegradedOutput(t *testing.T) {
+	ioStreams, outBuf, errBuf := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = kvx.OutputFormatQuiet
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+
+	require.Error(t, err, "exit code still conveys the failure")
+	assert.Equal(t, exitcode.CatalogError, exitcode.GetCode(err))
+	assert.Empty(t, errBuf.String(), "quiet output must suppress the degraded warning")
+	assert.Empty(t, outBuf.String(), "quiet output must suppress stdout")
+}
+
+// TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray verifies the
+// structured (json/yaml) empty+stale path writes a parseable empty array to
+// stdout (so consumers can parse stdout) while the marker goes to stderr.
+func TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray(t *testing.T) {
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+	w := writer.New(ioStreams, &settings.Run{})
+
+	degraded := staleDegraded(t)
+	err := writeArtifactList(context.Background(), w, nil, false, outputOpts, degraded)
+
+	require.Error(t, err)
+	assert.Contains(t, outBuf.String(), "[]", "stdout should contain a parseable empty array")
 }

@@ -538,6 +538,7 @@ func listRemoteArtifacts(ctx context.Context, opts *ListOptions, kind catalog.Ar
 
 func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalog.ArtifactInfo, showAll bool, outputOpts *kvx.OutputOptions, degraded *catalog.AuthDegradedError) error {
 	structured := kvx.IsStructuredFormat(outputOpts.Format)
+	quiet := kvx.IsQuietFormat(outputOpts.Format)
 
 	// Handle empty results.
 	if len(artifacts) == 0 {
@@ -545,9 +546,15 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 		// catalog" case: the listing is not authoritatively empty, credentials
 		// were rejected. Fail loudly instead of printing "No artifacts found".
 		if degraded != nil {
-			renderDegradedSignal(ctx, w, degraded, structured)
+			// For structured output, still write an empty array to stdout so
+			// JSON/YAML consumers get a parseable document even on non-zero
+			// exit; the degraded/authError marker goes to stderr.
+			if structured {
+				_ = outputOpts.Write([]ArtifactListItem{})
+			}
+			renderDegradedSignal(ctx, w, degraded, structured, quiet)
 			return exitcode.WithCode(
-				fmt.Errorf("%w; run %s", degraded, authLoginHint(ctx, degraded.Registry)),
+				fmt.Errorf("%w; run %s", degraded, authLoginHint(ctx, degraded.Registry, degraded.Handler)),
 				exitcode.CatalogError,
 			)
 		}
@@ -562,7 +569,7 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 	// from anonymous access, but some content may be hidden. Print the results
 	// (exit 0) and warn that the listing is incomplete.
 	if degraded != nil {
-		renderDegradedSignal(ctx, w, degraded, structured)
+		renderDegradedSignal(ctx, w, degraded, structured, quiet)
 	}
 
 	// Sort by name, then version descending
@@ -633,27 +640,37 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 
 // authLoginHint returns the "<bin> auth login <handler>" (or "<bin> catalog
 // login <registry>") fix command for a degraded registry, using the binary
-// name from context.
-func authLoginHint(ctx context.Context, registry string) string {
+// name from context. It prefers the handler that actually supplied the rejected
+// credentials (which RemoteCatalog gives precedence over credential-store
+// entries), falling back to inferring a handler from the registry host only
+// when no handler was recorded.
+func authLoginHint(ctx context.Context, registry, handler string) string {
 	bin := settings.BinaryNameFromContext(ctx)
-	var customHandlers []appconfig.CustomOAuth2Config
-	if cfg := appconfig.FromContext(ctx); cfg != nil {
-		customHandlers = cfg.Auth.CustomOAuth2
+	if handler == "" {
+		var customHandlers []appconfig.CustomOAuth2Config
+		if cfg := appconfig.FromContext(ctx); cfg != nil {
+			customHandlers = cfg.Auth.CustomOAuth2
+		}
+		handler = catalog.InferAuthHandler(registry, customHandlers)
 	}
-	if handler := catalog.InferAuthHandler(registry, customHandlers); handler != "" {
+	if handler != "" {
 		return fmt.Sprintf("%s auth login %s", bin, handler)
 	}
 	return fmt.Sprintf("%s catalog login %s", bin, registry)
 }
 
-// renderDegradedSignal emits the human-facing degraded warning (always) and,
-// for structured output, a machine-readable {"degraded":true,...} marker on
-// stderr so -o json consumers can detect the condition without changing the
-// stdout array contract.
-func renderDegradedSignal(ctx context.Context, w *writer.Writer, degraded *catalog.AuthDegradedError, structured bool) {
-	w.WarnStderrf("Catalog listing is incomplete: %s were rejected for %s — showing anonymous results only.",
+// renderDegradedSignal emits the human-facing degraded warning and, for
+// structured output, a machine-readable {"degraded":true,...} marker on stderr
+// so -o json consumers can detect the condition without changing the stdout
+// array contract. It emits nothing when quiet output is requested (quiet
+// suppresses all output; the exit code still conveys the failure).
+func renderDegradedSignal(ctx context.Context, w *writer.Writer, degraded *catalog.AuthDegradedError, structured, quiet bool) {
+	if quiet {
+		return
+	}
+	w.WarnStderrf("Catalog listing is incomplete: rejected %s for %s — showing anonymous results only.",
 		credentialSourceDescription(degraded), degraded.Registry)
-	w.PlainStderrf("  To fix: %s", authLoginHint(ctx, degraded.Registry))
+	w.PlainStderrf("  To fix: %s", authLoginHint(ctx, degraded.Registry, degraded.Handler))
 
 	if structured {
 		marker := map[string]any{

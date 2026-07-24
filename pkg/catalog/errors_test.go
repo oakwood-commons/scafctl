@@ -156,17 +156,17 @@ func TestAuthDegradedError_Error(t *testing.T) {
 		{
 			name: "with explicit credential source",
 			err:  &AuthDegradedError{Registry: "reg.example.com", CredentialSource: "github auth handler token"},
-			want: `authentication required for registry "reg.example.com": github auth handler token were rejected; fell back to anonymous access`,
+			want: `authentication required for registry "reg.example.com": rejected github auth handler token; fell back to anonymous access`,
 		},
 		{
 			name: "handler only (no source)",
 			err:  &AuthDegradedError{Registry: "reg.example.com", Handler: "github"},
-			want: `authentication required for registry "reg.example.com": github auth handler credentials were rejected; fell back to anonymous access`,
+			want: `authentication required for registry "reg.example.com": rejected github auth handler credentials; fell back to anonymous access`,
 		},
 		{
 			name: "no source or handler",
 			err:  &AuthDegradedError{Registry: "reg.example.com"},
-			want: `authentication required for registry "reg.example.com": stored credentials were rejected; fell back to anonymous access`,
+			want: `authentication required for registry "reg.example.com": rejected stored credentials; fell back to anonymous access`,
 		},
 	}
 	for _, tt := range tests {

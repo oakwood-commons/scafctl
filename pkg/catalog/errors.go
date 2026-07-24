@@ -152,7 +152,7 @@ func (e *AuthDegradedError) Error() string {
 			source = "stored credentials"
 		}
 	}
-	return fmt.Sprintf("authentication required for registry %q: %s were rejected; fell back to anonymous access", e.Registry, source)
+	return fmt.Sprintf("authentication required for registry %q: rejected %s; fell back to anonymous access", e.Registry, source)
 }
 
 // staleCredentialReporter is the subset of RemoteCatalog needed to build an
