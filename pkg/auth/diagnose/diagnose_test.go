@@ -357,7 +357,7 @@ func TestRunSecretsStoreCheck(t *testing.T) {
 
 // TestProbeSecretsStore_ReadOnly exercises the real probeSecretsStore against a
 // seeded env-backend master key and asserts it is read-only: it reports the key
-// as found via the env backend and never writes a master.key file to the data dir.
+// as found and never writes a master.key file to the data dir.
 func TestProbeSecretsStore_ReadOnly(t *testing.T) {
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
@@ -372,7 +372,12 @@ func TestProbeSecretsStore_ReadOnly(t *testing.T) {
 
 	require.NoError(t, res.err, "seeded env key should probe without a hard error")
 	assert.True(t, res.found, "seeded env key should be found")
-	assert.Equal(t, secrets.KeyringBackendEnv, res.backend, "env backend should satisfy the read")
+	// The default keyring prefers the OS backend ahead of the env backend, so on a
+	// host that already has a master key in the OS keyring the probe resolves "os";
+	// otherwise it falls through to the seeded env key. Either is a correct, read-only
+	// result -- the invariant under test is the read-only proof below.
+	assert.Contains(t, []string{secrets.KeyringBackendOS, secrets.KeyringBackendEnv}, res.backend,
+		"os or env backend should satisfy the read")
 
 	// Read-only proof: no master.key file was created under the isolated data dir.
 	masterKey := filepath.Join(dataHome, "scafctl", "master.key")
