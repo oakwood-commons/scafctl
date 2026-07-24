@@ -1,6 +1,8 @@
 package diagnose
 
 import (
+	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
 
 func TestRunEnvVarChecks(t *testing.T) {
@@ -274,6 +278,118 @@ func BenchmarkRunClockSkewCheck(b *testing.B) {
 
 	for b.Loop() {
 		_ = runClockSkewCheck(client, url)
+	}
+}
+
+func TestRunSecretsStoreCheck(t *testing.T) {
+	origProbe := secretsProbeFunc
+	t.Cleanup(func() { secretsProbeFunc = origProbe })
+
+	hardErr := errors.New("keyring get failed: permission denied")
+
+	tests := []struct {
+		name                 string
+		probe                secretsProbeResult
+		requireSecureKeyring bool
+		wantStatus           CheckStatus
+		wantMsgContains      string
+	}{
+		{
+			name:            "hard access error fails",
+			probe:           secretsProbeResult{err: hardErr},
+			wantStatus:      StatusFail,
+			wantMsgContains: "cannot access the master-key keyring",
+		},
+		{
+			name:            "key present on secure OS backend is ok",
+			probe:           secretsProbeResult{found: true, backend: secrets.KeyringBackendOS},
+			wantStatus:      StatusOK,
+			wantMsgContains: "master key present (backend: os)",
+		},
+		{
+			name:            "key present on file backend warns",
+			probe:           secretsProbeResult{found: true, backend: secrets.KeyringBackendFile},
+			wantStatus:      StatusWarn,
+			wantMsgContains: "insecure backend",
+		},
+		{
+			name:            "key present on env backend warns",
+			probe:           secretsProbeResult{found: true, backend: secrets.KeyringBackendEnv},
+			wantStatus:      StatusWarn,
+			wantMsgContains: "insecure backend",
+		},
+		{
+			name:                 "insecure backend with requireSecureKeyring fails",
+			probe:                secretsProbeResult{found: true, backend: secrets.KeyringBackendFile},
+			requireSecureKeyring: true,
+			wantStatus:           StatusFail,
+			wantMsgContains:      "refuse to initialise",
+		},
+		{
+			name:            "no key yet is ok",
+			probe:           secretsProbeResult{found: false},
+			wantStatus:      StatusOK,
+			wantMsgContains: "no master key stored yet",
+		},
+		{
+			name:                 "no key yet with requireSecureKeyring is info",
+			probe:                secretsProbeResult{found: false},
+			requireSecureKeyring: true,
+			wantStatus:           StatusInfo,
+			wantMsgContains:      "requireSecureKeyring is enabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			probe := tt.probe
+			secretsProbeFunc = func() secretsProbeResult { return probe }
+
+			check := RunSecretsStoreCheck(tt.requireSecureKeyring)
+
+			assert.Equal(t, "secrets", check.Category)
+			assert.Equal(t, "secrets store", check.Name)
+			assert.Equal(t, tt.wantStatus, check.Status)
+			assert.Contains(t, check.Message, tt.wantMsgContains)
+		})
+	}
+}
+
+// TestProbeSecretsStore_ReadOnly exercises the real probeSecretsStore against a
+// seeded env-backend master key and asserts it is read-only: it reports the key
+// as found via the env backend and never writes a master.key file to the data dir.
+func TestProbeSecretsStore_ReadOnly(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i + 1)
+	}
+	t.Setenv(secrets.EnvSecretKey, base64.StdEncoding.EncodeToString(key))
+
+	res := probeSecretsStore()
+
+	require.NoError(t, res.err, "seeded env key should probe without a hard error")
+	assert.True(t, res.found, "seeded env key should be found")
+	assert.Equal(t, secrets.KeyringBackendEnv, res.backend, "env backend should satisfy the read")
+
+	// Read-only proof: no master.key file was created under the isolated data dir.
+	masterKey := filepath.Join(dataHome, "scafctl", "master.key")
+	_, statErr := os.Stat(masterKey)
+	assert.True(t, os.IsNotExist(statErr), "probe must not write a master key file, found: %v", statErr)
+}
+
+func BenchmarkRunSecretsStoreCheck(b *testing.B) {
+	origProbe := secretsProbeFunc
+	b.Cleanup(func() { secretsProbeFunc = origProbe })
+	secretsProbeFunc = func() secretsProbeResult {
+		return secretsProbeResult{found: true, backend: secrets.KeyringBackendOS}
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = RunSecretsStoreCheck(false)
 	}
 }
 
