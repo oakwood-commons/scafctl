@@ -549,14 +549,18 @@ func writeArtifactList(ctx context.Context, w *writer.Writer, artifacts []catalo
 			// For structured output, still write an empty array to stdout so
 			// JSON/YAML consumers get a parseable document even on non-zero
 			// exit; the degraded/authError marker goes to stderr.
+			var writeErr error
 			if structured {
-				_ = outputOpts.Write([]ArtifactListItem{})
+				writeErr = outputOpts.Write([]ArtifactListItem{})
 			}
 			renderDegradedSignal(ctx, w, degraded, structured, quiet)
-			return exitcode.WithCode(
-				fmt.Errorf("%w; run %s", degraded, authLoginHint(ctx, degraded.Registry, degraded.Handler)),
-				exitcode.CatalogError,
-			)
+			authErr := fmt.Errorf("%w; run %s", degraded, authLoginHint(ctx, degraded.Registry, degraded.Handler))
+			// Surface a stdout write failure alongside the auth-degraded error
+			// (the degraded state remains the primary signal / exit code).
+			if writeErr != nil {
+				authErr = fmt.Errorf("%w (failed to write empty result: %w)", authErr, writeErr)
+			}
+			return exitcode.WithCode(authErr, exitcode.CatalogError)
 		}
 		if structured {
 			return outputOpts.Write([]ArtifactListItem{})
