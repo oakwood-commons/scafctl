@@ -48,7 +48,8 @@ func CommandSecrets(cliParams *settings.Run, ioStreams *terminal.IOStreams, path
 			the key falls back to the SCAFCTL_SECRET_KEY environment variable, and then
 			to a 0600-permission file under the data directory (master.key). File and
 			environment backends are less secure than the OS keychain; set
-			settings.requireSecureKeyring to require the OS keychain and refuse the fallback.
+			settings.requireSecureKeyring in config (or the SCAFCTL_REQUIRE_SECURE_KEYRING
+			environment variable) to require the OS keychain and refuse the fallback.
 
 			Internal secrets:
 			  Secret names starting with the binary name followed by "." are used internally (e.g. auth tokens).

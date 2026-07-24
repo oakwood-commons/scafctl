@@ -479,7 +479,7 @@ func TestChainKeyring_Get(t *testing.T) {
 		assert.Equal(t, KeyringBackendOS, chain.Backend())
 	})
 
-	t.Run("returns hard error only when no backend reports not-found", func(t *testing.T) {
+	t.Run("surfaces the first hard error when every backend fails hard", func(t *testing.T) {
 		// Both backends fail with hard (non-not-found) errors: the chain has no
 		// clean "key absent" signal, so it surfaces the first hard error.
 		kr1 := newMockKeyringForTest()

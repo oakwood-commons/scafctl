@@ -196,8 +196,10 @@ func TestNew_KeyringUnavailableFallsBackToFile(t *testing.T) {
 }
 
 // unavailableKeyring wraps a testKeyring but maps its configured OS-unavailable
-// errors to ErrKeyNotFound on Get (mirroring OSKeyring.Get), so the chain can
-// fall through to a lower backend as it does in production.
+// errors to ErrKeyringUnavailable on Get, faithfully mirroring production
+// OSKeyring.Get. Returning ErrKeyringUnavailable (rather than ErrKeyNotFound)
+// forces chainKeyring.Get to exercise its explicit skip-on-unavailable branch,
+// so the regression test would fail if the chain stopped skipping it.
 type unavailableKeyring struct {
 	inner *testKeyring
 }
@@ -209,7 +211,7 @@ func newUnavailableKeyring(inner *testKeyring) *unavailableKeyring {
 func (u *unavailableKeyring) Get(service, account string) (string, error) {
 	val, err := u.inner.Get(service, account)
 	if err != nil && isOSKeyringUnavailable(err) {
-		return "", ErrKeyNotFound
+		return "", fmt.Errorf("%w: %w", ErrKeyringUnavailable, err)
 	}
 	return val, err
 }
