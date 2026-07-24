@@ -66,14 +66,17 @@ var ErrKeyringReadOnly = errors.New("keyring backend is read-only")
 // We deliberately match only *service-unreachable* phrasings -- D-Bus activation
 // failure and session-bus connection failure -- and NOT permission/authorization
 // errors. A permission-denied error (service present but access blocked, e.g.
-// D-Bus "AccessDenied"/"not authorized") is a genuine hard failure and must NOT
-// be misclassified as "unavailable" and silently downgraded to the file backend.
+// D-Bus "AccessDenied"/"not authorized", or a "dial unix ...: connect: permission
+// denied" on the session bus socket) is a genuine hard failure and must NOT be
+// misclassified as "unavailable" and silently downgraded to the file backend. For
+// that reason we match the specific "connect:" failure suffixes rather than the
+// bare "dial unix" prefix (which also appears in permission-denied dial errors).
 // The bare service name "org.freedesktop.secrets" is likewise excluded because it
 // appears in both activation-failure and permission-denied messages.
 var osKeyringUnavailableMarkers = []string{
 	"was not provided by any .service",         // D-Bus activation failure (no Secret Service)
-	"dial unix",                                // session bus socket unreachable (no D-Bus session)
-	"connection refused",                       // session bus present but refusing connections
+	"connect: no such file or directory",       // session bus socket missing (no D-Bus session)
+	"connect: connection refused",              // session bus present but refusing connections
 	"The name org.freedesktop.secrets was not", // explicit activation-failure variant
 }
 

@@ -689,6 +689,14 @@ func TestIsOSKeyringUnavailable(t *testing.T) {
 			err:  errors.New("org.freedesktop.DBus.Error.AccessDenied: not authorized to access org.freedesktop.secrets"),
 			want: false,
 		},
+		{
+			// A dial-unix error whose suffix is permission denied is a genuine
+			// access failure, not an unreachable session bus. It must remain a
+			// hard error so it is not silently downgraded to the file backend.
+			name: "dbus dial permission denied is NOT unavailable (genuine hard failure)",
+			err:  errors.New("dial unix /run/user/1000/bus: connect: permission denied"),
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
