@@ -76,8 +76,7 @@ func NewDebugProvider() *DebugProvider {
 			},
 			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 				fieldExpression: schemahelper.StringProp("Optional CEL expression to filter or transform resolver data before output. If not provided, outputs all resolver data. Resolver data is available under the '_' variable (e.g., _.user.name).",
-					schemahelper.WithExample("_.user.name"),
-					schemahelper.WithMaxLength(*ptrs.IntPtr(8192))),
+					schemahelper.WithExample("_.user.name")),
 				fieldLabel: schemahelper.StringProp("Optional label or message to add context to the debug output",
 					schemahelper.WithExample("User data after transformation"),
 					schemahelper.WithMaxLength(*ptrs.IntPtr(500))),
