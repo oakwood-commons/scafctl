@@ -29,11 +29,12 @@ scafctl auth diagnose entra --live-token
 ## What It Checks
 
 | Check | Description |
-|-------|-------------|
+| ------- | ------------- |
 | Auth registry | Are any handlers registered? |
 | Config file | Does your config file exist and contain auth sections? |
 | Environment variables | Are handler-specific env vars set correctly? |
 | Clock skew | Is local time within tolerance of an HTTPS server? |
+| Secrets store | Can the master-key keyring be read? Auth token caching depends on it. |
 | Auth status | Are you logged in to each handler? |
 | Cached token health | Are there expired or missing tokens? |
 | Plugin binary | Is the handler plugin binary present and executable? |

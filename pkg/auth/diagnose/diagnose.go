@@ -8,10 +8,13 @@ package diagnose
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/oakwood-commons/scafctl/pkg/secrets"
 )
 
 // CheckStatus represents the result of a single diagnostic check.
@@ -284,5 +287,129 @@ func runClockSkewCheck(client *http.Client, endpoint string) Check {
 		Name:     "clock skew",
 		Status:   StatusOK,
 		Message:  fmt.Sprintf("clock skew is %s (within acceptable range)", skew.Round(time.Millisecond)),
+	}
+}
+
+// secretsProbeFunc probes the master-key acquisition path in a read-only way.
+// It is a package var so tests can substitute a deterministic probe instead of
+// touching the real OS keyring / filesystem.
+var secretsProbeFunc = probeSecretsStore
+
+// secretsProbeResult captures the read-only outcome of a master-key probe.
+type secretsProbeResult struct {
+	// backend is the keyring backend that satisfied the read (os/env/file), or
+	// empty when no master key exists yet.
+	backend string
+	// found is true when an existing master key was successfully read.
+	found bool
+	// err is a genuine hard access error (never ErrKeyNotFound); nil otherwise.
+	err error
+}
+
+// probeSecretsStore attempts to read the existing master key from the default
+// keyring chain WITHOUT mutating anything. Unlike secrets.New(), it never
+// generates a key, never persists to a backend, and never touches encrypted
+// secrets. A missing key (ErrKeyNotFound) is reported as found=false, err=nil --
+// the store would create one on first real use. Any other error is a genuine
+// keyring access failure that would break login.
+func probeSecretsStore() secretsProbeResult {
+	kr := secrets.NewDefaultKeyring()
+	_, err := secrets.GetMasterKeyFromKeyring(kr)
+	if err == nil {
+		backend := ""
+		if br, ok := kr.(secrets.BackendReporter); ok {
+			backend = br.Backend()
+		}
+		return secretsProbeResult{backend: backend, found: true}
+	}
+	if errors.Is(err, secrets.ErrKeyNotFound) {
+		return secretsProbeResult{found: false}
+	}
+	return secretsProbeResult{err: err}
+}
+
+// RunSecretsStoreCheck performs a read-only health check of the secrets store's
+// master-key acquisition path. Auth depends on this store: login persists the
+// OAuth token by encrypting it with the master key held in the OS keyring (or
+// its env/file fallbacks). When the store cannot initialise -- e.g. no reachable
+// OS keyring and, on some hosts, permission-denied errors -- every login and
+// token cache operation fails, so a green auth diagnose without this check is a
+// false all-clear (issue #684).
+//
+// The check is non-mutating: it reads the master key if present but never
+// generates or persists one. requireSecureKeyring mirrors
+// settings.requireSecureKeyring: when true, an insecure env/file backend is a
+// failure because secrets.New() would refuse to proceed.
+func RunSecretsStoreCheck(requireSecureKeyring bool) Check {
+	const checkName = "secrets store"
+
+	res := secretsProbeFunc()
+
+	if res.err != nil {
+		return Check{
+			Category: "secrets",
+			Name:     checkName,
+			Status:   StatusFail,
+			Message: fmt.Sprintf(
+				"cannot access the master-key keyring: %v -- login and token caching will fail. "+
+					"Ensure the OS keychain (Keychain/Credential Manager/Secret Service) is reachable, "+
+					"set SCAFCTL_SECRET_KEY to supply the master key explicitly (e.g. on headless/CI hosts), "+
+					"or check the file-backend master key under the data dir (master.key, expected mode 0600) is readable",
+				res.err,
+			),
+		}
+	}
+
+	insecure := res.backend == secrets.KeyringBackendEnv || res.backend == secrets.KeyringBackendFile
+
+	// A key already exists on an insecure backend while secure keyring is
+	// required: secrets.New() would refuse to proceed, breaking auth.
+	if res.found && insecure && requireSecureKeyring {
+		return Check{
+			Category: "secrets",
+			Name:     checkName,
+			Status:   StatusFail,
+			Message: fmt.Sprintf(
+				"master key resolved via the insecure %q backend but settings.requireSecureKeyring is enabled "+
+					"(SCAFCTL_REQUIRE_SECURE_KEYRING) -- the store will refuse to initialise. "+
+					"Make the OS keychain reachable or disable requireSecureKeyring",
+				res.backend,
+			),
+		}
+	}
+
+	if res.found {
+		msg := fmt.Sprintf("master key present (backend: %s)", res.backend)
+		status := StatusOK
+		if insecure {
+			status = StatusWarn
+			msg += " -- insecure backend; master key is not protected by the OS keychain"
+		}
+		return Check{
+			Category: "secrets",
+			Name:     checkName,
+			Status:   status,
+			Message:  msg,
+		}
+	}
+
+	// No master key yet: the store would generate one on first use. Healthy,
+	// but if requireSecureKeyring is set and no OS keyring is reachable, that
+	// generation would land on an insecure backend and be refused -- we cannot
+	// know the write backend without mutating, so surface an informational note.
+	if requireSecureKeyring {
+		return Check{
+			Category: "secrets",
+			Name:     checkName,
+			Status:   StatusInfo,
+			Message: "no master key stored yet; it will be created on first use. " +
+				"settings.requireSecureKeyring is enabled, so a reachable OS keychain is required at that time",
+		}
+	}
+	return Check{
+		Category: "secrets",
+		Name:     checkName,
+		Status:   StatusOK,
+		Message:  "no master key stored yet; it will be created on first use",
 	}
 }
