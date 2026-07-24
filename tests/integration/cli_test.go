@@ -4265,6 +4265,7 @@ func TestIntegration_CatalogListHelp(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "List artifacts")
 	assert.Contains(t, stdout, "--kind")
+	assert.Contains(t, stdout, "plugin", "help should document the 'plugin' kind selector")
 	assert.Contains(t, stdout, "--name")
 	assert.Contains(t, stdout, "--output")
 	assert.Contains(t, stdout, "--catalog")
@@ -4322,6 +4323,41 @@ func TestIntegration_CatalogList_FilterByKind(t *testing.T) {
 	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "--kind", "solution", "-o", "json")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "resolver-demo")
+}
+
+func TestIntegration_CatalogList_KindPluginAccepted(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	// Build a solution so the catalog is non-empty; --kind plugin must exclude
+	// it (solutions are not plugins) yet still exit 0 rather than rejecting the
+	// kind selector.
+	_, _, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0")
+	require.Equal(t, 0, exitCode)
+
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "--kind", "plugin", "-o", "json")
+	assert.Equal(t, 0, exitCode, "--kind plugin must be a valid selector")
+	// The solution must NOT appear under the plugin selector.
+	assert.NotContains(t, stdout, "resolver-demo",
+		"solutions must be excluded from --kind plugin output")
+}
+
+func TestIntegration_CatalogList_KindInvalidRejected(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "catalog", "list", "--kind", "bogus")
+	assert.NotEqual(t, 0, exitCode, "an invalid kind must be rejected with a non-zero exit")
+	assert.Contains(t, stderr, "invalid kind")
+	assert.Contains(t, stderr, "plugin", "the error should list 'plugin' as a valid selector")
 }
 
 func TestIntegration_CatalogInspectHelp(t *testing.T) {
