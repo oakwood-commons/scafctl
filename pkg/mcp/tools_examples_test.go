@@ -241,6 +241,19 @@ func TestExamplesMetadataDriven(t *testing.T) {
 			assert.NotContains(t, item.Name, ".yaml")
 		}
 	})
+
+	t.Run("every reported category is filterable", func(t *testing.T) {
+		// The list_examples MCP enum is generated from Categories(); every
+		// metadata-derived category must therefore return results when used as
+		// a filter (regression guard against the old hardcoded directory enum).
+		cats := examples.Categories()
+		require.NotEmpty(t, cats)
+		for _, c := range cats {
+			items, err := examples.Scan(c)
+			require.NoError(t, err, "scanning category %q", c)
+			assert.NotEmpty(t, items, "category %q is reported but returns no examples", c)
+		}
+	})
 }
 
 func TestExamplesCategories(t *testing.T) {

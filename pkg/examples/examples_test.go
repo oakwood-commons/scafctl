@@ -260,6 +260,29 @@ func TestResolveExample_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestHasDotDotSegment(t *testing.T) {
+	t.Parallel()
+	// Only a ".." path *segment* is traversal; ".." inside a filename is safe.
+	traversal := []string{"..", "../x", "a/../../b", "foo/.."}
+	for _, p := range traversal {
+		assert.True(t, hasDotDotSegment(p), "%q should be flagged as traversal", p)
+	}
+	safe := []string{"foo..bar.yaml", "a/foo..bar/c.yaml", "resolvers/hello-world.yaml", "..bar", "bar..", ""}
+	for _, p := range safe {
+		assert.False(t, hasDotDotSegment(p), "%q should NOT be flagged as traversal", p)
+	}
+}
+
+func TestResolveExample_DotDotInFilenameIsNotTraversal(t *testing.T) {
+	t.Parallel()
+	// A query containing ".." in a segment name (not as a component) must not be
+	// rejected as traversal -- it should simply be "not found".
+	_, err := ResolveExample("foo..bar")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrExampleNotFound)
+	assert.NotErrorIs(t, err, ErrPathTraversal)
+}
+
 // ── Example struct tests ──────────────────────────────────────────────────────
 
 func TestExample_Fields(t *testing.T) {

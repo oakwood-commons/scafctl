@@ -178,8 +178,9 @@ func ResolveExample(query string) (string, error) {
 	}
 	normalized := path.Clean(strings.ReplaceAll(filepath.ToSlash(query), "\\", "/"))
 
-	// Security: reject path traversal before touching the filesystem.
-	if strings.Contains(normalized, "..") {
+	// Security: reject path traversal (a ".." path segment) before touching
+	// the filesystem. A filename that merely contains ".." (e.g. foo..bar) is safe.
+	if hasDotDotSegment(normalized) {
 		return "", ErrPathTraversal
 	}
 
@@ -234,6 +235,22 @@ func firstLine(s string) string {
 	return ""
 }
 
+// hasDotDotSegment reports whether a slash-separated path contains a ".."
+// component (a traversal segment), as opposed to merely containing the literal
+// ".." inside a filename (e.g. "foo..bar.yaml", which is safe). The input
+// should already be path.Clean'd and use forward slashes.
+func hasDotDotSegment(p string) bool {
+	if p == ".." {
+		return true
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // relFromRoot returns the forward-slash relative path of fpath under root,
 // handling both embed.FS (forward slashes) and OS filesystems (native
 // separators) consistently.
@@ -259,8 +276,9 @@ func Read(exPath string) (string, error) {
 	// no-op for backslashes on non-Windows hosts, so convert explicitly.
 	cleanPath := path.Clean(strings.ReplaceAll(filepath.ToSlash(exPath), "\\", "/"))
 
-	// Security: ensure the path doesn't escape
-	if strings.Contains(cleanPath, "..") {
+	// Security: reject a ".." path segment (traversal). A filename containing
+	// ".." (e.g. foo..bar.yaml) is safe and allowed.
+	if hasDotDotSegment(cleanPath) {
 		return "", ErrPathTraversal
 	}
 
