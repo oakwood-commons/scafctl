@@ -261,6 +261,22 @@ func TestDefaultListCatalogs(t *testing.T) {
 			wantNames: []string{"corp"},
 		},
 		{
+			// A non-OCI official entry whose URL matches an OCI default must NOT
+			// make the default look "official by URL": isOfficialByURL is guarded
+			// on the official catalog being OCI. The default is listed normally
+			// and the non-OCI official is skipped.
+			name: "official non-OCI with matching-URL default -> default listed, official skipped",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror"},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+					{Name: config.CatalogNameOfficial, Type: config.CatalogTypeHTTP, URL: officialURL},
+				},
+			},
+			wantNames: []string{"mirror"},
+		},
+		{
 			name:      "nil config -> nil",
 			cfg:       nil,
 			wantNames: []string{},

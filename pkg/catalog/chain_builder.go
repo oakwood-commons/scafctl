@@ -302,11 +302,14 @@ func DefaultListCatalogs(cfg *config.Config) []config.CatalogConfig {
 
 // isOfficialByURL reports whether the given URL matches the configured official
 // catalog's URL. Used to detect that a default catalog is the official catalog
-// even when it is referenced under a different (mirror) name.
+// even when it is referenced under a different (mirror) name. The official
+// catalog is only ever considered when it is an OCI catalog (matching the
+// type guard applied throughout DefaultListCatalogs), so a non-OCI official
+// entry never causes a default to be treated as official-by-URL.
 func isOfficialByURL(cfg *config.Config, url string) bool {
 	if url == "" {
 		return false
 	}
 	official, ok := cfg.GetCatalog(config.CatalogNameOfficial)
-	return ok && official.URL == url
+	return ok && official.Type == config.CatalogTypeOCI && official.URL == url
 }
