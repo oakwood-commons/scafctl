@@ -180,6 +180,42 @@ func TestExtractResolverInfo_ParameterKeysAsMap(t *testing.T) {
 	assert.True(t, infos[0].AcceptsParameters())
 }
 
+func TestExtractResolverInfo_ParameterKeysDedupeAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	// A resolver that reads a "key", then falls back to an alias "keys" list
+	// containing duplicates (including the earlier "key") and an empty string.
+	// Help output should reflect the provider's distinct, non-empty key set.
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"environment": {
+			Name: "environment",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"key": {Literal: "env"},
+						},
+					},
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []any{"env", "", "e", "e"}},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	// "env" (from key) is not repeated by the "keys" list, "" is dropped, and
+	// the duplicate "e" collapses to a single entry.
+	assert.Equal(t, []string{"env", "e"}, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsParameters())
+}
+
 func TestExtractResolverInfo_ParameterAll(t *testing.T) {
 	t.Parallel()
 

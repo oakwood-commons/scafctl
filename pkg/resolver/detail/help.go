@@ -53,17 +53,34 @@ func ExtractResolverInfo(sol *solution.Solution) []ResolverInfo {
 		}
 
 		if r.Resolve != nil {
+			// seen de-duplicates parameter key names across all parameter
+			// sources of this resolver, mirroring the distinct, non-empty key
+			// set the parameter provider actually reads (empty names are
+			// ignored, duplicates collapsed).
+			seen := make(map[string]struct{})
+			addKey := func(name string) {
+				if name == "" {
+					return
+				}
+				if _, dup := seen[name]; dup {
+					return
+				}
+				seen[name] = struct{}{}
+				info.ParameterKeys = append(info.ParameterKeys, name)
+			}
 			for i, src := range r.Resolve.With {
 				if src.Provider == "parameter" {
 					// Single-key / alias "keys" reads, and the distinct-key set
 					// of a "keys" + "as: map" read, all name CLI parameters.
 					if keyRef, ok := src.Inputs["key"]; ok && keyRef != nil {
-						if s, ok := keyRef.Literal.(string); ok && s != "" {
-							info.ParameterKeys = append(info.ParameterKeys, s)
+						if s, ok := keyRef.Literal.(string); ok {
+							addKey(s)
 						}
 					}
 					if keysRef, ok := src.Inputs["keys"]; ok && keysRef != nil {
-						info.ParameterKeys = append(info.ParameterKeys, literalStringList(keysRef.Literal)...)
+						for _, s := range literalStringList(keysRef.Literal) {
+							addKey(s)
+						}
 					}
 					// "all: true" reads every supplied parameter.
 					if allRef, ok := src.Inputs["all"]; ok && allRef != nil {
