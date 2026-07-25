@@ -72,6 +72,24 @@ func TestLoadTwoPhase_NoRootsIdenticalToLoad(t *testing.T) {
 	assert.False(t, runnerCalled, "runner must not be called when no load-time field references a resolver")
 }
 
+func TestLoadTwoPhase_NoRootsLoadErrorReturnsNilResult(t *testing.T) {
+	// When the load-time path has no resolver references it delegates to load;
+	// a load failure must surface a nil result (like Manager.Load) so callers
+	// cannot accidentally dereference a nil embedded LoadResult.
+	cfg := &Config{
+		Enabled: literalValueRef(true),
+		Backend: Backend{Provider: "mock-state", Inputs: map[string]*spec.ValueRef{"path": literalValueRef("s.json")}},
+	}
+	reg := newTestRegistry(t, &mockBackendProvider{loadErr: assert.AnError})
+	mgr := NewManager(cfg, reg, settings.RuntimeProvenance{EngineName: "scafctl", EngineVersion: "test-version"})
+
+	res, err := mgr.LoadTwoPhase(context.Background(), nil, twoPhaseCommand(), TwoPhaseInput{
+		Resolvers: []*resolver.Resolver{staticResolver("unused")},
+	})
+	require.Error(t, err)
+	assert.Nil(t, res, "load error must yield a nil result, not a wrapper around a nil LoadResult")
+}
+
 func TestLoadTwoPhase_RunsPhaseAAndSeeds(t *testing.T) {
 	cfg := &Config{
 		Enabled: literalValueRef(true),

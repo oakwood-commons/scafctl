@@ -77,7 +77,10 @@ type TwoPhaseResult struct {
 func (m *Manager) LoadTwoPhase(ctx context.Context, params map[string]any, command CommandInfo, in TwoPhaseInput) (*TwoPhaseResult, error) {
 	if m.config == nil {
 		res, err := m.load(ctx, nil, params, command)
-		return &TwoPhaseResult{LoadResult: res}, err
+		if err != nil {
+			return nil, err
+		}
+		return &TwoPhaseResult{LoadResult: res}, nil
 	}
 
 	stateProviderName := in.StateProviderName
@@ -95,7 +98,10 @@ func (m *Manager) LoadTwoPhase(ctx context.Context, params map[string]any, comma
 	if len(roots) == 0 {
 		// No resolver references at load time: identical to single-phase Load.
 		res, err := m.load(ctx, nil, params, command)
-		return &TwoPhaseResult{LoadResult: res}, err
+		if err != nil {
+			return nil, err
+		}
+		return &TwoPhaseResult{LoadResult: res}, nil
 	}
 
 	// Minimal Phase A: the roots plus everything they transitively depend on.
