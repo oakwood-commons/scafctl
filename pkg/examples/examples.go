@@ -26,8 +26,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrPathTraversal is returned when a path contains ".." components.
-var ErrPathTraversal = errors.New("path must not contain '..'")
+// ErrPathTraversal is returned when an example lookup path is unsafe: it either
+// contains a ".." traversal component or is an absolute/UNC/drive-letter path.
+// Example paths are always relative (e.g. "resolvers/hello-world.yaml").
+var ErrPathTraversal = errors.New("example path must be relative and must not contain '..'")
 
 // ErrAmbiguousExample is returned when a lookup query matches more than one
 // example. It is a sentinel error: ResolveExample wraps it with the candidate
