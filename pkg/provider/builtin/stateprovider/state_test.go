@@ -104,7 +104,7 @@ func TestStateProvider_Execute_MissingKeyInput(t *testing.T) {
 
 	_, err := p.Execute(ctx, map[string]any{"operation": OperationGet})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing required input: key")
+	assert.Contains(t, err.Error(), `specify exactly one of "key", "keys", or "all"`)
 }
 
 func TestStateProvider_Execute_EmptyKeyInput(t *testing.T) {
@@ -158,4 +158,182 @@ func TestStateProvider_WhatIf(t *testing.T) {
 	msg, err = whatIf(context.Background(), "not-a-map")
 	require.NoError(t, err)
 	assert.Empty(t, msg)
+}
+
+func TestStateProvider_WhatIf_MapModes(t *testing.T) {
+	p := New()
+	whatIf := p.Descriptor().WhatIf
+	require.NotNil(t, whatIf)
+
+	msg, err := whatIf(context.Background(), map[string]any{"all": true})
+	require.NoError(t, err)
+	assert.Contains(t, msg, "entire persisted state snapshot")
+
+	msg, err = whatIf(context.Background(), map[string]any{"keys": []any{"a", "b"}})
+	require.NoError(t, err)
+	assert.Contains(t, msg, "requested persisted state keys")
+
+	// all:false is inert and should not select the snapshot message.
+	msg, err = whatIf(context.Background(), map[string]any{"all": false, "key": "k"})
+	require.NoError(t, err)
+	assert.Contains(t, msg, "k")
+}
+
+func TestStateProvider_Execute_KeysMode_ReturnsMapOmittingAbsent(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, map[string]*state.PersistedEntry{
+		"keyA": {Value: "alpha", Type: "string", CreatedAt: time.Now().UTC()},
+		"keyC": {Value: "gamma", Type: "string", CreatedAt: time.Now().UTC()},
+	})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"operation": OperationGet,
+		"keys":      []any{"keyA", "keyB", "keyC"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	got, ok := output.Data.(map[string]any)
+	require.True(t, ok, "map mode must return a map")
+	assert.Equal(t, map[string]any{"keyA": "alpha", "keyC": "gamma"}, got)
+	// keyB is absent, so has()/optional chaining stay faithful.
+	_, exists := got["keyB"]
+	assert.False(t, exists)
+
+	assert.Equal(t, "map", output.Metadata["mode"])
+	assert.Equal(t, []string{"keyA", "keyC"}, output.Metadata["keys"])
+	assert.Equal(t, []string{"keyB"}, output.Metadata["missing"])
+}
+
+func TestStateProvider_Execute_KeysMode_StringSlice(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, map[string]*state.PersistedEntry{
+		"keyA": {Value: "alpha", Type: "string", CreatedAt: time.Now().UTC()},
+	})
+
+	output, err := p.Execute(ctx, map[string]any{"keys": []string{"keyA", "keyB"}})
+	require.NoError(t, err)
+	got, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"keyA": "alpha"}, got)
+	assert.Equal(t, []string{"keyB"}, output.Metadata["missing"])
+}
+
+func TestStateProvider_Execute_KeysMode_EmptyListReturnsEmptyMap(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, map[string]*state.PersistedEntry{
+		"keyA": {Value: "alpha", Type: "string", CreatedAt: time.Now().UTC()},
+	})
+
+	output, err := p.Execute(ctx, map[string]any{"keys": []any{}})
+	require.NoError(t, err)
+	got, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, got)
+}
+
+func TestStateProvider_Execute_AllMode_ReturnsWholeSnapshot(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, map[string]*state.PersistedEntry{
+		"keyA": {Value: "alpha", Type: "string", CreatedAt: time.Now().UTC()},
+		"keyC": {Value: "gamma", Type: "string", CreatedAt: time.Now().UTC()},
+	})
+
+	output, err := p.Execute(ctx, map[string]any{"operation": OperationGet, "all": true})
+	require.NoError(t, err)
+	got, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"keyA": "alpha", "keyC": "gamma"}, got)
+	assert.Equal(t, "map", output.Metadata["mode"])
+	assert.Equal(t, []string{"keyA", "keyC"}, output.Metadata["keys"])
+	// all mode reports no "missing" (no requested set).
+	_, hasMissing := output.Metadata["missing"]
+	assert.False(t, hasMissing)
+}
+
+func TestStateProvider_Execute_AllMode_NoStateReturnsEmptyMap(t *testing.T) {
+	p := New()
+
+	output, err := p.Execute(context.Background(), map[string]any{"all": true})
+	require.NoError(t, err)
+	got, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, got)
+}
+
+func TestStateProvider_Execute_AllFalseIsInert(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, map[string]*state.PersistedEntry{
+		"keyA": {Value: "alpha", Type: "string", CreatedAt: time.Now().UTC()},
+	})
+
+	// all:false does not select map mode; key still drives single-key mode.
+	output, err := p.Execute(ctx, map[string]any{"all": false, "key": "keyA"})
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", output.Data)
+}
+
+func TestStateProvider_Execute_MultipleSelectorsError(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, nil)
+
+	tests := []map[string]any{
+		{"key": "keyA", "keys": []any{"keyB"}},
+		{"key": "keyA", "all": true},
+		{"keys": []any{"keyB"}, "all": true},
+	}
+	for _, inputs := range tests {
+		_, err := p.Execute(ctx, inputs)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `specify exactly one of "key", "keys", or "all"`)
+	}
+}
+
+func TestStateProvider_Execute_MapMode_RejectsDefault(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{"keys": []any{"keyA"}, "default": ""})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"default" is only valid with a single "key"`)
+
+	_, err = p.Execute(ctx, map[string]any{"all": true, "default": ""})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"default" is only valid with a single "key"`)
+}
+
+func TestStateProvider_Execute_KeysMode_InvalidKeyPattern(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{"keys": []any{"ok", "../etc/passwd"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid key "../etc/passwd" at keys[1]`)
+}
+
+func TestStateProvider_Execute_KeysMode_NonStringEntry(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{"keys": []any{"ok", 123}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "keys[1] must be a string")
+}
+
+func TestStateProvider_Execute_KeysMode_WrongType(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{"keys": "not-a-list"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"keys" must be an array of strings`)
+}
+
+func TestStateProvider_Execute_NonBoolAll(t *testing.T) {
+	p := New()
+	ctx := ctxWithState(t, nil)
+
+	_, err := p.Execute(ctx, map[string]any{"all": "yes"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "all must be a boolean")
 }
