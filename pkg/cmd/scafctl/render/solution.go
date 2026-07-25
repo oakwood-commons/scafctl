@@ -333,13 +333,14 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 
 		// State lifecycle: load persisted state before resolver execution so
 		// the state provider can serve previously saved values (read-only).
-		ctx, params, err = o.loadStateIntoContext(ctx, sol, reg, params)
+		var stateSeed map[string]*resolver.ExecutionResult
+		ctx, params, stateSeed, err = o.loadStateIntoContext(ctx, sol, reg, params)
 		if err != nil {
 			return o.exitWithCode(err, exitcode.GeneralError)
 		}
 
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
-		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr)
+		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr, resolver.WithSeededResults(stateSeed))
 		if err != nil {
 			return o.exitWithCode(err, exitcode.RenderFailed)
 		}
@@ -427,13 +428,14 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 
 		// State lifecycle: load persisted state before resolver execution so
 		// the state provider can serve previously saved values (read-only).
-		ctx, params, err = o.loadStateIntoContext(ctx, sol, reg, params)
+		var stateSeed map[string]*resolver.ExecutionResult
+		ctx, params, stateSeed, err = o.loadStateIntoContext(ctx, sol, reg, params)
 		if err != nil {
 			return o.exitWithCode(err, exitcode.GeneralError)
 		}
 
 		resolverCfg := o.getEffectiveResolverConfig(ctx)
-		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr)
+		resolverData, err = solrender.ExecuteResolvers(ctx, sol, params, reg, resolverCfg, lgr, resolver.WithSeededResults(stateSeed))
 		if err != nil {
 			return o.exitWithCode(err, exitcode.RenderFailed)
 		}
@@ -484,7 +486,8 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 
 	// State lifecycle: load persisted state before resolver execution so
 	// the state provider can serve previously saved values (read-only).
-	ctx, params, err = o.loadStateIntoContext(ctx, sol, o.getRegistry(ctx), params)
+	var stateSeed map[string]*resolver.ExecutionResult
+	ctx, params, stateSeed, err = o.loadStateIntoContext(ctx, sol, o.getRegistry(ctx), params)
 	if err != nil {
 		return o.exitWithCode(err, exitcode.GeneralError)
 	}
@@ -500,6 +503,9 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	var extraOpts []resolver.ExecutorOption
 	if sol.Spec.HasCalls() {
 		extraOpts = append(extraOpts, resolver.WithCalls(sol.Spec.Calls))
+	}
+	if len(stateSeed) > 0 {
+		extraOpts = append(extraOpts, resolver.WithSeededResults(stateSeed))
 	}
 	executor := solrender.NewResolverExecutor(reg, resolverCfg, extraOpts...)
 
@@ -773,9 +779,9 @@ type solutionResolverRegistryAdapter = solrender.ResolverRegistryAdapter
 // access by the state provider during resolver execution. State is never saved
 // in render mode. Returns the updated context and merged parameters (saved + CLI)
 // so the parameter provider can replay previously saved values.
-func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) (context.Context, map[string]any, error) {
+func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) (context.Context, map[string]any, map[string]*resolver.ExecutionResult, error) {
 	if sol.State == nil {
-		return ctx, params, nil
+		return ctx, params, nil, nil
 	}
 
 	// --no-state skips reading persisted state entirely. render never saves, so
@@ -785,7 +791,7 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 		if w := writer.FromContext(ctx); w != nil {
 			w.WarnStderrf("--no-state: skipping state load for solution %q", sol.Metadata.Name)
 		}
-		return ctx, params, nil
+		return ctx, params, nil, nil
 	}
 
 	// Set solution directory so the file state backend can resolve relative
@@ -802,15 +808,34 @@ func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solutio
 		Subcommand: "render solution",
 		Parameters: formatParams(params),
 	}
-	loadResult, err := stateMgr.Load(ctx, params, cmdInfo)
+
+	// Two-phase load: state.enabled and backend inputs may reference
+	// state-independent resolvers, which are resolved in a minimal pre-load
+	// pass. Their results are returned as a seed so the main render run reuses
+	// them instead of re-executing.
+	resolverCfg := o.getEffectiveResolverConfig(ctx)
+	var lookup resolver.DescriptorLookup
+	if reg != nil {
+		lookup = reg.DescriptorLookup()
+	}
+	twoPhaseInput := state.TwoPhaseInput{
+		Resolvers: sol.Spec.ResolversToSlice(),
+		Lookup:    lookup,
+		Calls:     sol.Spec.Calls,
+		RunResolvers: func(rctx context.Context, subset []*resolver.Resolver) (*resolver.Context, error) {
+			return solrender.ExecuteResolverSubset(rctx, sol, subset, params, reg, resolverCfg)
+		},
+	}
+
+	loadResult, err := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, twoPhaseInput)
 	if err != nil {
-		return ctx, params, fmt.Errorf("state load: %w", err)
+		return ctx, params, nil, fmt.Errorf("state load: %w", err)
 	}
 	if !loadResult.Skipped {
 		ctx = loadResult.Ctx
 		params = loadResult.MergedParams
 	}
-	return ctx, params, nil
+	return ctx, params, loadResult.Seed, nil
 }
 
 // formatParams converts resolver parameters to string map for state command info.

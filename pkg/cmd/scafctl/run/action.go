@@ -20,6 +20,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -385,15 +386,17 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// the state provider can serve previously saved values.
 	var stateMgr *state.Manager
 	var stateData *state.Data
+	var stateSeed map[string]*resolver.ExecutionResult
 	if o.NoState {
 		warnStateSkipped(ctx, sol)
 	} else if sol.State != nil {
 		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run action", params)
-		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
+		loadResult, loadErr := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, o.buildStateTwoPhaseInput(sol, params, reg))
 		if loadErr != nil {
 			return o.handleStateLoadError(ctx, loadErr)
 		}
+		stateSeed = loadResult.Seed
 		if !loadResult.Skipped {
 			ctx = loadResult.Ctx
 			actionCtx = state.WithState(actionCtx, loadResult.Data)
@@ -406,13 +409,13 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	// override) so resolver paths resolve relative to the solution file.
 	// Pass actionCtx so WhatIf generation sees CLI overrides (output-dir, etc.).
 	if o.DryRun {
-		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd, stateSeed)
 	}
 
 	// Execute resolvers
 	resolvers := sol.Spec.ResolversToSlice()
 	start := time.Now()
-	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.GeneralError)
 	}
@@ -498,13 +501,13 @@ func (o *ActionOptions) exitWithCode(ctx context.Context, err error, code int) e
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs
 // resolvers (side-effect-free) and produces a structured WhatIf report.
-func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string) error {
+func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	s := &SolutionOptions{
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
 	}
-	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow, stateData, cwd)
+	return s.executeDryRun(resolverCtx, actionCtx, sol, reg, params, workflow, stateData, cwd, stateSeed)
 }
 
 // resolveOutputDir validates and creates the output directory.

@@ -79,13 +79,25 @@ type LoadResult struct {
 //  5. Merges saved parameters with CLI params (CLI wins on conflict).
 //  6. Captures command info.
 //  7. Injects state into context via WithState.
+//
+// Load resolves enabled and backend inputs with no resolver data (_ is empty).
+// To let those fields reference state-independent resolvers, use LoadTwoPhase,
+// which runs the referenced resolvers first and passes their values here.
 func (m *Manager) Load(ctx context.Context, params map[string]any, command CommandInfo) (*LoadResult, error) {
+	return m.load(ctx, nil, params, command)
+}
+
+// load is the shared implementation behind Load and LoadTwoPhase. resolverData
+// holds any resolver outputs available at load time (empty for the single-phase
+// Load; the Phase-A results for LoadTwoPhase) and is exposed as _ in enabled and
+// backend-input expressions.
+func (m *Manager) load(ctx context.Context, resolverData, params map[string]any, command CommandInfo) (*LoadResult, error) {
 	if m.config == nil {
 		return &LoadResult{Ctx: ctx, Skipped: true}, nil
 	}
 
-	// Evaluate enabled -- no resolver data at load time, only CLI params
-	enabled, err := m.evaluateEnabled(ctx, nil, params)
+	// Evaluate enabled -- resolverData is exposed as _, CLI params as __params.
+	enabled, err := m.evaluateEnabled(ctx, resolverData, params)
 	if err != nil {
 		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
 			return nil, &MissingParamsError{
@@ -99,8 +111,8 @@ func (m *Manager) Load(ctx context.Context, params map[string]any, command Comma
 		return &LoadResult{Ctx: ctx, Skipped: true}, nil
 	}
 
-	// Resolve backend inputs -- no resolver data at load time, only CLI params
-	backendInputs, err := m.resolveBackendInputs(ctx, nil, params)
+	// Resolve backend inputs -- resolverData is exposed as _, CLI params as __params.
+	backendInputs, err := m.resolveBackendInputs(ctx, resolverData, params)
 	if err != nil {
 		if missing := MissingParams(ctx, m.config, params); len(missing) > 0 {
 			return nil, &MissingParamsError{

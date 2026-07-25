@@ -44,6 +44,22 @@ func TestExplain_CELUndeclaredRef(t *testing.T) {
 	assert.Contains(t, exp.Summary, "foo")
 }
 
+func TestExplain_StateRefStateDependent(t *testing.T) {
+	exp := Explain(`state.enabled references state-dependent resolver(s) [saved]: those resolvers read state (or depend on one that does), so they cannot run before state is loaded (circular dependency)`)
+	assert.Equal(t, "state", exp.Category)
+	assert.Contains(t, exp.Summary, "state.enabled")
+	assert.Contains(t, exp.RootCause, "saved")
+	assert.NotEmpty(t, exp.Suggestions)
+}
+
+func TestExplain_StateRefUnknown(t *testing.T) {
+	exp := Explain(`state.backend.inputs.path references unknown resolver(s) [typo]: no such resolver is defined in the solution`)
+	assert.Equal(t, "state", exp.Category)
+	assert.Contains(t, exp.Summary, "state.backend.inputs.path")
+	assert.Contains(t, exp.RootCause, "typo")
+	assert.NotEmpty(t, exp.Suggestions)
+}
+
 func TestExplain_CELNoOverload(t *testing.T) {
 	exp := Explain(`found no matching overload for 'size'`)
 	assert.Equal(t, "cel_expression", exp.Category)

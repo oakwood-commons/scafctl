@@ -351,8 +351,10 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 		Explanation: `State persistence lets a solution replay its inputs between executions. When enabled, the CLI parameters ('-r key=value' values) used on each run are saved and automatically replayed on the next run, so the solution produces the same resolver values without re-supplying inputs.
 
 **Configuration** — add a top-level 'state' block to the solution:
-- **enabled** — literal bool, CEL expression, or template controlling activation.
+- **enabled** — literal bool, CEL expression, or template controlling activation. May reference state-independent resolver outputs (rslvr:/expr:/tmpl: with '_.<name>').
 - **backend** — which provider stores the state (e.g., file, http).
+
+**Dynamic configuration** — 'enabled' and 'backend.inputs' may reference resolver outputs (rslvr:/expr:/tmpl: with '_.<name>'), so the state file path or the enable flag can be computed from resolved values. Because these fields are evaluated *before* state is loaded, scafctl first runs a minimal "Phase A" — just the referenced resolvers and their transitive dependencies — evaluates the fields, loads state, then reuses those Phase-A results in the main run (they are not executed twice). Only *state-independent* resolvers may be referenced: a resolver that reads state (via the 'state' provider) or depends on one that does would be circular and is rejected at load time (lint rules 'state-ref-state-dependent' and 'state-ref-unknown'). Save-time overrides ('backend.saveOverrides') are evaluated after resolvers run and may reference any resolver.
 
 **Lifecycle**:
 1. Before resolvers run, the state manager calls the backend provider with 'state_load' to load any existing state, then merges the saved parameters with the current CLI parameters (CLI values win on conflict).
@@ -364,6 +366,7 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 **Backend providers** — file (local JSON; relative paths resolve against the solution directory), http (remote REST API). External providers (e.g., github) can be installed as plugins. Each implements CapabilityState with state_load, state_save, and state_delete operations.`,
 		Examples: []string{
 			"# Enable state with file backend; parameters replay automatically\nstate:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \"my-app-state.json\"\n\nspec:\n  resolvers:\n    # Locked after the first run -- value is saved and verified on later runs\n    deployment_id:\n      type: string\n      immutable: true\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"deployment_id\"\n    # Mutable -- replayed from saved parameters, overridable via -r\n    region:\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"region\"\n          - provider: static\n            inputs:\n              value: \"us-west-2\"",
+			"# Dynamic state config: enable flag and file path come from resolver outputs.\n# app_name/persist_state run in Phase A, then are reused in the main run.\nstate:\n  enabled:\n    rslvr: persist_state\n  backend:\n    provider: file\n    inputs:\n      path:\n        expr: \"'state/' + _.app_name + '.json'\"\n\nspec:\n  resolvers:\n    app_name:\n      type: string\n      resolve:\n        with:\n          - provider: parameter\n            inputs: { key: app_name }\n    persist_state:\n      type: bool\n      resolve:\n        with:\n          - provider: parameter\n            inputs: { key: persist }",
 		},
 		SeeAlso: []string{"resolver", "provider", "cel-expression"},
 	},
@@ -376,7 +379,7 @@ The catalog supports versioning, visibility controls (public/private), and beta 
 		Explanation: `Beyond the CEL and template functions, scafctl injects a set of *context variables* into expression evaluation. Which variables exist depends on the phase — a variable available in an action is not necessarily available in a resolver. No function list covers these; use the 'list_context_variables' tool for the full, machine-readable matrix (optionally filtered by phase).
 
 **CEL context variables**
-- **_** — map of resolved resolver values (_.region). Available in resolve inputs/when, transform, validate, and action when/inputs. Referencing _.other also creates an implicit dependency edge.
+- **_** — map of resolved resolver values (_.region). Available in resolve inputs/when, transform, validate, and action when/inputs, and in the state 'enabled'/'backend.inputs' fields (where it holds the Phase-A resolver outputs). Referencing _.other also creates an implicit dependency edge.
 - **__self** — the current resolver's in-progress value: the resolved value in transform, the final value in validate, and the current candidate value in a resolve-phase 'until' condition. Not available in a plain resolve provider input.
 - **__item / __index** — the current element / zero-based index inside a forEach iteration (resolve or transform).
 - **__plan** — pre-execution resolver topology injected before any resolver runs, so a resolver's when/inputs can read __plan["name"].phase, .dependsOn, and .dependencyCount.
