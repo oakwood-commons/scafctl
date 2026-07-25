@@ -8553,6 +8553,29 @@ func TestIntegration_GetExamples_List_FilterCategory(t *testing.T) {
 	assert.Contains(t, stdout, "solutions")
 }
 
+func TestIntegration_GetExamples_List_EmptyStructuredEmitsArray(t *testing.T) {
+	t.Parallel()
+	// An empty result in a structured format must still emit a parseable, empty
+	// document on stdout (not "null", not human text), and any guidance goes to
+	// stderr only.
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "--category", "no-such-category", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items),
+		"empty structured output must be valid JSON, got: %q", stdout)
+	assert.Empty(t, items)
+}
+
+func TestIntegration_GetExamples_List_EmptyHumanMessageOnStderr(t *testing.T) {
+	t.Parallel()
+	// In the default (human) format, an empty result prints no data on stdout;
+	// the "no examples" guidance is written to stderr.
+	stdout, stderr, exitCode := runScafctl(t, "get", "examples", "--category", "no-such-category")
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout), "stdout should be empty for a human empty result")
+	assert.Contains(t, stderr, "No examples found in category")
+}
+
 func TestIntegration_GetExamples_Get(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml")

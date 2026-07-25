@@ -107,19 +107,6 @@ func (o *Options) runList(ctx context.Context) error {
 		return err
 	}
 
-	if len(items) == 0 {
-		if o.Category != "" {
-			w.Infof("No examples found in category %q.", o.Category)
-			cats := exampleslib.Categories()
-			if len(cats) > 0 {
-				w.Infof("Available categories: %s", strings.Join(cats, ", "))
-			}
-		} else {
-			w.Infof("No examples available.")
-		}
-		return nil
-	}
-
 	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
 		kvx.WithIOStreams(o.IOStreams),
 		kvx.WithOutputContext(ctx),
@@ -138,13 +125,40 @@ func (o *Options) runList(ctx context.Context) error {
 			"description": {Priority: 3},
 		}),
 	)
+
+	structured := kvx.IsStructuredFormat(outputOpts.Format)
+	quiet := kvx.IsQuietFormat(outputOpts.Format)
+
+	if len(items) == 0 {
+		// Structured/quiet consumers must always receive a parseable, empty
+		// document on stdout -- never human text. Emit [] (a non-nil empty
+		// slice so JSON/YAML render "[]", not "null") and put any guidance on
+		// stderr only.
+		if structured {
+			if writeErr := outputOpts.Write([]exampleslib.Example{}); writeErr != nil {
+				return writeErr
+			}
+		}
+		if !structured && !quiet {
+			if o.Category != "" {
+				w.WarnStderrf("No examples found in category %q.", o.Category)
+				if cats := exampleslib.Categories(); len(cats) > 0 {
+					w.PlainStderrf("Available categories: %s", strings.Join(cats, ", "))
+				}
+			} else {
+				w.WarnStderrf("No examples available.")
+			}
+		}
+		return nil
+	}
+
 	if err := outputOpts.Write(items); err != nil {
 		return err
 	}
 
 	// Tip: the list shows metadata, but the content lives in the embedded FS.
 	// Tell the user exactly how to view a solution (the path is the handle).
-	if !kvx.IsStructuredFormat(outputOpts.Format) && !kvx.IsQuietFormat(outputOpts.Format) {
+	if !structured && !quiet {
 		bin := o.CliParams.BinaryName
 		w.PlainStderrf("")
 		w.PlainStderrf("Tip: run '%s get examples <path>' to view a solution (e.g. '%s get examples %s').",
