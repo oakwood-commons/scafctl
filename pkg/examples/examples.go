@@ -240,8 +240,10 @@ func firstLine(s string) string {
 
 // hasDotDotSegment reports whether a slash-separated path contains a ".."
 // component (a traversal segment), as opposed to merely containing the literal
-// ".." inside a filename (e.g. "foo..bar.yaml", which is safe). The input
-// should already be path.Clean'd and use forward slashes.
+// ".." inside a filename (e.g. "foo..bar.yaml", which is safe). The input must
+// be forward-slash separated but must NOT have been path.Clean'd: callers invoke
+// this before cleaning, precisely so a ".." component cannot be normalized away
+// (path.Clean("foo/../x") == "x") before the traversal check runs.
 func hasDotDotSegment(p string) bool {
 	if p == ".." {
 		return true
