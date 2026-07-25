@@ -195,6 +195,12 @@ const (
 
 	// CatalogNameOfficial is the official OCI catalog, always last in the chain.
 	CatalogNameOfficial = "official"
+
+	// DefaultOfficialCatalogURL is the OCI URL of the embedded official catalog.
+	// It is the single source of truth for the official catalog location, used
+	// both when materializing the default catalogs and when recognizing a
+	// default catalog that points at the official registry under an alias name.
+	DefaultOfficialCatalogURL = "oci://ghcr.io/oakwood-commons"
 )
 
 // IsReservedCatalogName reports whether name is a reserved catalog name whose

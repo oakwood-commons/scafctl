@@ -143,7 +143,7 @@ func TestDefaultListCatalogs(t *testing.T) {
 	t.Parallel()
 
 	const (
-		officialURL = "oci://ghcr.io/oakwood-commons"
+		officialURL = config.DefaultOfficialCatalogURL
 		privateURL  = "oci://private.example.com/catalog"
 	)
 
@@ -272,6 +272,35 @@ func TestDefaultListCatalogs(t *testing.T) {
 					localCat,
 					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
 					{Name: config.CatalogNameOfficial, Type: config.CatalogTypeHTTP, URL: officialURL},
+				},
+			},
+			wantNames: []string{"mirror"},
+		},
+		{
+			// The config merge omits the official entry entirely when
+			// disableOfficialCatalog is set, so isOfficialByURL falls back to the
+			// embedded default official URL. An aliased default pointing at that
+			// URL must still be recognized as official and dropped when disabled.
+			name: "official omitted + default URL == official URL + disabled -> empty",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror", DisableOfficialCatalog: true},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+				},
+			},
+			wantNames: []string{},
+		},
+		{
+			// Same aliased-to-official default, but official not disabled: the
+			// default is recognized as official and listed once (official is
+			// absent from the config, so there is nothing to append/dedup after).
+			name: "official omitted + default URL == official URL + enabled -> default only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror"},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
 				},
 			},
 			wantNames: []string{"mirror"},

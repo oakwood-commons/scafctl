@@ -300,16 +300,23 @@ func DefaultListCatalogs(cfg *config.Config) []config.CatalogConfig {
 	return append(catalogs, *official)
 }
 
-// isOfficialByURL reports whether the given URL matches the configured official
-// catalog's URL. Used to detect that a default catalog is the official catalog
-// even when it is referenced under a different (mirror) name. The official
-// catalog is only ever considered when it is an OCI catalog (matching the
-// type guard applied throughout DefaultListCatalogs), so a non-OCI official
-// entry never causes a default to be treated as official-by-URL.
+// isOfficialByURL reports whether the given URL matches the official catalog's
+// URL. Used to detect that a default catalog is the official catalog even when
+// it is referenced under a different (mirror) name.
+//
+// When an official catalog entry is present in the config it is only considered
+// if it is an OCI catalog (matching the type guard applied throughout
+// DefaultListCatalogs), so a non-OCI official entry never causes a default to be
+// treated as official-by-URL. When settings.disableOfficialCatalog is set the
+// config merge omits the official entry entirely; in that case we fall back to
+// the embedded default official URL so the URL-based disable/dedup semantics
+// still recognize an aliased default that points at the official registry.
 func isOfficialByURL(cfg *config.Config, url string) bool {
 	if url == "" {
 		return false
 	}
-	official, ok := cfg.GetCatalog(config.CatalogNameOfficial)
-	return ok && official.Type == config.CatalogTypeOCI && official.URL == url
+	if official, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
+		return official.Type == config.CatalogTypeOCI && official.URL == url
+	}
+	return url == config.DefaultOfficialCatalogURL
 }
