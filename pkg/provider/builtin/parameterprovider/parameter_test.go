@@ -1178,6 +1178,28 @@ func TestParameterProvider_Execute_MapMode_Keys_EmptyList(t *testing.T) {
 	assert.Equal(t, []string{}, output.Metadata["missing"])
 }
 
+func TestParameterProvider_Execute_MapMode_Keys_Duplicates(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{"a": "1"})
+
+	output, err := p.Execute(ctx, map[string]any{
+		// "a" (present) and "b" (absent) are each repeated; the distinct-set
+		// semantics must collapse them in both the map and the metadata.
+		"keys": []any{"a", "b", "a", "b"},
+		"as":   "map",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"a": int64(1)}, result)
+	// Duplicates are removed (first-seen order preserved) from metadata too.
+	assert.Equal(t, []string{"a"}, output.Metadata["keys"])
+	assert.Equal(t, []string{"b"}, output.Metadata["missing"])
+}
+
 func TestParameterProvider_Execute_MapMode_All(t *testing.T) {
 	t.Parallel()
 	p := NewParameterProvider()

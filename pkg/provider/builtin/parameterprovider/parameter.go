@@ -927,6 +927,11 @@ func (p *ParameterProvider) executeMapGet(ctx context.Context, lgr *logr.Logger,
 				return nil, fmt.Errorf("%s: invalid key %q at keys[%d]", ProviderName, k, i)
 			}
 		}
+		// De-duplicate the requested keys (preserving first-seen order) so the
+		// "distinct set" semantics hold: the output map already collapses
+		// duplicates, and this keeps metadata.keys/metadata.missing free of
+		// duplicate entries when a caller repeats a key.
+		requested = dedupePreserveOrder(requested)
 		for _, k := range requested {
 			raw, exists := params[k]
 			if !exists {
@@ -974,4 +979,19 @@ func toStringKeys(raw any) ([]string, error) {
 	default:
 		return nil, fmt.Errorf(`"keys" must be an array of strings, got %T`, raw)
 	}
+}
+
+// dedupePreserveOrder returns keys with duplicates removed, keeping the first
+// occurrence of each value in its original position.
+func dedupePreserveOrder(keys []string) []string {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
 }
