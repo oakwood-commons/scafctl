@@ -230,6 +230,25 @@ func TestResolveExample_ByName(t *testing.T) {
 	assert.Equal(t, "resolvers/cel-basics.yaml", got)
 }
 
+func TestResolveExample_ExactPathToNonSolutionFile(t *testing.T) {
+	t.Parallel()
+	// The listing is solution-only, but exact-path fetch must still resolve any
+	// embedded example file -- including non-solution kinds (e.g. kind: Config).
+	// Regression guard: catalog/native-auth.yaml is not listed by Scan but must
+	// remain fetchable by exact path.
+	got, err := ResolveExample("catalog/native-auth.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "catalog/native-auth.yaml", got)
+
+	// And it must NOT appear in the (solution-only) listing.
+	items, err := Scan("")
+	require.NoError(t, err)
+	for _, it := range items {
+		assert.NotEqual(t, "catalog/native-auth.yaml", it.Path,
+			"non-solution files must not be listed")
+	}
+}
+
 func TestResolveExample_Ambiguous(t *testing.T) {
 	t.Parallel()
 	// "hello-world" is a basename shared by several examples.

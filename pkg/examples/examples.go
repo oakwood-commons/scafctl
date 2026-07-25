@@ -190,6 +190,15 @@ func ResolveExample(query string) (string, error) {
 	}
 	normalized := path.Clean(slashed)
 
+	// Exact-path short-circuit: if the query names a real embedded example file,
+	// return it directly. The listing (Scan) is intentionally solution-only, but
+	// `get examples <path>` must still be able to fetch ANY embedded example file
+	// by exact path (e.g. catalog/native-auth.yaml, which is kind: Config), which
+	// it could before the metadata-driven listing narrowed Scan to solutions.
+	if exampleFileExists(normalized) {
+		return normalized, nil
+	}
+
 	items, err := Scan("")
 	if err != nil {
 		return "", err
@@ -279,6 +288,20 @@ func hasDotDotSegment(p string) bool {
 		}
 	}
 	return false
+}
+
+// exampleFileExists reports whether relPath names a regular file in the
+// embedded examples filesystem. relPath must already be traversal-checked and
+// path.Clean'd (forward slashes). It is used by ResolveExample to allow
+// exact-path fetching of any embedded example file, including non-solution
+// files that the solution-only listing excludes.
+func exampleFileExists(relPath string) bool {
+	examplesFS, root, err := getExamplesFS()
+	if err != nil {
+		return false
+	}
+	info, err := fs.Stat(examplesFS, path.Join(root, relPath))
+	return err == nil && !info.IsDir()
 }
 
 // relFromRoot returns the forward-slash relative path of fpath under root,

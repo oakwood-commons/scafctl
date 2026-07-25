@@ -8592,6 +8592,15 @@ func TestIntegration_GetExamples_Get_ByName(t *testing.T) {
 	assert.Contains(t, stdout, "name: cel-basics")
 }
 
+func TestIntegration_GetExamples_Get_NonSolutionByPath(t *testing.T) {
+	t.Parallel()
+	// The listing is solution-only, but exact-path fetch must still return any
+	// embedded example file, including non-solution kinds (kind: Config here).
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "catalog/native-auth.yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.NotEmpty(t, stdout)
+}
+
 func TestIntegration_GetExamples_Get_AmbiguousName(t *testing.T) {
 	t.Parallel()
 	// "hello-world" is shared by several examples; the lookup must refuse and
