@@ -261,9 +261,16 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 			// --catalog names a specific configured catalog; query only that one.
 			// The reserved official catalog is treated as unavailable when
 			// settings.disableOfficialCatalog is set, mirroring the resolver
-			// chain (which omits official entirely when disabled).
-			officialDisabled := opts.Catalog == appconfig.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog
-			if cat, ok := cfg.GetCatalog(opts.Catalog); ok && cat.Type == appconfig.CatalogTypeOCI && !officialDisabled {
+			// chain (which omits official entirely when disabled). Because the
+			// user explicitly asked for it, fail with a clear error rather than
+			// silently returning an empty result that looks like "no artifacts".
+			if opts.Catalog == appconfig.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+				return exitcode.WithCode(
+					fmt.Errorf("official catalog is disabled (settings.disableOfficialCatalog); unset it to list the official catalog"),
+					exitcode.InvalidInput,
+				)
+			}
+			if cat, ok := cfg.GetCatalog(opts.Catalog); ok && cat.Type == appconfig.CatalogTypeOCI {
 				remoteCatalogs = append(remoteCatalogs, *cat)
 			}
 		case opts.ShowAll:
