@@ -33,6 +33,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/walk"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
+	"github.com/oakwood-commons/scafctl/pkg/state"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	yaml "gopkg.in/yaml.v3"
 )
@@ -2396,7 +2397,7 @@ func lintState(sol *solution.Solution, result *Result, registry *provider.Regist
 	if !lintStateBackend(sol, result, registry) {
 		return
 	}
-	lintStateResolverRefs(sol, result)
+	lintStateRefs(sol, result, registry)
 	lintStateSaveOverrides(sol, result)
 	lintStateGitHubNoSaveBranch(sol, result)
 }
@@ -2447,24 +2448,68 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry *provider
 	return true
 }
 
-// lintStateResolverRefs checks for direct rslvr: references in state config.
-// These won't work because state loads before resolvers run.
-func lintStateResolverRefs(sol *solution.Solution, result *Result) {
-	location := "state"
-
-	if sol.State.Enabled != nil && sol.State.Enabled.Resolver != nil {
-		result.addFinding(SeverityError, "state", location+".enabled",
-			fmt.Sprintf("state.enabled uses rslvr: %q — resolver results are not available at state load time", *sol.State.Enabled.Resolver),
-			"Use a literal value or CEL expression referencing CLI params instead (e.g. expr: \"__params.enable_state == true\")",
-			"state-resolver-ref")
+// lintStateRefs validates that state config fields evaluated at load time
+// (state.enabled and backend inputs) reference only state-INDEPENDENT resolvers.
+//
+// The engine resolves these fields in a pre-load pass, so references to
+// state-independent resolvers are permitted. Two things are still errors:
+//   - a reference to a state-DEPENDENT resolver (one that reads the state
+//     snapshot, or transitively depends on one that does): it cannot run before
+//     state is loaded, so this is a circular dependency;
+//   - a reference to an undefined resolver: almost always a typo.
+//
+// saveOverrides are excluded here because they resolve at SAVE time (after all
+// resolvers have run); lintStateSaveOverrides covers them.
+func lintStateRefs(sol *solution.Solution, result *Result, registry *provider.Registry) {
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
 	}
-	for inputKey, input := range sol.State.Backend.Inputs {
-		if input != nil && input.Resolver != nil {
-			result.addFinding(SeverityError, "state", fmt.Sprintf("%s.backend.inputs.%s", location, inputKey),
-				fmt.Sprintf("state backend input %q uses rslvr: %q — resolver results are not available at state load time", inputKey, *input.Resolver),
-				"Use a CEL expression referencing a CLI parameter instead (e.g. expr: \"__params.appName + '-state.json'\")",
-				"state-resolver-ref")
+	part := state.BuildPartition(sol.Spec.ResolversToSlice(), lookup, sol.Spec.Calls, state.ReadProviderName)
+
+	check := func(vr *spec.ValueRef, location string) {
+		if vr == nil {
+			return
 		}
+		refs := make(map[string]bool)
+		resolver.ExtractRefsFromValueRef(vr, refs)
+
+		unknown := make([]string, 0)
+		dependent := make([]string, 0)
+		for ref := range refs {
+			switch {
+			case !part.IsKnown(ref):
+				unknown = append(unknown, ref)
+			case part.IsStateDependent(ref):
+				dependent = append(dependent, ref)
+			}
+		}
+		sort.Strings(unknown)
+		sort.Strings(dependent)
+
+		for _, ref := range unknown {
+			result.addFinding(SeverityError, "state", location,
+				fmt.Sprintf("%s references unknown resolver %q", location, ref),
+				"Fix the resolver name, or remove the reference",
+				"state-ref-unknown")
+		}
+		for _, ref := range dependent {
+			result.addFinding(SeverityError, "state", location,
+				fmt.Sprintf("%s references state-dependent resolver %q, which reads the state snapshot (or depends on one that does) and cannot run before state is loaded -- a circular dependency", location, ref),
+				"Reference only a state-independent resolver, a CEL expression over __params, or a literal here",
+				"state-ref-state-dependent")
+		}
+	}
+
+	check(sol.State.Enabled, "state.enabled")
+
+	inputKeys := make([]string, 0, len(sol.State.Backend.Inputs))
+	for key := range sol.State.Backend.Inputs {
+		inputKeys = append(inputKeys, key)
+	}
+	sort.Strings(inputKeys)
+	for _, key := range inputKeys {
+		check(sol.State.Backend.Inputs[key], "state.backend.inputs."+key)
 	}
 }
 

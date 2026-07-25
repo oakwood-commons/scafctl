@@ -458,6 +458,23 @@ func (o *sharedResolverOptions) generateTestOutput(ctx context.Context, command,
 	return nil
 }
 
+// execResolverConfig holds optional overrides for a single executeResolvers call.
+type execResolverConfig struct {
+	// seed maps resolver names to results produced in an earlier pass (e.g. the
+	// state two-phase pre-load). Seeded resolvers are reused instead of being
+	// re-executed, avoiding duplicate side effects from http/exec providers.
+	seed map[string]*resolver.ExecutionResult
+}
+
+// execResolverOption configures a single executeResolvers invocation.
+type execResolverOption func(*execResolverConfig)
+
+// withSeededResults reuses previously computed resolver results in this run
+// instead of re-executing those resolvers. A nil or empty map is a no-op.
+func withSeededResults(seed map[string]*resolver.ExecutionResult) execResolverOption {
+	return func(c *execResolverConfig) { c.seed = seed }
+}
+
 // executeResolvers runs the resolver execution pipeline on the given resolvers.
 // Returns the resolver data map (name -> value), the resolver context with full
 // execution metadata, and any error.
@@ -467,7 +484,13 @@ func (o *sharedResolverOptions) executeResolvers(
 	resolvers []*resolver.Resolver,
 	params map[string]any,
 	reg *provider.Registry,
+	opts ...execResolverOption,
 ) (map[string]any, *resolver.Context, error) {
+	var execCfg execResolverConfig
+	for _, opt := range opts {
+		opt(&execCfg)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	resolverData := make(map[string]any)
@@ -533,6 +556,12 @@ func (o *sharedResolverOptions) executeResolvers(
 
 	if sol.Spec.HasCalls() {
 		executorOpts = append(executorOpts, resolver.WithCalls(sol.Spec.Calls))
+	}
+
+	// Seed results from an earlier pass (e.g. the state two-phase pre-load) so
+	// those resolvers are reused rather than re-executed.
+	if len(execCfg.seed) > 0 {
+		executorOpts = append(executorOpts, resolver.WithSeededResults(execCfg.seed))
 	}
 
 	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
@@ -613,6 +642,31 @@ func (o *sharedResolverOptions) executeResolvers(
 
 	lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))
 	return resolverData, resolverCtx, nil
+}
+
+// buildStateTwoPhaseInput constructs the input for state's two-phase pre-load,
+// wiring the resolver runner to this option set's execution pipeline. The state
+// manager uses it to run only the minimal set of resolvers that a load-time
+// state field (state.enabled or a backend input) transitively depends on, then
+// returns their results as a seed so the main run does not re-execute them.
+func (o *sharedResolverOptions) buildStateTwoPhaseInput(
+	sol *solution.Solution,
+	params map[string]any,
+	reg *provider.Registry,
+) state.TwoPhaseInput {
+	var lookup resolver.DescriptorLookup
+	if reg != nil {
+		lookup = reg.DescriptorLookup()
+	}
+	return state.TwoPhaseInput{
+		Resolvers: sol.Spec.ResolversToSlice(),
+		Lookup:    lookup,
+		Calls:     sol.Spec.Calls,
+		RunResolvers: func(rctx context.Context, subset []*resolver.Resolver) (*resolver.Context, error) {
+			_, rc, rerr := o.executeResolvers(rctx, sol, subset, params, reg)
+			return rc, rerr
+		},
+	}
 }
 
 // deferredValidationFailures returns the set of resolver names whose deferred

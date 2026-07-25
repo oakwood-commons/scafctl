@@ -148,6 +148,39 @@ func knownPatterns() []pattern {
 			},
 		},
 		{
+			name:  "state-ref-state-dependent",
+			regex: regexp.MustCompile(`(state\.[^\s]+) references state-dependent resolver\(s\) \[([^\]]+)\]`),
+			build: func(m []string, _ string) Explanation {
+				return Explanation{
+					Category:  "state",
+					Summary:   fmt.Sprintf("State field %q references a state-dependent resolver", m[1]),
+					RootCause: fmt.Sprintf("The resolver(s) [%s] read state (or depend on one that does), so they cannot run before state is loaded -- a circular dependency", m[2]),
+					Suggestions: []string{
+						fmt.Sprintf("Reference only state-independent resolvers from %s (ones that do not use the state provider)", m[1]),
+						"Move the state read into a downstream resolver instead of the state.enabled / state.backend.inputs field",
+						"If you need the value at save time, use state.backend.save overrides, which are evaluated after resolvers run",
+						"Use lint_solution to see the state-ref-state-dependent finding and the offending references",
+					},
+				}
+			},
+		},
+		{
+			name:  "state-ref-unknown",
+			regex: regexp.MustCompile(`(state\.[^\s]+) references unknown resolver\(s\) \[([^\]]+)\]`),
+			build: func(m []string, _ string) Explanation {
+				return Explanation{
+					Category:  "state",
+					Summary:   fmt.Sprintf("State field %q references a resolver that does not exist", m[1]),
+					RootCause: fmt.Sprintf("No resolver named [%s] is defined in the solution -- usually a typo", m[2]),
+					Suggestions: []string{
+						"Check the resolver name spelling against spec.resolvers",
+						fmt.Sprintf("Ensure the referenced resolver is defined before using it in %s", m[1]),
+						"Use inspect_solution to list the available resolver names",
+					},
+				}
+			},
+		},
+		{
 			name:  "cel-undeclared-ref",
 			regex: regexp.MustCompile(`undeclared reference to '([^']+)'`),
 			build: func(m []string, _ string) Explanation {

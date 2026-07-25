@@ -307,7 +307,8 @@ flag alone.
 | `state-circular-dependency` | **Removed** -- no `saveToState` to create cycles |
 | `immutable-without-save` | **Removed** -- `saveToState` no longer exists |
 | `immutable-no-state-read` | **Removed** -- `state` provider no longer exists |
-| `state-resolver-ref` | **Retained** -- state backend inputs still cannot use `rslvr:` |
+| `state-ref-state-dependent` | **New** -- state.enabled/backend inputs may reference state-INDEPENDENT resolvers (resolved in a pre-load pass), but referencing a state-dependent resolver is a cycle |
+| `state-ref-unknown` | **New** -- state.enabled/backend inputs reference an undefined resolver |
 | `immutable-requires-state` | **New** -- resolver with `immutable: true` requires a `state` block on the solution |
 
 ### 7.4 New Lint Rule: `immutable-requires-state`

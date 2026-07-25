@@ -525,13 +525,21 @@ var KnownRules = map[string]RuleMeta{
 			"state:\n  enabled: true\n  backend:\n    provider: file\n    inputs:\n      path: \"my-state.json\"\n\nspec:\n  resolvers:\n    cluster_id:\n      type: string\n      immutable: true\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              key: \"cluster_id\"\n          - provider: exec\n            inputs:\n              command: \"uuidgen\"",
 		},
 	},
-	"state-resolver-ref": {
-		Rule:        "state-resolver-ref",
+	"state-ref-state-dependent": {
+		Rule:        "state-ref-state-dependent",
 		Severity:    string(SeverityError),
 		Category:    "state",
-		Description: "A state.enabled or state.backend.inputs field uses a direct rslvr: reference. State is loaded before resolvers run, so resolver results are not available.",
-		Why:         "State configuration is resolved before resolver execution using only CLI parameters (-r flags) and environment data. Direct rslvr: references will fail at runtime because resolver results do not exist yet.",
-		Fix:         "Use a CEL expression referencing CLI parameters instead, e.g.:\n  path:\n    expr: \"__params.appName + '-state.json'\"\nwhere appName is passed via -r appName=myapp.",
+		Description: "A state.enabled or state.backend.inputs field references a state-dependent resolver -- one that reads the state snapshot (via the state provider) or transitively depends on one that does.",
+		Why:         "state.enabled and backend inputs are evaluated in a pre-load pass, before the state snapshot exists. A state-dependent resolver cannot run in that pass, so referencing one is a circular dependency. References to state-INDEPENDENT resolvers are fine -- the engine resolves them before loading state.",
+		Fix:         "Reference only a state-independent resolver, a CEL expression over __params (e.g. expr: \"__params.appName + '-state.json'\"), or a literal. Move any state-reading logic out of the referenced resolver's pre-load path.",
+	},
+	"state-ref-unknown": {
+		Rule:        "state-ref-unknown",
+		Severity:    string(SeverityError),
+		Category:    "state",
+		Description: "A state.enabled or state.backend.inputs field references a resolver that is not defined in spec.resolvers.",
+		Why:         "The reference cannot resolve because no resolver with that name exists. This is almost always a typo in the resolver name.",
+		Fix:         "Correct the resolver name to match a defined resolver, or remove the reference.",
 	},
 	"state-save-override-state-ref": {
 		Rule:        "state-save-override-state-ref",

@@ -24,6 +24,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
+	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -498,15 +499,17 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// parameters via __params in CEL expressions (e.g. __params.appName).
 	var stateMgr *state.Manager
 	var stateData *state.Data
+	var stateSeed map[string]*resolver.ExecutionResult
 	if o.NoState {
 		warnStateSkipped(ctx, sol)
 	} else if sol.State != nil {
 		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run solution", params)
-		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
+		loadResult, loadErr := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, o.buildStateTwoPhaseInput(sol, params, reg))
 		if loadErr != nil {
 			return o.handleStateLoadError(ctx, loadErr)
 		}
+		stateSeed = loadResult.Seed
 		if !loadResult.Skipped {
 			ctx = loadResult.Ctx
 			actionCtx = state.WithState(actionCtx, loadResult.Data)
@@ -520,7 +523,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// action-phase WhatIf report uses actionCtx which has the working-dir
 	// override for accurate output-dir resolution.
 	if o.DryRun {
-		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd)
+		return o.executeDryRun(ctx, actionCtx, sol, reg, params, workflow, stateData, originalCwd, stateSeed)
 	}
 
 	// Execute resolvers if present
@@ -529,7 +532,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Track timing for execution metadata
 	start := time.Now()
 
-	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
 		return o.exitWithCode(ctx, err, exitcode.GeneralError)
 	}
@@ -621,13 +624,13 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // override) so resolver paths resolve relative to the solution file.
 // actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
 // so that dryrun.Generate / WhatIf sees the same context as real execution.
-func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string) error {
+func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
 	// get real data for WhatIf message generation safely.
 	resolvers := sol.Spec.ResolversToSlice()
-	resolverData, _, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg)
+	resolverData, _, err := o.executeResolvers(resolverCtx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
 		// Non-fatal — report will include warnings about missing resolver data.
 		resolverData = make(map[string]any)

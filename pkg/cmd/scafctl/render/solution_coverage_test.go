@@ -496,7 +496,7 @@ func TestSolutionOptions_loadStateIntoContext_NilState(t *testing.T) {
 	reg := provider.NewRegistry()
 
 	ctx := context.Background()
-	result, params, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
+	result, params, _, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, ctx, result, "context should be unchanged when state is nil")
@@ -521,7 +521,7 @@ func TestSolutionOptions_loadStateIntoContext_DisabledState(t *testing.T) {
 	reg := provider.NewRegistry()
 
 	ctx := setupWriterContext()
-	result, _, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
+	result, _, _, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
 
 	require.NoError(t, err)
 	// When state is disabled, context should not contain state data
@@ -549,7 +549,7 @@ func TestSolutionOptions_loadStateIntoContext_NoStateFlag(t *testing.T) {
 	reg := provider.NewRegistry()
 
 	ctx := setupWriterContext()
-	result, params, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
+	result, params, _, err := opts.loadStateIntoContext(ctx, sol, reg, nil)
 
 	require.NoError(t, err)
 	// --no-state must skip loading entirely: no state data in context.

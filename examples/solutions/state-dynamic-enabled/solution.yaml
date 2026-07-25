@@ -1,0 +1,106 @@
+# =============================================================================
+# Dynamic State Configuration Example
+# =============================================================================
+# Demonstrates referencing resolver outputs from the `state.enabled` and
+# `state.backend.inputs` fields. Before state is loaded, scafctl runs a minimal
+# "Phase A" -- just the resolvers those fields transitively require -- so the
+# state file path and enable flag can be computed from resolved values instead
+# of hard-coded literals. Those Phase-A resolvers are then reused (not re-run)
+# during the main execution.
+#
+# Only *state-independent* resolvers may be referenced here (a resolver that
+# reads state via the `state` provider, or depends on one that does, would form
+# a circular dependency and is rejected at load time with a clear error).
+#
+# Usage:
+#   scafctl run resolver -f solution.yaml -r app_name=billing -r persist=true
+#     -> writes state to  ./state/billing.json
+#   scafctl run resolver -f solution.yaml -r app_name=web -r persist=false
+#     -> state disabled (enabled resolves to false), nothing written
+#   Inspect: scafctl state list --path state/billing.json
+# =============================================================================
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-dynamic-enabled
+  version: 1.0.0
+  description: Compute state.enabled and state.backend.inputs from resolver outputs
+
+# State configuration that depends on resolved values:
+#   - `enabled` is driven by the `persist_state` resolver (a boolean derived
+#     from the `persist` parameter).
+#   - the backend `path` is built from the `state_path` resolver, giving each
+#     app its own state file.
+# scafctl runs `persist_state`, `state_path`, and their dependencies (app_name)
+# in Phase A, evaluates these fields, loads state, then seeds those results into
+# the main run so they are not executed twice.
+state:
+  enabled:
+    rslvr: persist_state
+  backend:
+    provider: file
+    inputs:
+      path:
+        rslvr: state_path
+
+spec:
+  resolvers:
+    # The application name -- a plain parameter, state-independent.
+    app_name:
+      description: Application name (drives the per-app state file)
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+          - provider: static
+            inputs:
+              value: "demo"
+
+    # Whether to persist state -- a parameter coerced to a boolean.
+    # Referenced by state.enabled.
+    persist_state:
+      description: Whether state persistence is enabled for this run
+      type: bool
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "persist"
+          - provider: static
+            inputs:
+              value: "true"
+
+    # The per-app state file path -- referenced by state.backend.inputs.path.
+    # Depends on app_name, so Phase A includes app_name transitively.
+    state_path:
+      description: Location of the state file for this application
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'state/' + _.app_name + '.json'"
+
+    # A regular resolver whose value is persisted -- runs in the main pass.
+    greeting:
+      description: Greeting message that gets saved to state
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: "'Deploying ' + _.app_name"
+
+  workflow:
+    actions:
+      show-config:
+        description: Display the dynamically resolved state configuration
+        provider: message
+        inputs:
+          message:
+            expr: "_.greeting + ' (state file: ' + _.state_path + ')'"
+          type: success
