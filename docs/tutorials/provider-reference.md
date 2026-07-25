@@ -2464,11 +2464,32 @@ without forming a self-cycle.
 
 ### Inputs
 
+Specify **exactly one** of `key`, `keys`, or `all` to choose the read mode.
+
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
 | `operation` | string | ❌ | State operation. Only `get` is supported (the default). |
-| `key` | string | ✅ | Name of the persisted resolver whose prior-run value to read. |
-| `default` | any | ❌ | Value returned when the key has no persisted entry (e.g. on the first run). Returns null when omitted. |
+| `key` | string | ❌ | Single-key mode. Name of the persisted resolver whose prior-run value to read. Returns the value directly. |
+| `keys` | array | ❌ | Map mode. Explicit set of persisted keys to read as a map. Absent keys are **omitted** from the map. |
+| `all` | bool | ❌ | Map mode. When `true`, read the entire persisted snapshot as a map. |
+| `default` | any | ❌ | Only valid with `key`: value returned when the key has no persisted entry (e.g. on the first run). Returns null when omitted. In map mode absent keys are omitted instead, so `default` is rejected. |
+
+### Read modes
+
+- **Single key** (`key`): returns the persisted value directly, or `default`/null
+  when absent. `_.prior_password` is the scalar value.
+- **Explicit set** (`keys`): returns a map of the requested keys to their
+  persisted values. Requested keys with no persisted entry are **omitted** from
+  the map (not defaulted), so `has(_.myState.keyB)` and
+  `_.myState.?keyB.orValue(d)` remain faithful.
+- **Whole snapshot** (`all: true`): returns a map of every persisted resolver's
+  prior-run value.
+
+In map mode the resolver value is the bare map. The set of present keys (and, in
+`keys` mode, the requested-but-absent keys) is reported in provider metadata,
+visible via `scafctl run provider state ...` but not in the resolver value. You
+can reconstruct the missing set in CEL with
+`myKeys.filter(k, !has(_.myState[k]))`.
 
 ### Examples
 
@@ -2492,6 +2513,24 @@ resolvers:
             operation: get
             key: db_password
             default: ""
+
+  # Reads several persisted keys at once as a map (absent keys omitted).
+  prior_config:
+    resolve:
+      with:
+        - provider: state
+          inputs:
+            operation: get
+            keys: [region, tier, cluster_id]
+
+  # Reads the entire persisted snapshot as a map.
+  prior_state:
+    resolve:
+      with:
+        - provider: state
+          inputs:
+            operation: get
+            all: true
 ```
 
 Within a single run, `state.get("db_password")` returns the prior run's value

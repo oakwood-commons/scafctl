@@ -82,6 +82,34 @@ spec:
               default: ""
 
     # =========================================================================
+    # Map mode -- read several persisted keys at once as a map
+    # =========================================================================
+    # `keys` reads an explicit set of persisted values into one map instead of
+    # one resolver per key. Absent keys are OMITTED (not defaulted), so
+    # has(_.prior_bag.current_token) and _.prior_bag.?ghost.orValue(d) stay
+    # faithful. No `type` is set because the value is a map, not a scalar.
+    prior_bag:
+      description: Reads a set of prior-run persisted keys into a single map
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              keys: [current_token, ghost_key]
+
+    # =========================================================================
+    # Whole-snapshot mode -- read every persisted value as a map
+    # =========================================================================
+    prior_snapshot:
+      description: Reads the entire prior-run persisted snapshot as a map
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              all: true
+
+    # =========================================================================
     # Summary -- compares this run's value with the prior run's value
     # =========================================================================
     token_summary:
@@ -92,7 +120,7 @@ spec:
           - provider: static
             inputs:
               value:
-                expr: "'current=' + _.current_token + ' previous=' + _.previous_token"
+                expr: "'current=' + _.current_token + ' previous=' + _.previous_token + ' bag_current=' + _.prior_bag.?current_token.orValue('none') + ' snapshot_keys=' + string(size(_.prior_snapshot))"
 
   workflow:
     actions:

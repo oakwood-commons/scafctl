@@ -99,6 +99,32 @@ spec:
               default: fallback-value
 
     # -------------------------------------------------------------------------
+    # Map mode (keys) -- reads several persisted keys at once as a map. Absent
+    # keys are OMITTED (not defaulted) so has()/optional chaining stay faithful.
+    # No `type` is set because the value is a map, not a scalar.
+    # -------------------------------------------------------------------------
+    prior_config:
+      description: Reads a set of prior-run persisted keys into a map
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              keys: [current_token, region, ghost_key]
+
+    # -------------------------------------------------------------------------
+    # Map mode (all) -- reads the entire persisted snapshot as a map.
+    # -------------------------------------------------------------------------
+    prior_all:
+      description: Reads the whole prior-run persisted snapshot as a map
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              operation: get
+              all: true
+
+    # -------------------------------------------------------------------------
     # Summary -- compares this run's value with the prior run's value.
     # -------------------------------------------------------------------------
     token_summary:
@@ -109,7 +135,7 @@ spec:
           - provider: static
             inputs:
               value:
-                expr: "'current=' + _.current_token + ' previous=' + _.previous_token + ' orphan=' + _.orphan_lookup"
+                expr: "'current=' + _.current_token + ' previous=' + _.previous_token + ' orphan=' + _.orphan_lookup + ' cfg_region=' + _.prior_config.?region.orValue('none') + ' snapshot_keys=' + string(size(_.prior_all))"
 
   workflow:
     actions:
@@ -169,6 +195,32 @@ spec:
             message: "current_token should reflect this run's parameter"
           - expression: __output.previous_token == "seeded-alpha"
             message: "previous_token should be the value persisted by the prior run"
+
+      # =====================================================================
+      # Map mode: reads several persisted keys as a map, omitting absent keys,
+      # and reads the whole snapshot via all: true.
+      # =====================================================================
+      map-mode-reads-keys-and-all:
+        description: state provider keys/all modes return maps with absent keys omitted
+        command: [run, resolver]
+        args: ["-o", "json", "-r", "token=bravo"]
+        tags: [state, persist, provider, map]
+        init:
+          - command: >-
+              printf '{"schemaVersion":3,"metadata":{"solution":"test-state-persist-provider","version":"1.0.0","createdAt":"2025-01-01T00:00:00Z","lastUpdatedAt":"2025-01-01T00:00:00Z","runtime":{"engine":{"name":"scafctl","version":"dev"},"cli":{"name":"scafctl","version":"dev"}}},"command":{"subcommand":"run resolver","parameters":{}},"parameters":{},"resolvers":{"current_token":{"value":"seeded-alpha","type":"string","createdAt":"2025-01-01T00:00:00Z"},"region":{"value":"us-east","type":"string","createdAt":"2025-01-01T00:00:00Z"}},"fingerprints":{}}'
+              > $SCAFCTL_SANDBOX_DIR/state.json
+        assertions:
+          - expression: __exitCode == 0
+          - expression: __output.prior_config.current_token == "seeded-alpha"
+            message: "keys mode should return the persisted value for a present key"
+          - expression: __output.prior_config.region == "us-east"
+            message: "keys mode should return every present requested key"
+          - expression: has(__output.prior_config.ghost_key) == false
+            message: "keys mode must OMIT absent keys so has() stays faithful"
+          - expression: __output.prior_all.current_token == "seeded-alpha"
+            message: "all mode should include every persisted key"
+          - expression: __output.prior_all.region == "us-east"
+            message: "all mode should include every persisted key"
 
       # =====================================================================
       # persist: true writes the current value into the state file on save.
