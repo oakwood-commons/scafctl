@@ -5,12 +5,14 @@ package examples
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	exampleslib "github.com/oakwood-commons/scafctl/pkg/examples"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -22,6 +24,9 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed examples_schema.json
+var examplesSchemaJSON []byte
 
 // Options holds configuration for the get examples command.
 type Options struct {
@@ -115,11 +120,40 @@ func (o *Options) runList(ctx context.Context) error {
 		return nil
 	}
 
-	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
-	return outputOpts.Write(items)
+	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
+		kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
+		kvx.WithOutputColumnOrder([]string{"displayName", "name", "category", "tags", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"displayName": {MaxWidth: 30, Priority: 10},
+			"name":        {MaxWidth: 26, Priority: 8},
+			"category":    {MaxWidth: 16, Priority: 7},
+			"tags":        {MaxWidth: 24, Priority: 5},
+			"description": {Priority: 4},
+			// Path is the fetch handle, surfaced in the detail view and the tip
+			// below rather than as a wide table column.
+			"path": {Hidden: true},
+		}),
+	)
+	if err := outputOpts.Write(items); err != nil {
+		return err
+	}
+
+	// Tip: the list shows metadata, but the content lives in the embedded FS.
+	// Tell the user exactly how to view a solution (the path is the handle).
+	if !kvx.IsStructuredFormat(outputOpts.Format) && !kvx.IsQuietFormat(outputOpts.Format) {
+		bin := o.CliParams.BinaryName
+		w.PlainStderrf("")
+		w.PlainStderrf("Tip: run '%s get examples <path>' to view a solution (e.g. '%s get examples %s').",
+			bin, bin, items[0].Path)
+	}
+	return nil
 }
 
-func (o *Options) runGet(ctx context.Context, exPath string) error {
+func (o *Options) runGet(ctx context.Context, query string) error {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		return fmt.Errorf("writer not initialized in context")
@@ -127,6 +161,26 @@ func (o *Options) runGet(ctx context.Context, exPath string) error {
 
 	if o.Category != "" {
 		return exitcode.WithCode(fmt.Errorf("--category can only be used in list mode"), exitcode.InvalidInput)
+	}
+
+	// Resolve the query (path, metadata.name, or basename) to a concrete path.
+	exPath, err := exampleslib.ResolveExample(query)
+	if err != nil {
+		switch {
+		case errors.Is(err, exampleslib.ErrPathTraversal):
+			w.Errorf("Invalid example path: %s", query)
+			return exitcode.WithCode(fmt.Errorf("invalid example path: %w", err), exitcode.InvalidInput)
+		case errors.Is(err, exampleslib.ErrAmbiguousExample):
+			w.Errorf("%v", err)
+			w.PlainStderrf("Pass the full path to disambiguate, e.g. '%s get examples <path>'.", o.CliParams.BinaryName)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
+		case errors.Is(err, exampleslib.ErrExampleNotFound):
+			w.Errorf("Example not found: %s", query)
+			w.PlainStderrf("Run '%s get examples' to list available examples.", o.CliParams.BinaryName)
+			return exitcode.WithCode(err, exitcode.FileNotFound)
+		default:
+			return err
+		}
 	}
 
 	content, err := exampleslib.Read(exPath)

@@ -28,8 +28,7 @@ spec:
             inputs:
               url: https://features.example.com/api/v1/flags
               method: GET
-              timeout: 5s
-          # Fall back to static defaults
+              timeout: 5          # Fall back to static defaults
           - provider: static
             inputs:
               value:

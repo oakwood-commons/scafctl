@@ -11,6 +11,11 @@ kind: Solution
 
 metadata:
   name: lint-stress-test
+  displayName: Lint Stress Test
+  category: solutions
+  tags:
+    - lint
+    - testing
   description: Triggers many lint rules for testing table output
 
 spec:

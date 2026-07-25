@@ -188,10 +188,10 @@ func TestExamplesScan(t *testing.T) {
 		require.NoError(t, err)
 		assert.Greater(t, len(items), 0)
 
-		// Verify items are sorted
+		// Verify items are sorted by category, then displayName.
 		for i := 1; i < len(items); i++ {
 			if items[i].Category == items[i-1].Category {
-				assert.LessOrEqual(t, items[i-1].Name, items[i].Name)
+				assert.LessOrEqual(t, items[i-1].DisplayName, items[i].DisplayName)
 			} else {
 				assert.Less(t, items[i-1].Category, items[i].Category)
 			}
@@ -215,26 +215,31 @@ func TestExamplesScan(t *testing.T) {
 	})
 }
 
-func TestExamplesDescriptionFromPath(t *testing.T) {
-	t.Run("known path returns specific description", func(t *testing.T) {
-		desc := examples.DescriptionFromPath("actions/hello-world.yaml")
-		assert.Equal(t, "Simple hello world action", desc)
+func TestExamplesMetadataDriven(t *testing.T) {
+	t.Run("scan reads description and displayName from solution metadata", func(t *testing.T) {
+		items, err := examples.Scan("")
+		require.NoError(t, err)
+		require.NotEmpty(t, items)
+
+		var hello *examples.Example
+		for i := range items {
+			if items[i].Path == "actions/hello-world.yaml" {
+				hello = &items[i]
+				break
+			}
+		}
+		require.NotNil(t, hello, "actions/hello-world.yaml should be listed")
+		assert.Equal(t, "hello-world-action", hello.Name)
+		assert.Equal(t, "Hello World Action", hello.DisplayName)
+		assert.Equal(t, "The simplest possible workflow with a single action", hello.Description)
 	})
 
-	t.Run("unknown path generates fallback", func(t *testing.T) {
-		desc := examples.DescriptionFromPath("custom/my-custom-thing.yaml")
-		assert.Contains(t, desc, "My Custom Thing")
-		assert.Contains(t, desc, "example")
-	})
-
-	t.Run("dashes replaced with spaces", func(t *testing.T) {
-		desc := examples.DescriptionFromPath("something/some-long-name.yaml")
-		assert.Contains(t, desc, "Some Long Name")
-	})
-
-	t.Run("underscores replaced with spaces", func(t *testing.T) {
-		desc := examples.DescriptionFromPath("something/some_other_name.yaml")
-		assert.Contains(t, desc, "Some Other Name")
+	t.Run("names never contain a file extension", func(t *testing.T) {
+		items, err := examples.Scan("")
+		require.NoError(t, err)
+		for _, item := range items {
+			assert.NotContains(t, item.Name, ".yaml")
+		}
 	})
 }
 

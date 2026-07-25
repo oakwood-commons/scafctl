@@ -29,7 +29,7 @@ scafctl run solution -f examples/actions/hello-world.yaml --log-level info --log
 You can also discover and download examples using the built-in `get examples` command:
 
 ```bash
-# List all available examples
+# List all available examples (metadata-driven; only kind: Solution)
 scafctl get examples
 
 # Filter by category
@@ -37,10 +37,14 @@ scafctl get examples --category resolvers
 scafctl get examples --category actions
 scafctl get examples --category solutions
 
-# Download an example
+# View an example by path (always unique)...
 scafctl get examples resolvers/hello-world.yaml > hello.yaml
 
-# List in JSON format
+# ...or by its metadata.name when unambiguous
+scafctl get examples cel-basics
+
+# Interactive card + detail view, or JSON
+scafctl get examples -i
 scafctl get examples -o json
 ```
 

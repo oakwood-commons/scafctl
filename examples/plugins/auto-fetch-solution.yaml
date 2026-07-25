@@ -1,7 +1,8 @@
 # Prerequisites:
 #   1. Build and publish the echo plugin to a catalog:
-#      cd examples/plugins/echo && go build -o echo-provider .
-#      scafctl catalog push provider echo-provider --version 1.0.0 --binary echo-provider
+#      cd examples/plugins/echo && go build -o echo .
+#      scafctl package plugin --name echo --kind provider --version 1.0.0 --platform $(go env GOOS)/$(go env GOARCH)=./echo
+#      scafctl catalog push echo@1.0.0
 #   2. Or run without real plugins to see the resolution flow:
 #      scafctl plugins install -f examples/plugins/auto-fetch-solution.yaml
 #
@@ -24,7 +25,7 @@ metadata:
 
 bundle:
   plugins:
-    - name: echo-provider
+    - name: echo
       kind: provider
       version: "^1.0.0"
       defaults:

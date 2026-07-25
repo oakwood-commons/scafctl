@@ -21,10 +21,6 @@ bundle:
   # (e.g., files loaded via dynamic CEL expressions)
   include:
     - "configs/**/*.yaml"
-  
-  # Exclude test files from the bundle
-  exclude:
-    - "**/*_test.yaml"
 
 spec:
   resolvers:
@@ -66,7 +62,6 @@ spec:
             inputs:
               path:
                 expr: "'configs/' + _.environment + '.yaml'"
-              format: yaml
 
     # Combine template with config values
     rendered-deployment:

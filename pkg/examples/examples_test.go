@@ -52,7 +52,7 @@ func TestScan_ResultsAreSorted(t *testing.T) {
 		prev := items[i-1]
 		curr := items[i]
 		if prev.Category == curr.Category {
-			assert.LessOrEqual(t, prev.Name, curr.Name, "items should be sorted by name within category")
+			assert.LessOrEqual(t, prev.DisplayName, curr.DisplayName, "items should be sorted by displayName within category")
 		} else {
 			assert.Less(t, prev.Category, curr.Category, "items should be sorted by category")
 		}
@@ -170,27 +170,94 @@ func TestCategories_ContainsExpectedCategories(t *testing.T) {
 	}
 }
 
-// ── DescriptionFromPath tests ─────────────────────────────────────────────────
+// ── Metadata-driven Scan tests ────────────────────────────────────────────────
 
-func TestDescriptionFromPath_KnownPath(t *testing.T) {
+func TestScan_OnlyListsSolutions(t *testing.T) {
 	t.Parallel()
-	desc := DescriptionFromPath("solutions/comprehensive/solution.yaml")
-	assert.NotEmpty(t, desc)
-	assert.Contains(t, desc, "Comprehensive")
+	items, err := Scan("")
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	for _, item := range items {
+		// Names come from metadata.name, never the filename, so no ".yaml".
+		assert.NotContains(t, item.Name, ".yaml", "name must come from metadata, not filename")
+		assert.NotContains(t, item.Name, ".yml")
+		// Non-solution files and intentional bad/stress demos must be excluded.
+		assert.NotContains(t, item.Path, "bad-solution")
+		assert.NotContains(t, item.Path, "lint-stress-test")
+	}
 }
 
-func TestDescriptionFromPath_UnknownPath(t *testing.T) {
+func TestScan_PopulatesMetadata(t *testing.T) {
 	t.Parallel()
-	desc := DescriptionFromPath("unknown/my-custom-example.yaml")
-	assert.Contains(t, desc, "example")
-	assert.Contains(t, desc, "My")
+	items, err := Scan("")
+	require.NoError(t, err)
+
+	var hello *Example
+	for i := range items {
+		if items[i].Path == "actions/hello-world.yaml" {
+			hello = &items[i]
+			break
+		}
+	}
+	require.NotNil(t, hello, "actions/hello-world.yaml should be listed")
+	assert.Equal(t, "hello-world-action", hello.Name)
+	assert.Equal(t, "Hello World Action", hello.DisplayName)
+	assert.Equal(t, "actions", hello.Category)
+	assert.NotEmpty(t, hello.Description)
+	assert.Contains(t, hello.Tags, "action")
 }
 
-func TestDescriptionFromPath_CleansFallbackName(t *testing.T) {
+func TestResolveExample_ExactPath(t *testing.T) {
 	t.Parallel()
-	desc := DescriptionFromPath("category/some-complex_file-name.yaml")
-	assert.NotContains(t, desc, "-")
-	assert.NotContains(t, desc, "_")
+	got, err := ResolveExample("actions/hello-world.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "actions/hello-world.yaml", got)
+}
+
+func TestResolveExample_ByName(t *testing.T) {
+	t.Parallel()
+	// cel-basics is a unique metadata.name.
+	got, err := ResolveExample("cel-basics")
+	require.NoError(t, err)
+	assert.Equal(t, "resolvers/cel-basics.yaml", got)
+}
+
+func TestResolveExample_Ambiguous(t *testing.T) {
+	t.Parallel()
+	// "hello-world" is a basename shared by several examples.
+	_, err := ResolveExample("hello-world")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAmbiguousExample)
+	assert.Contains(t, err.Error(), "actions/hello-world.yaml")
+}
+
+func TestResolveExample_NotFound(t *testing.T) {
+	t.Parallel()
+	_, err := ResolveExample("this-does-not-exist-anywhere")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrExampleNotFound)
+}
+
+func TestResolveExample_Empty(t *testing.T) {
+	t.Parallel()
+	_, err := ResolveExample("   ")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrExampleNotFound)
+}
+
+func TestResolveExample_RejectsPathTraversal(t *testing.T) {
+	t.Parallel()
+	for _, q := range []string{
+		"../../etc/passwd",
+		"foo/../../bar.yaml",
+		"..\\..\\windows\\system32",
+		"actions/../../secret",
+	} {
+		_, err := ResolveExample(q)
+		require.Error(t, err, "query %q must be rejected", q)
+		assert.ErrorIs(t, err, ErrPathTraversal, "query %q must return ErrPathTraversal", q)
+	}
 }
 
 // ── Example struct tests ──────────────────────────────────────────────────────
@@ -204,7 +271,6 @@ func TestExample_Fields(t *testing.T) {
 	for _, item := range items[:min(5, len(items))] {
 		assert.NotEmpty(t, item.Path, "Path should be set")
 		assert.NotEmpty(t, item.Name, "Name should be set")
-		assert.NotEmpty(t, item.Description, "Description should be set")
 	}
 }
 
@@ -226,6 +292,14 @@ func BenchmarkScan_Category(b *testing.B) {
 	}
 }
 
+func BenchmarkResolveExample(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = ResolveExample("cel-basics")
+	}
+}
+
 func BenchmarkRead(b *testing.B) {
 	items, err := Scan("")
 	if err != nil || len(items) == 0 {
@@ -236,21 +310,6 @@ func BenchmarkRead(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = Read(path)
-	}
-}
-
-func BenchmarkDescriptionFromPath(b *testing.B) {
-	paths := []string{
-		"solutions/comprehensive/solution.yaml",
-		"providers/static-hello.yaml",
-		"unknown/something.yaml",
-	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	idx := 0
-	for b.Loop() {
-		DescriptionFromPath(paths[idx%len(paths)])
-		idx++
 	}
 }
 

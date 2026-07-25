@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scafctl Example Solutions",
+  "description": "Schema for scafctl embedded example solutions with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "📄",
+  "x-kvx-collectionTitle": "Examples",
+
+  "x-kvx-list": {
+    "titleField": "displayName",
+    "subtitleField": "description",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["category", "tags"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "displayName",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "category"],
+        "layout": "inline"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Tags",
+        "fields": ["tags"],
+        "layout": "tags"
+      },
+      {
+        "title": "View this example",
+        "fields": ["path"],
+        "layout": "inline"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "path"],
+    "properties": {
+      "displayName": {
+        "type": "string",
+        "title": "Example",
+        "description": "Human-readable name from the solution's metadata.displayName"
+      },
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "The solution's metadata.name (stable identifier)"
+      },
+      "category": {
+        "type": "string",
+        "title": "Category",
+        "description": "Example category (from metadata.category or the top-level directory)"
+      },
+      "tags": {
+        "type": "array",
+        "items": { "type": "string" },
+        "title": "Tags",
+        "description": "Searchable keywords from metadata.tags"
+      },
+      "description": {
+        "type": "string",
+        "title": "Description",
+        "description": "First line of the solution's metadata.description"
+      },
+      "path": {
+        "type": "string",
+        "title": "Path",
+        "description": "Handle passed to 'get examples <path>' to view the full solution"
+      }
+    }
+  }
+}

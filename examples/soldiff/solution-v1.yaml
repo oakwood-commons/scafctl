@@ -1,5 +1,5 @@
-# Run: scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
-# Run: scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml -o json
+# Run: scafctl diff solution -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
+# Run: scafctl diff solution -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution
@@ -47,9 +47,7 @@ spec:
     actions:
       deploy:
         description: Deploy the application
-        with:
-          - provider: exec
-            inputs:
-              command: echo
-              args:
-                - "Deploying {{ .app_name }} with {{ .replicas }} replicas to {{ .environment }}"
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Deploying ' + _.app_name + ' with ' + string(_.replicas) + ' replicas to ' + _.environment"

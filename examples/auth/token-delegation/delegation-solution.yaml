@@ -12,7 +12,13 @@ kind: Solution
 
 metadata:
   name: token-delegation-demo
+  displayName: Token Delegation
   version: 1.0.0
+  category: auth
+  tags:
+    - auth
+    - token-delegation
+    - http
   description: |
     Demonstrates token delegation with the HTTP provider.
     Shows OBO, client credentials, and pass-through patterns.
@@ -29,7 +35,7 @@ spec:
               url: "https://graph.microsoft.com/v1.0/me"
               method: GET
               authProvider: entra
-              authScope: "https://graph.microsoft.com/.default"
+              scope: "https://graph.microsoft.com/.default"
 
     # OBO/Client Credentials: Access Key Vault with a different scope
     keyVaultSecret:
@@ -41,7 +47,7 @@ spec:
               url: "https://my-vault.vault.azure.net/secrets/my-secret?api-version=7.4"
               method: GET
               authProvider: entra
-              authScope: "https://vault.azure.net/.default"
+              scope: "https://vault.azure.net/.default"
 
     # Pass-through: Use the caller's GitHub token directly
     githubRepo:

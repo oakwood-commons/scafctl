@@ -1,9 +1,9 @@
 # Run: scafctl render solution -f examples/snapshots/snapshot-diff.yaml -r env=staging --snapshot --snapshot-file=/tmp/snap-staging.json
 # Run: scafctl render solution -f examples/snapshots/snapshot-diff.yaml -r env=production --snapshot --snapshot-file=/tmp/snap-prod.json
-# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json
-# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json --ignore-fields duration,providerCalls
-# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json --ignore-unchanged
-# Run: scafctl snapshot diff /tmp/snap-staging.json /tmp/snap-prod.json --format json
+# Run: scafctl diff snapshot /tmp/snap-staging.json /tmp/snap-prod.json
+# Run: scafctl diff snapshot /tmp/snap-staging.json /tmp/snap-prod.json --ignore-fields duration,providerCalls
+# Run: scafctl diff snapshot /tmp/snap-staging.json /tmp/snap-prod.json --ignore-unchanged
+# Run: scafctl diff snapshot /tmp/snap-staging.json /tmp/snap-prod.json -o json
 
 apiVersion: scafctl.io/v1
 kind: Solution
