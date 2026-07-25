@@ -5,6 +5,7 @@ package detail
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -241,6 +242,52 @@ func TestFormatResolverInputHelp_MapModeResolvers(t *testing.T) {
 	out := FormatResolverInputHelp(sol)
 	assert.Contains(t, out, "keyA,keyB")
 	assert.Contains(t, out, "(all)")
+}
+
+// TestFormatResolverInputHelp_MapModeStableOrdering verifies that resolvers
+// which render the same PARAMETER cell (here two "(all)" resolvers) keep a
+// deterministic order via the resolver-name tiebreaker, despite map iteration
+// being randomized.
+func TestFormatResolverInputHelp_MapModeStableOrdering(t *testing.T) {
+	t.Parallel()
+
+	allSource := func(name string) *resolver.Resolver {
+		return &resolver.Resolver{
+			Name: name,
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"all": {Literal: true},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"zzz_all": allSource("zzz_all"),
+		"aaa_all": allSource("aaa_all"),
+		"mmm_all": allSource("mmm_all"),
+	})
+
+	first := FormatResolverInputHelp(sol)
+	// The three "(all)" resolvers must appear in resolver-name order.
+	aaaIdx := strings.Index(first, "aaa_all")
+	mmmIdx := strings.Index(first, "mmm_all")
+	zzzIdx := strings.Index(first, "zzz_all")
+	require.NotEqual(t, -1, aaaIdx)
+	require.NotEqual(t, -1, mmmIdx)
+	require.NotEqual(t, -1, zzzIdx)
+	assert.Less(t, aaaIdx, mmmIdx, "aaa_all should sort before mmm_all")
+	assert.Less(t, mmmIdx, zzzIdx, "mmm_all should sort before zzz_all")
+
+	// Output must be identical across repeated invocations (map order is random).
+	for range 20 {
+		assert.Equal(t, first, FormatResolverInputHelp(sol))
+	}
 }
 
 func TestFormatResolverInputHelp_EmptyResolvers(t *testing.T) {

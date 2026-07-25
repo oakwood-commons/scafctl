@@ -863,6 +863,9 @@ func resolveMapMode(inputs map[string]any) (mapMode, allMode bool, err error) {
 		asMap = true
 	}
 
+	if allMode && asMap {
+		return false, false, fmt.Errorf(`%s: "all" is mutually exclusive with "as"`, ProviderName)
+	}
 	if asMap && !hasKeys {
 		return false, false, fmt.Errorf(`%s: "as: map" requires "keys"`, ProviderName)
 	}

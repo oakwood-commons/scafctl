@@ -1283,6 +1283,11 @@ func TestParameterProvider_Execute_MapMode_MutualExclusionAndValidation(t *testi
 			wantErr: `"all" is mutually exclusive with "key" and "keys"`,
 		},
 		{
+			name:    "all with as map",
+			inputs:  map[string]any{"all": true, "as": "map"},
+			wantErr: `"all" is mutually exclusive with "as"`,
+		},
+		{
 			name:    "as map with key",
 			inputs:  map[string]any{"key": "env", "keys": []any{"a"}, "as": "map"},
 			wantErr: `"as: map" is mutually exclusive with "key"`,

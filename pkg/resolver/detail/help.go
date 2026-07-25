@@ -142,9 +142,15 @@ func FormatResolverInputHelp(sol *solution.Solution) string {
 		}
 	}
 
-	// Sort each group by name for deterministic output
+	// Sort each group for deterministic output. Parameter resolvers sort by the
+	// rendered PARAMETER cell, then by resolver name as a tiebreaker so that
+	// resolvers producing the same cell (e.g. two "(all)" resolvers, or the same
+	// key list) keep a stable order regardless of map-iteration order.
 	slices.SortFunc(paramResolvers, func(a, b ResolverInfo) int {
-		return strings.Compare(parameterCell(a), parameterCell(b))
+		if c := strings.Compare(parameterCell(a), parameterCell(b)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
 	})
 	slices.SortFunc(computedResolvers, func(a, b ResolverInfo) int {
 		return strings.Compare(a.Name, b.Name)
