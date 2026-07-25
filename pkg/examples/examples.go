@@ -30,8 +30,9 @@ import (
 var ErrPathTraversal = errors.New("path must not contain '..'")
 
 // ErrAmbiguousExample is returned when a lookup query matches more than one
-// example. The Matches field lists the candidate paths so the caller can guide
-// the user to an unambiguous selection.
+// example. It is a sentinel error: ResolveExample wraps it with the candidate
+// paths in the error string (e.g. `...: "hello-world" matches a.yaml, b.yaml`),
+// so callers detect it with errors.Is and can surface the message to the user.
 var ErrAmbiguousExample = errors.New("ambiguous example query")
 
 // ErrExampleNotFound is returned when a lookup query matches no example.
@@ -182,7 +183,7 @@ func ResolveExample(query string) (string, error) {
 
 	// Security: reject any ".." path segment before touching the filesystem. A
 	// filename that merely contains ".." (e.g. foo..bar) is safe and allowed.
-	if hasDotDotSegment(slashed) {
+	if isUnsafeExamplePath(slashed) {
 		return "", ErrPathTraversal
 	}
 	normalized := path.Clean(slashed)
@@ -238,6 +239,28 @@ func firstLine(s string) string {
 	return ""
 }
 
+// isUnsafeExamplePath reports whether a slash-separated path is unsafe to use as
+// an example lookup: either it contains a ".." traversal segment, or it is an
+// absolute path (leading "/", or a Windows drive/UNC form). The input must be
+// forward-slash separated but NOT path.Clean'd, so a ".." component cannot be
+// normalized away (path.Clean("foo/../x") == "x") before the check runs.
+// Example paths are always relative (e.g. "resolvers/hello-world.yaml"); an
+// absolute input never names an embedded example and is rejected up front to
+// keep the guard complete for any reuse of this resolver logic.
+func isUnsafeExamplePath(p string) bool {
+	if hasDotDotSegment(p) {
+		return true
+	}
+	if strings.HasPrefix(p, "/") {
+		return true // absolute (including UNC "\\\\server" -> "//server")
+	}
+	// Windows drive-letter absolute path, e.g. "C:/x".
+	if len(p) >= 2 && p[1] == ':' {
+		return true
+	}
+	return false
+}
+
 // hasDotDotSegment reports whether a slash-separated path contains a ".."
 // component (a traversal segment), as opposed to merely containing the literal
 // ".." inside a filename (e.g. "foo..bar.yaml", which is safe). The input must
@@ -284,7 +307,7 @@ func Read(exPath string) (string, error) {
 
 	// Security: reject any ".." path segment. A filename containing ".."
 	// (e.g. foo..bar.yaml) is safe and allowed.
-	if hasDotDotSegment(slashed) {
+	if isUnsafeExamplePath(slashed) {
 		return "", ErrPathTraversal
 	}
 	cleanPath := path.Clean(slashed)

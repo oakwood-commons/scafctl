@@ -141,6 +141,8 @@ func TestRead_PathTraversalVariants(t *testing.T) {
 		"foo/../bar.yaml",
 		"foo/..",
 		"actions/../secret.yaml",
+		"/etc/passwd",
+		"C:\\Windows\\system32",
 	}
 
 	for _, path := range tests {
@@ -263,6 +265,10 @@ func TestResolveExample_RejectsPathTraversal(t *testing.T) {
 		"foo/../bar.yaml",
 		"foo/..",
 		"actions/../secret.yaml",
+		// Absolute / UNC paths never name an embedded example and are rejected.
+		"/etc/passwd",
+		"\\\\server\\share",
+		"C:\\Windows\\system32",
 	} {
 		_, err := ResolveExample(q)
 		require.Error(t, err, "query %q must be rejected", q)
@@ -280,6 +286,21 @@ func TestHasDotDotSegment(t *testing.T) {
 	safe := []string{"foo..bar.yaml", "a/foo..bar/c.yaml", "resolvers/hello-world.yaml", "..bar", "bar..", ""}
 	for _, p := range safe {
 		assert.False(t, hasDotDotSegment(p), "%q should NOT be flagged as traversal", p)
+	}
+}
+
+func TestIsUnsafeExamplePath(t *testing.T) {
+	t.Parallel()
+	unsafe := []string{
+		"..", "../x", "a/../../b", "foo/..", // traversal
+		"/etc/passwd", "//server/share", "C:/Windows", // absolute / UNC / drive
+	}
+	for _, p := range unsafe {
+		assert.True(t, isUnsafeExamplePath(p), "%q should be unsafe", p)
+	}
+	safe := []string{"resolvers/hello-world.yaml", "foo..bar.yaml", "a/b/c.yaml", "..bar"}
+	for _, p := range safe {
+		assert.False(t, isUnsafeExamplePath(p), "%q should be safe", p)
 	}
 }
 
