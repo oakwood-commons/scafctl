@@ -2167,12 +2167,31 @@ Access CLI parameters passed via `-r` flags.
 
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
-| `key` | string | ❌ | Parameter name (exact match). Provide either `key` or `keys`; `key` takes precedence over `keys` when both are set. |
-| `keys` | array of string | ❌ | Ordered list of parameter names (aliases) for a single logical parameter. The first name provided via CLI wins. Evaluated after `key`. |
-| `default` | any | ❌ | Value returned when the parameter is not provided. |
-| `type` | string | ❌ | How the value is coerced. One of `auto` (default), `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`, `fetch`. See the table below. |
+| `key` | string | ❌ | Single-key (scalar) mode. Parameter name (exact match). Provide either `key` or `keys`; `key` takes precedence over `keys` when both are set. Mutually exclusive with `all` and with `as: map`. |
+| `keys` | array of string | ❌ | Ordered list of parameter names. Default meaning: aliases for a single logical parameter (first provided via CLI wins), evaluated after `key`. With `as: map` it is instead a distinct set of parameter names read into a map. |
+| `as` | string | ❌ | Read-mode discriminator for `keys`. Only `map` is supported: it reinterprets `keys` as a distinct set of parameter names read into a map (instead of first-match-wins aliases). |
+| `all` | bool | ❌ | Map mode. When `true`, read every supplied CLI parameter as a map. Mutually exclusive with `key`, `keys`, and `as`. |
+| `default` | any | ❌ | Value returned when the parameter is not provided. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining `default` with `all` or `as: map` is an error. |
+| `type` | string | ❌ | How the value is coerced. One of `auto` (default), `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`, `fetch`. See the table below. Only valid in single-key/alias mode; in map mode each value uses `auto` inference. |
 
-At least one of `key` or `keys` must be provided.
+Specify one read mode: a single `key` / alias `keys`, `keys` + `as: map`, or `all: true`.
+
+### Read modes
+
+- **Single key** (`key`): returns the parameter value directly, or `default`/an
+  error when absent. `_.environment` is the scalar value.
+- **Aliases** (`keys`, no `as`): resolves one logical value from the first
+  provided alias (first-match-wins), falling back to `default`.
+- **Explicit set** (`keys` + `as: map`): returns a map of the requested
+  parameter names to their values. Requested keys not supplied via CLI are
+  **omitted** from the map (not defaulted), so `has(_.myBag.keyB)` and
+  `_.myBag.?keyB.orValue(d)` remain faithful. Each value uses `auto` inference.
+- **All supplied** (`all: true`): returns a map of every CLI-supplied
+  parameter to its `auto`-inferred value.
+
+In map mode the resolver value is the bare map. The set of present keys (and, in
+`keys` mode, the requested-but-absent keys) is reported in provider metadata,
+visible via `scafctl run provider parameter ...` but not in the resolver value.
 
 #### `type` values
 
@@ -2190,11 +2209,10 @@ At least one of `key` or `keys` must be provided.
 
 ### Output
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `value` | any | Parameter value |
-| `found` | bool | Whether parameter was provided |
-| `type` | string | Detected type of value |
+In single-key/alias mode the output is the parameter value (typed per the
+parsing rules), or the default when absent. In map mode (`keys` + `as: map`, or
+`all: true`) the output is a map of present parameter names to their
+auto-inferred values, with absent keys omitted.
 
 ### Examples
 
@@ -2219,6 +2237,26 @@ resolve:
       inputs:
         keys: [environment, e, env]
         default: dev
+```
+
+```yaml
+# Read a set of distinct parameters at once into a map (opt in with as: map).
+# Absent keys are omitted, so has(_.featureBag.keyB) stays faithful.
+resolve:
+  with:
+    - provider: parameter
+      inputs:
+        keys: [keyA, keyB, keyC]
+        as: map
+```
+
+```yaml
+# Read every supplied CLI parameter into a single map.
+resolve:
+  with:
+    - provider: parameter
+      inputs:
+        all: true
 ```
 
 ```yaml
@@ -2464,11 +2502,32 @@ without forming a self-cycle.
 
 ### Inputs
 
+Specify **exactly one** of `key`, `keys`, or `all` to choose the read mode.
+
 | Field | Type | Required | Description |
 |-------|------|:--------:|-------------|
 | `operation` | string | ❌ | State operation. Only `get` is supported (the default). |
-| `key` | string | ✅ | Name of the persisted resolver whose prior-run value to read. |
-| `default` | any | ❌ | Value returned when the key has no persisted entry (e.g. on the first run). Returns null when omitted. |
+| `key` | string | ❌ | Single-key mode. Name of the persisted resolver whose prior-run value to read. Returns the value directly. |
+| `keys` | array | ❌ | Map mode. Explicit set of persisted keys to read as a map. Absent keys are **omitted** from the map. |
+| `all` | bool | ❌ | Map mode. When `true`, read the entire persisted snapshot as a map. |
+| `default` | any | ❌ | Only valid with `key`: value returned when the key has no persisted entry (e.g. on the first run). Returns null when omitted. In map mode absent keys are omitted instead, so `default` is rejected. |
+
+### Read modes
+
+- **Single key** (`key`): returns the persisted value directly, or `default`/null
+  when absent. `_.prior_password` is the scalar value.
+- **Explicit set** (`keys`): returns a map of the requested keys to their
+  persisted values. Requested keys with no persisted entry are **omitted** from
+  the map (not defaulted), so `has(_.myState.keyB)` and
+  `_.myState.?keyB.orValue(d)` remain faithful.
+- **Whole snapshot** (`all: true`): returns a map of every persisted resolver's
+  prior-run value.
+
+In map mode the resolver value is the bare map. The set of present keys (and, in
+`keys` mode, the requested-but-absent keys) is reported in provider metadata,
+visible via `scafctl run provider state ...` but not in the resolver value. You
+can reconstruct the missing set in CEL with
+`myKeys.filter(k, !has(_.myState[k]))`.
 
 ### Examples
 
@@ -2492,6 +2551,24 @@ resolvers:
             operation: get
             key: db_password
             default: ""
+
+  # Reads several persisted keys at once as a map (absent keys omitted).
+  prior_config:
+    resolve:
+      with:
+        - provider: state
+          inputs:
+            operation: get
+            keys: [region, tier, cluster_id]
+
+  # Reads the entire persisted snapshot as a map.
+  prior_state:
+    resolve:
+      with:
+        - provider: state
+          inputs:
+            operation: get
+            all: true
 ```
 
 Within a single run, `state.get("db_password")` returns the prior run's value

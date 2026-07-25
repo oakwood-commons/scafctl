@@ -134,6 +134,7 @@ Resolvers demonstrate dynamic value computation, validation, and transformation.
 |---------|-------------|-----|
 | [hello-world.yaml](resolvers/hello-world.yaml) | Simplest resolver | `scafctl run resolver -f examples/resolvers/hello-world.yaml` |
 | [parameters.yaml](resolvers/parameters.yaml) | CLI parameters with defaults | `scafctl run resolver -f examples/resolvers/parameters.yaml -r name=Alice` |
+| [parameters-all.yaml](resolvers/parameters-all.yaml) | Read every supplied CLI parameter into a map (`all: true`) | `scafctl run resolver -f examples/resolvers/parameters-all.yaml -r name=Alice -r team=platform` |
 | [dependencies.yaml](resolvers/dependencies.yaml) | Resolver dependencies & phases | `scafctl run resolver -f examples/resolvers/dependencies.yaml` |
 | [env-config.yaml](resolvers/env-config.yaml) | Environment-based configuration | `scafctl run resolver -f examples/resolvers/env-config.yaml -r env=production` |
 | [validation.yaml](resolvers/validation.yaml) | Input validation patterns | `scafctl run resolver -f examples/resolvers/validation.yaml` |

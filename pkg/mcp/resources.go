@@ -451,10 +451,56 @@ func isParameterResolver(r *resolver.Resolver) bool {
 	return false
 }
 
+// parameterSourceIsMapMode reports whether a parameter provider source reads a
+// map instead of a single scalar -- "all: true" (every supplied parameter) or
+// "keys" + "as: map" (a distinct key set). In map mode the resolver name is not
+// a single CLI parameter name, and the read always produces a value (absent
+// keys are omitted), so such resolvers are neither required nor scalar-typed.
+func parameterSourceIsMapMode(src resolver.ProviderSource) bool {
+	if src.Provider != "parameter" {
+		return false
+	}
+	if allRef, ok := src.Inputs["all"]; ok && allRef != nil {
+		if b, ok := allRef.Literal.(bool); ok && b {
+			return true
+		}
+	}
+	if asRef, ok := src.Inputs["as"]; ok && asRef != nil {
+		if s, ok := asRef.Literal.(string); ok && s == "map" {
+			// "as: map" only selects map mode when the required "keys" input is
+			// present; without it the provider rejects the config ("as: map"
+			// requires "keys"), so it is not a valid map-mode read.
+			if _, hasKeys := src.Inputs["keys"]; hasKeys {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolverHasMapModeParameter reports whether any of a resolver's resolve
+// sources is a map-mode parameter read.
+func resolverHasMapModeParameter(r *resolver.Resolver) bool {
+	if r == nil || r.Resolve == nil {
+		return false
+	}
+	for _, src := range r.Resolve.With {
+		if parameterSourceIsMapMode(src) {
+			return true
+		}
+	}
+	return false
+}
+
 // isRequiredParameter checks if a resolver's only source is the "parameter" provider
 // (meaning there's no fallback chain and the parameter is effectively required).
 func isRequiredParameter(r *resolver.Resolver) bool {
 	if r.Resolve == nil {
+		return false
+	}
+	// Map-mode parameter reads always produce a value (absent keys are omitted),
+	// so they are never required.
+	if resolverHasMapModeParameter(r) {
 		return false
 	}
 	// If there's only one source and it's a parameter, it's required
@@ -469,10 +515,16 @@ func isRequiredParameter(r *resolver.Resolver) bool {
 func buildResolverProperty(r *resolver.Resolver) map[string]any {
 	prop := map[string]any{}
 
-	// Map resolver type to JSON Schema type
-	jsonType := resolverTypeToJSONSchemaType(r.Type)
-	if jsonType != "" {
-		prop["type"] = jsonType
+	// Map-mode parameter reads produce a map/object regardless of the resolver's
+	// declared scalar type, so present them as an object property.
+	if resolverHasMapModeParameter(r) {
+		prop["type"] = "object"
+	} else {
+		// Map resolver type to JSON Schema type
+		jsonType := resolverTypeToJSONSchemaType(r.Type)
+		if jsonType != "" {
+			prop["type"] = jsonType
+		}
 	}
 
 	// Add description

@@ -42,6 +42,41 @@ func BenchmarkParameterProvider_Execute(b *testing.B) {
 			_, _ = p.Execute(ctx, inputs)
 		}
 	})
+
+	b.Run("keys_map", func(b *testing.B) {
+		ctx := provider.WithParameters(context.Background(), map[string]any{
+			"env":    "production",
+			"region": "us-east-1",
+			"tier":   "gold",
+		})
+		inputs := map[string]any{
+			"keys": []any{"env", "region", "missing"},
+			"as":   "map",
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
+
+	b.Run("all_map", func(b *testing.B) {
+		ctx := provider.WithParameters(context.Background(), map[string]any{
+			"env":    "production",
+			"region": "us-east-1",
+			"tier":   "gold",
+		})
+		inputs := map[string]any{
+			"all": true,
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
 }
 
 func BenchmarkParameterProvider_Execute_TypedCoercion(b *testing.B) {

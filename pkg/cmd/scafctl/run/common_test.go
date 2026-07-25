@@ -9,6 +9,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -139,6 +140,38 @@ func TestExtractParameterKeys(t *testing.T) {
 			}},
 			want: []string{"env", "region"},
 		},
+		{
+			name: "keys as map contributes its distinct keys",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+						"keys": listRef("keyA", "keyB"),
+						"as":   strRef("map"),
+					}},
+				}},
+			}},
+			want: []string{"keyA", "keyB"},
+		},
+		{
+			name: "keys as []string literal",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+						"keys": {Literal: []string{"keyA", "keyB"}},
+					}},
+				}},
+			}},
+			want: []string{"keyA", "keyB"},
+		},
+		{
+			name: "all mode contributes no named keys",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Literal: true}}},
+				}},
+			}},
+			want: nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -146,6 +179,84 @@ func TestExtractParameterKeys(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestResolversAcceptAllParameters(t *testing.T) {
+	tests := []struct {
+		name      string
+		resolvers []*resolver.Resolver
+		want      bool
+	}{
+		{
+			name: "all true",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Literal: true}}},
+				}},
+			}},
+			want: true,
+		},
+		{
+			name: "all false is inert",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Literal: false}}},
+				}},
+			}},
+			want: false,
+		},
+		{
+			name: "named-key resolver only",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"key": {Literal: "env"}}},
+				}},
+			}},
+			want: false,
+		},
+		{
+			name: "all on non-parameter provider ignored",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*resolver.ValueRef{"all": {Literal: true}}},
+				}},
+			}},
+			want: false,
+		},
+		{
+			name: "non-literal all via resolver ref treated as could-be-true",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Resolver: refString("useAll")}}},
+				}},
+			}},
+			want: true,
+		},
+		{
+			name: "non-literal all via expression treated as could-be-true",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Expr: refExpr("true")}}},
+				}},
+			}},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, resolversAcceptAllParameters(tt.resolvers))
+		})
+	}
+}
+
+// refString returns a pointer to s for building ValueRef.Resolver in tests.
+func refString(s string) *string { return &s }
+
+// refExpr returns a pointer to a celexp.Expression for building ValueRef.Expr
+// in tests.
+func refExpr(s string) *celexp.Expression {
+	e := celexp.Expression(s)
+	return &e
 }
 
 func TestBuildParamFlagHint(t *testing.T) {
