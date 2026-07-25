@@ -13,11 +13,24 @@ import (
 
 // ResolverInfo describes a single resolver for help text rendering.
 type ResolverInfo struct {
-	Name         string
-	Type         string
-	Description  string
-	HasDefault   bool
-	ParameterKey string // The parameter key if this resolver uses the "parameter" provider.
+	Name        string
+	Type        string
+	Description string
+	HasDefault  bool
+	// ParameterKeys holds the CLI parameter names this resolver reads via the
+	// "parameter" provider: a single "key", the alias list "keys", or the
+	// distinct-key set of a "keys" + "as: map" read. Empty when the resolver
+	// does not read named CLI parameters.
+	ParameterKeys []string
+	// AcceptsAllParameters is true when the resolver reads every supplied CLI
+	// parameter via the parameter provider's "all: true" map mode.
+	AcceptsAllParameters bool
+}
+
+// AcceptsParameters reports whether the resolver reads CLI parameters (named
+// keys or the whole supplied set).
+func (r ResolverInfo) AcceptsParameters() bool {
+	return len(r.ParameterKeys) > 0 || r.AcceptsAllParameters
 }
 
 // ExtractResolverInfo builds a list of ResolverInfo from a solution's resolvers.
@@ -42,10 +55,20 @@ func ExtractResolverInfo(sol *solution.Solution) []ResolverInfo {
 		if r.Resolve != nil {
 			for i, src := range r.Resolve.With {
 				if src.Provider == "parameter" {
-					// Extract the key input (literal string value)
+					// Single-key / alias "keys" reads, and the distinct-key set
+					// of a "keys" + "as: map" read, all name CLI parameters.
 					if keyRef, ok := src.Inputs["key"]; ok && keyRef != nil {
-						if s, ok := keyRef.Literal.(string); ok {
-							info.ParameterKey = s
+						if s, ok := keyRef.Literal.(string); ok && s != "" {
+							info.ParameterKeys = append(info.ParameterKeys, s)
+						}
+					}
+					if keysRef, ok := src.Inputs["keys"]; ok && keysRef != nil {
+						info.ParameterKeys = append(info.ParameterKeys, literalStringList(keysRef.Literal)...)
+					}
+					// "all: true" reads every supplied parameter.
+					if allRef, ok := src.Inputs["all"]; ok && allRef != nil {
+						if b, ok := allRef.Literal.(bool); ok && b {
+							info.AcceptsAllParameters = true
 						}
 					}
 					// If there are more sources after this one, the resolver
@@ -61,6 +84,25 @@ func ExtractResolverInfo(sol *solution.Solution) []ResolverInfo {
 	}
 
 	return infos
+}
+
+// literalStringList normalizes a "keys" literal (a []string or []any of
+// strings) into a []string, ignoring non-string entries.
+func literalStringList(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // FormatResolverInputHelp generates a human-readable help section describing
@@ -93,7 +135,7 @@ func FormatResolverInputHelp(sol *solution.Solution) string {
 	var paramResolvers []ResolverInfo
 	var computedResolvers []ResolverInfo
 	for _, info := range infos {
-		if info.ParameterKey != "" {
+		if info.AcceptsParameters() {
 			paramResolvers = append(paramResolvers, info)
 		} else {
 			computedResolvers = append(computedResolvers, info)
@@ -102,7 +144,7 @@ func FormatResolverInputHelp(sol *solution.Solution) string {
 
 	// Sort each group by name for deterministic output
 	slices.SortFunc(paramResolvers, func(a, b ResolverInfo) int {
-		return strings.Compare(a.ParameterKey, b.ParameterKey)
+		return strings.Compare(parameterCell(a), parameterCell(b))
 	})
 	slices.SortFunc(computedResolvers, func(a, b ResolverInfo) int {
 		return strings.Compare(a.Name, b.Name)
@@ -114,7 +156,7 @@ func FormatResolverInputHelp(sol *solution.Solution) string {
 	maxNameLen := len("RESOLVER")
 
 	for _, info := range infos {
-		paramKey := info.ParameterKey
+		paramKey := parameterCell(info)
 		if paramKey == "" {
 			paramKey = "-"
 		}
@@ -154,7 +196,7 @@ func FormatResolverInputHelp(sol *solution.Solution) string {
 		}
 
 		line := fmt.Sprintf("  %-*s  %-*s  %-*s  %s",
-			maxParamLen, info.ParameterKey,
+			maxParamLen, parameterCell(info),
 			maxTypeLen, typeStr,
 			maxNameLen, info.Name,
 			desc)
@@ -184,4 +226,17 @@ func FormatResolverInputHelp(sol *solution.Solution) string {
 	}
 
 	return sb.String()
+}
+
+// parameterCell renders the PARAMETER column for a resolver: "(all)" when it
+// reads every supplied parameter, the comma-joined key list when it reads
+// named parameters, or "-" when it reads none.
+func parameterCell(info ResolverInfo) string {
+	if info.AcceptsAllParameters {
+		return "(all)"
+	}
+	if len(info.ParameterKeys) > 0 {
+		return strings.Join(info.ParameterKeys, ",")
+	}
+	return "-"
 }

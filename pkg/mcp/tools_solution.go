@@ -780,6 +780,12 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 			), nil
 		}
 		if rslvr.Resolve != nil && len(rslvr.Resolve.With) > 0 && rslvr.Resolve.With[0].Provider == "parameter" {
+			// Map-mode parameter reads (all: true, or keys + as: map) do not map
+			// the resolver name to a single CLI parameter, and always produce a
+			// value, so there is nothing to elicit for them.
+			if resolverHasMapModeParameter(rslvr) {
+				continue
+			}
 			if _, provided := params[name]; !provided {
 				missingParamNames = append(missingParamNames, name)
 				if rslvr.Description != "" {

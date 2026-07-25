@@ -139,11 +139,93 @@ func TestExtractParameterKeys(t *testing.T) {
 			}},
 			want: []string{"env", "region"},
 		},
+		{
+			name: "keys as map contributes its distinct keys",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+						"keys": listRef("keyA", "keyB"),
+						"as":   strRef("map"),
+					}},
+				}},
+			}},
+			want: []string{"keyA", "keyB"},
+		},
+		{
+			name: "keys as []string literal",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+						"keys": {Literal: []string{"keyA", "keyB"}},
+					}},
+				}},
+			}},
+			want: []string{"keyA", "keyB"},
+		},
+		{
+			name: "all mode contributes no named keys",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Literal: true}}},
+				}},
+			}},
+			want: nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := extractParameterKeys(tt.resolvers)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestResolversAcceptAllParameters(t *testing.T) {
+	tests := []struct {
+		name      string
+		resolvers []*resolver.Resolver
+		want      bool
+	}{
+		{
+			name: "all true",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Literal: true}}},
+				}},
+			}},
+			want: true,
+		},
+		{
+			name: "all false is inert",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"all": {Literal: false}}},
+				}},
+			}},
+			want: false,
+		},
+		{
+			name: "named-key resolver only",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{"key": {Literal: "env"}}},
+				}},
+			}},
+			want: false,
+		},
+		{
+			name: "all on non-parameter provider ignored",
+			resolvers: []*resolver.Resolver{{
+				Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*resolver.ValueRef{"all": {Literal: true}}},
+				}},
+			}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, resolversAcceptAllParameters(tt.resolvers))
 		})
 	}
 }

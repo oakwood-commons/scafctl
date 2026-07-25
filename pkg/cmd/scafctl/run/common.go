@@ -1038,17 +1038,45 @@ func extractParameterKeys(resolvers []*resolver.Resolver) []string {
 				}
 			}
 			if keysRef, ok := src.Inputs["keys"]; ok && keysRef != nil {
-				if list, ok := keysRef.Literal.([]any); ok {
+				switch list := keysRef.Literal.(type) {
+				case []any:
 					for _, item := range list {
 						if s, ok := item.(string); ok {
 							add(s)
 						}
+					}
+				case []string:
+					for _, s := range list {
+						add(s)
 					}
 				}
 			}
 		}
 	}
 	return keys
+}
+
+// resolversAcceptAllParameters reports whether any resolver reads every
+// supplied CLI parameter via the parameter provider's "all: true" map mode.
+// When true, callers must not typo-check -r keys against a fixed key list --
+// any key is valid.
+func resolversAcceptAllParameters(resolvers []*resolver.Resolver) bool {
+	for _, r := range resolvers {
+		if r.Resolve == nil {
+			continue
+		}
+		for _, src := range r.Resolve.With {
+			if src.Provider != "parameter" {
+				continue
+			}
+			if allRef, ok := src.Inputs["all"]; ok && allRef != nil {
+				if b, ok := allRef.Literal.(bool); ok && b {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // mockedResolversEnvSuffix is the suffix appended to the binary-name-derived

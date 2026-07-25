@@ -753,3 +753,92 @@ func TestServerRegistersProviderResources(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, textContent.Text, "[]")
 }
+
+func paramSource(inputs map[string]*resolver.ValueRef) resolver.ProviderSource {
+	return resolver.ProviderSource{Provider: "parameter", Inputs: inputs}
+}
+
+func TestResolverHasMapModeParameter(t *testing.T) {
+	tests := []struct {
+		name string
+		r    *resolver.Resolver
+		want bool
+	}{
+		{
+			name: "all true",
+			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+				paramSource(map[string]*resolver.ValueRef{"all": {Literal: true}}),
+			}}},
+			want: true,
+		},
+		{
+			name: "keys as map",
+			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+				paramSource(map[string]*resolver.ValueRef{
+					"keys": {Literal: []any{"a", "b"}},
+					"as":   {Literal: "map"},
+				}),
+			}}},
+			want: true,
+		},
+		{
+			name: "single key scalar",
+			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+				paramSource(map[string]*resolver.ValueRef{"key": {Literal: "env"}}),
+			}}},
+			want: false,
+		},
+		{
+			name: "alias keys without as map",
+			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+				paramSource(map[string]*resolver.ValueRef{"keys": {Literal: []any{"a", "b"}}}),
+			}}},
+			want: false,
+		},
+		{
+			name: "all false is inert",
+			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+				paramSource(map[string]*resolver.ValueRef{"all": {Literal: false}}),
+			}}},
+			want: false,
+		},
+		{
+			name: "nil resolve",
+			r:    &resolver.Resolver{},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, resolverHasMapModeParameter(tt.r))
+		})
+	}
+}
+
+func TestIsRequiredParameter_MapModeNotRequired(t *testing.T) {
+	r := &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+		paramSource(map[string]*resolver.ValueRef{"all": {Literal: true}}),
+	}}}
+	assert.False(t, isRequiredParameter(r),
+		"map-mode parameter reads always produce a value, so they are not required")
+
+	// A plain single-key parameter with no fallback remains required.
+	scalar := &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+		paramSource(map[string]*resolver.ValueRef{"key": {Literal: "env"}}),
+	}}}
+	assert.True(t, isRequiredParameter(scalar))
+}
+
+func TestBuildResolverProperty_MapModeIsObject(t *testing.T) {
+	r := &resolver.Resolver{
+		Type: "string", // declared scalar type is overridden by map mode
+		Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+			paramSource(map[string]*resolver.ValueRef{
+				"keys": {Literal: []any{"a", "b"}},
+				"as":   {Literal: "map"},
+			}),
+		}},
+	}
+	prop := buildResolverProperty(r)
+	assert.Equal(t, "object", prop["type"])
+}

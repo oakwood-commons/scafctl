@@ -63,7 +63,7 @@ func TestExtractResolverInfo_ParameterResolver(t *testing.T) {
 	assert.Equal(t, "environment", infos[0].Name)
 	assert.Equal(t, "string", infos[0].Type)
 	assert.Equal(t, "Target deployment environment", infos[0].Description)
-	assert.Equal(t, "env", infos[0].ParameterKey)
+	assert.Equal(t, []string{"env"}, infos[0].ParameterKeys)
 	assert.True(t, infos[0].HasDefault)
 }
 
@@ -90,7 +90,7 @@ func TestExtractResolverInfo_ParameterNoDefault(t *testing.T) {
 
 	infos := ExtractResolverInfo(sol)
 	require.Len(t, infos, 1)
-	assert.Equal(t, "token", infos[0].ParameterKey)
+	assert.Equal(t, []string{"token"}, infos[0].ParameterKeys)
 	assert.False(t, infos[0].HasDefault)
 }
 
@@ -118,8 +118,129 @@ func TestExtractResolverInfo_ComputedResolver(t *testing.T) {
 	infos := ExtractResolverInfo(sol)
 	require.Len(t, infos, 1)
 	assert.Equal(t, "greeting", infos[0].Name)
-	assert.Empty(t, infos[0].ParameterKey)
+	assert.Empty(t, infos[0].ParameterKeys)
+	assert.False(t, infos[0].AcceptsAllParameters)
+	assert.False(t, infos[0].AcceptsParameters())
 	assert.False(t, infos[0].HasDefault)
+}
+
+func TestExtractResolverInfo_ParameterAliasKeys(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"environment": {
+			Name: "environment",
+			Type: spec.TypeString,
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []any{"environment", "e", "env"}},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	// Alias "keys" resolvers accept CLI parameters (previously mis-classified
+	// as computed because only "key" was inspected).
+	assert.Equal(t, []string{"environment", "e", "env"}, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsParameters())
+	assert.False(t, infos[0].AcceptsAllParameters)
+}
+
+func TestExtractResolverInfo_ParameterKeysAsMap(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"bag": {
+			Name: "bag",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []string{"keyA", "keyB"}},
+							"as":   {Literal: "map"},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	assert.Equal(t, []string{"keyA", "keyB"}, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsParameters())
+}
+
+func TestExtractResolverInfo_ParameterAll(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"everything": {
+			Name: "everything",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"all": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	assert.Empty(t, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsAllParameters)
+	assert.True(t, infos[0].AcceptsParameters())
+}
+
+func TestFormatResolverInputHelp_MapModeResolvers(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"bag": {
+			Name: "bag",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []any{"keyA", "keyB"}},
+							"as":   {Literal: "map"},
+						},
+					},
+				},
+			},
+		},
+		"everything": {
+			Name: "everything",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"all": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	out := FormatResolverInputHelp(sol)
+	assert.Contains(t, out, "keyA,keyB")
+	assert.Contains(t, out, "(all)")
 }
 
 func TestFormatResolverInputHelp_EmptyResolvers(t *testing.T) {

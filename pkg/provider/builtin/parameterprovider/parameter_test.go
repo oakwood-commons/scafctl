@@ -1083,3 +1083,296 @@ func TestParameterProvider_Execute_DryRun_WithDefault_IgnoresDefault(t *testing.
 	assert.Equal(t, "[DRY-RUN] Not retrieved", output.Data)
 	assert.True(t, output.Metadata["dryRun"].(bool))
 }
+
+// --- Map mode ("keys" + "as: map", or "all: true") -------------------------
+
+func TestParameterProvider_Execute_MapMode_Keys(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"keyA": "alpha",
+		"keyC": "gamma",
+		"keyD": "delta", // present but not requested -> excluded
+	})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"keys": []any{"keyA", "keyB", "keyC"},
+		"as":   "map",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok, "map mode returns a bare map")
+	// Present keys are returned; absent keyB is omitted (not defaulted).
+	assert.Equal(t, map[string]any{"keyA": "alpha", "keyC": "gamma"}, result)
+	_, hasB := result["keyB"]
+	assert.False(t, hasB, "absent keys must be omitted so has() stays faithful")
+	// keyD is present in params but was not requested -> excluded.
+	_, hasD := result["keyD"]
+	assert.False(t, hasD, "unrequested params must not leak into the map")
+
+	assert.Equal(t, "map", output.Metadata["mode"])
+	assert.Equal(t, []string{"keyA", "keyC"}, output.Metadata["keys"])
+	assert.Equal(t, []string{"keyB"}, output.Metadata["missing"])
+}
+
+func TestParameterProvider_Execute_MapMode_Keys_StringSlice(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{"a": "1"})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"keys": []string{"a", "b"},
+		"as":   "map",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, int64(1), result["a"], "values use the provider's auto inference")
+	assert.Equal(t, []string{"b"}, output.Metadata["missing"])
+}
+
+func TestParameterProvider_Execute_MapMode_Keys_AutoInference(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"flag":  "true",
+		"count": "3",
+		"name":  "svc",
+	})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"keys": []any{"flag", "count", "name"},
+		"as":   "map",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, result["flag"])
+	assert.Equal(t, int64(3), result["count"])
+	assert.Equal(t, "svc", result["name"])
+}
+
+func TestParameterProvider_Execute_MapMode_Keys_EmptyList(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{"a": "1"})
+
+	output, err := p.Execute(ctx, map[string]any{
+		"keys": []any{},
+		"as":   "map",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, result)
+	assert.Equal(t, []string{}, output.Metadata["keys"])
+	assert.Equal(t, []string{}, output.Metadata["missing"])
+}
+
+func TestParameterProvider_Execute_MapMode_All(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"flag":  "true",
+		"count": "3",
+		"name":  "svc",
+	})
+
+	output, err := p.Execute(ctx, map[string]any{"all": true})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"flag": true, "count": int64(3), "name": "svc"}, result)
+	assert.Equal(t, "map", output.Metadata["mode"])
+	// present keys are sorted; no "missing" key in all mode.
+	assert.Equal(t, []string{"count", "flag", "name"}, output.Metadata["keys"])
+	_, hasMissing := output.Metadata["missing"]
+	assert.False(t, hasMissing, "all mode has no notion of missing keys")
+}
+
+func TestParameterProvider_Execute_MapMode_All_Empty(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	output, err := p.Execute(ctx, map[string]any{"all": true})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	result, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, result)
+	assert.Equal(t, []string{}, output.Metadata["keys"])
+}
+
+func TestParameterProvider_Execute_MapMode_AllFalseIsInert(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{"env": "prod"})
+
+	// all: false must not select map mode; the scalar key read wins.
+	output, err := p.Execute(ctx, map[string]any{"key": "env", "all": false})
+
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "prod", output.Data)
+	assert.Equal(t, true, output.Metadata["exists"])
+}
+
+func TestParameterProvider_Execute_MapMode_DryRun(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		inputs map[string]any
+	}{
+		{"keys as map", map[string]any{"keys": []any{"a", "b"}, "as": "map"}},
+		{"all", map[string]any{"all": true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewParameterProvider()
+			ctx := provider.WithDryRun(provider.WithParameters(context.Background(), map[string]any{
+				"a": "1",
+				"b": "2",
+			}), true)
+
+			output, err := p.Execute(ctx, tt.inputs)
+
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			// Dry-run returns an empty placeholder map (absent keys are omitted).
+			assert.Equal(t, map[string]any{}, output.Data)
+			assert.Equal(t, true, output.Metadata["dryRun"])
+			assert.Equal(t, "map", output.Metadata["mode"])
+		})
+	}
+}
+
+func TestParameterProvider_Execute_MapMode_MutualExclusionAndValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		inputs  map[string]any
+		wantErr string
+	}{
+		{
+			name:    "as map without keys",
+			inputs:  map[string]any{"as": "map"},
+			wantErr: `"as: map" requires "keys"`,
+		},
+		{
+			name:    "all with key",
+			inputs:  map[string]any{"all": true, "key": "env"},
+			wantErr: `"all" is mutually exclusive with "key" and "keys"`,
+		},
+		{
+			name:    "all with keys",
+			inputs:  map[string]any{"all": true, "keys": []any{"a"}},
+			wantErr: `"all" is mutually exclusive with "key" and "keys"`,
+		},
+		{
+			name:    "as map with key",
+			inputs:  map[string]any{"key": "env", "keys": []any{"a"}, "as": "map"},
+			wantErr: `"as: map" is mutually exclusive with "key"`,
+		},
+		{
+			name:    "unsupported as value",
+			inputs:  map[string]any{"keys": []any{"a"}, "as": "list"},
+			wantErr: `unsupported as "list"`,
+		},
+		{
+			name:    "as not a string",
+			inputs:  map[string]any{"keys": []any{"a"}, "as": 42},
+			wantErr: "as must be a string",
+		},
+		{
+			name:    "all not a bool",
+			inputs:  map[string]any{"all": "yes"},
+			wantErr: "all must be a boolean",
+		},
+		{
+			name:    "default rejected in keys map mode",
+			inputs:  map[string]any{"keys": []any{"a"}, "as": "map", "default": "x"},
+			wantErr: `"default" is only valid with a single "key"/alias "keys"`,
+		},
+		{
+			name:    "default rejected in all mode",
+			inputs:  map[string]any{"all": true, "default": "x"},
+			wantErr: `"default" is only valid with a single "key"/alias "keys"`,
+		},
+		{
+			name:    "type rejected in keys map mode",
+			inputs:  map[string]any{"keys": []any{"a"}, "as": "map", "type": "string"},
+			wantErr: `"type" is only valid with a single "key"/alias "keys"`,
+		},
+		{
+			name:    "type rejected in all mode",
+			inputs:  map[string]any{"all": true, "type": "string"},
+			wantErr: `"type" is only valid with a single "key"/alias "keys"`,
+		},
+		{
+			name:    "invalid key pattern in map mode",
+			inputs:  map[string]any{"keys": []any{"ok", "_.bad expr"}, "as": "map"},
+			wantErr: "invalid key",
+		},
+		{
+			name:    "non-string key element in map mode",
+			inputs:  map[string]any{"keys": []any{"ok", 42}, "as": "map"},
+			wantErr: "keys[1] must be a string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), map[string]any{"a": "1"})
+			output, err := p.Execute(ctx, tt.inputs)
+			require.Error(t, err)
+			assert.Nil(t, output)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestToStringKeys(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		raw     any
+		want    []string
+		wantErr string
+	}{
+		{"string slice", []string{"a", "b"}, []string{"a", "b"}, ""},
+		{"any slice of strings", []any{"a", "b"}, []string{"a", "b"}, ""},
+		{"empty any slice", []any{}, []string{}, ""},
+		{"nil", nil, nil, `"keys" must be an array of strings`},
+		{"wrong type", "a", nil, `"keys" must be an array of strings, got string`},
+		{"non-string element", []any{"a", 1}, nil, "keys[1] must be a string"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := toStringKeys(tt.raw)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

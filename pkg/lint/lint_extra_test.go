@@ -1033,6 +1033,57 @@ func TestLintResolvers_ParameterMissingDefault_HasDefault(t *testing.T) {
 		"should not warn when the parameter source declares a default")
 }
 
+func TestLintResolvers_ParameterMissingDefault_MapModeAll(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"everything": {
+			Description: "reads all parameters (map mode, no default needed)",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"all": {Literal: true},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"everything": true})
+
+	assert.Empty(t, filterByRule(result.Findings),
+		"map mode (all: true) always produces a value, so no default is required")
+}
+
+func TestLintResolvers_ParameterMissingDefault_MapModeKeys(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"bag": {
+			Description: "reads a distinct key set as a map (no default needed)",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"keys": {Literal: []any{"keyA", "keyB"}},
+						"as":   {Literal: "map"},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"bag": true})
+
+	assert.Empty(t, filterByRule(result.Findings),
+		"map mode (keys + as: map) omits absent keys, so no default is required")
+}
+
 func TestLintResolvers_ParameterMissingDefault_HasUnconditionalFallback(t *testing.T) {
 	exprCond := celexp.Expression("_.useParam == true")
 
