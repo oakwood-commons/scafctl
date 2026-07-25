@@ -199,6 +199,40 @@ func parameterSourceHasDefault(step resolver.ProviderSource) bool {
 	return ok
 }
 
+// parameterMapModeInputs are the input keys that switch the parameter provider
+// into map mode, where a 'default' is neither valid nor needed: absent keys are
+// simply omitted from the returned map, so the read always produces a value.
+const (
+	parameterAllInput  = "all"
+	parameterAsInput   = "as"
+	parameterAsMap     = "map"
+	parameterKeysInput = "keys"
+)
+
+// parameterSourceIsMapMode reports whether a parameter provider source reads a
+// map instead of a single scalar -- either "all: true" (every supplied
+// parameter) or "keys" + "as: map" (a distinct key set). Map-mode reads never
+// fail on a missing parameter (absent keys are omitted), so they act as a
+// guaranteed producer and do not need a 'default'.
+func parameterSourceIsMapMode(step resolver.ProviderSource) bool {
+	if allRef, ok := step.Inputs[parameterAllInput]; ok && allRef != nil {
+		if b, ok := allRef.Literal.(bool); ok && b {
+			return true
+		}
+	}
+	if asRef, ok := step.Inputs[parameterAsInput]; ok && asRef != nil {
+		if s, ok := asRef.Literal.(string); ok && s == parameterAsMap {
+			// "as: map" only selects map mode when the required "keys" input is
+			// present; without it the provider rejects the config ("as: map"
+			// requires "keys"), so it is not a valid map-mode read.
+			if _, hasKeys := step.Inputs[parameterKeysInput]; hasKeys {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // parameterTypeInput is the input key the parameter provider reads to select an
 // explicit type instead of automatic inference.
 const parameterTypeInput = "type"
@@ -476,7 +510,9 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 						continue
 					}
 					if step.Provider == parameterProviderName {
-						if parameterSourceHasDefault(step) {
+						if parameterSourceHasDefault(step) || parameterSourceIsMapMode(step) {
+							// A 'default' fallback, or a map-mode read (absent keys
+							// omitted), always produces a value.
 							hasGuaranteedFallback = true
 						} else {
 							unconditionalParamWithoutDefault = true

@@ -5,6 +5,7 @@ package detail
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -63,7 +64,7 @@ func TestExtractResolverInfo_ParameterResolver(t *testing.T) {
 	assert.Equal(t, "environment", infos[0].Name)
 	assert.Equal(t, "string", infos[0].Type)
 	assert.Equal(t, "Target deployment environment", infos[0].Description)
-	assert.Equal(t, "env", infos[0].ParameterKey)
+	assert.Equal(t, []string{"env"}, infos[0].ParameterKeys)
 	assert.True(t, infos[0].HasDefault)
 }
 
@@ -90,7 +91,7 @@ func TestExtractResolverInfo_ParameterNoDefault(t *testing.T) {
 
 	infos := ExtractResolverInfo(sol)
 	require.Len(t, infos, 1)
-	assert.Equal(t, "token", infos[0].ParameterKey)
+	assert.Equal(t, []string{"token"}, infos[0].ParameterKeys)
 	assert.False(t, infos[0].HasDefault)
 }
 
@@ -118,8 +119,211 @@ func TestExtractResolverInfo_ComputedResolver(t *testing.T) {
 	infos := ExtractResolverInfo(sol)
 	require.Len(t, infos, 1)
 	assert.Equal(t, "greeting", infos[0].Name)
-	assert.Empty(t, infos[0].ParameterKey)
+	assert.Empty(t, infos[0].ParameterKeys)
+	assert.False(t, infos[0].AcceptsAllParameters)
+	assert.False(t, infos[0].AcceptsParameters())
 	assert.False(t, infos[0].HasDefault)
+}
+
+func TestExtractResolverInfo_ParameterAliasKeys(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"environment": {
+			Name: "environment",
+			Type: spec.TypeString,
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []any{"environment", "e", "env"}},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	// Alias "keys" resolvers accept CLI parameters (previously mis-classified
+	// as computed because only "key" was inspected).
+	assert.Equal(t, []string{"environment", "e", "env"}, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsParameters())
+	assert.False(t, infos[0].AcceptsAllParameters)
+}
+
+func TestExtractResolverInfo_ParameterKeysAsMap(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"bag": {
+			Name: "bag",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []string{"keyA", "keyB"}},
+							"as":   {Literal: "map"},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	assert.Equal(t, []string{"keyA", "keyB"}, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsParameters())
+}
+
+func TestExtractResolverInfo_ParameterKeysDedupeAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	// A resolver that reads a "key", then falls back to an alias "keys" list
+	// containing duplicates (including the earlier "key") and an empty string.
+	// Help output should reflect the provider's distinct, non-empty key set.
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"environment": {
+			Name: "environment",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"key": {Literal: "env"},
+						},
+					},
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []any{"env", "", "e", "e"}},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	// "env" (from key) is not repeated by the "keys" list, "" is dropped, and
+	// the duplicate "e" collapses to a single entry.
+	assert.Equal(t, []string{"env", "e"}, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsParameters())
+}
+
+func TestExtractResolverInfo_ParameterAll(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"everything": {
+			Name: "everything",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"all": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	infos := ExtractResolverInfo(sol)
+	require.Len(t, infos, 1)
+	assert.Empty(t, infos[0].ParameterKeys)
+	assert.True(t, infos[0].AcceptsAllParameters)
+	assert.True(t, infos[0].AcceptsParameters())
+}
+
+func TestFormatResolverInputHelp_MapModeResolvers(t *testing.T) {
+	t.Parallel()
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"bag": {
+			Name: "bag",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"keys": {Literal: []any{"keyA", "keyB"}},
+							"as":   {Literal: "map"},
+						},
+					},
+				},
+			},
+		},
+		"everything": {
+			Name: "everything",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"all": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	out := FormatResolverInputHelp(sol)
+	assert.Contains(t, out, "keyA,keyB")
+	assert.Contains(t, out, "(all)")
+}
+
+// TestFormatResolverInputHelp_MapModeStableOrdering verifies that resolvers
+// which render the same PARAMETER cell (here two "(all)" resolvers) keep a
+// deterministic order via the resolver-name tiebreaker, despite map iteration
+// being randomized.
+func TestFormatResolverInputHelp_MapModeStableOrdering(t *testing.T) {
+	t.Parallel()
+
+	allSource := func(name string) *resolver.Resolver {
+		return &resolver.Resolver{
+			Name: name,
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "parameter",
+						Inputs: map[string]*spec.ValueRef{
+							"all": {Literal: true},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	sol := buildTestSolution(map[string]*resolver.Resolver{
+		"zzz_all": allSource("zzz_all"),
+		"aaa_all": allSource("aaa_all"),
+		"mmm_all": allSource("mmm_all"),
+	})
+
+	first := FormatResolverInputHelp(sol)
+	// The three "(all)" resolvers must appear in resolver-name order.
+	aaaIdx := strings.Index(first, "aaa_all")
+	mmmIdx := strings.Index(first, "mmm_all")
+	zzzIdx := strings.Index(first, "zzz_all")
+	require.NotEqual(t, -1, aaaIdx)
+	require.NotEqual(t, -1, mmmIdx)
+	require.NotEqual(t, -1, zzzIdx)
+	assert.Less(t, aaaIdx, mmmIdx, "aaa_all should sort before mmm_all")
+	assert.Less(t, mmmIdx, zzzIdx, "mmm_all should sort before zzz_all")
+
+	// Output must be identical across repeated invocations (map order is random).
+	for range 20 {
+		assert.Equal(t, first, FormatResolverInputHelp(sol))
+	}
 }
 
 func TestFormatResolverInputHelp_EmptyResolvers(t *testing.T) {

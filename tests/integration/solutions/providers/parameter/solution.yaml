@@ -137,6 +137,26 @@ spec:
               type: int
               default: 3
 
+    # Map mode: read a distinct set of parameters into a map (as: map). Absent
+    # keys are omitted (not defaulted), and each value uses auto inference.
+    mapBag:
+      description: A distinct set of parameters read into a map
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              keys: [keyA, keyB, keyC]
+              as: map
+
+    # Map mode: read every supplied CLI parameter into a map.
+    allBag:
+      description: Every supplied CLI parameter read into a map
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              all: true
+
   testing:
     config:
       # resolve-defaults: resolvers use parameter provider requiring external -r flag input
@@ -266,4 +286,35 @@ spec:
         assertions:
           - expression: __exitCode != 0
             message: "type int should fail the run when the value cannot be parsed as an integer"
+
+      map-mode-reads-keys-and-all:
+        description: Verify map mode (keys + as:map, and all:true) returns maps with absent keys omitted
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a", "-r", "keyA=alpha", "-r", "keyC=gamma"]
+        assertions:
+          # keys + as:map: present keys are returned...
+          - expression: __output.mapBag.keyA == "alpha"
+            message: "map mode should return present requested keys"
+          - expression: __output.mapBag.keyC == "gamma"
+            message: "map mode should return all present requested keys"
+          # ...and absent requested keys are omitted (not defaulted).
+          - expression: has(__output.mapBag.keyB) == false
+            message: "absent requested keys must be omitted so has() stays faithful"
+          # all:true reads every supplied parameter, including keyA/keyC above.
+          - expression: __output.allBag.keyA == "alpha"
+            message: "all mode should include every supplied parameter"
+          - expression: __output.allBag.name == "x"
+            message: "all mode should include unrelated supplied parameters too"
+
+      map-mode-empty-keys-and-all:
+        description: Verify map mode returns empty maps when no requested/any params are supplied
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          # None of keyA/keyB/keyC supplied -> empty map.
+          - expression: __output.mapBag.size() == 0
+            message: "map mode with no requested keys supplied should be an empty map"
+          # all mode still reflects the supplied params (name, count, ...).
+          - expression: has(__output.allBag.name)
+            message: "all mode should reflect the supplied parameters"
 

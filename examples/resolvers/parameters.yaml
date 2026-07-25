@@ -16,7 +16,9 @@ metadata:
   description: |
     CLI parameter usage with default values and type coercion.
     Demonstrates positional args, -r flag, @file loading, @- stdin,
-    and raw stdin piping into individual parameters.
+    raw stdin piping into individual parameters, alias keys, and the
+    map read mode (keys + as: map). For the "read every supplied
+    parameter" mode (all: true), see parameters-all.yaml.
 
 spec:
   resolvers:
@@ -113,3 +115,30 @@ spec:
               # Create array of greetings
               expression: |
                 lists.range(_.count).map(i, _.greeting + ' (#' + string(i + 1) + ')')
+
+    # Read a set of DISTINCT parameters at once into a map (opt in with as: map).
+    # This differs from alias "keys" (first-match-wins): here every listed name
+    # is its own entry. Absent keys are OMITTED from the map (not defaulted), so
+    # has()/optional chaining against the map stay faithful.
+    #   scafctl run resolver -f parameters.yaml -r tier=gold -r region=us-west-2
+    featureBag:
+      description: A distinct set of parameters read into a map
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              keys: [tier, region, cluster]
+              as: map
+
+    # Downstream resolver that consumes the map. Because absent keys are omitted,
+    # use optional chaining (?key.orValue) or has() for values that may be absent.
+    tierSummary:
+      description: Summary derived from the featureBag map
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                'tier=' + _.featureBag.?tier.orValue('default') +
+                ' keys=' + string(_.featureBag.size())

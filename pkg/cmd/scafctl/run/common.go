@@ -1038,17 +1038,60 @@ func extractParameterKeys(resolvers []*resolver.Resolver) []string {
 				}
 			}
 			if keysRef, ok := src.Inputs["keys"]; ok && keysRef != nil {
-				if list, ok := keysRef.Literal.([]any); ok {
+				switch list := keysRef.Literal.(type) {
+				case []any:
 					for _, item := range list {
 						if s, ok := item.(string); ok {
 							add(s)
 						}
+					}
+				case []string:
+					for _, s := range list {
+						add(s)
 					}
 				}
 			}
 		}
 	}
 	return keys
+}
+
+// resolversAcceptAllParameters reports whether any resolver reads every
+// supplied CLI parameter via the parameter provider's "all: true" map mode.
+// When true, callers must not typo-check -r keys against a fixed key list --
+// any key is valid.
+//
+// A non-literal "all" input (set via a resolver reference, CEL expression, or
+// Go template) cannot be evaluated statically, so it is treated conservatively
+// as "could be true": validation is skipped rather than risk falsely rejecting
+// valid -r keys when map mode activates at runtime.
+func resolversAcceptAllParameters(resolvers []*resolver.Resolver) bool {
+	for _, r := range resolvers {
+		if r.Resolve == nil {
+			continue
+		}
+		for _, src := range r.Resolve.With {
+			if src.Provider != "parameter" {
+				continue
+			}
+			allRef, ok := src.Inputs["all"]
+			if !ok || allRef == nil {
+				continue
+			}
+			if b, ok := allRef.Literal.(bool); ok {
+				if b {
+					return true
+				}
+				continue
+			}
+			// Non-literal "all" (rslvr/expr/tmpl): could resolve to true at
+			// runtime, so fail open and skip typo validation.
+			if allRef.Resolver != nil || allRef.Expr != nil || allRef.Tmpl != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // mockedResolversEnvSuffix is the suffix appended to the binary-name-derived
