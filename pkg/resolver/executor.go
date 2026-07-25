@@ -344,6 +344,14 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 		if seeded == nil {
 			continue
 		}
+		// A seeded resolver that was skipped must stay absent from _ (the
+		// resolver context map), mirroring the executor's own skipped handling
+		// (see executeResolver's completion block). Injecting it would leak a
+		// skipped value into _ and break `has(_.name)` expectations.
+		if seeded.Status == ExecutionStatusSkipped {
+			lgr.V(1).Info("skipped seeded resolver result — kept absent from context", "resolver", name)
+			continue
+		}
 		resolverCtx.SetResult(name, seeded)
 		lgr.V(1).Info("injected seeded resolver result", "resolver", name)
 	}

@@ -192,6 +192,38 @@ func TestExecutor_SeededResult_MissingStatusDefaultsToSuccess(t *testing.T) {
 	assert.Equal(t, int64(0), atomic.LoadInt64(&calls))
 }
 
+func TestExecutor_SeededResult_SkippedStaysAbsent(t *testing.T) {
+	var calls int64
+	registry := newCountingRegistry(&calls)
+	// A seeded result with a skipped status must not be injected into the
+	// resolver context: skipped resolvers stay absent from _ so has(_.name)
+	// stays false, mirroring the executor's own skipped handling.
+	executor := NewExecutor(registry, WithSeededResults(map[string]*ExecutionResult{
+		"seeded": {Value: nil, Status: ExecutionStatusSkipped},
+	}))
+
+	resolvers := []*Resolver{
+		{
+			Name:    "seeded",
+			Type:    TypeString,
+			Resolve: &ResolvePhase{With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "should-not-run"}}}}},
+		},
+	}
+
+	ctx, err := executor.Execute(context.Background(), resolvers, nil)
+	require.NoError(t, err)
+
+	result, ok := FromContext(ctx)
+	require.True(t, ok)
+
+	// The skipped seed leaves the resolver absent from _.
+	assert.False(t, result.Has("seeded"), "skipped seeded resolver must be absent from the resolver context map")
+	_, ok = result.Get("seeded")
+	assert.False(t, ok, "skipped seeded resolver value must not be visible in _")
+	// And it never invokes its provider (execution is still short-circuited).
+	assert.Equal(t, int64(0), atomic.LoadInt64(&calls), "skipped seeded resolver must not invoke its provider")
+}
+
 func TestExecutor_NoSeed_ExecutesNormally(t *testing.T) {
 	var calls int64
 	registry := newCountingRegistry(&calls)
