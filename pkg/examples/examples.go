@@ -264,6 +264,7 @@ func DescriptionFromPath(exPath string) string {
 		// Resolvers
 		"resolvers/hello-world.yaml":         "Simple static value resolver",
 		"resolvers/parameters.yaml":          "Parameter provider for user input",
+		"resolvers/parameters-all.yaml":      "Parameter provider all-mode (every CLI param into a map)",
 		"resolvers/dependencies.yaml":        "Resolver dependency chain (dependsOn)",
 		"resolvers/env-config.yaml":          "Environment variable resolver",
 		"resolvers/validation.yaml":          "Resolver validation rules",

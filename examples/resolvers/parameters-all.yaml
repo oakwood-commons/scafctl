@@ -1,0 +1,42 @@
+# Run: scafctl run resolver -f parameters-all.yaml -r name=Alice -r count=5
+# Run: scafctl run resolver -f parameters-all.yaml -r team=platform -r owner=alice
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: parameters-all-example
+  displayName: Parameters (all mode) Example
+  category: resolvers
+  tags:
+    - resolver-example
+  description: |
+    The parameter provider "all: true" read mode collects EVERY supplied CLI
+    parameter into a single map. Because the solution declares that it consumes
+    arbitrary parameters, unknown-key typo validation is intentionally relaxed:
+    any -r key=value pair is a legitimate input.
+
+spec:
+  resolvers:
+    # Read EVERY supplied CLI parameter into a single map.
+    # Absent keys simply do not appear -- the map only contains what was passed.
+    #   scafctl run resolver -f parameters-all.yaml -r name=Alice -r count=5
+    allParams:
+      description: Every supplied CLI parameter as a map
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              all: true
+
+    # Downstream resolver that consumes the all-params map. Use optional chaining
+    # (?key.orValue) or has() for values that may be absent.
+    summary:
+      description: Summary derived from the all-params map
+      type: string
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                'count=' + string(_.allParams.size()) +
+                ' name=' + _.allParams.?name.orValue('(none)')

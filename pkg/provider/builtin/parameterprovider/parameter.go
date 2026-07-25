@@ -11,10 +11,13 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/go-logr/logr"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/httpc"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -84,6 +87,37 @@ var paramTypeEnum = func() []any {
 	return enum
 }()
 
+// Input key names for the parameter provider's inputs.
+const (
+	// InputKey is a single exact parameter name (scalar read).
+	InputKey = "key"
+	// InputKeys is an ordered list of parameter names. By default it is an alias
+	// list (first-match-wins) for one logical value; with "as: map" it is a
+	// distinct set of names read into a map.
+	InputKeys = "keys"
+	// InputAs is the read-mode discriminator for "keys". The only supported value
+	// is AsMap.
+	InputAs = "as"
+	// InputAll selects the whole-supplied-parameter-set map read.
+	InputAll = "all"
+	// InputDefault is the scalar fallback value; invalid in map mode.
+	InputDefault = "default"
+	// InputType selects an explicit scalar coercion; invalid in map mode.
+	InputType = "type"
+	// AsMap is the "as" value that reinterprets "keys" as a distinct set of
+	// parameter names read into a map (instead of first-match-wins aliases).
+	AsMap = "map"
+)
+
+// keyPattern matches a valid parameter name. It mirrors the resolver name
+// grammar so authors cannot pass expressions or path traversals as a key.
+const keyPattern = `^[A-Za-z_][A-Za-z0-9_.\-]*$`
+
+// keyRe is the compiled form of keyPattern. The schema enforces the pattern on
+// the single-key/alias inputs; map mode ("keys" + "as: map") validates each
+// entry at runtime.
+var keyRe = regexp.MustCompile(keyPattern)
+
 // HTTPClient defines the interface for HTTP operations
 type HTTPClient interface {
 	Get(ctx context.Context, url string) (*http.Response, error)
@@ -152,27 +186,28 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 				provider.CapabilityFrom,
 			},
 			Schema: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-				"key": schemahelper.StringProp("Name of the parameter to retrieve (exact match). Provide either key or keys; key takes precedence over keys when both are set.",
+				"key": schemahelper.StringProp("Single-key (scalar) read. Name of the parameter to retrieve (exact match). Provide either key or keys; key takes precedence over keys when both are set. Mutually exclusive with \"all\" and with \"as: map\".",
 					schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
-					schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_.\-]*$`),
+					schemahelper.WithPattern(keyPattern),
 					schemahelper.WithExample("env")),
-				"keys": schemahelper.ArrayProp("Ordered list of parameter names (aliases) for a single logical parameter. The first name that was provided via CLI wins. Evaluated after key. Use this to accept a parameter under any of several flag names (e.g. environment, e, env).",
+				"keys": schemahelper.ArrayProp("Ordered list of parameter names. Default meaning: aliases for a single logical parameter (the first name provided via CLI wins), evaluated after key. With \"as: map\" it is instead a distinct set of parameter names read into a map, with absent keys OMITTED (not defaulted).",
 					schemahelper.WithItems(schemahelper.StringProp("Parameter name (exact match)",
 						schemahelper.WithMaxLength(*ptrs.IntPtr(256)),
-						schemahelper.WithPattern(`^[A-Za-z_][A-Za-z0-9_.\-]*$`))),
+						schemahelper.WithPattern(keyPattern))),
 					schemahelper.WithMaxItems(50)),
-				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
+				"as": schemahelper.StringProp("Read-mode discriminator for \"keys\". Omitted (default): \"keys\" is an alias list (first-match-wins) for one logical value. \"map\": \"keys\" is a distinct set of parameter names read into a map, with absent keys OMITTED (not defaulted) so has() and optional chaining stay faithful.",
+					schemahelper.WithEnum(AsMap),
+					schemahelper.WithExample(AsMap)),
+				"all": schemahelper.BoolProp("When true, read every supplied CLI parameter as a map. Mutually exclusive with \"key\", \"keys\", and \"as\".",
+					schemahelper.WithExample(true)),
+				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining \"default\" with \"all\" or \"as: map\" is an error. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
 					schemahelper.WithExample("fallback")),
-				"type": schemahelper.StringProp("Controls how the parameter value is coerced. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources, falling back to the literal string. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
+				"type": schemahelper.StringProp("Controls how the parameter value is coerced. Only valid in single-key/alias mode; in map mode each value is returned with the provider's standard \"auto\" inference. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources, falling back to the literal string. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
 					schemahelper.WithEnum(paramTypeEnum...),
 					schemahelper.WithExample(TypeString)),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
-				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
-					"value":  schemahelper.AnyProp("The parameter value (typed based on parsing rules)", schemahelper.WithExample("prod")),
-					"exists": schemahelper.BoolProp("Whether the value came from a CLI-provided parameter (false when using the default value)", schemahelper.WithExample(true)),
-					"type":   schemahelper.StringProp("Detected type of the value", schemahelper.WithExample("string")),
-				}),
+				provider.CapabilityFrom: schemahelper.AnyProp("In single-key/alias mode the parameter value (typed per the parsing rules), or the default when absent. In map mode (\"keys\" + \"as: map\", or \"all: true\") a map of present parameter names to their auto-inferred values, with absent keys omitted."),
 			},
 			Examples: []provider.Example{
 				{
@@ -197,6 +232,21 @@ inputs:
 inputs:
   keys: [environment, e, env]
   default: development`,
+				},
+				{
+					Name:        "Read a set of parameters as a map",
+					Description: "Read several distinct parameters at once into a map (opt in with as: map). Absent keys are omitted, so has(_.myBag.keyB) stays faithful.",
+					YAML: `provider: parameter
+inputs:
+  keys: [keyA, keyB, keyC]
+  as: map`,
+				},
+				{
+					Name:        "Read all supplied parameters as a map",
+					Description: "Read every CLI-supplied parameter into a single map.",
+					YAML: `provider: parameter
+inputs:
+  all: true`,
 				},
 				{
 					Name:        "Get array parameter",
@@ -281,6 +331,24 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 	}
 
 	lgr.V(1).Info("executing provider", "provider", ProviderName)
+
+	// Determine the read mode. Map mode ("all: true", or "keys" + "as: map")
+	// returns a map instead of a single scalar and is mutually exclusive with
+	// the single-key / alias-keys scalar reads, so it must be resolved before
+	// the scalar candidate-key path below.
+	mapMode, allMode, err := resolveMapMode(inputs)
+	if err != nil {
+		return nil, err
+	}
+	if mapMode {
+		if _, has := inputs[InputDefault]; has {
+			return nil, fmt.Errorf(`%s: "default" is only valid with a single "key"/alias "keys"; in map mode absent keys are omitted (use has()/optional chaining)`, ProviderName)
+		}
+		if _, has := inputs[InputType]; has {
+			return nil, fmt.Errorf(`%s: "type" is only valid with a single "key"/alias "keys"; map mode returns each value with the provider's standard auto inference`, ProviderName)
+		}
+		return p.executeMapGet(ctx, lgr, inputs[InputKeys], allMode)
+	}
 
 	// Build the ordered list of parameter names to look up. "key" (when set)
 	// takes precedence, followed by each name in "keys" in declared order.
@@ -759,4 +827,171 @@ func firstProvided(candidates []string, params map[string]any) (string, any, boo
 		}
 	}
 	return "", nil, false
+}
+
+// resolveMapMode inspects the selector inputs and reports whether the caller
+// requested a map read and, if so, whether it is the whole-parameter-set
+// ("all: true") variant. It enforces that the map selectors are mutually
+// exclusive with each other and with the scalar "key"/alias-"keys" reads.
+//
+// Selection:
+//   - all: true             -> map mode (every supplied parameter)
+//   - keys: [...] + as: map  -> map mode (an explicit distinct-key set)
+//   - key / keys (no as)     -> scalar mode (single value / first-match alias)
+func resolveMapMode(inputs map[string]any) (mapMode, allMode bool, err error) {
+	_, hasKey := inputs[InputKey]
+	_, hasKeys := inputs[InputKeys]
+
+	if raw, present := inputs[InputAll]; present {
+		b, ok := raw.(bool)
+		if !ok {
+			return false, false, fmt.Errorf("%s: all must be a boolean, got %T", ProviderName, raw)
+		}
+		// Only all:true selects the whole-parameter-set mode; all:false is inert.
+		allMode = b
+	}
+
+	asMap := false
+	if raw, present := inputs[InputAs]; present {
+		s, ok := raw.(string)
+		if !ok {
+			return false, false, fmt.Errorf("%s: as must be a string, got %T", ProviderName, raw)
+		}
+		if s != AsMap {
+			return false, false, fmt.Errorf("%s: unsupported as %q (only %q is supported)", ProviderName, s, AsMap)
+		}
+		asMap = true
+	}
+
+	if allMode && asMap {
+		return false, false, fmt.Errorf(`%s: "all" is mutually exclusive with "as"`, ProviderName)
+	}
+	if asMap && !hasKeys {
+		return false, false, fmt.Errorf(`%s: "as: map" requires "keys"`, ProviderName)
+	}
+	if allMode && (hasKey || hasKeys) {
+		return false, false, fmt.Errorf(`%s: "all" is mutually exclusive with "key" and "keys"`, ProviderName)
+	}
+	if asMap && hasKey {
+		return false, false, fmt.Errorf(`%s: "as: map" is mutually exclusive with "key"`, ProviderName)
+	}
+
+	mapMode = allMode || (hasKeys && asMap)
+	return mapMode, allMode, nil
+}
+
+// executeMapGet reads either an explicit set of parameter names ("keys" +
+// "as: map") or every supplied parameter ("all: true") into a map. Absent keys
+// are omitted from the returned map (rather than defaulted) so that has() and
+// optional chaining against the map stay faithful. Each present value is
+// returned with the provider's standard auto inference. The present-key list
+// (and, in keys mode, the requested-but-absent list) is reported in metadata;
+// the resolver value is the bare map.
+func (p *ParameterProvider) executeMapGet(ctx context.Context, lgr *logr.Logger, rawKeys any, allMode bool) (*provider.Output, error) {
+	params, ok := provider.ParametersFromContext(ctx)
+	if !ok {
+		params = make(map[string]any)
+	}
+
+	// Dry-run does not read actual parameter values; mirror the scalar dry-run
+	// path by returning a placeholder (an empty map, since absent keys are
+	// omitted) rather than the real supplied values.
+	if provider.DryRunFromContext(ctx) {
+		return &provider.Output{
+			Data:     map[string]any{},
+			Metadata: map[string]any{"dryRun": true, "mode": "map"},
+		}, nil
+	}
+
+	result := make(map[string]any)
+	presentKeys := []string{}
+	missing := []string{}
+
+	if allMode {
+		for k, raw := range params {
+			v, err := p.resolveValue(ctx, raw, TypeAuto)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to parse parameter %q: %w", ProviderName, k, err)
+			}
+			result[k] = v
+			presentKeys = append(presentKeys, k)
+		}
+		sort.Strings(presentKeys)
+	} else {
+		requested, err := toStringKeys(rawKeys)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ProviderName, err)
+		}
+		for i, k := range requested {
+			if !keyRe.MatchString(k) {
+				return nil, fmt.Errorf("%s: invalid key %q at keys[%d]", ProviderName, k, i)
+			}
+		}
+		// De-duplicate the requested keys (preserving first-seen order) so the
+		// "distinct set" semantics hold: the output map already collapses
+		// duplicates, and this keeps metadata.keys/metadata.missing free of
+		// duplicate entries when a caller repeats a key.
+		requested = dedupePreserveOrder(requested)
+		for _, k := range requested {
+			raw, exists := params[k]
+			if !exists {
+				missing = append(missing, k)
+				continue
+			}
+			v, err := p.resolveValue(ctx, raw, TypeAuto)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to parse parameter %q: %w", ProviderName, k, err)
+			}
+			result[k] = v
+			presentKeys = append(presentKeys, k)
+		}
+	}
+
+	metadata := map[string]any{
+		"mode": "map",
+		"keys": presentKeys,
+	}
+	if !allMode {
+		metadata["missing"] = missing
+	}
+	lgr.V(1).Info("provider completed", "provider", ProviderName, "mode", "map", "present", len(presentKeys), "missing", len(missing))
+	return &provider.Output{Data: result, Metadata: metadata}, nil
+}
+
+// toStringKeys normalizes the "keys" input into a []string. It accepts both
+// []string and []any (the shape a CEL list or YAML sequence produces).
+func toStringKeys(raw any) ([]string, error) {
+	switch v := raw.(type) {
+	case []string:
+		return v, nil
+	case []any:
+		out := make([]string, 0, len(v))
+		for i, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("keys[%d] must be a string, got %T", i, item)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	case nil:
+		return nil, fmt.Errorf(`"keys" must be an array of strings`)
+	default:
+		return nil, fmt.Errorf(`"keys" must be an array of strings, got %T`, raw)
+	}
+}
+
+// dedupePreserveOrder returns keys with duplicates removed, keeping the first
+// occurrence of each value in its original position.
+func dedupePreserveOrder(keys []string) []string {
+	seen := make(map[string]struct{}, len(keys))
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
 }
