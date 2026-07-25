@@ -954,12 +954,24 @@ const unreachableOCIURL2 = "oci://127.0.0.1:2/nope"
 func runListWithConfig(t *testing.T, cfg *appconfig.Config, args ...string) (string, error) {
 	t.Helper()
 
+	// Bound the context so a filtered (rather than refused) localhost port can
+	// never hang the test; the unreachable OCI URLs normally fail fast with
+	// "connection refused".
+	baseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
 	var buf bytes.Buffer
 	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
-	w := writer.New(ioStreams, settings.NewCliParams())
-	ctx := appconfig.WithConfig(writer.WithWriter(context.Background(), w), cfg)
 
+	// Share a single verbose-enabled CliParams between the writer and the
+	// command so per-catalog verbose diagnostics ("Searching remote catalog",
+	// "Skipping catalog") are observable in the captured output.
 	cliParams := settings.NewCliParams()
+	cliParams.Verbose = true
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := appconfig.WithConfig(writer.WithWriter(baseCtx, w), cfg)
+
 	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
 	cmd.SetContext(ctx)
 	cmd.SetArgs(args)
@@ -1013,8 +1025,9 @@ func TestRunList_CatalogScope_SelectsNamedCatalog(t *testing.T) {
 
 // TestRunList_AllScope_SelectsEveryOCICatalog verifies the `--all` switch arm:
 // every configured OCI catalog is queried (non-OCI entries are skipped). Under
-// --all, per-catalog errors are demoted to verbose, so the command completes
-// with exit 0 and no warnings on stderr.
+// --all, per-catalog errors are demoted to verbose; with verbose enabled the
+// per-catalog diagnostics prove both OCI entries were iterated and the non-OCI
+// entry was not.
 func TestRunList_AllScope_SelectsEveryOCICatalog(t *testing.T) {
 	t.Parallel()
 
@@ -1029,8 +1042,16 @@ func TestRunList_AllScope_SelectsEveryOCICatalog(t *testing.T) {
 
 	out, err := runListWithConfig(t, cfg, "--all")
 	require.NoError(t, err)
-	// --all demotes per-catalog failures to verbose, so no warning is printed
-	// at the default verbosity, but the run still succeeds over both OCI
-	// catalogs and skips the filesystem one.
+	// Both OCI catalogs are iterated: verbose "Searching remote catalog" fires
+	// for each before the (refused) network call, and the demoted-to-verbose
+	// "Skipping catalog" fires on failure.
+	assert.Contains(t, out, `Searching remote catalog "corp"`)
+	assert.Contains(t, out, `Searching remote catalog "mirror"`)
+	assert.Contains(t, out, `Skipping catalog "corp"`)
+	assert.Contains(t, out, `Skipping catalog "mirror"`)
+	// The non-OCI filesystem catalog is dropped by the Type==OCI selection
+	// guard and never iterated.
+	assert.NotContains(t, out, `"local-files"`)
+	// The run still completes successfully and reports no artifacts.
 	assert.Contains(t, out, "No artifacts found")
 }
