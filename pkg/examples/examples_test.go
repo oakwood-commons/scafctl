@@ -136,6 +136,11 @@ func TestRead_PathTraversalVariants(t *testing.T) {
 		"../../secret.yaml",
 		"foo/../../bar.yaml",
 		"../solution.yaml",
+		// Tricky: path.Clean would resolve these ".." components away if the
+		// check ran after cleaning; they must still be rejected.
+		"foo/../bar.yaml",
+		"foo/..",
+		"actions/../secret.yaml",
 	}
 
 	for _, path := range tests {
@@ -253,6 +258,11 @@ func TestResolveExample_RejectsPathTraversal(t *testing.T) {
 		"foo/../../bar.yaml",
 		"..\\..\\windows\\system32",
 		"actions/../../secret",
+		// Tricky: a ".." that path.Clean would resolve away if checked after
+		// cleaning. These must still be rejected.
+		"foo/../bar.yaml",
+		"foo/..",
+		"actions/../secret.yaml",
 	} {
 		_, err := ResolveExample(q)
 		require.Error(t, err, "query %q must be rejected", q)

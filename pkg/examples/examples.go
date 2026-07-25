@@ -176,13 +176,16 @@ func ResolveExample(query string) (string, error) {
 	if query == "" {
 		return "", ErrExampleNotFound
 	}
-	normalized := path.Clean(strings.ReplaceAll(filepath.ToSlash(query), "\\", "/"))
+	// Slash-normalize WITHOUT cleaning first, so a ".." component cannot be
+	// resolved away before the traversal check (path.Clean("foo/../x") == "x").
+	slashed := strings.ReplaceAll(filepath.ToSlash(query), "\\", "/")
 
-	// Security: reject path traversal (a ".." path segment) before touching
-	// the filesystem. A filename that merely contains ".." (e.g. foo..bar) is safe.
-	if hasDotDotSegment(normalized) {
+	// Security: reject any ".." path segment before touching the filesystem. A
+	// filename that merely contains ".." (e.g. foo..bar) is safe and allowed.
+	if hasDotDotSegment(slashed) {
 		return "", ErrPathTraversal
 	}
+	normalized := path.Clean(slashed)
 
 	items, err := Scan("")
 	if err != nil {
@@ -271,16 +274,18 @@ func Read(exPath string) (string, error) {
 		return "", err
 	}
 
-	// Normalize to forward slashes. embed.FS always uses forward slashes, and a
-	// caller may pass a Windows-style backslash path. filepath.ToSlash is a
-	// no-op for backslashes on non-Windows hosts, so convert explicitly.
-	cleanPath := path.Clean(strings.ReplaceAll(filepath.ToSlash(exPath), "\\", "/"))
+	// Normalize to forward slashes WITHOUT cleaning first: embed.FS uses forward
+	// slashes, a caller may pass Windows-style backslashes, and path.Clean would
+	// resolve a ".." component away (path.Clean("foo/../x") == "x") before the
+	// traversal check. filepath.ToSlash is a no-op for backslashes off Windows.
+	slashed := strings.ReplaceAll(filepath.ToSlash(exPath), "\\", "/")
 
-	// Security: reject a ".." path segment (traversal). A filename containing
-	// ".." (e.g. foo..bar.yaml) is safe and allowed.
-	if hasDotDotSegment(cleanPath) {
+	// Security: reject any ".." path segment. A filename containing ".."
+	// (e.g. foo..bar.yaml) is safe and allowed.
+	if hasDotDotSegment(slashed) {
 		return "", ErrPathTraversal
 	}
+	cleanPath := path.Clean(slashed)
 
 	fullPath := path.Join(root, cleanPath)
 	content, err := fs.ReadFile(examplesFS, fullPath)

@@ -126,16 +126,16 @@ func (o *Options) runList(ctx context.Context) error {
 		kvx.WithOutputNoColor(o.CliParams.NoColor),
 		kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
 		kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
-		kvx.WithOutputColumnOrder([]string{"displayName", "name", "category", "tags", "description"}),
+		kvx.WithOutputColumnOrder([]string{"displayName", "name", "category", "path", "tags", "description"}),
 		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
-			"displayName": {MaxWidth: 30, Priority: 10},
-			"name":        {MaxWidth: 26, Priority: 8},
+			"displayName": {MaxWidth: 28, Priority: 10},
+			"name":        {MaxWidth: 24, Priority: 8},
 			"category":    {MaxWidth: 16, Priority: 7},
-			"tags":        {MaxWidth: 24, Priority: 5},
-			"description": {Priority: 4},
-			// Path is the fetch handle, surfaced in the detail view and the tip
-			// below rather than as a wide table column.
-			"path": {Hidden: true},
+			// Path is the copy/paste handle for `get examples <path>` -- keep it
+			// visible and wide enough that it does not truncate.
+			"path":        {MaxWidth: 48, Priority: 9},
+			"tags":        {MaxWidth: 20, Priority: 4},
+			"description": {Priority: 3},
 		}),
 	)
 	if err := outputOpts.Write(items); err != nil {
