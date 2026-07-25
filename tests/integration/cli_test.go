@@ -8511,8 +8511,9 @@ func TestIntegration_GetExamples_List(t *testing.T) {
 	stdout, _, exitCode := runScafctl(t, "get", "examples", "-o", "yaml")
 	assert.Equal(t, 0, exitCode)
 	// Listing is metadata-driven: displayName/name/category come from each
-	// solution's metadata block, not the filename. (kvx yaml lowercases keys.)
-	assert.Contains(t, stdout, "displayname:")
+	// solution's metadata block, not the filename. Explicit yaml tags keep the
+	// YAML key casing aligned with the JSON output and the display schema.
+	assert.Contains(t, stdout, "displayName:")
 	assert.Contains(t, stdout, "name:")
 	assert.Contains(t, stdout, "category:")
 	// Names come from metadata.name, so they never carry a file extension.
@@ -8544,6 +8545,21 @@ func TestIntegration_GetExamples_List_OnlySolutions(t *testing.T) {
 		n, _ := it["name"].(string)
 		assert.NotContains(t, n, ".yaml", "name must come from metadata, not filename")
 	}
+}
+
+func TestIntegration_GetExamples_List_JSONYAMLKeyCasingAligned(t *testing.T) {
+	t.Parallel()
+	// JSON and YAML output must use the same camelCase field names (the struct
+	// carries matching json+yaml tags), and both must match the display-schema
+	// field names. Guards against yaml.Marshal lowercasing keys.
+	yamlOut, _, yc := runScafctl(t, "get", "examples", "-o", "yaml")
+	assert.Equal(t, 0, yc)
+	assert.Contains(t, yamlOut, "displayName:")
+	assert.NotContains(t, yamlOut, "displayname:")
+
+	jsonOut, _, jc := runScafctl(t, "get", "examples", "-o", "json")
+	assert.Equal(t, 0, jc)
+	assert.Contains(t, jsonOut, "\"displayName\"")
 }
 
 func TestIntegration_GetExamples_List_FilterCategory(t *testing.T) {

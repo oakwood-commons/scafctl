@@ -54,18 +54,18 @@ const solutionKind = "Solution"
 type Example struct {
 	// DisplayName is the human-friendly name from metadata.displayName.
 	// Falls back to metadata.name when unset.
-	DisplayName string `json:"displayName,omitempty"`
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty"`
 	// Name is the solution's metadata.name (its stable identifier).
-	Name string `json:"name"`
+	Name string `json:"name" yaml:"name"`
 	// Category is metadata.category (falls back to the top-level directory).
-	Category string `json:"category,omitempty"`
+	Category string `json:"category,omitempty" yaml:"category,omitempty"`
 	// Tags are metadata.tags.
-	Tags []string `json:"tags,omitempty"`
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty"`
 	// Description is metadata.description (first line, trimmed).
-	Description string `json:"description,omitempty"`
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
 	// Path is the embedded-FS path used as the unambiguous fetch handle for
 	// `get examples <path>` (metadata.name is not unique across examples).
-	Path string `json:"path"`
+	Path string `json:"path" yaml:"path"`
 }
 
 // exampleMeta is a lightweight view of a solution used only to populate the
