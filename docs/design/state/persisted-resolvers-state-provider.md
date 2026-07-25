@@ -208,6 +208,41 @@ Behavior:
 - Dry-run reads the loaded snapshot normally; it is read-only and has no side
   effect.
 
+#### Map mode (`keys` / `all`)
+
+Instead of a single `key`, an author may read many persisted values into one map.
+Specify **exactly one** of `key`, `keys`, or `all`:
+
+```yaml
+resolvers:
+  # Read an explicit set of persisted keys into a map.
+  - name: prior_config
+    from:
+      provider: state
+      operation: get
+      keys: [region, tier, cluster_id]
+
+  # Read the entire persisted snapshot into a map.
+  - name: prior_state
+    from:
+      provider: state
+      operation: get
+      all: true
+```
+
+- The resolver value is the **bare map** (`_.prior_config.region`), keeping the
+  same shape convention as single-key mode returning a bare scalar.
+- Absent keys are **omitted** from the map rather than defaulted, so
+  `has(_.prior_config.tier)` and `_.prior_config.?tier.orValue(d)` stay faithful.
+  This restores the key-absence fidelity that a hand-assembled `cel` map loses.
+- The present-key list (and, in `keys` mode, the requested-but-absent `missing`
+  list) is reported in provider **metadata** (visible via `run provider`), not in
+  the resolver value. Reconstruct the missing set in CEL with
+  `myKeys.filter(k, !has(_.prior_config[k]))`.
+- `default` is only valid with a single `key`; combining it with `keys`/`all` is
+  an error (in map mode absence is expressed by omission).
+- Like `key`, `keys`/`all` create no dependency edges in the resolver graph.
+
 ### Ordering guarantee
 
 The correctness of the feature rests on the run lifecycle: state is loaded into

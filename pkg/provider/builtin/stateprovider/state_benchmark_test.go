@@ -34,4 +34,22 @@ func BenchmarkStateProvider_Execute(b *testing.B) {
 			_, _ = p.Execute(ctx, inputs)
 		}
 	})
+
+	b.Run("keys_map", func(b *testing.B) {
+		inputs := map[string]any{"keys": []any{"db_password", "absent"}}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
+
+	b.Run("all_map", func(b *testing.B) {
+		inputs := map[string]any{"all": true}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
 }
