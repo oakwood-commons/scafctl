@@ -28,26 +28,42 @@ const (
 	SchemaVersionMinimum = 2
 )
 
+// ReadProviderName is the canonical name of the state *read* provider (the
+// provider resolvers use to read the loaded state snapshot). A resolver using it
+// is state-dependent and cannot participate in the two-phase pre-load. This is
+// the single source of truth for the name; the provider implementation and all
+// partition logic reference it to avoid drift.
+const ReadProviderName = "state"
+
 // Config is the solution-level state configuration.
 // It is a top-level peer to Spec, Catalog, Bundle, and Compose on the Solution struct.
 //
 // CLI parameters passed via -r flags are available as __params in CEL expressions
 // and Go templates used in Enabled and Backend.Inputs. This allows dynamic backend
-// configuration without requiring resolver execution (which happens after state load).
+// configuration from user input.
+//
+// Enabled and Backend.Inputs may also reference resolvers (via rslvr:, expr:, or
+// tmpl:), as long as those resolvers are state-INDEPENDENT -- i.e. they do not
+// read state (via the state provider) and do not transitively depend on one that
+// does. The engine runs the referenced resolvers first (a minimal pre-load pass),
+// then loads state with their values exposed as _. Referencing a state-dependent
+// resolver is a circular dependency and is rejected (see CycleError).
 //
 // Example:
 //
 //	state:
 //	  enabled:
-//	    expr: "__params.state_enabled == true"
+//	    expr: "_.stateEnabled"   # stateEnabled is a state-independent resolver
 //	  backend:
 //	    provider: file
 //	    inputs:
 //	      path:
 //	        expr: "'gcp/' + __params.project + '/state.json'"
 type Config struct {
-	// Enabled controls whether state persistence is active. Supports literal bool, CEL expression, or template.
-	// Resolver references (rslvr:) are not supported because state is loaded before resolver execution.
+	// Enabled controls whether state persistence is active. Supports a literal bool,
+	// CEL expression, Go template, or resolver reference.
+	// References to state-independent resolvers are resolved via a pre-load pass;
+	// references to state-dependent resolvers are rejected (circular dependency).
 	// Use __params to reference CLI parameters (e.g. expr: "__params.enable_state == true").
 	Enabled *spec.ValueRef `json:"enabled" yaml:"enabled" doc:"Dynamic activation of state persistence"`
 
@@ -62,8 +78,11 @@ type Backend struct {
 
 	// Inputs are provider-specific inputs. Each value is a ValueRef for dynamic resolution.
 	//
-	// CEL expressions use __params for CLI parameters (e.g. __params.project) and _ for
-	// resolver outputs (available at save time only, not load time).
+	// CEL expressions use __params for CLI parameters (e.g. __params.project) and _
+	// for resolver outputs. A referenced resolver must be state-independent (it must
+	// not read state or depend on one that does); the engine runs such resolvers in a
+	// pre-load pass before loading state. Referencing a state-dependent resolver is a
+	// circular dependency and is rejected.
 	//
 	// Go templates spread resolver data at top level (e.g. {{ .name }}) and expose CLI
 	// parameters under __params (e.g. {{ .__params.project }}).

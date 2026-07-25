@@ -623,15 +623,17 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// the state provider can serve previously saved values.
 	var stateMgr *state.Manager
 	var stateData *state.Data
+	var stateSeed map[string]*resolver.ExecutionResult
 	if o.NoState {
 		warnStateSkipped(ctx, sol)
 	} else if sol.State != nil {
 		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run resolver", params)
-		loadResult, loadErr := stateMgr.Load(ctx, params, cmdInfo)
+		loadResult, loadErr := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, o.buildStateTwoPhaseInput(sol, params, reg))
 		if loadErr != nil {
 			return o.handleStateLoadError(ctx, loadErr)
 		}
+		stateSeed = loadResult.Seed
 		if !loadResult.Skipped {
 			ctx = loadResult.Ctx
 			stateData = loadResult.Data
@@ -653,7 +655,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	start := time.Now()
 
 	// Execute resolvers
-	resolverData, resolverCtx, execErr := o.executeResolvers(ctx, sol, resolvers, params, reg)
+	resolverData, resolverCtx, execErr := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if execErr != nil && resolverCtx == nil {
 		// A hard failure occurred before any values could be produced
 		// (e.g., phase build error). Abort with the error.

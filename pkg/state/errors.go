@@ -52,3 +52,46 @@ func (e *MissingParamsError) Error() string {
 func (e *MissingParamsError) Unwrap() error {
 	return e.Original
 }
+
+// CycleError is returned when a state configuration field (enabled or a
+// backend input) references a resolver that cannot be resolved before state is
+// loaded -- i.e. a resolver that itself reads state (via the state provider) or
+// transitively depends on one that does. Honouring such a reference would
+// require running the resolver before the state it depends on has been loaded,
+// a circular dependency. The referenced resolvers are listed so the author can
+// see exactly which references break the acyclic guarantee.
+type CycleError struct {
+	// Location is the config path of the offending field, e.g. "state.enabled"
+	// or "state.backend.inputs.path".
+	Location string `json:"location" yaml:"location" doc:"Config path of the offending field"`
+
+	// Refs is the sorted list of state-dependent resolver names referenced at
+	// Location.
+	Refs []string `json:"refs" yaml:"refs" doc:"State-dependent resolver names referenced"`
+}
+
+func (e *CycleError) Error() string {
+	return fmt.Sprintf(
+		"%s references state-dependent resolver(s) [%s]: those resolvers read state (or depend on one that does), so they cannot run before state is loaded (circular dependency)",
+		e.Location, strings.Join(e.Refs, ", "),
+	)
+}
+
+// UnknownStateRefError is returned when a state configuration field references a
+// resolver name that does not exist in the solution. This is almost always a
+// typo; catching it at load time yields a clear message instead of a silent
+// null/empty value.
+type UnknownStateRefError struct {
+	// Location is the config path of the offending field.
+	Location string `json:"location" yaml:"location" doc:"Config path of the offending field"`
+
+	// Refs is the sorted list of unknown resolver names referenced at Location.
+	Refs []string `json:"refs" yaml:"refs" doc:"Unknown resolver names referenced"`
+}
+
+func (e *UnknownStateRefError) Error() string {
+	return fmt.Sprintf(
+		"%s references unknown resolver(s) [%s]: no such resolver is defined in the solution",
+		e.Location, strings.Join(e.Refs, ", "),
+	)
+}

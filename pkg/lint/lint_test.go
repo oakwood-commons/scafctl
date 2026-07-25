@@ -1892,7 +1892,7 @@ func TestLintState_ValidConfig(t *testing.T) {
 	assert.Empty(t, stateFindings)
 }
 
-func TestLintState_ResolverRefInEnabled(t *testing.T) {
+func TestLintState_EnabledRefToStateIndependentResolverAllowed(t *testing.T) {
 	rslvrName := "my_flag"
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -1919,13 +1919,81 @@ func TestLintState_ResolverRefInEnabled(t *testing.T) {
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "state-resolver-ref")
-	assert.Len(t, findings, 1)
-	assert.Contains(t, findings[0].Message, "state.enabled")
-	assert.Contains(t, findings[0].Message, "my_flag")
+	// my_flag is state-independent (uses static), so referencing it at load time
+	// is now allowed -- the engine resolves it in the two-phase pre-load.
+	assert.Empty(t, filterFindingsByRule(result, "state-ref-state-dependent"))
+	assert.Empty(t, filterFindingsByRule(result, "state-ref-unknown"))
 }
 
-func TestLintState_ResolverRefInBackendInputs(t *testing.T) {
+func TestLintState_EnabledRefToStateDependentResolverRejected(t *testing.T) {
+	rslvrName := "saved_flag"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				// saved_flag reads the state snapshot, so it cannot run before
+				// state is loaded -- referencing it at load time is a cycle.
+				"saved_flag": {
+					Type:    "bool",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: state.ReadProviderName}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Resolver: &rslvrName},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newStateProvider(state.ReadProviderName, provider.CapabilityState))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-ref-state-dependent")
+	assert.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "state.enabled")
+	assert.Contains(t, findings[0].Message, "saved_flag")
+}
+
+func TestLintState_EnabledRefToUnknownResolverRejected(t *testing.T) {
+	rslvrName := "does_not_exist"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"my_flag": {
+					Type:    "bool",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Resolver: &rslvrName},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "test.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-ref-unknown")
+	assert.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "state.enabled")
+	assert.Contains(t, findings[0].Message, "does_not_exist")
+}
+
+func TestLintState_BackendInputRefToStateIndependentResolverAllowed(t *testing.T) {
 	rslvrName := "app_name"
 	sol := &solution.Solution{
 		APIVersion: "scafctl.io/v1",
@@ -1954,10 +2022,44 @@ func TestLintState_ResolverRefInBackendInputs(t *testing.T) {
 	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
 
 	result := Solution(sol, "test.yaml", reg)
-	findings := filterFindingsByRule(result, "state-resolver-ref")
+	// app_name is state-independent, so a backend input may reference it.
+	assert.Empty(t, filterFindingsByRule(result, "state-ref-state-dependent"))
+	assert.Empty(t, filterFindingsByRule(result, "state-ref-unknown"))
+}
+
+func TestLintState_BackendInputRefToStateDependentResolverRejected(t *testing.T) {
+	rslvrName := "saved_path"
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"saved_path": {
+					Type:    "string",
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: state.ReadProviderName}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs: map[string]*spec.ValueRef{
+					"path": {Resolver: &rslvrName},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newStateProvider(state.ReadProviderName, provider.CapabilityState))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-ref-state-dependent")
 	assert.Len(t, findings, 1)
 	assert.Contains(t, findings[0].Message, "path")
-	assert.Contains(t, findings[0].Message, "app_name")
+	assert.Contains(t, findings[0].Message, "saved_path")
 }
 
 func TestLintState_SaveOverrideStateRef(t *testing.T) {
@@ -2026,7 +2128,7 @@ func TestLintState_SaveOverrideRslvrAllowed(t *testing.T) {
 
 	result := Solution(sol, "test.yaml", reg)
 	// rslvr: is allowed in saveOverrides (unlike inputs)
-	findings := filterFindingsByRule(result, "state-resolver-ref")
+	findings := filterFindingsByRule(result, "state-ref-state-dependent")
 	assert.Empty(t, findings)
 	findings = filterFindingsByRule(result, "state-save-override-state-ref")
 	assert.Empty(t, findings)

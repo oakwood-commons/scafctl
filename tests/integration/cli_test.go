@@ -1463,6 +1463,245 @@ spec:
 	assert.NoFileExists(t, statePath, "state file must still not exist after a second --no-state run")
 }
 
+// TestIntegration_RunSolution_DynamicStatePath verifies that
+// state.backend.inputs can reference a resolver output: the state file path is
+// computed from the resolved app_name, so state is written to the per-app path.
+func TestIntegration_RunSolution_DynamicStatePath(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dynamic-state-path
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path:
+        expr: "_.app_name + '-state.json'"
+spec:
+  resolvers:
+    app_name:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: app_name
+              default: demo
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "app_name=billing")
+	assert.Equal(t, 0, exitCode, "run with dynamic state path should exit zero")
+	assert.Contains(t, stdout, "ACTION_RAN")
+
+	// State must be written to the resolver-derived path, not a literal one.
+	require.FileExists(t, filepath.Join(tmpDir, "billing-state.json"), "state must be written to the dynamic per-app path")
+	assert.NoFileExists(t, filepath.Join(tmpDir, "demo-state.json"), "default path must not be used when app_name is supplied")
+}
+
+// TestIntegration_RunSolution_DynamicStateEnabledFalse verifies that
+// state.enabled can reference a resolver output: when that resolver evaluates to
+// false, the state lifecycle is skipped and no state file is written.
+func TestIntegration_RunSolution_DynamicStateEnabledFalse(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dynamic-state-enabled
+  version: 1.0.0
+state:
+  enabled:
+    rslvr: persist_state
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    persist_state:
+      type: bool
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: persist
+              default: "false"
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	// persist=false -> state disabled -> no file written, action still runs.
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "persist=false")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "ACTION_RAN")
+	assert.NoFileExists(t, statePath, "state must not be written when the enabled resolver is false")
+
+	// persist=true -> state enabled -> file written.
+	_, _, exitCode = runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath, "-r", "persist=true")
+	assert.Equal(t, 0, exitCode)
+	require.FileExists(t, statePath, "state must be written when the enabled resolver is true")
+}
+
+// TestIntegration_RunSolution_StateCycleRejected verifies that referencing a
+// state-dependent resolver (one that reads the state snapshot) from a load-time
+// state field is rejected with a clear circular-dependency error before anything
+// runs.
+func TestIntegration_RunSolution_StateCycleRejected(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-cycle
+  version: 1.0.0
+state:
+  enabled:
+    rslvr: reads_state
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    reads_state:
+      resolve:
+        with:
+          - provider: state
+            inputs:
+              key: anything
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+	statePath := filepath.Join(tmpDir, "state.json")
+
+	_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath)
+	assert.NotEqual(t, 0, exitCode, "a state cycle must fail the run")
+	assert.Contains(t, stderr, "state.enabled", "error should name the offending field")
+	assert.Contains(t, stderr, "reads_state", "error should name the state-dependent resolver")
+	assert.NoFileExists(t, statePath, "no state should be written when a cycle is detected")
+}
+
+// TestIntegration_RunSolution_StateNoDoubleExecution proves the two-phase
+// pre-load reuses Phase-A results instead of re-executing them: a resolver with
+// an observable side effect (appending to a counter file) is referenced by
+// state.enabled, so it runs in Phase A. After a full run it must have executed
+// exactly once, not twice.
+func TestIntegration_RunSolution_StateNoDoubleExecution(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	counterPath := filepath.ToSlash(filepath.Join(tmpDir, "counter.txt"))
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-no-double-exec
+  version: 1.0.0
+state:
+  enabled:
+    expr: "_.side_effect.stdout.contains('ok')"
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    side_effect:
+      resolve:
+        with:
+          - provider: exec
+            inputs:
+              command: "echo run >> '` + counterPath + `'; echo ok"
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "ACTION_RAN")
+
+	raw, err := os.ReadFile(filepath.Join(tmpDir, "counter.txt")) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	lines := strings.Count(strings.TrimSpace(string(raw)), "\n") + 1
+	assert.Equal(t, 1, lines, "side-effect resolver must execute exactly once (Phase A seed reused in main run); got:\n%s", raw)
+}
+
+// TestIntegration_RunResolver_DynamicStatePath verifies the two-phase state
+// pre-load is wired into the `run resolver` entrypoint: the resolver-derived
+// state path is honored and state is written there.
+func TestIntegration_RunResolver_DynamicStatePath(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: dynamic-state-path-resolver
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path:
+        expr: "_.app_name + '-state.json'"
+spec:
+  resolvers:
+    app_name:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: app_name
+              default: demo
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	stdout, _, exitCode := runScafctlInDir(t, tmpDir, "run", "resolver", "-f", solutionPath, "-r", "app_name=web")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "web")
+	require.FileExists(t, filepath.Join(tmpDir, "web-state.json"), "run resolver must honor the dynamic state path")
+}
+
 func TestIntegration_RunSolution_FileNotFound(t *testing.T) {
 	t.Parallel()
 	_, stderr, exitCode := runScafctl(t,

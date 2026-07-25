@@ -59,19 +59,20 @@ type ProgressCallback interface {
 type Executor struct {
 	registry           RegistryInterface
 	timeout            time.Duration
-	maxConcurrency     int                   // Max concurrent resolvers per phase (0 = unlimited)
-	phaseTimeout       time.Duration         // Max time per phase
-	warnValueSize      int64                 // Warn when value exceeds this size in bytes (0 = disabled)
-	maxValueSize       int64                 // Fail when value exceeds this size in bytes (0 = disabled)
-	progressCallback   ProgressCallback      // Optional callback for progress events
-	validateAll        bool                  // Continue execution and collect all errors instead of stopping at first
-	nonFatalValidation bool                  // Treat validation failures as non-fatal: collect them but do not skip dependents
-	skipValidation     bool                  // Skip the validation phase of all resolvers
-	skipTransform      bool                  // Skip the transform and validation phases of all resolvers
-	deferredValidation bool                  // Run the post-resolution deferred (cross-resolver) validation phase
-	mockedResolvers    map[string]any        // Pre-populated resolver values that skip execution
-	calls              map[string]*spec.Call // Reusable call definitions invoked via call + args
-	dedupMemo          *call.Memo            // Per-run memo for opt-in call de-duplication
+	maxConcurrency     int                         // Max concurrent resolvers per phase (0 = unlimited)
+	phaseTimeout       time.Duration               // Max time per phase
+	warnValueSize      int64                       // Warn when value exceeds this size in bytes (0 = disabled)
+	maxValueSize       int64                       // Fail when value exceeds this size in bytes (0 = disabled)
+	progressCallback   ProgressCallback            // Optional callback for progress events
+	validateAll        bool                        // Continue execution and collect all errors instead of stopping at first
+	nonFatalValidation bool                        // Treat validation failures as non-fatal: collect them but do not skip dependents
+	skipValidation     bool                        // Skip the validation phase of all resolvers
+	skipTransform      bool                        // Skip the transform and validation phases of all resolvers
+	deferredValidation bool                        // Run the post-resolution deferred (cross-resolver) validation phase
+	mockedResolvers    map[string]any              // Pre-populated resolver values that skip execution
+	seededResults      map[string]*ExecutionResult // Pre-computed results (e.g. state pre-load phase) reused without re-execution
+	calls              map[string]*spec.Call       // Reusable call definitions invoked via call + args
+	dedupMemo          *call.Memo                  // Per-run memo for opt-in call de-duplication
 }
 
 // ExecutorOption is a functional option for configuring the Executor
@@ -181,6 +182,21 @@ func WithDeferredValidation(enabled bool) ExecutorOption {
 func WithMockedResolvers(mocks map[string]any) ExecutorOption {
 	return func(e *Executor) {
 		e.mockedResolvers = mocks
+	}
+}
+
+// WithSeededResults pre-populates resolver results computed in an earlier pass
+// (for example the resolvers run during the two-phase state pre-load) so that
+// those resolvers are not executed a second time in the main run. Unlike
+// WithMockedResolvers -- a testing affordance that supplies synthetic values --
+// seeded results are the genuine outputs of a real prior execution. A seeded
+// resolver skips execution entirely (including its when condition) and its
+// value is reused verbatim; as with mocked resolvers, per-run execution metadata
+// (provider call count, duration) reflects the skipped main-run pass rather than
+// the original execution.
+func WithSeededResults(seeded map[string]*ExecutionResult) ExecutorOption {
+	return func(e *Executor) {
+		e.seededResults = seeded
 	}
 }
 
@@ -319,6 +335,25 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 			Status: ExecutionStatusSuccess,
 		})
 		lgr.V(1).Info("injected mocked resolver value", "resolver", name)
+	}
+
+	// Inject seeded resolver results (e.g. from the two-phase state pre-load).
+	// These resolvers already ran, so their values are made available up front
+	// and their execution is skipped (see executeResolver) rather than repeated.
+	for name, seeded := range e.seededResults {
+		if seeded == nil {
+			continue
+		}
+		// A seeded resolver that was skipped must stay absent from _ (the
+		// resolver context map), mirroring the executor's own skipped handling
+		// (see executeResolver's completion block). Injecting it would leak a
+		// skipped value into _ and break `has(_.name)` expectations.
+		if seeded.Status == ExecutionStatusSkipped {
+			lgr.V(1).Info("skipped seeded resolver result — kept absent from context", "resolver", name)
+			continue
+		}
+		resolverCtx.SetResult(name, seeded)
+		lgr.V(1).Info("injected seeded resolver result", "resolver", name)
 	}
 
 	// Track failed resolvers for validate-all / non-fatal-validation mode. The
@@ -733,6 +768,33 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 		return false, nil
 	}
 
+	// Check if this resolver has a seeded result (injected via WithSeededResults).
+	// It already ran in an earlier pass (e.g. the two-phase state pre-load), so we
+	// reuse its value and skip execution to avoid invoking the provider twice.
+	if seeded, ok := e.seededResult(r.Name); ok {
+		result.Value = seeded.Value
+		// Preserve the seeded status/error rather than assuming success. A
+		// seeded ExecutionResult carries its own outcome, and forcing success
+		// here would mask a failed pre-pass result and let the main run proceed
+		// on incomplete or incorrect data.
+		result.Status = seeded.Status
+		result.Error = seeded.Error
+		if seeded.Status == ExecutionStatusFailed {
+			if result.Error == nil {
+				result.Error = fmt.Errorf("seeded resolver %q has a failed result", r.Name)
+			}
+			resolverLgr.V(1).Info("resolver seeded with a failed result — propagating failure")
+			return false, result.Error
+		}
+		// A real pre-pass result always sets a status; default a missing one to
+		// success so the value is still surfaced downstream.
+		if result.Status == "" {
+			result.Status = ExecutionStatusSuccess
+		}
+		resolverLgr.V(1).Info("resolver seeded — skipping execution", "status", result.Status)
+		return false, nil
+	}
+
 	// Check when condition
 	if r.When != nil {
 		shouldExecute, err := e.evaluateCondition(resolverContext, r.When)
@@ -894,6 +956,19 @@ func (e *Executor) isMocked(name string) bool {
 	}
 	_, ok := e.mockedResolvers[name]
 	return ok
+}
+
+// seededResult returns the seeded result for a resolver name, if one was
+// injected via WithSeededResults. A nil seed entry is treated as absent.
+func (e *Executor) seededResult(name string) (*ExecutionResult, bool) {
+	if e.seededResults == nil {
+		return nil, false
+	}
+	seeded, ok := e.seededResults[name]
+	if !ok || seeded == nil {
+		return nil, false
+	}
+	return seeded, true
 }
 
 func (e *Executor) evaluateCondition(ctx context.Context, cond *Condition) (bool, error) {

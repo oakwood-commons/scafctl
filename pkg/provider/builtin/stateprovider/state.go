@@ -25,7 +25,7 @@ import (
 
 const (
 	// ProviderName is the name of the state provider.
-	ProviderName = "state"
+	ProviderName = state.ReadProviderName
 	// Version is the version of the state provider.
 	Version = "1.0.0"
 	// OperationGet reads a persisted value from the loaded state snapshot.
