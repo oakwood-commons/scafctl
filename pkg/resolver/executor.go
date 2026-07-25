@@ -765,8 +765,25 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 	// reuse its value and skip execution to avoid invoking the provider twice.
 	if seeded, ok := e.seededResult(r.Name); ok {
 		result.Value = seeded.Value
-		result.Status = ExecutionStatusSuccess
-		resolverLgr.V(1).Info("resolver seeded — skipping execution")
+		// Preserve the seeded status/error rather than assuming success. A
+		// seeded ExecutionResult carries its own outcome, and forcing success
+		// here would mask a failed pre-pass result and let the main run proceed
+		// on incomplete or incorrect data.
+		result.Status = seeded.Status
+		result.Error = seeded.Error
+		if seeded.Status == ExecutionStatusFailed {
+			if result.Error == nil {
+				result.Error = fmt.Errorf("seeded resolver %q has a failed result", r.Name)
+			}
+			resolverLgr.V(1).Info("resolver seeded with a failed result — propagating failure")
+			return false, result.Error
+		}
+		// A real pre-pass result always sets a status; default a missing one to
+		// success so the value is still surfaced downstream.
+		if result.Status == "" {
+			result.Status = ExecutionStatusSuccess
+		}
+		resolverLgr.V(1).Info("resolver seeded — skipping execution", "status", result.Status)
 		return false, nil
 	}
 

@@ -5,6 +5,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -122,6 +123,73 @@ func TestExecutor_SeededResult_NilEntryRunsNormally(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "ran", value)
 	assert.Equal(t, int64(1), atomic.LoadInt64(&calls), "resolver with nil seed entry must execute normally")
+}
+
+func TestExecutor_SeededResult_FailedResultPropagates(t *testing.T) {
+	var calls int64
+	registry := newCountingRegistry(&calls)
+	executor := NewExecutor(registry, WithSeededResults(map[string]*ExecutionResult{
+		"seeded": {
+			Value:  nil,
+			Status: ExecutionStatusFailed,
+			Error:  errors.New("pre-load boom"),
+		},
+	}))
+
+	resolvers := []*Resolver{
+		{
+			Name:    "seeded",
+			Type:    TypeString,
+			Resolve: &ResolvePhase{With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "should-not-run"}}}}},
+		},
+	}
+
+	ctx, err := executor.Execute(context.Background(), resolvers, nil)
+	// A failed seed must not be masked as success — the run reports the failure
+	// instead of proceeding on incomplete data.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pre-load boom")
+
+	result, ok := FromContext(ctx)
+	require.True(t, ok)
+
+	execResult, ok := result.GetResult("seeded")
+	require.True(t, ok)
+	assert.Equal(t, ExecutionStatusFailed, execResult.Status, "seeded failure status must be preserved")
+	assert.Equal(t, int64(0), atomic.LoadInt64(&calls), "failed seeded resolver must not invoke its provider")
+}
+
+func TestExecutor_SeededResult_MissingStatusDefaultsToSuccess(t *testing.T) {
+	var calls int64
+	registry := newCountingRegistry(&calls)
+	// A seed entry without an explicit status (zero value) is treated as a
+	// success so its value is still surfaced.
+	executor := NewExecutor(registry, WithSeededResults(map[string]*ExecutionResult{
+		"seeded": {Value: "from-preload"},
+	}))
+
+	resolvers := []*Resolver{
+		{
+			Name:    "seeded",
+			Type:    TypeString,
+			Resolve: &ResolvePhase{With: []ProviderSource{{Provider: "static", Inputs: map[string]*ValueRef{"value": {Literal: "should-not-run"}}}}},
+		},
+	}
+
+	ctx, err := executor.Execute(context.Background(), resolvers, nil)
+	require.NoError(t, err)
+
+	result, ok := FromContext(ctx)
+	require.True(t, ok)
+
+	value, ok := result.Get("seeded")
+	require.True(t, ok)
+	assert.Equal(t, "from-preload", value)
+
+	execResult, ok := result.GetResult("seeded")
+	require.True(t, ok)
+	assert.Equal(t, ExecutionStatusSuccess, execResult.Status)
+	assert.Equal(t, int64(0), atomic.LoadInt64(&calls))
 }
 
 func TestExecutor_NoSeed_ExecutesNormally(t *testing.T) {
