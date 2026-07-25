@@ -796,6 +796,13 @@ func TestResolverHasMapModeParameter(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "as map without keys is invalid, not map mode",
+			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+				paramSource(map[string]*resolver.ValueRef{"as": {Literal: "map"}}),
+			}}},
+			want: false,
+		},
+		{
 			name: "all false is inert",
 			r: &resolver.Resolver{Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
 				paramSource(map[string]*resolver.ValueRef{"all": {Literal: false}}),

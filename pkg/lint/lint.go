@@ -203,9 +203,10 @@ func parameterSourceHasDefault(step resolver.ProviderSource) bool {
 // into map mode, where a 'default' is neither valid nor needed: absent keys are
 // simply omitted from the returned map, so the read always produces a value.
 const (
-	parameterAllInput = "all"
-	parameterAsInput  = "as"
-	parameterAsMap    = "map"
+	parameterAllInput  = "all"
+	parameterAsInput   = "as"
+	parameterAsMap     = "map"
+	parameterKeysInput = "keys"
 )
 
 // parameterSourceIsMapMode reports whether a parameter provider source reads a
@@ -221,7 +222,12 @@ func parameterSourceIsMapMode(step resolver.ProviderSource) bool {
 	}
 	if asRef, ok := step.Inputs[parameterAsInput]; ok && asRef != nil {
 		if s, ok := asRef.Literal.(string); ok && s == parameterAsMap {
-			return true
+			// "as: map" only selects map mode when the required "keys" input is
+			// present; without it the provider rejects the config ("as: map"
+			// requires "keys"), so it is not a valid map-mode read.
+			if _, hasKeys := step.Inputs[parameterKeysInput]; hasKeys {
+				return true
+			}
 		}
 	}
 	return false

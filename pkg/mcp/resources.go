@@ -467,7 +467,12 @@ func parameterSourceIsMapMode(src resolver.ProviderSource) bool {
 	}
 	if asRef, ok := src.Inputs["as"]; ok && asRef != nil {
 		if s, ok := asRef.Literal.(string); ok && s == "map" {
-			return true
+			// "as: map" only selects map mode when the required "keys" input is
+			// present; without it the provider rejects the config ("as: map"
+			// requires "keys"), so it is not a valid map-mode read.
+			if _, hasKeys := src.Inputs["keys"]; hasKeys {
+				return true
+			}
 		}
 	}
 	return false

@@ -1084,6 +1084,31 @@ func TestLintResolvers_ParameterMissingDefault_MapModeKeys(t *testing.T) {
 		"map mode (keys + as: map) omits absent keys, so no default is required")
 }
 
+func TestLintResolvers_ParameterMissingDefault_AsMapWithoutKeys(t *testing.T) {
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"bag": {
+			Description: "as: map without keys is invalid, not map mode",
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "parameter", Inputs: map[string]*spec.ValueRef{
+						"as": {Literal: "map"},
+					}},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintResolvers(sol, result, reg, map[string]bool{"bag": true})
+
+	assert.Len(t, filterByRule(result.Findings), 1,
+		"as: map without keys is not map mode, so the missing-default warning still fires")
+}
+
 func TestLintResolvers_ParameterMissingDefault_HasUnconditionalFallback(t *testing.T) {
 	exprCond := celexp.Expression("_.useParam == true")
 
