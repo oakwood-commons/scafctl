@@ -260,6 +260,16 @@ scafctl catalog list -o yaml
 > `--pre-release` to include them, or `--pre-release --all-versions` to see
 > every version.
 
+> [!NOTE]
+> **Catalog scope.** A bare `scafctl catalog list` queries the same ordered
+> catalog chain the resolver uses: your default catalog first, then the built-in
+> anonymous `official` catalog as a fallback. This means official artifacts are
+> listed even when your default catalog is private and you are unauthenticated.
+> Each row's `catalog` column attributes its source. Set
+> `settings.disableOfficialCatalog: true` to drop the official fallback, use
+> `--catalog <name>` to list exactly one catalog, or `--all` to list every
+> configured catalog.
+
 Expected output:
 
 ```yaml
@@ -315,18 +325,20 @@ scafctl catalog list --kind plugin --name github --all-versions
 > [!NOTE]
 > **Private registries and rejected credentials.** If a catalog points at a
 > private OCI registry and your stored credentials are rejected (for example an
-> expired token), `catalog list` falls back to anonymous access. When that
-> anonymous listing is **empty**, the command does **not** report an empty
-> catalog -- it exits non-zero with an actionable error naming the registry and
-> the login command to fix it (`auth login <handler>`, or `catalog login
-> <registry>` when no auth handler applies), so a rejected credential is never
-> mistaken for a genuinely empty catalog. This fatal behavior only applies when
-> the raw anonymous listing was itself empty: if it returned artifacts that your
-> filters (`--pre-release`, a version constraint, or `--catalog`) then removed,
-> the empty final result is attributed to filtering, so the command exits 0 with
-> the degraded warning rather than failing. When anonymous access still returns some artifacts,
-> those are listed (exit 0) with a warning that the listing is incomplete. In
-> any structured output mode (`-o json`, `-o yaml`, etc.) the results on stdout
+> expired token), `catalog list` falls back to anonymous access. Because a bare
+> `catalog list` also queries the `official` catalog, a rejected private default
+> often still returns results from `official`: those are listed (exit 0) with a
+> warning that the primary listing was incomplete and how to authenticate. When
+> the **entire** chain yields nothing anonymously, the command does **not**
+> report an empty catalog -- it exits non-zero with an actionable error naming the
+> registry and the login command to fix it (`auth login <handler>`, or `catalog
+> login <registry>` when no auth handler applies), so a rejected credential is
+> never mistaken for a genuinely empty catalog. This fatal behavior only applies
+> when the raw anonymous listing was itself empty: if it returned artifacts that
+> your filters (`--pre-release`, a version constraint, or `--catalog`) then
+> removed, the empty final result is attributed to filtering, so the command
+> exits 0 with the degraded warning rather than failing. In any structured output
+> mode (`-o json`, `-o yaml`, etc.) the results on stdout
 > are unchanged; a `{"degraded":true,"authError":{...}}` marker is written to
 > stderr so programmatic consumers can detect the degraded state.
 

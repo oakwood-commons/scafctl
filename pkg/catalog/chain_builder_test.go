@@ -138,3 +138,189 @@ func TestBuildRemoteCatalogFromConfig_AuthProvider_UsesGetRegistered(t *testing.
 		})
 	}
 }
+
+func TestDefaultListCatalogs(t *testing.T) {
+	t.Parallel()
+
+	const (
+		officialURL = config.DefaultOfficialCatalogURL
+		privateURL  = "oci://private.example.com/catalog"
+	)
+
+	officialCat := config.CatalogConfig{
+		Name: config.CatalogNameOfficial,
+		Type: config.CatalogTypeOCI,
+		URL:  officialURL,
+	}
+	privateCat := config.CatalogConfig{
+		Name: "corp",
+		Type: config.CatalogTypeOCI,
+		URL:  privateURL,
+	}
+	localCat := config.CatalogConfig{
+		Name: config.CatalogNameLocal,
+		Type: config.CatalogTypeFilesystem,
+		Path: "/tmp/catalog",
+	}
+
+	tests := []struct {
+		name      string
+		cfg       *config.Config
+		wantNames []string
+	}{
+		{
+			name: "default and official distinct -> primary then official",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "corp"},
+				Catalogs: []config.CatalogConfig{localCat, privateCat, officialCat},
+			},
+			wantNames: []string{"corp", config.CatalogNameOfficial},
+		},
+		{
+			name: "disableOfficialCatalog -> default only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "corp", DisableOfficialCatalog: true},
+				Catalogs: []config.CatalogConfig{localCat, privateCat, officialCat},
+			},
+			wantNames: []string{"corp"},
+		},
+		{
+			name: "default IS official by name -> official once (deduped)",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: config.CatalogNameOfficial},
+				Catalogs: []config.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{config.CatalogNameOfficial},
+		},
+		{
+			name: "default IS official by name AND disabled -> empty",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: config.CatalogNameOfficial, DisableOfficialCatalog: true},
+				Catalogs: []config.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{},
+		},
+		{
+			name: "default IS official by URL AND disabled -> empty",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror", DisableOfficialCatalog: true},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+					officialCat,
+				},
+			},
+			wantNames: []string{},
+		},
+		{
+			name: "default has same URL as official -> deduped to primary",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror"},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+					officialCat,
+				},
+			},
+			wantNames: []string{"mirror"},
+		},
+		{
+			name: "no default configured -> official only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: ""},
+				Catalogs: []config.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{config.CatalogNameOfficial},
+		},
+		{
+			name: "default is non-OCI -> official only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: config.CatalogNameLocal},
+				Catalogs: []config.CatalogConfig{localCat, officialCat},
+			},
+			wantNames: []string{config.CatalogNameOfficial},
+		},
+		{
+			name: "official missing from catalogs -> default only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "corp"},
+				Catalogs: []config.CatalogConfig{localCat, privateCat},
+			},
+			wantNames: []string{"corp"},
+		},
+		{
+			name: "official present but non-OCI -> default only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "corp"},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					privateCat,
+					{Name: config.CatalogNameOfficial, Type: config.CatalogTypeHTTP, URL: officialURL},
+				},
+			},
+			wantNames: []string{"corp"},
+		},
+		{
+			// A non-OCI official entry whose URL matches an OCI default must NOT
+			// make the default look "official by URL": isOfficialByURL is guarded
+			// on the official catalog being OCI. The default is listed normally
+			// and the non-OCI official is skipped.
+			name: "official non-OCI with matching-URL default -> default listed, official skipped",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror"},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+					{Name: config.CatalogNameOfficial, Type: config.CatalogTypeHTTP, URL: officialURL},
+				},
+			},
+			wantNames: []string{"mirror"},
+		},
+		{
+			// The config merge omits the official entry entirely when
+			// disableOfficialCatalog is set, so isOfficialByURL falls back to the
+			// embedded default official URL. An aliased default pointing at that
+			// URL must still be recognized as official and dropped when disabled.
+			name: "official omitted + default URL == official URL + disabled -> empty",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror", DisableOfficialCatalog: true},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+				},
+			},
+			wantNames: []string{},
+		},
+		{
+			// Same aliased-to-official default, but official not disabled: the
+			// default is recognized as official and listed once (official is
+			// absent from the config, so there is nothing to append/dedup after).
+			name: "official omitted + default URL == official URL + enabled -> default only",
+			cfg: &config.Config{
+				Settings: config.Settings{DefaultCatalog: "mirror"},
+				Catalogs: []config.CatalogConfig{
+					localCat,
+					{Name: "mirror", Type: config.CatalogTypeOCI, URL: officialURL},
+				},
+			},
+			wantNames: []string{"mirror"},
+		},
+		{
+			name:      "nil config -> nil",
+			cfg:       nil,
+			wantNames: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := DefaultListCatalogs(tt.cfg)
+			gotNames := make([]string, len(got))
+			for i, c := range got {
+				gotNames[i] = c.Name
+			}
+			assert.Equal(t, tt.wantNames, gotNames, "ordered catalog names")
+		})
+	}
+}

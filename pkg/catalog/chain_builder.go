@@ -250,3 +250,73 @@ func BuildRemoteCatalogFromConfig(catCfg config.CatalogConfig, credStore *Creden
 	}
 	return remoteCat, nil
 }
+
+// DefaultListCatalogs returns the ordered set of OCI catalogs a bare
+// `catalog list` (no --catalog, no --all) should query: the configured default
+// catalog first (primary), followed by the built-in official catalog as an
+// anonymous fallback. This mirrors the ordered chain the resolver consumes (see
+// BuildCatalogChain) so a private or unauthenticated default catalog does not
+// hide artifacts that are anonymously available from the official catalog
+// (issue #692).
+//
+// The official catalog is omitted when settings.disableOfficialCatalog is set --
+// including the case where the default catalog IS the official catalog, so a
+// disabled official catalog is never listed. Non-OCI catalogs are skipped, and
+// the official catalog is de-duplicated when the default catalog IS the official
+// catalog (by reserved name or identical URL).
+func DefaultListCatalogs(cfg *config.Config) []config.CatalogConfig {
+	if cfg == nil {
+		return nil
+	}
+
+	var catalogs []config.CatalogConfig
+
+	defCat, hasDefault := cfg.GetDefaultCatalog()
+	defaultIsOfficial := hasDefault &&
+		(defCat.Name == config.CatalogNameOfficial || isOfficialByURL(cfg, defCat.URL))
+
+	// Include the default catalog first, unless it IS the official catalog and
+	// the official catalog is disabled (in which case it must not be listed).
+	if hasDefault && defCat.Type == config.CatalogTypeOCI &&
+		(!defaultIsOfficial || !cfg.Settings.DisableOfficialCatalog) {
+		catalogs = append(catalogs, *defCat)
+	}
+
+	if cfg.Settings.DisableOfficialCatalog {
+		return catalogs
+	}
+
+	official, hasOfficial := cfg.GetCatalog(config.CatalogNameOfficial)
+	if !hasOfficial || official.Type != config.CatalogTypeOCI {
+		return catalogs
+	}
+
+	// Skip official if the default already IS official (same reserved name or
+	// identical URL) to avoid querying and listing it twice.
+	if hasDefault && (defCat.Name == config.CatalogNameOfficial || defCat.URL == official.URL) {
+		return catalogs
+	}
+
+	return append(catalogs, *official)
+}
+
+// isOfficialByURL reports whether the given URL matches the official catalog's
+// URL. Used to detect that a default catalog is the official catalog even when
+// it is referenced under a different (mirror) name.
+//
+// When an official catalog entry is present in the config it is only considered
+// if it is an OCI catalog (matching the type guard applied throughout
+// DefaultListCatalogs), so a non-OCI official entry never causes a default to be
+// treated as official-by-URL. When settings.disableOfficialCatalog is set the
+// config merge omits the official entry entirely; in that case we fall back to
+// the embedded default official URL so the URL-based disable/dedup semantics
+// still recognize an aliased default that points at the official registry.
+func isOfficialByURL(cfg *config.Config, url string) bool {
+	if url == "" {
+		return false
+	}
+	if official, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
+		return official.Type == config.CatalogTypeOCI && official.URL == url
+	}
+	return url == config.DefaultOfficialCatalogURL
+}
