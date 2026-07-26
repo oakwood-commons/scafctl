@@ -368,7 +368,7 @@ func defaultCatalogs() []CatalogConfig {
 		{
 			Name:         "official",
 			Type:         CatalogTypeOCI,
-			URL:          "oci://ghcr.io/oakwood-commons",
+			URL:          DefaultOfficialCatalogURL,
 			AuthProvider: "github",
 		},
 	}

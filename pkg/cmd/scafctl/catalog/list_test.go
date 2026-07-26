@@ -12,6 +12,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
+	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -898,4 +899,159 @@ func TestWriteArtifactList_EmptyStaleStructured_WritesEmptyArray(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, outBuf.String(), "[]", "stdout should contain a parseable empty array")
+}
+
+// TestRunList_CatalogOfficialDisabled_ReturnsInvalidInput verifies that an
+// explicit `--catalog official` selection fails with a clear InvalidInput error
+// when settings.disableOfficialCatalog is set, rather than silently returning an
+// empty result that looks like "no artifacts found".
+func TestRunList_CatalogOfficialDisabled_ReturnsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Settings: appconfig.Settings{DisableOfficialCatalog: true},
+		Catalogs: []appconfig.CatalogConfig{
+			{
+				Name: appconfig.CatalogNameOfficial,
+				Type: appconfig.CatalogTypeOCI,
+				URL:  appconfig.DefaultOfficialCatalogURL,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+	w := writer.New(ioStreams, settings.NewCliParams())
+	ctx := appconfig.WithConfig(writer.WithWriter(context.Background(), w), cfg)
+
+	cliParams := settings.NewCliParams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{"--catalog", appconfig.CatalogNameOfficial})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err),
+		"disabled official catalog explicitly selected should return InvalidInput")
+	assert.Contains(t, err.Error(), "official catalog is disabled")
+	assert.NotContains(t, buf.String(), "No artifacts found",
+		"should not present a disabled catalog as an empty result")
+}
+
+// unreachableOCIURL points at a closed local port so remote catalog listing
+// fails fast (connection refused, ~ms) instead of hanging on the network. This
+// lets runList's catalog-selection switch and remote loop be exercised
+// deterministically without a real registry.
+const unreachableOCIURL = "oci://127.0.0.1:1/nope"
+
+// unreachableOCIURL2 is a second closed-port URL, distinct from unreachableOCIURL
+// so DefaultListCatalogs does not dedup the official fallback against a default
+// that happens to share the same URL.
+const unreachableOCIURL2 = "oci://127.0.0.1:2/nope"
+
+// runListWithConfig executes `catalog list` with the given config in context
+// and the supplied args, returning combined stdout+stderr and the error.
+func runListWithConfig(t *testing.T, cfg *appconfig.Config, args ...string) (string, error) {
+	t.Helper()
+
+	// Bound the context so a filtered (rather than refused) localhost port can
+	// never hang the test; the unreachable OCI URLs normally fail fast with
+	// "connection refused".
+	baseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+
+	var buf bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+
+	// Share a single verbose-enabled CliParams between the writer and the
+	// command so per-catalog verbose diagnostics ("Searching remote catalog",
+	// "Skipping catalog") are observable in the captured output.
+	cliParams := settings.NewCliParams()
+	cliParams.Verbose = true
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := appconfig.WithConfig(writer.WithWriter(baseCtx, w), cfg)
+
+	cmd := CommandList(cliParams, ioStreams, "scafctl/catalog")
+	cmd.SetContext(ctx)
+	cmd.SetArgs(args)
+
+	err := cmd.Execute()
+	return buf.String(), err
+}
+
+// TestRunList_DefaultScope_QueriesDefaultThenOfficial verifies the bare-list
+// (default) switch arm: runList selects catalog.DefaultListCatalogs(cfg) and
+// searches the default catalog followed by the official fallback. Both remote
+// catalogs are unreachable (connection refused), so the command still completes
+// with exit 0 and reports no artifacts, but the selection + remote loop over
+// both catalogs is exercised.
+func TestRunList_DefaultScope_QueriesDefaultThenOfficial(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Settings: appconfig.Settings{DefaultCatalog: "corp"},
+		Catalogs: []appconfig.CatalogConfig{
+			{Name: "corp", Type: appconfig.CatalogTypeOCI, URL: unreachableOCIURL},
+			{Name: appconfig.CatalogNameOfficial, Type: appconfig.CatalogTypeOCI, URL: unreachableOCIURL2},
+		},
+	}
+
+	out, err := runListWithConfig(t, cfg)
+	require.NoError(t, err, "unreachable remote catalogs are non-fatal for bare list")
+	// Both the primary default and the official fallback should have been tried.
+	assert.Contains(t, out, `failed to list from remote catalog "corp"`)
+	assert.Contains(t, out, `failed to list from remote catalog "official"`)
+}
+
+// TestRunList_CatalogScope_SelectsNamedCatalog verifies the `--catalog <name>`
+// switch arm: only the named configured OCI catalog is queried.
+func TestRunList_CatalogScope_SelectsNamedCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Catalogs: []appconfig.CatalogConfig{
+			{Name: "corp", Type: appconfig.CatalogTypeOCI, URL: unreachableOCIURL},
+			{Name: appconfig.CatalogNameOfficial, Type: appconfig.CatalogTypeOCI, URL: unreachableOCIURL},
+		},
+	}
+
+	out, err := runListWithConfig(t, cfg, "--catalog", "corp")
+	require.NoError(t, err)
+	assert.Contains(t, out, `failed to list from remote catalog "corp"`)
+	// Only the explicitly named catalog is queried -- official is not consulted.
+	assert.NotContains(t, out, `failed to list from remote catalog "official"`)
+}
+
+// TestRunList_AllScope_SelectsEveryOCICatalog verifies the `--all` switch arm:
+// every configured OCI catalog is queried (non-OCI entries are skipped). Under
+// --all, per-catalog errors are demoted to verbose; with verbose enabled the
+// per-catalog diagnostics prove both OCI entries were iterated and the non-OCI
+// entry was not.
+func TestRunList_AllScope_SelectsEveryOCICatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &appconfig.Config{
+		Catalogs: []appconfig.CatalogConfig{
+			{Name: "corp", Type: appconfig.CatalogTypeOCI, URL: unreachableOCIURL},
+			{Name: "mirror", Type: appconfig.CatalogTypeOCI, URL: unreachableOCIURL},
+			// A non-OCI catalog must be skipped by the --all selection.
+			{Name: "local-files", Type: appconfig.CatalogTypeFilesystem, URL: ""},
+		},
+	}
+
+	out, err := runListWithConfig(t, cfg, "--all")
+	require.NoError(t, err)
+	// Both OCI catalogs are iterated: verbose "Searching remote catalog" fires
+	// for each before the (refused) network call, and the demoted-to-verbose
+	// "Skipping catalog" fires on failure.
+	assert.Contains(t, out, `Searching remote catalog "corp"`)
+	assert.Contains(t, out, `Searching remote catalog "mirror"`)
+	assert.Contains(t, out, `Skipping catalog "corp"`)
+	assert.Contains(t, out, `Skipping catalog "mirror"`)
+	// The non-OCI filesystem catalog is dropped by the Type==OCI selection
+	// guard and never iterated.
+	assert.NotContains(t, out, `"local-files"`)
+	// The run still completes successfully and reports no artifacts.
+	assert.Contains(t, out, "No artifacts found")
 }

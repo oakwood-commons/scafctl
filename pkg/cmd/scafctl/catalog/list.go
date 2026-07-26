@@ -34,7 +34,7 @@ type ListOptions struct {
 	Insecure          bool   // Allow HTTP connections
 	AllVersions       bool   // Show all versions instead of just latest
 	PreRelease        bool   // Include pre-release versions
-	ShowAll           bool   // List all configured catalogs instead of just the default
+	ShowAll           bool   // List every configured catalog instead of the default plus official fallback
 	CliParams         *settings.Run
 	IOStreams         *terminal.IOStreams
 	flags.KvxOutputFlags
@@ -98,9 +98,13 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		Short:        "List artifacts in the catalog",
 		SilenceUsage: true,
 		Long: heredoc.Docf(`
-			List artifacts from the default catalog and local catalog.
-			Use --catalog to list from a specific catalog, or --all to
-			list from all configured catalogs.
+			List artifacts from the local catalog, the default catalog, and
+			the built-in official catalog as an ordered fallback (the same
+			chain the resolver uses), so official artifacts still appear when
+			the default catalog is private or unreachable. Set
+			settings.disableOfficialCatalog to drop the official fallback.
+			Use --catalog to list from exactly one catalog, or --all to
+			list from every configured catalog.
 
 			By default, only the latest version of each artifact is shown.
 			Use --name to see all versions of a specific artifact, or
@@ -168,7 +172,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	cmd.Flags().BoolVar(&options.Insecure, "insecure", false, "Allow insecure HTTP connections")
 	cmd.Flags().BoolVar(&options.AllVersions, "all-versions", false, "Show all versions instead of just the latest")
 	cmd.Flags().BoolVar(&options.PreRelease, "pre-release", false, "Include pre-release versions (e.g. 1.0.0-beta.1)")
-	cmd.Flags().BoolVar(&options.ShowAll, "all", false, "List all configured catalogs instead of just the default")
+	cmd.Flags().BoolVar(&options.ShowAll, "all", false, "List every configured catalog instead of the default plus official fallback")
 	cmd.Flags().StringVar(&options.VersionConstraint, "version", "", "Filter by semver version constraint (e.g., \"^1.0.0\", \">= 1.0, < 2.0\")")
 
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
@@ -248,22 +252,40 @@ func runList(ctx context.Context, opts *ListOptions, outputOpts *kvx.OutputOptio
 	// Determine which remote catalogs to query.
 	// --catalog: only the named catalog (used as post-filter below).
 	// --all: all configured catalogs.
-	// default: only the configured defaultCatalog.
+	// default: the default catalog plus the built-in official catalog as an
+	//   ordered fallback (catalog.DefaultListCatalogs).
 	if cfg := appconfig.FromContext(ctx); cfg != nil {
 		var remoteCatalogs []appconfig.CatalogConfig
-		if opts.Catalog != "" {
+		switch {
+		case opts.Catalog != "":
 			// --catalog names a specific configured catalog; query only that one.
+			// The reserved official catalog is treated as unavailable when
+			// settings.disableOfficialCatalog is set, mirroring the resolver
+			// chain (which omits official entirely when disabled). Because the
+			// user explicitly asked for it, fail with a clear error rather than
+			// silently returning an empty result that looks like "no artifacts".
+			if opts.Catalog == appconfig.CatalogNameOfficial && cfg.Settings.DisableOfficialCatalog {
+				return exitcode.WithCode(
+					fmt.Errorf("official catalog is disabled (settings.disableOfficialCatalog); unset it to list the official catalog"),
+					exitcode.InvalidInput,
+				)
+			}
 			if cat, ok := cfg.GetCatalog(opts.Catalog); ok && cat.Type == appconfig.CatalogTypeOCI {
 				remoteCatalogs = append(remoteCatalogs, *cat)
 			}
-		} else if opts.ShowAll {
+		case opts.ShowAll:
 			for _, catCfg := range cfg.Catalogs {
 				if catCfg.Type == appconfig.CatalogTypeOCI {
 					remoteCatalogs = append(remoteCatalogs, catCfg)
 				}
 			}
-		} else if defCat, ok := cfg.GetDefaultCatalog(); ok && defCat.Type == appconfig.CatalogTypeOCI {
-			remoteCatalogs = append(remoteCatalogs, *defCat)
+		default:
+			// Bare `catalog list` (no --catalog, no --all) queries the default
+			// catalog as the primary, then falls back to the built-in official
+			// catalog -- mirroring the ordered chain the resolver consumes so a
+			// private/unauthenticated default does not hide anonymously-available
+			// official artifacts. See issue #692.
+			remoteCatalogs = catalog.DefaultListCatalogs(cfg)
 		}
 
 		for _, catCfg := range remoteCatalogs {
