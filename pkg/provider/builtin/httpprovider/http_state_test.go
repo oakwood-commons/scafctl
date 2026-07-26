@@ -109,7 +109,28 @@ func TestHTTPProvider_StateLoad_InvalidJSON(t *testing.T) {
 		"url":       server.URL,
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unmarshal")
+	assert.Contains(t, err.Error(), "read state schema version")
+}
+
+func TestHTTPProvider_StateLoad_IncompatibleSchemaVersion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Below the minimum floor AND a field whose type no longer matches the
+		// current struct -- the version guard must win over the type error.
+		_, _ = w.Write([]byte(`{"schemaVersion":1,"metadata":{"solution":{"nested":"object"}}}`))
+	}))
+	defer server.Close()
+
+	p := NewHTTPProvider()
+	ctx := testContext(t)
+
+	_, err := p.Execute(ctx, map[string]any{
+		"operation": "state_load",
+		"url":       server.URL,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, state.ErrIncompatibleSchemaVersion)
 }
 
 func TestHTTPProvider_StateSave_Success(t *testing.T) {

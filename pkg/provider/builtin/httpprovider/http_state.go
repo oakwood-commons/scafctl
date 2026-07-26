@@ -57,15 +57,15 @@ func (p *HTTPProvider) executeStateLoad(ctx context.Context, client *httpc.Clien
 		return nil, fmt.Errorf("state load: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var stateData state.Data
-	if err := json.Unmarshal(body, &stateData); err != nil {
-		return nil, fmt.Errorf("state load: unmarshal: %w", err)
+	stateData, err := state.DecodeData(body)
+	if err != nil {
+		return nil, fmt.Errorf("state load: %w", err)
 	}
 
 	return &provider.Output{
 		Data: map[string]any{
 			"success": true,
-			"data":    &stateData,
+			"data":    stateData,
 		},
 	}, nil
 }

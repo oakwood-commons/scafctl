@@ -60,6 +60,26 @@ func TestExplain_StateRefUnknown(t *testing.T) {
 	assert.NotEmpty(t, exp.Suggestions)
 }
 
+func TestExplain_StateSchemaVersionUnsupported(t *testing.T) {
+	exp := Explain(`state load: unsupported state schema version: file version 4 is newer than supported version 3; upgrade scafctl`)
+	assert.Equal(t, "state", exp.Category)
+	assert.Contains(t, exp.Summary, "4")
+	assert.Contains(t, exp.Summary, "3")
+	assert.Contains(t, exp.RootCause, "newer version of scafctl")
+	assert.NotEmpty(t, exp.Suggestions)
+	assert.Contains(t, exp.Suggestions[0], "Upgrade scafctl")
+}
+
+func TestExplain_StateSchemaVersionIncompatible(t *testing.T) {
+	exp := Explain(`state load: incompatible state schema version: file version 1 is older than the minimum supported version 2; delete the state file and recreate it`)
+	assert.Equal(t, "state", exp.Category)
+	assert.Contains(t, exp.Summary, "1")
+	assert.Contains(t, exp.Summary, "2")
+	assert.Contains(t, exp.RootCause, "breaking change")
+	assert.NotEmpty(t, exp.Suggestions)
+	assert.Contains(t, exp.Suggestions[0], "Delete the state file")
+}
+
 func TestExplain_CELNoOverload(t *testing.T) {
 	exp := Explain(`found no matching overload for 'size'`)
 	assert.Equal(t, "cel_expression", exp.Category)

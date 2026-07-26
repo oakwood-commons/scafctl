@@ -47,7 +47,7 @@ func TestLoadFromFile_InvalidJSON(t *testing.T) {
 
 	_, err := LoadFromFile(path, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unmarshal")
+	assert.Contains(t, err.Error(), "read state schema version")
 }
 
 func TestLoadFromFile_NilMapsNormalized(t *testing.T) {
