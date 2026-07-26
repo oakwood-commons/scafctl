@@ -914,7 +914,7 @@ func TestRunList_CatalogOfficialDisabled_ReturnsInvalidInput(t *testing.T) {
 			{
 				Name: appconfig.CatalogNameOfficial,
 				Type: appconfig.CatalogTypeOCI,
-				URL:  "oci://ghcr.io/oakwood-commons",
+				URL:  appconfig.DefaultOfficialCatalogURL,
 			},
 		},
 	}
