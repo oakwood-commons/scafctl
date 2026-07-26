@@ -66,6 +66,10 @@ type Example struct {
 	// Path is the embedded-FS path used as the unambiguous fetch handle for
 	// `get examples <path>` (metadata.name is not unique across examples).
 	Path string `json:"path" yaml:"path"`
+	// Content is the full example file content. It powers the interactive (-i)
+	// detail view so a user can read the solution without leaving the browser.
+	// Omitted from the default table (see the command's column hints).
+	Content string `json:"content,omitempty" yaml:"content,omitempty"`
 }
 
 // exampleMeta is a lightweight view of a solution used only to populate the
@@ -147,6 +151,7 @@ func Scan(category string) ([]Example, error) {
 			Tags:        meta.Metadata.Tags,
 			Description: firstLine(meta.Metadata.Description),
 			Path:        relPath,
+			Content:     string(content),
 		})
 		return nil
 	})
@@ -168,67 +173,83 @@ func Scan(category string) ([]Example, error) {
 	return items, nil
 }
 
-// ResolveExample resolves a user-supplied query to a single example path. The
-// query may be an exact path, a metadata.name, or a file basename. When the
-// query matches exactly one example, its path is returned. When it matches more
-// than one, ErrAmbiguousExample is returned wrapped with the candidate paths so
-// the caller can prompt for a precise path. When nothing matches,
-// ErrExampleNotFound is returned.
-func ResolveExample(query string) (string, error) {
+// MatchExamples resolves a user-supplied query to the example(s) it identifies.
+// The query may be an exact embedded path, a metadata.name, or a file basename.
+// It returns:
+//
+//   - exactly one Example when the query names a single example (by exact path,
+//     or a unique name/basename),
+//   - more than one Example when a name/basename matches several (the caller
+//     should present them as a list to choose from),
+//   - ErrExampleNotFound when nothing matches,
+//   - ErrPathTraversal when the query is an unsafe path.
+//
+// Exact-path matches also resolve non-solution embedded files (e.g. kind:
+// Config) that the solution-only listing excludes; those are returned as a
+// single Example carrying just the Path.
+func MatchExamples(query string) ([]Example, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return "", ErrExampleNotFound
+		return nil, ErrExampleNotFound
 	}
 	// Slash-normalize WITHOUT cleaning first, so a ".." component cannot be
 	// resolved away before the traversal check (path.Clean("foo/../x") == "x").
 	slashed := strings.ReplaceAll(filepath.ToSlash(query), "\\", "/")
-
-	// Security: reject any ".." path segment before touching the filesystem. A
-	// filename that merely contains ".." (e.g. foo..bar) is safe and allowed.
 	if isUnsafeExamplePath(slashed) {
-		return "", ErrPathTraversal
+		return nil, ErrPathTraversal
 	}
 	normalized := path.Clean(slashed)
 
-	// Exact-path short-circuit: if the query names a real embedded example file,
-	// return it directly. The listing (Scan) is intentionally solution-only, but
-	// `get examples <path>` must still be able to fetch ANY embedded example file
-	// by exact path (e.g. catalog/native-auth.yaml, which is kind: Config), which
-	// it could before the metadata-driven listing narrowed Scan to solutions.
-	if exampleFileExists(normalized) {
-		return normalized, nil
-	}
-
 	items, err := Scan("")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	// 1. Exact path match wins immediately (paths are unique).
+	// 1. Exact path match wins immediately (paths are unique): a listed solution
+	//    is returned with full metadata...
 	for _, it := range items {
 		if it.Path == normalized {
-			return it.Path, nil
+			return []Example{it}, nil
 		}
 	}
+	// ...and any other embedded example file by exact path (non-solution kinds
+	// the listing excludes) is still fetchable.
+	if exampleFileExists(normalized) {
+		return []Example{{Name: normalized, Path: normalized}}, nil
+	}
 
-	// 2. Match by metadata.name or file basename (may be ambiguous).
-	var matches []string
+	// 2. Match by metadata.name or file basename (may match several).
+	var matches []Example
 	for _, it := range items {
 		base := strings.TrimSuffix(path.Base(it.Path), path.Ext(it.Path))
 		if it.Name == query || base == query || base == normalized {
-			matches = append(matches, it.Path)
+			matches = append(matches, it)
 		}
 	}
-
-	switch len(matches) {
-	case 0:
-		return "", fmt.Errorf("%w: %q", ErrExampleNotFound, query)
-	case 1:
-		return matches[0], nil
-	default:
-		sort.Strings(matches)
-		return "", fmt.Errorf("%w: %q matches %s", ErrAmbiguousExample, query, strings.Join(matches, ", "))
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("%w: %q", ErrExampleNotFound, query)
 	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+	return matches, nil
+}
+
+// ResolveExample resolves a query to a single example path. It is a thin wrapper
+// over MatchExamples for callers requiring exactly one result: when the query
+// matches more than one example, ErrAmbiguousExample is returned wrapped with
+// the candidate paths.
+func ResolveExample(query string) (string, error) {
+	matches, err := MatchExamples(query)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) > 1 {
+		paths := make([]string, len(matches))
+		for i, m := range matches {
+			paths[i] = m.Path
+		}
+		return "", fmt.Errorf("%w: %q matches %s", ErrAmbiguousExample, query, strings.Join(paths, ", "))
+	}
+	return matches[0].Path, nil
 }
 
 // displayNameOf returns metadata.displayName, falling back to metadata.name.

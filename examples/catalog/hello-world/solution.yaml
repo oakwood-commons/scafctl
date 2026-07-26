@@ -2,8 +2,8 @@ apiVersion: scafctl.io/v1
 kind: Solution
 
 metadata:
-  name: hello-world
-  displayName: Hello World
+  name: hello-world-catalog
+  displayName: Hello World (Catalog)
   category: developer-tools
   tags:
     - catalog

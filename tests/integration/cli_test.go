@@ -8527,7 +8527,7 @@ func TestIntegration_GetExamples_List_ShowsViewTip(t *testing.T) {
 	_, stderr, exitCode := runScafctl(t, "get", "examples")
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stderr, "get examples")
-	assert.Contains(t, stderr, "to view a solution")
+	assert.Contains(t, stderr, "to view an example")
 }
 
 func TestIntegration_GetExamples_List_OnlySolutions(t *testing.T) {
@@ -8617,14 +8617,27 @@ func TestIntegration_GetExamples_Get_NonSolutionByPath(t *testing.T) {
 	assert.NotEmpty(t, stdout)
 }
 
-func TestIntegration_GetExamples_Get_AmbiguousName(t *testing.T) {
+func TestIntegration_GetExamples_Get_MultipleMatchesListed(t *testing.T) {
 	t.Parallel()
-	// "hello-world" is shared by several examples; the lookup must refuse and
-	// list the candidates rather than guessing.
-	_, stderr, exitCode := runScafctl(t, "get", "examples", "hello-world")
-	assert.NotEqual(t, 0, exitCode)
-	assert.Contains(t, stderr, "ambiguous")
-	assert.Contains(t, stderr, "actions/hello-world.yaml")
+	// "hello-world" is a basename shared by several examples. Rather than error,
+	// the command lists the matching examples (with their paths) so the user can
+	// pick one, and exits 0.
+	stdout, stderr, exitCode := runScafctl(t, "get", "examples", "hello-world")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "examples match")
+	// The matches are rendered as a list including their disambiguating paths.
+	combined := stdout + stderr
+	assert.Contains(t, combined, "actions/hello-world.yaml")
+	assert.Contains(t, combined, "resolvers/hello-world.yaml")
+}
+
+func TestIntegration_GetExamples_Get_UniqueNameShowsContent(t *testing.T) {
+	t.Parallel()
+	// A now-unique name resolves directly to that example's content.
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "hello-world-resolver")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "kind: Solution")
+	assert.Contains(t, stdout, "name: hello-world-resolver")
 }
 
 func TestIntegration_GetExamples_Get_PathTraversalRejected(t *testing.T) {

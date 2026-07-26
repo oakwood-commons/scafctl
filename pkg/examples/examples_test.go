@@ -258,6 +258,75 @@ func TestResolveExample_Ambiguous(t *testing.T) {
 	assert.Contains(t, err.Error(), "actions/hello-world.yaml")
 }
 
+func TestMatchExamples_UniqueName(t *testing.T) {
+	t.Parallel()
+	got, err := MatchExamples("hello-world-resolver")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "hello-world-resolver", got[0].Name)
+	assert.Equal(t, "resolvers/hello-world.yaml", got[0].Path)
+}
+
+func TestMatchExamples_MultipleReturnsAll(t *testing.T) {
+	t.Parallel()
+	// "hello-world" is a basename shared by several examples; MatchExamples
+	// returns all of them (the CLI lists them for the user to pick).
+	got, err := MatchExamples("hello-world")
+	require.NoError(t, err)
+	require.Greater(t, len(got), 1)
+	paths := make([]string, len(got))
+	for i, m := range got {
+		paths[i] = m.Path
+	}
+	assert.Contains(t, paths, "actions/hello-world.yaml")
+	assert.Contains(t, paths, "resolvers/hello-world.yaml")
+}
+
+func TestMatchExamples_ExactPath(t *testing.T) {
+	t.Parallel()
+	got, err := MatchExamples("resolvers/cel-basics.yaml")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "resolvers/cel-basics.yaml", got[0].Path)
+}
+
+func TestMatchExamples_NotFoundAndTraversal(t *testing.T) {
+	t.Parallel()
+	_, err := MatchExamples("does-not-exist-xyz")
+	assert.ErrorIs(t, err, ErrExampleNotFound)
+
+	_, err = MatchExamples("../../etc/passwd")
+	assert.ErrorIs(t, err, ErrPathTraversal)
+}
+
+func TestScan_PopulatesContent(t *testing.T) {
+	t.Parallel()
+	// Content carries the full example file so the interactive (-i) detail view
+	// can show the solution without a second command.
+	items, err := Scan("")
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+	for _, it := range items[:min(5, len(items))] {
+		assert.Contains(t, it.Content, "apiVersion:", "%s: content should be the full solution", it.Path)
+		assert.Contains(t, it.Content, "kind: Solution", it.Path)
+	}
+}
+
+func TestExampleNamesAreUnique(t *testing.T) {
+	t.Parallel()
+	// Regression guard: every listed example must have a unique metadata.name so
+	// `get examples <name>` is unambiguous by name.
+	items, err := Scan("")
+	require.NoError(t, err)
+	seen := make(map[string]string, len(items))
+	for _, it := range items {
+		if prev, dup := seen[it.Name]; dup {
+			t.Errorf("duplicate example name %q: %s and %s", it.Name, prev, it.Path)
+		}
+		seen[it.Name] = it.Path
+	}
+}
+
 func TestResolveExample_NotFound(t *testing.T) {
 	t.Parallel()
 	_, err := ResolveExample("this-does-not-exist-anywhere")

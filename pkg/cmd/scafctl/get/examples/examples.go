@@ -107,25 +107,7 @@ func (o *Options) runList(ctx context.Context) error {
 		return err
 	}
 
-	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
-		kvx.WithIOStreams(o.IOStreams),
-		kvx.WithOutputContext(ctx),
-		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
-		kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
-		kvx.WithOutputColumnOrder([]string{"displayName", "name", "category", "path", "tags", "description"}),
-		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
-			"displayName": {MaxWidth: 28, Priority: 10},
-			"name":        {MaxWidth: 24, Priority: 8},
-			"category":    {MaxWidth: 16, Priority: 7},
-			// Path is the copy/paste handle for `get examples <path>` -- keep it
-			// visible and wide enough that it does not truncate.
-			"path":        {MaxWidth: 48, Priority: 9},
-			"tags":        {MaxWidth: 20, Priority: 4},
-			"description": {Priority: 3},
-		}),
-	)
-
+	outputOpts := o.listOutputOpts(ctx)
 	structured := kvx.IsStructuredFormat(outputOpts.Format)
 	quiet := kvx.IsQuietFormat(outputOpts.Format)
 
@@ -157,14 +139,46 @@ func (o *Options) runList(ctx context.Context) error {
 	}
 
 	// Tip: the list shows metadata, but the content lives in the embedded FS.
-	// Tell the user exactly how to view a solution (the path is the handle).
+	// Tell the user how to view a specific example.
 	if !structured && !quiet {
 		bin := o.CliParams.BinaryName
 		w.PlainStderrf("")
-		w.PlainStderrf("Tip: run '%s get examples <path>' to view a solution (e.g. '%s get examples %s').",
-			bin, bin, items[0].Path)
+		w.PlainStderrf("Tip: run '%s get examples <name>' to view an example (e.g. '%s get examples %s').",
+			bin, bin, items[0].Name)
 	}
 	return nil
+}
+
+// listOutputOpts builds the kvx output options for the example listing (shared
+// by the full list and the multi-match filtered list). The display schema drives
+// the interactive (-i) card + detail view; the column hints tune the plain
+// table. name and path are internal fetch handles, not list columns.
+func (o *Options) listOutputOpts(ctx context.Context) *kvx.OutputOptions {
+	return flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
+		kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
+		kvx.WithOutputColumnOrder([]string{"name", "category", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			// `name` is the PRIMARY column: it is exactly what the user types in
+			// `get examples <name>` (what you see is what you type, matching
+			// `get provider`). Fixed columns get a MaxWidth so the table fits;
+			// description is a flex column that absorbs the remaining terminal
+			// width (MaxWidth is its minimum, not a cap).
+			"name":        {MaxWidth: 34, Priority: 10},
+			"category":    {MaxWidth: 14, Priority: 8},
+			"description": {MaxWidth: 40, Priority: 6, Flex: true},
+			// displayName/tags/path/content are not table columns; they appear in
+			// the -i detail view and/or -o json/yaml. name/path are the fetch
+			// handles; content powers the -i detail "Solution" section.
+			"displayName": {Hidden: true},
+			"tags":        {Hidden: true},
+			"path":        {Hidden: true},
+			"content":     {Hidden: true},
+		}),
+	)
 }
 
 func (o *Options) runGet(ctx context.Context, query string) error {
@@ -177,17 +191,14 @@ func (o *Options) runGet(ctx context.Context, query string) error {
 		return exitcode.WithCode(fmt.Errorf("--category can only be used in list mode"), exitcode.InvalidInput)
 	}
 
-	// Resolve the query (path, metadata.name, or basename) to a concrete path.
-	exPath, err := exampleslib.ResolveExample(query)
+	// Resolve the query (exact path, metadata.name, or basename) to matching
+	// example(s).
+	matches, err := exampleslib.MatchExamples(query)
 	if err != nil {
 		switch {
 		case errors.Is(err, exampleslib.ErrPathTraversal):
 			w.Errorf("Invalid example path: %s", query)
 			return exitcode.WithCode(fmt.Errorf("invalid example path: %w", err), exitcode.InvalidInput)
-		case errors.Is(err, exampleslib.ErrAmbiguousExample):
-			w.Errorf("%v", err)
-			w.PlainStderrf("Pass the full path to disambiguate, e.g. '%s get examples <path>'.", o.CliParams.BinaryName)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
 		case errors.Is(err, exampleslib.ErrExampleNotFound):
 			w.Errorf("Example not found: %s", query)
 			w.PlainStderrf("Run '%s get examples' to list available examples.", o.CliParams.BinaryName)
@@ -196,6 +207,35 @@ func (o *Options) runGet(ctx context.Context, query string) error {
 			return err
 		}
 	}
+
+	// More than one example matched the name/basename: show the matches as a
+	// filtered list so the user can pick one, rather than guessing or erroring.
+	if len(matches) > 1 {
+		outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+			kvx.WithIOStreams(o.IOStreams),
+			kvx.WithOutputContext(ctx),
+			kvx.WithOutputNoColor(o.CliParams.NoColor),
+			kvx.WithOutputAppName(o.CliParams.BinaryName+" get examples"),
+			kvx.WithOutputDisplaySchemaJSON(examplesSchemaJSON),
+			kvx.WithOutputColumnOrder([]string{"displayName", "category", "path"}),
+			kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+				"displayName": {MaxWidth: 32, Priority: 10},
+				"category":    {MaxWidth: 16, Priority: 8},
+				// Show path here so the user can disambiguate the matches.
+				"path":        {MaxWidth: 48, Priority: 6},
+				"name":        {Hidden: true},
+				"tags":        {Hidden: true},
+				"description": {Hidden: true},
+				"content":     {Hidden: true},
+			}),
+		)
+		if !kvx.IsStructuredFormat(outputOpts.Format) && !kvx.IsQuietFormat(outputOpts.Format) {
+			w.WarnStderrf("%d examples match %q -- pick one by its path:", len(matches), query)
+		}
+		return outputOpts.Write(matches)
+	}
+
+	exPath := matches[0].Path
 
 	content, err := exampleslib.Read(exPath)
 	if err != nil {

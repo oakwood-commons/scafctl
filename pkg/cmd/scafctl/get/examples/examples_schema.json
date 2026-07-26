@@ -34,9 +34,14 @@
         "layout": "tags"
       },
       {
-        "title": "View this example",
+        "title": "Path",
         "fields": ["path"],
         "layout": "inline"
+      },
+      {
+        "title": "Solution",
+        "fields": ["content"],
+        "layout": "paragraph"
       }
     ]
   },
@@ -75,6 +80,11 @@
         "type": "string",
         "title": "Path",
         "description": "Handle passed to 'get examples <path>' to view the full solution"
+      },
+      "content": {
+        "type": "string",
+        "title": "Solution",
+        "description": "The full example solution content, shown in the interactive detail view"
       }
     }
   }
