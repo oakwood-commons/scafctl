@@ -31,28 +31,15 @@ func (p *FileProvider) executeStateLoad(absPath string) (*provider.Output, error
 		return nil, fmt.Errorf("state load: %w", err)
 	}
 
-	var stateData state.Data
-	if err := json.Unmarshal(data, &stateData); err != nil {
-		return nil, fmt.Errorf("state load: unmarshal: %w", err)
-	}
-
-	if stateData.Parameters == nil {
-		stateData.Parameters = make(map[string]any)
-	}
-	if stateData.Resolvers == nil {
-		stateData.Resolvers = make(map[string]*state.PersistedEntry)
-	}
-	if stateData.Fingerprints == nil {
-		stateData.Fingerprints = make(map[string]*state.FingerprintEntry)
-	}
-	if stateData.Command.Parameters == nil {
-		stateData.Command.Parameters = make(map[string]string)
+	stateData, err := state.DecodeData(data)
+	if err != nil {
+		return nil, fmt.Errorf("state load: %w", err)
 	}
 
 	return &provider.Output{
 		Data: map[string]any{
 			"success": true,
-			"data":    &stateData,
+			"data":    stateData,
 		},
 	}, nil
 }

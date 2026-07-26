@@ -34,6 +34,19 @@ func TestFileProvider_StateLoad_NotFound(t *testing.T) {
 	assert.NotNil(t, data["data"])
 }
 
+func TestFileProvider_StateLoad_IncompatibleSchemaVersion(t *testing.T) {
+	p := NewFileProvider()
+	absPath := filepath.Join(t.TempDir(), "legacy.json")
+	// Below the minimum floor AND a field whose type no longer matches the
+	// current struct -- the version guard must win over the raw decode error.
+	err := os.WriteFile(absPath, []byte(`{"schemaVersion":1,"metadata":{"solution":{"nested":"object"}}}`), 0o600)
+	require.NoError(t, err)
+
+	_, err = p.executeStateLoad(absPath)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, state.ErrIncompatibleSchemaVersion)
+}
+
 func TestFileProvider_StateRoundTrip(t *testing.T) {
 	p := NewFileProvider()
 	tmpDir := t.TempDir()
@@ -190,7 +203,7 @@ func TestFileProvider_StateLoadInvalidJSON(t *testing.T) {
 
 	_, err := p.executeStateLoad(statePath)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unmarshal")
+	assert.Contains(t, err.Error(), "read state schema version")
 }
 
 func TestFileProvider_StateSaveMarshal(t *testing.T) {

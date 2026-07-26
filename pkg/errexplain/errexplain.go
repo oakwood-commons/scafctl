@@ -181,6 +181,38 @@ func knownPatterns() []pattern {
 			},
 		},
 		{
+			name:  "state-schema-version-unsupported",
+			regex: regexp.MustCompile(`unsupported state schema version: file version (\d+) is newer than supported version (\d+)`),
+			build: func(m []string, _ string) Explanation {
+				return Explanation{
+					Category:  "state",
+					Summary:   fmt.Sprintf("State file schema version %s is newer than this build supports (%s)", m[1], m[2]),
+					RootCause: fmt.Sprintf("The state file was written by a newer version of scafctl (schema version %s), which this build (max %s) cannot safely read", m[1], m[2]),
+					Suggestions: []string{
+						"Upgrade scafctl to a version that supports this state schema",
+						"Do not hand-edit the schemaVersion field to a lower number -- the file layout may be incompatible",
+						"If you must use this build, recreate the state with it (delete the newer state file first, losing its data)",
+					},
+				}
+			},
+		},
+		{
+			name:  "state-schema-version-incompatible",
+			regex: regexp.MustCompile(`incompatible state schema version: file version (\d+) is older than the minimum supported version (\d+)`),
+			build: func(m []string, _ string) Explanation {
+				return Explanation{
+					Category:  "state",
+					Summary:   fmt.Sprintf("State file schema version %s is older than the minimum supported version (%s)", m[1], m[2]),
+					RootCause: fmt.Sprintf("The state file uses an old schema (version %s) whose layout was dropped by a breaking change; the minimum this build can read is version %s", m[1], m[2]),
+					Suggestions: []string{
+						"Delete the state file and recreate it -- the old layout cannot be safely migrated in place",
+						"If the state is backed by a remote store, remove the stale object before the next run",
+						"Back up any values you need from the old file before deleting it, since they will be regenerated",
+					},
+				}
+			},
+		},
+		{
 			name:  "cel-undeclared-ref",
 			regex: regexp.MustCompile(`undeclared reference to '([^']+)'`),
 			build: func(m []string, _ string) Explanation {
