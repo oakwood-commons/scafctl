@@ -197,9 +197,11 @@ const (
 	CatalogNameOfficial = "official"
 
 	// DefaultOfficialCatalogURL is the OCI URL of the embedded official catalog.
-	// It is the single source of truth for the official catalog location, used
-	// both when materializing the default catalogs and when recognizing a
-	// default catalog that points at the official registry under an alias name.
+	// It must be kept in sync with the embedded defaults.yaml, which hardcodes
+	// the same URL and is the effective runtime source for the official catalog
+	// entry. This constant is used only as a fallback when the embedded defaults
+	// are unavailable, and to recognize a default catalog that points at the
+	// official registry under an alias name.
 	DefaultOfficialCatalogURL = "oci://ghcr.io/oakwood-commons"
 )
 
