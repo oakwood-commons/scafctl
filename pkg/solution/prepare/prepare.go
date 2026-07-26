@@ -1260,7 +1260,14 @@ const hostMetadataSettingsKey = "metadata"
 // blob delivered under Settings["metadata"]. A nil solution yields an empty
 // solution object, which is the correct shape for pool-mode hosts that serve
 // many solutions (per-solution metadata is delivered per-execution instead).
+//
+// An empty entrypoint is normalized to EntrypointUnknown so the serialized
+// metadata never reports a blank/invalid entrypoint, regardless of caller.
 func buildHostMetadataSettings(entrypoint string, sol *solution.Solution) (json.RawMessage, error) {
+	if entrypoint == "" {
+		entrypoint = EntrypointUnknown
+	}
+
 	type solutionMeta struct {
 		Name        string   `json:"name"`
 		Version     string   `json:"version"`

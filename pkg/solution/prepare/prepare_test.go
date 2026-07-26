@@ -1156,6 +1156,18 @@ func TestHostStaticProviderConfig_APIEntrypoint(t *testing.T) {
 	assert.Equal(t, "api", meta["entrypoint"])
 }
 
+func TestHostStaticProviderConfig_EmptyEntrypointDefaultsToUnknown(t *testing.T) {
+	// An empty entrypoint must serialize as EntrypointUnknown rather than a
+	// blank/invalid value, even though HostStaticProviderConfig is exported and
+	// a caller could pass "".
+	cfg := HostStaticProviderConfig("scafctl", "")
+
+	raw := cfg.Settings["metadata"]
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	assert.Equal(t, EntrypointUnknown, meta["entrypoint"])
+}
+
 func TestInjectHTTPClientSettings_NilConfig(t *testing.T) {
 	// Must not panic.
 	injectHTTPClientSettings(context.Background(), nil)

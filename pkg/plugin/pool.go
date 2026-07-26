@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -191,8 +192,27 @@ func WithSanitizeEnv(sanitize bool) PoolOption {
 // The config must contain only host-static data (constant for the pool's
 // lifetime). Per-solution values vary per request and are delivered on the
 // per-execution path instead, never re-configured on the shared wrapper.
+//
+// The cfg.Settings map is cloned so the long-lived pool never shares the
+// caller's map reference; a caller mutating its map afterward cannot race with
+// or alter what pooled providers observe.
 func WithBaseProviderConfig(cfg ProviderConfig) PoolOption {
-	return func(o *poolOptions) { o.baseConfig = cfg }
+	return func(o *poolOptions) { o.baseConfig = cloneProviderConfig(cfg) }
+}
+
+// cloneProviderConfig returns a copy of cfg with its Settings map cloned so the
+// pool never shares the caller's map reference. The values (json.RawMessage)
+// are treated as immutable and are not deep-copied.
+func cloneProviderConfig(cfg ProviderConfig) ProviderConfig {
+	if cfg.Settings == nil {
+		return cfg
+	}
+	settings := make(map[string]json.RawMessage, len(cfg.Settings))
+	for k, v := range cfg.Settings {
+		settings[k] = v
+	}
+	cfg.Settings = settings
+	return cfg
 }
 
 // PoolStats holds pool metrics.
@@ -798,9 +818,10 @@ func (p *Pool) ClientOptsLen() int {
 
 // BaseProviderConfig returns the host-static ProviderConfig delivered to each
 // pooled provider at load time. See [WithBaseProviderConfig]. This is primarily
-// useful for testing that the base config was wired correctly.
+// useful for testing that the base config was wired correctly. The returned
+// Settings map is a clone so callers cannot mutate the pool's stored config.
 func (p *Pool) BaseProviderConfig() ProviderConfig {
-	return p.opts.baseConfig
+	return cloneProviderConfig(p.opts.baseConfig)
 }
 
 // Shutdown kills all managed plugin processes. Called once on server stop.

@@ -115,6 +115,42 @@ func TestNewPool_WithBaseProviderConfig(t *testing.T) {
 		assert.Equal(t, "mycli", p.opts.baseConfig.BinaryName)
 		assert.Equal(t, base.Settings, p.opts.baseConfig.Settings)
 	})
+
+	t.Run("clones the caller's settings map on store", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+
+		// Mutating the caller's map after construction must not affect the pool.
+		base.Settings["metadata"] = json.RawMessage(`{"entrypoint":"tampered"}`)
+		base.Settings["injected"] = json.RawMessage(`true`)
+
+		stored := p.opts.baseConfig.Settings
+		assert.Equal(t, json.RawMessage(`{"entrypoint":"mcp"}`), stored["metadata"])
+		assert.NotContains(t, stored, "injected")
+	})
+
+	t.Run("BaseProviderConfig returns a clone", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+
+		// Mutating the returned map must not affect the pool's stored config.
+		got := p.BaseProviderConfig()
+		got.Settings["metadata"] = json.RawMessage(`{"entrypoint":"tampered"}`)
+
+		assert.Equal(t, json.RawMessage(`{"entrypoint":"mcp"}`), p.opts.baseConfig.Settings["metadata"])
+	})
 }
 
 func TestBuildSpawnClientOpts(t *testing.T) {
