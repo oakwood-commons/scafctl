@@ -30,5 +30,5 @@ spec:
               method: GET
               headers:
                 Accept: application/json
-              auth: github
+              authProvider: github
               scope: "read:user"

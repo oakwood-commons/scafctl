@@ -1,11 +1,11 @@
-# Run: scafctl solution diff -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
+# Run: scafctl diff solution -f examples/soldiff/solution-v1.yaml -f examples/soldiff/solution-v2.yaml
 
 apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
-  name: soldiff-demo
+  name: soldiff-demo-v2
   version: "2.0.0"
-  displayName: Soldiff Demo
+  displayName: Soldiff Demo (v2)
   category: developer-tools
   tags:
     - diff
@@ -57,21 +57,17 @@ spec:
     actions:
       deploy:
         description: Deploy the application with health check
-        with:
-          - provider: exec
-            inputs:
-              command: echo
-              args:
-                - "Deploying {{ .app_name }} with {{ .replicas }} replicas to {{ .environment }}"
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Deploying ' + _.app_name + ' with ' + string(_.replicas) + ' replicas to ' + _.environment"
 
       # New action added in v2
       verify:
         description: Verify deployment health
         dependsOn:
           - deploy
-        with:
-          - provider: exec
-            inputs:
-              command: echo
-              args:
-                - "Checking health at {{ .health_check_url }}"
+        provider: exec
+        inputs:
+          command:
+            expr: "'echo Checking health at ' + _.health_check_url"

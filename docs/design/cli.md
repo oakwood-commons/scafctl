@@ -1080,12 +1080,15 @@ scafctl lint rule <rule-id> -o json
 
 ## Browsing Examples
 
-Discover and download built-in example configurations:
+Discover and view built-in example solutions. Examples are **embedded in the
+binary** (not files on disk), and the listing is driven by each solution's own
+`metadata` (displayName, name, category, tags, description) -- only
+`kind: Solution` examples are listed.
 
 ### List Examples
 
 ~~~bash
-# List all examples
+# List all examples (metadata-driven; prints a tip on how to view one)
 scafctl get examples
 
 # Filter by category
@@ -1093,21 +1096,39 @@ scafctl get examples --category solutions
 scafctl get examples --category resolvers
 scafctl get examples --category actions
 
-# Output as JSON
-scafctl get examples -o json
+# Interactive card + detail view
+scafctl get examples -i
 
-# Output as YAML
+# Output as JSON / YAML
+scafctl get examples -o json
 scafctl get examples -o yaml
 ~~~
 
 ### Get an Example
 
+You can fetch an example by its **path** (always unique) or by its
+**metadata.name** / basename when that is unambiguous:
+
 ~~~bash
-# Print example to stdout
+# By full path (always works)
 scafctl get examples resolvers/hello-world.yaml
+
+# By metadata.name when unique
+scafctl get examples cel-basics
 
 # Save to file
 scafctl get examples resolvers/hello-world.yaml > output.yaml
+~~~
+
+If a name matches more than one example (e.g. `hello-world` exists as an action,
+a resolver, and a solution), the command refuses to guess and lists the
+candidate paths so you can pick one:
+
+~~~bash
+scafctl get examples hello-world
+# error: ambiguous example query: "hello-world" matches
+#        actions/hello-world.yaml, resolvers/hello-world.yaml, ...
+# Pass the full path to disambiguate.
 ~~~
 
 ---

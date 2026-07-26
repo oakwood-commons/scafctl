@@ -8749,9 +8749,56 @@ func TestIntegration_GetExamples_List(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "get", "examples", "-o", "yaml")
 	assert.Equal(t, 0, exitCode)
-	assert.Contains(t, stdout, "path:")
+	// Listing is metadata-driven: displayName/name/category come from each
+	// solution's metadata block, not the filename. Explicit yaml tags keep the
+	// YAML key casing aligned with the JSON output and the display schema.
+	assert.Contains(t, stdout, "displayName:")
+	assert.Contains(t, stdout, "name:")
 	assert.Contains(t, stdout, "category:")
-	assert.Contains(t, stdout, "description:")
+	// Names come from metadata.name, so they never carry a file extension.
+	assert.NotContains(t, stdout, "name: resolver-demo.yaml")
+}
+
+func TestIntegration_GetExamples_List_ShowsViewTip(t *testing.T) {
+	t.Parallel()
+	// The default (table) list prints a tip to stderr telling the user how to
+	// view an example's content, since the path is an embedded-FS handle.
+	_, stderr, exitCode := runScafctl(t, "get", "examples")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "get examples")
+	assert.Contains(t, stderr, "to view an example")
+}
+
+func TestIntegration_GetExamples_List_OnlySolutions(t *testing.T) {
+	t.Parallel()
+	// Non-solution files (configs, partials, templates) must not appear.
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items))
+	require.NotEmpty(t, items)
+	for _, it := range items {
+		p, _ := it["path"].(string)
+		assert.NotContains(t, p, "bad-solution")
+		assert.NotContains(t, p, "lint-stress-test")
+		n, _ := it["name"].(string)
+		assert.NotContains(t, n, ".yaml", "name must come from metadata, not filename")
+	}
+}
+
+func TestIntegration_GetExamples_List_JSONYAMLKeyCasingAligned(t *testing.T) {
+	t.Parallel()
+	// JSON and YAML output must use the same camelCase field names (the struct
+	// carries matching json+yaml tags), and both must match the display-schema
+	// field names. Guards against yaml.Marshal lowercasing keys.
+	yamlOut, _, yc := runScafctl(t, "get", "examples", "-o", "yaml")
+	assert.Equal(t, 0, yc)
+	assert.Contains(t, yamlOut, "displayName:")
+	assert.NotContains(t, yamlOut, "displayname:")
+
+	jsonOut, _, jc := runScafctl(t, "get", "examples", "-o", "json")
+	assert.Equal(t, 0, jc)
+	assert.Contains(t, jsonOut, "\"displayName\"")
 }
 
 func TestIntegration_GetExamples_List_FilterCategory(t *testing.T) {
@@ -8761,11 +8808,83 @@ func TestIntegration_GetExamples_List_FilterCategory(t *testing.T) {
 	assert.Contains(t, stdout, "solutions")
 }
 
+func TestIntegration_GetExamples_List_EmptyStructuredEmitsArray(t *testing.T) {
+	t.Parallel()
+	// An empty result in a structured format must still emit a parseable, empty
+	// document on stdout (not "null", not human text), and any guidance goes to
+	// stderr only.
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "--category", "no-such-category", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &items),
+		"empty structured output must be valid JSON, got: %q", stdout)
+	assert.Empty(t, items)
+}
+
+func TestIntegration_GetExamples_List_EmptyHumanMessageOnStderr(t *testing.T) {
+	t.Parallel()
+	// In the default (human) format, an empty result prints no data on stdout;
+	// the "no examples" guidance is written to stderr.
+	stdout, stderr, exitCode := runScafctl(t, "get", "examples", "--category", "no-such-category")
+	assert.Equal(t, 0, exitCode)
+	assert.Empty(t, strings.TrimSpace(stdout), "stdout should be empty for a human empty result")
+	assert.Contains(t, stderr, "No examples found in category")
+}
+
 func TestIntegration_GetExamples_Get(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "get", "examples", "resolver-demo.yaml")
 	assert.Equal(t, 0, exitCode)
 	assert.NotEmpty(t, stdout)
+}
+
+func TestIntegration_GetExamples_Get_ByName(t *testing.T) {
+	t.Parallel()
+	// A unique metadata.name resolves without needing the full path.
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "cel-basics")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "kind: Solution")
+	assert.Contains(t, stdout, "name: cel-basics")
+}
+
+func TestIntegration_GetExamples_Get_NonSolutionByPath(t *testing.T) {
+	t.Parallel()
+	// The listing is solution-only, but exact-path fetch must still return any
+	// embedded example file, including non-solution kinds (kind: Config here).
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "catalog/native-auth.yaml")
+	assert.Equal(t, 0, exitCode)
+	assert.NotEmpty(t, stdout)
+}
+
+func TestIntegration_GetExamples_Get_MultipleMatchesListed(t *testing.T) {
+	t.Parallel()
+	// "hello-world" is a basename shared by several examples. Rather than error,
+	// the command lists the matching examples (with their paths) so the user can
+	// pick one, and exits 0.
+	stdout, stderr, exitCode := runScafctl(t, "get", "examples", "hello-world")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "examples match")
+	// The matches are rendered as a list including their disambiguating paths.
+	combined := stdout + stderr
+	assert.Contains(t, combined, "actions/hello-world.yaml")
+	assert.Contains(t, combined, "resolvers/hello-world.yaml")
+}
+
+func TestIntegration_GetExamples_Get_UniqueNameShowsContent(t *testing.T) {
+	t.Parallel()
+	// A now-unique name resolves directly to that example's content.
+	stdout, _, exitCode := runScafctl(t, "get", "examples", "hello-world-resolver")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "kind: Solution")
+	assert.Contains(t, stdout, "name: hello-world-resolver")
+}
+
+func TestIntegration_GetExamples_Get_PathTraversalRejected(t *testing.T) {
+	t.Parallel()
+	// A traversal query must be rejected before touching the filesystem.
+	_, stderr, exitCode := runScafctl(t, "get", "examples", "../../etc/passwd")
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "Invalid example path")
 }
 
 func TestIntegration_GetExamples_Get_JSON(t *testing.T) {

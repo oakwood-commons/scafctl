@@ -16,7 +16,6 @@ metadata:
     keepSkipped: true retains nils so output stays index-aligned with input.
 
 spec:
-    - resolver-example
   resolvers:
     # ─────────────────────────────────────────────
     # 1. Source data — all users (active and inactive)

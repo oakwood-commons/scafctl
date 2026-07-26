@@ -24,7 +24,12 @@ apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
   name: github-state-example
+  displayName: GitHub State Persistence
   version: 1.0.0
+  category: solutions
+  tags:
+    - state
+    - github
   description: |
     GitHub-based state persistence with PR workflow.
     Loads state from main, saves to a feature branch derived from a resolver.

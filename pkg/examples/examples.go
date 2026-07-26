@@ -22,24 +22,75 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
-// ErrPathTraversal is returned when a path contains ".." components.
-var ErrPathTraversal = errors.New("path must not contain '..'")
+// ErrPathTraversal is returned when an example lookup path is unsafe: it either
+// contains a ".." traversal component or is an absolute/UNC/drive-letter path.
+// Example paths are always relative (e.g. "resolvers/hello-world.yaml").
+var ErrPathTraversal = errors.New("example path must be relative and must not contain '..'")
+
+// ErrAmbiguousExample is returned when a lookup query matches more than one
+// example. It is a sentinel error: ResolveExample wraps it with the candidate
+// paths in the error string (e.g. `...: "hello-world" matches a.yaml, b.yaml`),
+// so callers detect it with errors.Is and can surface the message to the user.
+var ErrAmbiguousExample = errors.New("ambiguous example query")
+
+// ErrExampleNotFound is returned when a lookup query matches no example.
+var ErrExampleNotFound = errors.New("example not found")
 
 //go:embed files/*
 var EmbeddedExamples embed.FS
 
-// Example represents an example file in the listing.
+// solutionKind is the only artifact kind surfaced as a runnable example. Config
+// files, auth-handler configs, compose partials, and rendered templates that
+// live under examples/ are intentionally excluded from the listing.
+const solutionKind = "Solution"
+
+// Example represents a runnable example solution in the listing. Fields are
+// sourced from the solution's own metadata block (not the filename), so the
+// listing reflects what the author declared.
 type Example struct {
-	Path        string `json:"path"`
-	Category    string `json:"category"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	// DisplayName is the human-friendly name from metadata.displayName.
+	// Falls back to metadata.name when unset.
+	DisplayName string `json:"displayName,omitempty" yaml:"displayName,omitempty"`
+	// Name is the solution's metadata.name (its stable identifier).
+	Name string `json:"name" yaml:"name"`
+	// Category is metadata.category (falls back to the top-level directory).
+	Category string `json:"category,omitempty" yaml:"category,omitempty"`
+	// Tags are metadata.tags.
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty"`
+	// Description is metadata.description (first line, trimmed).
+	Description string `json:"description,omitempty" yaml:"description,omitempty"`
+	// Path is the embedded-FS path used as the unambiguous fetch handle for
+	// `get examples <path>` (metadata.name is not unique across examples).
+	Path string `json:"path" yaml:"path"`
+	// Content is the full example file content. It powers the interactive (-i)
+	// detail view so a user can read the solution without leaving the browser.
+	// Omitted from the default table (see the command's column hints).
+	Content string `json:"content,omitempty" yaml:"content,omitempty"`
 }
 
-// Scan walks the examples filesystem and returns matching examples.
-// If category is empty, returns all examples.
+// exampleMeta is a lightweight view of a solution used only to populate the
+// listing. It deliberately parses just the fields the listing needs so a quirky
+// (but valid) example never breaks scanning.
+type exampleMeta struct {
+	Kind     string `yaml:"kind"`
+	Metadata struct {
+		Name        string   `yaml:"name"`
+		DisplayName string   `yaml:"displayName"`
+		Category    string   `yaml:"category"`
+		Description string   `yaml:"description"`
+		Tags        []string `yaml:"tags"`
+	} `yaml:"metadata"`
+}
+
+// Scan walks the examples filesystem and returns matching example solutions.
+// Only kind: Solution files are returned; non-solution YAML (configs, partials,
+// templates) is skipped. If category is non-empty, only examples in that
+// category are returned. Metadata is read from each solution's own metadata
+// block.
 func Scan(category string) ([]Example, error) {
 	examplesFS, root, err := getExamplesFS()
 	if err != nil {
@@ -55,67 +106,236 @@ func Scan(category string) ([]Example, error) {
 			return nil
 		}
 
-		// Only include YAML files (use path.Ext for forward-slash paths from embed.FS)
 		ext := path.Ext(fpath)
 		if ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
 
-		// Get the relative path from the root.
-		// embed.FS always uses forward slashes, so use strings-based trimming
-		// instead of filepath.Rel which produces OS-native separators on Windows.
-		relPath := strings.TrimPrefix(fpath, root+"/")
-		if relPath == fpath {
-			// Fallback for OS filesystem where paths may use native separators
-			var relErr error
-			relPath, relErr = filepath.Rel(root, fpath)
-			if relErr != nil {
-				return relErr
+		relPath := relFromRoot(fpath, root)
+
+		// Skip intentionally invalid/demo examples that exist to trigger errors
+		// or stress lint rules -- they are not runnable reference examples.
+		if strings.Contains(relPath, "bad-solution") || strings.Contains(relPath, "lint-stress-test") {
+			return nil
+		}
+
+		content, err := fs.ReadFile(examplesFS, fpath)
+		if err != nil {
+			return nil //nolint:nilerr // skip unreadable file, keep scanning
+		}
+
+		var meta exampleMeta
+		if err := yaml.Unmarshal(content, &meta); err != nil {
+			// Not valid YAML (e.g. a Go-template partial) -- not a listable example.
+			return nil //nolint:nilerr
+		}
+		if meta.Kind != solutionKind {
+			return nil
+		}
+
+		// Category from metadata, falling back to the first path component.
+		cat := meta.Metadata.Category
+		if cat == "" {
+			if parts := strings.SplitN(relPath, "/", 2); len(parts) > 1 {
+				cat = parts[0]
 			}
-			relPath = filepath.ToSlash(relPath)
 		}
-
-		// Determine category from the first directory component
-		parts := strings.SplitN(relPath, "/", 2)
-		cat := ""
-		name := relPath
-		if len(parts) > 1 {
-			cat = parts[0]
-			name = parts[1]
-		}
-
-		// Apply category filter
 		if category != "" && cat != category {
 			return nil
 		}
 
-		// Skip intentionally bad examples
-		if strings.Contains(relPath, "bad-solution") {
-			return nil
-		}
-
-		item := Example{
-			Path:        relPath,
+		items = append(items, Example{
+			DisplayName: displayNameOf(meta),
+			Name:        meta.Metadata.Name,
 			Category:    cat,
-			Name:        name,
-			Description: DescriptionFromPath(relPath),
-		}
-		items = append(items, item)
+			Tags:        meta.Metadata.Tags,
+			Description: firstLine(meta.Metadata.Description),
+			Path:        relPath,
+			Content:     string(content),
+		})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Sort by category then name
+	// Sort by category, then displayName, then path (stable, path is unique).
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Category != items[j].Category {
 			return items[i].Category < items[j].Category
 		}
-		return items[i].Name < items[j].Name
+		if items[i].DisplayName != items[j].DisplayName {
+			return items[i].DisplayName < items[j].DisplayName
+		}
+		return items[i].Path < items[j].Path
 	})
 
 	return items, nil
+}
+
+// MatchExamples resolves a user-supplied query to the example(s) it identifies.
+// The query may be an exact embedded path, a metadata.name, or a file basename.
+// It returns:
+//
+//   - exactly one Example when the query names a single example (by exact path,
+//     or a unique name/basename),
+//   - more than one Example when a name/basename matches several (the caller
+//     should present them as a list to choose from),
+//   - ErrExampleNotFound when nothing matches,
+//   - ErrPathTraversal when the query is an unsafe path.
+//
+// Exact-path matches also resolve non-solution embedded files (e.g. kind:
+// Config) that the solution-only listing excludes; those are returned as a
+// single Example carrying just the Path.
+func MatchExamples(query string) ([]Example, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, ErrExampleNotFound
+	}
+	// Slash-normalize WITHOUT cleaning first, so a ".." component cannot be
+	// resolved away before the traversal check (path.Clean("foo/../x") == "x").
+	slashed := strings.ReplaceAll(filepath.ToSlash(query), "\\", "/")
+	if isUnsafeExamplePath(slashed) {
+		return nil, ErrPathTraversal
+	}
+	normalized := path.Clean(slashed)
+
+	items, err := Scan("")
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. Exact path match wins immediately (paths are unique): a listed solution
+	//    is returned with full metadata...
+	for _, it := range items {
+		if it.Path == normalized {
+			return []Example{it}, nil
+		}
+	}
+	// ...and any other embedded example file by exact path (non-solution kinds
+	// the listing excludes) is still fetchable.
+	if exampleFileExists(normalized) {
+		return []Example{{Name: normalized, Path: normalized}}, nil
+	}
+
+	// 2. Match by metadata.name or file basename (may match several).
+	var matches []Example
+	for _, it := range items {
+		base := strings.TrimSuffix(path.Base(it.Path), path.Ext(it.Path))
+		if it.Name == query || base == query || base == normalized {
+			matches = append(matches, it)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("%w: %q", ErrExampleNotFound, query)
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+	return matches, nil
+}
+
+// ResolveExample resolves a query to a single example path. It is a thin wrapper
+// over MatchExamples for callers requiring exactly one result: when the query
+// matches more than one example, ErrAmbiguousExample is returned wrapped with
+// the candidate paths.
+func ResolveExample(query string) (string, error) {
+	matches, err := MatchExamples(query)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) > 1 {
+		paths := make([]string, len(matches))
+		for i, m := range matches {
+			paths[i] = m.Path
+		}
+		return "", fmt.Errorf("%w: %q matches %s", ErrAmbiguousExample, query, strings.Join(paths, ", "))
+	}
+	return matches[0].Path, nil
+}
+
+// displayNameOf returns metadata.displayName, falling back to metadata.name.
+func displayNameOf(m exampleMeta) string {
+	if m.Metadata.DisplayName != "" {
+		return m.Metadata.DisplayName
+	}
+	return m.Metadata.Name
+}
+
+// firstLine returns the first non-empty line of s, trimmed. Multi-line
+// descriptions (block scalars) collapse to their first line for the listing.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// isUnsafeExamplePath reports whether a slash-separated path is unsafe to use as
+// an example lookup: either it contains a ".." traversal segment, or it is an
+// absolute path (leading "/", or a Windows drive/UNC form). The input must be
+// forward-slash separated but NOT path.Clean'd, so a ".." component cannot be
+// normalized away (path.Clean("foo/../x") == "x") before the check runs.
+// Example paths are always relative (e.g. "resolvers/hello-world.yaml"); an
+// absolute input never names an embedded example and is rejected up front to
+// keep the guard complete for any reuse of this resolver logic.
+func isUnsafeExamplePath(p string) bool {
+	if hasDotDotSegment(p) {
+		return true
+	}
+	if strings.HasPrefix(p, "/") {
+		return true // absolute (including UNC "\\\\server" -> "//server")
+	}
+	// Windows drive-letter absolute path, e.g. "C:/x".
+	if len(p) >= 2 && p[1] == ':' {
+		return true
+	}
+	return false
+}
+
+// hasDotDotSegment reports whether a slash-separated path contains a ".."
+// component (a traversal segment), as opposed to merely containing the literal
+// ".." inside a filename (e.g. "foo..bar.yaml", which is safe). The input must
+// be forward-slash separated but must NOT have been path.Clean'd: callers invoke
+// this before cleaning, precisely so a ".." component cannot be normalized away
+// (path.Clean("foo/../x") == "x") before the traversal check runs.
+func hasDotDotSegment(p string) bool {
+	if p == ".." {
+		return true
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// exampleFileExists reports whether relPath names a regular file in the
+// embedded examples filesystem. relPath must already be traversal-checked and
+// path.Clean'd (forward slashes). It is used by ResolveExample to allow
+// exact-path fetching of any embedded example file, including non-solution
+// files that the solution-only listing excludes.
+func exampleFileExists(relPath string) bool {
+	examplesFS, root, err := getExamplesFS()
+	if err != nil {
+		return false
+	}
+	info, err := fs.Stat(examplesFS, path.Join(root, relPath))
+	return err == nil && !info.IsDir()
+}
+
+// relFromRoot returns the forward-slash relative path of fpath under root,
+// handling both embed.FS (forward slashes) and OS filesystems (native
+// separators) consistently.
+func relFromRoot(fpath, root string) string {
+	relPath := strings.TrimPrefix(fpath, root+"/")
+	if relPath == fpath {
+		if rel, err := filepath.Rel(root, fpath); err == nil {
+			relPath = filepath.ToSlash(rel)
+		}
+	}
+	return relPath
 }
 
 // Read returns the contents of an example file.
@@ -125,13 +345,18 @@ func Read(exPath string) (string, error) {
 		return "", err
 	}
 
-	// Normalize to forward slashes (embed.FS always uses forward slashes)
-	cleanPath := path.Clean(filepath.ToSlash(exPath))
+	// Normalize to forward slashes WITHOUT cleaning first: embed.FS uses forward
+	// slashes, a caller may pass Windows-style backslashes, and path.Clean would
+	// resolve a ".." component away (path.Clean("foo/../x") == "x") before the
+	// traversal check. filepath.ToSlash is a no-op for backslashes off Windows.
+	slashed := strings.ReplaceAll(filepath.ToSlash(exPath), "\\", "/")
 
-	// Security: ensure the path doesn't escape
-	if strings.Contains(cleanPath, "..") {
+	// Security: reject any ".." path segment. A filename containing ".."
+	// (e.g. foo..bar.yaml) is safe and allowed.
+	if isUnsafeExamplePath(slashed) {
 		return "", ErrPathTraversal
 	}
+	cleanPath := path.Clean(slashed)
 
 	fullPath := path.Join(root, cleanPath)
 	content, err := fs.ReadFile(examplesFS, fullPath)
@@ -227,101 +452,4 @@ func findExamplesDir() (string, error) {
 	}
 
 	return "", fmt.Errorf("could not locate examples directory")
-}
-
-// DescriptionFromPath generates a human-readable description from a file path.
-func DescriptionFromPath(exPath string) string {
-	descriptions := map[string]string{
-		// Solutions
-		"solutions/comprehensive/solution.yaml":      "Comprehensive solution demonstrating all features (resolvers, actions, transforms, validation, etc.)",
-		"solutions/email-notifier/solution.yaml":     "Email notification solution with parameters, validation, and action workflow",
-		"solutions/terraform/solution.yaml":          "Terraform infrastructure scaffolding solution",
-		"solutions/k8s-clusters/solution.yaml":       "Kubernetes cluster provisioning solution",
-		"solutions/directory/solution.yaml":          "Directory provider examples (list, read, create, copy)",
-		"solutions/scaffold-demo/solution.yaml":      "Scaffold/template rendering demo solution",
-		"solutions/github-auth/solution.yaml":        "GitHub authentication and API access solution",
-		"solutions/composition/parent.yaml":          "Solution composition - parent that composes children",
-		"solutions/composition/child.yaml":           "Solution composition - child partial solution",
-		"solutions/taskfile/solution.yaml":           "Taskfile-based workflow solution",
-		"solutions/tested-solution/solution.yaml":    "Solution with functional tests defined in spec.testing.cases",
-		"solutions/template-functions/solution.yaml": "Demonstrates custom Go template functions (slugify, where, selectField, cel, toYaml, metadata) plus the CEL strings.slugify function",
-
-		// Actions
-		"actions/hello-world.yaml":              "Simple hello world action",
-		"actions/sequential-chain.yaml":         "Actions executed sequentially using dependsOn",
-		"actions/parallel-with-deps.yaml":       "Parallel actions with dependency ordering",
-		"actions/conditional-execution.yaml":    "Actions with conditional execution (when clauses)",
-		"actions/error-handling.yaml":           "Error handling with continueOnError",
-		"actions/finally-cleanup.yaml":          "Finally block for cleanup actions",
-		"actions/foreach-deploy.yaml":           "ForEach iteration over collections",
-		"actions/retry-backoff.yaml":            "Retry with exponential backoff",
-		"actions/conditional-retry.yaml":        "Retry with conditional retry logic (retryIf)",
-		"actions/complex-workflow.yaml":         "Complex workflow with all action features",
-		"actions/template-render.yaml":          "Template rendering action",
-		"actions/go-template-inline.yaml":       "Inline Go template action",
-		"actions/result-schema-validation.yaml": "Action result schema validation",
-
-		// Resolvers
-		"resolvers/hello-world.yaml":         "Simple static value resolver",
-		"resolvers/parameters.yaml":          "Parameter provider for user input",
-		"resolvers/parameters-all.yaml":      "Parameter provider all-mode (every CLI param into a map)",
-		"resolvers/dependencies.yaml":        "Resolver dependency chain (dependsOn)",
-		"resolvers/env-config.yaml":          "Environment variable resolver",
-		"resolvers/validation.yaml":          "Resolver validation rules",
-		"resolvers/transform-pipeline.yaml":  "Multi-step transform pipeline",
-		"resolvers/cel-basics.yaml":          "CEL expression basics in resolvers",
-		"resolvers/cel-builtins.yaml":        "CEL built-in functions reference",
-		"resolvers/cel-extensions.yaml":      "scafctl custom CEL extensions",
-		"resolvers/cel-transforms.yaml":      "CEL-based transform examples",
-		"resolvers/cel-common-patterns.yaml": "Common CEL patterns and recipes",
-		"resolvers/feature-flags.yaml":       "Feature flag resolver pattern",
-		"resolvers/identity.yaml":            "Identity/auth resolver pattern",
-		"resolvers/secrets.yaml":             "Secrets resolver pattern",
-		"resolvers/error-recovery.yaml":      "Conditional error recovery with continueOnError",
-
-		// Providers
-		"providers/static-hello.yaml":                "Static provider — simple static string value",
-		"providers/exec-ls.yaml":                     "Exec provider — list directory contents",
-		"providers/http-get.yaml":                    "HTTP provider — simple GET request",
-		"providers/http-autoparse.yaml":              "HTTP provider — auto-parse JSON responses",
-		"providers/http-poll.yaml":                   "HTTP provider — polling until a condition is met",
-		"providers/http-entra.yaml":                  "HTTP provider — Microsoft Graph API with Entra auth",
-		"providers/github-api.yaml":                  "HTTP provider — GitHub API with authentication",
-		"providers/http-pagination-cursor.yaml":      "HTTP provider — cursor-based pagination",
-		"providers/http-pagination-link-header.yaml": "HTTP provider — Link header pagination (RFC 8288)",
-		"providers/http-pagination-odata.yaml":       "HTTP provider — OData / Microsoft Graph pagination",
-		"providers/http-pagination-offset.yaml":      "HTTP provider — offset-based pagination",
-		"providers/http-pagination-page-number.yaml": "HTTP provider — page number pagination",
-		"providers/github-provider.yaml":             "GitHub provider — read repository info via GraphQL",
-		"providers/github-write-operations.yaml":     "GitHub provider — write operations reference (issues, PRs, commits, releases)",
-		"providers/hcl-format.yaml":                  "HCL provider — format Terraform content to canonical style",
-		"providers/hcl-validate.yaml":                "HCL provider — validate HCL syntax and return diagnostics",
-		"providers/hcl-parse-variables.yaml":         "HCL provider — parse Terraform variable definitions",
-		"providers/hcl-generate.yaml":                "HCL provider — generate HCL from structured block data",
-		"providers/hcl-generate-json.yaml":           "HCL provider — generate Terraform JSON (.tf.json)",
-		"providers/identity-list.yaml":               "Identity provider — list available auth handlers",
-		"providers/identity-claims.yaml":             "Identity provider — get claims from stored metadata",
-		"providers/identity-status.yaml":             "Identity provider — check authentication status",
-		"providers/identity-groups.yaml":             "Identity provider — get Entra group memberships",
-		"providers/identity-scoped-claims.yaml":      "Identity provider — get claims from a scoped access token",
-		"providers/identity-scoped-status.yaml":      "Identity provider — check scoped token status and metadata",
-		"providers/metadata-full.yaml":               "Metadata provider — returns runtime metadata about scafctl and the current solution",
-		"providers/message-types.yaml":               "Message provider — all six built-in message types (success, warning, error, info, debug, plain)",
-		"providers/message-custom-style.yaml":        "Message provider — custom colors, bold, italic, icons, and newline control",
-		"providers/message-dynamic.yaml":             "Message provider — Go template interpolation and CEL expression messages",
-		"providers/metadata-single-field.yaml":       "Metadata provider — use CEL to extract a single field from runtime metadata",
-		"providers/security-example.yaml":            "Security hardening patterns across providers",
-	}
-
-	if desc, ok := descriptions[exPath]; ok {
-		return desc
-	}
-
-	// Fallback: generate from filename.
-	// Use path.Base/path.Ext (forward-slash) since relPaths are normalized to forward slashes.
-	name := path.Base(exPath)
-	name = strings.TrimSuffix(name, path.Ext(name))
-	name = strings.ReplaceAll(name, "-", " ")
-	name = strings.ReplaceAll(name, "_", " ")
-	return strings.Title(name) + " example" //nolint:staticcheck // strings.Title is fine for simple cases
 }
