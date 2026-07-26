@@ -783,6 +783,31 @@ func TestExtractStateData(t *testing.T) {
 		assert.ErrorIs(t, err, ErrUnsupportedSchemaVersion)
 	})
 
+	t.Run("direct pointer normalizes nil maps", func(t *testing.T) {
+		t.Parallel()
+		// An in-process provider that constructs a *Data directly may leave the
+		// maps nil. extractStateData must normalize the direct-pointer path so it
+		// has the same postconditions as the map fallback (which normalizes via
+		// DecodeData); otherwise downstream reads/writes could nil-map panic.
+		bare := &Data{SchemaVersion: SchemaVersionCurrent}
+		require.Nil(t, bare.Resolvers)
+		require.Nil(t, bare.Parameters)
+		require.Nil(t, bare.Fingerprints)
+		require.Nil(t, bare.Command.Parameters)
+
+		result, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success": true,
+				"data":    bare,
+			}},
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, result.Resolvers)
+		assert.NotNil(t, result.Parameters)
+		assert.NotNil(t, result.Fingerprints)
+		assert.NotNil(t, result.Command.Parameters)
+	})
+
 	t.Run("unsupported type", func(t *testing.T) {
 		t.Parallel()
 		_, err := extractStateData(&provider.ExecutionResult{

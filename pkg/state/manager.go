@@ -446,6 +446,7 @@ func extractStateData(result *provider.ExecutionResult) (*Data, error) {
 		if err := validateSchemaVersion(stateData.SchemaVersion); err != nil {
 			return nil, err
 		}
+		normalizeData(stateData)
 		return stateData, nil
 	}
 
