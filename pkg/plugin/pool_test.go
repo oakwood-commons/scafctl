@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -89,6 +90,30 @@ func TestNewPool_WithSanitizeEnv(t *testing.T) {
 		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithSanitizeEnv(true))
 		defer p.Shutdown()
 		assert.True(t, p.SanitizeEnv())
+	})
+}
+
+func TestNewPool_WithBaseProviderConfig(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	t.Run("defaults to empty base config", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+		assert.Empty(t, p.opts.baseConfig.BinaryName)
+		assert.Nil(t, p.opts.baseConfig.Settings)
+	})
+
+	t.Run("stores the provided base config", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+		assert.Equal(t, "mycli", p.opts.baseConfig.BinaryName)
+		assert.Equal(t, base.Settings, p.opts.baseConfig.Settings)
 	})
 }
 

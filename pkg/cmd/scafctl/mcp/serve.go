@@ -228,6 +228,13 @@ func buildMCPPluginPool(ctx context.Context, cfg *config.Config, reg *provider.R
 	// (SSH_AUTH_SOCK, GITHUB_TOKEN, etc.) during interactive sessions.
 	var poolOpts []plugin.PoolOption
 	poolOpts = append(poolOpts, plugin.WithSanitizeEnv(false))
+	// Deliver host-static runtime metadata (build info, entrypoint, command,
+	// args) to pooled plugins so the metadata provider and any other
+	// Settings-driven plugin behave the same under this long-lived host as
+	// under one-shot per-call hosts.
+	poolOpts = append(poolOpts, plugin.WithBaseProviderConfig(
+		prepare.HostStaticProviderConfig(settings.BinaryNameFromContext(ctx), prepare.EntrypointMCP),
+	))
 	// Wire auth host dependencies so plugins can use host auth
 	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
 		poolOpts = append(poolOpts, plugin.WithClientOptions(authOpts...))

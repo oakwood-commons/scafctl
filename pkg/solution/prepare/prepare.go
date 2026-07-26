@@ -1237,26 +1237,30 @@ func ResolveOfficialAuthHandlers(
 	return authClients, nil
 }
 
-// injectHostMetadataSettings populates cfg.Settings["metadata"] with host runtime
-// information so that the metadata plugin (and any other plugin that cares) can
-// return version, entrypoint, args, and solution metadata to callers.
-//
-// NOTE: os.Args is included in the serialized settings. This means command-line
-// arguments (potentially including sensitive values) are visible to all plugins
-// over the local gRPC socket. This is acceptable because plugins are first-party
-// trusted binaries, but users should avoid passing secrets via CLI flags when
-// running untrusted plugin binaries.
-func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Solution) {
-	if cfg == nil {
-		return
-	}
+// Entrypoint values reported by the metadata provider's "entrypoint" field.
+// They describe how the host process was invoked. The host derives the value
+// and delivers it to plugins via ProviderConfig.Settings["metadata"].
+const (
+	// EntrypointCLI is a one-shot command-line invocation (scafctl run ...).
+	EntrypointCLI = "cli"
+	// EntrypointAPI is a long-lived HTTP API server (scafctl serve).
+	EntrypointAPI = "api"
+	// EntrypointMCP is a long-lived MCP server (scafctl mcp serve).
+	EntrypointMCP = "mcp"
+	// EntrypointUnknown is used when the host could not be classified.
+	EntrypointUnknown = "unknown"
+)
 
-	// Determine entrypoint from binary name heuristic.
-	entrypoint := "cli"
-	if cfg.BinaryName == "" {
-		entrypoint = "unknown"
-	}
+// hostMetadataSettingsKey is the ProviderConfig.Settings key under which host
+// runtime metadata is delivered to plugins.
+const hostMetadataSettingsKey = "metadata"
 
+// buildHostMetadataSettings serializes host runtime metadata (build info,
+// entrypoint, command, args) plus the given solution metadata into the JSON
+// blob delivered under Settings["metadata"]. A nil solution yields an empty
+// solution object, which is the correct shape for pool-mode hosts that serve
+// many solutions (per-solution metadata is delivered per-execution instead).
+func buildHostMetadataSettings(entrypoint string, sol *solution.Solution) (json.RawMessage, error) {
 	type solutionMeta struct {
 		Name        string   `json:"name"`
 		Version     string   `json:"version"`
@@ -1300,7 +1304,35 @@ func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Soluti
 		Solution:     solMeta,
 	}
 
-	raw, err := json.Marshal(meta)
+	return json.Marshal(meta)
+}
+
+// injectHostMetadataSettings populates cfg.Settings["metadata"] with host runtime
+// information so that the metadata plugin (and any other plugin that cares) can
+// return version, entrypoint, args, and solution metadata to callers.
+//
+// This is the per-call (one-shot) path: the plugin process is spawned for a
+// single solution, so both host-static and per-solution metadata are delivered
+// together via the one-time ConfigureProvider call. Pool-mode hosts must use
+// HostStaticProviderConfig instead (see its doc for why).
+//
+// NOTE: os.Args is included in the serialized settings. This means command-line
+// arguments (potentially including sensitive values) are visible to all plugins
+// over the local gRPC socket. This is acceptable because plugins are first-party
+// trusted binaries, but users should avoid passing secrets via CLI flags when
+// running untrusted plugin binaries.
+func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Solution) {
+	if cfg == nil {
+		return
+	}
+
+	// Determine entrypoint from binary name heuristic.
+	entrypoint := EntrypointCLI
+	if cfg.BinaryName == "" {
+		entrypoint = EntrypointUnknown
+	}
+
+	raw, err := buildHostMetadataSettings(entrypoint, sol)
 	if err != nil {
 		return
 	}
@@ -1308,7 +1340,31 @@ func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Soluti
 	if cfg.Settings == nil {
 		cfg.Settings = make(map[string]json.RawMessage)
 	}
-	cfg.Settings["metadata"] = json.RawMessage(raw)
+	cfg.Settings[hostMetadataSettingsKey] = raw
+}
+
+// HostStaticProviderConfig builds a ProviderConfig that carries host-static
+// metadata (build version/commit/time, entrypoint, command, args) for delivery
+// to pooled plugins at load time.
+//
+// Pool-mode hosts (long-lived MCP/API servers) start a plugin process once and
+// share it across many solutions and concurrent requests, so the one-time
+// ConfigureProvider call cannot safely carry per-solution metadata. The
+// solution object is therefore intentionally left empty here; per-solution
+// metadata is delivered per-execution via ExecuteProviderRequest.SolutionMetadata.
+//
+// Without this, pooled plugins would only ever receive an empty ProviderConfig,
+// causing the metadata provider to report entrypoint "unknown" and empty
+// version/command fields under pool-mode hosts.
+func HostStaticProviderConfig(binaryName, entrypoint string) plugin.ProviderConfig {
+	cfg := plugin.ProviderConfig{BinaryName: binaryName}
+
+	raw, err := buildHostMetadataSettings(entrypoint, nil)
+	if err != nil {
+		return cfg
+	}
+	cfg.Settings = map[string]json.RawMessage{hostMetadataSettingsKey: raw}
+	return cfg
 }
 
 // injectHTTPClientSettings propagates httpClient configuration (e.g.

@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -164,6 +165,33 @@ func TestBuildPluginPool_SanitizesEnv(t *testing.T) {
 
 	// API server pools sanitize env by default
 	assert.True(t, pool.SanitizeEnv())
+}
+
+func TestBuildPluginPool_HostStaticMetadata(t *testing.T) {
+	// The API server pool should carry a host-static base config reporting the
+	// "api" entrypoint so pooled plugins receive host runtime metadata.
+	ctx := context.Background()
+	reg := provider.NewRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal: false,
+			},
+		},
+	}
+
+	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
+	defer pool.Shutdown()
+
+	base := pool.BaseProviderConfig()
+	raw, ok := base.Settings["metadata"]
+	require.True(t, ok, "base config should carry host metadata settings")
+
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	assert.Equal(t, prepare.EntrypointAPI, meta["entrypoint"])
+	assert.Contains(t, meta, "buildVersion")
 }
 
 func TestBuildPluginPool_AllowedPlugins(t *testing.T) {
