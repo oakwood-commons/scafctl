@@ -714,7 +714,7 @@ func TestExtractStateData(t *testing.T) {
 		// Simulate what happens when a provider returns data as map[string]any
 		// (e.g., after JSON round-trip through a plugin boundary).
 		dataMap := map[string]any{
-			"schemaVersion": float64(1),
+			"schemaVersion": float64(SchemaVersionCurrent),
 			"metadata": map[string]any{
 				"solution": "test-app",
 				"version":  "1.0.0",
@@ -742,10 +742,70 @@ func TestExtractStateData(t *testing.T) {
 			}},
 		})
 		assert.NoError(t, err)
-		assert.Equal(t, 1, result.SchemaVersion)
+		assert.Equal(t, SchemaVersionCurrent, result.SchemaVersion)
 		assert.Equal(t, "test-app", result.Metadata.Solution)
 		assert.Contains(t, result.Parameters, "region")
 		assert.Equal(t, "us-east-1", result.Parameters["region"])
+	})
+
+	t.Run("map fallback out-of-range version", func(t *testing.T) {
+		t.Parallel()
+		// A map-form state whose schemaVersion is below the floor must surface
+		// the actionable version error, not a raw decode error -- even when a
+		// field type no longer matches the current struct.
+		dataMap := map[string]any{
+			"schemaVersion": float64(1),
+			"metadata":      map[string]any{"solution": map[string]any{"nested": "object"}},
+		}
+		_, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success": true,
+				"data":    dataMap,
+			}},
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrIncompatibleSchemaVersion)
+	})
+
+	t.Run("direct pointer out-of-range version", func(t *testing.T) {
+		t.Parallel()
+		// An in-process provider (e.g. an embedder's custom backend) returning a
+		// *Data with an out-of-range schema version must also be rejected.
+		bad := NewData()
+		bad.SchemaVersion = SchemaVersionCurrent + 1
+		_, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success": true,
+				"data":    bad,
+			}},
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrUnsupportedSchemaVersion)
+	})
+
+	t.Run("direct pointer normalizes nil maps", func(t *testing.T) {
+		t.Parallel()
+		// An in-process provider that constructs a *Data directly may leave the
+		// maps nil. extractStateData must normalize the direct-pointer path so it
+		// has the same postconditions as the map fallback (which normalizes via
+		// DecodeData); otherwise downstream reads/writes could nil-map panic.
+		bare := &Data{SchemaVersion: SchemaVersionCurrent}
+		require.Nil(t, bare.Resolvers)
+		require.Nil(t, bare.Parameters)
+		require.Nil(t, bare.Fingerprints)
+		require.Nil(t, bare.Command.Parameters)
+
+		result, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success": true,
+				"data":    bare,
+			}},
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, result.Resolvers)
+		assert.NotNil(t, result.Parameters)
+		assert.NotNil(t, result.Fingerprints)
+		assert.NotNil(t, result.Command.Parameters)
 	})
 
 	t.Run("unsupported type", func(t *testing.T) {

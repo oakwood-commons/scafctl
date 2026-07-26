@@ -1304,6 +1304,92 @@ spec:
 	assert.Contains(t, stateDoc.Resolvers, "region", "immutable region should be locked after a passing run")
 }
 
+// TestIntegration_RunSolution_StateSchemaVersionOutOfRange verifies that when a
+// state file's schemaVersion is outside the supported range, the run fails with
+// the actionable schema-version error rather than a cryptic Go reflection error
+// from the strict full-struct decode. The pre-written state file also carries a
+// type-incompatible field ("resolvers" as a string) so that, without the
+// peek-before-decode guard, the strict unmarshal would surface a
+// "cannot unmarshal" error -- the assertions confirm it does not.
+func TestIntegration_RunSolution_StateSchemaVersionOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: state-schema-version
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: file
+    inputs:
+      path: state.json
+spec:
+  resolvers:
+    region:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`
+
+	testCases := []struct {
+		name        string
+		schemaVer   int
+		wantMessage string
+		wantHint    string
+	}{
+		{
+			name:        "older than minimum is incompatible",
+			schemaVer:   1,
+			wantMessage: "incompatible state schema version",
+			wantHint:    "delete the state file and recreate it",
+		},
+		{
+			name:        "newer than current is unsupported",
+			schemaVer:   999,
+			wantMessage: "unsupported state schema version",
+			wantHint:    "upgrade scafctl",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			solutionPath := filepath.Join(tmpDir, "solution.yaml")
+			require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+			// Pre-write a state file whose schemaVersion is out of range AND whose
+			// "resolvers" field has an incompatible type (string, not an object).
+			// Without the version guard running first, the strict decode would fail
+			// with a "cannot unmarshal" reflection error.
+			statePath := filepath.Join(tmpDir, "state.json")
+			stateJSON := fmt.Sprintf(`{"schemaVersion": %d, "resolvers": "not-a-map"}`, tc.schemaVer)
+			require.NoError(t, os.WriteFile(statePath, []byte(stateJSON), 0o600))
+
+			_, stderr, exitCode := runScafctlInDir(t, tmpDir, "run", "solution", "-f", solutionPath)
+			assert.NotEqual(t, 0, exitCode, "an out-of-range state schema version should fail the run")
+			assert.Contains(t, stderr, tc.wantMessage, "the actionable schema-version error should be surfaced")
+			assert.Contains(t, stderr, tc.wantHint, "the error should include the actionable remediation hint")
+			assert.NotContains(t, stderr, "cannot unmarshal",
+				"the version guard must fire before the strict decode, so no reflection error should leak")
+		})
+	}
+}
+
 // TestIntegration_RunSolution_NoStateFlag verifies that --no-state skips the
 // entire state lifecycle: no state file is written, immutable values are not
 // locked or verified, the action still runs, and a one-line stderr notice is

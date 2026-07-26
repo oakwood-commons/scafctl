@@ -443,6 +443,10 @@ func extractStateData(result *provider.ExecutionResult) (*Data, error) {
 
 	// Direct pointer — returned by in-process providers.
 	if stateData, ok := sd.(*Data); ok {
+		if err := validateSchemaVersion(stateData.SchemaVersion); err != nil {
+			return nil, err
+		}
+		normalizeData(stateData)
 		return stateData, nil
 	}
 
@@ -453,11 +457,11 @@ func extractStateData(result *provider.ExecutionResult) (*Data, error) {
 		if err != nil {
 			return nil, fmt.Errorf("marshal state map: %w", err)
 		}
-		var stateData Data
-		if err := json.Unmarshal(b, &stateData); err != nil {
-			return nil, fmt.Errorf("unmarshal state map: %w", err)
+		stateData, err := DecodeData(b)
+		if err != nil {
+			return nil, err
 		}
-		return &stateData, nil
+		return stateData, nil
 	}
 
 	return nil, fmt.Errorf("expected *Data or map[string]any, got %T", sd)
