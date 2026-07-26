@@ -15,8 +15,6 @@ metadata:
     topology: phase, dependsOn list, and dependencyCount.
 
 spec:
-  tags:
-    - resolver-example
   resolvers:
     # Phase 1: no dependencies
     base_url:

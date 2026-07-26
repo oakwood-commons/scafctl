@@ -5,8 +5,8 @@ apiVersion: scafctl.io/v1
 kind: Solution
 
 metadata:
-  name: hello-world
-  displayName: Hello World
+  name: hello-world-solution
+  displayName: Hello World (Solution)
   description: |
     A minimal hello-world solution that demonstrates the basic structure
     of a scafctl solution. Use this as a starting point for building

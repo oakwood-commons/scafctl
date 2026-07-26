@@ -29,5 +29,5 @@ spec:
               method: GET
               headers:
                 Accept: application/json
-              auth: entra
+              authProvider: entra
               scope: "https://graph.microsoft.com/.default"

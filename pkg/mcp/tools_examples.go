@@ -23,8 +23,8 @@ func (s *Server) registerExampleTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("category",
-			mcp.Description("Filter by category. Omit to list all examples grouped by category."),
-			mcp.Enum("solutions", "resolvers", "actions", "providers", "exec", "config", "mcp", "snapshots", "catalog", "auth", "eval", "plugins", "telemetry"),
+			mcp.Description("Filter by category (from each example's metadata.category). Omit to list all examples grouped by category."),
+			mcp.Enum(examples.Categories()...),
 		),
 	)
 	s.addTool(listExamplesTool, s.handleListExamples)

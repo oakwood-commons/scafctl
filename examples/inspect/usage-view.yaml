@@ -13,6 +13,7 @@ metadata:
   name: registry-index
   displayName: Registry Index
   version: 1.0.0
+  category: inspect
   description: Query and refresh a small registry index.
   tags: [registry, discovery]
   links:

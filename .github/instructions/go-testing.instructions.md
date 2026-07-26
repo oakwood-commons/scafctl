@@ -79,6 +79,19 @@ func BenchmarkMyFeature(b *testing.B) {
 }
 ```
 
+## Testing kvx TUI / `-i` output
+
+CLI commands that render arrays via kvx cannot be visually verified by piping
+(a non-TTY shell only shows the flat text fallback, never the card/detail TUI).
+To assert the real interactive rendering, use kvx's snapshot API: convert the
+data with `core.LoadObject`, parse the display schema with
+`tui.ParseSchemaWithDisplay`, and render a fixed-size frame with
+`tui.RenderSnapshot(root, tui.Config{Width, Height, DisplaySchema, StartKeys})`.
+See the "kvx Rendering" section in
+`.github/instructions/cli-commands.instructions.md` for the full harness and the
+`core.LoadObject` gotcha (struct slices must be converted or the card view won't
+trigger).
+
 ## Reference
 
 See skill: `golang-testing` for testing patterns, benchmarks, fuzzing, and coverage.
