@@ -997,6 +997,7 @@ func solutionMetaFromSolution(sol *solution.Solution) *provider.SolutionMeta {
 		Description: sol.Metadata.Description,
 		Category:    sol.Metadata.Category,
 		Tags:        sol.Metadata.Tags,
+		Source:      sol.Provenance(),
 	}
 	if sol.Metadata.Version != nil {
 		meta.Version = sol.Metadata.Version.String()

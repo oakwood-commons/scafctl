@@ -348,6 +348,19 @@ func (s *Solution) GetPath() string {
 	return s.path
 }
 
+// Provenance returns a human-meaningful origin string for the solution, used as
+// the runtime SolutionMeta.source delivered to providers. It prefers the local
+// file system path the solution was loaded from; when that is empty (e.g. a
+// solution loaded from a catalog reference, bundle, or stdin) it falls back to
+// the author-declared metadata.source (typically the source repository URL).
+// Returns an empty string when neither is known.
+func (s *Solution) Provenance() string {
+	if s.path != "" {
+		return s.path
+	}
+	return s.Metadata.Source
+}
+
 // RawContent returns a copy of the original bytes used to parse this solution.
 // It preserves the original formatting for round-trip fidelity.
 // Returns nil if the solution was not loaded from bytes.

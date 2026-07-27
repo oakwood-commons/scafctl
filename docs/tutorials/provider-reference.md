@@ -2002,6 +2002,7 @@ None. The metadata provider accepts no inputs.
 | `solution.description` | string | Solution description |
 | `solution.category` | string | Solution category |
 | `solution.tags` | string[] | Solution tags |
+| `solution.source` | string | Solution provenance: the local file path when run from a file, otherwise the author-declared `metadata.source` (e.g. a catalog or repository reference). Empty when neither is available. |
 | `os` | string | Operating system (`runtime.GOOS`): `darwin`, `linux`, `windows`, etc. |
 | `arch` | string | CPU architecture (`runtime.GOARCH`): `amd64`, `arm64`, etc. |
 | `shell` | string | Detected shell name (e.g. `bash`, `zsh`, `fish`, `pwsh`, `powershell`, `cmd.exe`). On Unix, reads `$SHELL`. On Windows, detects PowerShell via `PSModulePath` and parent process inspection, then falls back to Git Bash (`$SHELL`) and finally `%ComSpec%`. Empty if not detected. |
