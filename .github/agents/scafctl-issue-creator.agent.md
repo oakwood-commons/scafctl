@@ -1,6 +1,6 @@
 ---
 description: "GitHub issue creator for scafctl. Explores codebase for technical context, assesses feasibility and scope, then creates a well-structured GitHub issue via gh CLI. Use when filing issues, bug reports, or feature requests."
-name: "issue-creator"
+name: "scafctl-issue-creator"
 tools: [read, search, execute, web]
 argument-hint: "Describe the change, bug, or feature you want to file"
 ---
@@ -23,6 +23,7 @@ Clarify what the user wants. Ask brief follow-up questions if the request is amb
 ### Phase 2: Explore
 
 Search the codebase to gather technical context. Use the `Explore` subagent for fast, targeted searches when you need to find patterns across multiple packages:
+
 - Which files, packages, and layers would be affected?
 - Existing patterns, interfaces, or types that are relevant?
 - Similar implementations to reference?
@@ -35,8 +36,9 @@ Present the user with:
 **Feasibility**: Straightforward or blockers/risks?
 
 **Scope**:
+
 | Size | Description |
-|------|-------------|
+| ------ | ------------- |
 | **XS** | Trivial -- config change, typo fix, single-line edit |
 | **S** | Small -- isolated change in 1-2 files, < 1 hour |
 | **M** | Medium -- touches multiple files/layers, < 1 day |
@@ -56,6 +58,7 @@ Use `gh issue create` with:
 **Title**: Clear action phrase (conventional commit style, e.g., "feat(provider): add Redis provider")
 
 **Body** (Markdown):
+
 ```
 ## Summary
 {One paragraph describing the change and motivation}
@@ -81,5 +84,6 @@ Use `--body-file` for complex markdown to avoid shell escaping issues.
 ## Markdown Rules
 
 When writing issue bodies:
+
 - Use tilde fences (`~~~`) instead of backtick fences when code blocks contain backticks
 - Use only ASCII characters -- `--` not em dashes, straight quotes not curly quotes, `...` not ellipsis characters
