@@ -187,14 +187,13 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 	catalogLogger := cfg.Logger.WithName("remote-catalog").WithValues("catalog", cfg.Name)
 
 	enumCfg := enumeratorConfig{
-		authHandlerName: authHandlerName(cfg.AuthHandler),
-		authHandler:     cfg.AuthHandler,
-		authScope:       cfg.AuthScope,
-		registry:        cfg.Registry,
-		repository:      cfg.Repository,
-		client:          client,
-		insecure:        cfg.Insecure,
-		logger:          catalogLogger,
+		authHandler: cfg.AuthHandler,
+		authScope:   cfg.AuthScope,
+		registry:    cfg.Registry,
+		repository:  cfg.Repository,
+		client:      client,
+		insecure:    cfg.Insecure,
+		logger:      catalogLogger,
 	}
 
 	rc.client = client

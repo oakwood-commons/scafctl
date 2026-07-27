@@ -36,40 +36,25 @@ type registryEnumerator interface {
 // enumeratorConfig bundles values needed by selectEnumerator.
 // Avoids coupling enumerators to RemoteCatalogConfig.
 type enumeratorConfig struct {
-	authHandlerName string
-	authHandler     scafctlauth.Handler
-	authScope       string
-	registry        string
-	repository      string
-	client          *auth.Client
-	insecure        bool
-	logger          logr.Logger
+	authHandler scafctlauth.Handler
+	authScope   string
+	registry    string
+	repository  string
+	client      *auth.Client
+	insecure    bool
+	logger      logr.Logger
 }
 
-// selectEnumerator returns the appropriate enumerator based on the auth handler
-// name and registry URL. Falls back to OCI _catalog for unknown registries.
+// selectEnumerator returns the appropriate enumerator based on the registry
+// URL. Falls back to OCI _catalog for unknown registries.
+//
+// Selection is driven purely by generic hostname detection, which covers every
+// public registry with a vendor-specific enumeration API (GCP Artifact
+// Registry, Quay, GHCR). Registry-instance-specific selection (e.g. a private
+// Quay behind a custom hostname) is intentionally NOT hardcoded here -- that is
+// an embedder concern, not scafctl's.
 func selectEnumerator(cfg enumeratorConfig) registryEnumerator {
-	// Try auth handler name first (explicit config)
-	switch cfg.authHandlerName {
-	case "gcp":
-		if e, err := newGCPEnumerator(cfg); err == nil {
-			cfg.logger.V(1).Info("using GCP Artifact Registry enumerator",
-				"registry", cfg.registry)
-			return e
-		}
-	case "quay-registry":
-		cfg.logger.V(1).Info("using Quay API enumerator",
-			"registry", cfg.registry)
-		return newQuayEnumerator(cfg)
-	case "github":
-		if e, err := newGHCREnumerator(cfg); err == nil {
-			cfg.logger.V(1).Info("using GHCR Packages API enumerator",
-				"registry", cfg.registry)
-			return e
-		}
-	}
-
-	// Try hostname-based detection as fallback
+	// Hostname-based detection.
 	switch {
 	case strings.HasSuffix(cfg.registry, "-docker.pkg.dev"):
 		if e, err := newGCPEnumerator(cfg); err == nil {

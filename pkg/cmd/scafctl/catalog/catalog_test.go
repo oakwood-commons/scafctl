@@ -139,7 +139,7 @@ func TestResolveAuthProvider_FromCatalogConfig(t *testing.T) {
 // TestResolveAuthProvider_InferenceTakesPriorityOverDefault verifies that
 // registry-host inference (e.g. *.pkg.dev → gcp) takes priority over the
 // default catalog's authProvider. Without this, a full OCI ref to a GCP
-// registry would incorrectly use the default catalog's handler (e.g. quay-registry).
+// registry would incorrectly use the default catalog's handler (e.g. quay).
 func TestResolveAuthProvider_InferenceTakesPriorityOverDefault(t *testing.T) {
 	t.Parallel()
 
