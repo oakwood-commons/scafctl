@@ -376,6 +376,27 @@ func TestSortAndDedupeLatest_DedupeKeyIncludesPlatform(t *testing.T) {
 	assert.Len(t, result, 2, "same version across different platforms must both be retained")
 }
 
+func TestSortAndDedupeLatest_DeterministicTieBreakOnEqualVersion(t *testing.T) {
+	// Same Name+Version but different Platform/RegistryHash/Path: the sort
+	// must produce a stable, deterministic order regardless of input order
+	// (not left to sort.Slice's unstable behavior), and allVersions=true
+	// must preserve every entry.
+	cached := []CachedPlugin{
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64", RegistryHash: "hashB", Path: "/z"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "darwin/arm64", RegistryHash: "hashA", Path: "/a"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64", RegistryHash: "hashA", Path: "/y"},
+	}
+	want := []CachedPlugin{
+		{Name: "myplugin", Version: "1.0.0", Platform: "darwin/arm64", RegistryHash: "hashA", Path: "/a"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64", RegistryHash: "hashA", Path: "/y"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64", RegistryHash: "hashB", Path: "/z"},
+	}
+
+	result := SortAndDedupeLatest(cached, true)
+	require.Len(t, result, 3)
+	assert.Equal(t, want, result)
+}
+
 func TestSortAndDedupeLatest_EmptyInput(t *testing.T) {
 	result := SortAndDedupeLatest(nil, false)
 	assert.Empty(t, result)

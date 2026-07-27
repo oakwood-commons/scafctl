@@ -609,14 +609,30 @@ func SortAndDedupeLatest(cached []CachedPlugin, allVersions bool) []CachedPlugin
 		vj, jErr := semver.NewVersion(cached[j].Version)
 		switch {
 		case iErr == nil && jErr == nil:
-			return vi.GreaterThan(vj)
+			if !vi.Equal(vj) {
+				return vi.GreaterThan(vj)
+			}
 		case iErr == nil:
 			return true // valid semver always sorts above invalid
 		case jErr == nil:
 			return false
 		default:
-			return cached[i].Version > cached[j].Version
+			if cached[i].Version != cached[j].Version {
+				return cached[i].Version > cached[j].Version
+			}
 		}
+		// Deterministic tie-breakers for equal Name+Version (e.g. the same
+		// version cached for different platforms or registry hashes): fall
+		// back to Platform, then RegistryHash, then Path so sort.Slice's
+		// output ordering never depends on input order, and the subsequent
+		// name+platform dedupe always retains a consistent entry.
+		if cached[i].Platform != cached[j].Platform {
+			return cached[i].Platform < cached[j].Platform
+		}
+		if cached[i].RegistryHash != cached[j].RegistryHash {
+			return cached[i].RegistryHash < cached[j].RegistryHash
+		}
+		return cached[i].Path < cached[j].Path
 	})
 
 	if allVersions {
