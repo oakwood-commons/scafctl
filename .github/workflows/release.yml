@@ -106,3 +106,80 @@ jobs:
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           gh release upload "$tag" dist/index.html --clobber
+
+  benchmark:
+    name: Benchmark vs Previous Release
+    needs: [release]
+    runs-on: ubuntu-latest
+    env:
+      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY }}
+      # benchstat requires >= 6 samples for finite confidence intervals
+      BENCH_COUNT: 6
+      BENCH_TIME: 1s
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
+
+      - name: Find previous release tag
+        id: prev-tag
+        run: |
+          current_tag="${GITHUB_REF#refs/tags/}"
+          prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -Fxv "${current_tag}" | head -1)
+          if [ -z "$prev_tag" ]; then
+            echo "No previous release tag found (this is the first release), skipping comparison."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Previous release: $prev_tag"
+            echo "tag=$prev_tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run benchmarks on this release
+        if: steps.prev-tag.outputs.tag != ''
+        run: |
+          go test -run='^$' -bench='.' -benchmem \
+            -benchtime="${BENCH_TIME}" -count="${BENCH_COUNT}" \
+            -timeout=30m \
+            -short \
+            ./... | tee release-bench.txt
+
+      - name: Checkout previous release
+        if: steps.prev-tag.outputs.tag != ''
+        run: git checkout "${{ steps.prev-tag.outputs.tag }}"
+
+      - name: Run benchmarks on previous release
+        if: steps.prev-tag.outputs.tag != ''
+        run: |
+          go test -run='^$' -bench='.' -benchmem \
+            -benchtime="${BENCH_TIME}" -count="${BENCH_COUNT}" \
+            -timeout=30m \
+            -short \
+            ./... | tee prev-bench.txt
+
+      - name: Compare benchmarks
+        if: steps.prev-tag.outputs.tag != ''
+        run: |
+          {
+            echo "Benchmark comparison: ${{ steps.prev-tag.outputs.tag }} vs ${GITHUB_REF#refs/tags/}"
+            echo "Ran with -count=${BENCH_COUNT} -benchtime=${BENCH_TIME}"
+            echo ""
+            benchstat prev-bench.txt release-bench.txt
+          } | tee benchmark-comparison.txt
+
+      - name: Upload benchmark comparison to release
+        if: steps.prev-tag.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release upload "$tag" benchmark-comparison.txt --clobber

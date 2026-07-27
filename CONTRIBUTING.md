@@ -11,6 +11,7 @@ See our [Code of Conduct](CODE_OF_CONDUCT.md).
 ### Developer Certificate of Origin (DCO) & Commit Signing
 
 All commits must be:
+
 1. **GPG/SSH signed** (`-S`) — verifies commit author identity
 2. **DCO signed-off** (`-s`) — certifies you have the right to submit the contribution under the project's license per the [Developer Certificate of Origin](https://developercertificate.org/)
 
@@ -27,6 +28,7 @@ git commit --amend -s -S --no-edit
 ```
 
 > **Tip**: To sign all commits automatically, configure Git once:
+>
 > ```bash
 > git config --global commit.gpgSign true
 > git config --global user.signingkey <YOUR_KEY_ID>
@@ -132,6 +134,24 @@ Use `b.Loop()` (not `for i := 0; i < b.N; i++`) for benchmark loops.
 Always call `b.ReportAllocs()` before `b.ResetTimer()` in every benchmark function.
 Benchmark-only files should use the `*_benchmark_test.go` naming convention.
 
+Benchmarks do **not** run automatically on every PR (comparative Go benchmarks
+on shared CI runners are too noisy to gate merges on, and this repo's PR
+benchmark job is not a required check). Instead:
+
+- **On demand per PR**: comment `/benchmark` on a pull request (maintainers
+  only) to trigger `.github/workflows/benchmark.yml`. Only a maintainer can
+  invoke it, but the PR's own code is still untrusted once checked out, so the
+  workflow splits into three jobs to keep secrets and write access away from
+  it: a `gate` job authorizes the command, an unprivileged `benchmark` job
+  checks out and runs the PR's changed benchmark packages against the base
+  branch with `benchstat` (no repo secrets, no write permissions), and a
+  `report` job -- which never checks out PR code -- downloads the results and
+  posts/updates the PR comment.
+- **On every release**: pushing a `v*` tag triggers a `benchmark` job in
+  `.github/workflows/release.yml` that runs the full benchmark suite on the
+  new tag, compares it against the previous release tag with `benchstat`, and
+  uploads `benchmark-comparison.txt` as a release asset.
+
 ### 4. Lint Your Code
 
 ```bash
@@ -151,6 +171,7 @@ git commit -m "refactor(cli): simplify output formatting"
 ```
 
 **Types:**
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `docs`: Documentation
@@ -176,9 +197,11 @@ due to path filters:
 
 - **Lint, Test, and Plugin SDK Compatibility** run automatically on fork PRs in
   an unprivileged sandbox (read-only token, no access to repository secrets).
-- **Benchmarks** run in the same unprivileged context. Results are uploaded as
-  artifacts and a separate privileged workflow posts the comparison comment on the
-  PR.
+- **Benchmarks** are not part of automatic fork PR CI (see above -- they are
+  triggered on demand via `/benchmark`). When triggered, the job that checks
+  out and executes the PR's own code runs unprivileged (read-only, no
+  secrets); a separate job downloads its results and posts the comparison
+  comment.
 - **First-time contributors** may require a maintainer to approve the workflow run
   via the GitHub repository setting "Require approval for first-time contributors."
 
