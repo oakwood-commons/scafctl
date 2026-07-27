@@ -239,6 +239,74 @@ result, err := svc.Execute(ctx, gotmpl.TemplateOptions{
 })
 ```
 
+### Embedder Function Registration
+
+Embedders that build their own CLI on top of scafctl can register additional
+Go-template functions that become available to **every** template rendered
+through the shared service (resolvers, the `go-template` provider, `evaluate`,
+etc.). This is Go-only: functions are compiled Go code, so individual solution
+YAML files cannot declare them.
+
+The simplest path is the `RootOptions.GoTemplateFuncs` field, which the root
+command registers during startup:
+
+```go
+cmd, cleanup := scafctl.Root(&scafctl.RootOptions{
+    BinaryName: "mycli",
+    GoTemplateFuncs: template.FuncMap{
+        "shout": func(s string) string { return strings.ToUpper(s) + "!" },
+    },
+})
+defer cleanup()
+```
+
+Under the hood this calls `gotmpl.RegisterFuncs`, which is **additive** and
+merged at the single choke point used by all services:
+
+```go
+// Additive: a name that collides with a built-in (sprig or custom) is an
+// error, and no functions are registered (all-or-nothing).
+if err := gotmpl.RegisterFuncs(template.FuncMap{
+    "shout": func(s string) string { return strings.ToUpper(s) + "!" },
+}); err != nil {
+    log.Fatal(err)
+}
+```
+
+Precedence when a template renders (later wins):
+
+1. Built-in factory functions (sprig + custom scafctl functions)
+2. Environment stripping: unless environment access is enabled, `env` and
+   `expandenv` are removed here so secrets cannot be exfiltrated by default
+3. Additively registered embedder functions (`RegisterFuncs`) -- only names not
+   already provided by a built-in; a collision is rejected. This layer never
+   re-introduces a stripped `env`/`expandenv`, regardless of registration order
+4. Override embedder functions (`RegisterFuncsOverride`) -- unconditionally
+   replace an existing function; use this escape hatch only when you must shadow
+   a built-in (this is also the only way to deliberately re-enable a stripped
+   `env`/`expandenv`)
+
+`RegisterFuncs` deliberately refuses to shadow built-ins so that a typo cannot
+silently change template behavior. When shadowing is intentional, call
+`RegisterFuncsOverride` instead.
+
+Registration also fails fast if a value is not a usable template function (nil,
+a non-function, or a function whose return signature text/template rejects), so
+an embedder build bug surfaces as a clear error rather than a later panic.
+
+Registration is register-once (like `sql.Register` and other stdlib global
+registries): re-registering a name that is already present -- even with the
+identical function -- is a collision. Register your functions a single time at
+startup. The root command guards its own wiring, so executing the command more
+than once in a long-running host does not re-register or self-collide.
+
+Registered functions are discoverable:
+
+- CLI: `mycli get template functions --embedder`
+- MCP: `list_go_template_functions` with `embedder_only: true`
+
+Each is tagged with `Source: "embedder"` (see `ExtFunction.Source`).
+
 ### String Replacements
 
 Protect literal template syntax from parsing:

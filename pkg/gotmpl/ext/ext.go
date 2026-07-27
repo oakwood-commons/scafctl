@@ -49,6 +49,7 @@ func Sprig() gotmpl.ExtFunctionList {
 			Name:        name,
 			Description: sprigDescription(name),
 			Custom:      false,
+			Source:      gotmpl.SourceSprig,
 			Links:       []string{"https://masterminds.github.io/sprig/"},
 			Func: template.FuncMap{
 				name: fn,
@@ -70,7 +71,7 @@ func Sprig() gotmpl.ExtFunctionList {
 //	    fmt.Printf("Custom Function: %s (%s)\n", f.Name, f.Description)
 //	}
 func Custom() gotmpl.ExtFunctionList {
-	return gotmpl.ExtFunctionList{
+	funcs := gotmpl.ExtFunctionList{
 		// HCL functions
 		hcl.ToHclFunc(),
 		hcl.ToHclValueFunc(),
@@ -96,6 +97,16 @@ func Custom() gotmpl.ExtFunctionList {
 		extyaml.MustToYamlFunc(),
 		extyaml.MustFromYamlFunc(),
 	}
+
+	// Tag every custom function with its source for discoverability. The
+	// individual constructors may predate the Source field, so backfill it here
+	// in one place.
+	for i := range funcs {
+		if funcs[i].Source == "" {
+			funcs[i].Source = gotmpl.SourceCustom
+		}
+	}
+	return funcs
 }
 
 // All returns a combined list of all Go template extension functions, including

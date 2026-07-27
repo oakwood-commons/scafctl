@@ -5,6 +5,17 @@ package gotmpl
 
 import "text/template"
 
+// Function source tags used by the Source field for discoverability tooling.
+const (
+	// SourceSprig marks a third-party function from the sprig library.
+	SourceSprig = "sprig"
+	// SourceCustom marks a scafctl-specific built-in function.
+	SourceCustom = "custom"
+	// SourceEmbedder marks a function supplied by an embedding application via
+	// RegisterFuncs / RegisterFuncsOverride.
+	SourceEmbedder = "embedder"
+)
+
 // ExtFunction describes a Go template function extension with metadata
 // for discoverability via MCP tools and CLI commands.
 type ExtFunction struct {
@@ -23,6 +34,12 @@ type ExtFunction struct {
 	// Custom indicates whether this is a scafctl-specific function (true)
 	// or a third-party/built-in function (false, e.g., sprig functions)
 	Custom bool `json:"custom,omitempty" yaml:"custom,omitempty" doc:"Whether this is a scafctl-specific function"`
+
+	// Source identifies where the function originates: "sprig" (third-party
+	// library), "custom" (scafctl-specific built-in), or "embedder" (registered
+	// by an embedding application via RegisterFuncs). May be empty for legacy
+	// entries that predate this field.
+	Source string `json:"source,omitempty" yaml:"source,omitempty" doc:"Origin of the function: sprig, custom, or embedder" maxLength:"32" example:"embedder"`
 
 	// Func is the template.FuncMap entry for this function.
 	// Excluded from JSON/YAML serialization.

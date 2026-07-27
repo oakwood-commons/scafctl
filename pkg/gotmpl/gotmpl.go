@@ -186,18 +186,34 @@ func getContextFuncBinder(ctx context.Context) template.FuncMap {
 	return factory(ctx)
 }
 
-// getExtensionFuncMap returns the extension function map from the factory.
-// When allowEnvFunctions is false (the default), the sprig 'env' and 'expandenv'
-// functions are removed to prevent templates from exfiltrating process secrets.
-func getExtensionFuncMap() template.FuncMap {
+// factoryFuncMap returns the raw built-in extension function map from the
+// factory (sprig + custom), or an empty map when no factory has been set. It
+// does NOT apply env-function stripping or embedder registrations, so it
+// reflects the authoritative built-in name set used for collision detection.
+func factoryFuncMap() template.FuncMap {
 	extensionFuncMapMu.RLock()
-	var fm template.FuncMap
+	defer extensionFuncMapMu.RUnlock()
 	if extensionFuncMapFactory != nil {
-		fm = extensionFuncMapFactory()
-	} else {
-		fm = make(template.FuncMap)
+		return extensionFuncMapFactory()
 	}
-	extensionFuncMapMu.RUnlock()
+	return make(template.FuncMap)
+}
+
+// getExtensionFuncMap returns the effective extension function map for a
+// service. Precedence (lowest to highest):
+//  1. built-in extension set from the factory (sprig + custom)
+//  2. env-function stripping: when allowEnvFunctions is false (the default),
+//     the sprig 'env' and 'expandenv' functions are removed to prevent
+//     templates from exfiltrating process secrets
+//  3. additive embedder functions (RegisterFuncs) — added only for names not
+//     already present, so built-ins win on collision. The env/expandenv names
+//     are never re-introduced additively while stripping is in effect, so an
+//     additive registration cannot smuggle them back regardless of whether the
+//     factory was set when the function was registered.
+//  4. override embedder functions (RegisterFuncsOverride) — overwrite
+//     unconditionally, and can re-introduce a stripped function such as env
+func getExtensionFuncMap() template.FuncMap {
+	fm := factoryFuncMap()
 
 	allowEnvFunctionsMu.RLock()
 	allow := allowEnvFunctionsFlag
@@ -206,6 +222,22 @@ func getExtensionFuncMap() template.FuncMap {
 	if !allow {
 		delete(fm, "env")
 		delete(fm, "expandenv")
+	}
+
+	additive, override := registeredExtensionFuncs()
+	for name, fn := range additive {
+		// Never re-add a stripped env function via the additive path; only the
+		// explicit override escape hatch may re-introduce it. This makes the
+		// secret-exfiltration guard independent of registration ordering.
+		if !allow && (name == "env" || name == "expandenv") {
+			continue
+		}
+		if _, exists := fm[name]; !exists {
+			fm[name] = fn
+		}
+	}
+	for name, fn := range override {
+		fm[name] = fn
 	}
 	return fm
 }

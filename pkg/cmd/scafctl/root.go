@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
@@ -171,6 +172,22 @@ type RootOptions struct {
 	// startup before config-based or plugin handlers, and appear in
 	// 'auth list' immediately.
 	BuiltinAuthHandlers []auth.Handler
+
+	// GoTemplateFuncs are custom Go-template functions the embedder compiles
+	// into the binary. They are registered additively at startup (built-ins win
+	// on name collision) so they become available to the go-template provider
+	// and every other gotmpl consumer, and appear in list_go_template_functions
+	// and 'get template functions'. A name that collides with a built-in or a
+	// previously-registered function fails startup loudly. To deliberately
+	// replace a built-in, call gotmpl.RegisterFuncsOverride directly instead.
+	GoTemplateFuncs template.FuncMap
+
+	// goTemplateFuncsRegistered guards GoTemplateFuncs registration so that
+	// executing the same command more than once (a REPL, a long-running host,
+	// or repeated calls in tests) does not re-register the process-global
+	// functions and self-collide. PersistentPreRun runs sequentially, so a
+	// plain bool is sufficient.
+	goTemplateFuncsRegistered bool
 
 	// ActionDiscoveryFileNames overrides the file names used by "run action"
 	// auto-discovery. When empty, the defaults from
@@ -480,6 +497,21 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 				EnableMetrics:     gtValues.EnableMetrics,
 				AllowEnvFunctions: gtValues.AllowEnvFunctions,
 			})
+
+			// ── Register embedder-supplied Go template functions ──
+			// Registered additively (built-ins win on collision). A collision is
+			// an embedder build bug, so fail loudly rather than silently dropping
+			// the function. Runs after RegisterDefaults has set the extension
+			// factory so built-in collisions are detectable. Guarded so a command
+			// executed more than once does not re-register (and self-collide with)
+			// the process-global functions.
+			if len(opts.GoTemplateFuncs) > 0 && !opts.goTemplateFuncsRegistered {
+				if funcErr := gotmpl.RegisterFuncs(opts.GoTemplateFuncs); funcErr != nil {
+					w.ErrorWithExit(fmt.Sprintf("register Go template functions: %v", funcErr))
+					return
+				}
+				opts.goTemplateFuncsRegistered = true
+			}
 
 			// Initialize shared secrets store with config-aware settings.
 			// Auth handlers that receive this store will not create their own.

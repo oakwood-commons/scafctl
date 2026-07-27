@@ -11,7 +11,7 @@
     "titleField": "name",
     "subtitleField": "description",
     "subtitleMaxLines": 1,
-    "badgeFields": ["custom"]
+    "badgeFields": ["source"]
   },
 
   "x-kvx-detail": {
@@ -20,7 +20,7 @@
     "sections": [
       {
         "title": "",
-        "fields": ["name", "custom"],
+        "fields": ["name", "source", "custom"],
         "layout": "inline"
       },
       {
@@ -59,6 +59,11 @@
         "type": "boolean",
         "title": "Custom",
         "description": "Whether this is a custom scafctl extension"
+      },
+      "source": {
+        "type": "string",
+        "title": "Source",
+        "description": "Origin of the function: sprig, custom, or embedder"
       },
       "description": {
         "type": "string",

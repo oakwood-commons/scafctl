@@ -31,6 +31,7 @@ type FunctionSummary struct {
 	Name        string `json:"name" yaml:"name" required:"true"`
 	Description string `json:"description" yaml:"description"`
 	Custom      bool   `json:"custom" yaml:"custom"`
+	Source      string `json:"source,omitempty" yaml:"source,omitempty"`
 }
 
 // Options holds configuration for the get template functions command
@@ -43,14 +44,16 @@ type Options struct {
 	flags.KvxOutputFlags
 
 	// Filter options
-	Custom bool   // Show only custom (scafctl-specific) functions
-	Sprig  bool   // Show only sprig library functions
-	Search string // Search functions by name or description
+	Custom   bool   // Show only custom (scafctl-specific) functions
+	Sprig    bool   // Show only sprig library functions
+	Embedder bool   // Show only embedder-registered functions
+	Search   string // Search functions by name or description
 
 	// For dependency injection in tests
-	allFn    func() gotmpl.ExtFunctionList
-	customFn func() gotmpl.ExtFunctionList
-	sprigFn  func() gotmpl.ExtFunctionList
+	allFn      func() gotmpl.ExtFunctionList
+	customFn   func() gotmpl.ExtFunctionList
+	sprigFn    func() gotmpl.ExtFunctionList
+	embedderFn func() gotmpl.ExtFunctionList
 }
 
 // CommandFunctions creates the canonical 'get template functions' subcommand,
@@ -90,7 +93,7 @@ func newCommand(cliParams *settings.Run, ioStreams *terminal.IOStreams, path, us
 		Long: fmt.Sprintf(`List all available Go template extension functions, including sprig
 library functions and custom scafctl-specific functions.
 
-By default, lists all functions. Use --custom or --sprig to filter.
+By default, lists all functions. Use --custom, --sprig, or --embedder to filter.
 
 OUTPUT FORMATS:
   table     Table view with key information (default)
@@ -107,6 +110,9 @@ Examples:
 
   # List only sprig library functions
   %[1]s get template functions --sprig
+
+  # List only embedder-registered functions
+  %[1]s get template functions --embedder
 
   # Output as JSON
   %[1]s get template functions -o json
@@ -140,6 +146,7 @@ Examples:
 	// Filter flags
 	cCmd.Flags().BoolVar(&options.Custom, "custom", false, fmt.Sprintf("Show only custom %s functions", cliParams.BinaryName))
 	cCmd.Flags().BoolVar(&options.Sprig, "sprig", false, "Show only sprig library functions")
+	cCmd.Flags().BoolVar(&options.Embedder, "embedder", false, "Show only embedder-registered functions")
 	cCmd.Flags().StringVarP(&options.Search, "search", "s", "", "Search functions by name or description")
 
 	return cCmd
@@ -150,6 +157,7 @@ func (o *Options) getFunctions() gotmpl.ExtFunctionList {
 	allFn := gotmplext.All
 	customFn := gotmplext.Custom
 	sprigFn := gotmplext.Sprig
+	embedderFn := gotmpl.RegisteredFuncs
 
 	// Allow test injection
 	if o.allFn != nil {
@@ -161,14 +169,19 @@ func (o *Options) getFunctions() gotmpl.ExtFunctionList {
 	if o.sprigFn != nil {
 		sprigFn = o.sprigFn
 	}
+	if o.embedderFn != nil {
+		embedderFn = o.embedderFn
+	}
 
 	switch {
 	case o.Custom:
 		return customFn()
 	case o.Sprig:
 		return sprigFn()
+	case o.Embedder:
+		return embedderFn()
 	default:
-		return allFn()
+		return gotmpl.CombinedFuncs(allFn(), embedderFn())
 	}
 }
 
@@ -216,6 +229,7 @@ func (o *Options) RunListFunctions(ctx context.Context) error {
 			Name:        fn.Name,
 			Description: fn.Description,
 			Custom:      fn.Custom,
+			Source:      fn.Source,
 		})
 	}
 	return o.writeOutput(ctx, summaries)

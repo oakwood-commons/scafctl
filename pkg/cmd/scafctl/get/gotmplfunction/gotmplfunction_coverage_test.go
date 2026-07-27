@@ -107,6 +107,75 @@ func TestGetFunctions_Sprig(t *testing.T) {
 	assert.Equal(t, "sprig1", result[0].Name)
 }
 
+func TestGetFunctions_Embedder(t *testing.T) {
+	t.Parallel()
+
+	embedderList := gotmpl.ExtFunctionList{{Name: "emb1", Source: gotmpl.SourceEmbedder}}
+	opts := &Options{
+		Embedder: true,
+		embedderFn: func() gotmpl.ExtFunctionList {
+			return embedderList
+		},
+		allFn: func() gotmpl.ExtFunctionList {
+			return mockFunctionList()
+		},
+	}
+
+	result := opts.getFunctions()
+	assert.Len(t, result, 1)
+	assert.Equal(t, "emb1", result[0].Name)
+	assert.Equal(t, gotmpl.SourceEmbedder, result[0].Source)
+}
+
+func TestGetFunctions_DefaultAppendsEmbedder(t *testing.T) {
+	t.Parallel()
+
+	opts := &Options{
+		allFn: func() gotmpl.ExtFunctionList {
+			return mockFunctionList()
+		},
+		embedderFn: func() gotmpl.ExtFunctionList {
+			return gotmpl.ExtFunctionList{{Name: "emb1", Source: gotmpl.SourceEmbedder}}
+		},
+	}
+
+	result := opts.getFunctions()
+	// Default (no filter) appends embedder functions onto the full built-in list.
+	assert.Len(t, result, 3)
+	names := make([]string, len(result))
+	for i, fn := range result {
+		names[i] = fn.Name
+	}
+	assert.Contains(t, names, "emb1")
+}
+
+func TestGetFunctions_DefaultDedupesEmbedderOverride(t *testing.T) {
+	t.Parallel()
+
+	opts := &Options{
+		allFn: func() gotmpl.ExtFunctionList {
+			return mockFunctionList() // testFunc (custom), sprigFunc (sprig)
+		},
+		embedderFn: func() gotmpl.ExtFunctionList {
+			// Shadows the built-in "sprigFunc".
+			return gotmpl.ExtFunctionList{{Name: "sprigFunc", Source: gotmpl.SourceEmbedder}}
+		},
+	}
+
+	result := opts.getFunctions()
+
+	count := 0
+	var source string
+	for _, fn := range result {
+		if fn.Name == "sprigFunc" {
+			count++
+			source = fn.Source
+		}
+	}
+	assert.Equal(t, 1, count, "shadowed built-in must not be duplicated")
+	assert.Equal(t, gotmpl.SourceEmbedder, source, "embedder override must win")
+}
+
 func TestGetFunctions_DefaultsToAll_WhenNoInjected(t *testing.T) {
 	t.Parallel()
 

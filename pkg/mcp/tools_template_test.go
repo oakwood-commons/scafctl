@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"text/template"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,6 +74,63 @@ func TestHandleEvaluateGoTemplate(t *testing.T) {
 		result, err := srv.handleEvaluateGoTemplate(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, result.IsError)
+	})
+}
+
+// TestHandleListGoTemplateFunctions_EmbedderOnly verifies the MCP
+// list_go_template_functions tool surfaces embedder-registered functions,
+// tagged with the embedder source, both in the embedder_only view and the
+// default (combined) view.
+func TestHandleListGoTemplateFunctions_EmbedderOnly(t *testing.T) {
+	// The gotmpl registry is process-global; reset it so this test does not leak
+	// the embedder function into other tests in this binary (which could hit
+	// register-once collisions or see extra entries in default listings).
+	gotmpl.ResetRegistryForTesting()
+	t.Cleanup(gotmpl.ResetRegistryForTesting)
+	require.NoError(t, gotmpl.RegisterFuncs(template.FuncMap{
+		"mcpEmbedderListTestFunc": func(s string) string { return s },
+	}))
+
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	list := func(t *testing.T, args map[string]any) []map[string]any {
+		t.Helper()
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "list_go_template_functions"
+		request.Params.Arguments = args
+
+		result, err := srv.handleListGoTemplateFunctions(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var output struct {
+			Functions []map[string]any `json:"functions"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+		return output.Functions
+	}
+
+	find := func(fns []map[string]any, name string) map[string]any {
+		for _, fn := range fns {
+			if fn["name"] == name {
+				return fn
+			}
+		}
+		return nil
+	}
+
+	t.Run("embedder_only view", func(t *testing.T) {
+		fn := find(list(t, map[string]any{"embedder_only": true}), "mcpEmbedderListTestFunc")
+		require.NotNil(t, fn, "embedder function should appear in embedder_only listing")
+		assert.Equal(t, gotmpl.SourceEmbedder, fn["source"])
+	})
+
+	t.Run("default combined view", func(t *testing.T) {
+		fn := find(list(t, map[string]any{}), "mcpEmbedderListTestFunc")
+		require.NotNil(t, fn, "embedder function should appear in the default listing")
+		assert.Equal(t, gotmpl.SourceEmbedder, fn["source"])
 	})
 }
 
