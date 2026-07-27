@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(cli)* `plugins list` now dedupes to the latest cached version per plugin (name+platform) by default, matching `catalog list`'s existing behavior; pass `--all-versions` (or its alias `--all`) to show every cached version (#532)
 - *(provider)* [**breaking**] Give the `parameter` provider an explicit `type` enum (`auto`, `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`) for per-type coercion, replacing the previous all-or-nothing `type: string` escape hatch. Automatic inference (`auto`, the default) no longer splits comma-separated values into lists -- set `type: csv` to opt in. Numeric-looking values continue to infer to numbers under `auto`; use `type: string` to keep them strings (e.g. for CEL `matches()`) or `type: raw` to disable inference entirely. Typed values that fail to parse now error clearly instead of silently returning the wrong type (#624)
 - *(lint)* Add `parameter-numeric-matches` rule (warning) to flag resolvers that read a numeric `parameter` default without an explicit `type` yet call `matches()` on the value, where automatic inference would coerce the value to an integer and fail at runtime
 

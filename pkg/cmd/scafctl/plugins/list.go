@@ -21,10 +21,11 @@ import (
 
 // ListOptions holds options for the list command.
 type ListOptions struct {
-	BinaryName string
-	CliParams  *settings.Run
-	IOStreams  *terminal.IOStreams
-	CacheDir   string
+	BinaryName  string
+	CliParams   *settings.Run
+	IOStreams   *terminal.IOStreams
+	CacheDir    string
+	AllVersions bool
 	flags.KvxOutputFlags
 }
 
@@ -65,7 +66,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		Short:        "List cached plugin binaries",
 		SilenceUsage: true,
 		Long: strings.ReplaceAll(heredoc.Doc(`
-			List all plugin binaries stored in the local plugin cache.
+			List plugin binaries stored in the local plugin cache.
 
 			Shows the name, version, platform, and size for each cached binary.
 			This command shows the remote download cache only (plugins fetched
@@ -73,9 +74,16 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 			'scafctl build plugin', use:
 			  scafctl catalog list --kind provider --pre-release --all-versions
 
+			By default, only the latest cached version of each plugin (per name
+			+ platform) is shown. Use --all-versions (or its alias --all) to
+			show every cached version.
+
 			Examples:
-			  # List all cached plugins
+			  # List the latest cached version of each plugin
 			  scafctl plugins list
+
+			  # List every cached version of every plugin
+			  scafctl plugins list --all-versions
 
 			  # List in JSON format
 			  scafctl plugins list -o json
@@ -100,6 +108,8 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	}
 
 	cmd.Flags().StringVar(&opts.CacheDir, "cache-dir", "", fmt.Sprintf("Plugin cache directory (default: $XDG_CACHE_HOME/%s/plugins/)", path))
+	cmd.Flags().BoolVar(&opts.AllVersions, "all-versions", false, "Show all cached versions instead of just the latest per plugin")
+	cmd.Flags().BoolVar(&opts.AllVersions, "all", false, "Alias for --all-versions")
 	flags.AddKvxOutputFlagsToStruct(cmd, &opts.KvxOutputFlags)
 
 	return cmd
@@ -131,6 +141,12 @@ func runList(ctx context.Context, opts *ListOptions, kvxOpts *kvx.OutputOptions)
 		w.PlainStderrf("To see locally-built artifacts: %s catalog list --kind provider --pre-release --all-versions", opts.BinaryName)
 		return kvxOpts.Write([]pluginListItem{})
 	}
+
+	// By default, keep only the latest cached version per name+platform
+	// (real semver comparison). --all-versions (or --all) restores the full
+	// listing. See plugin.SortAndDedupeLatest for the shared dedup logic
+	// (also used by the MCP list_plugins tool).
+	cached = plugin.SortAndDedupeLatest(cached, opts.AllVersions)
 
 	items := make([]pluginListItem, len(cached))
 	for i, p := range cached {
