@@ -12,8 +12,9 @@ You are a senior Go code reviewer for the **scafctl** project ensuring high stan
 When invoked via a prompt file (e.g., `go-review.prompt.md`), follow the prompt's phases exactly. The prompt contains the detailed checklist and procedure. This agent file provides reference context.
 
 When invoked directly (not via a prompt), run this procedure:
+
 1. Run `git diff --stat HEAD -- '*.go'` and `git status --short` to see all changes
-2. Run `go vet ./...` and `task lint`
+2. Run `go vet ./...` and `task lint:changed`
 3. Read the full diff and full contents of new files
 4. Apply all review checks below
 5. Run coverage on every changed package
@@ -32,6 +33,7 @@ When invoked directly (not via a prompt), run this procedure:
 - **Paths**: Use xdg paths via `pkg/paths`
 - **Tests**: Must include benchmarks for new features/providers
 - **Binary name**: Never hardcoded `"scafctl"` -- use `settings.CliBinaryName`
+- **Array output display schema**: A command that emits an **array of objects** via kvx should attach an interactive display schema (`kvx.WithOutputDisplaySchemaJSON`, a `go:embed`-ed `<cmd>_schema.json` with `x-kvx-list`/`x-kvx-detail` extensions) so `-i` renders a card/detail view rather than a plain KEY/VALUE table. Note `WithOutputSchemaJSON` only tunes table column hints; it is not a substitute. Single-object/scalar output does not need one. Canonical example: `pkg/cmd/scafctl/get/provider/provider.go` + `provider_schema.json`
 
 ## Known Pitfalls (real bugs found in this codebase)
 
@@ -63,6 +65,7 @@ Check for these explicitly -- each caused an actual bug.
 ## Review Priorities
 
 ### CRITICAL -- Security
+
 - Command injection: Unvalidated input in `os/exec` or `shellexec`
 - Path traversal: User-controlled file paths without validation
 - Race conditions: Shared state without synchronization
@@ -70,23 +73,27 @@ Check for these explicitly -- each caused an actual bug.
 - Insecure TLS: `InsecureSkipVerify: true`
 
 ### CRITICAL -- Error Handling
+
 - Ignored errors: Using `_` to discard errors
 - Missing error wrapping: `return err` without `fmt.Errorf("context: %w", err)`
 - Panic for recoverable errors: Use error returns instead
 
 ### HIGH -- Correctness
+
 - Delegation correctness: All fields forwarded to callees
 - Mutation safety: No shared struct mutation
 - Schema/runtime consistency: Schemas match all code paths
 - Edge cases: nil inputs, empty slices, zero values
 
 ### HIGH -- Code Quality
+
 - Large functions: Over 60 lines (flag, suggest extraction)
 - Deep nesting: More than 4 levels
 - Non-idiomatic: `if/else` instead of early return
 - Package-level mutable state
 
 ### MEDIUM -- Performance
+
 - String concatenation in loops: Use `strings.Builder`
 - Missing slice pre-allocation: `make([]T, 0, cap)`
 - Unnecessary allocations in hot paths
@@ -100,6 +107,7 @@ Check for these explicitly -- each caused an actual bug.
 ## Output Format
 
 For each finding:
+
 ```
 [SEVERITY] file.go:line -- description
   Suggestion: fix recommendation

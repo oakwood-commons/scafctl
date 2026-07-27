@@ -15,3 +15,12 @@ Create a structured implementation blueprint for the described feature:
 8. **Risks & edge cases** -- What could go wrong
 
 Follow scafctl conventions: provider-based architecture, CEL/Go templates, Writer for output, kvx for data.
+
+Before planning, run the issue triage/validation gate (confirm the issue is
+legitimate and still relevant, treat the reporter's suggested implementation as
+an unverified hint, and choose the BEST solution -- breaking changes allowed).
+
+When the plan is implemented, the "Issue Definition of Done" gate runs
+automatically as the final phase: dispatch `go-reviewer` then `artifact-auditor`
+(the `/finish-issue` flow), resolve findings, and summarize -- without asking the
+user for permission. See `.github/copilot-instructions.md`.
