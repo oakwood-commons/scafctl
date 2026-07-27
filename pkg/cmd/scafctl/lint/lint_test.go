@@ -388,6 +388,95 @@ func TestExplainRun_CSVOutput(t *testing.T) {
 	assert.Contains(t, output, "empty-solution")
 }
 
+// TestExplainRun_NonInteractiveOptions_UseSchemaJSON is the regression test
+// for issue #672: the non-interactive output path previously wired an
+// interactive display schema (WithOutputDisplaySchemaJSON) instead of a
+// column-hint schema (WithOutputSchemaJSON) when building outputOpts. This
+// calls the exact same nonInteractiveOutputOptions helper that Run() uses
+// and asserts directly on the resulting struct fields, so it fails if the
+// wrong setter is reintroduced there -- unlike output-content assertions,
+// which render identically either way for this schema/data combination
+// because explainColumnOrder already pins ColumnOrder explicitly (bypassing
+// any ColumnOrder/HiddenColumns that DisplaySchemaJSON would otherwise
+// derive).
+func TestExplainRun_NonInteractiveOptions_UseSchemaJSON(t *testing.T) {
+	t.Parallel()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	ctx := testContext(ioStreams)
+
+	opts := &RuleOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      testCliParams(),
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+	}
+
+	outputOpts := opts.nonInteractiveOutputOptions(ctx)
+
+	assert.Equal(t, lintExplainSchemaJSON, outputOpts.SchemaJSON,
+		"non-interactive path must use SchemaJSON (column hints), not DisplaySchemaJSON")
+	assert.Empty(t, outputOpts.DisplaySchemaJSON,
+		"non-interactive path must not set DisplaySchemaJSON; that is reserved for the interactive branch")
+}
+
+// TestExplainRun_TableOutput_WithExamples is a smoke test covering table
+// rendering for a rule with a real, non-trivial Examples value
+// (call-not-found). lintExplainSchemaJSON declares "examples" as a JSON
+// array while projectRule() flattens RuleMeta.Examples into a single
+// joined string; this confirms that shape difference does not break
+// non-interactive table rendering or panic. It does not, by itself,
+// discriminate between WithOutputSchemaJSON and WithOutputDisplaySchemaJSON
+// for this schema/data combination -- see
+// TestExplainRun_NonInteractiveOptions_UseSchemaJSON for the assertion that
+// actually regresses issue #672.
+func TestExplainRun_TableOutput_WithExamples(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RuleOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "table"},
+	}
+
+	err := opts.Run(ctx, "call-not-found")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "call-not-found")
+	assert.Contains(t, output, "error")
+	assert.Contains(t, output, "call")
+	assert.Contains(t, output, "getUser")
+}
+
+// TestExplainRun_ListOutput_WithExamples is the list-format counterpart to
+// TestExplainRun_TableOutput_WithExamples, covering issue #672 for the
+// "list" output format as well as "table".
+func TestExplainRun_ListOutput_WithExamples(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := testCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RuleOptions{
+		BinaryName:     "scafctl",
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "list"},
+	}
+
+	err := opts.Run(ctx, "call-not-found")
+	require.NoError(t, err)
+
+	output := outBuf.String()
+	assert.Contains(t, output, "call-not-found")
+	assert.Contains(t, output, "error")
+	assert.Contains(t, output, "getUser")
+}
+
 func TestExplainRun_UnknownRule(t *testing.T) {
 	t.Parallel()
 	ioStreams, _, _ := terminal.NewTestIOStreams()
