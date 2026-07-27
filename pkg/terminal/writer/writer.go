@@ -8,6 +8,7 @@ package writer
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -22,6 +23,21 @@ type Writer struct {
 	ioStreams *terminal.IOStreams
 	cliParams *settings.Run
 	exitFunc  func(code int)
+
+	// humanToStderr routes human-facing messages (success/info/warning/
+	// section-header/debug/plain) to stderr instead of stdout. It is set via
+	// WithHumanToStderr for commands that emit structured data on stdout
+	// (e.g., -o json) and must keep progress noise off that stream.
+	humanToStderr bool
+}
+
+// humanOut returns the stream for human-facing (non-error) messages. It is
+// stderr when humanToStderr is set, otherwise stdout.
+func (w *Writer) humanOut() io.Writer {
+	if w.humanToStderr {
+		return w.ioStreams.ErrOut
+	}
+	return w.ioStreams.Out
 }
 
 // New creates a new Writer with the given IOStreams and CLI params.
@@ -37,13 +53,25 @@ func New(ioStreams *terminal.IOStreams, cliParams *settings.Run, opts ...Option)
 	return w
 }
 
-// Success writes a success message to stdout.
+// Clone returns a copy of the writer with the given options applied on top of
+// its existing configuration. Unlike New, it preserves the current fields
+// (streams, CLI params, exit function, human routing) so a derived writer does
+// not silently drop root-level options such as WithExitFunc.
+func (w *Writer) Clone(opts ...Option) *Writer {
+	clone := *w
+	for _, opt := range opts {
+		opt(&clone)
+	}
+	return &clone
+}
+
+// Success writes a success message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Success(msg string) {
 	if w.cliParams.IsQuiet {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.Out, output.SuccessMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.SuccessMessage(msg, w.cliParams.NoColor))
 }
 
 // Successf writes a formatted success message to stdout.
@@ -69,13 +97,13 @@ func (w *Writer) SuccessStderrf(format string, args ...any) {
 	w.SuccessStderr(fmt.Sprintf(format, args...))
 }
 
-// Warning writes a warning message to stdout.
+// Warning writes a warning message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Warning(msg string) {
 	if w.cliParams.IsQuiet {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.Out, output.WarningMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.WarningMessage(msg, w.cliParams.NoColor))
 }
 
 // Warningf writes a formatted warning message to stdout.
@@ -146,13 +174,13 @@ func (w *Writer) ErrorWithCodef(code int, format string, args ...any) {
 	w.ErrorWithCode(code, fmt.Sprintf(format, args...))
 }
 
-// Info writes an informational message to stdout.
+// Info writes an informational message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Info(msg string) {
 	if w.cliParams.IsQuiet {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.Out, output.InfoMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.InfoMessage(msg, w.cliParams.NoColor))
 }
 
 // Infof writes a formatted informational message to stdout.
@@ -161,23 +189,23 @@ func (w *Writer) Infof(format string, args ...any) {
 	w.Info(fmt.Sprintf(format, args...))
 }
 
-// SectionHeader writes a bold section header to stdout.
+// SectionHeader writes a bold section header to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) SectionHeader(msg string) {
 	if w.cliParams.IsQuiet {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.Out, output.SectionHeaderMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.SectionHeaderMessage(msg, w.cliParams.NoColor))
 }
 
-// Debug writes a debug message to stdout.
+// Debug writes a debug message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 // Only writes if log level indicates debug output is enabled (debug, trace, or numeric V-level).
 func (w *Writer) Debug(msg string) {
 	if w.cliParams.IsQuiet || !logger.IsDebugLevel(w.cliParams.MinLogLevel) {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.Out, output.DebugMessage(msg, w.cliParams.NoColor))
+	fmt.Fprintln(w.humanOut(), output.DebugMessage(msg, w.cliParams.NoColor))
 }
 
 // Debugf writes a formatted debug message to stdout.
@@ -228,13 +256,13 @@ func (w *Writer) Verbosef(format string, args ...any) {
 	w.Verbose(fmt.Sprintf(format, args...))
 }
 
-// Plain writes a plain message to stdout without any styling or newline.
+// Plain writes a plain message to stdout (or stderr when WithHumanToStderr is set) without any styling or newline.
 // Respects --quiet flag only.
 func (w *Writer) Plain(msg string) {
 	if w.cliParams.IsQuiet {
 		return
 	}
-	fmt.Fprint(w.ioStreams.Out, msg)
+	fmt.Fprint(w.humanOut(), msg)
 }
 
 // Plainf writes a formatted plain message to stdout without any styling or newline.
@@ -243,13 +271,13 @@ func (w *Writer) Plainf(format string, args ...any) {
 	w.Plain(fmt.Sprintf(format, args...))
 }
 
-// Plainln writes a plain message to stdout with a newline, without any styling.
+// Plainln writes a plain message to stdout (or stderr when WithHumanToStderr is set) with a newline, without any styling.
 // Respects --quiet flag only.
 func (w *Writer) Plainln(msg string) {
 	if w.cliParams.IsQuiet {
 		return
 	}
-	fmt.Fprintln(w.ioStreams.Out, msg)
+	fmt.Fprintln(w.humanOut(), msg)
 }
 
 // Plainlnf writes a formatted plain message to stdout with a newline, without any styling.

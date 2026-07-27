@@ -30,9 +30,14 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/output"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+// ValidPackageOutputTypes lists the machine-readable formats accepted by the
+// package/build solution -o/--output flag.
+var ValidPackageOutputTypes = []string{"json", "yaml"}
 
 // SolutionOptions holds options for the package solution command.
 type SolutionOptions struct {
@@ -58,6 +63,8 @@ type SolutionOptions struct {
 	Bump            string
 	Strict          bool
 	NoVerify        bool
+	Output          string
+	ComposedOut     string
 	CliParams       *settings.Run
 	IOStreams       *terminal.IOStreams
 
@@ -126,9 +133,26 @@ func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 
 			  # Package without bundling
 			  scafctl package solution -f ./solution.yaml --no-bundle
+
+			  # Emit a machine-readable build report on stdout (progress goes to stderr)
+			  scafctl package solution -f ./solution.yaml -o json
+
+			  # Preview the build result as JSON without storing anything
+			  scafctl package solution -f ./solution.yaml --dry-run -o json
+
+			  # Write the composed (flattened) solution to a file
+			  scafctl package solution -f ./solution.yaml --composed-out composed.yaml
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Validate -o/--output early.
+			if err := output.ValidateOutputType(options.Output, ValidPackageOutputTypes); err != nil {
+				if w := writer.FromContext(cmd.Context()); w != nil {
+					w.Errorf("%v", err)
+				}
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
 			// Validate --bump value early
 			if options.Bump != "" {
 				if _, err := solution.ParseBumpLevel(options.Bump); err != nil {
@@ -253,6 +277,8 @@ func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 	cmd.Flags().StringVar(&options.Bump, "bump", "", "Auto-increment version based on last published version (patch, minor, major)")
 	cmd.Flags().BoolVar(&options.Strict, "strict", false, "Fail if the built bundle has completeness warnings")
 	cmd.Flags().BoolVar(&options.NoVerify, "no-verify", false, "Skip built-bundle completeness verification")
+	cmd.Flags().StringVarP(&options.Output, "output", "o", "", fmt.Sprintf("Emit a machine-readable build report on stdout. One of: (%s)", strings.Join(ValidPackageOutputTypes, ", ")))
+	cmd.Flags().StringVar(&options.ComposedOut, "composed-out", "", "Write the composed (flattened) solution document to this path (.json for JSON, otherwise YAML)")
 
 	return cmd
 }
@@ -260,6 +286,15 @@ func CommandPackageSolution(cliParams *settings.Run, ioStreams *terminal.IOStrea
 func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 	lgr := logger.FromContext(ctx)
 	w := writer.FromContext(ctx)
+
+	// When emitting a machine-readable report on stdout, route all human
+	// progress output to stderr so stdout carries only the report document.
+	// Clone the existing writer so root-level options (e.g. RootOptions.ExitFunc
+	// via writer.WithExitFunc) are preserved rather than discarded.
+	if opts.Output != "" {
+		w = w.Clone(writer.WithHumanToStderr())
+		ctx = writer.WithWriter(ctx, w)
+	}
 
 	w.Verbosef("Reading solution from %s", opts.File)
 
@@ -498,6 +533,17 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		}
 	}
 
+	// Write the composed (flattened) solution document if requested. This
+	// reflects the solution as it will be stored: composed when bundling ran,
+	// or the original document under --no-bundle (composition only runs inside
+	// the bundle pipeline). Emitted for all downstream paths (cache hit,
+	// dry-run, and normal store).
+	if opts.ComposedOut != "" {
+		if err := writeComposedSolution(opts.ComposedOut, &sol, w); err != nil {
+			return err
+		}
+	}
+
 	// Handle build cache hit — artifact unchanged since last build
 	if br != nil && br.CacheHit {
 		// Verify the artifact still exists in the local catalog. It may have
@@ -505,7 +551,9 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		// entry remained on disk.
 		localCat, catErr := catalog.NewLocalCatalog(*lgr)
 		catalogMissing := false
+		catalogPath := ""
 		if catErr == nil {
+			catalogPath = localCat.Path()
 			ref := catalog.Reference{
 				Kind:    catalog.ArtifactKindSolution,
 				Name:    br.CacheEntry.ArtifactName,
@@ -520,7 +568,14 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 			w.Infof("  Digest: %s", br.CacheEntry.ArtifactDigest)
 			w.Infof("  Use --no-cache to force a full rebuild")
 			w.Verbosef("Fingerprint: %s (%d input files)", br.CacheEntry.Fingerprint, br.CacheEntry.InputFiles)
-			return nil
+			return emitPackageReport(ctx, opts, builder.PackageReportInput{
+				Name:            br.CacheEntry.ArtifactName,
+				Version:         br.CacheEntry.ArtifactVersion,
+				Solution:        &sol,
+				Build:           br,
+				CatalogPath:     catalogPath,
+				IncludeSolution: true,
+			})
 		}
 
 		// Artifact missing from catalog — fall through to re-store it.
@@ -532,11 +587,18 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 
 	// Dry-run: show what would be built but don't store
 	if opts.DryRun {
-		if br != nil && br.Discovery != nil {
+		if opts.Output == "" && br != nil && br.Discovery != nil {
 			printDryRunOutput(w, br.Discovery, &sol, opts)
 		}
 		w.Infof("Dry run: would build %s@%s", name, version.String())
-		return nil
+		return emitPackageReport(ctx, opts, builder.PackageReportInput{
+			Name:            name,
+			Version:         version.String(),
+			Solution:        &sol,
+			Build:           br,
+			DryRun:          true,
+			IncludeSolution: true,
+		})
 	}
 
 	// Create local catalog
@@ -615,7 +677,25 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 	// rerun re-builds and re-verifies instead of hitting a cached broken
 	// artifact and exiting 0. The stored catalog artifact is left in place.
 	if !opts.NoVerify {
-		if verr := verifyBuiltBundle(ctx, localCatalog, info.Reference, opts, w, lgr); verr != nil {
+		vr, verr := verifyBuiltBundle(ctx, localCatalog, info.Reference, opts, w, lgr)
+		if verr != nil {
+			// Emit a best-effort report so machine consumers get the structured
+			// failure (verification.passed=false + errors/warnings) alongside the
+			// non-zero exit. The stored artifact is intentionally left in place
+			// (no rollback), so the report still describes what was written.
+			// A report write error must not mask the original verification error.
+			if rerr := emitPackageReport(ctx, opts, builder.PackageReportInput{
+				Name:            info.Reference.Name,
+				Version:         info.Reference.Version.String(),
+				Solution:        &sol,
+				Build:           br,
+				Info:            &info,
+				Verify:          vr,
+				CatalogPath:     localCatalog.Path(),
+				IncludeSolution: true,
+			}); rerr != nil {
+				lgr.V(1).Info("failed to emit failure report", "error", rerr)
+			}
 			return verr
 		}
 
@@ -631,30 +711,93 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 		if builder.WriteBuildCacheEntry(ctx, storeResult) {
 			w.Verbose("Build cache entry written")
 		}
-	} else {
-		w.Verbose("Skipping build-cache entry (--no-verify): unverified artifacts are not cached")
+
+		return emitPackageReport(ctx, opts, builder.PackageReportInput{
+			Name:            info.Reference.Name,
+			Version:         info.Reference.Version.String(),
+			Solution:        &sol,
+			Build:           br,
+			Info:            &info,
+			Verify:          vr,
+			CatalogPath:     localCatalog.Path(),
+			IncludeSolution: true,
+		})
 	}
 
+	w.Verbose("Skipping build-cache entry (--no-verify): unverified artifacts are not cached")
+
+	return emitPackageReport(ctx, opts, builder.PackageReportInput{
+		Name:            info.Reference.Name,
+		Version:         info.Reference.Version.String(),
+		Solution:        &sol,
+		Build:           br,
+		Info:            &info,
+		CatalogPath:     localCatalog.Path(),
+		IncludeSolution: true,
+	})
+}
+
+// emitPackageReport writes a machine-readable package report to stdout when a
+// structured output format is requested. It is a no-op when -o/--output is unset.
+func emitPackageReport(ctx context.Context, opts *SolutionOptions, in builder.PackageReportInput) error {
+	if opts.Output == "" {
+		return nil
+	}
+	report := builder.NewPackageReport(in)
+	if err := output.WriteOutput(opts.IOStreams, opts.Output, report, nil); err != nil {
+		if w := writer.FromContext(ctx); w != nil {
+			w.Errorf("failed to write %s output: %v", opts.Output, err)
+		}
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	return nil
+}
+
+// writeComposedSolution serializes the composed solution to the given path.
+// The format is JSON when the path ends in ".json", otherwise YAML.
+func writeComposedSolution(path string, sol *solution.Solution, w *writer.Writer) error {
+	var (
+		data []byte
+		err  error
+	)
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		data, err = sol.ToJSONPretty()
+	} else {
+		data, err = sol.ToYAML()
+	}
+	if err != nil {
+		w.Errorf("failed to serialize composed solution: %v", err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		w.Errorf("failed to write composed solution to %s: %v", path, err)
+		return exitcode.WithCode(err, exitcode.GeneralError)
+	}
+	w.SuccessStderrf("Composed solution written: %s", path)
 	return nil
 }
 
 // verifyBuiltBundle fetches the stored bundle for ref, verifies its
 // completeness, renders the result, and enforces producer policy: fail on
-// errors, and (under --strict) fail on warnings.
-func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *SolutionOptions, w *writer.Writer, lgr *logr.Logger) error {
+// errors, and (under --strict) fail on warnings. It returns the verify result
+// so callers can surface it in a machine-readable report -- including on a
+// policy-decision failure, where the (non-nil) result carries the errors and
+// warnings that triggered the failure. The result is nil only when
+// verification could not run (fetch/parse/verify infrastructure errors).
+func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref catalog.Reference, opts *SolutionOptions, w *writer.Writer, lgr *logr.Logger) (*bundler.VerifyResult, error) {
 	content, bundleData, _, ferr := localCatalog.FetchWithBundle(ctx, ref)
 	if ferr != nil {
 		// Producer errors are always fatal: we cannot confirm a good build.
 		err := fmt.Errorf("fetching built bundle for verification: %w", ferr)
 		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.GeneralError)
+		return nil, exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	var vsol solution.Solution
 	if err := vsol.LoadFromBytes(content); err != nil {
 		err = fmt.Errorf("parsing built solution for verification: %w", err)
 		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.GeneralError)
+		return nil, exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	// Pass the (possibly empty) bundleData through to VerifyBundle: the empty
@@ -666,7 +809,7 @@ func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref ca
 	if err != nil {
 		err = fmt.Errorf("verifying built bundle: %w", err)
 		w.Errorf("%v", err)
-		return exitcode.WithCode(err, exitcode.GeneralError)
+		return nil, exitcode.WithCode(err, exitcode.GeneralError)
 	}
 
 	// Producer: incompleteness fails the build, so render failures as errors.
@@ -674,10 +817,12 @@ func verifyBuiltBundle(ctx context.Context, localCatalog catalog.Catalog, ref ca
 
 	if failErr := packageVerifyDecision(vr, opts.Strict); failErr != nil {
 		w.Errorf("%v", failErr)
-		return failErr
+		// Return vr alongside the error so the caller can emit a report whose
+		// verification section explains why the build failed.
+		return vr, failErr
 	}
 
-	return nil
+	return vr, nil
 }
 
 // packageVerifyDecision applies the producer verification policy to a verify

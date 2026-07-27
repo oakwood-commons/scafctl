@@ -370,6 +370,33 @@ scafctl package solution -f ./my-solution.yaml
 | `--no-vendor` | `false` | Skip vendoring catalog dependencies |
 | `--bundle-max-size` | `50MB` | Maximum total size of bundled files |
 | `--dry-run` | `false` | Show what would be bundled without building |
+| `-o`, `--output` | (none) | Emit a machine-readable build report on stdout (`json` or `yaml`) |
+| `--composed-out` | (none) | Write the composed (flattened) solution document to a path (`.json` for JSON, otherwise YAML) |
+
+#### Machine-Readable Build Report
+
+Passing `-o json` (or `-o yaml`) emits a structured `PackageReport` on **stdout**
+and routes all human progress to **stderr**, so the report can be piped into
+tooling without contamination:
+
+```bash
+$ scafctl package solution -f ./solution.yaml -o json | jq .reference
+"dynamic-paths-example@1.0.0"
+```
+
+The report captures the resolved identity, storage digest, catalog path, build
+fingerprint/cache status, the bundle manifest (files, vendored refs, plugins),
+the completeness-verification summary, and the fully composed solution document
+(under `solution`). Reports are emitted for the normal store path, build-cache
+hits, and `--dry-run` (where `dryRun: true` and no `digest`/`catalog` are set,
+since nothing is stored). Under `--no-verify` the `verification` section is
+omitted.
+
+`--composed-out <path>` additionally writes just the composed (flattened)
+solution document to a file, mirroring what is stored: composed when bundling
+ran, or the original document under `--no-bundle` (composition only runs inside
+the bundle pipeline). The format follows the extension (`.json` for pretty JSON,
+otherwise YAML).
 
 #### Dry-Run Output
 

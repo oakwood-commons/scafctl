@@ -13,3 +13,15 @@ func WithExitFunc(fn func(code int)) Option {
 		w.exitFunc = fn
 	}
 }
+
+// WithHumanToStderr routes human-facing messages (success, info, warning,
+// section header, debug, and plain output) to stderr instead of stdout.
+//
+// Use this for commands that emit structured data on stdout (e.g., -o json/yaml)
+// so progress and status noise never corrupts the machine-readable stream.
+// Error output always goes to stderr regardless of this option.
+func WithHumanToStderr() Option {
+	return func(w *Writer) {
+		w.humanToStderr = true
+	}
+}

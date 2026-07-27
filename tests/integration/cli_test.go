@@ -4396,6 +4396,113 @@ func TestIntegration_BuildSolution_DryRun(t *testing.T) {
 	assert.Contains(t, stdout, "Dry run")
 }
 
+func TestIntegration_BuildSolution_JSONReport(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "-o", "json")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+
+	// stdout must be clean JSON: the report only, no human progress.
+	var report map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report),
+		"stdout must be valid JSON, got: %s", stdout)
+	assert.Equal(t, "1.0.0", report["version"])
+	assert.NotEmpty(t, report["digest"], "a stored artifact has a digest")
+	assert.NotNil(t, report["solution"], "composed solution is embedded")
+
+	// Human progress is routed to stderr.
+	assert.Contains(t, stderr, "Built")
+}
+
+func TestIntegration_BuildSolution_YAMLReport(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "-o", "yaml")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "version: 1.0.0")
+	assert.Contains(t, stdout, "reference:")
+	assert.Contains(t, stderr, "Built")
+}
+
+func TestIntegration_BuildSolution_DryRunJSONReport(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	stdout, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--dry-run", "-o", "json")
+
+	if exitCode != 0 {
+		t.Logf("stdout: %s", stdout)
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+
+	var report map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report),
+		"stdout must be valid JSON, got: %s", stdout)
+	assert.Equal(t, true, report["dryRun"])
+	assert.Empty(t, report["digest"], "dry-run stores nothing")
+	assert.Contains(t, stderr, "Dry run")
+}
+
+func TestIntegration_BuildSolution_ComposedOut(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+	composedOut := filepath.Join(tmpDir, "composed.yaml")
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "--dry-run", "--composed-out", composedOut)
+
+	if exitCode != 0 {
+		t.Logf("stderr: %s", stderr)
+	}
+	assert.Equal(t, 0, exitCode)
+
+	data, err := os.ReadFile(composedOut)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "apiVersion:")
+}
+
+func TestIntegration_BuildSolution_InvalidOutput(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	env := map[string]string{
+		"XDG_DATA_HOME":  tmpDir,
+		"XDG_CACHE_HOME": tmpDir,
+	}
+
+	_, stderr, exitCode := runScafctlWithEnv(t, env, "build", "solution", "-f", "examples/resolver-demo.yaml", "--version", "1.0.0", "-o", "xml")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "xml")
+}
+
 func TestIntegration_BuildSolution_NoBundle(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()

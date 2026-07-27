@@ -273,7 +273,9 @@ func WriteJSONOutput(ioStreams *terminal.IOStreams, data any) error {
 	if err != nil {
 		return fmt.Errorf("unable to generate JSON output: %w", err)
 	}
-	fmt.Fprintf(ioStreams.Out, "%s\n", string(jsonBytes))
+	if _, err := fmt.Fprintf(ioStreams.Out, "%s\n", string(jsonBytes)); err != nil {
+		return fmt.Errorf("unable to write JSON output: %w", err)
+	}
 	return nil
 }
 
@@ -293,6 +295,8 @@ func WriteYAMLOutput(ioStreams *terminal.IOStreams, data any) error {
 	if err != nil {
 		return fmt.Errorf("unable to generate YAML output: %w", err)
 	}
-	fmt.Fprintf(ioStreams.Out, "%s\n", string(yamlBytes))
+	if _, err := fmt.Fprintf(ioStreams.Out, "%s\n", string(yamlBytes)); err != nil {
+		return fmt.Errorf("unable to write YAML output: %w", err)
+	}
 	return nil
 }
