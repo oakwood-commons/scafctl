@@ -15,7 +15,7 @@ When invoked via a prompt file (e.g., `go-review.prompt.md`), follow the prompt'
 
 When invoked directly (not via a prompt), run this procedure:
 1. Run `git diff --stat HEAD -- '*.go'` and `git status --short` to see all changes
-2. Run `go vet ./...` and `task lint`
+2. Run `go vet ./...` and `task lint:changed`
 3. Read the full diff and full contents of new files
 4. Apply all review checks below
 5. Run coverage on every changed package

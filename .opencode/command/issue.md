@@ -1,6 +1,6 @@
 ---
 description: "scafctl: File a GitHub issue with codebase exploration and feasibility assessment."
-agent: issue-creator
+agent: scafctl-issue-creator
 ---
 Create a GitHub issue for the described change. Follow this process:
 

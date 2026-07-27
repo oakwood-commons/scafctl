@@ -10,7 +10,6 @@
   },
   "plugin": [
     "opencode-vibeguard",
-    "opencode-notify",
     "@tarquinen/opencode-dcp@3.1.14"
   ],
   "formatter": {},

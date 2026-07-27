@@ -6,7 +6,7 @@ Review the current Go code changes thoroughly. You MUST complete ALL phases belo
 
 ## Phase 1: Automated checks
 
-1. Run `go vet ./...` and `task lint`
+1. Run `go vet ./...` and `task lint:changed`
 2. Run `git diff --stat HEAD -- '*.go'` and `git status --short` to identify all changed/new files
 3. Read the full diff for all changed files
 4. Read the full contents of all new (untracked) files
