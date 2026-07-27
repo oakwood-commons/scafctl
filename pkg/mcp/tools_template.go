@@ -103,7 +103,7 @@ func (s *Server) registerTemplateTools() {
 
 	// list_go_template_functions
 	listGoTemplateFunctionsTool := mcp.NewTool("list_go_template_functions",
-		mcp.WithDescription("List all available Go template extension functions. Includes both sprig functions (upper, lower, toJson, dict, etc.) and custom scafctl-specific functions (toHcl, toYaml, fromYaml, mustToYaml, mustFromYaml)."),
+		mcp.WithDescription("List all available Go template extension functions. Includes sprig functions (upper, lower, toJson, dict, etc.), custom scafctl-specific functions (toHcl, toYaml, fromYaml, mustToYaml, mustFromYaml), and any functions registered by an embedding application. Each result carries a 'source' tag: sprig, custom, or embedder."),
 		mcp.WithTitleAnnotation("List Go Template Functions"),
 		mcp.WithToolIcons(toolIcons["template"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -115,6 +115,9 @@ func (s *Server) registerTemplateTools() {
 		),
 		mcp.WithBoolean("sprig_only",
 			mcp.Description("If true, only return sprig library functions"),
+		),
+		mcp.WithBoolean("embedder_only",
+			mcp.Description("If true, only return functions registered by the embedding application"),
 		),
 		mcp.WithString("name",
 			mcp.Description("Get details for a specific function by name (substring match)"),
@@ -213,13 +216,19 @@ func (s *Server) handleEvaluateGoTemplate(_ context.Context, request mcp.CallToo
 func (s *Server) handleListGoTemplateFunctions(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	customOnly := request.GetBool("custom_only", false)
 	sprigOnly := request.GetBool("sprig_only", false)
+	embedderOnly := request.GetBool("embedder_only", false)
 	name := request.GetString("name", "")
 
-	functions := gotmplext.All()
-	if customOnly {
+	var functions gotmpl.ExtFunctionList
+	switch {
+	case customOnly:
 		functions = gotmplext.Custom()
-	} else if sprigOnly {
+	case sprigOnly:
 		functions = gotmplext.Sprig()
+	case embedderOnly:
+		functions = gotmpl.RegisteredFuncs()
+	default:
+		functions = append(gotmplext.All(), gotmpl.RegisteredFuncs()...)
 	}
 
 	return filterAndReturnNamedFunctions(

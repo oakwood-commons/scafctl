@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"text/template"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -421,4 +423,54 @@ func TestRoot_ConfigPathHonored(t *testing.T) {
 	info, err := captured.Resolve(context.Background(), "lab")
 	require.NoError(t, err)
 	assert.Equal(t, "https://api.lab.example.com:6443", info.APIServerURL)
+}
+
+// TestRoot_GoTemplateFuncs_Discoverable verifies the embedder contract: a custom
+// Go-template function supplied via RootOptions.GoTemplateFuncs is registered
+// during startup and surfaces in the discoverability output, even under a
+// non-default binary name. Uses a unique function name so the package-global
+// registry cannot collide with other tests in this binary.
+func TestRoot_GoTemplateFuncs_Discoverable(t *testing.T) {
+	ioStreams, stdout, _ := terminal.NewTestIOStreams()
+
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams:  ioStreams,
+		BinaryName: "mycli",
+		GoTemplateFuncs: template.FuncMap{
+			"embedderRootDiscoverable": func(s string) string { return s },
+		},
+	})
+	defer cleanup()
+	cmd.SetArgs([]string{"get", "template", "functions", "--embedder", "-o", "json"})
+	require.NoError(t, cmd.Execute())
+
+	output := stdout.String()
+	assert.Contains(t, output, "embedderRootDiscoverable",
+		"embedder-registered function should appear in --embedder listing")
+	assert.Contains(t, output, gotmpl.SourceEmbedder,
+		"embedder function should be tagged with the embedder source")
+}
+
+// TestRoot_GoTemplateFuncs_CollisionFailsLoud verifies that an embedder build
+// bug -- registering a function whose name collides with a built-in -- fails
+// loudly at startup rather than silently dropping the function.
+func TestRoot_GoTemplateFuncs_CollisionFailsLoud(t *testing.T) {
+	// Ensure the extension factory is set so built-in collisions are detectable.
+	RegisterDefaults()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	exitCalled := false
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams: ioStreams,
+		ExitFunc:  func(_ int) { exitCalled = true },
+		GoTemplateFuncs: template.FuncMap{
+			"upper": func(string) string { return "" },
+		},
+	})
+	defer cleanup()
+	cmd.SetArgs([]string{"version"})
+
+	_ = cmd.Execute()
+	assert.True(t, exitCalled,
+		"ExitFunc should be called when an embedder function collides with a built-in")
 }

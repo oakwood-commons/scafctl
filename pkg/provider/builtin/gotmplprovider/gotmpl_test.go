@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -48,6 +49,32 @@ func TestGoTemplateProvider_Execute_SimpleTemplate(t *testing.T) {
 	require.NotNil(t, output)
 
 	assert.Equal(t, "Hello, World!", output.Data)
+}
+
+// TestGoTemplateProvider_Execute_EmbedderRegisteredFunc proves that a function
+// registered by an embedder via gotmpl.RegisterFuncs is available through the
+// go-template provider (i.e. the single-choke-point merge reaches the provider
+// service). The function name is unique to avoid collisions in the shared,
+// process-global registry.
+func TestGoTemplateProvider_Execute_EmbedderRegisteredFunc(t *testing.T) {
+	require.NoError(t, gotmpl.RegisterFuncs(template.FuncMap{
+		"providerTestEmbedderShout": func(s string) string { return s + "!!!" },
+	}))
+
+	// Provider must be constructed AFTER registration so its service captures
+	// the merged func map.
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"name":     "embedder-func-test",
+		"template": `{{ providerTestEmbedderShout "hi" }}`,
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "hi!!!", output.Data)
 }
 
 func TestGoTemplateProvider_Execute_WithName(t *testing.T) {
