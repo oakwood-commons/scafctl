@@ -88,6 +88,69 @@ func TestHandleListPlugins(t *testing.T) {
 		}
 		assert.True(t, found, "expected mcp-test-provider in plugin list")
 	})
+
+	t.Run("dedupes to latest version by default and all_versions restores full list", func(t *testing.T) {
+		t.Setenv("XDG_CACHE_HOME", t.TempDir())
+		xdg.Reload()
+
+		cacheDir := paths.PluginCacheDir()
+		for _, version := range []string{"0.1.1", "0.2.0"} {
+			pluginDir := filepath.Join(cacheDir, "mcp-dedup-provider", version, "linux-amd64")
+			require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+			binPath := filepath.Join(pluginDir, "mcp-dedup-provider")
+			require.NoError(t, os.WriteFile(binPath, []byte("binary"), 0o755))
+		}
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		countVersions := func(plugins []plugin.CachedPlugin) int {
+			count := 0
+			for _, p := range plugins {
+				if p.Name == "mcp-dedup-provider" {
+					count++
+				}
+			}
+			return count
+		}
+
+		// Default: latest only.
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "list_plugins"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListPlugins(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var envelope struct {
+			Plugins []plugin.CachedPlugin `json:"plugins"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+		assert.Equal(t, 1, countVersions(envelope.Plugins), "default should dedupe to latest version only")
+		for _, p := range envelope.Plugins {
+			if p.Name == "mcp-dedup-provider" {
+				assert.Equal(t, "0.2.0", p.Version)
+			}
+		}
+
+		// all_versions=true: full listing restored.
+		requestAll := mcp.CallToolRequest{}
+		requestAll.Params.Name = "list_plugins"
+		requestAll.Params.Arguments = map[string]any{"all_versions": true}
+
+		resultAll, err := srv.handleListPlugins(context.Background(), requestAll)
+		require.NoError(t, err)
+		assert.False(t, resultAll.IsError)
+
+		textAll := resultAll.Content[0].(mcp.TextContent).Text
+		var envelopeAll struct {
+			Plugins []plugin.CachedPlugin `json:"plugins"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(textAll), &envelopeAll))
+		assert.Equal(t, 2, countVersions(envelopeAll.Plugins), "all_versions=true should return every cached version")
+	})
 }
 
 func TestHandleGetPluginCachePath(t *testing.T) {

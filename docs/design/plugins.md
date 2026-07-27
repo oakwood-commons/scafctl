@@ -70,7 +70,7 @@ A plugin may expose one or more providers OR one or more auth handlers (not both
 When distributed via the catalog, plugins are categorized by their purpose:
 
 | Artifact Kind | Description | Repository Path |
-|--------------|-------------|-----------------|
+| -------------- | ------------- | ----------------- |
 | `provider` | go-plugin binary exposing providers | `/providers/` |
 | `auth-handler` | go-plugin binary exposing auth handlers | `/auth-handlers/` |
 
@@ -130,7 +130,7 @@ performance-critical remain in-process.
 ### Current Built-in Providers
 
 | Provider | Reason |
-|----------|--------|
+| ---------- | -------- |
 | `cel` | Imports `pkg/celexp` (rule 1) |
 | `go-template` | Imports `pkg/gotmpl` (rule 1) |
 | `validation` | Imports `pkg/celexp` for CEL-based validation rules (rule 1) |
@@ -215,7 +215,7 @@ service HostService {
 ### RPC Lifecycle
 
 | Phase | RPC | Direction | When |
-|-------|-----|-----------|------|
+| ------- | ----- | ----------- | ------ |
 | Discovery | `GetProviders` | host -> plugin | On plugin load |
 | Schema | `GetProviderDescriptor` | host -> plugin | After discovery |
 | Configuration | `ConfigureProvider` | host -> plugin | Once after load, before any execution |
@@ -229,7 +229,7 @@ service HostService {
 ### Auth Handler RPC Lifecycle
 
 | Phase | RPC | Direction | When |
-|-------|-----|-----------|------|
+| ------- | ----- | ----------- | ------ |
 | Discovery | `GetAuthHandlers` | host -> plugin | On plugin load |
 | Configuration | `ConfigureAuthHandler` | host -> plugin | Once after load, before any auth calls |
 | Authentication | `Login` | host -> plugin | On `auth login` |
@@ -273,7 +273,7 @@ Called during CLI shutdown or context cancellation to allow auth handler plugins
 Plugins that need host-side resources (secrets, auth tokens) use the `HostService` callback service. The host registers this service via the go-plugin GRPCBroker during plugin startup.
 
 | Callback | Purpose |
-|----------|---------|
+| ---------- | --------- |
 | `GetSecret` / `SetSecret` / `DeleteSecret` / `ListSecrets` | Access the host's secret store |
 | `GetAuthIdentity` | Retrieve identity claims from the host's auth registry |
 | `ListAuthHandlers` | List available auth handlers (filtered by AllowedAuthHandlers) |
@@ -496,6 +496,7 @@ bundle:
 ```
 
 scafctl will:
+
 1. Check if the plugin exists in the local catalog
 2. Pull missing plugins from configured remote catalogs
 3. Validate version constraints are met
@@ -587,7 +588,7 @@ When a solution declares plugin dependencies under `bundle.plugins`, scafctl aut
 ### Architecture
 
 | Component | Package | Responsibility |
-|-----------|---------|----------------|
+| ----------- | --------- | ---------------- |
 | **Fetcher** | `pkg/plugin/fetcher.go` | Orchestrates fetch + cache + registration |
 | **Cache** | `pkg/plugin/cache.go` | Content-addressed binary cache under `$XDG_CACHE_HOME/scafctl/plugins/` |
 | **ChainCatalog** | `pkg/catalog/chain.go` | Tries catalogs in order (local → remote OCI) |
@@ -607,7 +608,10 @@ When a solution declares plugin dependencies under `bundle.plugins`, scafctl aut
 ### CLI Commands
 
 - **`scafctl plugins install`** — Pre-fetch plugin binaries from catalogs before a build or run
-- **`scafctl plugins list`** — List cached plugin binaries with digest, size, and platform info
+- **`scafctl plugins list`** — List cached plugin binaries with digest, size, and platform info.
+  By default shows only the latest cached version per name+platform (matching
+  `catalog list`'s dedupe behavior); pass `--all-versions` (or `--all`) to show
+  every cached version.
 
 Both commands live in `pkg/cmd/scafctl/plugins/`.
 
@@ -631,7 +635,7 @@ combinations, scafctl supports **OCI image indexes** (fat manifests).
 ### Architecture
 
 | Component | Package | Responsibility |
-|-----------|---------|----------------|
+| ----------- | --------- | ---------------- |
 | **MultiPlatform helpers** | `pkg/catalog/multiplatform.go` | Platform↔OCI conversion, index matching |
 | **StoreMultiPlatform** | `pkg/catalog/local_multiplatform.go` | Store multi-platform artifact as image index |
 | **FetchByPlatform** | `pkg/catalog/local_multiplatform.go` | Fetch correct platform binary from image index |
@@ -704,7 +708,7 @@ identities are loaded.
 ### Verification Modes
 
 | Mode | Behavior |
-|------|----------|
+| ------ | ---------- |
 | `off` (default) | Digest-only verification; no signature check |
 | `warn` | Verify signature; log a warning on failure but continue |
 | `enforce` | Verify signature; fail on missing or invalid signature |
@@ -724,7 +728,7 @@ plugins:
 ```
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `mode` | `off`, `warn`, or `enforce` |
 | `trustedIssuers` | OIDC token issuers whose signing certificates are trusted |
 | `trustedIdentities` | Glob patterns matching the certificate subject/identity |
@@ -807,7 +811,7 @@ and testing workflows where different versions must be compared.
 ### Pinning Mechanisms
 
 | Mechanism | Scope | Example |
-|-----------|-------|---------|
+| ----------- | ------- | --------- |
 | `name@version` positional syntax | Single `run provider` invocation | `scafctl run provider exec@0.5.0 command="echo hi"` |
 | `--plugin-version` flag | Single `run provider` invocation | `scafctl run provider exec --plugin-version 0.5.0 command="echo hi"` |
 | `bundle.plugins[].version` | Solution-level constraint | `version: "0.5.0"` or `version: "^1.0.0"` |
@@ -826,7 +830,7 @@ A bare `@` at position 0 (e.g., `@latest`) is treated as a name with no version.
 ### Implementation
 
 | Component | Package | Role |
-|-----------|---------|------|
+| ----------- | --------- | ------ |
 | `parseProviderNameVersion` | `pkg/cmd/scafctl/run/provider.go` | Splits `name@version` |
 | `RegisterCachedPluginVersion` | `pkg/plugin/fetcher.go` | Loads exact version from cache |
 | `PluginVersion` field on `ProviderOptions` | `pkg/cmd/scafctl/run/provider.go` | Carries version through CLI |
@@ -836,7 +840,8 @@ A bare `@` at position 0 (e.g., `@latest`) is treated as a name with no version.
 
 Plugin versions are visible through:
 
-- `scafctl plugins list` -- shows version column for cached plugins
+- `scafctl plugins list` -- shows version column for cached plugins (latest per
+  name+platform by default; `--all-versions`/`--all` shows every cached version)
 - `scafctl get provider -o json` -- includes version for all providers
 - `scafctl catalog list --kind provider --all-versions` -- shows all available versions
 - MCP `list_providers` tool -- returns version field per provider
@@ -860,6 +865,7 @@ order is:
 Plugins are the extensibility layer of scafctl. They exist to supply providers in an isolated, versioned, and scalable way using go-plugin. Plugins are not a new execution model or abstraction. They are the mechanism by which providers are distributed and invoked, keeping the core system small, stable, and extensible.
 
 Plugins are distributed through the catalog system as OCI artifacts, enabling:
+
 - Versioned plugin releases with semantic versioning
 - Multi-platform support (linux/amd64, darwin/arm64, etc.)
 - Offline distribution via `scafctl save/load`
