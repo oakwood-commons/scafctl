@@ -17,7 +17,7 @@ Architecture and design documentation for scafctl.
 - [Actions](actions.md) — Actions system design
 - [Authentication](auth.md) — Authentication architecture
 - [CEL Integration](cel.md) — CEL expression language integration
-- [Go-Template Embedder Functions](gotmpl-embedder-funcs.md) — Registering custom Go-template functions from an embedder
+- [Go-Template Embedder Functions](gotmpl-embedder-funcs.md) -- Registering custom Go-template functions from an embedder
 - [Catalog](catalog.md) — Catalog system design
 - [CLI](cli.md) — Command-line interface design
 - [Plugins](plugins.md) — Plugin system architecture and auto-fetch
