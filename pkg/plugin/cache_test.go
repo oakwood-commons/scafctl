@@ -316,6 +316,74 @@ func TestCache_GetLatestCached_SemverBeatsLexicographic(t *testing.T) {
 	assert.Equal(t, "0.10.0", version, "should pick 0.10.0 (semver) not 0.9.0 (lexicographic)")
 }
 
+func TestSortAndDedupeLatest_DefaultKeepsOnlyLatestPerNamePlatform(t *testing.T) {
+	cached := []CachedPlugin{
+		{Name: "myplugin", Version: "0.9.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "0.10.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64"},
+	}
+
+	result := SortAndDedupeLatest(cached, false)
+	require.Len(t, result, 1)
+	assert.Equal(t, "1.0.0", result[0].Version)
+}
+
+func TestSortAndDedupeLatest_AllVersionsReturnsEveryEntrySorted(t *testing.T) {
+	cached := []CachedPlugin{
+		{Name: "myplugin", Version: "0.9.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64"},
+	}
+
+	result := SortAndDedupeLatest(cached, true)
+	require.Len(t, result, 2)
+	// Sorted descending by semver within the same name.
+	assert.Equal(t, "1.0.0", result[0].Version)
+	assert.Equal(t, "0.9.0", result[1].Version)
+}
+
+func TestSortAndDedupeLatest_SemverBeatsLexicographic(t *testing.T) {
+	cached := []CachedPlugin{
+		{Name: "myplugin", Version: "0.9.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "0.10.0", Platform: "linux/amd64"},
+	}
+
+	result := SortAndDedupeLatest(cached, false)
+	require.Len(t, result, 1)
+	assert.Equal(t, "0.10.0", result[0].Version, "should pick 0.10.0 (semver) not 0.9.0 (lexicographic)")
+}
+
+func TestSortAndDedupeLatest_ValidSemverAlwaysBeatsNonSemver(t *testing.T) {
+	// "zzz-not-a-version" sorts lexically above all valid semver strings,
+	// but a valid semver version must always be preferred as "latest".
+	cached := []CachedPlugin{
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "9.0.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "zzz-not-a-version", Platform: "linux/amd64"},
+	}
+
+	result := SortAndDedupeLatest(cached, false)
+	require.Len(t, result, 1)
+	assert.Equal(t, "9.0.0", result[0].Version)
+}
+
+func TestSortAndDedupeLatest_DedupeKeyIncludesPlatform(t *testing.T) {
+	cached := []CachedPlugin{
+		{Name: "myplugin", Version: "1.0.0", Platform: "linux/amd64"},
+		{Name: "myplugin", Version: "1.0.0", Platform: "darwin/arm64"},
+	}
+
+	result := SortAndDedupeLatest(cached, false)
+	assert.Len(t, result, 2, "same version across different platforms must both be retained")
+}
+
+func TestSortAndDedupeLatest_EmptyInput(t *testing.T) {
+	result := SortAndDedupeLatest(nil, false)
+	assert.Empty(t, result)
+
+	result = SortAndDedupeLatest([]CachedPlugin{}, true)
+	assert.Empty(t, result)
+}
+
 func TestCache_Get_MigrationFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	cache := NewCache(tmpDir)

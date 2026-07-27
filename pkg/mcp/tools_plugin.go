@@ -22,7 +22,8 @@ import (
 func (s *Server) registerPluginTools() {
 	listPluginsTool := mcp.NewTool("list_plugins",
 		mcp.WithDescription(fmt.Sprintf(
-			"List cached plugin binaries in the %s plugin cache. Returns name, version, platform, path, and size for each cached plugin. Plugins are cached after being fetched from catalogs or installed locally.",
+			"List cached plugin binaries in the %s plugin cache. Returns name, version, platform, path, and size for each cached plugin. Plugins are cached after being fetched from catalogs or installed locally. "+
+				"By default, only the latest cached version of each plugin (per name+platform) is returned, matching the 'plugins list' CLI command; set 'all_versions' to true to return every cached version.",
 			s.name,
 		)),
 		mcp.WithTitleAnnotation("List Cached Plugins"),
@@ -31,6 +32,9 @@ func (s *Server) registerPluginTools() {
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithBoolean("all_versions",
+			mcp.Description("Return every cached version of each plugin instead of just the latest (per name+platform). Defaults to false."),
+		),
 	)
 	s.addTool(listPluginsTool, s.handleListPlugins)
 
@@ -115,8 +119,13 @@ func (s *Server) registerPluginTools() {
 	s.addTool(getSignaturePolicyTool, s.handleGetSignaturePolicy)
 }
 
-// handleListPlugins lists cached plugin binaries.
-func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// handleListPlugins lists cached plugin binaries. By default it returns only
+// the latest cached version of each plugin (per name+platform), matching the
+// 'plugins list' CLI command; set 'all_versions' to true to return every
+// cached version.
+func (s *Server) handleListPlugins(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	allVersions := request.GetBool("all_versions", false)
+
 	cache := plugin.NewCache(paths.PluginCacheDir())
 	plugins, err := cache.List()
 	if err != nil {
@@ -124,6 +133,8 @@ func (s *Server) handleListPlugins(_ context.Context, _ mcp.CallToolRequest) (*m
 			WithSuggestion("Check that the plugin cache directory exists and is readable"),
 		), nil
 	}
+
+	plugins = plugin.SortAndDedupeLatest(plugins, allVersions)
 
 	if len(plugins) == 0 {
 		// Return an empty envelope (not plain text) so strict MCP clients still

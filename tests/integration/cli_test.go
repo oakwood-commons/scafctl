@@ -11916,6 +11916,55 @@ func TestIntegration_PluginsList_PathNotInTable(t *testing.T) {
 	assert.NotContains(t, stdout, "path")
 }
 
+// TestIntegration_PluginsList_DedupesToLatestByDefault verifies that plugins
+// list shows only the latest cached version of each plugin by default, and
+// that --all-versions restores the full listing (issue #532).
+func TestIntegration_PluginsList_DedupesToLatestByDefault(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	binName := "fake-plugin"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	for _, version := range []string{"0.1.1", "0.2.0"} {
+		pluginDir := filepath.Join(cacheDir, "scafctl", "plugins", "fake-plugin", version, platform)
+		require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, binName), []byte("#!/bin/sh\nexit 0"), 0o755))
+	}
+
+	env := map[string]string{"XDG_CACHE_HOME": cacheDir}
+
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "plugins", "list", "-o", "json")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "0.2.0")
+	assert.NotContains(t, stdout, "0.1.1")
+
+	stdoutAll, _, exitCodeAll := runScafctlWithEnv(t, env, "plugins", "list", "--all-versions", "-o", "json")
+	assert.Equal(t, 0, exitCodeAll)
+	assert.Contains(t, stdoutAll, "0.2.0")
+	assert.Contains(t, stdoutAll, "0.1.1")
+
+	// The --all alias must behave identically to --all-versions end-to-end.
+	stdoutAlias, _, exitCodeAlias := runScafctlWithEnv(t, env, "plugins", "list", "--all", "-o", "json")
+	assert.Equal(t, 0, exitCodeAlias)
+	assert.Contains(t, stdoutAlias, "0.2.0")
+	assert.Contains(t, stdoutAlias, "0.1.1")
+}
+
+// TestIntegration_PluginsListHelp verifies plugins list --help documents the
+// new --all-versions/--all flags (issue #532), mirroring
+// TestIntegration_CatalogListHelp for catalog list.
+func TestIntegration_PluginsListHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "plugins", "list", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "--all-versions")
+	assert.Contains(t, stdout, "--all")
+}
+
 func TestIntegration_RunProvider_VersionPinFlag(t *testing.T) {
 	t.Parallel()
 	cacheDir := t.TempDir()

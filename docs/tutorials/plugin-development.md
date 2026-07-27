@@ -56,17 +56,21 @@ scafctl resolves plugins through two mechanisms:
 
 {{< tabs "plugin-development-cmd-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
    mkdir -p "$(scafctl paths cache)/plugins"
    cp my-plugin "$(scafctl paths cache)/plugins/"
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
    $pluginDir = "$(scafctl paths cache)/plugins"
    New-Item -ItemType Directory -Force -Path $pluginDir
    Copy-Item my-plugin $pluginDir
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -74,6 +78,7 @@ scafctl resolves plugins through two mechanisms:
 
 {{< tabs "plugin-development-cmd-2" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
@@ -84,8 +89,10 @@ scafctl plugins list
 # Push to a remote registry
 scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Pre-fetch plugins declared in a solution
 scafctl plugins install -f my-solution.yaml
@@ -96,12 +103,15 @@ scafctl plugins list
 # Push to a remote registry
 scafctl catalog push my-plugin@1.0.0 --catalog ghcr.io/myorg
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
 > **Note:** `plugins list` shows only plugins fetched from the remote catalog
-> cache. Local builds loaded via `--plugin-dir` are not listed. To see all
-> available versions (including pre-release), use:
+> cache. Local builds loaded via `--plugin-dir` are not listed. By default it
+> shows only the latest cached version of each plugin; pass `--all-versions`
+> (or `--all`) to see every cached version. To see all available versions
+> from the catalog (including pre-release), use:
 > `scafctl catalog list --kind provider --pre-release --all-versions`
 
 ## Next Steps

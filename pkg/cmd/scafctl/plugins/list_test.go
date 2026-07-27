@@ -4,9 +4,11 @@
 package plugins
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -138,6 +140,187 @@ func TestRunList_PopulatedCache_ReturnsItems(t *testing.T) {
 	assert.Contains(t, out, "test-plugin")
 	assert.Contains(t, out, "1.2.3")
 	assert.Contains(t, out, "sizeHuman")
+}
+
+func TestRunList_MultipleVersions_DedupesToLatestByDefault(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	binName := "test-plugin"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	for _, version := range []string{"0.1.1", "0.2.0", "0.9.0", "0.10.0"} {
+		pluginDir := filepath.Join(cacheDir, "test-plugin", version, platform)
+		require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, binName), []byte("binary"), 0o755))
+	}
+
+	opts := &ListOptions{
+		BinaryName: "scafctl",
+		CacheDir:   cacheDir,
+	}
+
+	err := runList(ctx, opts, outputOpts)
+	require.NoError(t, err)
+
+	var items []pluginListItem
+	require.NoError(t, json.Unmarshal(outBuf.Bytes(), &items))
+	require.Len(t, items, 1, "expected only the latest version to be returned by default")
+	assert.Equal(t, "0.10.0", items[0].Version, "0.10.0 should sort above 0.9.0 via semver comparison")
+}
+
+func TestRunList_AllVersionsFlag_ShowsEveryCachedVersion(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	binName := "test-plugin"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	for _, version := range []string{"0.1.1", "0.2.0"} {
+		pluginDir := filepath.Join(cacheDir, "test-plugin", version, platform)
+		require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, binName), []byte("binary"), 0o755))
+	}
+
+	opts := &ListOptions{
+		BinaryName:  "scafctl",
+		CacheDir:    cacheDir,
+		AllVersions: true,
+	}
+
+	err := runList(ctx, opts, outputOpts)
+	require.NoError(t, err)
+
+	var items []pluginListItem
+	require.NoError(t, json.Unmarshal(outBuf.Bytes(), &items))
+	require.Len(t, items, 2, "--all-versions should show every cached version")
+}
+
+func TestRunList_MixedSemverAndNonSemverVersions_PicksLatestSemver(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	binName := "test-plugin"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	// "zzz-not-a-version" sorts lexically above any of the valid semver
+	// strings but must never be picked as "latest" since it's not a valid
+	// semver version -- a valid semver version always wins.
+	for _, version := range []string{"1.0.0", "9.0.0", "zzz-not-a-version"} {
+		pluginDir := filepath.Join(cacheDir, "test-plugin", version, platform)
+		require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, binName), []byte("binary"), 0o755))
+	}
+
+	opts := &ListOptions{
+		BinaryName: "scafctl",
+		CacheDir:   cacheDir,
+	}
+
+	err := runList(ctx, opts, outputOpts)
+	require.NoError(t, err)
+
+	var items []pluginListItem
+	require.NoError(t, json.Unmarshal(outBuf.Bytes(), &items))
+	require.Len(t, items, 1, "expected only the latest version to be returned by default")
+	assert.Equal(t, "9.0.0", items[0].Version, "valid semver must win over a lexically-larger non-semver string")
+}
+
+func TestRunList_SameVersionDifferentPlatforms_BothRetained(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	outputOpts := kvx.NewOutputOptions(ioStreams)
+	outputOpts.Format = "json"
+
+	cacheDir := t.TempDir()
+	binName := "test-plugin"
+
+	for _, platform := range []string{"linux-amd64", "darwin-arm64"} {
+		pluginDir := filepath.Join(cacheDir, "test-plugin", "1.0.0", platform)
+		require.NoError(t, os.MkdirAll(pluginDir, 0o755))
+		bin := binName
+		if strings.HasPrefix(platform, "windows") {
+			bin += ".exe"
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(pluginDir, bin), []byte("binary"), 0o755))
+	}
+
+	opts := &ListOptions{
+		BinaryName: "scafctl",
+		CacheDir:   cacheDir,
+	}
+
+	err := runList(ctx, opts, outputOpts)
+	require.NoError(t, err)
+
+	var items []pluginListItem
+	require.NoError(t, json.Unmarshal(outBuf.Bytes(), &items))
+	require.Len(t, items, 2, "the name+platform dedupe key must retain both platforms of the same version")
+}
+
+func TestCommandList_AllVersionsAndAllFlags(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl")
+
+	f := cmd.Flags().Lookup("all-versions")
+	require.NotNil(t, f, "all-versions flag should exist")
+	assert.Equal(t, "false", f.DefValue)
+
+	all := cmd.Flags().Lookup("all")
+	require.NotNil(t, all, "all flag should exist as an alias for all-versions")
+	assert.Equal(t, "false", all.DefValue)
+}
+
+func TestCommandList_AllFlag_IsAliasForAllVersions(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	cmd := CommandList(cliParams, ioStreams, "scafctl")
+
+	require.NoError(t, cmd.Flags().Set("all", "true"))
+
+	f := cmd.Flags().Lookup("all-versions")
+	require.NotNil(t, f)
+	assert.Equal(t, "true", f.Value.String(), "--all should also flip --all-versions since they share the same backing variable")
 }
 
 func TestRunList_NoWriterInContext_ReturnsError(t *testing.T) {

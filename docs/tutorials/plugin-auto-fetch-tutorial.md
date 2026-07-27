@@ -50,12 +50,13 @@ spec:
 ### Fields
 
 | Field | Description | Example |
-|-------|-------------|---------|
+| ------- | ------------- | --------- |
 | `name` | Plugin catalog reference | `aws-provider` |
 | `kind` | Plugin type: `provider` or `auth-handler` | `provider` |
 | `version` | Semver constraint | `^1.5.0`, `>=2.0.0`, `1.2.3` |
 
 Version constraints follow [semver](https://semver.org/) conventions:
+
 - `^1.5.0` — any 1.x.y where x ≥ 5
 - `~1.5.0` — any 1.5.x
 - `>=2.0.0` — 2.0.0 or higher
@@ -67,6 +68,7 @@ Use `scafctl plugins install` to download plugin binaries before running a solut
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Install plugins for a solution
 scafctl plugins install -f solution.yaml
@@ -77,8 +79,10 @@ scafctl plugins install -f solution.yaml --platform linux/amd64
 # Use a custom cache directory
 scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Install plugins for a solution
 scafctl plugins install -f solution.yaml
@@ -89,10 +93,12 @@ scafctl plugins install -f solution.yaml --platform linux/amd64
 # Use a custom cache directory
 scafctl plugins install -f solution.yaml --cache-dir /tmp/plugins
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
 This is useful for:
+
 - **CI/CD**: Pre-fetch plugins in a setup step, then run solutions offline
 - **Air-gapped environments**: Fetch once on a connected machine, copy the cache
 - **Reproducibility**: Pin versions with a lock file, then install from locks
@@ -103,6 +109,7 @@ View what's in your local plugin cache:
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Table view (default)
 scafctl plugins list
@@ -113,8 +120,10 @@ scafctl plugins list -o json
 # YAML output
 scafctl plugins list -o yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Table view (default)
 scafctl plugins list
@@ -125,8 +134,17 @@ scafctl plugins list -o json
 # YAML output
 scafctl plugins list -o yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
+
+> **Note:** By default, `plugins list` shows only the latest cached version of
+> each plugin (per platform). Pass `--all-versions` (or its alias `--all`) to
+> see every cached version:
+>
+> ```bash
+> scafctl plugins list --all-versions
+> ```
 
 ## Lock Files for Reproducibility
 
@@ -167,7 +185,7 @@ plugins:
 ### Verification Modes
 
 | Mode | Behavior |
-|------|----------|
+| ------ | ---------- |
 | `off` (default) | No signature check; digest verification only |
 | `warn` | Verify signature; log a warning on failure but continue execution |
 | `enforce` | Verify signature; fail with an error on missing or invalid signature |
@@ -189,10 +207,12 @@ Signature verification requires the `cosign` build tag:
 
 {{< tabs "plugin-signature-build" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Build scafctl with cosign signature verification support
 go build -tags cosign -o scafctl ./cmd/scafctl/scafctl.go
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -219,10 +239,12 @@ For production CI/CD pipelines, combine signature enforcement with strict mode:
 
 {{< tabs "plugin-signature-ci" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Enforce both explicit plugin declarations and valid signatures
 scafctl run solution -f solution.yaml --strict
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -276,6 +298,7 @@ $XDG_CACHE_HOME/scafctl/plugins/
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # List cached plugins
 scafctl plugins list
@@ -284,8 +307,10 @@ scafctl plugins list
 # To clear the entire cache:
 rm -rf ~/.cache/scafctl/plugins/
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # List cached plugins
 scafctl plugins list
@@ -294,6 +319,7 @@ scafctl plugins list
 # To clear the entire cache:
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scafctl\plugins\"
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -329,6 +355,7 @@ $XDG_CACHE_HOME/scafctl/provider-schemas/
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Schema cache is at $XDG_CACHE_HOME/scafctl/provider-schemas/
 # To clear all cached schemas (forces re-fetch on next access):
@@ -337,8 +364,10 @@ rm -rf ~/.cache/scafctl/provider-schemas/
 # To invalidate a single provider:
 rm ~/.cache/scafctl/provider-schemas/exec.json
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Schema cache is at $env:LOCALAPPDATA\cache\scafctl\provider-schemas\
 # To clear all cached schemas:
@@ -347,6 +376,7 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\cache\scafctl\provider-schemas\"
 # To invalidate a single provider:
 Remove-Item "$env:LOCALAPPDATA\cache\scafctl\provider-schemas\exec.json"
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -365,6 +395,7 @@ dev.scafctl.plugin.platform: linux/amd64
 ```
 
 When fetching, scafctl:
+
 1. Lists all artifacts for the plugin version
 2. Matches the `dev.scafctl.plugin.platform` annotation against the current (or requested) platform
 3. Falls back to a direct fetch if no platform annotation exists (single-platform plugin)
@@ -373,16 +404,20 @@ When fetching, scafctl:
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Fetch for a different platform
 scafctl plugins install -f solution.yaml --platform linux/amd64
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Fetch for a different platform
 scafctl plugins install -f solution.yaml --platform linux/amd64
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -394,18 +429,23 @@ When you run a solution that declares plugin dependencies:
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f solution.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f solution.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
 The prepare phase automatically:
+
 1. Reads `bundle.plugins` from the solution
 2. Checks the lock file for pinned versions
 3. Fetches any missing plugins from the catalog chain
@@ -422,7 +462,7 @@ scafctl includes a built-in registry of 10 **official providers** distributed as
 ### Official Providers
 
 | Provider | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `directory` | File system directory operations |
 | `env` | Environment variable lookup |
 | `exec` | Shell command execution |
@@ -456,6 +496,7 @@ The `run provider` command also auto-resolves official providers. You can invoke
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-run-provider" >}}
 {{% tab "Bash" %}}
+
 ~~~bash
 # Auto-resolves the exec provider plugin and runs it
 scafctl run provider exec command='echo hello' -o json
@@ -463,8 +504,10 @@ scafctl run provider exec command='echo hello' -o json
 # Auto-resolves the env provider plugin
 scafctl run provider env name=HOME -o json
 ~~~
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ~~~powershell
 # Auto-resolves the exec provider plugin and runs it
 scafctl run provider exec command='echo hello' -o json
@@ -472,6 +515,7 @@ scafctl run provider exec command='echo hello' -o json
 # Auto-resolves the env provider plugin
 scafctl run provider env name=HOME -o json
 ~~~
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -503,6 +547,7 @@ The `--strict` flag disables auto-resolution and requires all providers to be ei
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-strict" >}}
 {{% tab "Bash" %}}
+
 ~~~bash
 # Fails if any provider would be auto-resolved
 scafctl run solution -f solution.yaml --strict
@@ -510,8 +555,10 @@ scafctl run solution -f solution.yaml --strict
 # Also works with run resolver
 scafctl run resolver -f solution.yaml --strict
 ~~~
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ~~~powershell
 # Fails if any provider would be auto-resolved
 scafctl run solution -f solution.yaml --strict
@@ -519,6 +566,7 @@ scafctl run solution -f solution.yaml --strict
 # Also works with run resolver
 scafctl run resolver -f solution.yaml --strict
 ~~~
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -540,6 +588,7 @@ With this setting, solutions must declare all non-built-in providers in `bundle.
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # 1. Develop your solution with plugin dependencies
 cat > solution.yaml << 'EOF'
@@ -575,8 +624,10 @@ scafctl run solution -f solution.yaml
 # 5. Check what's cached
 scafctl plugins list
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # 1. Develop your solution with plugin dependencies
 @'
@@ -612,6 +663,7 @@ scafctl run solution -f solution.yaml
 # 5. Check what's cached
 scafctl plugins list
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -642,6 +694,7 @@ If a cached binary seems corrupt:
 
 {{< tabs "plugin-auto-fetch-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Remove the specific plugin from cache
 rm -rf ~/.cache/scafctl/plugins/<plugin-name>/<version>/
@@ -649,8 +702,10 @@ rm -rf ~/.cache/scafctl/plugins/<plugin-name>/<version>/
 # Re-fetch
 scafctl plugins install -f solution.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Remove the specific plugin from cache
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scafctl\plugins\<plugin-name>\<version>\"
@@ -658,5 +713,6 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\scafctl\plugins\<plugin-name>\<ve
 # Re-fetch
 scafctl plugins install -f solution.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}

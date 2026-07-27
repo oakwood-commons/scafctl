@@ -585,6 +585,56 @@ func (c *Cache) GetLatestBinary(name string) (string, string, bool) {
 	return c.GetLatestCached(name, CurrentPlatform())
 }
 
+// SortAndDedupeLatest sorts a slice of CachedPlugin by name, then version
+// descending (real semver comparison so e.g. 0.10.0 sorts above 0.9.0), and --
+// unless allVersions is true -- collapses it to only the latest cached
+// version per name+platform. This is the shared dedup-to-latest logic used
+// by both `plugins list` and the MCP list_plugins tool, mirroring the
+// `catalog list` behavior for consistency across cached-plugin listings.
+//
+// A version that fails to parse as semver always sorts below one that does
+// (matching GetLatestCached's "valid semver always wins" precedent); only
+// when BOTH sides fail to parse is a lexical fallback used. This avoids an
+// invalid strict-weak-ordering that could otherwise pick an arbitrary
+// "latest" when comparing valid and invalid versions pairwise.
+//
+// The input slice is sorted and filtered in place; the returned slice shares
+// the input's backing array.
+func SortAndDedupeLatest(cached []CachedPlugin, allVersions bool) []CachedPlugin {
+	sort.Slice(cached, func(i, j int) bool {
+		if cached[i].Name != cached[j].Name {
+			return cached[i].Name < cached[j].Name
+		}
+		vi, iErr := semver.NewVersion(cached[i].Version)
+		vj, jErr := semver.NewVersion(cached[j].Version)
+		switch {
+		case iErr == nil && jErr == nil:
+			return vi.GreaterThan(vj)
+		case iErr == nil:
+			return true // valid semver always sorts above invalid
+		case jErr == nil:
+			return false
+		default:
+			return cached[i].Version > cached[j].Version
+		}
+	})
+
+	if allVersions {
+		return cached
+	}
+
+	seen := make(map[string]bool)
+	filtered := cached[:0]
+	for _, p := range cached {
+		key := p.Name + "/" + p.Platform
+		if !seen[key] {
+			seen[key] = true
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered
+}
+
 // ListCurrentPlatform returns cached plugins that match the current platform.
 // When multiple versions of the same plugin are cached, only the latest
 // (by semver) is included.
