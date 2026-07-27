@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -14,6 +15,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,6 +141,22 @@ func TestBuildMCPPluginPool(t *testing.T) {
 
 		// MCP pools should not sanitize env so host credentials are available
 		assert.False(t, pool.SanitizeEnv(), "MCP pool should not sanitize env")
+	})
+
+	t.Run("wires host-static metadata base config with mcp entrypoint", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		lgr := logr.Discard()
+		pool, _ := buildMCPPluginPool(context.Background(), nil, reg, &lgr)
+		defer pool.Shutdown()
+
+		base := pool.BaseProviderConfig()
+		raw, ok := base.Settings["metadata"]
+		require.True(t, ok, "base config should carry host metadata settings")
+
+		var meta map[string]any
+		require.NoError(t, json.Unmarshal(raw, &meta))
+		assert.Equal(t, prepare.EntrypointMCP, meta["entrypoint"])
+		assert.Contains(t, meta, "buildVersion")
 	})
 
 	t.Run("wires auth client opts when auth registry in context", func(t *testing.T) {

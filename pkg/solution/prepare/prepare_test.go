@@ -1121,6 +1121,60 @@ func TestInjectHostMetadataSettings_NilSolution(t *testing.T) {
 	assert.Equal(t, "", solMap["name"])
 }
 
+func TestHostStaticProviderConfig(t *testing.T) {
+	cfg := HostStaticProviderConfig("mycli", EntrypointMCP)
+
+	assert.Equal(t, "mycli", cfg.BinaryName)
+	require.NotNil(t, cfg.Settings)
+	raw, ok := cfg.Settings[hostMetadataSettingsKey]
+	require.True(t, ok)
+
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+
+	// Entrypoint is the one supplied by the host, not derived from BinaryName.
+	assert.Equal(t, "mcp", meta["entrypoint"])
+
+	// Solution metadata is intentionally empty: pool-mode hosts serve many
+	// solutions and deliver per-solution metadata per-execution instead.
+	solMap, ok := meta["solution"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "", solMap["name"])
+
+	// Tags is documented as string[] and must serialize as an array (not null),
+	// even in pool mode where the solution is empty, so consumers can rely on
+	// the shape.
+	tags, ok := solMap["tags"].([]any)
+	require.True(t, ok, "tags must be a JSON array, got %T", solMap["tags"])
+	assert.Empty(t, tags)
+
+	// Host-static build fields are present (keys always serialized).
+	assert.Contains(t, meta, "buildVersion")
+	assert.Contains(t, meta, "command")
+	assert.Contains(t, meta, "args")
+}
+
+func TestHostStaticProviderConfig_APIEntrypoint(t *testing.T) {
+	cfg := HostStaticProviderConfig("scafctl", EntrypointAPI)
+
+	raw := cfg.Settings[hostMetadataSettingsKey]
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	assert.Equal(t, "api", meta["entrypoint"])
+}
+
+func TestHostStaticProviderConfig_EmptyEntrypointDefaultsToUnknown(t *testing.T) {
+	// An empty entrypoint must serialize as EntrypointUnknown rather than a
+	// blank/invalid value, even though HostStaticProviderConfig is exported and
+	// a caller could pass "".
+	cfg := HostStaticProviderConfig("scafctl", "")
+
+	raw := cfg.Settings[hostMetadataSettingsKey]
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	assert.Equal(t, EntrypointUnknown, meta["entrypoint"])
+}
+
 func TestInjectHTTPClientSettings_NilConfig(t *testing.T) {
 	// Must not panic.
 	injectHTTPClientSettings(context.Background(), nil)

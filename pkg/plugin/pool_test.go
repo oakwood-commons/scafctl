@@ -5,6 +5,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -89,6 +90,69 @@ func TestNewPool_WithSanitizeEnv(t *testing.T) {
 		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithSanitizeEnv(true))
 		defer p.Shutdown()
 		assert.True(t, p.SanitizeEnv())
+	})
+}
+
+func TestNewPool_WithBaseProviderConfig(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	t.Run("defaults to empty base config", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+		assert.Empty(t, p.opts.baseConfig.BinaryName)
+		assert.Nil(t, p.opts.baseConfig.Settings)
+	})
+
+	t.Run("stores the provided base config", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+		assert.Equal(t, "mycli", p.opts.baseConfig.BinaryName)
+		assert.Equal(t, base.Settings, p.opts.baseConfig.Settings)
+	})
+
+	t.Run("clones the caller's settings map on store", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+
+		// Mutating the caller's map (and the underlying value bytes) after
+		// construction must not affect the pool.
+		base.Settings["metadata"][0] = 'X'
+		base.Settings["metadata"] = json.RawMessage(`{"entrypoint":"tampered"}`)
+		base.Settings["injected"] = json.RawMessage(`true`)
+
+		stored := p.opts.baseConfig.Settings
+		assert.Equal(t, json.RawMessage(`{"entrypoint":"mcp"}`), stored["metadata"])
+		assert.NotContains(t, stored, "injected")
+	})
+
+	t.Run("BaseProviderConfig returns a deep clone", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+
+		// Mutating the returned map entry or its bytes must not affect the pool.
+		got := p.BaseProviderConfig()
+		got.Settings["metadata"][0] = 'X'
+		got.Settings["metadata"] = json.RawMessage(`{"entrypoint":"tampered"}`)
+
+		assert.Equal(t, json.RawMessage(`{"entrypoint":"mcp"}`), p.opts.baseConfig.Settings["metadata"])
 	})
 }
 
