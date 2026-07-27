@@ -126,7 +126,9 @@ func TestNewPool_WithBaseProviderConfig(t *testing.T) {
 		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
 		defer p.Shutdown()
 
-		// Mutating the caller's map after construction must not affect the pool.
+		// Mutating the caller's map (and the underlying value bytes) after
+		// construction must not affect the pool.
+		base.Settings["metadata"][0] = 'X'
 		base.Settings["metadata"] = json.RawMessage(`{"entrypoint":"tampered"}`)
 		base.Settings["injected"] = json.RawMessage(`true`)
 
@@ -135,7 +137,7 @@ func TestNewPool_WithBaseProviderConfig(t *testing.T) {
 		assert.NotContains(t, stored, "injected")
 	})
 
-	t.Run("BaseProviderConfig returns a clone", func(t *testing.T) {
+	t.Run("BaseProviderConfig returns a deep clone", func(t *testing.T) {
 		base := ProviderConfig{
 			BinaryName: "mycli",
 			Settings: map[string]json.RawMessage{
@@ -145,8 +147,9 @@ func TestNewPool_WithBaseProviderConfig(t *testing.T) {
 		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
 		defer p.Shutdown()
 
-		// Mutating the returned map must not affect the pool's stored config.
+		// Mutating the returned map entry or its bytes must not affect the pool.
 		got := p.BaseProviderConfig()
+		got.Settings["metadata"][0] = 'X'
 		got.Settings["metadata"] = json.RawMessage(`{"entrypoint":"tampered"}`)
 
 		assert.Equal(t, json.RawMessage(`{"entrypoint":"mcp"}`), p.opts.baseConfig.Settings["metadata"])

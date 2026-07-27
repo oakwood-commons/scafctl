@@ -200,16 +200,18 @@ func WithBaseProviderConfig(cfg ProviderConfig) PoolOption {
 	return func(o *poolOptions) { o.baseConfig = cloneProviderConfig(cfg) }
 }
 
-// cloneProviderConfig returns a copy of cfg with its Settings map cloned so the
-// pool never shares the caller's map reference. The values (json.RawMessage)
-// are treated as immutable and are not deep-copied.
+// cloneProviderConfig returns a copy of cfg with its Settings map deep-cloned so
+// the pool never shares mutable references with the caller in either direction.
+// Both the map and each json.RawMessage ([]byte) value are copied, so a caller
+// mutating its map entries -- or the bytes of a value returned by
+// BaseProviderConfig -- cannot race with or alter what pooled providers observe.
 func cloneProviderConfig(cfg ProviderConfig) ProviderConfig {
 	if cfg.Settings == nil {
 		return cfg
 	}
 	settings := make(map[string]json.RawMessage, len(cfg.Settings))
 	for k, v := range cfg.Settings {
-		settings[k] = v
+		settings[k] = append(json.RawMessage(nil), v...)
 	}
 	cfg.Settings = settings
 	return cfg
@@ -819,7 +821,8 @@ func (p *Pool) ClientOptsLen() int {
 // BaseProviderConfig returns the host-static ProviderConfig delivered to each
 // pooled provider at load time. See [WithBaseProviderConfig]. This is primarily
 // useful for testing that the base config was wired correctly. The returned
-// Settings map is a clone so callers cannot mutate the pool's stored config.
+// Settings map is a deep clone (map and value bytes), so callers cannot mutate
+// the pool's stored config.
 func (p *Pool) BaseProviderConfig() ProviderConfig {
 	return cloneProviderConfig(p.opts.baseConfig)
 }
