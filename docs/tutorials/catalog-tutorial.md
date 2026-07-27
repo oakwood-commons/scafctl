@@ -1871,6 +1871,58 @@ rm -rf extracted/ config-only/
 
 ---
 
+## Machine-Readable Build Output (CI)
+
+For pipelines, `scafctl package solution` can emit a structured build report on
+**stdout** while all human progress goes to **stderr**, so the report pipes
+cleanly into tools like `jq`.
+
+### Step 1: Emit a JSON Build Report
+
+{{< tabs "catalog-tutorial-cmd-mrbo-1" >}}
+{{% tab "Bash" %}}
+```bash
+scafctl package solution -f ./solution.yaml -o json | jq '{reference, digest, cacheHit}'
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+scafctl package solution -f ./solution.yaml -o json | ConvertFrom-Json | Select-Object reference, digest, cacheHit
+```
+{{% /tab %}}
+{{< /tabs >}}
+
+The report captures the resolved `reference`, storage `digest`, `catalog` path,
+build `fingerprint`/`cacheHit`, the `bundle` manifest (files, vendored refs,
+plugins), the `verification` summary, and the fully composed `solution`
+document. Use `-o yaml` for YAML instead.
+
+### Step 2: Preview Without Storing
+
+Combine with `--dry-run` to inspect what *would* be built (the report has
+`dryRun: true` and no `digest`, since nothing is stored):
+
+```bash
+scafctl package solution -f ./solution.yaml --dry-run -o json | jq '.dryRun, .bundle.fileCount'
+```
+
+### Step 3: Write the Composed Solution to a File
+
+`--composed-out` writes just the composed (flattened) solution document. The
+format follows the extension (`.json` for pretty JSON, otherwise YAML):
+
+```bash
+scafctl package solution -f ./solution.yaml --composed-out composed.yaml
+```
+
+### What You Learned
+
+- `-o json`/`-o yaml` emits a machine-readable build report on stdout (progress moves to stderr)
+- The report works on the normal store path, build-cache hits, and `--dry-run`
+- `--composed-out PATH` writes the flattened solution document for inspection or downstream tooling
+
+---
+
 ## Comparing Bundle Versions
 
 When you release a new version of a bundled solution, `diff bundle` shows exactly what changed.

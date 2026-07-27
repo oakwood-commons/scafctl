@@ -5,10 +5,16 @@ package output
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 )
+
+// errWriter always fails, used to exercise write-error propagation.
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) { return 0, fmt.Errorf("boom") }
 
 func TestParseOutputFormat(t *testing.T) {
 	tests := []struct {
@@ -746,6 +752,30 @@ func TestWriteOutput(t *testing.T) {
 				if got := errOutBuf.String(); got != tt.wantErrOut {
 					t.Errorf("WriteOutput() errOut = %q, want %q", got, tt.wantErrOut)
 				}
+			}
+		})
+	}
+}
+
+func TestWriteOutput_WriteError(t *testing.T) {
+	tests := []struct {
+		name       string
+		outputType string
+		wantErr    string
+	}{
+		{name: "json write error", outputType: "json", wantErr: "unable to write JSON output"},
+		{name: "yaml write error", outputType: "yaml", wantErr: "unable to write YAML output"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ioStreams := terminal.NewIOStreams(nil, errWriter{}, errWriter{}, false)
+			err := WriteOutput(ioStreams, tt.outputType, map[string]string{"foo": "bar"}, nil)
+			if err == nil {
+				t.Fatalf("WriteOutput() error = nil, want write error")
+			}
+			if got := err.Error(); !strings.Contains(got, tt.wantErr) {
+				t.Errorf("WriteOutput() error = %q, want substring %q", got, tt.wantErr)
 			}
 		})
 	}

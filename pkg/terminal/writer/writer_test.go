@@ -492,3 +492,38 @@ func TestVerboseEnabled(t *testing.T) {
 		assert.False(t, w.VerboseEnabled())
 	})
 }
+
+func TestWithHumanToStderr(t *testing.T) {
+	t.Run("routes human output to stderr", func(t *testing.T) {
+		w, outBuf, errBuf := newTestWriter(WithHumanToStderr())
+		w.cliParams.NoColor = true
+
+		w.Success("done")
+		w.Info("informational")
+		w.Warning("careful")
+		w.SectionHeader("section")
+		w.Plain("plain")
+		w.Plainln("plainln")
+
+		assert.Empty(t, outBuf.String(), "stdout must stay clean for machine-readable output")
+		combined := errBuf.String()
+		assert.Contains(t, combined, "done")
+		assert.Contains(t, combined, "informational")
+		assert.Contains(t, combined, "careful")
+		assert.Contains(t, combined, "section")
+		assert.Contains(t, combined, "plain")
+		assert.Contains(t, combined, "plainln")
+	})
+
+	t.Run("default routes human output to stdout", func(t *testing.T) {
+		w, outBuf, errBuf := newTestWriter()
+		w.cliParams.NoColor = true
+
+		w.Success("done")
+		w.Info("informational")
+
+		assert.Contains(t, outBuf.String(), "done")
+		assert.Contains(t, outBuf.String(), "informational")
+		assert.Empty(t, errBuf.String())
+	})
+}

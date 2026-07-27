@@ -72,7 +72,7 @@ func TestVerifyBuiltBundle_FetchErrorAlwaysFatal(t *testing.T) {
 	cat := &fetchBundleCatalog{fetchErr: errors.New("boom")}
 	// Producer fetch errors are fatal even without --strict.
 	opts := &SolutionOptions{Strict: false}
-	err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
+	_, err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fetching built bundle")
 }
@@ -84,7 +84,7 @@ func TestVerifyBuiltBundle_ParseErrorFatal(t *testing.T) {
 
 	cat := &fetchBundleCatalog{content: []byte("::not yaml::")}
 	opts := &SolutionOptions{}
-	err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
+	_, err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing built solution")
 }
@@ -99,9 +99,13 @@ func TestVerifyBuiltBundle_BundleLessIncompleteStrictFails(t *testing.T) {
 	// warning, which is fatal under producer --strict.
 	cat := &fetchBundleCatalog{content: []byte(solutionReferencingLocalFile), bundleData: nil}
 	opts := &SolutionOptions{Strict: true}
-	err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
+	vr, err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
 	require.Error(t, err, "bundle-less incomplete artifact must fail under --strict")
 	assert.Contains(t, err.Error(), "warning(s) (strict)")
+	// The verify result is returned even on a policy-decision failure so callers
+	// can surface it in a machine-readable report.
+	require.NotNil(t, vr, "verify result must accompany a policy-decision failure")
+	assert.NotEmpty(t, vr.Warnings, "failure result should carry the triggering warnings")
 }
 
 func TestVerifyBuiltBundle_BundleLessNonStrictPasses(t *testing.T) {
@@ -112,6 +116,6 @@ func TestVerifyBuiltBundle_BundleLessNonStrictPasses(t *testing.T) {
 
 	cat := &fetchBundleCatalog{content: []byte(solutionReferencingLocalFile), bundleData: nil}
 	opts := &SolutionOptions{Strict: false}
-	err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
+	_, err := verifyBuiltBundle(ctx, cat, catalog.Reference{Name: "s", Kind: catalog.ArtifactKindSolution}, opts, w, lgr)
 	assert.NoError(t, err, "producer warnings are non-fatal without --strict")
 }
