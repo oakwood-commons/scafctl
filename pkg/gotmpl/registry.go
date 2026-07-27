@@ -56,6 +56,10 @@ var (
 // once) pass the same func map repeatedly without hitting a self-collision;
 // only a name bound to a *different* function is rejected.
 //
+// Each value is validated up front: a nil value, a non-function, or a function
+// whose return signature text/template would reject is rejected here with a
+// clear error, rather than panicking later when a template is constructed.
+//
 // This function is thread-safe.
 func RegisterFuncs(funcs template.FuncMap) error {
 	if len(funcs) == 0 {
@@ -73,6 +77,9 @@ func RegisterFuncs(funcs template.FuncMap) error {
 	for _, name := range names {
 		if name == "" {
 			return fmt.Errorf("register template func: name must not be empty")
+		}
+		if err := validateFunc(name, funcs[name]); err != nil {
+			return fmt.Errorf("register template func: %w", err)
 		}
 		if _, ok := builtins[name]; ok {
 			return fmt.Errorf("register template func %q: %w (built-in)", name, ErrFuncNameCollision)
@@ -101,7 +108,8 @@ func RegisterFuncs(funcs template.FuncMap) error {
 // embedders that need to replace a sprig/custom function (including re-enabling
 // stripped functions such as env). Unlike RegisterFuncs it does not reject
 // names that collide with built-ins; it errors only when the same name has
-// already been registered as an override (all-or-nothing).
+// already been registered as an override (all-or-nothing). Values are validated
+// the same way as RegisterFuncs so an invalid function fails fast here.
 //
 // This function is thread-safe.
 func RegisterFuncsOverride(funcs template.FuncMap) error {
@@ -117,6 +125,9 @@ func RegisterFuncsOverride(funcs template.FuncMap) error {
 	for _, name := range names {
 		if name == "" {
 			return fmt.Errorf("register template func override: name must not be empty")
+		}
+		if err := validateFunc(name, funcs[name]); err != nil {
+			return fmt.Errorf("register template func override: %w", err)
 		}
 		if _, ok := overrideFuncs[name]; ok {
 			return fmt.Errorf("register template func override %q: %w", name, ErrFuncNameCollision)
@@ -180,6 +191,37 @@ func registeredExtensionFuncs() (additive, override template.FuncMap) {
 		override[k] = v
 	}
 	return additive, override
+}
+
+// errorType is the reflect.Type of the error interface, used by validateFunc to
+// match text/template's own good-function rule for two-result functions.
+var errorType = reflect.TypeOf((*error)(nil)).Elem()
+
+// validateFunc reports whether fn is usable as a text/template function,
+// mirroring the checks text/template performs in (*Template).Funcs. Registering
+// a nil value, a non-function, or a function with an unsupported return
+// signature would otherwise panic later at template construction, far from the
+// embedder call site. Failing fast here turns that latent panic into a clear
+// error at registration time.
+func validateFunc(name string, fn any) error {
+	if fn == nil {
+		return fmt.Errorf("value for %q must not be nil", name)
+	}
+	v := reflect.ValueOf(fn)
+	if v.Kind() != reflect.Func {
+		return fmt.Errorf("value for %q is %s, want a function", name, v.Kind())
+	}
+	if v.IsNil() {
+		return fmt.Errorf("value for %q must not be a nil function", name)
+	}
+	t := v.Type()
+	switch {
+	case t.NumOut() == 1:
+	case t.NumOut() == 2 && t.Out(1) == errorType:
+	default:
+		return fmt.Errorf("function %q must return 1 value, or 2 values where the second is error", name)
+	}
+	return nil
 }
 
 // sortedFuncNames returns the keys of a FuncMap in deterministic sorted order

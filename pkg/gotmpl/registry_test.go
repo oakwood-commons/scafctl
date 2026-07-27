@@ -86,6 +86,43 @@ func TestRegisterFuncs_EmptyNameRejected(t *testing.T) {
 	assert.Empty(t, RegisteredFuncs(), "nothing should be registered on error")
 }
 
+func TestRegisterFuncs_InvalidValueRejected(t *testing.T) {
+	resetRegistryForTesting()
+	t.Cleanup(resetRegistryForTesting)
+
+	cases := map[string]any{
+		"nil value":         nil,
+		"non-function":      "not a func",
+		"nil function":      (func())(nil),
+		"too many results":  func() (int, int, int) { return 0, 0, 0 },
+		"bad second result": func() (int, int) { return 0, 0 },
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := RegisterFuncs(template.FuncMap{"bad": bad})
+			require.Error(t, err, "invalid func value must fail fast")
+			assert.Empty(t, RegisteredFuncs(), "nothing should be registered on error")
+
+			err = RegisterFuncsOverride(template.FuncMap{"bad": bad})
+			require.Error(t, err, "override must validate too")
+			assert.Empty(t, RegisteredFuncs())
+		})
+	}
+}
+
+func TestRegisterFuncs_ValidTwoResultFuncAccepted(t *testing.T) {
+	resetRegistryForTesting()
+	t.Cleanup(resetRegistryForTesting)
+
+	require.NoError(t, RegisterFuncs(template.FuncMap{
+		"maybe": func(s string) (string, error) { return s, nil },
+	}))
+
+	out, err := render(t, `{{ maybe "ok" }}`)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", out)
+}
+
 func TestRegisterFuncs_CollisionWithBuiltin(t *testing.T) {
 	resetRegistryForTesting()
 	t.Cleanup(resetRegistryForTesting)

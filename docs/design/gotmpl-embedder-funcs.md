@@ -59,10 +59,14 @@ intentional.
 Later entries win:
 
 1. Built-in factory functions (sprig + custom scafctl functions)
-2. Additive embedder functions (`RegisterFuncs`) -- applied only for names not
-   already provided by a built-in
-3. Override embedder functions (`RegisterFuncsOverride`) -- applied
-   unconditionally
+2. Environment stripping -- unless environment access is enabled, `env` and
+   `expandenv` are removed at this layer so secrets are not exposed by default
+3. Additive embedder functions (`RegisterFuncs`) -- applied only for names not
+   already provided by a built-in, and never re-introducing a stripped
+   `env`/`expandenv` regardless of registration order
+4. Override embedder functions (`RegisterFuncsOverride`) -- applied
+   unconditionally, and the only way to deliberately re-enable a stripped
+   `env`/`expandenv`
 
 ## Fail-loud wiring
 

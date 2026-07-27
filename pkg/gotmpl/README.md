@@ -276,15 +276,23 @@ if err := gotmpl.RegisterFuncs(template.FuncMap{
 Precedence when a template renders (later wins):
 
 1. Built-in factory functions (sprig + custom scafctl functions)
-2. Additively registered embedder functions (`RegisterFuncs`) -- only names not
-   already provided by a built-in; a collision is rejected
-3. Override embedder functions (`RegisterFuncsOverride`) -- unconditionally
+2. Environment stripping: unless environment access is enabled, `env` and
+   `expandenv` are removed here so secrets cannot be exfiltrated by default
+3. Additively registered embedder functions (`RegisterFuncs`) -- only names not
+   already provided by a built-in; a collision is rejected. This layer never
+   re-introduces a stripped `env`/`expandenv`, regardless of registration order
+4. Override embedder functions (`RegisterFuncsOverride`) -- unconditionally
    replace an existing function; use this escape hatch only when you must shadow
-   a built-in
+   a built-in (this is also the only way to deliberately re-enable a stripped
+   `env`/`expandenv`)
 
 `RegisterFuncs` deliberately refuses to shadow built-ins so that a typo cannot
 silently change template behavior. When shadowing is intentional, call
 `RegisterFuncsOverride` instead.
+
+Registration also fails fast if a value is not a usable template function (nil,
+a non-function, or a function whose return signature text/template rejects), so
+an embedder build bug surfaces as a clear error rather than a later panic.
 
 Registered functions are discoverable:
 
