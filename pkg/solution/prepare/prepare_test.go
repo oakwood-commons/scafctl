@@ -120,7 +120,7 @@ func TestSolution(t *testing.T) {
 		result.Cleanup()
 	})
 
-	t.Run("ProviderCtx nil when no solution provider in registry", func(t *testing.T) {
+	t.Run("ProviderCtx non-nil and carries execution settings without solution provider", func(t *testing.T) {
 		sol := minimalSolution()
 		getter := &mockGetter{sol: sol}
 		// Empty registry with no solution provider registered.
@@ -131,7 +131,17 @@ func TestSolution(t *testing.T) {
 			WithRegistry(emptyReg),
 		)
 		require.NoError(t, err)
-		assert.Nil(t, result.ProviderCtx, "ProviderCtx should be nil when solution provider is not in registry")
+		// ProviderCtx is always non-nil: even without the solution provider it
+		// must deliver per-execution provider settings (pool-mode metadata fix).
+		require.NotNil(t, result.ProviderCtx, "ProviderCtx should always be non-nil")
+
+		enrichedCtx := result.ProviderCtx(context.Background())
+		settings, ok := provider.ExecutionSettingsFromContext(enrichedCtx)
+		require.True(t, ok, "execution settings should be attached")
+		assert.Contains(t, settings, "metadata", "execution settings should carry the metadata blob")
+
+		// Solution provider deps must not be attached when it is not registered.
+		assert.Nil(t, solutionprovider.ProviderRegistryFromContext(enrichedCtx))
 		result.Cleanup()
 	})
 
@@ -1175,6 +1185,94 @@ func TestHostStaticProviderConfig_EmptyEntrypointDefaultsToUnknown(t *testing.T)
 	assert.Equal(t, EntrypointUnknown, meta["entrypoint"])
 }
 
+func TestBuildPerSolutionSettings(t *testing.T) {
+	t.Run("carries full metadata blob with solution values", func(t *testing.T) {
+		sol := minimalSolution()
+		sol.Metadata.Source = "github.com/acme/solutions//demo"
+
+		settings := buildPerSolutionSettings(EntrypointMCP, sol)
+		require.NotNil(t, settings)
+		raw, ok := settings[hostMetadataSettingsKey]
+		require.True(t, ok, "metadata key must be present")
+
+		var meta map[string]any
+		require.NoError(t, json.Unmarshal(raw, &meta))
+
+		// Host-static entrypoint must be preserved so the key-level settings
+		// override on the plugin side does not clobber it under pool mode.
+		assert.Equal(t, "mcp", meta["entrypoint"])
+
+		// Per-solution fields must be populated.
+		solMap, ok := meta["solution"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "test-solution", solMap["name"])
+		assert.Equal(t, "1.0.0", solMap["version"])
+		// With no local path, source falls back to the author-declared source.
+		assert.Equal(t, "github.com/acme/solutions//demo", solMap["source"])
+	})
+
+	t.Run("blob source uses local path provenance when available", func(t *testing.T) {
+		sol := minimalSolution()
+		sol.SetPath("/path/to/solution.yaml")
+		sol.Metadata.Source = "github.com/acme/solutions//demo"
+
+		settings := buildPerSolutionSettings(EntrypointMCP, sol)
+		require.NotNil(t, settings)
+
+		var meta map[string]any
+		require.NoError(t, json.Unmarshal(settings[hostMetadataSettingsKey], &meta))
+		solMap, ok := meta["solution"].(map[string]any)
+		require.True(t, ok)
+		// Path provenance takes precedence, matching the proto SolutionMeta.Source
+		// channel so the metadata provider reports a consistent origin.
+		assert.Equal(t, "/path/to/solution.yaml", solMap["source"])
+	})
+
+	t.Run("nil solution yields empty solution object", func(t *testing.T) {
+		settings := buildPerSolutionSettings(EntrypointCLI, nil)
+		require.NotNil(t, settings)
+
+		var meta map[string]any
+		require.NoError(t, json.Unmarshal(settings[hostMetadataSettingsKey], &meta))
+		solMap, ok := meta["solution"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "", solMap["name"])
+	})
+}
+
+func TestHostEntrypoint(t *testing.T) {
+	t.Run("reads authoritative entrypoint from pool base config", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(),
+			plugin.WithBaseProviderConfig(HostStaticProviderConfig("scafctl", EntrypointMCP)),
+		)
+		got := hostEntrypoint(&prepareConfig{pluginPool: pool})
+		assert.Equal(t, EntrypointMCP, got)
+	})
+
+	t.Run("falls back to CLI heuristic when binary name set (per-call)", func(t *testing.T) {
+		got := hostEntrypoint(&prepareConfig{pluginCfg: &plugin.ProviderConfig{BinaryName: "scafctl"}})
+		assert.Equal(t, EntrypointCLI, got)
+	})
+
+	t.Run("unknown when no pool and no binary name", func(t *testing.T) {
+		got := hostEntrypoint(&prepareConfig{})
+		assert.Equal(t, EntrypointUnknown, got)
+	})
+
+	t.Run("unknown for a pool whose base config lacks a metadata entrypoint", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		// Pool with no base provider config: a pool is never the CLI path, so it
+		// must not fall through to the CLI heuristic even when a binary name is set.
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
+		got := hostEntrypoint(&prepareConfig{
+			pluginPool: pool,
+			pluginCfg:  &plugin.ProviderConfig{BinaryName: "scafctl"},
+		})
+		assert.Equal(t, EntrypointUnknown, got)
+	})
+}
+
 func TestInjectHTTPClientSettings_NilConfig(t *testing.T) {
 	// Must not panic.
 	injectHTTPClientSettings(context.Background(), nil)
@@ -1858,4 +1956,17 @@ func TestRegisterBundleAuthHandlers_NoAuthHandlers(t *testing.T) {
 	clients, err := registerBundleAuthHandlers(context.Background(), sol, &prepareConfig{})
 	require.NoError(t, err)
 	assert.Nil(t, clients, "no auth-handler plugins means no clients and no fetch")
+}
+
+func BenchmarkBuildPerSolutionSettings(b *testing.B) {
+	sol := minimalSolution()
+	sol.Metadata.Source = "github.com/acme/solutions//demo"
+	sol.Metadata.Tags = []string{"infra", "demo"}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if s := buildPerSolutionSettings(EntrypointMCP, sol); s == nil {
+			b.Fatal("expected non-nil settings")
+		}
+	}
 }

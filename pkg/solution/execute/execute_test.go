@@ -17,6 +17,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestToSolutionMeta_Source(t *testing.T) {
+	t.Run("uses solution path as provenance source", func(t *testing.T) {
+		sol := &solution.Solution{}
+		sol.Metadata.Name = "demo"
+		sol.SetPath("/path/to/solution.yaml")
+		sol.Metadata.Source = "github.com/acme/solutions//demo"
+
+		meta := toSolutionMeta(sol)
+		require.NotNil(t, meta)
+		assert.Equal(t, "demo", meta.Name)
+		assert.Equal(t, "/path/to/solution.yaml", meta.Source)
+	})
+
+	t.Run("falls back to metadata source when no path", func(t *testing.T) {
+		sol := &solution.Solution{}
+		sol.Metadata.Source = "github.com/acme/solutions//demo"
+
+		meta := toSolutionMeta(sol)
+		require.NotNil(t, meta)
+		assert.Equal(t, "github.com/acme/solutions//demo", meta.Source)
+	})
+}
+
 func TestValidateSolution(t *testing.T) {
 	t.Run("valid solution with no workflow", func(t *testing.T) {
 		sol := &solution.Solution{}

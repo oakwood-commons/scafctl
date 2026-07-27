@@ -216,6 +216,7 @@ func unmarshalSolutionMeta(ctx context.Context, meta *proto.SolutionMeta) contex
 		Description: meta.Description,
 		Category:    meta.Category,
 		Tags:        meta.Tags,
+		Source:      meta.Source,
 	})
 }
 
@@ -715,6 +716,7 @@ func marshalSolutionMeta(ctx context.Context) *proto.SolutionMeta {
 		Description: meta.Description,
 		Category:    meta.Category,
 		Tags:        meta.Tags,
+		Source:      meta.Source,
 	}
 }
 
@@ -783,6 +785,18 @@ func buildExecuteProviderRequest(ctx context.Context, providerName string, input
 
 	// Solution metadata
 	req.SolutionMetadata = marshalSolutionMeta(ctx)
+
+	// Per-execution provider settings. Pool-mode hosts configure pooled plugins
+	// once with host-static settings; this channel delivers the per-solution
+	// settings (merged over the configure-time values on the plugin side) so
+	// Settings-driven plugins report correct per-solution values on every call.
+	// Bytes are deep-copied so the request never aliases the shared context map.
+	if execSettings, ok := provider.ExecutionSettingsFromContext(ctx); ok && len(execSettings) > 0 {
+		req.Settings = make(map[string][]byte, len(execSettings))
+		for k, v := range execSettings {
+			req.Settings[k] = append([]byte(nil), v...)
+		}
+	}
 
 	// Auth profile
 	if profile := auth.ProfileFromContext(ctx); profile != "" {

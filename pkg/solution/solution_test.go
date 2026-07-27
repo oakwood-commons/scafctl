@@ -381,6 +381,26 @@ func TestSolution_GetSetPath(t *testing.T) {
 	assert.Equal(t, path, s.GetPath())
 }
 
+func TestSolution_Provenance(t *testing.T) {
+	t.Run("prefers file system path", func(t *testing.T) {
+		s := Solution{}
+		s.SetPath("/path/to/solution.yaml")
+		s.Metadata.Source = "github.com/acme/solutions//demo"
+		assert.Equal(t, "/path/to/solution.yaml", s.Provenance())
+	})
+
+	t.Run("falls back to metadata source when path empty", func(t *testing.T) {
+		s := Solution{}
+		s.Metadata.Source = "github.com/acme/solutions//demo"
+		assert.Equal(t, "github.com/acme/solutions//demo", s.Provenance())
+	})
+
+	t.Run("empty when neither path nor source known", func(t *testing.T) {
+		s := Solution{}
+		assert.Empty(t, s.Provenance())
+	})
+}
+
 func TestSolution_LoadFromBytes(t *testing.T) {
 	t.Run("applies defaults and validates", func(t *testing.T) {
 		data := []byte(`metadata:

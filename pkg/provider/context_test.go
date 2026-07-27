@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -361,4 +362,29 @@ func TestWithSolutionDirectory_AndFromContext(t *testing.T) {
 func TestSolutionDirectoryFromContext_NotSet(t *testing.T) {
 	_, ok := SolutionDirectoryFromContext(context.Background())
 	assert.False(t, ok)
+}
+
+func TestWithExecutionSettings_AndFromContext(t *testing.T) {
+	ctx := context.Background()
+	settings := map[string]json.RawMessage{
+		"metadata": json.RawMessage(`{"solution":{"name":"demo"}}`),
+	}
+	ctx = WithExecutionSettings(ctx, settings)
+
+	got, ok := ExecutionSettingsFromContext(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, settings, got)
+}
+
+func TestExecutionSettingsFromContext_NotSet(t *testing.T) {
+	got, ok := ExecutionSettingsFromContext(context.Background())
+	assert.False(t, ok)
+	assert.Nil(t, got)
+}
+
+func TestWithExecutionSettings_Nil(t *testing.T) {
+	ctx := WithExecutionSettings(context.Background(), nil)
+	got, ok := ExecutionSettingsFromContext(ctx)
+	assert.True(t, ok)
+	assert.Nil(t, got)
 }
