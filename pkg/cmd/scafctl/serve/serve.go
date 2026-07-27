@@ -437,6 +437,13 @@ func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fe
 		plugin.WithIdleTimeout(5 * time.Minute),
 		plugin.WithMaxPlugins(50),
 		plugin.WithDisableExternal(!cfg.APIServer.Plugins.AllowExternal),
+		// Deliver host-static runtime metadata (build info, entrypoint,
+		// command, args) to pooled plugins so the metadata provider and any
+		// other Settings-driven plugin behave the same under this long-lived
+		// API host as under one-shot per-call hosts.
+		plugin.WithBaseProviderConfig(
+			prepare.HostStaticProviderConfig(settings.BinaryNameFromContext(ctx), prepare.EntrypointAPI),
+		),
 	}
 	if len(allowedPluginNames) > 0 {
 		poolOpts = append(poolOpts, plugin.WithAllowedPlugins(allowedPluginNames))

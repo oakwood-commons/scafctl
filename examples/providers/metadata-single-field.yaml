@@ -45,7 +45,7 @@ spec:
               expression: "_.runtime_meta.version.buildVersion"
 
     entrypoint:
-      description: Whether running as CLI or API
+      description: How scafctl was invoked (cli, api, mcp, or unknown)
       type: string
       dependsOn:
         - runtime_meta

@@ -1993,7 +1993,7 @@ None. The metadata provider accepts no inputs.
 | `version.buildTime` | string | Timestamp of the build |
 | `args` | string[] | Command-line arguments passed to scafctl |
 | `cwd` | string | Current working directory |
-| `entrypoint` | string | How scafctl was invoked: `"cli"`, `"api"`, or `"unknown"` |
+| `entrypoint` | string | How scafctl was invoked: `"cli"`, `"api"`, `"mcp"`, or `"unknown"` |
 | `command` | string | The command path (e.g. `scafctl/run/solution`) |
 | `solution` | object | Metadata about the currently-running solution |
 | `solution.name` | string | Solution name |
