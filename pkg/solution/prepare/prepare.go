@@ -213,11 +213,12 @@ type Result struct {
 	// DiscoveredFrom holds metadata about how the solution file was discovered.
 	// Only populated when auto-discovery is used (path was empty).
 	DiscoveredFrom get.DiscoveryResult `json:"-" yaml:"-"`
-	// ProviderCtx enriches a context with solution provider dependencies
-	// (loader, registry, plugin deps, client tracker). Callers must apply
-	// this to the execution context before running resolvers or actions so
-	// the solution provider can resolve sub-solutions. May be nil when no
-	// solution provider is registered.
+	// ProviderCtx enriches a context with per-execution provider settings and
+	// solution provider dependencies (loader, registry, plugin deps, client
+	// tracker). Callers must apply this to the execution context before running
+	// resolvers or actions so that per-solution provider settings reach plugins
+	// on every execution and the solution provider can resolve sub-solutions.
+	// Always non-nil.
 	ProviderCtx func(ctx context.Context) context.Context `json:"-" yaml:"-"`
 }
 
@@ -490,14 +491,28 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		}
 	}
 
-	// Build a context enrichment function that injects solution provider
-	// dependencies via context. This avoids mutating the shared singleton
-	// in DefaultRegistry and keeps per-execution state isolated.
-	var providerCtx func(ctx context.Context) context.Context
-	if reg.Has(solutionprovider.ProviderName) {
-		tracker := solutionprovider.NewChildClientTracker()
+	// Build a context enrichment function that injects per-execution provider
+	// settings and (when present) solution provider dependencies via context.
+	// This avoids mutating the shared singleton in DefaultRegistry and keeps
+	// per-execution state isolated.
+	//
+	// The per-solution settings blob is attached unconditionally -- it must not
+	// be gated on the solution provider being registered, since it carries the
+	// per-solution metadata that pooled plugins (e.g. the metadata provider)
+	// rely on for every execution.
+	execSettings := buildPerSolutionSettings(hostEntrypoint(cfg), sol)
 
-		providerCtx = func(ctx context.Context) context.Context {
+	hasSolutionProvider := reg.Has(solutionprovider.ProviderName)
+	var tracker *solutionprovider.ChildClientTracker
+	if hasSolutionProvider {
+		tracker = solutionprovider.NewChildClientTracker()
+	}
+
+	providerCtx := func(ctx context.Context) context.Context {
+		if len(execSettings) > 0 {
+			ctx = provider.WithExecutionSettings(ctx, execSettings)
+		}
+		if hasSolutionProvider {
 			ctx = solutionprovider.WithLoaderCtx(ctx, getter)
 			ctx = solutionprovider.WithProviderRegistry(ctx, reg)
 			ctx = solutionprovider.WithChildClientTracker(ctx, tracker)
@@ -513,9 +528,11 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 			if len(cfg.clientOpts) > 0 {
 				ctx = solutionprovider.WithClientOptionsCtx(ctx, cfg.clientOpts)
 			}
-			return ctx
 		}
+		return ctx
+	}
 
+	if hasSolutionProvider {
 		// Add tracker cleanup to kill child plugin clients for this run only.
 		origCleanup := cleanup
 		cleanup = func() {
@@ -1290,7 +1307,10 @@ func buildHostMetadataSettings(entrypoint string, sol *solution.Solution) (json.
 		if sol.Metadata.Tags != nil {
 			solMeta.Tags = sol.Metadata.Tags
 		}
-		solMeta.Source = sol.Metadata.Source
+		// Report the solution's runtime provenance (local path, else the
+		// author-declared metadata.source) so the metadata provider surfaces
+		// the same origin the proto SolutionMeta.Source carries.
+		solMeta.Source = sol.Provenance()
 		if sol.Metadata.Version != nil {
 			solMeta.Version = sol.Metadata.Version.String()
 		}
@@ -1347,15 +1367,70 @@ func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Soluti
 		entrypoint = EntrypointUnknown
 	}
 
-	raw, err := buildHostMetadataSettings(entrypoint, sol)
-	if err != nil {
+	settings := buildPerSolutionSettings(entrypoint, sol)
+	if settings == nil {
 		return
 	}
 
 	if cfg.Settings == nil {
 		cfg.Settings = make(map[string]json.RawMessage)
 	}
-	cfg.Settings[hostMetadataSettingsKey] = raw
+	for k, v := range settings {
+		cfg.Settings[k] = v
+	}
+}
+
+// buildPerSolutionSettings builds the settings map delivered to plugins on every
+// provider execution via ExecuteProviderRequest.settings. It returns the
+// complete host metadata blob (host-static fields plus the per-solution
+// sub-object) under the "metadata" key.
+//
+// The blob must be complete rather than solution-only because the SDK merges
+// execute-time settings over configure-time settings at the key level: the
+// execute-time "metadata" entry fully replaces the configure-time one. Pool-mode
+// hosts configure pooled plugins once with an empty-solution blob, so this
+// per-execution blob is what carries correct per-solution values (name, version,
+// source, ...) to those plugins. Callers pass the entrypoint that matches the
+// configure-time blob (see hostEntrypoint) so host-static fields -- crucially
+// the entrypoint -- are preserved through the override.
+//
+// Returns nil when the blob cannot be marshaled, matching the fail-soft
+// behavior of the configure-time injection path.
+func buildPerSolutionSettings(entrypoint string, sol *solution.Solution) map[string]json.RawMessage {
+	raw, err := buildHostMetadataSettings(entrypoint, sol)
+	if err != nil {
+		return nil
+	}
+	return map[string]json.RawMessage{hostMetadataSettingsKey: raw}
+}
+
+// hostEntrypoint resolves the host entrypoint (cli/api/mcp) used to build the
+// per-execution metadata blob. In pool mode the authoritative value is the
+// entrypoint the pool baked into its host-static baseConfig at load time, so it
+// is read back from there to guarantee the per-execution blob preserves it
+// through the key-level settings override. In per-call mode (no pool) it falls
+// back to the binary-name heuristic used by injectHostMetadataSettings.
+func hostEntrypoint(cfg *prepareConfig) string {
+	if cfg.pluginPool != nil {
+		base := cfg.pluginPool.BaseProviderConfig()
+		if raw, ok := base.Settings[hostMetadataSettingsKey]; ok {
+			var meta struct {
+				Entrypoint string `json:"entrypoint"`
+			}
+			if err := json.Unmarshal(raw, &meta); err == nil && meta.Entrypoint != "" {
+				return meta.Entrypoint
+			}
+		}
+		// A pool is a long-lived server, never the one-shot CLI path, so fall
+		// back to Unknown rather than the CLI heuristic when the base config
+		// could not supply an entrypoint.
+		return EntrypointUnknown
+	}
+
+	if cfg.pluginCfg != nil && cfg.pluginCfg.BinaryName != "" {
+		return EntrypointCLI
+	}
+	return EntrypointUnknown
 }
 
 // HostStaticProviderConfig builds a ProviderConfig that carries host-static

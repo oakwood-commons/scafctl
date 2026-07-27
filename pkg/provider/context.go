@@ -5,6 +5,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 
 	sdkprovider "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
 )
@@ -151,4 +152,26 @@ func WithSolutionDirectory(ctx context.Context, dir string) context.Context {
 func SolutionDirectoryFromContext(ctx context.Context) (string, bool) {
 	dir, ok := ctx.Value(solutionDirectoryKey).(string)
 	return dir, ok
+}
+
+// executionSettingsKey is a scafctl-only context key carrying the per-execution
+// host settings that the host serializes into ExecuteProviderRequest.settings.
+const executionSettingsKey scafctlContextKey = "scafctl.provider.executionSettings"
+
+// WithExecutionSettings returns a new context carrying the per-execution host
+// settings map that the host serializes into ExecuteProviderRequest.settings on
+// each provider execution. This is the host-side (producer) counterpart to the
+// SDK's provider.WithSettings, which the plugin server uses to expose the merged
+// effective settings to the plugin (consumer). Pooled hosts use this channel to
+// deliver per-solution values that the one-time ConfigureProvider call cannot.
+// The map and its values are treated as read-only.
+func WithExecutionSettings(ctx context.Context, settings map[string]json.RawMessage) context.Context {
+	return context.WithValue(ctx, executionSettingsKey, settings)
+}
+
+// ExecutionSettingsFromContext retrieves the per-execution host settings map.
+// Returns the settings map and true if present, nil and false otherwise.
+func ExecutionSettingsFromContext(ctx context.Context) (map[string]json.RawMessage, bool) {
+	settings, ok := ctx.Value(executionSettingsKey).(map[string]json.RawMessage)
+	return settings, ok
 }

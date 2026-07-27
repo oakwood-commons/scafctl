@@ -234,6 +234,7 @@ func TestBuildExecuteProviderRequest_RoundTrip(t *testing.T) {
 	ctx = provider.WithSolutionMetadata(ctx, &provider.SolutionMeta{
 		Name:    "test-sol",
 		Version: "2.0.0",
+		Source:  "/path/to/solution.yaml",
 	})
 	ctx = auth.WithProfile(ctx, "work")
 
@@ -255,6 +256,7 @@ func TestBuildExecuteProviderRequest_RoundTrip(t *testing.T) {
 	require.NotNil(t, req.SolutionMetadata)
 	assert.Equal(t, "test-sol", req.SolutionMetadata.Name)
 	assert.Equal(t, "2.0.0", req.SolutionMetadata.Version)
+	assert.Equal(t, "/path/to/solution.yaml", req.SolutionMetadata.Source)
 
 	var params map[string]any
 	require.NoError(t, json.Unmarshal(req.Parameters, &params))
@@ -281,6 +283,66 @@ func TestBuildExecuteProviderRequest_AuthProfile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, req.AuthProfile)
 	})
+}
+
+func TestBuildExecuteProviderRequest_ExecutionSettings(t *testing.T) {
+	t.Run("populates settings from context", func(t *testing.T) {
+		settings := map[string]json.RawMessage{
+			"metadata": json.RawMessage(`{"solution":{"name":"demo"}}`),
+		}
+		ctx := provider.WithExecutionSettings(context.Background(), settings)
+
+		req, err := buildExecuteProviderRequest(ctx, "test", []byte(`{}`))
+		require.NoError(t, err)
+		require.Contains(t, req.Settings, "metadata")
+		assert.JSONEq(t, `{"solution":{"name":"demo"}}`, string(req.Settings["metadata"]))
+	})
+
+	t.Run("deep-copies bytes so request does not alias context map", func(t *testing.T) {
+		orig := json.RawMessage(`{"solution":{"name":"demo"}}`)
+		settings := map[string]json.RawMessage{"metadata": orig}
+		ctx := provider.WithExecutionSettings(context.Background(), settings)
+
+		req, err := buildExecuteProviderRequest(ctx, "test", []byte(`{}`))
+		require.NoError(t, err)
+		require.Contains(t, req.Settings, "metadata")
+
+		// Mutating the request bytes must not affect the source map.
+		req.Settings["metadata"][0] = 'X'
+		assert.Equal(t, `{"solution":{"name":"demo"}}`, string(orig),
+			"source settings bytes must not be aliased by the request")
+	})
+
+	t.Run("no settings key when context has none", func(t *testing.T) {
+		req, err := buildExecuteProviderRequest(context.Background(), "test", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Nil(t, req.Settings)
+	})
+
+	t.Run("empty settings map yields no settings", func(t *testing.T) {
+		ctx := provider.WithExecutionSettings(context.Background(), map[string]json.RawMessage{})
+		req, err := buildExecuteProviderRequest(ctx, "test", []byte(`{}`))
+		require.NoError(t, err)
+		assert.Nil(t, req.Settings)
+	})
+}
+
+func TestSolutionMeta_SourceRoundTrip(t *testing.T) {
+	// marshalSolutionMeta (host client -> proto) and unmarshalSolutionMeta
+	// (proto -> plugin-side context) must preserve Source in both directions.
+	ctx := provider.WithSolutionMetadata(context.Background(), &provider.SolutionMeta{
+		Name:   "demo",
+		Source: "github.com/acme/solutions//demo",
+	})
+
+	protoMeta := marshalSolutionMeta(ctx)
+	require.NotNil(t, protoMeta)
+	assert.Equal(t, "github.com/acme/solutions//demo", protoMeta.Source)
+
+	rtCtx := unmarshalSolutionMeta(context.Background(), protoMeta)
+	meta, ok := provider.SolutionMetadataFromContext(rtCtx)
+	require.True(t, ok)
+	assert.Equal(t, "github.com/acme/solutions//demo", meta.Source)
 }
 
 func TestApplyRequestContext_AuthProfile(t *testing.T) {
