@@ -1,35 +1,46 @@
 name: Benchmark
 
 # Chatops-triggered benchmark comparison. Comment `/benchmark` on a PR to run it.
-# Gated to maintainers (author_association) since this workflow checks out and
-# executes PR code (including from forks) with write access to post comments.
+#
+# This workflow is split into three jobs to keep secrets and write access away
+# from the PR's own (potentially untrusted, fork-authored) code:
+#   - `gate`: verifies the commenter is a maintainer (author_association) and
+#     acknowledges the command. Never checks out PR code. Has `issues: write`
+#     to react/comment and `pull-requests: read` to look up the PR's base SHA.
+#   - `benchmark`: checks out and *executes* the PR's own code to produce
+#     benchmark results. Runs with `contents: read` only -- no repo secrets,
+#     no write permissions of any kind -- since this is the only job that
+#     runs code the PR's author controls. Results are handed off as a build
+#     artifact, not posted directly.
+#   - `report`: never checks out or executes PR code. Downloads the artifact
+#     produced by `benchmark` (from this same workflow run) and posts/updates
+#     the PR comment. Has `issues: write` only.
+#
+# A trusted commenter does not make the PR's code trustworthy -- the job
+# split (not the author_association check) is what protects secrets/write
+# access from a malicious or compromised benchmark.
 
 on:
   issue_comment:
     types: [created]
-
-permissions:
-  contents: read
-  pull-requests: read
-  issues: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
-  benchmark:
-    name: Benchmark Comparison
+  gate:
+    name: Authorize command
     runs-on: ubuntu-latest
     if: >
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/benchmark') &&
       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
-    env:
-      SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' }}
-      # benchstat requires >= 6 samples for finite confidence intervals
-      BENCH_COUNT: 6
-      BENCH_TIME: 1s
+    permissions:
+      issues: write
+      pull-requests: read
+    outputs:
+      base_sha: ${{ steps.pr.outputs.base_sha }}
     steps:
       - name: Acknowledge command
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -54,6 +65,26 @@ jobs:
             });
             core.setOutput('base_sha', pr.data.base.sha);
 
+  benchmark:
+    name: Run benchmarks (untrusted PR code)
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Never reference secrets.SCAFCTL_SECRET_KEY here -- this job checks out
+      # and executes the PR's own (untrusted) code. This literal is a public,
+      # non-sensitive placeholder (the same value used in test.yml); no
+      # benchmark in this repo actually reads it, it only exists so the env
+      # var is non-empty if some future benchmark happens to check it.
+      SCAFCTL_SECRET_KEY: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+      # benchstat requires >= 6 samples for finite confidence intervals
+      BENCH_COUNT: 6
+      BENCH_TIME: 1s
+    outputs:
+      packages: ${{ steps.find-bench.outputs.packages }}
+      empty: ${{ steps.benchstat.outputs.empty }}
+    steps:
       - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -74,7 +105,7 @@ jobs:
       - name: Find changed benchmark packages
         id: find-bench
         run: |
-          CHANGED_PKGS=$(git diff --name-only "${{ steps.pr.outputs.base_sha }}" HEAD -- '*.go' \
+          CHANGED_PKGS=$(git diff --name-only "${{ needs.gate.outputs.base_sha }}" HEAD -- '*.go' \
             | xargs -I{} dirname {} \
             | sort -u \
             | sed 's|^\./|./|; s|^|./|; s|^\./\./|./|' \
@@ -113,7 +144,7 @@ jobs:
 
       - name: Checkout base branch
         if: steps.find-bench.outputs.packages != ''
-        run: git checkout "${{ steps.pr.outputs.base_sha }}"
+        run: git checkout "${{ needs.gate.outputs.base_sha }}"
 
       - name: Run benchmarks on base branch
         if: steps.find-bench.outputs.packages != ''
@@ -138,15 +169,67 @@ jobs:
           echo "$RESULT" > benchstat-result.txt
           set -e
 
-      - name: Post benchmark comparison
+      - name: Upload benchmark results
         if: steps.find-bench.outputs.packages != '' && steps.benchstat.outputs.empty != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-results
+          path: benchstat-result.txt
+          retention-days: 5
+
+  report:
+    name: Post benchmark comparison
+    needs: [gate, benchmark]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      BENCH_COUNT: 6
+      BENCH_TIME: 1s
+    steps:
+      - name: Download benchmark results
+        if: needs.benchmark.outputs.packages != '' && needs.benchmark.outputs.empty != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+
+            const { data: list } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+
+            const artifact = list.artifacts.find(a => a.name === 'benchmark-results');
+            if (!artifact) {
+              core.setFailed('benchmark-results artifact not found in this run');
+              return;
+            }
+
+            const download = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: artifact.id,
+              archive_format: 'zip',
+            });
+
+            fs.writeFileSync(`${process.env.GITHUB_WORKSPACE}/benchmark-results.zip`, Buffer.from(download.data));
+
+      - name: Extract artifact safely
+        if: needs.benchmark.outputs.packages != '' && needs.benchmark.outputs.empty != 'true'
+        run: |
+          mkdir -p bench-artifacts
+          unzip -j -o benchmark-results.zip benchstat-result.txt -d bench-artifacts/
+
+      - name: Post benchmark comparison
+        if: needs.benchmark.outputs.packages != '' && needs.benchmark.outputs.empty != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- benchmark-comparison -->';
 
-            const result = fs.readFileSync('benchstat-result.txt', 'utf8').trim();
+            const result = fs.readFileSync('bench-artifacts/benchstat-result.txt', 'utf8').trim();
 
             // Sanitize: compute a fence delimiter longer than any backtick run in the content.
             const maxRun = (result.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
@@ -170,7 +253,7 @@ jobs:
               `> Benchmarks ran with \`-count=${process.env.BENCH_COUNT}\` and \`-benchtime=${process.env.BENCH_TIME}\`.`,
             ].join('\n');
 
-            const { data: comments } = await github.rest.issues.listComments({
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
@@ -195,14 +278,14 @@ jobs:
             }
 
       - name: No benchmarks found
-        if: steps.find-bench.outputs.packages == ''
+        if: needs.benchmark.outputs.packages == ''
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const marker = '<!-- benchmark-comparison -->';
             const body = `${marker}\nNo changed packages in this PR contain benchmark tests -- nothing to compare.`;
 
-            const { data: comments } = await github.rest.issues.listComments({
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
