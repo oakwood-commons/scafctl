@@ -1126,7 +1126,7 @@ func TestHostStaticProviderConfig(t *testing.T) {
 
 	assert.Equal(t, "mycli", cfg.BinaryName)
 	require.NotNil(t, cfg.Settings)
-	raw, ok := cfg.Settings["metadata"]
+	raw, ok := cfg.Settings[hostMetadataSettingsKey]
 	require.True(t, ok)
 
 	var meta map[string]any
@@ -1150,7 +1150,7 @@ func TestHostStaticProviderConfig(t *testing.T) {
 func TestHostStaticProviderConfig_APIEntrypoint(t *testing.T) {
 	cfg := HostStaticProviderConfig("scafctl", EntrypointAPI)
 
-	raw := cfg.Settings["metadata"]
+	raw := cfg.Settings[hostMetadataSettingsKey]
 	var meta map[string]any
 	require.NoError(t, json.Unmarshal(raw, &meta))
 	assert.Equal(t, "api", meta["entrypoint"])
@@ -1162,7 +1162,7 @@ func TestHostStaticProviderConfig_EmptyEntrypointDefaultsToUnknown(t *testing.T)
 	// a caller could pass "".
 	cfg := HostStaticProviderConfig("scafctl", "")
 
-	raw := cfg.Settings["metadata"]
+	raw := cfg.Settings[hostMetadataSettingsKey]
 	var meta map[string]any
 	require.NoError(t, json.Unmarshal(raw, &meta))
 	assert.Equal(t, EntrypointUnknown, meta["entrypoint"])

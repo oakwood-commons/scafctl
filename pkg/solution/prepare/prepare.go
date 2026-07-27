@@ -1324,10 +1324,13 @@ func buildHostMetadataSettings(entrypoint string, sol *solution.Solution) (json.
 // HostStaticProviderConfig instead (see its doc for why).
 //
 // NOTE: os.Args is included in the serialized settings. This means command-line
-// arguments (potentially including sensitive values) are visible to all plugins
-// over the local gRPC socket. This is acceptable because plugins are first-party
-// trusted binaries, but users should avoid passing secrets via CLI flags when
-// running untrusted plugin binaries.
+// arguments (potentially including sensitive values) are visible to every plugin
+// that receives this config over the local gRPC socket. For built-in and other
+// first-party plugins this is acceptable, but scafctl can be configured to allow
+// external (third-party/untrusted) plugins (disabled by default; see the API
+// server's AllowExternal / DisableExternal controls). Operators who enable
+// external plugins are trusting those binaries with the host command line, so
+// avoid passing secrets via CLI flags in that configuration.
 func injectHostMetadataSettings(cfg *plugin.ProviderConfig, sol *solution.Solution) {
 	if cfg == nil {
 		return
