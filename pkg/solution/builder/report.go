@@ -27,14 +27,15 @@ type PackageReport struct {
 	Reference string `json:"reference" yaml:"reference"`
 
 	// Digest is the content digest of the stored artifact (sha256:...).
-	// Empty for dry-run reports, where nothing is stored.
+	// Omitted from the report for dry-run builds, where nothing is stored.
 	Digest string `json:"digest,omitempty" yaml:"digest,omitempty"`
 
 	// Catalog is the path or name of the catalog the artifact was stored in.
-	// Empty for dry-run reports.
+	// Omitted from the report for dry-run builds.
 	Catalog string `json:"catalog,omitempty" yaml:"catalog,omitempty"`
 
-	// Size is the stored artifact size in bytes. Zero for dry-run reports.
+	// Size is the stored artifact size in bytes.
+	// Omitted from the report for dry-run builds.
 	Size int64 `json:"size,omitempty" yaml:"size,omitempty"`
 
 	// DryRun is true when the report describes what would be built without

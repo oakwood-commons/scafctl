@@ -767,7 +767,7 @@ func writeComposedSolution(path string, sol *solution.Solution, w *writer.Writer
 		w.Errorf("failed to serialize composed solution: %v", err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // user-specified output path, world-readable solution document
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		w.Errorf("failed to write composed solution to %s: %v", path, err)
 		return exitcode.WithCode(err, exitcode.GeneralError)
 	}
