@@ -135,7 +135,7 @@ jobs:
         id: prev-tag
         run: |
           current_tag="${GITHUB_REF#refs/tags/}"
-          prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${current_tag}$" | head -1)
+          prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -Fxv "${current_tag}" | head -1)
           if [ -z "$prev_tag" ]; then
             echo "No previous release tag found (this is the first release), skipping comparison."
             echo "tag=" >> "$GITHUB_OUTPUT"
