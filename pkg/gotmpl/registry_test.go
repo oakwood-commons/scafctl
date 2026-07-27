@@ -55,8 +55,8 @@ func render(t *testing.T, content string) (string, error) {
 }
 
 func TestRegisterFuncs_RenderThroughService(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	err := RegisterFuncs(template.FuncMap{
 		"shout": func(s string) string { return s + "!" },
@@ -69,8 +69,8 @@ func TestRegisterFuncs_RenderThroughService(t *testing.T) {
 }
 
 func TestRegisterFuncs_EmptyInputIsNoop(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	assert.NoError(t, RegisterFuncs(nil))
 	assert.NoError(t, RegisterFuncs(template.FuncMap{}))
@@ -78,8 +78,8 @@ func TestRegisterFuncs_EmptyInputIsNoop(t *testing.T) {
 }
 
 func TestRegisterFuncs_EmptyNameRejected(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	err := RegisterFuncs(template.FuncMap{"": func() string { return "" }})
 	require.Error(t, err)
@@ -87,8 +87,8 @@ func TestRegisterFuncs_EmptyNameRejected(t *testing.T) {
 }
 
 func TestRegisterFuncs_InvalidValueRejected(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	cases := map[string]any{
 		"nil value":         nil,
@@ -111,8 +111,8 @@ func TestRegisterFuncs_InvalidValueRejected(t *testing.T) {
 }
 
 func TestRegisterFuncs_ValidTwoResultFuncAccepted(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	require.NoError(t, RegisterFuncs(template.FuncMap{
 		"maybe": func(s string) (string, error) { return s, nil },
@@ -124,8 +124,8 @@ func TestRegisterFuncs_ValidTwoResultFuncAccepted(t *testing.T) {
 }
 
 func TestRegisterFuncs_CollisionWithBuiltin(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	// Built-in 'upper' uppercases; the collision must be rejected and the
 	// built-in must remain unchanged.
@@ -145,8 +145,8 @@ func TestRegisterFuncs_CollisionWithBuiltin(t *testing.T) {
 }
 
 func TestRegisterFuncs_CollisionWithPriorRegistration(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	require.NoError(t, RegisterFuncs(template.FuncMap{"dup": func() string { return "a" }}))
 
@@ -160,8 +160,8 @@ func TestRegisterFuncs_CollisionWithPriorRegistration(t *testing.T) {
 }
 
 func TestRegisterFuncs_AllOrNothingOnCollision(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	require.NoError(t, RegisterFuncs(template.FuncMap{"taken": func() string { return "x" }}))
 
@@ -181,8 +181,8 @@ func TestRegisterFuncs_AllOrNothingOnCollision(t *testing.T) {
 }
 
 func TestRegisterFuncsOverride_OverwritesBuiltin(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	withFactory(t, template.FuncMap{
 		"greet": func() string { return "builtin" },
@@ -198,8 +198,8 @@ func TestRegisterFuncsOverride_OverwritesBuiltin(t *testing.T) {
 }
 
 func TestRegisterFuncsOverride_DuplicateRejected(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	require.NoError(t, RegisterFuncsOverride(template.FuncMap{"o": func() string { return "1" }}))
 	err := RegisterFuncsOverride(template.FuncMap{"o": func() string { return "2" }})
@@ -207,8 +207,8 @@ func TestRegisterFuncsOverride_DuplicateRejected(t *testing.T) {
 }
 
 func TestRegisterFuncs_AdditiveEnvIsRejectedWhenStripped(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	// Factory exposes env (as sprig does). With env functions disallowed (the
 	// default), the additive path must reject a colliding 'env' so it cannot be
@@ -227,8 +227,8 @@ func TestRegisterFuncs_AdditiveEnvIsRejectedWhenStripped(t *testing.T) {
 }
 
 func TestRegisterFuncsOverride_CanReintroduceEnv(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	withFactory(t, template.FuncMap{
 		"env": func(string) string { return "SECRET" },
@@ -253,8 +253,8 @@ func TestRegisterFuncsOverride_CanReintroduceEnv(t *testing.T) {
 // registration time because the factory had not yet been set (so built-in
 // collision detection was empty).
 func TestRegisterFuncs_AdditiveEnvSkippedRegardlessOfFactory(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	// No factory installed: factoryFuncMap() is empty, so 'env' registers
 	// additively without a built-in collision.
@@ -276,8 +276,8 @@ func TestRegisterFuncs_AdditiveEnvSkippedRegardlessOfFactory(t *testing.T) {
 // registries such as sql.Register). The re-execution case is handled by the
 // root command guarding its own wiring, not by an idempotency exception here.
 func TestRegisterFuncs_DuplicateNameIsCollision(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	fn := func() string { return "v" }
 	funcs := template.FuncMap{"reg": fn}
@@ -328,8 +328,8 @@ func TestCombinedFuncs_EmptyRegisteredReturnsBuiltins(t *testing.T) {
 }
 
 func TestRegistry_Precedence(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	// Registry provides the base value.
 	require.NoError(t, RegisterFuncs(template.FuncMap{
@@ -365,8 +365,8 @@ func TestRegistry_Precedence(t *testing.T) {
 }
 
 func TestRegisteredFuncs_SourceTagged(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	require.NoError(t, RegisterFuncs(template.FuncMap{"addFn": func() string { return "" }}))
 	require.NoError(t, RegisterFuncsOverride(template.FuncMap{"ovrFn": func() string { return "" }}))
@@ -383,26 +383,29 @@ func TestRegisteredFuncs_SourceTagged(t *testing.T) {
 }
 
 func TestResetRegistryForTesting_Isolation(t *testing.T) {
-	resetRegistryForTesting()
+	ResetRegistryForTesting()
 	require.NoError(t, RegisterFuncs(template.FuncMap{"tmp": func() string { return "" }}))
 	assert.Len(t, RegisteredFuncs(), 1)
 
-	resetRegistryForTesting()
+	ResetRegistryForTesting()
 	assert.Empty(t, RegisteredFuncs())
 }
 
 func TestRegistry_ConcurrentAccess(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	var wg sync.WaitGroup
-	// Writers registering distinct names.
+	// Writers registering distinct names. Each goroutine records its own
+	// registration error in a dedicated slot (no shared slot => no lock needed)
+	// so a failure surfaces with context instead of only as a length mismatch.
+	writeErrs := make([]error, 8)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
 			name := "cf" + string(rune('a'+n))
-			_ = RegisterFuncs(template.FuncMap{name: func() string { return name }})
+			writeErrs[n] = RegisterFuncs(template.FuncMap{name: func() string { return name }})
 		}(i)
 	}
 	// Readers hitting the merge path concurrently.
@@ -416,13 +419,17 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 
+	// Every distinct writer must have registered successfully.
+	for n, err := range writeErrs {
+		assert.NoErrorf(t, err, "writer %d failed to register", n)
+	}
 	// All 8 distinct writers should have registered without error/race.
 	assert.Len(t, RegisteredFuncs(), 8)
 }
 
 func TestErrFuncNameCollision_Is(t *testing.T) {
-	resetRegistryForTesting()
-	t.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	t.Cleanup(ResetRegistryForTesting)
 
 	require.NoError(t, RegisterFuncs(template.FuncMap{"x": func() string { return "" }}))
 	err := RegisterFuncs(template.FuncMap{"x": func() string { return "" }})

@@ -57,6 +57,11 @@ func TestGoTemplateProvider_Execute_SimpleTemplate(t *testing.T) {
 // service). The function name is unique to avoid collisions in the shared,
 // process-global registry.
 func TestGoTemplateProvider_Execute_EmbedderRegisteredFunc(t *testing.T) {
+	// The gotmpl registry is process-global; reset it so this test does not leak
+	// the embedder function into other tests in this binary (register-once means
+	// a later duplicate registration would otherwise collide).
+	gotmpl.ResetRegistryForTesting()
+	t.Cleanup(gotmpl.ResetRegistryForTesting)
 	require.NoError(t, gotmpl.RegisterFuncs(template.FuncMap{
 		"providerTestEmbedderShout": func(s string) string { return s + "!!!" },
 	}))

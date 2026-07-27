@@ -82,6 +82,11 @@ func TestHandleEvaluateGoTemplate(t *testing.T) {
 // tagged with the embedder source, both in the embedder_only view and the
 // default (combined) view.
 func TestHandleListGoTemplateFunctions_EmbedderOnly(t *testing.T) {
+	// The gotmpl registry is process-global; reset it so this test does not leak
+	// the embedder function into other tests in this binary (which could hit
+	// register-once collisions or see extra entries in default listings).
+	gotmpl.ResetRegistryForTesting()
+	t.Cleanup(gotmpl.ResetRegistryForTesting)
 	require.NoError(t, gotmpl.RegisterFuncs(template.FuncMap{
 		"mcpEmbedderListTestFunc": func(s string) string { return s },
 	}))

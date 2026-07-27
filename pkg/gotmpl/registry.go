@@ -258,8 +258,11 @@ func CombinedFuncs(builtins, registered ExtFunctionList) ExtFunctionList {
 	return append(out, registered...)
 }
 
-// resetRegistryForTesting clears both embedder registries. Tests only.
-func resetRegistryForTesting() {
+// ResetRegistryForTesting clears both embedder registries. It is exported so
+// tests in other packages that register process-global embedder functions can
+// restore a clean registry via t.Cleanup, keeping package test runs order-
+// independent. Tests only.
+func ResetRegistryForTesting() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	registeredFuncs = template.FuncMap{}

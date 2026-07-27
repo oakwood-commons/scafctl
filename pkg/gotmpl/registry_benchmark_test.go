@@ -14,8 +14,8 @@ import (
 // non-empty registry. It resets the registry on cleanup.
 func registerBenchFuncs(b *testing.B, n int) {
 	b.Helper()
-	resetRegistryForTesting()
-	b.Cleanup(resetRegistryForTesting)
+	ResetRegistryForTesting()
+	b.Cleanup(ResetRegistryForTesting)
 
 	additive := make(template.FuncMap, n)
 	for i := 0; i < n; i++ {

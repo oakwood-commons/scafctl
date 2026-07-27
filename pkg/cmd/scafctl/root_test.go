@@ -431,6 +431,8 @@ func TestRoot_ConfigPathHonored(t *testing.T) {
 // non-default binary name. Uses a unique function name so the package-global
 // registry cannot collide with other tests in this binary.
 func TestRoot_GoTemplateFuncs_Discoverable(t *testing.T) {
+	gotmpl.ResetRegistryForTesting()
+	t.Cleanup(gotmpl.ResetRegistryForTesting)
 	ioStreams, stdout, _ := terminal.NewTestIOStreams()
 
 	cmd, cleanup := Root(&RootOptions{
@@ -455,6 +457,8 @@ func TestRoot_GoTemplateFuncs_Discoverable(t *testing.T) {
 // bug -- registering a function whose name collides with a built-in -- fails
 // loudly at startup rather than silently dropping the function.
 func TestRoot_GoTemplateFuncs_CollisionFailsLoud(t *testing.T) {
+	gotmpl.ResetRegistryForTesting()
+	t.Cleanup(gotmpl.ResetRegistryForTesting)
 	// Ensure the extension factory is set so built-in collisions are detectable.
 	RegisterDefaults()
 
@@ -480,6 +484,8 @@ func TestRoot_GoTemplateFuncs_CollisionFailsLoud(t *testing.T) {
 // functions and thus does not self-collide (register-once is enforced globally,
 // so the root wiring must guard its own registration).
 func TestRoot_GoTemplateFuncs_ReExecuteNoSelfCollision(t *testing.T) {
+	gotmpl.ResetRegistryForTesting()
+	t.Cleanup(gotmpl.ResetRegistryForTesting)
 	ioStreams, _, _ := terminal.NewTestIOStreams()
 	exitCalled := false
 	cmd, cleanup := Root(&RootOptions{
