@@ -11,6 +11,7 @@ See our [Code of Conduct](CODE_OF_CONDUCT.md).
 ### Developer Certificate of Origin (DCO) & Commit Signing
 
 All commits must be:
+
 1. **GPG/SSH signed** (`-S`) — verifies commit author identity
 2. **DCO signed-off** (`-s`) — certifies you have the right to submit the contribution under the project's license per the [Developer Certificate of Origin](https://developercertificate.org/)
 
@@ -27,6 +28,7 @@ git commit --amend -s -S --no-edit
 ```
 
 > **Tip**: To sign all commits automatically, configure Git once:
+>
 > ```bash
 > git config --global commit.gpgSign true
 > git config --global user.signingkey <YOUR_KEY_ID>
@@ -132,6 +134,19 @@ Use `b.Loop()` (not `for i := 0; i < b.N; i++`) for benchmark loops.
 Always call `b.ReportAllocs()` before `b.ResetTimer()` in every benchmark function.
 Benchmark-only files should use the `*_benchmark_test.go` naming convention.
 
+Benchmarks do **not** run automatically on every PR (comparative Go benchmarks
+on shared CI runners are too noisy to gate merges on, and this repo's PR
+benchmark job is not a required check). Instead:
+
+- **On demand per PR**: comment `/benchmark` on a pull request (maintainers
+  only) to trigger `.github/workflows/benchmark.yml`. It benchmarks only the
+  changed packages that contain benchmark tests, compares PR vs. base branch
+  with `benchstat`, and posts/updates a PR comment with the result.
+- **On every release**: pushing a `v*` tag triggers a `benchmark` job in
+  `.github/workflows/release.yml` that runs the full benchmark suite on the
+  new tag, compares it against the previous release tag with `benchstat`, and
+  uploads `benchmark-comparison.txt` as a release asset.
+
 ### 4. Lint Your Code
 
 ```bash
@@ -151,6 +166,7 @@ git commit -m "refactor(cli): simplify output formatting"
 ```
 
 **Types:**
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `docs`: Documentation

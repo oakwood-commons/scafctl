@@ -1,35 +1,62 @@
 name: Benchmark
 
+# Chatops-triggered benchmark comparison. Comment `/benchmark` on a PR to run it.
+# Gated to maintainers (author_association) since this workflow checks out and
+# executes PR code (including from forks) with write access to post comments.
+
 on:
-  pull_request:
-    branches:
-      - main
-      - develop
-    paths:
-      - '**/*.go'
-      - 'go.mod'
-      - 'go.sum'
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   benchmark:
     name: Benchmark Comparison
     runs-on: ubuntu-latest
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/benchmark') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     env:
       SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' }}
       # benchstat requires >= 6 samples for finite confidence intervals
       BENCH_COUNT: 6
       BENCH_TIME: 1s
     steps:
-      - name: Checkout PR branch
+      - name: Acknowledge command
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket',
+            });
+
+      - name: Get PR details
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+            core.setOutput('base_sha', pr.data.base.sha);
+
+      - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
           fetch-depth: 0
 
       - name: Set up Go
@@ -42,12 +69,11 @@ jobs:
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260312031701-16a31bc5fbd0
 
       # Only benchmark packages that were actually changed in this PR
-      # and contain benchmark tests — avoids running the full suite on every PR.
+      # and contain benchmark tests — avoids running the full suite.
       - name: Find changed benchmark packages
         id: find-bench
         run: |
-          # Get Go packages that have changed files in this PR
-          CHANGED_PKGS=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD -- '*.go' \
+          CHANGED_PKGS=$(git diff --name-only "${{ steps.pr.outputs.base_sha }}" HEAD -- '*.go' \
             | xargs -I{} dirname {} \
             | sort -u \
             | sed 's|^\./|./|; s|^|./|; s|^\./\./|./|' \
@@ -59,7 +85,6 @@ jobs:
             exit 0
           fi
 
-          # From those changed packages, keep only the ones that have benchmark tests
           BENCH_PKGS=""
           for pkg in $CHANGED_PKGS; do
             if grep -rl --include='*_test.go' 'func Benchmark' "$pkg" >/dev/null 2>&1; then
@@ -87,7 +112,7 @@ jobs:
 
       - name: Checkout base branch
         if: steps.find-bench.outputs.packages != ''
-        run: git checkout "${{ github.event.pull_request.base.sha }}"
+        run: git checkout "${{ steps.pr.outputs.base_sha }}"
 
       - name: Run benchmarks on base branch
         if: steps.find-bench.outputs.packages != ''
@@ -109,23 +134,73 @@ jobs:
             EMPTY=true
           fi
           echo "empty=$EMPTY" >> "$GITHUB_OUTPUT"
-          # Use a file to pass the result to avoid env-var escaping issues
           echo "$RESULT" > benchstat-result.txt
           set -e
 
-      - name: Save PR number and metadata
+      - name: Post benchmark comparison
         if: steps.find-bench.outputs.packages != '' && steps.benchstat.outputs.empty != 'true'
-        run: |
-          echo "${{ github.event.pull_request.number }}" > pr-number.txt
-          echo '{"count":"'"${BENCH_COUNT}"'","time":"'"${BENCH_TIME}"'"}' > bench-metadata.json
-
-      - name: Upload benchmark results
-        if: steps.find-bench.outputs.packages != '' && steps.benchstat.outputs.empty != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          name: benchmark-results
-          path: |
-            benchstat-result.txt
-            pr-number.txt
-            bench-metadata.json
-          retention-days: 5
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- benchmark-comparison -->';
+
+            const result = fs.readFileSync('benchstat-result.txt', 'utf8').trim();
+
+            // Sanitize: compute a fence delimiter longer than any backtick run in the content.
+            const maxRun = (result.match(/`+/g) || []).reduce((max, s) => Math.max(max, s.length), 0);
+            const fence = '`'.repeat(Math.max(maxRun + 1, 4));
+
+            const body = [
+              marker,
+              '## Benchmark Comparison',
+              '',
+              '<details>',
+              '<summary>Click to expand benchmark results</summary>',
+              '',
+              fence,
+              result,
+              fence,
+              '',
+              '</details>',
+              '',
+              '> **How to read**: `~` means no significant change, `+` means regression, `-` means improvement. `p`-value >= 0.05 means the difference is not statistically significant.',
+              '>',
+              `> Benchmarks ran with \`-count=${process.env.BENCH_COUNT}\` and \`-benchtime=${process.env.BENCH_TIME}\`.`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                body,
+              });
+            }
+
+      - name: No benchmarks found
+        if: steps.find-bench.outputs.packages == ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: 'No changed packages in this PR contain benchmark tests -- nothing to compare.',
+            });
