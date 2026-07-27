@@ -181,7 +181,7 @@ func (o *Options) getFunctions() gotmpl.ExtFunctionList {
 	case o.Embedder:
 		return embedderFn()
 	default:
-		return append(allFn(), embedderFn()...)
+		return gotmpl.CombinedFuncs(allFn(), embedderFn())
 	}
 }
 

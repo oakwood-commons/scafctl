@@ -474,3 +474,26 @@ func TestRoot_GoTemplateFuncs_CollisionFailsLoud(t *testing.T) {
 	assert.True(t, exitCalled,
 		"ExitFunc should be called when an embedder function collides with a built-in")
 }
+
+// TestRoot_GoTemplateFuncs_ReExecuteNoSelfCollision verifies that executing the
+// same command more than once does not re-register the process-global embedder
+// functions and thus does not self-collide (register-once is enforced globally,
+// so the root wiring must guard its own registration).
+func TestRoot_GoTemplateFuncs_ReExecuteNoSelfCollision(t *testing.T) {
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	exitCalled := false
+	cmd, cleanup := Root(&RootOptions{
+		IOStreams: ioStreams,
+		ExitFunc:  func(_ int) { exitCalled = true },
+		GoTemplateFuncs: template.FuncMap{
+			"embedderRootReexec": func(s string) string { return s },
+		},
+	})
+	defer cleanup()
+
+	cmd.SetArgs([]string{"version"})
+	require.NoError(t, cmd.Execute())
+	require.NoError(t, cmd.Execute(), "second execution must not self-collide")
+	assert.False(t, exitCalled,
+		"re-executing the same command must not fail the embedder registration")
+}

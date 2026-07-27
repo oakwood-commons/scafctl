@@ -182,6 +182,13 @@ type RootOptions struct {
 	// replace a built-in, call gotmpl.RegisterFuncsOverride directly instead.
 	GoTemplateFuncs template.FuncMap
 
+	// goTemplateFuncsRegistered guards GoTemplateFuncs registration so that
+	// executing the same command more than once (a REPL, a long-running host,
+	// or repeated calls in tests) does not re-register the process-global
+	// functions and self-collide. PersistentPreRun runs sequentially, so a
+	// plain bool is sufficient.
+	goTemplateFuncsRegistered bool
+
 	// ActionDiscoveryFileNames overrides the file names used by "run action"
 	// auto-discovery. When empty, the defaults from
 	// settings.ActionFileNamesFor are used.
@@ -495,12 +502,15 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			// Registered additively (built-ins win on collision). A collision is
 			// an embedder build bug, so fail loudly rather than silently dropping
 			// the function. Runs after RegisterDefaults has set the extension
-			// factory so built-in collisions are detectable.
-			if len(opts.GoTemplateFuncs) > 0 {
+			// factory so built-in collisions are detectable. Guarded so a command
+			// executed more than once does not re-register (and self-collide with)
+			// the process-global functions.
+			if len(opts.GoTemplateFuncs) > 0 && !opts.goTemplateFuncsRegistered {
 				if funcErr := gotmpl.RegisterFuncs(opts.GoTemplateFuncs); funcErr != nil {
 					w.ErrorWithExit(fmt.Sprintf("register Go template functions: %v", funcErr))
 					return
 				}
+				opts.goTemplateFuncsRegistered = true
 			}
 
 			// Initialize shared secrets store with config-aware settings.

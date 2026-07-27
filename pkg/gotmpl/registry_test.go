@@ -270,11 +270,12 @@ func TestRegisterFuncs_AdditiveEnvSkippedRegardlessOfFactory(t *testing.T) {
 	assert.False(t, ok, "additive env must not be merged while stripped")
 }
 
-// TestRegisterFuncs_IdempotentSameFunc verifies that re-registering the exact
-// same function under the same name is a no-op rather than a self-collision,
-// so an embedder that reconstructs the root command (or a test that executes it
-// repeatedly) can pass the same func map more than once.
-func TestRegisterFuncs_IdempotentSameFunc(t *testing.T) {
+// TestRegisterFuncs_DuplicateNameIsCollision verifies register-once semantics:
+// re-registering a name that is already present -- even with the identical
+// function value -- is rejected as a collision (matching stdlib global
+// registries such as sql.Register). The re-execution case is handled by the
+// root command guarding its own wiring, not by an idempotency exception here.
+func TestRegisterFuncs_DuplicateNameIsCollision(t *testing.T) {
 	resetRegistryForTesting()
 	t.Cleanup(resetRegistryForTesting)
 
@@ -282,11 +283,8 @@ func TestRegisterFuncs_IdempotentSameFunc(t *testing.T) {
 	funcs := template.FuncMap{"reg": fn}
 
 	require.NoError(t, RegisterFuncs(funcs))
-	require.NoError(t, RegisterFuncs(funcs), "identical re-registration must be a no-op")
-
-	// A different function under the same name is still a genuine collision.
-	err := RegisterFuncs(template.FuncMap{"reg": func() string { return "other" }})
-	require.ErrorIs(t, err, ErrFuncNameCollision)
+	// The very same func value re-registered is still a collision.
+	require.ErrorIs(t, RegisterFuncs(funcs), ErrFuncNameCollision)
 
 	// Exactly one registered entry remains, still the original.
 	list := RegisteredFuncs()
@@ -296,6 +294,37 @@ func TestRegisterFuncs_IdempotentSameFunc(t *testing.T) {
 	out, err := render(t, `{{ reg }}`)
 	require.NoError(t, err)
 	assert.Equal(t, "v", out)
+}
+
+func TestCombinedFuncs_DedupesOverrideByName(t *testing.T) {
+	builtins := ExtFunctionList{
+		{Name: "upper", Source: SourceSprig},
+		{Name: "custom1", Source: SourceCustom},
+	}
+	registered := ExtFunctionList{
+		{Name: "upper", Source: SourceEmbedder}, // shadows the built-in
+		{Name: "shout", Source: SourceEmbedder},
+	}
+
+	got := CombinedFuncs(builtins, registered)
+
+	bySource := make(map[string]string, len(got))
+	count := make(map[string]int, len(got))
+	for _, f := range got {
+		bySource[f.Name] = f.Source
+		count[f.Name]++
+	}
+	assert.Equal(t, 1, count["upper"], "shadowed built-in must appear once")
+	assert.Equal(t, SourceEmbedder, bySource["upper"], "embedder override must win")
+	assert.Equal(t, SourceCustom, bySource["custom1"], "non-shadowed built-in retained")
+	assert.Equal(t, SourceEmbedder, bySource["shout"], "embedder-only func retained")
+	assert.Len(t, got, 3, "no duplicate entries")
+}
+
+func TestCombinedFuncs_EmptyRegisteredReturnsBuiltins(t *testing.T) {
+	builtins := ExtFunctionList{{Name: "a", Source: SourceSprig}}
+	got := CombinedFuncs(builtins, nil)
+	assert.Equal(t, builtins, got)
 }
 
 func TestRegistry_Precedence(t *testing.T) {

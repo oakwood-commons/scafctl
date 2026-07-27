@@ -294,6 +294,12 @@ Registration also fails fast if a value is not a usable template function (nil,
 a non-function, or a function whose return signature text/template rejects), so
 an embedder build bug surfaces as a clear error rather than a later panic.
 
+Registration is register-once (like `sql.Register` and other stdlib global
+registries): re-registering a name that is already present -- even with the
+identical function -- is a collision. Register your functions a single time at
+startup. The root command guards its own wiring, so executing the command more
+than once in a long-running host does not re-register or self-collide.
+
 Registered functions are discoverable:
 
 - CLI: `mycli get template functions --embedder`

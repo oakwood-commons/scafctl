@@ -50,6 +50,15 @@ entire call is rejected with `ErrFuncNameCollision` and nothing is registered.
 This refusal to silently shadow a built-in means a typo cannot quietly change
 template behavior.
 
+Registration is **register-once**, matching the Go standard library's global
+registries (for example `sql.Register`): re-registering an already-present name
+-- even with the identical function -- is a collision. Register a given set of
+functions a single time. The root command guards its own wiring (see below), so
+executing the command more than once in a long-running host does not
+re-register or self-collide. Values are also validated up front (a nil value, a
+non-function, or a function whose return signature `text/template` rejects fails
+fast rather than panicking later at template construction).
+
 `RegisterFuncsOverride` is the escape hatch: it unconditionally replaces an
 existing function (including a built-in). Use it only when shadowing is
 intentional.
@@ -74,7 +83,9 @@ When an embedder supplies `RootOptions.GoTemplateFuncs`, a collision is treated
 as an embedder build bug: the root command reports the error and exits via the
 writer's exit path rather than dropping the function and continuing. This keeps
 the failure obvious at startup instead of surfacing as a confusing "function not
-defined" template error later.
+defined" template error later. The wiring registers exactly once per
+`RootOptions`, so a command executed more than once (a REPL or long-running
+host) does not re-register the process-global functions and self-collide.
 
 ## Discoverability
 
@@ -85,7 +96,10 @@ Registered functions are tagged with `Source: "embedder"`
 - MCP: `list_go_template_functions` with `embedder_only: true`
 
 The default (unfiltered) views also include embedder functions alongside the
-sprig (`source: sprig`) and custom (`source: custom`) built-ins.
+sprig (`source: sprig`) and custom (`source: custom`) built-ins. When an
+embedder shadows a built-in via `RegisterFuncsOverride`, the combined listing is
+de-duplicated by name (`gotmpl.CombinedFuncs`) so only the effective embedder
+function is shown, keeping discovery aligned with what actually runs.
 
 ## Related
 

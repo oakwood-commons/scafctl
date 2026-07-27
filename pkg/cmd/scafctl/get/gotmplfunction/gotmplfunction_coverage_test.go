@@ -149,6 +149,33 @@ func TestGetFunctions_DefaultAppendsEmbedder(t *testing.T) {
 	assert.Contains(t, names, "emb1")
 }
 
+func TestGetFunctions_DefaultDedupesEmbedderOverride(t *testing.T) {
+	t.Parallel()
+
+	opts := &Options{
+		allFn: func() gotmpl.ExtFunctionList {
+			return mockFunctionList() // testFunc (custom), sprigFunc (sprig)
+		},
+		embedderFn: func() gotmpl.ExtFunctionList {
+			// Shadows the built-in "sprigFunc".
+			return gotmpl.ExtFunctionList{{Name: "sprigFunc", Source: gotmpl.SourceEmbedder}}
+		},
+	}
+
+	result := opts.getFunctions()
+
+	count := 0
+	var source string
+	for _, fn := range result {
+		if fn.Name == "sprigFunc" {
+			count++
+			source = fn.Source
+		}
+	}
+	assert.Equal(t, 1, count, "shadowed built-in must not be duplicated")
+	assert.Equal(t, gotmpl.SourceEmbedder, source, "embedder override must win")
+}
+
 func TestGetFunctions_DefaultsToAll_WhenNoInjected(t *testing.T) {
 	t.Parallel()
 

@@ -228,7 +228,7 @@ func (s *Server) handleListGoTemplateFunctions(_ context.Context, request mcp.Ca
 	case embedderOnly:
 		functions = gotmpl.RegisteredFuncs()
 	default:
-		functions = append(gotmplext.All(), gotmpl.RegisteredFuncs()...)
+		functions = gotmpl.CombinedFuncs(gotmplext.All(), gotmpl.RegisteredFuncs())
 	}
 
 	return filterAndReturnNamedFunctions(

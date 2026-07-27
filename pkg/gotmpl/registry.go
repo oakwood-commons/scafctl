@@ -50,11 +50,12 @@ var (
 // gotmpl consumer, and appear in list_go_template_functions and
 // `get template functions`.
 //
-// Re-registering an identical function under the same name is an idempotent
-// no-op rather than a collision. This lets an embedder that reconstructs the
-// root command in a long-running process (or a test that executes it more than
-// once) pass the same func map repeatedly without hitting a self-collision;
-// only a name bound to a *different* function is rejected.
+// Like the Go standard library's global registries (for example sql.Register),
+// this is register-once: re-registering a name that is already present -- even
+// with an identical function -- is rejected as a collision. Callers that run in
+// a long-running process should register their functions a single time rather
+// than on every command execution (the root command guards its own wiring so a
+// command executed more than once does not self-collide).
 //
 // Each value is validated up front: a nil value, a non-function, or a function
 // whose return signature text/template would reject is rejected here with a
@@ -84,12 +85,7 @@ func RegisterFuncs(funcs template.FuncMap) error {
 		if _, ok := builtins[name]; ok {
 			return fmt.Errorf("register template func %q: %w (built-in)", name, ErrFuncNameCollision)
 		}
-		if existing, ok := registeredFuncs[name]; ok {
-			// Idempotent re-registration of the identical function is allowed;
-			// a different function under the same name is a genuine collision.
-			if sameFunc(existing, funcs[name]) {
-				continue
-			}
+		if _, ok := registeredFuncs[name]; ok {
 			return fmt.Errorf("register template func %q: %w", name, ErrFuncNameCollision)
 		}
 		if _, ok := overrideFuncs[name]; ok {
@@ -235,18 +231,31 @@ func sortedFuncNames(funcs template.FuncMap) []string {
 	return names
 }
 
-// sameFunc reports whether two registered function values refer to the same
-// underlying function. It compares code pointers via reflection, which lets an
-// idempotent re-registration (the same func passed again) be distinguished from
-// a genuine collision (a different func under an already-used name). Non-func or
-// nil values are treated as not-equal so they fall through to the collision
-// path rather than panicking.
-func sameFunc(a, b any) bool {
-	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
-	if va.Kind() != reflect.Func || vb.Kind() != reflect.Func {
-		return false
+// CombinedFuncs merges a built-in function list with embedder-registered
+// functions into a single list de-duplicated by name. Embedder entries win on a
+// name collision, so when an embedder shadows a built-in via
+// RegisterFuncsOverride the listing shows only the effective (override)
+// function rather than also showing the shadowed built-in. This keeps
+// discoverability output (MCP list_go_template_functions and the CLI
+// `get template functions` command) aligned with the function that actually
+// runs. Order is preserved: surviving built-ins first, then the registered
+// functions.
+func CombinedFuncs(builtins, registered ExtFunctionList) ExtFunctionList {
+	if len(registered) == 0 {
+		return builtins
 	}
-	return va.Pointer() == vb.Pointer()
+	shadowed := make(map[string]struct{}, len(registered))
+	for _, f := range registered {
+		shadowed[f.Name] = struct{}{}
+	}
+	out := make(ExtFunctionList, 0, len(builtins)+len(registered))
+	for _, f := range builtins {
+		if _, ok := shadowed[f.Name]; ok {
+			continue
+		}
+		out = append(out, f)
+	}
+	return append(out, registered...)
 }
 
 // resetRegistryForTesting clears both embedder registries. Tests only.
