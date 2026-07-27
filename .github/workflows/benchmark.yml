@@ -182,6 +182,7 @@ jobs:
     needs: [gate, benchmark]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       issues: write
     env:
       BENCH_COUNT: 6
