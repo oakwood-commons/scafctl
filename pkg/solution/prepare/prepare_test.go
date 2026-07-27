@@ -1141,6 +1141,13 @@ func TestHostStaticProviderConfig(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "", solMap["name"])
 
+	// Tags is documented as string[] and must serialize as an array (not null),
+	// even in pool mode where the solution is empty, so consumers can rely on
+	// the shape.
+	tags, ok := solMap["tags"].([]any)
+	require.True(t, ok, "tags must be a JSON array, got %T", solMap["tags"])
+	assert.Empty(t, tags)
+
 	// Host-static build fields are present (keys always serialized).
 	assert.Contains(t, meta, "buildVersion")
 	assert.Contains(t, meta, "command")

@@ -1278,13 +1278,18 @@ func buildHostMetadataSettings(entrypoint string, sol *solution.Solution) (json.
 		Source      string   `json:"source,omitempty"`
 	}
 
-	solMeta := solutionMeta{}
+	// Tags is documented as string[], so default to an empty slice; a nil
+	// slice marshals to JSON null, which breaks consumers expecting an array
+	// (this happens in pool mode and whenever the solution has no tags).
+	solMeta := solutionMeta{Tags: []string{}}
 	if sol != nil && sol.Metadata.Name != "" {
 		solMeta.Name = sol.Metadata.Name
 		solMeta.DisplayName = sol.Metadata.DisplayName
 		solMeta.Description = sol.Metadata.Description
 		solMeta.Category = sol.Metadata.Category
-		solMeta.Tags = sol.Metadata.Tags
+		if sol.Metadata.Tags != nil {
+			solMeta.Tags = sol.Metadata.Tags
+		}
 		solMeta.Source = sol.Metadata.Source
 		if sol.Metadata.Version != nil {
 			solMeta.Version = sol.Metadata.Version.String()
