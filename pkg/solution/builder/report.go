@@ -207,7 +207,7 @@ func NewPackageReport(in PackageReportInput) *PackageReport {
 		report.Bundle = newBundleReport(in.Build.Discovery, in.Solution)
 	}
 
-	if in.Verify != nil {
+	if in.Verify != nil && !in.DryRun {
 		report.Verification = newVerificationReport(in.Verify)
 	}
 

@@ -289,8 +289,10 @@ func runPackageSolution(ctx context.Context, opts *SolutionOptions) error {
 
 	// When emitting a machine-readable report on stdout, route all human
 	// progress output to stderr so stdout carries only the report document.
+	// Clone the existing writer so root-level options (e.g. RootOptions.ExitFunc
+	// via writer.WithExitFunc) are preserved rather than discarded.
 	if opts.Output != "" {
-		w = writer.New(opts.IOStreams, opts.CliParams, writer.WithHumanToStderr())
+		w = w.Clone(writer.WithHumanToStderr())
 		ctx = writer.WithWriter(ctx, w)
 	}
 

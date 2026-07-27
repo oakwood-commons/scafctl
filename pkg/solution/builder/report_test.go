@@ -115,6 +115,26 @@ func TestNewPackageReport_DryRunOmitsStoreFields(t *testing.T) {
 	assert.Nil(t, report.Solution, "solution not embedded unless requested")
 }
 
+func TestNewPackageReport_DryRunOmitsVerification(t *testing.T) {
+	sol := newTestSolution()
+	build := &BuildResult{
+		Discovery: &bundler.DiscoveryResult{},
+	}
+	vr := &bundler.VerifyResult{Warnings: []string{"dynamic path detected"}}
+
+	report := NewPackageReport(PackageReportInput{
+		Name:     "my-solution",
+		Version:  "1.2.3",
+		Solution: sol,
+		Build:    build,
+		Verify:   vr,
+		DryRun:   true,
+	})
+
+	assert.True(t, report.DryRun)
+	assert.Nil(t, report.Verification, "verification is not applicable for dry-run builds")
+}
+
 func TestNewPackageReport_CacheHitUsesCacheEntry(t *testing.T) {
 	sol := newTestSolution()
 	build := &BuildResult{

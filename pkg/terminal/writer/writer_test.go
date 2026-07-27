@@ -527,3 +527,36 @@ func TestWithHumanToStderr(t *testing.T) {
 		assert.Empty(t, errBuf.String())
 	})
 }
+
+func TestClone(t *testing.T) {
+	t.Run("preserves exit func while applying new options", func(t *testing.T) {
+		var exitCode int
+		base, outBuf, errBuf := newTestWriter(WithExitFunc(func(code int) {
+			exitCode = code
+		}))
+		base.cliParams.NoColor = true
+
+		clone := base.Clone(WithHumanToStderr())
+
+		// The clone keeps the exit function from the base writer.
+		clone.ErrorWithCode(7, "boom")
+		assert.Equal(t, 7, exitCode)
+		assert.Contains(t, errBuf.String(), "boom")
+
+		// The clone applies the new option: human output goes to stderr.
+		clone.Success("done")
+		assert.Empty(t, outBuf.String(), "cloned writer must keep stdout clean")
+		assert.Contains(t, errBuf.String(), "done")
+	})
+
+	t.Run("does not mutate the original writer", func(t *testing.T) {
+		base, outBuf, _ := newTestWriter()
+		base.cliParams.NoColor = true
+
+		_ = base.Clone(WithHumanToStderr())
+
+		// The original still routes human output to stdout.
+		base.Success("original")
+		assert.Contains(t, outBuf.String(), "original")
+	})
+}

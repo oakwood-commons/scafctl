@@ -53,6 +53,18 @@ func New(ioStreams *terminal.IOStreams, cliParams *settings.Run, opts ...Option)
 	return w
 }
 
+// Clone returns a copy of the writer with the given options applied on top of
+// its existing configuration. Unlike New, it preserves the current fields
+// (streams, CLI params, exit function, human routing) so a derived writer does
+// not silently drop root-level options such as WithExitFunc.
+func (w *Writer) Clone(opts ...Option) *Writer {
+	clone := *w
+	for _, opt := range opts {
+		opt(&clone)
+	}
+	return &clone
+}
+
 // Success writes a success message to stdout (or stderr when WithHumanToStderr is set).
 // Respects --quiet and --no-color flags.
 func (w *Writer) Success(msg string) {
