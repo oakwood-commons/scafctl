@@ -109,6 +109,23 @@ Examples:
 // explainColumnOrder controls field display order in KVX visual output.
 var explainColumnOrder = []string{"rule", "severity", "category", "description", "why", "fix", "examples"}
 
+// nonInteractiveOutputOptions builds the OutputOptions used for the
+// structured (JSON/YAML/CSV/TOML) and non-interactive visual (auto/table/list)
+// formats. It must use WithOutputSchemaJSON (column display hints), not
+// WithOutputDisplaySchemaJSON (interactive TUI x-kvx-* extensions) -- the
+// latter is reserved for the separate interactive branch in Run, which builds
+// its own OutputOptions using lintRulesSchemaJSON. See issue #672.
+func (o *RuleOptions) nonInteractiveOutputOptions(ctx context.Context) *kvx.OutputOptions {
+	return flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.BinaryName+" lint rule"),
+		kvx.WithOutputSchemaJSON(lintExplainSchemaJSON),
+		kvx.WithOutputColumnOrder(explainColumnOrder),
+	)
+}
+
 // Run executes the lint rule command.
 func (o *RuleOptions) Run(ctx context.Context, ruleName string) error {
 	if o.BinaryName == "" {
@@ -127,14 +144,7 @@ func (o *RuleOptions) Run(ctx context.Context, ruleName string) error {
 		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
-	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
-		kvx.WithIOStreams(o.IOStreams),
-		kvx.WithOutputContext(ctx),
-		kvx.WithOutputNoColor(o.CliParams.NoColor),
-		kvx.WithOutputAppName(o.BinaryName+" lint rule"),
-		kvx.WithOutputDisplaySchemaJSON(lintExplainSchemaJSON),
-		kvx.WithOutputColumnOrder(explainColumnOrder),
-	)
+	outputOpts := o.nonInteractiveOutputOptions(ctx)
 
 	// For structured formats (JSON/YAML/CSV/TOML), emit the full RuleMeta.
 	if kvx.IsStructuredFormat(outputOpts.Format) {
