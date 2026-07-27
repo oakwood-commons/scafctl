@@ -24,6 +24,9 @@ on:
   issue_comment:
     types: [created]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.issue.number }}
   cancel-in-progress: true
@@ -161,8 +164,11 @@ jobs:
         run: |
           set +e
           RESULT=$(benchstat base-bench.txt pr-bench.txt 2>&1)
+          # Only truly empty output should suppress the report -- a "no data"
+          # substring can appear inside an otherwise-useful comparison (e.g.
+          # mixed results), so don't treat that as empty.
           EMPTY=false
-          if [ -z "$RESULT" ] || echo "$RESULT" | grep -q 'no data'; then
+          if [ -z "$RESULT" ]; then
             EMPTY=true
           fi
           echo "empty=$EMPTY" >> "$GITHUB_OUTPUT"
@@ -260,7 +266,9 @@ jobs:
               issue_number: context.payload.issue.number,
             });
 
-            const existing = comments.find(c => c.body.includes(marker));
+            // Only ever update a comment this workflow itself created --
+            // never a user comment that happens to contain the marker text.
+            const existing = comments.find(c => c.body.includes(marker) && c.user.login === 'github-actions[bot]');
 
             if (existing) {
               await github.rest.issues.updateComment({
@@ -292,7 +300,9 @@ jobs:
               issue_number: context.payload.issue.number,
             });
 
-            const existing = comments.find(c => c.body.includes(marker));
+            // Only ever update a comment this workflow itself created --
+            // never a user comment that happens to contain the marker text.
+            const existing = comments.find(c => c.body.includes(marker) && c.user.login === 'github-actions[bot]');
 
             if (existing) {
               await github.rest.issues.updateComment({
