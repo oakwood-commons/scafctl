@@ -54,8 +54,9 @@ outdated, or already handled. Work through this gate before writing a blueprint.
 ### 3. Find the BEST solution, not the easy one
 
 - **Breaking changes are allowed** -- scafctl is pre-production and does not keep
-  backward compatibility (see copilot-instructions). Do not contort the design to
-  avoid a break; choose the correct model and note the break explicitly.
+  backward compatibility (see `.github/copilot-instructions.md`). Do not contort
+  the design to avoid a break; choose the correct model and note the break
+  explicitly.
 - Prefer the solution that is correct, maintainable, and consistent over the one
   that is fastest to land. Call out any easy-but-inferior option you rejected and
   why.
