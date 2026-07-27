@@ -26,15 +26,15 @@ import (
 func TestCachedTokenInfoToMap_ClusterLabel(t *testing.T) {
 	t.Parallel()
 
-	aliases := map[string]string{"pd1020": "https://api.pd1020.example.com:6443"}
+	aliases := map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"}
 
 	// Hostname matches an alias -> short selector.
 	aliased := cachedTokenInfoToMap(&auth.CachedTokenInfo{
 		Handler:   "openshift",
 		TokenKind: "access",
-		Hostname:  "https://api.pd1020.example.com:6443",
+		Hostname:  "https://api.cluster-a.example.com:6443",
 	}, "scafctl", aliases)
-	assert.Equal(t, "pd1020", aliased["cluster"])
+	assert.Equal(t, "cluster-a", aliased["cluster"])
 
 	// Hostname without an alias -> trimmed host.
 	unaliased := cachedTokenInfoToMap(&auth.CachedTokenInfo{

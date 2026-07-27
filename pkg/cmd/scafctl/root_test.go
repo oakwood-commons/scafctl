@@ -233,16 +233,16 @@ func TestRoot_CustomBinaryNameUpdatesSolutionDiscovery(t *testing.T) {
 	})
 
 	cmd, _ := Root(&RootOptions{
-		BinaryName: "cldctl",
+		BinaryName: "mycli",
 	})
 	require.NotNil(t, cmd)
-	if cmd.Use != "cldctl" {
-		t.Errorf("Root().Use = %q, want %q", cmd.Use, "cldctl")
+	if cmd.Use != "mycli" {
+		t.Errorf("Root().Use = %q, want %q", cmd.Use, "mycli")
 	}
 	// Verify package-level solution discovery vars were updated
-	expectedFolders := settings.SolutionFoldersFor("cldctl")
+	expectedFolders := settings.SolutionFoldersFor("mycli")
 	assert.Equal(t, expectedFolders, settings.GetRootSolutionFolders())
-	expectedNames := settings.SolutionFileNamesFor("cldctl")
+	expectedNames := settings.SolutionFileNamesFor("mycli")
 	assert.Equal(t, expectedNames, settings.GetSolutionFileNames())
 }
 

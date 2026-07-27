@@ -22,7 +22,7 @@ import (
 )
 
 // TestAuthHandlerNameSet_EmbedderBinaryName is an embedder-scenario test: a
-// non-default binary name ("cldctl") must scope the installed-plugin scan to the
+// non-default binary name ("mycli") must scope the installed-plugin scan to the
 // embedder's own plugin cache (so 'auth handlers', completions, and root
 // enumeration surface it), and installed handlers must not leak across binary
 // names.
@@ -31,7 +31,7 @@ func TestAuthHandlerNameSet_EmbedderBinaryName(t *testing.T) {
 
 	// The package TestMain isolates xdg.CacheHome, so seeding under the embedder's
 	// binary-name subdir is hermetic. Layout: <cacheDir>/<key>/<ver>/<plat>/<key>.
-	const embedder = "cldctl"
+	const embedder = "mycli"
 	cacheDir := settings.PluginCacheDirFor(embedder)
 	platformDir := runtime.GOOS + "-" + runtime.GOARCH
 	pluginDir := filepath.Join(cacheDir, "auth-handler-openshift", "0.1.0", platformDir)
@@ -39,7 +39,7 @@ func TestAuthHandlerNameSet_EmbedderBinaryName(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(pluginDir, "auth-handler-openshift"), []byte("binary"), 0o600))
 
 	// The embedder's binary name comes from the Run settings in context, exactly
-	// as the root command wires it for embedders like cldctl.
+	// as the root command wires it for embedders like mycli.
 	embedderCtx := settings.IntoContext(context.Background(), &settings.Run{BinaryName: embedder})
 	assert.Contains(t, authHandlerNameSet(embedderCtx), "openshift",
 		"installed third-party plugin under the embedder's cache must surface")

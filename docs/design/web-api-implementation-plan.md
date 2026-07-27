@@ -4,7 +4,7 @@
 
 Add a [Huma](https://github.com/danielgtaylor/huma)+[chi](https://github.com/go-chi/chi)-based REST API to scafctl, started via a new `scafctl serve` command. The API mirrors all major CLI features (run, render, lint, eval, catalog, solutions, providers, config, etc.) with Entra OIDC authentication, Prometheus metrics, OpenTelemetry tracing, audit logging, CEL-based filtering, and admin endpoints.
 
-Architecture follows the [jqapi](https://github.com/ford-cloud/jqapi) reference implementation: chi router → layered middleware → Huma endpoint registration → handler context with dependency injection. All operations are synchronous request-response initially, with an async task model planned as future work.
+Architecture follows the [jqapi](https://github.com/example-org/jqapi) reference implementation: chi router → layered middleware → Huma endpoint registration → handler context with dependency injection. All operations are synchronous request-response initially, with an async task model planned as future work.
 
 ---
 

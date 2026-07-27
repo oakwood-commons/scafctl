@@ -316,7 +316,7 @@ func (m *mockCacher) Put(_, _, _, _ string, _, _ []byte) error {
 
 // TestSolutionResolver_EmbedderCatalog verifies the full catalog resolution
 // round-trip when the catalog lives at a non-default path (simulating an
-// embedder like "cldctl" that sets paths.SetAppName("cldctl")).
+// embedder like "mycli" that sets paths.SetAppName("mycli")).
 //
 // This catches regressions where catalog resolution depends on hardcoded
 // "scafctl" paths or tag formats.

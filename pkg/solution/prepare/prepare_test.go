@@ -521,14 +521,14 @@ func TestLoadSolutionWithBundle_InvalidStdin(t *testing.T) {
 func TestNewDefaultGetter_UsesContextBinaryName(t *testing.T) {
 	// Not parallel: os.Chdir is process-wide and would race with other tests.
 
-	// Create a temp directory with cldctl/solution.yaml
+	// Create a temp directory with mycli/solution.yaml
 	tmpDir := t.TempDir()
-	cldctlDir := filepath.Join(tmpDir, "cldctl")
-	require.NoError(t, os.MkdirAll(cldctlDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(cldctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
+	mycliDir := filepath.Join(tmpDir, "mycli")
+	require.NoError(t, os.MkdirAll(mycliDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(mycliDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
 
 	// Create a context with a custom binary name
-	run := &settings.Run{BinaryName: "cldctl"}
+	run := &settings.Run{BinaryName: "mycli"}
 	ctx := settings.IntoContext(context.Background(), run)
 	lgr := logr.Discard()
 	ctx = logger.WithLogger(ctx, &lgr)
@@ -536,14 +536,14 @@ func TestNewDefaultGetter_UsesContextBinaryName(t *testing.T) {
 	getter := NewDefaultGetter(ctx, false)
 	require.NotNil(t, getter, "getter should be created from context with custom binary name")
 
-	// chdir to tmpDir so FindSolution can discover cldctl/solution.yaml
+	// chdir to tmpDir so FindSolution can discover mycli/solution.yaml
 	origDir, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(tmpDir))
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
 	found := getter.FindSolution()
-	assert.Equal(t, filepath.ToSlash(filepath.Join("cldctl", "solution.yaml")), found)
+	assert.Equal(t, filepath.ToSlash(filepath.Join("mycli", "solution.yaml")), found)
 }
 
 func TestNewDefaultGetter_DefaultBinaryName(t *testing.T) {
@@ -574,13 +574,13 @@ func TestNewDefaultGetter_DefaultBinaryName(t *testing.T) {
 func TestNewDefaultGetter_CustomBinaryDoesNotFindDefault(t *testing.T) {
 	// Not parallel: os.Chdir is process-wide and would race with other tests.
 
-	// Create a temp directory with only scafctl/solution.yaml (no cldctl/)
+	// Create a temp directory with only scafctl/solution.yaml (no mycli/)
 	tmpDir := t.TempDir()
 	scafctlDir := filepath.Join(tmpDir, settings.CliBinaryName)
 	require.NoError(t, os.MkdirAll(scafctlDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(scafctlDir, "solution.yaml"), []byte("name: test\nversion: 1.0.0\n"), 0o644))
 
-	run := &settings.Run{BinaryName: "cldctl"}
+	run := &settings.Run{BinaryName: "mycli"}
 	ctx := settings.IntoContext(context.Background(), run)
 	lgr := logr.Discard()
 	ctx = logger.WithLogger(ctx, &lgr)
@@ -593,7 +593,7 @@ func TestNewDefaultGetter_CustomBinaryDoesNotFindDefault(t *testing.T) {
 	require.NoError(t, os.Chdir(tmpDir))
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 
-	// Should NOT find scafctl/solution.yaml when binary name is "cldctl"
+	// Should NOT find scafctl/solution.yaml when binary name is "mycli"
 	found := getter.FindSolution()
 	assert.Empty(t, found, "custom binary name getter should not discover default binary's solution folder")
 }

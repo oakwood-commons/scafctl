@@ -2347,7 +2347,7 @@ func TestResolverOptions_Run_CatalogFallbackAfterAutoDiscoveryFailure(t *testing
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		Names: []string{"ford-proxy"},
+		Names: []string{"my-proxy"},
 	}
 
 	lgr := logger.Get(0)
@@ -2362,7 +2362,7 @@ func TestResolverOptions_Run_CatalogFallbackAfterAutoDiscoveryFailure(t *testing
 	// The run will fail (no catalog configured), but we should see the
 	// fallback path was taken: File should be set to the catalog ref.
 	assert.Error(t, err)
-	assert.Equal(t, "ford-proxy", opts.File, "fallback should set File to catalog ref after auto-discovery load failure")
+	assert.Equal(t, "my-proxy", opts.File, "fallback should set File to catalog ref after auto-discovery load failure")
 	assert.Empty(t, opts.Names, "fallback should consume the positional arg")
 }
 
@@ -3189,7 +3189,7 @@ func TestResolverOptions_Run_CatalogFallbackNotFiredForMalformedSolution(t *test
 			PhaseTimeout:    5 * time.Minute,
 			registry:        testRegistry(),
 		},
-		Names: []string{"ford-proxy"},
+		Names: []string{"my-proxy"},
 	}
 
 	lgr := logger.Get(0)
@@ -3204,7 +3204,7 @@ func TestResolverOptions_Run_CatalogFallbackNotFiredForMalformedSolution(t *test
 	assert.Error(t, err)
 	// Should get the validation error, NOT a catalog lookup error.
 	// The fallback should NOT have consumed the first name as a catalog ref.
-	assert.NotEqual(t, "ford-proxy", opts.File, "fallback should NOT fire for a malformed solution.yaml")
+	assert.NotEqual(t, "my-proxy", opts.File, "fallback should NOT fire for a malformed solution.yaml")
 }
 
 func TestResolverOptions_renderValidationDiagnostics_NilCliParamsNoPanic(t *testing.T) {

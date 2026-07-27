@@ -134,7 +134,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
-- *(solution)* Add cldctl get solution command (#1)
+- *(solution)* Add mycli get solution command (#1)
 - *(cel)* Start cel implementation (#2)
 - *(cel)* Implement custom CEL extension functions (#3)
 - *(gotmpl)* Implement Go templating service with customizable options (#5)

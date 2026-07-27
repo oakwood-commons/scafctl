@@ -85,7 +85,7 @@ func TestCommandLogout_MultiClusterCachedSessions(t *testing.T) {
 	mock.CapabilitiesValue = []auth.Capability{auth.CapInstanceHostname}
 	mock.SetNotAuthenticated() // hostname-less base instance reports unauthenticated
 	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
-		{Handler: "openshift", Hostname: "https://api.pd1020.example.com:6443"},
+		{Handler: "openshift", Hostname: "https://api.cluster-a.example.com:6443"},
 	}
 
 	ctx = withTestHandler(ctx, mock)
@@ -115,7 +115,7 @@ func TestCommandLogout_BaseStatusErrorWithCachedSessions(t *testing.T) {
 	mock.CapabilitiesValue = []auth.Capability{auth.CapInstanceHostname}
 	mock.StatusErr = errors.New("no api server configured")
 	mock.ListCachedTokensResult = []*auth.CachedTokenInfo{
-		{Handler: "openshift", Hostname: "https://api.pd1020.example.com:6443"},
+		{Handler: "openshift", Hostname: "https://api.cluster-a.example.com:6443"},
 	}
 
 	ctx = withTestHandler(ctx, mock)

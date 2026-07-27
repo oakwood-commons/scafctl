@@ -144,7 +144,7 @@ With either configured, all of these work:
 
 ```bash
 scafctl kube login lab                      # static alias
-scafctl kube login pd1020                    # from inventory
+scafctl kube login cluster-a                    # from inventory
 scafctl kube login https://api.x:6443 --handler oidc   # direct URL, no config
 ```
 

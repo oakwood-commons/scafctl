@@ -122,7 +122,7 @@ entries just have empty handler/profile fields.
 When bridging overwrites a credential with a different username, warn:
 
 ~~~
-WARNING: Replacing ghcr.io credentials (was: abaker9_ford, now: abaker-9)
+WARNING: Replacing ghcr.io credentials (was: alice-work, now: alice)
 ~~~
 
 #### 1c. Improve `auth status` display
@@ -135,8 +135,8 @@ Auth Handlers
 +-------------------------------------------------------------------+
 | Handler  Profile            Status          User             ... |
 |-------------------------------------------------------------------|
-| entra    built-in (active)  authenticated   abaker9@ford.com ... |
-| github   work (active)      authenticated   abaker9@ford.com ... |
+| entra    built-in (active)  authenticated   alice@example.com ... |
+| github   work (active)      authenticated   alice@example.com ... |
 | gcp      built-in (active)  authenticated   gcloud ADC       ... |
 +-------------------------------------------------------------------+
 
@@ -144,7 +144,7 @@ Registry Credentials
 +----------------------------------------------------------+
 | Registry          User              Source               |
 |----------------------------------------------------------|
-| ghcr.io           abaker9_ford      github / work        |
+| ghcr.io           alice-work      github / work        |
 | us-docker.pkg.dev oauth2accesstoken gcp / built-in       |
 +----------------------------------------------------------+
 ~~~
@@ -160,8 +160,8 @@ distinguish its type.
 Consolidated success line with profile:
 
 ~~~
-OK: Logged in to GitHub as abaker-9 [profile: personal]
--> Registry credentials stored for ghcr.io (user: abaker-9, via github handler)
+OK: Logged in to GitHub as alice [profile: personal]
+-> Registry credentials stored for ghcr.io (user: alice, via github handler)
 ~~~
 
 #### 1e. Inject profile into catalog operations

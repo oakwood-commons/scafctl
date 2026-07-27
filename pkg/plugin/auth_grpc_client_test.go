@@ -233,12 +233,12 @@ func TestAuthHandlerGRPCClient_Login_ForwardsHostname(t *testing.T) {
 	client := &AuthHandlerGRPCClient{client: mock}
 
 	_, err := client.Login(context.Background(), "openshift", LoginRequest{
-		Hostname: "pd1020",
+		Hostname: "cluster-a",
 		Flow:     auth.FlowServicePrincipal,
 	}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, gotReq)
-	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname must be mapped onto the proto LoginRequest")
+	assert.Equal(t, "cluster-a", gotReq.Hostname, "hostname must be mapped onto the proto LoginRequest")
 }
 
 func TestAuthHandlerGRPCClient_Login_ForwardsCallbackPort(t *testing.T) {

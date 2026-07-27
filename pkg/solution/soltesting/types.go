@@ -450,10 +450,10 @@ type TestCase struct {
 	// the directory structure so that repo-root-relative paths in resolvers
 	// resolve correctly.
 	//
-	// Example: if baseDir is "cldctl" and the solution references
-	// "./cldctl/output/data.json", the sandbox places the file at
-	// sandbox/cldctl/output/data.json and the solution at
-	// sandbox/cldctl/solution.yaml.
+	// Example: if baseDir is "mycli" and the solution references
+	// "./mycli/output/data.json", the sandbox places the file at
+	// sandbox/mycli/output/data.json and the solution at
+	// sandbox/mycli/solution.yaml.
 	BaseDir string `json:"baseDir,omitempty" yaml:"baseDir,omitempty" doc:"Subdirectory within sandbox for nesting solution files" maxLength:"500"`
 
 	// Inputs maps parameter names to values. Each entry is translated to a

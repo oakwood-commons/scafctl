@@ -638,24 +638,24 @@ func TestFindSolution(t *testing.T) {
 		getter := NewGetter(
 			WithStatFunc(customStatFunc),
 			WithSolutionDiscovery(
-				settings.SolutionFoldersFor("cldctl"),
-				settings.SolutionFileNamesFor("cldctl"),
+				settings.SolutionFoldersFor("mycli"),
+				settings.SolutionFileNamesFor("mycli"),
 			),
 		)
 		_ = getter.FindSolution()
 
-		// Should check cldctl/solution.yaml, not scafctl/solution.yaml
-		foundCldctl := false
+		// Should check mycli/solution.yaml, not scafctl/solution.yaml
+		foundMycli := false
 		foundScafctl := false
 		for _, p := range checkedPaths {
-			if p == "cldctl/solution.yaml" {
-				foundCldctl = true
+			if p == "mycli/solution.yaml" {
+				foundMycli = true
 			}
 			if p == "scafctl/solution.yaml" {
 				foundScafctl = true
 			}
 		}
-		assert.True(t, foundCldctl, "Should check for cldctl/solution.yaml")
+		assert.True(t, foundMycli, "Should check for mycli/solution.yaml")
 		assert.False(t, foundScafctl, "Should NOT check for scafctl/solution.yaml")
 	})
 }
@@ -1996,12 +1996,12 @@ func TestFindSolution_DiscoveryMode(t *testing.T) {
 	})
 
 	t.Run("action mode prefers root actions.yaml over subfolder solution.yaml", func(t *testing.T) {
-		// Simulates: cldctl/solution.yaml exists, root actions.yaml exists.
+		// Simulates: mycli/solution.yaml exists, root actions.yaml exists.
 		// In action mode, root actions.yaml should be preferred even though
 		// subfolder solution.yaml is found first in folder-priority order.
 		existingFiles := map[string]bool{
-			"cldctl/solution.yaml": true,
-			"actions.yaml":         true,
+			"mycli/solution.yaml": true,
+			"actions.yaml":        true,
 		}
 		customStatFunc := func(path string) (os.FileInfo, error) {
 			if existingFiles[path] {
@@ -2014,8 +2014,8 @@ func TestFindSolution_DiscoveryMode(t *testing.T) {
 			WithStatFunc(customStatFunc),
 			WithDiscoveryMode(settings.DiscoveryModeAction),
 			WithSolutionDiscovery(
-				[]string{"cldctl", ".cldctl", ""},
-				settings.ActionFileNamesFor("cldctl"),
+				[]string{"mycli", ".mycli", ""},
+				settings.ActionFileNamesFor("mycli"),
 			),
 		)
 		path := getter.FindSolution()
@@ -2024,12 +2024,12 @@ func TestFindSolution_DiscoveryMode(t *testing.T) {
 		result := getter.LastDiscoveryResult()
 		assert.True(t, result.IsActionFile)
 		// The subfolder solution.yaml should be recorded as the alternate path.
-		assert.Equal(t, "cldctl/solution.yaml", result.AlternatePath)
+		assert.Equal(t, "mycli/solution.yaml", result.AlternatePath)
 	})
 
 	t.Run("action mode uses subfolder solution.yaml when no action file exists anywhere", func(t *testing.T) {
 		existingFiles := map[string]bool{
-			"cldctl/solution.yaml": true,
+			"mycli/solution.yaml": true,
 		}
 		customStatFunc := func(path string) (os.FileInfo, error) {
 			if existingFiles[path] {
@@ -2042,13 +2042,13 @@ func TestFindSolution_DiscoveryMode(t *testing.T) {
 			WithStatFunc(customStatFunc),
 			WithDiscoveryMode(settings.DiscoveryModeAction),
 			WithSolutionDiscovery(
-				[]string{"cldctl", ".cldctl", ""},
-				settings.ActionFileNamesFor("cldctl"),
+				[]string{"mycli", ".mycli", ""},
+				settings.ActionFileNamesFor("mycli"),
 			),
 		)
 		path := getter.FindSolution()
 
-		assert.Equal(t, "cldctl/solution.yaml", path)
+		assert.Equal(t, "mycli/solution.yaml", path)
 		result := getter.LastDiscoveryResult()
 		assert.False(t, result.IsActionFile)
 	})

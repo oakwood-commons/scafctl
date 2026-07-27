@@ -876,10 +876,10 @@ func TestAuthHandlerWrapper_Login_ForwardsHostname(t *testing.T) {
 
 	_, err := w.Login(context.Background(), auth.LoginOptions{
 		Flow:     auth.FlowServicePrincipal,
-		Hostname: "pd1020",
+		Hostname: "cluster-a",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname from LoginOptions must reach the plugin LoginRequest")
+	assert.Equal(t, "cluster-a", gotReq.Hostname, "hostname from LoginOptions must reach the plugin LoginRequest")
 }
 
 func TestAuthHandlerWrapper_Login_ForwardsCallbackPort(t *testing.T) {
@@ -951,11 +951,11 @@ func TestAuthHandlerGRPCServer_Login_ForwardsHostname(t *testing.T) {
 
 	err := server.Login(&proto.LoginRequest{
 		HandlerName: "openshift",
-		Hostname:    "pd1020",
+		Hostname:    "cluster-a",
 		Flow:        string(auth.FlowServicePrincipal),
 	}, stream)
 	require.NoError(t, err)
-	assert.Equal(t, "pd1020", gotReq.Hostname, "hostname from proto LoginRequest must reach the handler")
+	assert.Equal(t, "cluster-a", gotReq.Hostname, "hostname from proto LoginRequest must reach the handler")
 	require.NotEmpty(t, stream.messages, "server must send a result message")
 }
 

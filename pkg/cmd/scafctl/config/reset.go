@@ -123,7 +123,7 @@ func (o *ResetOptions) Run(ctx context.Context) error {
 	}
 
 	// Re-create from defaults. Use embedder defaults when available so
-	// that an embedding CLI (e.g. cldctl) resets to its own defaults
+	// that an embedding CLI (e.g. mycli) resets to its own defaults
 	// rather than scafctl's built-in defaults.
 	baseDefaults := appconfig.BaseDefaultsFromContext(ctx)
 	var ensureErr error

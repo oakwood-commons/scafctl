@@ -4,7 +4,7 @@ title: "Embedder Guide: Catalog Default Configuration"
 
 # Embedder Guide: Catalog Default Configuration
 
-This document explains how embedders (e.g., cldctl) should consume scafctl's
+This document explains how embedders (e.g., mycli) should consume scafctl's
 catalog configuration system. It covers the reserved name enforcement model,
 how to add organization-specific catalogs, and how to migrate away from custom
 merge logic.
@@ -44,7 +44,7 @@ if config.IsReservedCatalogName("official") {
     // true -- this name is owned by scafctl defaults
 }
 
-if config.IsReservedCatalogName("ford-internal") {
+if config.IsReservedCatalogName("internal-catalog") {
     // false -- safe to use as an embedder catalog name
 }
 ~~~
@@ -75,13 +75,13 @@ config file, so users can still override non-reserved values.
 ~~~go
 baseConfig := []byte(`
 catalogs:
-  - name: ford-internal
+  - name: internal-catalog
     type: oci
-    url: oci://ghcr.io/ford-cloud/catalog
+    url: oci://ghcr.io/example-org/catalog
     authProvider: github
     discoveryStrategy: auto
 settings:
-  defaultCatalog: ford-internal
+  defaultCatalog: internal-catalog
 `)
 
 mgr := config.NewManager(configPath, config.WithBaseConfig(baseConfig))
@@ -97,7 +97,7 @@ Those entries will be overwritten by scafctl's defaults at load time.
 ### Step 3: Remove custom merge logic
 
 Embedders should **not** implement their own catalog merge functions. The
-`mergeCatalogs` function in cldctl's `pkg/config/defaults.go` should be
+`mergeCatalogs` function in mycli's `pkg/config/defaults.go` should be
 deleted. It is redundant and contains a bug that panics when catalog entries
 have nested map values:
 
@@ -117,7 +117,7 @@ The final configuration is built from these layers, last wins:
 | 1. Built-in defaults | `setDefaults()` | N/A (source of truth) |
 | 2. Embedder base config | `WithBaseConfig(data)` | Yes, after merge |
 | 3. User config file | `~/.config/scafctl/config.yaml` | Yes, after merge |
-| 4. Environment variables | `SCAFCTL_*` / `CLDCTL_*` | N/A (scalar only) |
+| 4. Environment variables | `SCAFCTL_*` / `MYCLI_*` | N/A (scalar only) |
 | 5. Reserved enforcement | `mergeDefaultCatalogEntries` | **Enforced** |
 
 Viper replaces arrays entirely when merging layers, so catalogs defined in
@@ -132,15 +132,15 @@ default entries after Viper's merge is complete.
 | `config.EnsureDefaults(path)` | Write/merge config file with defaults |
 | `config.NewManager(path, opts...)` | Create a config manager |
 | `config.WithBaseConfig(data)` | Inject embedder config layer |
-| `config.WithEnvPrefix(prefix)` | Override env var prefix (e.g., `CLDCTL`) |
+| `config.WithEnvPrefix(prefix)` | Override env var prefix (e.g., `MYCLI`) |
 | `config.IsReservedCatalogName(name)` | Check if a catalog name is reserved |
 | `config.DefaultsYAML()` | Get a copy of the embedded defaults |
 | `config.EmbeddedCatalogDefaults()` | Get parsed default catalog entries |
 
 ## Migration Checklist
 
-- [ ] Delete cldctl's `mergeCatalogs` function
+- [ ] Delete mycli's `mergeCatalogs` function
 - [ ] Replace file-level merge with `config.EnsureDefaults(configPath)`
-- [ ] Move cldctl-specific catalogs into a `WithBaseConfig` call
-- [ ] Verify no cldctl catalog uses a reserved name (`local`, `official`)
-- [ ] Run `cldctl catalog index push --dry-run` to confirm no panic
+- [ ] Move mycli-specific catalogs into a `WithBaseConfig` call
+- [ ] Verify no mycli catalog uses a reserved name (`local`, `official`)
+- [ ] Run `mycli catalog index push --dry-run` to confirm no panic

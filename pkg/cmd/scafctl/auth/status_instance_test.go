@@ -94,14 +94,14 @@ func TestExpandInstanceRows_TwoClusters(t *testing.T) {
 	h.ListCachedTokensResult = []*auth.CachedTokenInfo{
 		{
 			Handler:   "openshift",
-			Hostname:  "https://api.np0510.caas.ford.com:6443",
+			Hostname:  "https://api.cluster-b.example.com:6443",
 			Flow:      auth.FlowInteractive,
 			ExpiresAt: now.Add(time.Hour),
 			CachedAt:  now.Add(-2 * time.Hour),
 		},
 		{
 			Handler:   "openshift",
-			Hostname:  "https://api.pd1020.caas.ford.com:6443",
+			Hostname:  "https://api.cluster-a.example.com:6443",
 			Flow:      auth.FlowInteractive,
 			ExpiresAt: now.Add(30 * time.Minute),
 			CachedAt:  now, // most recent -> active
@@ -110,16 +110,16 @@ func TestExpandInstanceRows_TwoClusters(t *testing.T) {
 	status := &auth.Status{Authenticated: true}
 
 	ctx := instanceConfigCtx(t, "openshift", map[string]string{
-		"pd1020": "https://api.pd1020.caas.ford.com:6443",
+		"cluster-a": "https://api.cluster-a.example.com:6443",
 	})
 
 	rows := expandInstanceRows(ctx, "openshift", h, status, baseStatusRow("openshift"))
 	require.Len(t, rows, 2)
 
-	// Deterministic order: sorted by hostname; np0510 < pd1020. For the built-in
+	// Deterministic order: sorted by hostname; cluster-a < cluster-b. For the built-in
 	// profile the cluster alias/label alone is shown (no redundant "built-in /").
-	assert.Equal(t, "api.np0510.caas.ford.com", rows[0]["profile"], "unaliased host trimmed")
-	assert.Equal(t, "pd1020 (active)", rows[1]["profile"], "aliased host + active marker (most recent CachedAt)")
+	assert.Equal(t, "cluster-a (active)", rows[0]["profile"], "aliased host + active marker (most recent CachedAt)")
+	assert.Equal(t, "api.cluster-b.example.com", rows[1]["profile"], "unaliased host trimmed")
 
 	// Shared identity fills the user column on every row.
 	assert.Equal(t, "user@example.com", rows[0]["user"])
@@ -143,13 +143,13 @@ func TestExpandInstanceRows_DedupesTokensPerCluster(t *testing.T) {
 	h.ListCachedTokensResult = []*auth.CachedTokenInfo{
 		{
 			Handler:  "openshift",
-			Hostname: "https://api.pd1020.caas.ford.com:6443",
+			Hostname: "https://api.cluster-a.example.com:6443",
 			Flow:     auth.FlowInteractive, // user login (older)
 			CachedAt: now.Add(-time.Hour),
 		},
 		{
 			Handler:  "openshift",
-			Hostname: "https://api.pd1020.caas.ford.com:6443",
+			Hostname: "https://api.cluster-a.example.com:6443",
 			Flow:     auth.FlowServicePrincipal, // minted SA token (newer)
 			CachedAt: now,
 		},
@@ -160,7 +160,7 @@ func TestExpandInstanceRows_DedupesTokensPerCluster(t *testing.T) {
 	require.Len(t, rows, 1, "multiple tokens for one cluster must collapse to a single row")
 	// The user/login flow wins over the newer machine flow.
 	assert.Equal(t, string(auth.FlowInteractive), rows[0]["flow"])
-	assert.Equal(t, "api.pd1020.caas.ford.com (active)", rows[0]["profile"])
+	assert.Equal(t, "api.cluster-a.example.com (active)", rows[0]["profile"])
 }
 
 // TestExpandInstanceRows_NamedProfilePrefix asserts that a non-default (named)
@@ -175,7 +175,7 @@ func TestExpandInstanceRows_NamedProfilePrefix(t *testing.T) {
 	h.ListCachedTokensResult = []*auth.CachedTokenInfo{
 		{
 			Handler:  "openshift",
-			Hostname: "https://api.pd1020.caas.ford.com:6443",
+			Hostname: "https://api.cluster-a.example.com:6443",
 			Flow:     auth.FlowInteractive,
 			CachedAt: now,
 		},
@@ -186,7 +186,7 @@ func TestExpandInstanceRows_NamedProfilePrefix(t *testing.T) {
 	base["profile"] = "work" // a named profile is active
 	rows := expandInstanceRows(context.Background(), "openshift", h, status, base)
 	require.Len(t, rows, 1)
-	assert.Equal(t, "work / api.pd1020.caas.ford.com (active)", rows[0]["profile"])
+	assert.Equal(t, "work / api.cluster-a.example.com (active)", rows[0]["profile"])
 }
 
 func TestExpandInstanceRows_ExpiredCluster(t *testing.T) {
@@ -198,7 +198,7 @@ func TestExpandInstanceRows_ExpiredCluster(t *testing.T) {
 	h.ListCachedTokensResult = []*auth.CachedTokenInfo{
 		{
 			Handler:   "openshift",
-			Hostname:  "https://api.pd1020.caas.ford.com:6443",
+			Hostname:  "https://api.cluster-a.example.com:6443",
 			IsExpired: true,
 			CachedAt:  now,
 		},

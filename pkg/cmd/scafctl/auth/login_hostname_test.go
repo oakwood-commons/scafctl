@@ -167,18 +167,18 @@ func hostnameTokenFixture(t *testing.T, hn *config.HostnameConfig) (context.Cont
 // requesting the token, mirroring the login path.
 func TestCommandToken_HostnameAliasResolved(t *testing.T) {
 	ctx, mock := hostnameTokenFixture(t, &config.HostnameConfig{
-		Aliases: map[string]string{"pd1020": "https://api.pd1020.example.com:6443"},
+		Aliases: map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"},
 	})
 
 	buf := &bytes.Buffer{}
 	ioStreams := terminal.NewIOStreams(nil, buf, buf, false)
 	cmd := CommandToken(settings.NewCliParams(), ioStreams, "scafctl/auth")
 	cmd.SetContext(ctx)
-	cmd.SetArgs([]string{"openshift", "--server", "pd1020", "--raw"})
+	cmd.SetArgs([]string{"openshift", "--server", "cluster-a", "--raw"})
 
 	require.NoError(t, cmd.Execute())
 	require.Len(t, mock.GetTokenCalls, 1)
-	assert.Equal(t, "https://api.pd1020.example.com:6443", mock.GetTokenCalls[0].Hostname,
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", mock.GetTokenCalls[0].Hostname,
 		"a --server alias must be resolved to the concrete endpoint URL before GetToken")
 }
 
@@ -186,7 +186,7 @@ func TestCommandToken_HostnameAliasResolved(t *testing.T) {
 // --server URL is forwarded unchanged even when aliases exist.
 func TestCommandToken_HostnameConcreteURLPassthrough(t *testing.T) {
 	ctx, mock := hostnameTokenFixture(t, &config.HostnameConfig{
-		Aliases: map[string]string{"pd1020": "https://api.pd1020.example.com:6443"},
+		Aliases: map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"},
 	})
 
 	buf := &bytes.Buffer{}
@@ -204,7 +204,7 @@ func TestCommandToken_HostnameConcreteURLPassthrough(t *testing.T) {
 // selector fails with an invalid-input error and never calls the handler.
 func TestCommandToken_HostnameSelectorNotFound(t *testing.T) {
 	ctx, mock := hostnameTokenFixture(t, &config.HostnameConfig{
-		Aliases: map[string]string{"pd1020": "https://api.pd1020.example.com:6443"},
+		Aliases: map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"},
 	})
 
 	buf := &bytes.Buffer{}

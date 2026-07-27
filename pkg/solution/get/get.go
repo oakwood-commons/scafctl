@@ -870,7 +870,7 @@ func (o *Getter) FindSolution() string {
 	o.lastDiscovery = DiscoveryResult{Mode: o.discoveryMode}
 
 	// In action mode, if the first match is a non-action file (e.g.,
-	// cldctl/solution.yaml), remember it as a fallback and keep searching
+	// mycli/solution.yaml), remember it as a fallback and keep searching
 	// remaining folders for an actual action file (e.g., ./actions.yaml).
 	var fallbackPath string
 	var fallbackFilename string

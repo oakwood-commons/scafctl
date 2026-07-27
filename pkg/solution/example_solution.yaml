@@ -13,7 +13,7 @@ metadata:
     - infrastructure
   maintainers:
     - name: Aeron Baker
-      email: abaker9@company.com
+      email: alice@example.com
   links:
     - name: Documentation
       url: https://docs.example.com/gcp-basic

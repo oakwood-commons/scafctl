@@ -13,9 +13,9 @@ func TestAliasForURL(t *testing.T) {
 	t.Parallel()
 
 	aliases := map[string]string{
-		"pd1020": "https://api.pd1020.caas.ford.com:6443",
-		"np0510": "https://api.np0510.caas.ford.com:6443",
-		"legacy": "api.pd1020.caas.ford.com", // bare host, same as pd1020
+		"cluster-a": "https://api.cluster-a.example.com:6443",
+		"cluster-b": "https://api.cluster-b.example.com:6443",
+		"legacy":    "api.cluster-a.example.com", // bare host, same as cluster-a
 	}
 
 	tests := []struct {
@@ -28,22 +28,22 @@ func TestAliasForURL(t *testing.T) {
 		{
 			name:      "exact url match",
 			aliases:   aliases,
-			url:       "https://api.np0510.caas.ford.com:6443",
-			wantAlias: "np0510",
+			url:       "https://api.cluster-b.example.com:6443",
+			wantAlias: "cluster-b",
 			wantOK:    true,
 		},
 		{
 			name:      "match ignores scheme and port",
 			aliases:   aliases,
-			url:       "https://api.np0510.caas.ford.com",
-			wantAlias: "np0510",
+			url:       "https://api.cluster-b.example.com",
+			wantAlias: "cluster-b",
 			wantOK:    true,
 		},
 		{
 			name:      "ambiguous match returns lexicographically first",
 			aliases:   aliases,
-			url:       "https://api.pd1020.caas.ford.com:6443",
-			wantAlias: "legacy",
+			url:       "https://api.cluster-a.example.com:6443",
+			wantAlias: "cluster-a",
 			wantOK:    true,
 		},
 		{
@@ -56,7 +56,7 @@ func TestAliasForURL(t *testing.T) {
 		{
 			name:      "empty aliases",
 			aliases:   nil,
-			url:       "https://api.pd1020.caas.ford.com",
+			url:       "https://api.cluster-a.example.com",
 			wantAlias: "",
 			wantOK:    false,
 		},
@@ -87,7 +87,7 @@ func TestDisplayHostFromURL(t *testing.T) {
 		url  string
 		want string
 	}{
-		{"https url with port", "https://api.pd1020.caas.ford.com:6443", "api.pd1020.caas.ford.com"},
+		{"https url with port", "https://api.cluster-a.example.com:6443", "api.cluster-a.example.com"},
 		{"http url with path", "http://host.example.com/some/path", "host.example.com"},
 		{"bare host", "host.example.com", "host.example.com"},
 		{"bare host with port", "host.example.com:8443", "host.example.com"},

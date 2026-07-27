@@ -220,7 +220,7 @@ func CommandToken(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 			// login path. Returns the value unchanged when it is already a URL or
 			// when the handler has no hostname config, so plain-hostname handlers
 			// and exec-info URLs are unaffected. Without this, a bare cluster
-			// selector (e.g. "pd1020") would reach the plugin unresolved and fail.
+			// selector (e.g. "cluster-a") would reach the plugin unresolved and fail.
 			if tokenHostname != "" {
 				resolved, rErr := hostnameresolver.Resolve(ctx, handlerName, tokenHostname)
 				if rErr != nil {

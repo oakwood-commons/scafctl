@@ -97,7 +97,7 @@ func TestInjectAuthHandlerSettings(t *testing.T) {
 					Handlers: map[string]config.HandlerConfig{
 						"openshift": {
 							Hostname: &config.HostnameConfig{
-								Aliases: map[string]string{"pd1020": "https://api.example.com:6443"},
+								Aliases: map[string]string{"cluster-a": "https://api.example.com:6443"},
 							},
 						},
 					},

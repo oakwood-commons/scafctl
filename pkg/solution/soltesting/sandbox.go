@@ -56,9 +56,9 @@ func NewSandbox(solutionPath string, bundleFiles, testFiles []string) (*Sandbox,
 // directory structure for solutions that live in a subdirectory of a repository
 // and whose resolvers reference paths relative to the repository root.
 //
-// For example, with baseDir="cldctl":
-//   - solution.yaml  -> sandbox/cldctl/solution.yaml
-//   - output/data.json -> sandbox/cldctl/output/data.json
+// For example, with baseDir="mycli":
+//   - solution.yaml  -> sandbox/mycli/solution.yaml
+//   - output/data.json -> sandbox/mycli/output/data.json
 //
 // The process working directory (cmd.Dir) should be set to sandbox.Path()
 // (the root), so repo-root-relative paths resolve correctly.

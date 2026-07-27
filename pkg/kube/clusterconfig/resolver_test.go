@@ -78,7 +78,7 @@ func TestResolver_ListCached_UsesCachedInventory(t *testing.T) {
 	deps := hostname.Deps{
 		Cache: &fakeCache{
 			hit:     true,
-			entries: []hostname.Entry{{Name: "pd1020", URL: "https://api.pd:6443"}},
+			entries: []hostname.Entry{{Name: "cluster-a", URL: "https://api.pd:6443"}},
 		},
 		Fetch: func(context.Context, config.HostnameResolverSource, string) ([]byte, error) {
 			t.Fatal("Fetch must not be called when the inventory is cached")
@@ -95,7 +95,7 @@ func TestResolver_ListCached_UsesCachedInventory(t *testing.T) {
 	for i, c := range list {
 		names[i] = c.Name
 	}
-	assert.ElementsMatch(t, []string{"lab", "pd1020"}, names)
+	assert.ElementsMatch(t, []string{"lab", "cluster-a"}, names)
 }
 
 func TestResolver_Enabled(t *testing.T) {
@@ -141,13 +141,13 @@ func TestResolver_Resolve_Inventory(t *testing.T) {
 	t.Parallel()
 
 	deps := inventoryDeps([]hostname.Entry{
-		{Name: "pd1020", URL: "https://api.pd.example.com:6443", DefaultHandler: "openshift", AuthType: "oauth", Audience: "pd-aud"},
+		{Name: "cluster-a", URL: "https://api.pd.example.com:6443", DefaultHandler: "openshift", AuthType: "oauth", Audience: "pd-aud"},
 	})
 	r := New(config.ClusterResolutionConfig{Resolver: resolverConfig()}, WithDeps(deps))
 
-	info, err := r.Resolve(context.Background(), "pd1020")
+	info, err := r.Resolve(context.Background(), "cluster-a")
 	require.NoError(t, err)
-	assert.Equal(t, "pd1020", info.Name)
+	assert.Equal(t, "cluster-a", info.Name)
 	assert.Equal(t, "https://api.pd.example.com:6443", info.APIServerURL)
 	assert.Equal(t, "openshift", info.DefaultHandler)
 	assert.Equal(t, kube.AuthTypeOAuth, info.AuthType)
@@ -188,7 +188,7 @@ func TestResolver_Resolve_InventoryMiss(t *testing.T) {
 	t.Parallel()
 
 	deps := inventoryDeps([]hostname.Entry{
-		{Name: "pd1020", URL: "https://api.pd.example.com:6443"},
+		{Name: "cluster-a", URL: "https://api.pd.example.com:6443"},
 	})
 	r := New(config.ClusterResolutionConfig{Resolver: resolverConfig()}, WithDeps(deps))
 

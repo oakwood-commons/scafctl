@@ -4,7 +4,7 @@
 
 # --- 1. Default profile status ---
 dist/scafctl auth status github
-# => authenticated, abaker9@gmail.com, Profile=built-in
+# => authenticated, alice@example.com, Profile=built-in
 
 # --- 2. Work profile status ---
 dist/scafctl auth status github --profile work

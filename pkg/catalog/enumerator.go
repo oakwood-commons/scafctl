@@ -57,7 +57,7 @@ func selectEnumerator(cfg enumeratorConfig) registryEnumerator {
 				"registry", cfg.registry)
 			return e
 		}
-	case "ford-quay":
+	case "quay-registry":
 		cfg.logger.V(1).Info("using Quay API enumerator",
 			"registry", cfg.registry)
 		return newQuayEnumerator(cfg)
@@ -273,7 +273,7 @@ func (e *quayEnumerator) setClient(client *auth.Client) {
 
 func newQuayEnumerator(cfg enumeratorConfig) *quayEnumerator {
 	// Quay's namespace is the top-level org/user that owns the repositories.
-	// In catalog config this maps to the repository field (e.g. "ford-solutions").
+	// In catalog config this maps to the repository field (e.g. "my-solutions").
 	return &quayEnumerator{
 		registry:  cfg.registry,
 		namespace: cfg.repository,

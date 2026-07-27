@@ -25,7 +25,7 @@ func TestDiskCache_SetGetRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	c := newTestCache(t, time.Now)
-	entries := []Entry{{Name: "pd1020", URL: "https://api.pd1020.example.com:6443"}}
+	entries := []Entry{{Name: "cluster-a", URL: "https://api.cluster-a.example.com:6443"}}
 	c.Set(context.Background(), "key1", entries, time.Hour)
 
 	got, ok := c.Get(context.Background(), "key1")
@@ -89,8 +89,8 @@ func TestDiskCache_PeekAll(t *testing.T) {
 	c := newTestCache(t, func() time.Time { return current })
 
 	// Two inventories under different keys; one will expire.
-	c.Set(context.Background(), "auth-key", []Entry{{Name: "pd1010", URL: "https://api.pd1010.example.com:6443"}}, time.Minute)
-	c.Set(context.Background(), "kube-key", []Entry{{Name: "pd1020", URL: "https://api.pd1020.example.com:6443"}}, time.Minute)
+	c.Set(context.Background(), "auth-key", []Entry{{Name: "cluster-c", URL: "https://api.cluster-c.example.com:6443"}}, time.Minute)
+	c.Set(context.Background(), "kube-key", []Entry{{Name: "cluster-a", URL: "https://api.cluster-a.example.com:6443"}}, time.Minute)
 
 	// Advance past expiry: Get would miss + evict, but peekAll ignores TTL.
 	current = base.Add(2 * time.Minute)
@@ -101,8 +101,8 @@ func TestDiskCache_PeekAll(t *testing.T) {
 		names[e.Name] = e.URL
 	}
 	assert.Len(t, all, 2, "peekAll returns entries from all cache files, ignoring TTL")
-	assert.Equal(t, "https://api.pd1010.example.com:6443", names["pd1010"])
-	assert.Equal(t, "https://api.pd1020.example.com:6443", names["pd1020"])
+	assert.Equal(t, "https://api.cluster-c.example.com:6443", names["cluster-c"])
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", names["cluster-a"])
 
 	// peekAll must not evict expired files.
 	_, statErr := os.Stat(c.path("auth-key"))

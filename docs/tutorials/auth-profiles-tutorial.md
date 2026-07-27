@@ -419,8 +419,8 @@ Example output:
 
 ```text
 #  Handler  Kind  Status         Flow         User               Expires  Profile
-1  github   auth  authenticated  device_code  abaker9@gmail.com           built-in
-2  github   auth  authenticated  pat          abaker9@ford.com            work
+1  github   auth  authenticated  device_code  alice@example.com           built-in
+2  github   auth  authenticated  pat          alice@example.com            work
 ```
 
 > **Tip:** Fine-grained PATs let you scope access to specific repositories and permissions. Use them for profiles that only need access to a subset of your org's repos.

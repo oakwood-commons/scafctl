@@ -37,10 +37,10 @@ func TestSelectEnumerator(t *testing.T) {
 			wantType:        "*catalog.gcpEnumerator",
 		},
 		{
-			name:            "ford-quay auth handler selects Quay enumerator",
-			authHandlerName: "ford-quay",
-			registry:        "fcr.ford.com",
-			repository:      "ford-solutions",
+			name:            "quay-registry auth handler selects Quay enumerator",
+			authHandlerName: "quay-registry",
+			registry:        "registry.example.com",
+			repository:      "my-solutions",
 			wantType:        "*catalog.quayEnumerator",
 		},
 		{
@@ -412,14 +412,14 @@ func TestQuayEnumerator(t *testing.T) {
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/v1/repository", r.URL.Path)
-			assert.Equal(t, "ford-solutions", r.URL.Query().Get("namespace"))
+			assert.Equal(t, "my-solutions", r.URL.Query().Get("namespace"))
 			assert.Equal(t, "Bearer my-quay-token", r.Header.Get("Authorization"))
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"repositories": []any{
-					map[string]string{"namespace": "ford-solutions", "name": "solutions/starter-kit"},
-					map[string]string{"namespace": "ford-solutions", "name": "providers/terraform"},
+					map[string]string{"namespace": "my-solutions", "name": "solutions/starter-kit"},
+					map[string]string{"namespace": "my-solutions", "name": "providers/terraform"},
 				},
 			})
 		}))
@@ -428,7 +428,7 @@ func TestQuayEnumerator(t *testing.T) {
 		host := server.Listener.Addr().String()
 		e := &quayEnumerator{
 			registry:  host,
-			namespace: "ford-solutions",
+			namespace: "my-solutions",
 			client: &orasauth.Client{
 				Credential: func(_ context.Context, _ string) (orasauth.Credential, error) {
 					return orasauth.Credential{Password: "my-quay-token"}, nil
@@ -442,8 +442,8 @@ func TestQuayEnumerator(t *testing.T) {
 		repos, err := e.enumerate(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, []string{
-			"ford-solutions/solutions/starter-kit",
-			"ford-solutions/providers/terraform",
+			"my-solutions/solutions/starter-kit",
+			"my-solutions/providers/terraform",
 		}, repos)
 	})
 
@@ -451,7 +451,7 @@ func TestQuayEnumerator(t *testing.T) {
 		t.Parallel()
 
 		e := &quayEnumerator{
-			registry: "fcr.ford.com",
+			registry: "registry.example.com",
 			client:   &orasauth.Client{},
 			logger:   logr.Discard(),
 		}
@@ -473,7 +473,7 @@ func TestQuayEnumerator(t *testing.T) {
 		host := server.Listener.Addr().String()
 		e := &quayEnumerator{
 			registry:  host,
-			namespace: "ford-solutions",
+			namespace: "my-solutions",
 			client:    &orasauth.Client{Client: server.Client()},
 			insecure:  true,
 			logger:    logr.Discard(),
@@ -631,10 +631,10 @@ func TestParseGCPRegistryURL(t *testing.T) {
 		{
 			name:       "standard GCP AR",
 			registry:   "us-central1-docker.pkg.dev",
-			repository: "ford-6c2cb87c6f2cc16da4f2260c/cldctl-oci",
+			repository: "org-abc123/mycli-oci",
 			wantLoc:    "us-central1",
-			wantProj:   "ford-6c2cb87c6f2cc16da4f2260c",
-			wantRepo:   "cldctl-oci",
+			wantProj:   "org-abc123",
+			wantRepo:   "mycli-oci",
 		},
 		{
 			name:       "multi-region",

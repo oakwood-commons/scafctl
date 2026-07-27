@@ -338,7 +338,7 @@ the plugin exists.
 
 - `pkg/kubeconfig.Manager` is constructed with the host binary name
   (`settings.Run.BinaryName`, falling back to `settings.CliBinaryName`) and
-  passes it as `exec_command` so embedders (e.g. `cldctl`) get correct kubeconfig
+  passes it as `exec_command` so embedders (e.g. `mycli`) get correct kubeconfig
   exec args. No hardcoded `scafctl`.
 - The fetch-then-register path uses the manager's configured binary name
   (`m.binaryName`) for the `plugin.ProviderConfig.BinaryName`, keeping plugin

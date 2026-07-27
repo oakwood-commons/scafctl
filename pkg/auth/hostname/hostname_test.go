@@ -50,7 +50,7 @@ func resolverCfg(authProvider string) *config.HostnameConfig {
 func TestResolveWith_Precedence(t *testing.T) {
 	t.Parallel()
 
-	inventory := []Entry{{Name: "pd1020", URL: "https://api.pd1020.example.com:6443"}}
+	inventory := []Entry{{Name: "cluster-a", URL: "https://api.cluster-a.example.com:6443"}}
 
 	tests := []struct {
 		name     string
@@ -88,19 +88,19 @@ func TestResolveWith_Precedence(t *testing.T) {
 		{
 			name:     "dynamic resolver lookup",
 			cfg:      resolverCfg(""),
-			selector: "pd1020",
-			want:     "https://api.pd1020.example.com:6443",
+			selector: "cluster-a",
+			want:     "https://api.cluster-a.example.com:6443",
 		},
 		{
 			name: "static alias overlays inventory entry with same name",
 			cfg: &config.HostnameConfig{
-				Aliases: map[string]string{"pd1020": "https://override.example.com:6443"},
+				Aliases: map[string]string{"cluster-a": "https://override.example.com:6443"},
 				Resolver: &config.HostnameResolverConfig{
 					Source:    config.HostnameResolverSource{URL: "https://inv.example.com"},
 					Transform: "_",
 				},
 			},
-			selector: "pd1020",
+			selector: "cluster-a",
 			want:     "https://override.example.com:6443",
 		},
 		{
@@ -152,7 +152,7 @@ func TestResolveWith_LoopGuard(t *testing.T) {
 		},
 	}
 
-	_, err := ResolveWith(context.Background(), cfg, "openshift", "pd1020", deps)
+	_, err := ResolveWith(context.Background(), cfg, "openshift", "cluster-a", deps)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrResolverLoop)
 }
@@ -171,7 +171,7 @@ func TestResolveWith_NoCredentials(t *testing.T) {
 		},
 	}
 
-	_, err := ResolveWith(context.Background(), cfg, "openshift", "pd1020", deps)
+	_, err := ResolveWith(context.Background(), cfg, "openshift", "cluster-a", deps)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrNoCredentials)
 	assert.False(t, fetchCalled, "fetch must not run when credentials are missing")
@@ -188,7 +188,7 @@ func TestResolveWith_TransformShapeError(t *testing.T) {
 		},
 	}
 
-	_, err := ResolveWith(context.Background(), cfg, "openshift", "pd1020", deps)
+	_, err := ResolveWith(context.Background(), cfg, "openshift", "cluster-a", deps)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrTransformShape)
 }
@@ -208,13 +208,13 @@ func TestResolveWith_TokenInjectedIntoFetch(t *testing.T) {
 			return []byte(`{}`), nil
 		},
 		Transform: func(context.Context, string, []byte) ([]Entry, error) {
-			return []Entry{{Name: "pd1020", URL: "https://api.pd1020.example.com:6443"}}, nil
+			return []Entry{{Name: "cluster-a", URL: "https://api.cluster-a.example.com:6443"}}, nil
 		},
 	}
 
-	got, err := ResolveWith(context.Background(), cfg, "openshift", "pd1020", deps)
+	got, err := ResolveWith(context.Background(), cfg, "openshift", "cluster-a", deps)
 	require.NoError(t, err)
-	assert.Equal(t, "https://api.pd1020.example.com:6443", got)
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", got)
 	assert.Equal(t, "secret-token", gotBearer)
 }
 
@@ -225,7 +225,7 @@ func TestResolveWith_CacheHitSkipsFetch(t *testing.T) {
 	cache := &fakeCache{store: map[string][]Entry{}}
 	// Pre-seed the cache under the computed key.
 	key := cacheKey("openshift", cfg.Resolver)
-	cache.store[key] = []Entry{{Name: "pd1020", URL: "https://cached.example.com:6443"}}
+	cache.store[key] = []Entry{{Name: "cluster-a", URL: "https://cached.example.com:6443"}}
 
 	fetchCalled := false
 	deps := Deps{
@@ -239,7 +239,7 @@ func TestResolveWith_CacheHitSkipsFetch(t *testing.T) {
 		},
 	}
 
-	got, err := ResolveWith(context.Background(), cfg, "openshift", "pd1020", deps)
+	got, err := ResolveWith(context.Background(), cfg, "openshift", "cluster-a", deps)
 	require.NoError(t, err)
 	assert.Equal(t, "https://cached.example.com:6443", got)
 	assert.False(t, fetchCalled, "fetch must be skipped on cache hit")
@@ -254,11 +254,11 @@ func TestResolveWith_CacheMissStoresResult(t *testing.T) {
 		Cache: cache,
 		Fetch: func(context.Context, config.HostnameResolverSource, string) ([]byte, error) { return []byte(`{}`), nil },
 		Transform: func(context.Context, string, []byte) ([]Entry, error) {
-			return []Entry{{Name: "pd1020", URL: "https://api.pd1020.example.com:6443"}}, nil
+			return []Entry{{Name: "cluster-a", URL: "https://api.cluster-a.example.com:6443"}}, nil
 		},
 	}
 
-	_, err := ResolveWith(context.Background(), cfg, "openshift", "pd1020", deps)
+	_, err := ResolveWith(context.Background(), cfg, "openshift", "cluster-a", deps)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cache.sets, "resolved inventory should be cached")
 }
@@ -294,7 +294,7 @@ func TestIsConcreteURL(t *testing.T) {
 	}{
 		{"https://api.example.com:6443", true},
 		{"http://localhost:8080", true},
-		{"pd1020", false},
+		{"cluster-a", false},
 		{"ftp://example.com", false},
 		{"", false},
 		{"api.example.com", false},
@@ -426,7 +426,7 @@ func TestResolveInventory(t *testing.T) {
 			return []byte("{}"), nil
 		},
 		Transform: func(context.Context, string, []byte) ([]Entry, error) {
-			return []Entry{{Name: "pd1020", URL: "https://api.pd:6443"}}, nil
+			return []Entry{{Name: "cluster-a", URL: "https://api.pd:6443"}}, nil
 		},
 		Cache: cache,
 	}
@@ -434,7 +434,7 @@ func TestResolveInventory(t *testing.T) {
 	entries, err := ResolveInventory(context.Background(), rc, "kube", deps)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	assert.Equal(t, "pd1020", entries[0].Name)
+	assert.Equal(t, "cluster-a", entries[0].Name)
 	assert.Equal(t, 1, cache.sets, "resolved inventory must be cached")
 }
 
@@ -455,12 +455,12 @@ func TestCachedInventory(t *testing.T) {
 	t.Run("hit returns cached entries without fetching", func(t *testing.T) {
 		t.Parallel()
 		cache := &fakeCache{store: map[string][]Entry{
-			cacheKey("kube", rc): {{Name: "pd1020", URL: "https://api.pd:6443"}},
+			cacheKey("kube", rc): {{Name: "cluster-a", URL: "https://api.pd:6443"}},
 		}}
 		// No Fetch provided: CachedInventory must never call it.
 		entries, ok := CachedInventory(context.Background(), rc, "kube", Deps{Cache: cache})
 		require.True(t, ok)
 		require.Len(t, entries, 1)
-		assert.Equal(t, "pd1020", entries[0].Name)
+		assert.Equal(t, "cluster-a", entries[0].Name)
 	})
 }

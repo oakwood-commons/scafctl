@@ -17,8 +17,8 @@ func TestDefaultTransform_MapKeyedShape(t *testing.T) {
 	// Mirrors the real clusters inventory: a top-level name-keyed map where each
 	// value carries an apiServerURL.
 	body := []byte(`{
-		"pd1020": {"clusterName": "pd1020", "apiServerURL": "https://api.pd1020.example.com:6443", "status": "in-use"},
-		"pd1030": {"clusterName": "pd1030", "apiServerURL": "https://api.pd1030.example.com:6443", "status": "in-use"}
+		"cluster-a": {"clusterName": "cluster-a", "apiServerURL": "https://api.cluster-a.example.com:6443", "status": "in-use"},
+		"cluster-d": {"clusterName": "cluster-d", "apiServerURL": "https://api.cluster-d.example.com:6443", "status": "in-use"}
 	}`)
 
 	cel := `_.map(k, {"name": k, "url": _[k].apiServerURL})`
@@ -31,8 +31,8 @@ func TestDefaultTransform_MapKeyedShape(t *testing.T) {
 	for _, e := range entries {
 		byName[e.Name] = e.URL
 	}
-	assert.Equal(t, "https://api.pd1020.example.com:6443", byName["pd1020"])
-	assert.Equal(t, "https://api.pd1030.example.com:6443", byName["pd1030"])
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", byName["cluster-a"])
+	assert.Equal(t, "https://api.cluster-d.example.com:6443", byName["cluster-d"])
 }
 
 func TestDefaultTransform_FiltersWithCEL(t *testing.T) {

@@ -26,18 +26,18 @@ This design adds two composable capabilities:
    overwrites it.
 
 Together these reproduce a legacy capability from the predecessor tool
-(`cldctl`): one resolver can explicitly read another resolver's previously saved
+(`mycli`): one resolver can explicitly read another resolver's previously saved
 value and do whatever it wants with it.
 
 ## Motivation
 
-We are converting existing `cldctl` solution files to scafctl. In `cldctl`,
+We are converting existing `mycli` solution files to scafctl. In `mycli`,
 every resolver's value was saved into state, and any resolver could explicitly
 read the saved value of another resolver from a prior run. scafctl's
 deterministic-replay model does not save arbitrary resolver values, so this
 legacy pattern currently has no equivalent.
 
-This is a required migration feature. Rather than reintroduce `cldctl`'s
+This is a required migration feature. Rather than reintroduce `mycli`'s
 save-everything model (which would erode scafctl's determinism guarantees), we
 add a narrow, explicit, opt-in mechanism: authors mark exactly the resolvers
 whose values need to survive, and read them back only through an explicit
@@ -262,7 +262,7 @@ sequenceDiagram
 ```
 
 On the next run, `prior_password` reads what was written as NEW here. This is the
-`cldctl` read-back semantic.
+`mycli` read-back semantic.
 
 ### DAG independence
 

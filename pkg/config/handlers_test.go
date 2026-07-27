@@ -27,7 +27,7 @@ auth:
     openshift:
       hostname:
         aliases:
-          pd1020: https://api.pd1020.example.com:6443
+          cluster-a: https://api.cluster-a.example.com:6443
         resolver:
           source:
             url: https://clusters.example.com
@@ -49,7 +49,7 @@ auth:
 
 	// Host-consumed hostname block parsed into typed fields.
 	require.NotNil(t, handler.Hostname)
-	assert.Equal(t, "https://api.pd1020.example.com:6443", handler.Hostname.Aliases["pd1020"])
+	assert.Equal(t, "https://api.cluster-a.example.com:6443", handler.Hostname.Aliases["cluster-a"])
 	require.NotNil(t, handler.Hostname.Resolver)
 	assert.Equal(t, "https://clusters.example.com", handler.Hostname.Resolver.Source.URL)
 	assert.Equal(t, "entra", handler.Hostname.Resolver.Source.AuthProvider)
@@ -78,7 +78,7 @@ auth:
     openshift:
       hostname:
         aliases:
-          pd1020: https://api.pd1020.example.com:6443
+          cluster-a: https://api.cluster-a.example.com:6443
       apiTimeout: 30
       nested:
         deeply:

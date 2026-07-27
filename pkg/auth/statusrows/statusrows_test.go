@@ -101,10 +101,10 @@ func TestDedupInstanceTokens(t *testing.T) {
 func TestClusterLabel(t *testing.T) {
 	t.Parallel()
 
-	aliases := map[string]string{"pd1020": "https://api.pd1020.example.com:6443"}
+	aliases := map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"}
 
 	// Alias match -> short selector.
-	assert.Equal(t, "pd1020", ClusterLabel(aliases, "https://api.pd1020.example.com:6443"))
+	assert.Equal(t, "cluster-a", ClusterLabel(aliases, "https://api.cluster-a.example.com:6443"))
 	// No alias -> trimmed display host.
 	assert.Equal(t, "api.other.example.com", ClusterLabel(aliases, "https://api.other.example.com:6443"))
 	// No aliases at all -> display host.
@@ -117,9 +117,9 @@ func TestInstanceAliases(t *testing.T) {
 	// No config in context.
 	assert.Nil(t, InstanceAliases(context.Background(), "openshift"))
 
-	ctx := instanceConfigCtx("openshift", map[string]string{"pd1020": "https://api.pd1020.example.com"})
+	ctx := instanceConfigCtx("openshift", map[string]string{"cluster-a": "https://api.cluster-a.example.com"})
 	got := InstanceAliases(ctx, "openshift")
-	assert.Equal(t, "https://api.pd1020.example.com", got["pd1020"])
+	assert.Equal(t, "https://api.cluster-a.example.com", got["cluster-a"])
 
 	// Unknown handler -> nil.
 	assert.Nil(t, InstanceAliases(ctx, "other"))
@@ -131,7 +131,7 @@ func TestInstanceAliases(t *testing.T) {
 			Handlers: map[string]config.HandlerConfig{
 				"openshift": {
 					Hostname: &config.HostnameConfig{
-						Aliases:  map[string]string{"pd1020": "https://api.pd1020.example.com"},
+						Aliases:  map[string]string{"cluster-a": "https://api.cluster-a.example.com"},
 						Resolver: &config.HostnameResolverConfig{Transform: "_"},
 					},
 				},
@@ -139,7 +139,7 @@ func TestInstanceAliases(t *testing.T) {
 		},
 	})
 	resolved := InstanceAliases(resolverCtx, "openshift")
-	assert.Equal(t, "https://api.pd1020.example.com", resolved["pd1020"])
+	assert.Equal(t, "https://api.cluster-a.example.com", resolved["cluster-a"])
 }
 
 func TestExpand_NonInstanceHandler(t *testing.T) {
@@ -177,19 +177,19 @@ func TestExpand_TwoClusters(t *testing.T) {
 	h := auth.NewMockHandler("openshift")
 	h.CapabilitiesValue = []auth.Capability{auth.CapInstanceHostname}
 	h.ListCachedTokensResult = []*auth.CachedTokenInfo{
-		{Handler: "openshift", Hostname: "https://api.np0510.example.com:6443", Flow: auth.FlowInteractive, CachedAt: now.Add(-2 * time.Hour)},
-		{Handler: "openshift", Hostname: "https://api.pd1020.example.com:6443", Flow: auth.FlowInteractive, CachedAt: now}, // most recent -> active
+		{Handler: "openshift", Hostname: "https://api.cluster-b.example.com:6443", Flow: auth.FlowInteractive, CachedAt: now.Add(-2 * time.Hour)},
+		{Handler: "openshift", Hostname: "https://api.cluster-a.example.com:6443", Flow: auth.FlowInteractive, CachedAt: now}, // most recent -> active
 	}
-	ctx := instanceConfigCtx("openshift", map[string]string{"pd1020": "https://api.pd1020.example.com:6443"})
+	ctx := instanceConfigCtx("openshift", map[string]string{"cluster-a": "https://api.cluster-a.example.com:6443"})
 
 	sessions := Expand(ctx, "openshift", h, &auth.Status{Authenticated: true})
 	require.Len(t, sessions, 2)
 
-	// Sorted by hostname: np0510 < pd1020.
-	assert.Equal(t, "api.np0510.example.com", sessions[0].ClusterLabel)
-	assert.False(t, sessions[0].Active)
-	assert.Equal(t, "pd1020", sessions[1].ClusterLabel)
-	assert.True(t, sessions[1].Active, "most recent CachedAt is active")
+	// Sorted by hostname: cluster-a < cluster-b.
+	assert.Equal(t, "cluster-a", sessions[0].ClusterLabel)
+	assert.True(t, sessions[0].Active, "most recent CachedAt is active")
+	assert.Equal(t, "api.cluster-b.example.com", sessions[1].ClusterLabel)
+	assert.False(t, sessions[1].Active)
 }
 
 // TestExpand_DedupesPerCluster asserts several tokens for the same instance
@@ -201,8 +201,8 @@ func TestExpand_DedupesPerCluster(t *testing.T) {
 	h := auth.NewMockHandler("openshift")
 	h.CapabilitiesValue = []auth.Capability{auth.CapInstanceHostname}
 	h.ListCachedTokensResult = []*auth.CachedTokenInfo{
-		{Handler: "openshift", Hostname: "https://api.pd1020.example.com:6443", Flow: auth.FlowInteractive, CachedAt: now.Add(-time.Hour)},
-		{Handler: "openshift", Hostname: "https://api.pd1020.example.com:6443", Flow: auth.FlowServicePrincipal, CachedAt: now},
+		{Handler: "openshift", Hostname: "https://api.cluster-a.example.com:6443", Flow: auth.FlowInteractive, CachedAt: now.Add(-time.Hour)},
+		{Handler: "openshift", Hostname: "https://api.cluster-a.example.com:6443", Flow: auth.FlowServicePrincipal, CachedAt: now},
 	}
 
 	sessions := Expand(context.Background(), "openshift", h, &auth.Status{Authenticated: true})

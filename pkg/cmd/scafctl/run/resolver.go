@@ -256,7 +256,7 @@ Examples:
   scafctl run resolver --action tag --action release -f ./my-solution.yaml
 
   # Run from catalog without -f (auto-fallback)
-  scafctl run resolver ford-proxy`, settings.CliBinaryName, cliParams.BinaryName),
+  scafctl run resolver my-proxy`, settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.ArbitraryArgs,
 		PreRun: func(cCmd *cobra.Command, args []string) {
 			// Track which flags were explicitly set by the user

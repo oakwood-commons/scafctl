@@ -232,8 +232,8 @@ Handler     Profile     Status                  Identity
 -------     -------     ------                  --------
 entra       (built-in)  Authenticated           user@example.com
 entra       work        Authenticated           user@work.example.com  [active]
-github      (built-in)  Authenticated           abaker9
-github      work        Authenticated           abaker9-emu
+github      (built-in)  Authenticated           alice
+github      work        Authenticated           alice-emu
 github      personal    Not authenticated
 gcp         (built-in)  Authenticated           user@gmail.com
 gcp         internal    Authenticated           user@corp.google.com   [active]
