@@ -9,6 +9,7 @@ package collections
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"text/template"
 
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
@@ -46,16 +47,21 @@ func WhereFunc() gotmpl.ExtFunction {
 	}
 }
 
-// SelectFunc returns an ExtFunction that projects a single field from a list of maps.
+// SelectFunc returns an ExtFunction that projects a single field from a list of
+// maps, or extracts a single value from a map.
 //
 // Example usage in a Go template:
 //
 //	{{ .items | selectField "name" }}
+//	{{ .metadata | selectField "tags" }}
 func SelectFunc() gotmpl.ExtFunction {
 	return gotmpl.ExtFunction{
 		Name: "selectField",
-		Description: "Extracts a single field from each map in a list, returning a flat list of values. " +
-			"Non-map entries are skipped. Entries missing the key produce nil in the output.",
+		Description: "Extracts a single field from data. Given a list of maps, returns a flat list of " +
+			"the field's values (non-map entries are skipped; entries missing the key produce nil). " +
+			"Given a single map, returns a one-element list holding the value, or an empty list if the " +
+			"key is absent -- making it useful as an existence check in an if. Keys may use dotted paths " +
+			"(e.g. \"a.b.c\") to descend into nested maps.",
 		Custom: true,
 		Examples: []gotmpl.Example{
 			{
@@ -69,6 +75,14 @@ func SelectFunc() gotmpl.ExtFunction {
 			{
 				Description: "Extract nested field for further processing",
 				Template:    `{{ range (.items | selectField "email") }}{{ . }}{{ end }}`,
+			},
+			{
+				Description: "Use against a map as an existence check",
+				Template:    `{{ if .metadata | selectField "tags" }}has tags{{ end }}`,
+			},
+			{
+				Description: "Descend into a nested map with a dotted path",
+				Template:    `{{ .config | selectField "database.host" }}`,
 			},
 		},
 		Func: template.FuncMap{
@@ -108,15 +122,33 @@ func Where(key string, value, list any) ([]any, error) {
 	return result, nil
 }
 
-// SelectField extracts a single field from each map in a list.
+// SelectField extracts a single field from a map or from each map in a list.
 //
-// The list can be []any, []map[string]any, or any slice type.
-// Non-map entries are silently skipped. If a map doesn't have the specified
-// key, nil is included in the output to preserve positional alignment.
+// When the input is a map, SelectField returns a one-element list holding the
+// value at key, or an empty list if the key is absent. This mirrors the legacy
+// select helper and makes selectField usable as an existence check inside an if.
+//
+// When the input is a list ([]any, []map[string]any, or any slice type),
+// SelectField projects key from each map element. Non-map entries are silently
+// skipped. If a map doesn't have the specified key, nil is included in the
+// output to preserve positional alignment.
+//
+// In both modes, key may be a dotted path (e.g. "a.b.c") to descend into nested
+// maps; descent stops (yielding a missing value) when an intermediate value is
+// not a map or the key is absent.
 //
 // Returns an empty []any if the input is nil or empty.
-func SelectField(key string, list any) ([]any, error) {
-	items, err := toSlice(list)
+func SelectField(key string, input any) ([]any, error) {
+	// Map input: return a one-element list (existence-check friendly), or an
+	// empty list when the key path is absent. This matches legacy select.
+	if m, ok := toMap(input); ok {
+		if v, found := lookupKey(m, key); found {
+			return []any{v}, nil
+		}
+		return []any{}, nil
+	}
+
+	items, err := toSlice(input)
 	if err != nil {
 		return nil, fmt.Errorf("selectField: %w", err)
 	}
@@ -127,13 +159,58 @@ func SelectField(key string, list any) ([]any, error) {
 		if !ok {
 			continue
 		}
-		result = append(result, m[key])
+		v, _ := lookupKey(m, key)
+		result = append(result, v)
 	}
 
 	if result == nil {
 		return []any{}, nil
 	}
 	return result, nil
+}
+
+// lookupKey resolves a (possibly dotted) key path against a map, returning the
+// value and whether the full path was found. A single segment with no dots is
+// the common case: a direct map lookup. Dotted paths (e.g. "a.b.c") descend
+// through nested maps; descent fails (found == false) as soon as an
+// intermediate value is not a string-keyed map or a segment is absent. Malformed
+// paths with empty segments (leading, trailing, or doubled dots such as ".a",
+// "a.", or "a..b") also return found == false rather than matching an
+// empty-string key.
+func lookupKey(m map[string]any, path string) (any, bool) {
+	// Fast path: a plain key with no dotted descent is by far the common case.
+	// Handling it directly avoids the segment-slice allocation and the toMap
+	// indirection, keeping list projection allocation-free per element.
+	if !strings.Contains(path, ".") {
+		v, ok := m[path]
+		return v, ok
+	}
+
+	// Dotted path: descend one segment at a time. strings.Cut avoids allocating
+	// a slice of segments.
+	cur := any(m)
+	for rest := path; ; {
+		segment, remainder, more := strings.Cut(rest, ".")
+		// An empty segment means the path had a leading, trailing, or doubled
+		// dot (e.g. ".a", "a.", "a..b"). Treat these malformed paths as a clean
+		// "not found" rather than looking up an empty-string key.
+		if segment == "" {
+			return nil, false
+		}
+		cm, ok := toMap(cur)
+		if !ok {
+			return nil, false
+		}
+		v, exists := cm[segment]
+		if !exists {
+			return nil, false
+		}
+		cur = v
+		if !more {
+			return cur, true
+		}
+		rest = remainder
+	}
 }
 
 // toSlice converts any slice or array to []any using reflection.

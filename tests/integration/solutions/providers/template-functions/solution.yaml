@@ -31,6 +31,20 @@ spec:
                   port: 9090
                   active: false
 
+    metadata:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-solution
+                tags:
+                  - alpha
+                  - beta
+                database:
+                  host: db.example.com
+                  port: 5432
+
     # slugify test
     slugified:
       dependsOn: [project-name]
@@ -90,6 +104,35 @@ spec:
               template: '{{ selectField "name" .services | toYaml }}'
               name: select-test
 
+    # selectField on a map (existence check + dotted path)
+    has-tags:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ if .metadata | selectField "tags" }}yes{{ else }}no{{ end }}'
+              name: select-map-exists-test
+
+    db-host:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ .metadata | selectField "database.host" | first }}'
+              name: select-map-dotted-test
+
     # cel inline test
     active-count:
       dependsOn: [services]
@@ -144,3 +187,22 @@ spec:
             message: "selectField should extract api-gateway"
           - expression: '__output["service-names"].contains("legacy-proxy")'
             message: "selectField should extract legacy-proxy"
+
+      test-select-map-exists:
+        description: Verify selectField on a map works as an existence check
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output["has-tags"] == "yes"'
+            message: "selectField on a map should detect the present key"
+
+      test-select-map-dotted:
+        description: Verify selectField on a map supports dotted key paths
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: '__output["db-host"] == "db.example.com"'
+            message: "selectField should descend a dotted path into a nested map"
+
