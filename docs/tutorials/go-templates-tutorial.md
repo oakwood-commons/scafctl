@@ -2103,29 +2103,35 @@ scafctl provides two functions for converting arbitrary strings into DNS-safe la
 ```yaml
 spec:
   resolvers:
-    project-name:
-      type: static
-      from:
-        value: "My Cool Project! (v2)"
+    projectName:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "My Cool Project! (v2)"
 
-    dns-label:
-      type: go-template
-      dependsOn: [project-name]
-      transform:
-        template: '{{ slugify .project-name }}'
-        name: slugify-demo
+    dnsLabel:
+      type: string
+      dependsOn: [projectName]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ slugify .projectName }}'
+              name: slugify-demo
 ```
 
 {{< tabs "go-templates-tutorial-cmd-28" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f slugify-demo.yaml -e _.dns-label
+scafctl run resolver -f slugify-demo.yaml -e _.dnsLabel
 # Output: my-cool-project-v2
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f slugify-demo.yaml -e _.dns-label
+scafctl run resolver -f slugify-demo.yaml -e _.dnsLabel
 # Output: my-cool-project-v2
 ```
 {{% /tab %}}
@@ -2146,7 +2152,7 @@ scafctl run resolver -f slugify-demo.yaml -e _.dns-label
 Two collection functions let you filter and project lists of maps without CEL:
 
 - **`where key value list`** — Returns items where `item[key] == value`
-- **`selectField key list`** — Returns a list of `item[key]` values (like SQL SELECT)
+- **`selectField key list`** — Returns a list of `item[key]` values (like SQL SELECT). Also accepts a single map, returning a one-element list (empty if the key is absent), and supports dotted key paths.
 
 ### Filtering with where
 
@@ -2154,22 +2160,27 @@ Two collection functions let you filter and project lists of maps without CEL:
 spec:
   resolvers:
     services:
-      type: static
-      from:
-        value:
-          - name: api
-            active: true
-          - name: legacy
-            active: false
-          - name: web
-            active: true
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: api
+                  active: true
+                - name: legacy
+                  active: false
+                - name: web
+                  active: true
 
-    active-only:
-      type: go-template
+    activeOnly:
       dependsOn: [services]
-      transform:
-        template: '{{ where "active" true .services | toYaml }}'
-        name: where-demo
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ where "active" true .services | toYaml }}'
+              name: where-demo
 ```
 
 Result: only `api` and `web` items are returned.
@@ -2177,12 +2188,14 @@ Result: only `api` and `web` items are returned.
 ### Projecting with selectField
 
 ```yaml
-    service-names:
-      type: go-template
+    serviceNames:
       dependsOn: [services]
-      transform:
-        template: '{{ selectField "name" .services | toYaml }}'
-        name: select-demo
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ selectField "name" .services | toYaml }}'
+              name: select-demo
 ```
 
 Result: `["api", "legacy", "web"]`
@@ -2190,15 +2203,59 @@ Result: `["api", "legacy", "web"]`
 ### Combining with pipes
 
 ```yaml
-    active-names:
-      type: go-template
+    activeNames:
       dependsOn: [services]
-      transform:
-        template: '{{ where "active" true .services | selectField "name" | toYaml }}'
-        name: combined-demo
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ where "active" true .services | selectField "name" | toYaml }}'
+              name: combined-demo
 ```
 
 Result: `["api", "web"]`
+
+### selectField on a map
+
+`selectField` also accepts a single map. It returns a one-element list holding
+the value at the key, or an empty list when the key is absent. Because an empty
+list is falsy, this makes `selectField` a convenient existence check:
+
+```yaml
+    metadata:
+      type: object
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                tags: [alpha, beta]
+                database:
+                  host: db.example.com
+
+    hasTags:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ if .metadata | selectField "tags" }}has tags{{ end }}'
+              name: exists-demo
+```
+
+Keys may use dotted paths to descend into nested maps (in both the map and list
+forms):
+
+```yaml
+    dbHost:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ .metadata | selectField "database.host" | first }}'
+              name: dotted-demo
+```
 
 ---
 
@@ -2216,24 +2273,29 @@ The data argument becomes `_` in the CEL expression (same as the `expr` field co
 spec:
   resolvers:
     services:
-      type: static
-      from:
-        value:
-          - name: api
-            port: 8080
-            active: true
-          - name: legacy
-            port: 9090
-            active: false
+      type: array
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: api
+                  port: 8080
+                  active: true
+                - name: legacy
+                  port: 9090
+                  active: false
 
     summary:
-      type: go-template
       dependsOn: [services]
-      transform:
-        template: |
-          Active services: {{ cel "size(_.services.filter(s, s.active == true))" . }}
-          Total ports: {{ cel "_.services.map(s, s.port).reduce(a, b, a + b)" . }}
-        name: cel-in-template
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: |
+                Active services: {{ cel "size(_.services.filter(s, s.active == true))" . }}
+                Highest port: {{ cel "math.greatest(_.services.map(s, s.port))" . }}
+              name: cel-in-template
 ```
 
 ### When to use cel vs pure Go template
@@ -2270,10 +2332,12 @@ Say you have a template that tries to range over a string:
 ```yaml
 resolvers:
   greeting:
-    type: go-template
-    transform:
-      template: '{{ range .name }}{{ . }}{{ end }}'
-      name: bad-range
+    resolve:
+      with:
+        - provider: go-template
+          inputs:
+            template: '{{ range .name }}{{ . }}{{ end }}'
+            name: bad-range
 ```
 
 If `.name` resolves to the string `"Alice"` instead of a list, the error output includes:

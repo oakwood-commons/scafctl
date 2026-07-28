@@ -80,4 +80,22 @@ func BenchmarkSelectField(b *testing.B) {
 			_, _ = SelectField("name", items)
 		}
 	})
+
+	b.Run("map", func(b *testing.B) {
+		m := map[string]any{"name": "alice", "age": 30, "email": "alice@example.com"}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = SelectField("name", m)
+		}
+	})
+
+	b.Run("mapDottedPath", func(b *testing.B) {
+		m := map[string]any{"meta": map[string]any{"nested": map[string]any{"id": 1}}}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = SelectField("meta.nested.id", m)
+		}
+	})
 }

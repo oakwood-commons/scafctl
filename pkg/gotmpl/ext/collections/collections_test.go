@@ -162,6 +162,67 @@ func TestSelectField(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []any{"alice", "bob"}, got)
 	})
+
+	t.Run("map input with present key returns one-element list", func(t *testing.T) {
+		m := map[string]any{"name": "x", "tags": []any{"a", "b"}}
+		got, err := SelectField("tags", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{[]any{"a", "b"}}, got)
+	})
+
+	t.Run("map input with absent key returns empty list", func(t *testing.T) {
+		m := map[string]any{"name": "x"}
+		got, err := SelectField("tags", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{}, got)
+	})
+
+	t.Run("map input with present nil value returns one-element list", func(t *testing.T) {
+		// A key that exists with a nil value is "present": selectField returns a
+		// length-1 (truthy) list, so it reports the key as existing.
+		m := map[string]any{"tags": nil}
+		got, err := SelectField("tags", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{nil}, got)
+	})
+
+	t.Run("map input with dotted path descends nested maps", func(t *testing.T) {
+		m := map[string]any{"database": map[string]any{"host": "db.example.com"}}
+		got, err := SelectField("database.host", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{"db.example.com"}, got)
+	})
+
+	t.Run("map input with dotted path missing segment returns empty list", func(t *testing.T) {
+		m := map[string]any{"database": map[string]any{"host": "db.example.com"}}
+		got, err := SelectField("database.port", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{}, got)
+	})
+
+	t.Run("map input with dotted path through non-map returns empty list", func(t *testing.T) {
+		m := map[string]any{"database": "not-a-map"}
+		got, err := SelectField("database.host", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{}, got)
+	})
+
+	t.Run("typed map input", func(t *testing.T) {
+		m := map[string]string{"name": "alice"}
+		got, err := SelectField("name", m)
+		require.NoError(t, err)
+		assert.Equal(t, []any{"alice"}, got)
+	})
+
+	t.Run("list input with dotted path descends per element", func(t *testing.T) {
+		list := []any{
+			map[string]any{"meta": map[string]any{"id": 1}},
+			map[string]any{"meta": map[string]any{"id": 2}},
+		}
+		got, err := SelectField("meta.id", list)
+		require.NoError(t, err)
+		assert.Equal(t, []any{1, 2}, got)
+	})
 }
 
 func TestWhereFunc(t *testing.T) {

@@ -10059,6 +10059,84 @@ spec:
 	assert.Contains(t, stdout, "legacy")
 }
 
+// TestIntegration_RunResolver_TemplateFunctions_SelectFieldMap verifies selectField
+// accepts a map input (legacy select parity): it works as an existence check and
+// supports dotted key paths for descending into nested maps.
+func TestIntegration_RunResolver_TemplateFunctions_SelectFieldMap(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	solutionFile := filepath.Join(tmpDir, "solution.yaml")
+
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: select-map-test
+  version: 1.0.0
+spec:
+  resolvers:
+    metadata:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                name: my-solution
+                tags: [alpha, beta]
+                database:
+                  host: db.example.com
+                  port: 5432
+    hasTags:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ if .metadata | selectField "tags" }}yes{{ else }}no{{ end }}'
+              name: exists-test
+    hasMissing:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ if .metadata | selectField "absent" }}yes{{ else }}no{{ end }}'
+              name: absent-test
+    dbHost:
+      dependsOn: [metadata]
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: placeholder
+      transform:
+        with:
+          - provider: go-template
+            inputs:
+              template: '{{ .metadata | selectField "database.host" | first }}'
+              name: dotted-test
+`
+	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
+
+	stdout, stderr, exitCode := runScafctl(t, "run", "resolver", "-f", solutionFile, "-o", "json")
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	assert.Equal(t, 0, exitCode, "expected exit code 0, got %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+	assert.Contains(t, stdout, `"hasTags": "yes"`)
+	assert.Contains(t, stdout, `"hasMissing": "no"`)
+	assert.Contains(t, stdout, `"dbHost": "db.example.com"`)
+}
+
 func TestIntegration_RunResolver_PositionalParams(t *testing.T) {
 	t.Parallel()
 	stdout, stderr, exitCode := runScafctl(t,
