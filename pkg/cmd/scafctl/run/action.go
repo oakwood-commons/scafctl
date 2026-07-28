@@ -110,6 +110,14 @@ ACTION SELECTION:
 
 `+ResolverParametersHelp+`
 
+FAILURE OUTPUT (json/yaml):
+  On failure the structured output still emits a parseable document so callers
+  piping to jq/yq can detect and inspect the failure programmatically instead of
+  receiving empty stdout. Setup and resolver-phase failures emit a
+  {status: "failed", diagnostics: [...]} envelope; an action-execution failure
+  emits the full action result envelope (status: "failed" with per-action error
+  detail). Human formats (table/quiet) keep the prior stderr-only behavior.
+
 EXIT CODES:
   0  Success
   1  Resolver execution failed
@@ -417,7 +425,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	start := time.Now()
 	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
-		return o.exitWithCode(ctx, err, exitcode.GeneralError)
+		return o.failStructured(ctx, err, exitcode.GeneralError)
 	}
 	resolverElapsed := time.Since(start)
 
@@ -471,6 +479,21 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
+		// An action failed hard. In structured output emit the full action
+		// envelope (status:"failed", per-action error, failedActions) before
+		// returning the non-zero exit so stdout stays parseable.
+		if o.isStructuredOutput() {
+			var executionData map[string]any
+			if o.ShowExecution {
+				executionData = resolverExecutionData
+			}
+			if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr == nil {
+				if w := writer.FromContext(ctx); w != nil {
+					w.Errorf("action execution failed: %v", err)
+				}
+				return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+			}
+		}
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
@@ -497,6 +520,18 @@ func (o *ActionOptions) exitWithCode(ctx context.Context, err error, code int) e
 		w.Error(err.Error())
 	}
 	return exitcode.WithCode(err, code)
+}
+
+// failStructured delegates to SolutionOptions.failStructured so setup and
+// resolver-phase failures emit a parseable {status, diagnostics} document in
+// json/yaml instead of an empty stdout.
+func (o *ActionOptions) failStructured(ctx context.Context, err error, code int) error {
+	s := &SolutionOptions{
+		sharedResolverOptions: o.sharedResolverOptions,
+		Verbose:               o.Verbose,
+		ShowExecution:         o.ShowExecution,
+	}
+	return s.failStructured(ctx, err, code)
 }
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs

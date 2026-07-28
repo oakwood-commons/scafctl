@@ -393,6 +393,18 @@ Execution Metadata Flags:
     scafctl run resolver -f ./solution.yaml -o json --show-execution
     scafctl run solution -f ./solution.yaml --show-execution
 
+Structured Failure Output (json/yaml):
+  On failure, 'run resolver', 'run solution', and 'run action' still write a
+  parseable document to stdout (never empty stdout) so pipelines using jq/yq can
+  detect and inspect failures programmatically:
+    run resolver -- the values map gains reserved keys '__status': "failed" and
+      '__diagnostics' (list of {resolver, phase, message}). Successful runs omit
+      these keys.
+    run solution / run action -- setup and resolver-phase failures emit a
+      {status: "failed", diagnostics: [...]} envelope; an action-execution
+      failure emits the full action result envelope (per-action error detail).
+  Human formats (table/quiet) keep the prior stderr-only error behavior.
+
 CEL Context Variables (available in resolver conditions, inputs, and action when/inputs):
   _            Map of resolved resolver values (e.g., _.environment, _.config.port)
   __plan       Pre-execution resolver topology (available in resolvers, populated before any resolver runs):

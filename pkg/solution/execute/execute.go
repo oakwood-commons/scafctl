@@ -178,6 +178,66 @@ func DiagnosticsFromError(err error) []ResolverDiagnostic {
 	return []ResolverDiagnostic{{Message: err.Error()}}
 }
 
+// Reserved output keys and status values used to surface a structured failure
+// envelope in machine-readable output formats (json/yaml). The DiagnosticsKey
+// and StatusKey are double-underscore-prefixed so they never collide with a
+// user-defined resolver name in the resolver output map, mirroring the existing
+// __execution convention.
+const (
+	// DiagnosticsKey is the reserved key under which a []ResolverDiagnostic list
+	// is attached to the resolver output map on failure.
+	DiagnosticsKey = "__diagnostics"
+
+	// StatusKey is the reserved key under which the run status ("failed") is
+	// attached to the resolver output map on failure.
+	StatusKey = "__status"
+
+	// StatusFieldKey is the plain (non-underscore) status key used by the
+	// action/solution failure envelope, matching action.BuildOutputData's
+	// "status" field.
+	StatusFieldKey = "status"
+
+	// DiagnosticsFieldKey is the plain (non-underscore) diagnostics key used by
+	// the action/solution failure envelope, matching its sibling keys
+	// ("failedActions", "skippedActions").
+	DiagnosticsFieldKey = "diagnostics"
+
+	// StatusFailed is the status value written when a run fails.
+	StatusFailed = "failed"
+)
+
+// InjectResolverFailureEnvelope attaches a structured failure envelope to a
+// resolver output map so machine-readable output (json/yaml) remains parseable
+// even when the run fails. It sets StatusKey to StatusFailed and DiagnosticsKey
+// to the structured diagnostics derived from err. A nil results map is created;
+// a nil err is a no-op (the map is returned unchanged). Existing resolved values
+// in the map are preserved so partial results stay inspectable.
+func InjectResolverFailureEnvelope(results map[string]any, err error) map[string]any {
+	if err == nil {
+		return results
+	}
+	if results == nil {
+		results = make(map[string]any)
+	}
+	results[StatusKey] = StatusFailed
+	results[DiagnosticsKey] = DiagnosticsFromError(err)
+	return results
+}
+
+// BuildFailureEnvelope builds a standalone structured failure envelope for
+// commands whose output is a fixed-schema map (run solution / run action) rather
+// than a bare resolver map. It returns {status: "failed", diagnostics: [...]}
+// keyed to match action.BuildOutputData. Returns nil when err is nil.
+func BuildFailureEnvelope(err error) map[string]any {
+	if err == nil {
+		return nil
+	}
+	return map[string]any{
+		StatusFieldKey:      StatusFailed,
+		DiagnosticsFieldKey: DiagnosticsFromError(err),
+	}
+}
+
 // isValidationFailure reports whether a single resolver failure originated from
 // the validate phase. Resolve- and transform-phase failures (where no value
 // could be produced) return false so callers keep treating them as fatal.

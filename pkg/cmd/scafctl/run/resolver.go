@@ -172,6 +172,14 @@ OUTPUT FORMATS:
   yaml     YAML output (for piping/scripting)
   quiet    Suppress output (exit code only)
 
+FAILURE OUTPUT (json/yaml):
+  On a run failure the structured output still emits a parseable document so
+  callers piping to jq/yq can detect and inspect the failure programmatically
+  instead of receiving empty stdout. The resolved values map gains two reserved
+  keys: "__status": "failed" and "__diagnostics" (a list of {resolver, phase,
+  message}). Successful runs never include these keys. Human formats
+  (table/quiet) keep the prior stderr-only error behavior.
+
 EXIT CODES:
   0  Success
   1  Resolver execution failed
@@ -658,8 +666,10 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	resolverData, resolverCtx, execErr := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if execErr != nil && resolverCtx == nil {
 		// A hard failure occurred before any values could be produced
-		// (e.g., phase build error). Abort with the error.
-		return o.exitWithCode(ctx, execErr, exitcode.GeneralError)
+		// (e.g., phase build error). Emit a structured failure envelope in
+		// json/yaml so stdout stays parseable; otherwise abort with a
+		// stderr-only error.
+		return o.failStructured(ctx, nil, execErr, exitcode.GeneralError)
 	}
 
 	elapsed := time.Since(start)
@@ -677,7 +687,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// Build output and write
 	results := o.buildResolverOutputMap(resolverData, sol)
 	if err := o.checkValueSizes(results, *lgr); err != nil {
-		return o.exitWithCode(ctx, err, exitcode.ValidationFailed)
+		return o.failStructured(ctx, results, err, exitcode.ValidationFailed)
 	}
 
 	// Include __execution metadata only when --show-execution is set
@@ -716,6 +726,13 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// (on stdout) remain useful for troubleshooting and machine consumption.
 	if execErr != nil {
 		o.renderValidationDiagnostics(ctx, execErr)
+		// In structured output (json/yaml), also attach the failure envelope
+		// (__status/__diagnostics) to the stdout document so machine consumers
+		// can detect and inspect the validation failure programmatically, not
+		// just via exit code + stderr.
+		if o.isStructuredOutput() {
+			results = execute.InjectResolverFailureEnvelope(results, execErr)
+		}
 	}
 
 	// When -o test: generate a functional test definition instead of normal output.
@@ -811,6 +828,28 @@ func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solutio
 	}
 
 	return nil
+}
+
+// failStructured renders a resolver-run failure so that machine-readable output
+// formats (json/yaml) still emit a parseable document on stdout instead of an
+// empty stdout with a stderr-only error. In structured mode it attaches a
+// failure envelope (__status/__diagnostics) to the (possibly nil or partial)
+// results map, writes it to stdout, emits a one-line human error to stderr, and
+// returns the coded error. For human formats (table/quiet/interactive) it falls
+// back to the stderr-only exitWithCode behavior.
+func (o *ResolverOptions) failStructured(ctx context.Context, results map[string]any, err error, code int) error {
+	if !o.isStructuredOutput() {
+		return o.exitWithCode(ctx, err, code)
+	}
+	results = execute.InjectResolverFailureEnvelope(results, err)
+	if writeErr := o.writeResolverOutput(ctx, results, o.BinaryName+" run resolver"); writeErr != nil {
+		// Fall back to the stderr-only path if the structured write itself fails.
+		return o.exitWithCode(ctx, err, code)
+	}
+	if w := writer.FromContext(ctx); w != nil {
+		w.Errorf("%v", err)
+	}
+	return exitcode.WithCode(err, code)
 }
 
 // renderValidationDiagnostics writes a human-readable summary of resolver

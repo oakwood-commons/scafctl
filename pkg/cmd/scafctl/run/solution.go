@@ -145,6 +145,14 @@ OUTPUT FORMATS:
   yaml     YAML output (for piping/scripting)
   quiet    Suppress output (exit code only)
 
+FAILURE OUTPUT (json/yaml):
+  On failure the structured output still emits a parseable document so callers
+  piping to jq/yq can detect and inspect the failure programmatically instead of
+  receiving empty stdout. Setup and resolver-phase failures emit a
+  {status: "failed", diagnostics: [...]} envelope; an action-execution failure
+  emits the full action result envelope (status: "failed" with per-action error
+  detail). Human formats (table/quiet) keep the prior stderr-only behavior.
+
 INTERACTIVE MODE:
   Use -i/--interactive to launch a TUI for exploring results:
   - Navigate with arrow keys
@@ -534,7 +542,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
-		return o.exitWithCode(ctx, err, exitcode.GeneralError)
+		return o.failStructured(ctx, err, exitcode.GeneralError)
 	}
 
 	resolverElapsed := time.Since(start)
@@ -597,6 +605,21 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {
+		// An action failed hard. In structured output the full action envelope
+		// (status:"failed", per-action error, failedActions) is far more useful
+		// than an empty stdout, so emit it before returning the non-zero exit.
+		if o.isStructuredOutput() {
+			var executionData map[string]any
+			if o.ShowExecution {
+				executionData = resolverExecutionData
+			}
+			if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr == nil {
+				if w := writer.FromContext(ctx); w != nil {
+					w.Errorf("action execution failed: %v", err)
+				}
+				return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
+			}
+		}
 		return o.exitWithCode(ctx, fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 	}
 
@@ -891,7 +914,15 @@ func (o *SolutionOptions) writeVerboseActionStatus(w *writer.Writer, name string
 // writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
 func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, result *action.ExecutionResult, executionData map[string]any, format string) error {
 	outputData := action.BuildOutputData(result, executionData)
+	return o.writeStructuredData(ctx, outputData, format)
+}
 
+// writeStructuredData marshals a structured map to JSON or YAML and writes it to
+// stdout. It is the shared serialization path for both the success envelope and
+// the failure envelope, so both honour the same format handling. Only json and
+// yaml are supported (matching writeActionOutput's dispatch); any other format
+// returns an error so callers can fall back rather than emit an empty document.
+func (o *SolutionOptions) writeStructuredData(ctx context.Context, outputData map[string]any, format string) error {
 	var data []byte
 	var marshalErr error
 
@@ -900,6 +931,8 @@ func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, resul
 		data, marshalErr = yaml.Marshal(outputData)
 	case "json":
 		data, marshalErr = json.MarshalIndent(outputData, "", "  ")
+	default:
+		return fmt.Errorf("unsupported output format: %s", format)
 	}
 
 	if marshalErr != nil {
@@ -910,6 +943,27 @@ func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, resul
 		w.Plainln(string(data))
 	}
 	return nil
+}
+
+// failStructured renders a solution/action failure so that machine-readable
+// output formats (json/yaml) still emit a parseable {status, diagnostics}
+// document on stdout instead of an empty stdout with a stderr-only error. It is
+// used for setup and resolver-phase failures that occur before an action
+// ExecutionResult exists; action-execution failures instead emit the full
+// action envelope via writeActionOutput. For human formats (table/quiet) it
+// falls back to the stderr-only exitWithCode behavior.
+func (o *SolutionOptions) failStructured(ctx context.Context, err error, code int) error {
+	if !o.isStructuredOutput() {
+		return o.exitWithCode(ctx, err, code)
+	}
+	envelope := execute.BuildFailureEnvelope(err)
+	if writeErr := o.writeStructuredData(ctx, envelope, o.Output); writeErr != nil {
+		return o.exitWithCode(ctx, err, code)
+	}
+	if w := writer.FromContext(ctx); w != nil {
+		w.Errorf("%v", err)
+	}
+	return exitcode.WithCode(err, code)
 }
 
 // writeActionTestOutput generates a functional test definition from the action execution
