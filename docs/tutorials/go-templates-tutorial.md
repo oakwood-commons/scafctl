@@ -2152,7 +2152,7 @@ scafctl run resolver -f slugify-demo.yaml -e _.dnsLabel
 Two collection functions let you filter and project lists of maps without CEL:
 
 - **`where key value list`** — Returns items where `item[key] == value`
-- **`selectField key list`** — Returns a list of `item[key]` values (like SQL SELECT). Also accepts a single map, returning a one-element list (empty if the key is absent), and supports dotted key paths.
+- **`selectField key list`** -- Returns a list of `item[key]` values (like SQL SELECT). Also accepts a single map, returning a one-element list (empty if the key is absent), and supports dotted key paths.
 
 ### Filtering with where
 

@@ -207,6 +207,15 @@ func TestSelectField(t *testing.T) {
 		assert.Equal(t, []any{}, got)
 	})
 
+	t.Run("map input with malformed dotted path returns empty list", func(t *testing.T) {
+		m := map[string]any{"": "empty-key", "database": map[string]any{"host": "db.example.com", "": "nested-empty"}}
+		for _, path := range []string{".database", "database.", "database..host"} {
+			got, err := SelectField(path, m)
+			require.NoError(t, err, "path %q", path)
+			assert.Equal(t, []any{}, got, "path %q should not match an empty-string key", path)
+		}
+	})
+
 	t.Run("typed map input", func(t *testing.T) {
 		m := map[string]string{"name": "alice"}
 		got, err := SelectField("name", m)

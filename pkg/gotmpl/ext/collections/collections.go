@@ -173,7 +173,10 @@ func SelectField(key string, input any) ([]any, error) {
 // value and whether the full path was found. A single segment with no dots is
 // the common case: a direct map lookup. Dotted paths (e.g. "a.b.c") descend
 // through nested maps; descent fails (found == false) as soon as an
-// intermediate value is not a string-keyed map or a segment is absent.
+// intermediate value is not a string-keyed map or a segment is absent. Malformed
+// paths with empty segments (leading, trailing, or doubled dots such as ".a",
+// "a.", or "a..b") also return found == false rather than matching an
+// empty-string key.
 func lookupKey(m map[string]any, path string) (any, bool) {
 	// Fast path: a plain key with no dotted descent is by far the common case.
 	// Handling it directly avoids the segment-slice allocation and the toMap
@@ -188,6 +191,12 @@ func lookupKey(m map[string]any, path string) (any, bool) {
 	cur := any(m)
 	for rest := path; ; {
 		segment, remainder, more := strings.Cut(rest, ".")
+		// An empty segment means the path had a leading, trailing, or doubled
+		// dot (e.g. ".a", "a.", "a..b"). Treat these malformed paths as a clean
+		// "not found" rather than looking up an empty-string key.
+		if segment == "" {
+			return nil, false
+		}
 		cm, ok := toMap(cur)
 		if !ok {
 			return nil, false
