@@ -465,19 +465,10 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	lgr.V(1).Info("parsed parameters", "count", len(params))
 
-	// Validate parameter keys against parameter provider 'key' inputs (early typo detection)
-	if len(params) > 0 {
-		solResolvers := sol.Spec.ResolversToSlice()
-		// Skip typo detection when a resolver reads every supplied parameter
-		// (all: true) -- any -r key is valid in that case.
-		if !resolversAcceptAllParameters(solResolvers) {
-			paramKeys := extractParameterKeys(solResolvers)
-			if len(paramKeys) > 0 {
-				if err := flags.ValidateInputKeys(params, paramKeys, "solution"); err != nil {
-					return o.exitWithCode(ctx, err, exitcode.InvalidInput)
-				}
-			}
-		}
+	// Validate parameter keys against parameter provider 'key' inputs (early
+	// typo detection), honoring the --on-unknown-resolver policy.
+	if err := o.validateResolverParams(ctx, sol, params); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
 	// Inject CLI overrides into context before dry-run or live execution,

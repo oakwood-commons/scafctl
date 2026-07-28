@@ -146,6 +146,48 @@ const (
 	DefaultMaxValueSize = 10 * 1024 * 1024
 )
 
+// UnknownResolverPolicy controls how the run commands treat -r/--resolver
+// parameters whose key does not match any declared parameter (i.e. no resolver
+// consumes it). The strict default rejects them to catch typos and stale
+// inputs; callers driving a solution with a superset of inputs (e.g. a shared
+// parameter file) can relax it.
+type UnknownResolverPolicy string
+
+const (
+	// UnknownResolverError rejects unknown -r keys with an error (the strict
+	// default).
+	UnknownResolverError UnknownResolverPolicy = "error"
+
+	// UnknownResolverWarn proceeds after printing a warning that names the
+	// unknown -r keys (still surfaces likely typos).
+	UnknownResolverWarn UnknownResolverPolicy = "warn"
+
+	// UnknownResolverIgnore silently accepts unknown -r keys.
+	UnknownResolverIgnore UnknownResolverPolicy = "ignore"
+
+	// DefaultUnknownResolverPolicy is the strict default: unknown -r keys are
+	// treated as errors.
+	DefaultUnknownResolverPolicy = UnknownResolverError
+)
+
+// ParseUnknownResolverPolicy validates and normalizes a policy string. An empty
+// string resolves to DefaultUnknownResolverPolicy. Unrecognized values return
+// an error naming the valid choices.
+func ParseUnknownResolverPolicy(s string) (UnknownResolverPolicy, error) {
+	switch UnknownResolverPolicy(strings.ToLower(strings.TrimSpace(s))) {
+	case "":
+		return DefaultUnknownResolverPolicy, nil
+	case UnknownResolverError:
+		return UnknownResolverError, nil
+	case UnknownResolverWarn:
+		return UnknownResolverWarn, nil
+	case UnknownResolverIgnore:
+		return UnknownResolverIgnore, nil
+	default:
+		return "", fmt.Errorf("invalid unknown-resolver policy %q (valid: error, warn, ignore)", s)
+	}
+}
+
 // OTel / telemetry defaults
 const (
 	// DefaultOTelSamplerType is the default trace sampler. always_on means every

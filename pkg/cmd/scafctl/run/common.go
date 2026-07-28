@@ -22,6 +22,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	inputflags "github.com/oakwood-commons/scafctl/pkg/flags"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -206,6 +207,13 @@ type sharedResolverOptions struct {
 	// locked, and no state is saved afterward. Resolvers that read the state
 	// provider fall back to their defaults. Intended for CI/offline runs.
 	NoState bool
+
+	// OnUnknownResolver controls how -r/--resolver parameters whose key is not
+	// consumed by any declared parameter resolver are handled: "error"
+	// (default) rejects them, "warn" proceeds with a warning, "ignore" accepts
+	// them silently. Empty resolves to the config default, then the built-in
+	// strict default. Set via the --on-unknown-resolver flag.
+	OnUnknownResolver string
 
 	// nonFatalValidation, when true, makes executeResolvers treat resolver
 	// validation-only failures as non-fatal: it returns the populated values
@@ -965,6 +973,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
 	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
 	cCmd.Flags().BoolVar(&o.NoState, "no-state", false, "Skip the entire state lifecycle: do not load, verify immutables, or save state (for CI/offline runs)")
+	cCmd.Flags().StringVar(&o.OnUnknownResolver, "on-unknown-resolver", string(settings.DefaultUnknownResolverPolicy), "Policy for -r keys not consumed by any declared parameter: error (reject), warn (proceed with warning), or ignore (accept silently)")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
@@ -1081,6 +1090,77 @@ func (o *sharedResolverOptions) handleStateLoadError(ctx context.Context, loadEr
 		return o.exitWithCode(ctx, err, exitcode.GeneralError)
 	}
 	return o.exitWithCode(ctx, fmt.Errorf("state load: %w", loadErr), exitcode.GeneralError)
+}
+
+// validateResolverParams enforces the effective unknown-resolver policy for the
+// supplied -r/--resolver parameters. It centralizes the typo-detection logic
+// shared by run resolver, run solution, and run action.
+//
+// The policy is resolved from --on-unknown-resolver, falling back to the
+// resolver config default and then the strict built-in default. An invalid flag
+// or config value is reported as an error regardless of whether any parameters
+// were supplied.
+//
+// When the policy permits (warn/ignore), unknown keys do not fail the command:
+// warn emits a stderr warning naming the keys, ignore is silent. The strict
+// default (error) returns the validation error unchanged.
+func (o *sharedResolverOptions) validateResolverParams(ctx context.Context, sol *solution.Solution, params map[string]any) error {
+	policy, err := o.effectiveUnknownResolverPolicy(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(params) == 0 {
+		return nil
+	}
+
+	resolvers := sol.Spec.ResolversToSlice()
+	// Skip typo detection when a resolver reads every supplied parameter
+	// (all: true) -- any -r key is valid in that case.
+	if resolversAcceptAllParameters(resolvers) {
+		return nil
+	}
+
+	paramKeys := extractParameterKeys(resolvers)
+	if len(paramKeys) == 0 {
+		return nil
+	}
+
+	verr := inputflags.ValidateInputKeys(params, paramKeys, "solution")
+	if verr == nil {
+		return nil
+	}
+
+	switch policy {
+	case settings.UnknownResolverIgnore:
+		return nil
+	case settings.UnknownResolverWarn:
+		if w := writer.FromContext(ctx); w != nil {
+			w.WarnStderrf("%v", verr)
+		}
+		return nil
+	case settings.UnknownResolverError:
+		return verr
+	}
+	// Unreachable: effectiveUnknownResolverPolicy only returns known policies.
+	return verr
+}
+
+// effectiveUnknownResolverPolicy resolves the unknown-resolver policy honoring
+// precedence: the --on-unknown-resolver flag overrides the resolver config
+// default, which overrides the strict built-in default. It returns an error if
+// the resolved value is not a recognized policy.
+func (o *sharedResolverOptions) effectiveUnknownResolverPolicy(ctx context.Context) (settings.UnknownResolverPolicy, error) {
+	raw := o.OnUnknownResolver
+	// When the flag was not explicitly set, defer to config. flagsChanged is
+	// nil outside the command-execution flow (e.g. unit tests), in which case
+	// the value on the options struct is authoritative.
+	if o.flagsChanged != nil && !o.flagsChanged["on-unknown-resolver"] {
+		if cfg := config.FromContext(ctx); cfg != nil && cfg.Resolver.OnUnknownResolver != "" {
+			raw = cfg.Resolver.OnUnknownResolver
+		}
+	}
+	return settings.ParseUnknownResolverPolicy(raw)
 }
 
 // extractParameterKeys collects the CLI parameter keys accepted by a set of resolvers.

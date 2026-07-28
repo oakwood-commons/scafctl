@@ -394,6 +394,12 @@ type ResolverConfig struct {
 
 	// ValidateAll enables collecting all errors instead of stopping at first
 	ValidateAll bool `json:"validateAll,omitempty" yaml:"validateAll,omitempty" mapstructure:"validateAll" doc:"Collect all errors vs stop at first"`
+
+	// OnUnknownResolver sets the default policy for -r/--resolver parameters
+	// whose key is not consumed by any declared parameter resolver: "error"
+	// (default) rejects them, "warn" proceeds with a warning, "ignore" accepts
+	// them silently. Overridden by the --on-unknown-resolver CLI flag.
+	OnUnknownResolver string `json:"onUnknownResolver,omitempty" yaml:"onUnknownResolver,omitempty" mapstructure:"onUnknownResolver" doc:"Default policy for unknown -r keys (error|warn|ignore)" enum:"error,warn,ignore" example:"error"`
 }
 
 // ActionConfig holds action executor configuration.

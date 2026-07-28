@@ -379,3 +379,39 @@ func TestFileNamesForMode_CustomActionFiles_NoMutation(t *testing.T) {
 
 	assert.Equal(t, original, custom, "FileNamesForMode must not mutate the input slice")
 }
+
+func TestParseUnknownResolverPolicy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    UnknownResolverPolicy
+		wantErr bool
+	}{
+		{name: "empty resolves to default", input: "", want: DefaultUnknownResolverPolicy},
+		{name: "error", input: "error", want: UnknownResolverError},
+		{name: "warn", input: "warn", want: UnknownResolverWarn},
+		{name: "ignore", input: "ignore", want: UnknownResolverIgnore},
+		{name: "uppercase normalized", input: "WARN", want: UnknownResolverWarn},
+		{name: "whitespace trimmed", input: "  ignore  ", want: UnknownResolverIgnore},
+		{name: "invalid value", input: "loud", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseUnknownResolverPolicy(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "valid: error, warn, ignore")
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestDefaultUnknownResolverPolicy_IsStrict(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, UnknownResolverError, DefaultUnknownResolverPolicy)
+}

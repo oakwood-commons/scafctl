@@ -252,7 +252,7 @@ After the third run, the state file contains:
 - `team` was added as a new key.
 
 > [!NOTE]
-> Only parameters that correspond to a declared resolver with `provider: parameter` are accepted. Passing an unknown key (e.g., `-r foo=bar` when no resolver uses `key: "foo"`) produces an error.
+> Only parameters that correspond to a declared resolver with `provider: parameter` are accepted. Passing an unknown key (e.g., `-r foo=bar` when no resolver uses `key: "foo"`) produces an error by default. To relax this (for example, when reusing a shared parameter file across solutions), pass `--on-unknown-resolver=warn` to proceed with a warning, or `--on-unknown-resolver=ignore` to accept unknown keys silently. The default policy can also be set via the `resolver.onUnknownResolver` config field.
 
 ### Merge Rules
 

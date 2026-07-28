@@ -270,6 +270,13 @@ resolver:
   # Default: false
   # validateAll: true
 
+  # Policy for -r/--resolver parameters whose key is not consumed by any
+  # declared parameter resolver: "error" rejects them, "warn" proceeds with a
+  # warning, "ignore" accepts them silently. Overridden by the
+  # --on-unknown-resolver CLI flag.
+  # Default: "error"
+  # onUnknownResolver: "warn"
+
 # =============================================================================
 # Action - Configuration for action execution
 # =============================================================================

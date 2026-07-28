@@ -576,18 +576,10 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		lgr.V(1).Info("--action resolved to resolver names", "actions", o.Actions, "resolvers", actionNames)
 	}
 
-	// Validate parameter keys against parameter provider 'key' inputs (early typo detection)
-	if len(params) > 0 {
-		// Skip typo detection when a resolver reads every supplied parameter
-		// (all: true) -- any -r key is valid in that case.
-		if !resolversAcceptAllParameters(allResolvers) {
-			paramKeys := extractParameterKeys(allResolvers)
-			if len(paramKeys) > 0 {
-				if err := flags.ValidateInputKeys(params, paramKeys, "solution"); err != nil {
-					return o.exitWithCode(ctx, err, exitcode.InvalidInput)
-				}
-			}
-		}
+	// Validate parameter keys against parameter provider 'key' inputs (early
+	// typo detection), honoring the --on-unknown-resolver policy.
+	if err := o.validateResolverParams(ctx, sol, params); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
 	var lookup resolver.DescriptorLookup
