@@ -10157,6 +10157,52 @@ func TestIntegration_RunResolver_UnknownParamKeyNoSuggestion(t *testing.T) {
 	assert.Contains(t, stderr, "does not accept input")
 }
 
+func TestIntegration_RunResolver_UnknownParamKey_WarnPolicy(t *testing.T) {
+	t.Parallel()
+	// --on-unknown-resolver=warn downgrades the rejection to a warning and
+	// proceeds with execution.
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"--on-unknown-resolver=warn",
+		"namee=Alice",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stderr, "does not accept input")
+	// The resolver output is still produced.
+	assert.Contains(t, stdout, "name")
+}
+
+func TestIntegration_RunResolver_UnknownParamKey_IgnorePolicy(t *testing.T) {
+	t.Parallel()
+	// --on-unknown-resolver=ignore accepts the unknown key silently.
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"--on-unknown-resolver=ignore",
+		"namee=Alice",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	assert.NotContains(t, stderr, "does not accept input")
+	assert.Contains(t, stdout, "name")
+}
+
+func TestIntegration_RunResolver_InvalidUnknownResolverPolicy(t *testing.T) {
+	t.Parallel()
+	// An unrecognized policy value is rejected with a clear error.
+	_, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/parameters.yaml",
+		"--on-unknown-resolver=loud",
+		"name=Alice",
+	)
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, stderr, "valid: error, warn, ignore")
+}
+
 // TestIntegration_Lint_MissingFallbackSource verifies missing-fallback-source lint rule detects all-conditional resolvers.
 func TestIntegration_Lint_MissingFallbackSource(t *testing.T) {
 	t.Parallel()

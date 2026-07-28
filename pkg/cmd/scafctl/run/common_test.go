@@ -390,3 +390,147 @@ func TestWarnStateSkipped(t *testing.T) {
 		})
 	})
 }
+
+// paramResolverSolution builds a solution whose single resolver reads the
+// parameter provider under the given key.
+func paramResolverSolution(key string) *solution.Solution {
+	return &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				key: {
+					Name: key,
+					Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+						{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+							"key": {Literal: key},
+						}},
+					}},
+				},
+			},
+		},
+	}
+}
+
+func TestValidateResolverParams(t *testing.T) {
+	sol := paramResolverSolution("name")
+
+	newCtx := func() (context.Context, *bytes.Buffer) {
+		var buf bytes.Buffer
+		ioStreams := terminal.NewIOStreams(nil, &buf, &buf, false)
+		w := writer.New(ioStreams, settings.NewCliParams())
+		return writer.WithWriter(context.Background(), w), &buf
+	}
+
+	t.Run("known key passes regardless of policy", func(t *testing.T) {
+		for _, policy := range []string{"error", "warn", "ignore"} {
+			ctx, buf := newCtx()
+			opts := &sharedResolverOptions{OnUnknownResolver: policy}
+			err := opts.validateResolverParams(ctx, sol, map[string]any{"name": "x"})
+			require.NoError(t, err, "policy %s", policy)
+			assert.Empty(t, buf.String(), "policy %s should not warn on known key", policy)
+		}
+	})
+
+	t.Run("unknown key with error policy rejects", func(t *testing.T) {
+		ctx, _ := newCtx()
+		opts := &sharedResolverOptions{OnUnknownResolver: "error"}
+		err := opts.validateResolverParams(ctx, sol, map[string]any{"foo": "bar"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "foo")
+	})
+
+	t.Run("unknown key defaults to error when policy empty", func(t *testing.T) {
+		ctx, _ := newCtx()
+		opts := &sharedResolverOptions{}
+		err := opts.validateResolverParams(ctx, sol, map[string]any{"foo": "bar"})
+		require.Error(t, err)
+	})
+
+	t.Run("unknown key with warn policy proceeds and warns", func(t *testing.T) {
+		ctx, buf := newCtx()
+		opts := &sharedResolverOptions{OnUnknownResolver: "warn"}
+		err := opts.validateResolverParams(ctx, sol, map[string]any{"foo": "bar"})
+		require.NoError(t, err)
+		assert.Contains(t, buf.String(), "foo")
+	})
+
+	t.Run("unknown key with ignore policy is silent", func(t *testing.T) {
+		ctx, buf := newCtx()
+		opts := &sharedResolverOptions{OnUnknownResolver: "ignore"}
+		err := opts.validateResolverParams(ctx, sol, map[string]any{"foo": "bar"})
+		require.NoError(t, err)
+		assert.Empty(t, buf.String())
+	})
+
+	t.Run("invalid policy errors even without params", func(t *testing.T) {
+		ctx, _ := newCtx()
+		opts := &sharedResolverOptions{OnUnknownResolver: "loud"}
+		err := opts.validateResolverParams(ctx, sol, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "valid: error, warn, ignore")
+	})
+
+	t.Run("all-mode solution accepts any key", func(t *testing.T) {
+		ctx, _ := newCtx()
+		allSol := &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"params": {
+						Name: "params",
+						Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{
+							{Provider: "parameter", Inputs: map[string]*resolver.ValueRef{
+								"all": {Literal: true},
+							}},
+						}},
+					},
+				},
+			},
+		}
+		opts := &sharedResolverOptions{OnUnknownResolver: "error"}
+		err := opts.validateResolverParams(ctx, allSol, map[string]any{"anything": "goes"})
+		require.NoError(t, err)
+	})
+}
+
+func TestEffectiveUnknownResolverPolicy(t *testing.T) {
+	t.Run("flagsChanged nil uses options value", func(t *testing.T) {
+		opts := &sharedResolverOptions{OnUnknownResolver: "warn"}
+		got, err := opts.effectiveUnknownResolverPolicy(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, settings.UnknownResolverWarn, got)
+	})
+
+	t.Run("flag not set falls back to config default", func(t *testing.T) {
+		cfg := &config.Config{Resolver: config.ResolverConfig{OnUnknownResolver: "ignore"}}
+		ctx := config.WithConfig(context.Background(), cfg)
+		opts := &sharedResolverOptions{
+			OnUnknownResolver: string(settings.DefaultUnknownResolverPolicy),
+			flagsChanged:      map[string]bool{},
+		}
+		got, err := opts.effectiveUnknownResolverPolicy(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, settings.UnknownResolverIgnore, got)
+	})
+
+	t.Run("explicit flag overrides config", func(t *testing.T) {
+		cfg := &config.Config{Resolver: config.ResolverConfig{OnUnknownResolver: "ignore"}}
+		ctx := config.WithConfig(context.Background(), cfg)
+		opts := &sharedResolverOptions{
+			OnUnknownResolver: "warn",
+			flagsChanged:      map[string]bool{"on-unknown-resolver": true},
+		}
+		got, err := opts.effectiveUnknownResolverPolicy(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, settings.UnknownResolverWarn, got)
+	})
+
+	t.Run("invalid config value errors", func(t *testing.T) {
+		cfg := &config.Config{Resolver: config.ResolverConfig{OnUnknownResolver: "bogus"}}
+		ctx := config.WithConfig(context.Background(), cfg)
+		opts := &sharedResolverOptions{
+			OnUnknownResolver: string(settings.DefaultUnknownResolverPolicy),
+			flagsChanged:      map[string]bool{},
+		}
+		_, err := opts.effectiveUnknownResolverPolicy(ctx)
+		require.Error(t, err)
+	})
+}
