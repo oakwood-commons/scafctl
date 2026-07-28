@@ -295,6 +295,18 @@ func (o *sharedResolverOptions) exitWithCode(ctx context.Context, err error, cod
 	return exitcode.WithCode(err, code)
 }
 
+// isStructuredOutput reports whether the selected output format is a
+// machine-readable format (json/yaml/...) for which failures should still emit
+// a parseable document on stdout rather than an empty stdout with a stderr-only
+// error.
+func (o *sharedResolverOptions) isStructuredOutput() bool {
+	format, ok := kvx.ParseOutputFormat(o.Output)
+	if !ok {
+		return false
+	}
+	return kvx.IsStructuredFormat(format)
+}
+
 // buildResolverOutputMap builds the output map from resolver data with format-aware redaction for sensitive values.
 // Sensitive values are redacted in table/interactive output (human-facing) but revealed in structured
 // output formats (json, yaml) since those are typically used for machine consumption.

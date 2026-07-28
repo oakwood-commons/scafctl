@@ -1224,6 +1224,109 @@ func TestIntegration_RunSolution_NoWorkflowErrors(t *testing.T) {
 	assert.Contains(t, stderr, "scafctl run resolver")
 }
 
+// failureEnvelopeSolution hard-fails at the transform phase at runtime:
+// int("hello") passes load-time validation but errors when evaluated. It carries
+// a workflow so `run solution`/`run action` reach the resolver-execution site.
+const failureEnvelopeSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: failure-envelope-integration
+  version: 1.0.0
+spec:
+  resolvers:
+    broken:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+      transform:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'int(__self)'
+  workflow:
+    actions:
+      greet:
+        provider: message
+        inputs:
+          message: "SHOULD_NOT_RUN"
+          type: info
+`
+
+// TestIntegration_RunResolver_FailureEnvelope_JSON verifies that a resolver
+// failure still writes a parseable JSON document (with the reserved
+// __status/__diagnostics keys) to stdout instead of empty stdout, so scripts
+// piping to jq keep working on failure.
+func TestIntegration_RunResolver_FailureEnvelope_JSON(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(failureEnvelopeSolution), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver", "-f", solutionPath, "-o", "json",
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode, "resolver failure must exit non-zero")
+	require.NotEmpty(t, strings.TrimSpace(stdout), "stdout must not be empty on failure")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &decoded), "stdout must be valid JSON")
+	assert.Equal(t, "failed", decoded["__status"])
+	assert.NotEmpty(t, decoded["__diagnostics"])
+}
+
+// TestIntegration_RunSolution_FailureEnvelope_JSON verifies the same guarantee
+// for `run solution`: a resolver-phase failure emits a {status, diagnostics}
+// document on stdout.
+func TestIntegration_RunSolution_FailureEnvelope_JSON(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(failureEnvelopeSolution), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "solution", "-f", solutionPath, "-o", "json",
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode, "solution resolver failure must exit non-zero")
+	require.NotEmpty(t, strings.TrimSpace(stdout), "stdout must not be empty on failure")
+	assert.NotContains(t, stdout, "SHOULD_NOT_RUN", "actions must not run when resolvers fail")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &decoded), "stdout must be valid JSON")
+	assert.Equal(t, "failed", decoded["status"])
+	assert.NotEmpty(t, decoded["diagnostics"])
+}
+
+// TestIntegration_RunAction_FailureEnvelope_JSON verifies the same guarantee for
+// `run action`.
+func TestIntegration_RunAction_FailureEnvelope_JSON(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(failureEnvelopeSolution), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "action", "greet", "-f", solutionPath, "-o", "json",
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode, "action resolver failure must exit non-zero")
+	require.NotEmpty(t, strings.TrimSpace(stdout), "stdout must not be empty on failure")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &decoded), "stdout must be valid JSON")
+	assert.Equal(t, "failed", decoded["status"])
+	assert.NotEmpty(t, decoded["diagnostics"])
+}
+
 // TestIntegration_RunSolution_DeferredValidationImmutableNotLocked verifies the
 // two-phase validation D1 guarantee: when a deferred (cross-resolver) validation
 // rule fails on an immutable resolver, execution stops before actions run and
