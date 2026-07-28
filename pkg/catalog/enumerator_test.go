@@ -23,67 +23,46 @@ func TestSelectEnumerator(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
-		authHandlerName string
-		registry        string
-		repository      string
-		wantType        string
+		name       string
+		registry   string
+		repository string
+		wantType   string
 	}{
 		{
-			name:            "gcp auth handler selects GCP enumerator",
-			authHandlerName: "gcp",
-			registry:        "us-central1-docker.pkg.dev",
-			repository:      "my-project/my-repo",
-			wantType:        "*catalog.gcpEnumerator",
+			name:       "GCP Artifact Registry hostname selects GCP enumerator",
+			registry:   "us-central1-docker.pkg.dev",
+			repository: "my-project/my-repo",
+			wantType:   "*catalog.gcpEnumerator",
 		},
 		{
-			name:            "quay auth handler selects Quay enumerator",
-			authHandlerName: "quay",
-			registry:        "registry.example.com",
-			repository:      "my-solutions",
-			wantType:        "*catalog.quayEnumerator",
+			name:       "GCP hostname detection in another region",
+			registry:   "us-east4-docker.pkg.dev",
+			repository: "my-project/my-repo",
+			wantType:   "*catalog.gcpEnumerator",
 		},
 		{
-			name:            "GCP hostname detection without auth handler",
-			authHandlerName: "",
-			registry:        "us-east4-docker.pkg.dev",
-			repository:      "my-project/my-repo",
-			wantType:        "*catalog.gcpEnumerator",
+			name:       "quay.io hostname selects Quay enumerator",
+			registry:   "quay.io",
+			repository: "myorg",
+			wantType:   "*catalog.quayEnumerator",
 		},
 		{
-			name:            "quay hostname detection without auth handler",
-			authHandlerName: "",
-			registry:        "quay.io",
-			repository:      "myorg",
-			wantType:        "*catalog.quayEnumerator",
+			name:       "quay.io subdomain selects Quay enumerator",
+			registry:   "cdn.quay.io",
+			repository: "myorg",
+			wantType:   "*catalog.quayEnumerator",
 		},
 		{
-			name:            "ghcr.io hostname selects GHCR enumerator",
-			authHandlerName: "",
-			registry:        "ghcr.io",
-			repository:      "myorg",
-			wantType:        "*catalog.ghcrEnumerator",
+			name:       "ghcr.io hostname selects GHCR enumerator",
+			registry:   "ghcr.io",
+			repository: "myorg",
+			wantType:   "*catalog.ghcrEnumerator",
 		},
 		{
-			name:            "github auth handler selects GHCR enumerator",
-			authHandlerName: "github",
-			registry:        "ghcr.io",
-			repository:      "myorg",
-			wantType:        "*catalog.ghcrEnumerator",
-		},
-		{
-			name:            "unknown registry falls back to OCI",
-			authHandlerName: "",
-			registry:        "registry.example.com",
-			repository:      "myorg/scafctl",
-			wantType:        "*catalog.ociCatalogEnumerator",
-		},
-		{
-			name:            "gcp auth handler with non-GCP host falls back to OCI",
-			authHandlerName: "gcp",
-			registry:        "registry.example.com",
-			repository:      "myorg",
-			wantType:        "*catalog.ociCatalogEnumerator",
+			name:       "unknown registry falls back to OCI",
+			registry:   "registry.example.com",
+			repository: "myorg/scafctl",
+			wantType:   "*catalog.ociCatalogEnumerator",
 		},
 	}
 
@@ -92,11 +71,10 @@ func TestSelectEnumerator(t *testing.T) {
 			t.Parallel()
 
 			cfg := enumeratorConfig{
-				authHandlerName: tc.authHandlerName,
-				registry:        tc.registry,
-				repository:      tc.repository,
-				client:          &orasauth.Client{},
-				logger:          logr.Discard(),
+				registry:   tc.registry,
+				repository: tc.repository,
+				client:     &orasauth.Client{},
+				logger:     logr.Discard(),
 			}
 
 			e := selectEnumerator(cfg)
@@ -825,11 +803,10 @@ func typeName(v any) string {
 
 func BenchmarkSelectEnumerator(b *testing.B) {
 	cfg := enumeratorConfig{
-		authHandlerName: "gcp",
-		registry:        "us-central1-docker.pkg.dev",
-		repository:      "my-project/my-repo",
-		client:          &orasauth.Client{},
-		logger:          logr.Discard(),
+		registry:   "us-central1-docker.pkg.dev",
+		repository: "my-project/my-repo",
+		client:     &orasauth.Client{},
+		logger:     logr.Discard(),
 	}
 
 	b.ResetTimer()

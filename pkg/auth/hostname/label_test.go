@@ -15,7 +15,7 @@ func TestAliasForURL(t *testing.T) {
 	aliases := map[string]string{
 		"cluster-a": "https://api.cluster-a.example.com:6443",
 		"cluster-b": "https://api.cluster-b.example.com:6443",
-		"legacy": "api.cluster-a.example.com", // bare host, same as cluster-a
+		"legacy":    "api.cluster-a.example.com", // bare host, same as cluster-a
 	}
 
 	tests := []struct {
@@ -43,7 +43,7 @@ func TestAliasForURL(t *testing.T) {
 			name:      "ambiguous match returns lexicographically first",
 			aliases:   aliases,
 			url:       "https://api.cluster-a.example.com:6443",
-			wantAlias: "legacy",
+			wantAlias: "cluster-a",
 			wantOK:    true,
 		},
 		{

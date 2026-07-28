@@ -185,11 +185,11 @@ func TestExpand_TwoClusters(t *testing.T) {
 	sessions := Expand(ctx, "openshift", h, &auth.Status{Authenticated: true})
 	require.Len(t, sessions, 2)
 
-	// Sorted by hostname: cluster-b < cluster-a.
-	assert.Equal(t, "api.cluster-b.example.com", sessions[0].ClusterLabel)
-	assert.False(t, sessions[0].Active)
-	assert.Equal(t, "cluster-a", sessions[1].ClusterLabel)
-	assert.True(t, sessions[1].Active, "most recent CachedAt is active")
+	// Sorted by hostname: cluster-a < cluster-b.
+	assert.Equal(t, "cluster-a", sessions[0].ClusterLabel)
+	assert.True(t, sessions[0].Active, "most recent CachedAt is active")
+	assert.Equal(t, "api.cluster-b.example.com", sessions[1].ClusterLabel)
+	assert.False(t, sessions[1].Active)
 }
 
 // TestExpand_DedupesPerCluster asserts several tokens for the same instance

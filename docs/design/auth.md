@@ -29,7 +29,7 @@ Authentication is a system concern, not a provider implementation detail.
 scafctl provides built-in auth handlers for common identity providers:
 
 | Handler | Status | Description |
-|---------|--------|-------------|
+| --------- | -------- | ------------- |
 | `entra` | ✅ Implemented | Microsoft Entra ID (Azure AD) |
 | `github` | ✅ Implemented | GitHub OAuth (Device Code + PAT) |
 | `gcp` | ✅ Implemented | Google Cloud Platform (ADC, Service Account, Metadata, Workload Identity, gcloud ADC, Impersonation) |
@@ -97,7 +97,6 @@ auth:
         - sso.openshift.example.com
 ```
 
-
 ---
 
 ## Core Principles
@@ -136,7 +135,7 @@ Auth handlers are not action providers and do not perform side effects outside a
 Each handler declares a set of capabilities that describe which features it supports. CLI commands use these capabilities to dynamically validate flags and provide meaningful errors.
 
 | Capability | Description | Entra | GitHub | GCP |
-|------------|-------------|-------|--------|-----|
+| ------------ | ------------- | ------- | -------- | ----- |
 | `scopes_on_login` | Supports specifying scopes at login time | ✅ | ✅ | ✅ |
 | `scopes_on_token_request` | Supports per-request scopes when acquiring tokens | ✅ | ❌ | ✅ |
 | `tenant_id` | Supports tenant ID parameter | ✅ | ❌ | ❌ |
@@ -233,7 +232,7 @@ Behavior:
 **Supported Flows:**
 
 | Flow | Flag | Use Case |
-|------|------|----------|
+| ------ | ------ | ---------- |
 | Device Code | `--flow device-code` | Interactive user authentication |
 | Service Principal | `--flow service-principal` | CI/CD pipelines, automation |
 | Workload Identity | `--flow workload-identity` | Kubernetes (AKS) workload identity |
@@ -247,7 +246,7 @@ scafctl auth login github
 Behavior:
 
 - Initiates GitHub OAuth device code flow
-- User authenticates in a browser at https://github.com/login/device
+- User authenticates in a browser at <https://github.com/login/device>
 - An access token (and optionally refresh token) is obtained
 - Credentials are stored securely
 - Supports GitHub Enterprise Server via `--hostname`
@@ -308,7 +307,7 @@ Behavior:
 When `GetToken` is called, the Entra handler selects the flow in this order:
 
 | Priority | Flow | Condition |
-|----------|------|-----------|
+| ---------- | ------ | ----------- |
 | 1 | Workload Identity | `AZURE_FEDERATED_TOKEN_FILE` or `AZURE_FEDERATED_TOKEN` is set and valid |
 | 2 | Service Principal | `AZURE_CLIENT_SECRET` is set |
 | 3 | Device Code (refresh token) | A refresh token is present in the system secret store |
@@ -378,7 +377,7 @@ Uses the system secret store for long-lived credentials.
 Uses the system secret store for access tokens and optional refresh tokens.
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `GITHUB_TOKEN` | GitHub personal access token or Actions token |
 | `GH_TOKEN` | GitHub personal access token (gh CLI convention) |
 | `GH_HOST` | GitHub hostname for Enterprise Server |
@@ -388,7 +387,7 @@ Uses the system secret store for access tokens and optional refresh tokens.
 Credentials are read from environment variables (never stored):
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `AZURE_CLIENT_ID` | Application (client) ID |
 | `AZURE_TENANT_ID` | Directory (tenant) ID |
 | `AZURE_CLIENT_SECRET` | Client secret value |
@@ -400,7 +399,7 @@ Access tokens are still cached to disk like device code flow.
 Credentials are read from environment variables and projected token files (never stored):
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `AZURE_CLIENT_ID` | Application (client) ID |
 | `AZURE_TENANT_ID` | Directory (tenant) ID |
 | `AZURE_FEDERATED_TOKEN_FILE` | Path to projected service account token file |
@@ -421,7 +420,7 @@ scafctl.auth.<handler>.<type>
 For the Entra handler:
 
 | Secret Name | Description |
-|-------------|-------------|
+| ------------- | ------------- |
 | `scafctl.auth.entra.refresh_token` | Long-lived refresh token |
 | `scafctl.auth.entra.metadata` | Token metadata (claims, tenant, client ID, expiry) |
 | `scafctl.auth.entra.token.<flow>.<fingerprint>.<scope-hash>` | Cached access tokens partitioned by flow, config identity, and scope |
@@ -429,7 +428,7 @@ For the Entra handler:
 For the GitHub handler:
 
 | Secret Name | Description |
-|-------------|-------------|
+| ------------- | ------------- |
 | `scafctl.auth.github.refresh_token` | OAuth refresh token (if token expiration is enabled) |
 | `scafctl.auth.github.access_token` | OAuth access token (non-expiring apps) |
 | `scafctl.auth.github.metadata` | Token metadata (claims, hostname, client ID, expiry) |

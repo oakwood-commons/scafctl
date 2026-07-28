@@ -2001,7 +2001,7 @@ func TestFindSolution_DiscoveryMode(t *testing.T) {
 		// subfolder solution.yaml is found first in folder-priority order.
 		existingFiles := map[string]bool{
 			"mycli/solution.yaml": true,
-			"actions.yaml":         true,
+			"actions.yaml":        true,
 		}
 		customStatFunc := func(path string) (os.FileInfo, error) {
 			if existingFiles[path] {

@@ -116,10 +116,10 @@ func TestExpandInstanceRows_TwoClusters(t *testing.T) {
 	rows := expandInstanceRows(ctx, "openshift", h, status, baseStatusRow("openshift"))
 	require.Len(t, rows, 2)
 
-	// Deterministic order: sorted by hostname; cluster-b < cluster-a. For the built-in
+	// Deterministic order: sorted by hostname; cluster-a < cluster-b. For the built-in
 	// profile the cluster alias/label alone is shown (no redundant "built-in /").
-	assert.Equal(t, "api.cluster-b.example.com", rows[0]["profile"], "unaliased host trimmed")
-	assert.Equal(t, "cluster-a (active)", rows[1]["profile"], "aliased host + active marker (most recent CachedAt)")
+	assert.Equal(t, "cluster-a (active)", rows[0]["profile"], "aliased host + active marker (most recent CachedAt)")
+	assert.Equal(t, "api.cluster-b.example.com", rows[1]["profile"], "unaliased host trimmed")
 
 	// Shared identity fills the user column on every row.
 	assert.Equal(t, "user@example.com", rows[0]["user"])
