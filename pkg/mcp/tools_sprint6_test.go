@@ -155,6 +155,30 @@ func TestHandleValidateExpressions(t *testing.T) {
 		assert.Equal(t, float64(2), summary["invalid"])
 	})
 
+	t.Run("cel optional chaining is valid", func(t *testing.T) {
+		// Regression: the batch path (validateCELExpressionDirect) must accept
+		// optional access (.?) just like the single-expression handler.
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]any{
+			"expressions": []any{
+				map[string]any{"expression": `_.?name.orValue("fallback")`, "type": "cel"},
+				map[string]any{"expression": "msg.?field.?nested", "type": "cel"},
+			},
+		}
+		result, err := srv.handleValidateExpressions(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+		text := extractText(t, result)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &data))
+		summary := data["summary"].(map[string]any)
+		assert.Equal(t, float64(2), summary["total"])
+		assert.Equal(t, float64(2), summary["valid"])
+		assert.Equal(t, float64(0), summary["invalid"])
+	})
+
 	t.Run("empty expressions", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)

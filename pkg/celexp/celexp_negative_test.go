@@ -4,6 +4,7 @@
 package celexp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/cel-go/cel"
@@ -555,14 +556,21 @@ func TestValidateSyntax(t *testing.T) {
 		{name: "valid_function", expr: "size('hello')", wantErr: false},
 		{name: "valid_ternary", expr: "x > 0 ? 'pos' : 'neg'", wantErr: false},
 		{name: "valid_boolean", expr: "true && false", wantErr: false},
+		// Optional access and chaining must parse: the parse env enables
+		// optional types, matching runtime evaluation (regression for
+		// validate_expression reporting valid '.?' syntax as an error).
+		{name: "valid_optional_access", expr: `_.?name.orValue("fallback")`, wantErr: false},
+		{name: "valid_optional_chaining", expr: "msg.?field.?nested", wantErr: false},
+		{name: "valid_optional_index", expr: `m[?"key"].orValue("x")`, wantErr: false},
 		{name: "invalid_unclosed_paren", expr: "size('hello'", wantErr: true},
 		{name: "invalid_missing_operand", expr: "1 +", wantErr: true},
 		{name: "invalid_unclosed_string", expr: "'hello", wantErr: true},
 		{name: "empty_expression", expr: "", wantErr: true},
 	}
+	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateSyntax(tt.expr)
+			err := ValidateSyntax(ctx, tt.expr)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -573,7 +581,8 @@ func TestValidateSyntax(t *testing.T) {
 }
 
 func BenchmarkValidateSyntax(b *testing.B) {
+	ctx := context.Background()
 	for i := 0; i < b.N; i++ {
-		ValidateSyntax("x > 0 ? size(name) : 0")
+		ValidateSyntax(ctx, "x > 0 ? size(name) : 0")
 	}
 }

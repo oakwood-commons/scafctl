@@ -10,7 +10,7 @@ import (
 	"text/template"
 
 	"github.com/MakeNowJust/heredoc/v2"
-	"github.com/google/cel-go/cel"
+	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -105,7 +105,7 @@ func (o *ValidateOptions) Run(ctx context.Context) error {
 
 	switch o.Type {
 	case "cel":
-		result = validateCEL(o.Expression)
+		result = validateCEL(ctx, o.Expression)
 	case "go-template", "gotemplate", "template":
 		result = validateGoTemplate(o.Expression)
 	default:
@@ -136,26 +136,20 @@ func (o *ValidateOptions) Run(ctx context.Context) error {
 	return nil
 }
 
-// validateCEL validates a CEL expression for syntax errors.
-func validateCEL(expr string) *ValidateResult {
+// validateCEL validates a CEL expression for syntax errors. It delegates to
+// celexp.ValidateSyntax so the CLI parses with the same environment the runtime
+// uses -- including optional access and chaining (_.?name) -- rather than a
+// bare environment that would reject valid optional syntax.
+func validateCEL(ctx context.Context, expr string) *ValidateResult {
 	result := &ValidateResult{
 		Expression: expr,
 		Type:       "cel",
 		Valid:      true,
 	}
 
-	env, err := cel.NewEnv()
-	if err != nil {
+	if err := celexp.ValidateSyntax(ctx, expr); err != nil {
 		result.Valid = false
-		result.Error = fmt.Sprintf("failed to create CEL environment: %v", err)
-		return result
-	}
-
-	_, issues := env.Parse(expr)
-	if issues != nil && issues.Err() != nil {
-		result.Valid = false
-		result.Error = issues.Err().Error()
-		return result
+		result.Error = err.Error()
 	}
 
 	return result

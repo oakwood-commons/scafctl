@@ -175,6 +175,27 @@ func TestHandleValidateExpression(t *testing.T) {
 		assert.Equal(t, false, output["valid"])
 	})
 
+	t.Run("valid CEL optional chaining", func(t *testing.T) {
+		// Regression: optional access (.?) must validate the same way it
+		// evaluates -- previously reported as "unsupported syntax '.?'".
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "validate_expression"
+		request.Params.Arguments = map[string]any{
+			"expression": `_.?name.orValue("fallback")`,
+			"type":       "cel",
+		}
+
+		result, err := srv.handleValidateExpression(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+		assert.Equal(t, true, output["valid"])
+		assert.Equal(t, "cel", output["type"])
+	})
+
 	t.Run("valid Go template", func(t *testing.T) {
 		request := mcp.CallToolRequest{}
 		request.Params.Name = "validate_expression"
