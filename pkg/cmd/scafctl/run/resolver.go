@@ -847,7 +847,7 @@ func (o *ResolverOptions) failStructured(ctx context.Context, results map[string
 		return o.exitWithCode(ctx, err, code)
 	}
 	if w := writer.FromContext(ctx); w != nil {
-		w.WarnStderrf("%v", err)
+		w.Errorf("%v", err)
 	}
 	return exitcode.WithCode(err, code)
 }

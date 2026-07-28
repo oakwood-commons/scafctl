@@ -489,7 +489,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 			}
 			if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr == nil {
 				if w := writer.FromContext(ctx); w != nil {
-					w.WarnStderrf("action execution failed: %v", err)
+					w.Errorf("action execution failed: %v", err)
 				}
 				return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 			}

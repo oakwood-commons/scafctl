@@ -615,7 +615,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			}
 			if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr == nil {
 				if w := writer.FromContext(ctx); w != nil {
-					w.WarnStderrf("action execution failed: %v", err)
+					w.Errorf("action execution failed: %v", err)
 				}
 				return exitcode.WithCode(fmt.Errorf("action execution failed: %w", err), exitcode.ActionFailed)
 			}
@@ -961,7 +961,7 @@ func (o *SolutionOptions) failStructured(ctx context.Context, err error, code in
 		return o.exitWithCode(ctx, err, code)
 	}
 	if w := writer.FromContext(ctx); w != nil {
-		w.WarnStderrf("%v", err)
+		w.Errorf("%v", err)
 	}
 	return exitcode.WithCode(err, code)
 }

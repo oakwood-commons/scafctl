@@ -296,15 +296,21 @@ func (o *sharedResolverOptions) exitWithCode(ctx context.Context, err error, cod
 }
 
 // isStructuredOutput reports whether the selected output format is a
-// machine-readable format (json/yaml/...) for which failures should still emit
-// a parseable document on stdout rather than an empty stdout with a stderr-only
-// error.
+// machine-readable format for which failures should still emit a parseable
+// document on stdout rather than an empty stdout with a stderr-only error.
+//
+// The structured failure contract is deliberately scoped to json and yaml only
+// (matching the command help text and MCP docs). It intentionally excludes the
+// other "structured" kvx formats (csv/toml/mermaid): the solution/action
+// envelope serializer only supports json/yaml, and injecting the resolver
+// failure keys into csv/toml/mermaid would change those formats' output shape
+// in a way the documented contract does not describe.
 func (o *sharedResolverOptions) isStructuredOutput() bool {
 	format, ok := kvx.ParseOutputFormat(o.Output)
 	if !ok {
 		return false
 	}
-	return kvx.IsStructuredFormat(format)
+	return format == kvx.OutputFormatJSON || format == kvx.OutputFormatYAML
 }
 
 // buildResolverOutputMap builds the output map from resolver data with format-aware redaction for sensitive values.
