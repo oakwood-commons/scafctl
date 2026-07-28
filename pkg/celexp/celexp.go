@@ -76,7 +76,8 @@ func SetDefaultCostLimit(limit uint64) {
 // This should be called once during application initialization by the env package.
 // It allows celexp to use environments with all custom extensions without circular dependencies.
 //
-// This function is thread-safe and uses sync.Once to ensure it's only set once.
+// This function is thread-safe: it is guarded by a mutex and an initialized flag
+// so only the first call takes effect.
 func SetEnvFactory(factory func(context.Context, ...cel.EnvOption) (*cel.Env, error)) {
 	envFactoryMu.Lock()
 	defer envFactoryMu.Unlock()
@@ -98,7 +99,8 @@ func getEnvFactory() func(context.Context, ...cel.EnvOption) (*cel.Env, error) {
 // This should be called once during application initialization by the env package.
 // It allows celexp to use the global cache without circular dependencies.
 //
-// This function is thread-safe and uses sync.Once to ensure it's only set once.
+// This function is thread-safe: it is guarded by a mutex and an initialized flag
+// so only the first call takes effect.
 //
 // Example (called by env package during initialization):
 //

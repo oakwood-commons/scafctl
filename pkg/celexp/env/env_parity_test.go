@@ -24,8 +24,9 @@ import (
 // explicit optional-access and chaining cases.
 func TestValidateSyntaxRuntimeParity(t *testing.T) {
 	// Register the runtime factory so celexp.NewParseEnv (used by ValidateSyntax)
-	// builds the same environment the evaluator uses. SetEnvFactory is guarded by
-	// sync.Once; registering New here is the production configuration.
+	// builds the same environment the evaluator uses. SetEnvFactory is guarded by a
+	// mutex and an initialized flag so it only takes effect once; registering New
+	// here is the production configuration.
 	celexp.SetEnvFactory(New)
 
 	ctx := context.Background()
