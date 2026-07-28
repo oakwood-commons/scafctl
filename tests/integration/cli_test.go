@@ -8876,6 +8876,31 @@ func TestIntegration_EvalValidate_CELValid(t *testing.T) {
 	assert.Contains(t, stdout, "valid")
 }
 
+// TestIntegration_EvalValidate_CELOptionalChaining is a regression test: CEL
+// optional access/chaining (_.?name) must validate as syntactically valid on
+// the CLI, matching the runtime evaluation environment. Previously the
+// validator used a bare CEL environment without OptionalTypes and rejected it.
+func TestIntegration_EvalValidate_CELOptionalChaining(t *testing.T) {
+	t.Parallel()
+	for _, expr := range []string{
+		`_.?name.orValue("fallback")`,
+		"msg.?field.?nested",
+		`_[?"name"].orValue("x")`,
+	} {
+		expr := expr
+		t.Run(expr, func(t *testing.T) {
+			t.Parallel()
+			stdout, _, exitCode := runScafctl(t, "eval", "validate", "--expression", expr, "--type", "cel", "-o", "json")
+			assert.Equal(t, 0, exitCode)
+
+			var result map[string]any
+			require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+			assert.Equal(t, true, result["valid"], "expr %q should be valid", expr)
+			assert.Equal(t, "cel", result["type"])
+		})
+	}
+}
+
 func TestIntegration_EvalValidate_CELInvalid(t *testing.T) {
 	t.Parallel()
 	_, _, exitCode := runScafctl(t, "eval", "validate", "--expression", "invalid +++ (", "--type", "cel")

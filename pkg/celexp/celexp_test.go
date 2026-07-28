@@ -437,6 +437,65 @@ func TestSetEnvFactory(t *testing.T) {
 	assert.False(t, called2, "second SetEnvFactory call should be ignored")
 }
 
+func TestNewParseEnv(t *testing.T) {
+	// Save and restore original factory state so subtests can swap it freely.
+	origFactory := envFactory
+	origInitialized := envFactoryInitialized
+	t.Cleanup(func() {
+		envFactoryMu.Lock()
+		envFactory = origFactory
+		envFactoryInitialized = origInitialized
+		envFactoryMu.Unlock()
+	})
+
+	setFactory := func(f func(context.Context, ...cel.EnvOption) (*cel.Env, error)) {
+		envFactoryMu.Lock()
+		envFactory = f
+		envFactoryInitialized = true
+		envFactoryMu.Unlock()
+	}
+
+	t.Run("fallback env parses optional syntax", func(t *testing.T) {
+		// No factory registered -> NewParseEnv must fall back to an env with
+		// OptionalTypes so optional access (.?) still parses.
+		setFactory(nil)
+
+		env, err := NewParseEnv(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, env)
+
+		_, issues := env.Parse(`_.?name.orValue("fallback")`)
+		if issues != nil {
+			assert.NoError(t, issues.Err())
+		}
+	})
+
+	t.Run("uses registered factory", func(t *testing.T) {
+		called := false
+		setFactory(func(ctx context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
+			called = true
+			return cel.NewEnv(opts...)
+		})
+
+		env, err := NewParseEnv(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, env)
+		assert.True(t, called, "NewParseEnv should use the registered factory")
+	})
+
+	t.Run("wraps factory error", func(t *testing.T) {
+		setFactory(func(ctx context.Context, opts ...cel.EnvOption) (*cel.Env, error) {
+			return nil, assert.AnError
+		})
+
+		env, err := NewParseEnv(context.Background())
+		require.Error(t, err)
+		assert.Nil(t, env)
+		assert.Contains(t, err.Error(), "failed to create CEL environment")
+		assert.ErrorIs(t, err, assert.AnError)
+	})
+}
+
 func TestSetCacheFactory(t *testing.T) {
 	// Reset state so we can set it fresh
 	ResetForTesting()

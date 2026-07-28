@@ -34,20 +34,10 @@ func (e Expression) GetVariablesWithPrefix(ctx context.Context, prefix string) (
 		prefix = "_."
 	}
 
-	// Create a CEL environment for parsing
-	// Use the environment factory if available to include custom extensions
-	var env *cel.Env
-	var err error
-	factory := getEnvFactory()
-	if factory != nil {
-		env, err = factory(ctx)
-	} else {
-		// Enable optional types so optional access (_.?name, _[?"name"]) parses
-		// even when no extension factory is registered (e.g. white-box tests).
-		env, err = cel.NewEnv(cel.OptionalTypes())
-	}
+	// Create a CEL environment for parsing (shared with runtime via NewParseEnv).
+	env, err := NewParseEnv(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+		return nil, err
 	}
 
 	// Parse the expression to get the AST
@@ -112,7 +102,7 @@ func (e Expression) GetUnderscoreVariables(ctx context.Context) ([]string, error
 //	// hard == []string{"a"}, optional == []string{"b"}
 //	// (a is hard despite the _.?a use; b is optional-only)
 func (e Expression) GetUnderscoreVariablesByOptionality(ctx context.Context) (hard, optional []string, err error) {
-	env, err := e.parseEnv(ctx)
+	env, err := NewParseEnv(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -155,25 +145,6 @@ func (e Expression) GetUnderscoreVariablesByOptionality(ctx context.Context) (ha
 	return hard, optional, nil
 }
 
-// parseEnv builds a CEL environment for parsing, using the registered
-// environment factory (with custom extensions) when available and falling back
-// to a minimal environment with optional types enabled so optional access
-// (_.?name, _[?"name"]) parses in white-box tests.
-func (e Expression) parseEnv(ctx context.Context) (*cel.Env, error) {
-	if factory := getEnvFactory(); factory != nil {
-		env, err := factory(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create CEL environment: %w", err)
-		}
-		return env, nil
-	}
-	env, err := cel.NewEnv(cel.OptionalTypes())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
-	}
-	return env, nil
-}
-
 // MapLiteralKeys parses the CEL expression and, if its top-level node is a map
 // literal with constant string keys (e.g. {"a": _.x, "b": proj}), returns the
 // list of those keys and true. For any other expression shape -- a function
@@ -194,14 +165,7 @@ func (e Expression) parseEnv(ctx context.Context) (*cel.Env, error) {
 //	keys, ok := celexp.Expression(`map.merge(_.a, _.b)`).MapLiteralKeys(ctx)
 //	// keys == nil, ok == false
 func (e Expression) MapLiteralKeys(ctx context.Context) ([]string, bool) {
-	var env *cel.Env
-	var err error
-	factory := getEnvFactory()
-	if factory != nil {
-		env, err = factory(ctx)
-	} else {
-		env, err = cel.NewEnv(cel.OptionalTypes())
-	}
+	env, err := NewParseEnv(ctx)
 	if err != nil {
 		return nil, false
 	}
@@ -272,20 +236,10 @@ func (e Expression) MapLiteralKeys(ctx context.Context) ([]string, bool) {
 //	vars, err = expr.RequiredVariables(ctx)
 //	// Returns: []string{}, nil (x is a comprehension variable, not external)
 func (e Expression) RequiredVariables(ctx context.Context) ([]string, error) {
-	// Create a CEL environment for parsing
-	// Use the environment factory if available to include custom extensions
-	var env *cel.Env
-	var err error
-	factory := getEnvFactory()
-	if factory != nil {
-		env, err = factory(ctx)
-	} else {
-		// Enable optional types so optional access (_.?name, _[?"name"]) parses
-		// even when no extension factory is registered (e.g. white-box tests).
-		env, err = cel.NewEnv(cel.OptionalTypes())
-	}
+	// Create a CEL environment for parsing (shared with runtime via NewParseEnv).
+	env, err := NewParseEnv(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+		return nil, err
 	}
 
 	// Parse the expression to get the AST

@@ -76,7 +76,8 @@ func SetDefaultCostLimit(limit uint64) {
 // This should be called once during application initialization by the env package.
 // It allows celexp to use environments with all custom extensions without circular dependencies.
 //
-// This function is thread-safe and uses sync.Once to ensure it's only set once.
+// This function is thread-safe: it is guarded by a mutex and an initialized flag
+// so only the first call takes effect.
 func SetEnvFactory(factory func(context.Context, ...cel.EnvOption) (*cel.Env, error)) {
 	envFactoryMu.Lock()
 	defer envFactoryMu.Unlock()
@@ -98,7 +99,8 @@ func getEnvFactory() func(context.Context, ...cel.EnvOption) (*cel.Env, error) {
 // This should be called once during application initialization by the env package.
 // It allows celexp to use the global cache without circular dependencies.
 //
-// This function is thread-safe and uses sync.Once to ensure it's only set once.
+// This function is thread-safe: it is guarded by a mutex and an initialized flag
+// so only the first call takes effect.
 //
 // Example (called by env package during initialization):
 //
@@ -793,13 +795,40 @@ func formatCelType(t *cel.Type) string {
 	}
 }
 
-// ValidateSyntax checks a CEL expression for parse errors without executing it
-// or requiring any variable declarations. It uses a minimal CEL environment for
-// fast syntax validation. Returns nil if the expression is syntactically valid.
-func ValidateSyntax(expression string) error {
-	env, err := cel.NewEnv()
+// NewParseEnv builds a CEL environment for parse-only AST inspection and syntax
+// validation. It uses the registered environment factory -- which includes all
+// custom extensions and optional types -- when available, so the parser
+// recognizes exactly the same syntax the evaluation/runtime engine does. When no
+// factory is registered (e.g. white-box unit tests within celexp), it falls back
+// to a minimal environment with optional types enabled so optional access
+// (_.?name, _[?"name"]) still parses.
+//
+// Routing every parse-only environment through this single constructor keeps
+// syntax validation and evaluation from drifting apart.
+func NewParseEnv(ctx context.Context) (*cel.Env, error) {
+	if factory := getEnvFactory(); factory != nil {
+		env, err := factory(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+		}
+		return env, nil
+	}
+	env, err := cel.NewEnv(cel.OptionalTypes())
 	if err != nil {
-		return fmt.Errorf("creating CEL environment: %w", err)
+		return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+	}
+	return env, nil
+}
+
+// ValidateSyntax checks a CEL expression for parse errors without executing it
+// or requiring any variable declarations. It parses with the same environment
+// the runtime uses (via NewParseEnv), so any expression that evaluates
+// successfully -- including optional access and chaining (_.?name) -- also
+// validates successfully. Returns nil if the expression is syntactically valid.
+func ValidateSyntax(ctx context.Context, expression string) error {
+	env, err := NewParseEnv(ctx)
+	if err != nil {
+		return err
 	}
 
 	_, issues := env.Parse(expression)

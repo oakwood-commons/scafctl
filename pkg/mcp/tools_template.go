@@ -238,7 +238,7 @@ func (s *Server) handleListGoTemplateFunctions(_ context.Context, request mcp.Ca
 }
 
 // handleValidateExpression validates a CEL expression or Go template for syntax errors.
-func (s *Server) handleValidateExpression(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleValidateExpression(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	expression, err := request.RequireString("expression")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(),
@@ -257,7 +257,7 @@ func (s *Server) handleValidateExpression(_ context.Context, request mcp.CallToo
 
 	switch exprType {
 	case "cel":
-		return s.validateCELExpression(expression)
+		return s.validateCELExpression(ctx, expression)
 	case "go-template":
 		leftDelim := request.GetString("left_delim", "")
 		rightDelim := request.GetString("right_delim", "")
@@ -271,8 +271,8 @@ func (s *Server) handleValidateExpression(_ context.Context, request mcp.CallToo
 }
 
 // validateCELExpression checks a CEL expression for syntax errors without executing it.
-func (s *Server) validateCELExpression(expression string) (*mcp.CallToolResult, error) {
-	if err := celexp.ValidateSyntax(expression); err != nil {
+func (s *Server) validateCELExpression(ctx context.Context, expression string) (*mcp.CallToolResult, error) {
+	if err := celexp.ValidateSyntax(ctx, expression); err != nil {
 		return mcp.NewToolResultJSON(map[string]any{
 			"valid":      false,
 			"type":       "cel",
@@ -335,7 +335,7 @@ func (s *Server) validateGoTemplate(content, leftDelim, rightDelim string) (*mcp
 }
 
 // handleValidateExpressions batch-validates multiple CEL and Go-template expressions.
-func (s *Server) handleValidateExpressions(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleValidateExpressions(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := request.GetArguments()
 	exprsRaw, ok := args["expressions"]
 	if !ok || exprsRaw == nil {
@@ -407,7 +407,7 @@ func (s *Server) handleValidateExpressions(_ context.Context, request mcp.CallTo
 
 		switch exprType {
 		case "cel":
-			valid, errMsg := s.validateCELExpressionDirect(expr)
+			valid, errMsg := s.validateCELExpressionDirect(ctx, expr)
 			entry.Valid = valid
 			if errMsg != "" {
 				entry.Error = errMsg
@@ -445,8 +445,8 @@ func (s *Server) handleValidateExpressions(_ context.Context, request mcp.CallTo
 }
 
 // validateCELExpressionDirect validates a CEL expression and returns (valid, errorMsg).
-func (s *Server) validateCELExpressionDirect(expression string) (bool, string) {
-	if err := celexp.ValidateSyntax(expression); err != nil {
+func (s *Server) validateCELExpressionDirect(ctx context.Context, expression string) (bool, string) {
+	if err := celexp.ValidateSyntax(ctx, expression); err != nil {
 		return false, err.Error()
 	}
 	return true, ""

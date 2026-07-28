@@ -171,7 +171,9 @@ scafctl eval validate --expression '{{ .name }}' --type go-template
 | `-o` | string | No | Output format |
 
 **Implementation:**
-- CEL: use `cel.NewEnv().Parse()` to syntax-check
+- CEL: use `celexp.ValidateSyntax(ctx, expr)` to syntax-check (routes through the
+  shared parse environment so optional access/chaining like `_.?name` parses the
+  same way the runtime evaluates it)
 - Go template: use `template.New().Parse()` + `gotmpl.Service.GetReferences()`
 - Report: valid/invalid, error details, referenced variables
 

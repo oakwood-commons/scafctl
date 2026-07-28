@@ -6,6 +6,7 @@
 package lint
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -1394,11 +1395,11 @@ func lintTemplateUnderscorePrefix(tmpl, location string, result *Result) {
 }
 
 // celLintEnv holds the shared CEL environment used for all lint-time parsing.
-// It enables cel.OptionalTypes() so optional access syntax (_.?name, _[?"name"])
-// parses successfully, matching the env used by the reference collector and
-// runtime evaluation in pkg/celexp. The env is immutable and safe for
-// concurrent use, so it is built once and reused across every expression
-// instead of being rebuilt per call.
+// It is built once via celexp.NewParseEnv -- the same constructor the reference
+// collector and runtime evaluation use -- so optional access syntax (_.?name,
+// _[?"name"]) and every custom extension parse identically to evaluation and
+// cannot drift. The env is immutable and safe for concurrent use, so it is built
+// once and reused across every expression instead of being rebuilt per call.
 var (
 	celLintEnv     *cel.Env
 	celLintEnvErr  error
@@ -1408,7 +1409,7 @@ var (
 // lintCELEnv returns the shared lint CEL environment, building it on first use.
 func lintCELEnv() (*cel.Env, error) {
 	celLintEnvOnce.Do(func() {
-		celLintEnv, celLintEnvErr = cel.NewEnv(cel.OptionalTypes())
+		celLintEnv, celLintEnvErr = celexp.NewParseEnv(context.Background())
 	})
 	return celLintEnv, celLintEnvErr
 }

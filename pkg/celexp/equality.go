@@ -70,7 +70,7 @@ func (e Expression) paramEqualitiesWithPrefix(ctx context.Context, prefix string
 		prefix = "_."
 	}
 
-	env, err := newParseEnv(ctx)
+	env, err := NewParseEnv(ctx)
 	if err != nil {
 		return nil, false, false
 	}
@@ -96,15 +96,6 @@ func (e Expression) paramEqualitiesWithPrefix(ctx context.Context, prefix string
 		found[name] = dedupeSortValues(vals)
 	}
 	return found, reducible, true
-}
-
-// newParseEnv builds a CEL environment for parse-only AST inspection, reusing
-// the registered extension factory when available so custom functions parse.
-func newParseEnv(ctx context.Context) (*cel.Env, error) {
-	if factory := getEnvFactory(); factory != nil {
-		return factory(ctx)
-	}
-	return cel.NewEnv(cel.OptionalTypes())
 }
 
 // collectEqualities recursively walks call nodes, accumulating discovered
