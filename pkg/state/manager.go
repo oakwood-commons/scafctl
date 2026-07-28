@@ -436,14 +436,27 @@ func extractStateData(result *provider.ExecutionResult) (*Data, error) {
 		return nil, fmt.Errorf("expected map output, got %T", result.Output.Data)
 	}
 
-	sd, ok := dataMap["data"]
+	// A backend reports an absent object (a first run) via found:false. Treat it
+	// as fresh empty state without decoding or version-checking the payload, so
+	// the misleading "delete the state file" guidance is never emitted before a
+	// file exists. Absent found defaults to true (the prior backend contract).
+	if found, ok := dataMap[OutputKeyFound]; ok && !isTruthy(found) {
+		return NewData(), nil
+	}
+
+	sd, ok := dataMap[OutputKeyData]
 	if !ok {
 		return nil, fmt.Errorf("missing 'data' field in backend output")
 	}
 
 	// Direct pointer — returned by in-process providers.
 	if stateData, ok := sd.(*Data); ok {
-		if err := validateSchemaVersion(stateData.SchemaVersion); err != nil {
+		// A zero-value document is the in-process equivalent of a contentless
+		// payload: treat it as fresh empty state rather than a version-0 file.
+		if isEmptyData(stateData) {
+			return NewData(), nil
+		}
+		if err := validateSchemaVersion(stateData.SchemaVersion, true); err != nil {
 			return nil, err
 		}
 		normalizeData(stateData)

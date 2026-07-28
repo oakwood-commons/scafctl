@@ -43,12 +43,13 @@ func (p *HTTPProvider) executeStateLoad(ctx context.Context, client *httpc.Clien
 		return nil, fmt.Errorf("state load: response body exceeds maximum size of %d bytes", limit)
 	}
 
-	// 404 means no state yet -- return empty state
+	// 404 means no state yet -- report absence so the loader starts fresh.
 	if resp.StatusCode == http.StatusNotFound {
 		return &provider.Output{
 			Data: map[string]any{
-				"success": true,
-				"data":    state.NewData(),
+				"success":            true,
+				state.OutputKeyFound: false,
+				state.OutputKeyData:  state.NewData(),
 			},
 		}, nil
 	}

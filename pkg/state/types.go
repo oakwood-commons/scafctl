@@ -35,6 +35,20 @@ const (
 // partition logic reference it to avoid drift.
 const ReadProviderName = "state"
 
+const (
+	// OutputKeyData is the state_load output field that carries the decoded or
+	// serialized state document a backend read from its storage.
+	OutputKeyData = "data"
+
+	// OutputKeyFound is the state_load output field a backend sets to false to
+	// report that no state object exists yet (a first run). When absent it
+	// defaults to true, which preserves the prior backend contract. The core
+	// loader treats found:false as fresh empty state without decoding the
+	// payload or applying the schema-version guard, so the "delete the state
+	// file and recreate it" guidance is never emitted before a file exists.
+	OutputKeyFound = "found"
+)
+
 // Config is the solution-level state configuration.
 // It is a top-level peer to Spec, Catalog, Bundle, and Compose on the Solution struct.
 //

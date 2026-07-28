@@ -204,6 +204,7 @@ func NewFileProvider() *FileProvider {
 				provider.CapabilityState: schemahelper.ObjectSchema([]string{"success"}, map[string]*jsonschema.Schema{
 					"success": schemahelper.BoolProp("Whether the state operation succeeded"),
 					"data":    schemahelper.AnyProp("The loaded state data (for state_load operation)"),
+					"found":   schemahelper.BoolProp("Whether a state object exists (state_load operation). False on a first run when no state file exists yet; the loader then starts from fresh empty state. Absent defaults to true."),
 				}),
 				provider.CapabilityAction: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 					"success":      schemahelper.BoolProp("Whether the operation succeeded (for write/delete operations)"),

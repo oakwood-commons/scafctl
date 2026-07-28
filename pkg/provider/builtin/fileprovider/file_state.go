@@ -17,11 +17,12 @@ import (
 // executeStateLoad loads state from a JSON file at the given absolute path.
 func (p *FileProvider) executeStateLoad(absPath string) (*provider.Output, error) {
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		// First run -- return empty state
+		// First run -- report absence so the loader starts from fresh state.
 		return &provider.Output{
 			Data: map[string]any{
-				"success": true,
-				"data":    state.NewData(),
+				"success":            true,
+				state.OutputKeyFound: false,
+				state.OutputKeyData:  state.NewData(),
 			},
 		}, nil
 	}
