@@ -72,7 +72,9 @@ func TestHTTPProvider_StateLoad_NotFound(t *testing.T) {
 
 	data := result.Data.(map[string]any)
 	assert.True(t, data["success"].(bool))
-	assert.NotNil(t, data["data"])
+	// A 404 reports absence so the loader starts from fresh state.
+	assert.Equal(t, false, data[state.OutputKeyFound])
+	assert.NotNil(t, data[state.OutputKeyData])
 }
 
 func TestHTTPProvider_StateLoad_ServerError(t *testing.T) {

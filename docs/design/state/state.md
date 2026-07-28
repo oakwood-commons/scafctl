@@ -357,6 +357,39 @@ State is read and written only by the backend provider (`file`, `http`, or
 
 ---
 
+## State Backend Load Response Contract
+
+Every `CapabilityState` backend returns a map from `state_load`. The core state
+loader interprets it as follows:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `success` | bool | Whether the operation succeeded. |
+| `data` | object | The decoded/serialized `Data` document read from storage. |
+| `found` | bool | Optional. Set to `false` to report that no state object exists yet (a first run). Absent defaults to `true`. |
+
+**Reporting absence (first run).** When the backing object does not exist (a
+missing file, an HTTP/GitHub 404), a backend MUST NOT return an empty or
+zero-version document as if it were a real state file -- that value decodes to
+`schemaVersion: 0` and would otherwise trip the schema-version floor with a
+misleading "delete the state file and recreate it" error before any file
+exists. Instead, report absence in one of two ways:
+
+1. **Preferred:** set `found: false`. The loader then starts from fresh empty
+   state (`state.NewData()`) without decoding or version-checking the payload.
+2. **Accepted:** return `state.NewData()` (or a contentless payload -- empty
+   bytes, `null`, or `{}`) as `data`. The loader treats a contentless payload as
+   fresh empty state as a safety net for backends that do not set `found`.
+
+The schema-version guard (`ErrIncompatibleSchemaVersion` /
+`ErrUnsupportedSchemaVersion`) applies only to a **non-empty document that
+carries real content**, so a genuine older state file is still rejected rather
+than silently accepted (which would discard immutable locks).
+
+The built-in `file` and `http` backends set `found: false` on absence.
+
+---
+
 ## File Provider State Operations
 
 The built-in `file` provider supports state persistence via `CapabilityState`. State operations use `state_load`, `state_save`, and `state_delete` as the `operation` input.
@@ -373,7 +406,7 @@ The built-in `file` provider supports state persistence via `CapabilityState`. S
 
 | Operation | Behavior |
 |-----------|----------|
-| `state_load` | Reads JSON from the resolved path (relative to solution directory). Returns empty state structure if file does not exist (first run). |
+| `state_load` | Reads JSON from the resolved path (relative to solution directory). Reports `found: false` (fresh state) if the file does not exist (first run). |
 | `state_save` | Writes `Data` as JSON to the resolved path. Creates directories as needed. Uses atomic write (temp + rename). |
 | `state_delete` | Removes the state file at the resolved path. |
 
@@ -447,7 +480,7 @@ This is semantically correct: state reflects what is committed/deployed, not wha
 
 | Operation | Behavior |
 |-----------|----------|
-| `state_load` | Read JSON file from `owner/repo/path@ref`. Return empty state on 404 (first run). |
+| `state_load` | Read JSON file from `owner/repo/path@ref`. Report `found: false` (fresh state) on 404 (first run). |
 | `state_save` | Fetch HEAD OID of `branch`, call `createCommitOnBranch` with state JSON as file addition. Fail on OID conflict. |
 | `state_delete` | Fetch HEAD OID of `branch`, call `createCommitOnBranch` with file deletion. Idempotent on missing file. |
 

@@ -31,7 +31,9 @@ func TestFileProvider_StateLoad_NotFound(t *testing.T) {
 
 	data := result.Data.(map[string]any)
 	assert.True(t, data["success"].(bool))
-	assert.NotNil(t, data["data"])
+	// A missing file reports absence so the loader starts from fresh state.
+	assert.Equal(t, false, data[state.OutputKeyFound])
+	assert.NotNil(t, data[state.OutputKeyData])
 }
 
 func TestFileProvider_StateLoad_IncompatibleSchemaVersion(t *testing.T) {

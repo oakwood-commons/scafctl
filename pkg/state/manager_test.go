@@ -819,6 +819,65 @@ func TestExtractStateData(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "expected *Data or map[string]any")
 	})
+
+	t.Run("found false yields fresh state without data", func(t *testing.T) {
+		t.Parallel()
+		// A backend that reports an absent object (found:false) must yield fresh
+		// empty state without a data field and without a version error.
+		result, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success":      true,
+				OutputKeyFound: false,
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, SchemaVersionCurrent, result.SchemaVersion)
+		assert.Empty(t, result.Parameters)
+	})
+
+	t.Run("found false wins over zero-version data", func(t *testing.T) {
+		t.Parallel()
+		// Even when a backend returns a zero-value document alongside found:false,
+		// the absence signal takes precedence and no version guard is applied.
+		result, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success":      true,
+				OutputKeyFound: false,
+				OutputKeyData:  &Data{},
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, SchemaVersionCurrent, result.SchemaVersion)
+	})
+
+	t.Run("direct pointer empty document is fresh state", func(t *testing.T) {
+		t.Parallel()
+		// A zero-value *Data (no found signal) is the in-process equivalent of a
+		// contentless payload and must be treated as fresh state, not a v0 file.
+		result, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success":     true,
+				OutputKeyData: &Data{},
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, SchemaVersionCurrent, result.SchemaVersion)
+		assert.NotNil(t, result.Resolvers)
+	})
+
+	t.Run("map fallback empty object is fresh state", func(t *testing.T) {
+		t.Parallel()
+		// A plugin backend that returns an empty map on not-found (instead of the
+		// found signal) must still produce fresh state rather than a v0 error.
+		result, err := extractStateData(&provider.ExecutionResult{
+			Output: provider.Output{Data: map[string]any{
+				"success":     true,
+				OutputKeyData: map[string]any{},
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, SchemaVersionCurrent, result.SchemaVersion)
+	})
 }
 
 func TestManagerLoad_ParamsAsParams(t *testing.T) {

@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1490,6 +1492,97 @@ spec:
 			assert.Contains(t, stderr, tc.wantHint, "the error should include the actionable remediation hint")
 			assert.NotContains(t, stderr, "cannot unmarshal",
 				"the version guard must fire before the strict decode, so no reflection error should leak")
+		})
+	}
+}
+
+// TestIntegration_RunSolution_FirstRunAbsentState verifies the first-run
+// contract: when a state backend reports no existing state (an HTTP 404, or a
+// contentless "{}" payload the way some remote backends answer a missing
+// object), the run must start from fresh empty state and succeed -- it must NOT
+// be misread as an out-of-range "schemaVersion 0" and rejected with an
+// "incompatible state schema version" error.
+func TestIntegration_RunSolution_FirstRunAbsentState(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name       string
+		loadStatus int
+		loadBody   string
+	}{
+		{
+			name:       "remote 404 is a fresh first run",
+			loadStatus: http.StatusNotFound,
+			loadBody:   "not found",
+		},
+		{
+			name:       "contentless empty object is a fresh first run",
+			loadStatus: http.StatusOK,
+			loadBody:   "{}",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// state_load is a GET; state_save/delete use other methods.
+				if r.Method == http.MethodGet {
+					w.WriteHeader(tc.loadStatus)
+					_, _ = w.Write([]byte(tc.loadBody))
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"success": true}`))
+			}))
+			defer srv.Close()
+
+			solutionContent := fmt.Sprintf(`apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: first-run-absent-state
+  version: 1.0.0
+state:
+  enabled: true
+  backend:
+    provider: http
+    inputs:
+      url: %s
+spec:
+  resolvers:
+    region:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+  workflow:
+    actions:
+      notify:
+        provider: message
+        inputs:
+          message: "ACTION_RAN"
+          type: info
+`, srv.URL)
+
+			tmpDir := t.TempDir()
+			solutionPath := filepath.Join(tmpDir, "solution.yaml")
+			require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+			// The http backend talks to an httptest server on 127.0.0.1, which the
+			// SSRF guard blocks unless private IPs are explicitly allowed.
+			configPath := filepath.Join(tmpDir, "config.yaml")
+			require.NoError(t, os.WriteFile(configPath, []byte("httpClient:\n  allowPrivateIPs: true\n"), 0o600))
+
+			stdout, stderr, exitCode := runScafctlInDir(t, tmpDir, "--config", configPath, "run", "solution", "-f", solutionPath)
+			assert.Equal(t, 0, exitCode, "a first run against an absent remote state must succeed")
+			assert.Contains(t, stdout, "ACTION_RAN", "the action should run on a fresh first run")
+			assert.NotContains(t, stderr, "incompatible state schema version",
+				"an absent/contentless first-run state must not be misread as an out-of-range schema version")
 		})
 	}
 }

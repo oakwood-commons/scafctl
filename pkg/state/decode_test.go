@@ -25,6 +25,39 @@ func TestDecodeData_ValidRoundTrip(t *testing.T) {
 	assert.NotNil(t, sd.Command.Parameters)
 }
 
+func TestDecodeData_ContentlessIsFreshState(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"empty":         ``,
+		"whitespace":    "  \n\t ",
+		"json null":     `null`,
+		"empty object":  `{}`,
+		"padded object": "  { }  ",
+	}
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sd, err := DecodeData([]byte(raw))
+			require.NoError(t, err)
+			assert.Equal(t, SchemaVersionCurrent, sd.SchemaVersion)
+			assert.NotNil(t, sd.Parameters)
+			assert.NotNil(t, sd.Resolvers)
+			assert.NotNil(t, sd.Fingerprints)
+			assert.NotNil(t, sd.Command.Parameters)
+		})
+	}
+}
+
+// TestDecodeData_StructuredEmptyStillGuarded verifies that a document with keys
+// but no schemaVersion is NOT treated as contentless -- it must still be
+// rejected so a genuine old file is not silently accepted.
+func TestDecodeData_StructuredEmptyStillGuarded(t *testing.T) {
+	t.Parallel()
+	_, err := DecodeData([]byte(`{"parameters":{}}`))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrIncompatibleSchemaVersion)
+}
+
 func TestDecodeData_NewerVersionUnsupported(t *testing.T) {
 	t.Parallel()
 	raw := []byte(`{"schemaVersion":999,"parameters":{}}`)
@@ -95,20 +128,22 @@ func TestDecodeData_InRangeTypeMismatchStillRawError(t *testing.T) {
 func TestValidateSchemaVersion(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		version int
-		wantErr error
+		name     string
+		version  int
+		explicit bool
+		wantErr  error
 	}{
-		{name: "current", version: SchemaVersionCurrent, wantErr: nil},
-		{name: "minimum", version: SchemaVersionMinimum, wantErr: nil},
-		{name: "too new", version: SchemaVersionCurrent + 1, wantErr: ErrUnsupportedSchemaVersion},
-		{name: "too old", version: SchemaVersionMinimum - 1, wantErr: ErrIncompatibleSchemaVersion},
-		{name: "zero", version: 0, wantErr: ErrIncompatibleSchemaVersion},
+		{name: "current", version: SchemaVersionCurrent, explicit: true, wantErr: nil},
+		{name: "minimum", version: SchemaVersionMinimum, explicit: true, wantErr: nil},
+		{name: "too new", version: SchemaVersionCurrent + 1, explicit: true, wantErr: ErrUnsupportedSchemaVersion},
+		{name: "too old", version: SchemaVersionMinimum - 1, explicit: true, wantErr: ErrIncompatibleSchemaVersion},
+		{name: "zero explicit", version: 0, explicit: true, wantErr: ErrIncompatibleSchemaVersion},
+		{name: "zero implicit", version: 0, explicit: false, wantErr: ErrIncompatibleSchemaVersion},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateSchemaVersion(tt.version)
+			err := validateSchemaVersion(tt.version, tt.explicit)
 			if tt.wantErr == nil {
 				require.NoError(t, err)
 				return
@@ -117,4 +152,34 @@ func TestValidateSchemaVersion(t *testing.T) {
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
+}
+
+// TestValidateSchemaVersion_MessageDistinguishesMissingField verifies the
+// message differs for a document that carries an explicit older version versus
+// one that predates the schemaVersion field entirely.
+func TestValidateSchemaVersion_MessageDistinguishesMissingField(t *testing.T) {
+	t.Parallel()
+
+	explicitErr := validateSchemaVersion(1, true)
+	require.Error(t, explicitErr)
+	assert.Contains(t, explicitErr.Error(), "file version 1")
+
+	implicitErr := validateSchemaVersion(0, false)
+	require.Error(t, implicitErr)
+	assert.Contains(t, implicitErr.Error(), "no schemaVersion field")
+}
+
+func TestIsEmptyData(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isEmptyData(&Data{}), "zero-value document is empty")
+
+	assert.False(t, isEmptyData(nil), "nil is not a fresh document")
+	assert.False(t, isEmptyData(NewData()), "NewData has a nonzero schema version")
+
+	withParam := &Data{Parameters: map[string]any{"env": "prod"}}
+	assert.False(t, isEmptyData(withParam), "content makes it non-empty")
+
+	withMeta := &Data{Metadata: Metadata{Solution: "app"}}
+	assert.False(t, isEmptyData(withMeta), "metadata makes it non-empty")
 }
