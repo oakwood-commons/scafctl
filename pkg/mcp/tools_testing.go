@@ -32,7 +32,7 @@ func (s *Server) registerTestingTools() {
 			mcp.Description("Path to the solution file to generate tests for"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(genTestTool, s.handleGenerateTestScaffold)
@@ -59,7 +59,7 @@ func (s *Server) registerTestingTools() {
 			mcp.Description("Include built-in tests (lint, parse). Default: false"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(listTestsTool, s.handleListTests)

@@ -44,7 +44,7 @@ func (s *Server) registerRefsTools() {
 			mcp.Description("Expression type: 'go-template' (default) or 'cel'"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative file paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescFilePaths),
 		),
 	)
 	s.addTool(extractRefssTool, s.handleExtractResolverRefs)

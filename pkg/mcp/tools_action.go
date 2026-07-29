@@ -38,7 +38,7 @@ func (s *Server) registerActionTools() {
 			mcp.Description("Preview a specific action by name. If omitted, previews all actions."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD. Solution-relative reads (relativeTo: solution) resolve against the solution's own directory regardless of this setting when the solution has a local directory (a local file path or an extracted catalog bundle); for stdin (-) and unbundled catalog references there is no solution directory, so these reads fall back to the process CWD."),
+			mcp.Description(cwdDescSolutionAware),
 		),
 	)
 	s.addTool(previewActionTool, s.handlePreviewAction)

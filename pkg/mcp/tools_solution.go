@@ -66,7 +66,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Path to solution file, catalog name, or URL"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(inspectSolutionTool, s.handleInspectSolution)
@@ -90,7 +90,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Enum("error", "warning", "info"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(lintSolutionTool, s.handleLintSolution)
@@ -120,14 +120,14 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Target directory for action output. When set, actions resolve relative paths against this directory instead of CWD. Resolvers always use CWD regardless of this setting."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD. Solution-relative reads (relativeTo: solution) resolve against the solution's own directory regardless of this setting when the solution has a local directory (a local file path or an extracted catalog bundle); for stdin (-) and unbundled catalog references there is no solution directory, so these reads fall back to the process CWD."),
+			mcp.Description(cwdDescSolutionAware),
 		),
 	)
 	s.addTool(renderSolutionTool, s.handleRenderSolution)
 
 	// preview_resolvers
 	previewResolversTool := mcp.NewTool("preview_resolvers",
-		mcp.WithDescription("Execute a solution's resolver chain and return each resolver's resolved value. This is the 'does it actually work?' step between writing YAML and running the full solution. Shows the resolved value, type, and status for every resolver. Accepts optional input parameters for parameter-type resolvers. Use the 'resolver' parameter to debug a single resolver and see its resolve/transform/validate pipeline in detail. Validation failures are non-fatal by default: resolved values are still returned alongside a 'diagnostics' list so you can troubleshoot, and dependents of a validation-only failure still run because the upstream value is usable (resolve/transform failures remain fatal and do skip dependents). Set 'strict' to true to have the tool report an error when validation fails (values are still included)."),
+		mcp.WithDescription("Execute a solution's resolver chain and return each resolver's resolved value, type, and status. Accepts optional input parameters for parameter-type resolvers. Use 'resolver' to debug a single resolver's resolve/transform/validate pipeline. Validation failures are non-fatal by default (resolved values plus 'diagnostics' are returned, dependents still run); resolve/transform failures remain fatal. Set 'strict' to report an error on validation failure (values still included)."),
 		mcp.WithTitleAnnotation("Preview Resolvers"),
 		mcp.WithToolIcons(toolIcons["solution"]),
 		mcp.WithReadOnlyHintAnnotation(false),
@@ -152,7 +152,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Target directory for action output. Included for path preview purposes — resolvers always use CWD regardless of this setting."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD. Solution-relative reads (relativeTo: solution) resolve against the solution's own directory regardless of this setting when the solution has a local directory (a local file path or an extracted catalog bundle); for stdin (-) and unbundled catalog references there is no solution directory, so these reads fall back to the process CWD."),
+			mcp.Description(cwdDescSolutionAware),
 		),
 	)
 	s.addTool(previewResolversTool, s.handlePreviewResolvers)
@@ -186,7 +186,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Target directory for action output during test execution. When set, actions resolve relative paths against this directory instead of CWD."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths (including the solution path itself) resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescSolutionPathOnly),
 		),
 	)
 	s.addTool(runSolutionTestsTool, s.handleRunSolutionTests)
@@ -206,7 +206,7 @@ func (s *Server) registerSolutionTools() {
 		),
 		mcp.WithString("on_conflict",
 			mcp.Description("Include --on-conflict flag in the generated command. Controls file write behavior when targets exist. Valid values: error, overwrite, skip, skip-unchanged, append."),
-			mcp.Enum("error", "overwrite", "skip", "skip-unchanged", "append"),
+			mcp.Enum(onConflictEnumValues...),
 		),
 		mcp.WithBoolean("backup",
 			mcp.Description("Include --backup flag in the generated command. Creates .bak backups before overwriting existing files."),
@@ -215,7 +215,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Include --show-execution flag in the generated command. Adds __execution metadata (timing, phases, providers) to the output. Useful when debugging resolver performance or building execution-aware pipelines."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(getRunCommandTool, s.handleGetRunCommand)
@@ -234,7 +234,7 @@ func (s *Server) registerSolutionTools() {
 			mcp.Description("Path to solution file, catalog name, or URL"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(getSolutionUsageTool, s.handleGetSolutionUsage)

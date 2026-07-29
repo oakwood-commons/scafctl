@@ -31,7 +31,7 @@ func (s *Server) registerSnapshotTools() {
 			mcp.Description("Output detail level: 'summary' (default), 'resolvers' (include per-resolver data), 'full' (everything including raw values)"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(showSnapshotTool, s.handleShowSnapshot)
@@ -57,7 +57,7 @@ func (s *Server) registerSnapshotTools() {
 			mcp.Description("Omit unchanged resolvers from the response. Default: true"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(diffSnapshotsTool, s.handleDiffSnapshots)

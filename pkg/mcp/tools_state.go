@@ -28,7 +28,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State file path (relative to working directory or absolute)"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(listTool, s.handleStateList)
@@ -46,7 +46,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State file path (relative to working directory or absolute)"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(showTool, s.handleStateShow)
@@ -68,7 +68,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State entry key to retrieve (typically a resolver name)"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(getTool, s.handleStateGet)
@@ -89,7 +89,7 @@ func (s *Server) registerStateTools() {
 			mcp.Description("State entry key to delete. Omit to clear all entries."),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(deleteTool, s.handleStateDelete)
@@ -119,7 +119,7 @@ func (s *Server) registerStateTools() {
 			mcp.Enum("string", "int", "float", "bool"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(setTool, s.handleStateSet)

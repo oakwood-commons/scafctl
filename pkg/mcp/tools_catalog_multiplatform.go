@@ -64,7 +64,7 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 			mcp.Description("Overwrite an existing artifact with the same name and version (default: false)"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative platform binary paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescPlatformBinaryPaths),
 		),
 	}
 
