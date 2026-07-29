@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+	"github.com/oakwood-commons/scafctl/pkg/celexp/conversion"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -292,6 +293,102 @@ func TestJsonRoundTrip(t *testing.T) {
 
 	expected := map[string]any{"name": "John", "age": float64(30)}
 	assert.Equal(t, expected, result.Value())
+}
+
+// TestUnmarshalNullPreservation guards against a regression where an explicit
+// JSON/YAML null was coerced to the integer 0 while converting the CEL result
+// back to a native Go value (cel-go's Null.Value() returns
+// structpb.NullValue_NULL_VALUE, whose underlying value is 0).
+func TestUnmarshalNullPreservation(t *testing.T) {
+	jsonFn := JSONUnmarshalFunc()
+	yamlFn := YamlUnmarshalFunc()
+	env, err := cel.NewEnv(jsonFn.EnvOptions[0], yamlFn.EnvOptions[0])
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		expr      string
+		expectedB any
+	}{
+		{name: "json unmarshal null field", expr: `json.unmarshal('{"a": null, "b": 1}')`, expectedB: float64(1)},
+		{name: "yaml unmarshal null field", expr: `yaml.unmarshal('{"a": null, "b": 1}')`, expectedB: int64(1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, issues := env.Compile(tt.expr)
+			require.NoError(t, issues.Err())
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err)
+
+			result, _, err := prog.Eval(map[string]any{})
+			require.NoError(t, err)
+
+			// The output path converts the CEL value back to native Go.
+			goVal := conversion.CelValueToGo(result)
+			m, ok := goVal.(map[string]any)
+			require.True(t, ok, "expected map result, got %T", goVal)
+
+			actual, exists := m["a"]
+			assert.True(t, exists, "null key must remain present")
+			assert.Nil(t, actual, "null must not be coerced to 0")
+			assert.Equal(t, tt.expectedB, m["b"])
+		})
+	}
+}
+
+// TestMarshalUnmarshalNullRoundTrip verifies that a document containing null
+// survives an unmarshal -> marshal round-trip without the null becoming 0.
+func TestMarshalUnmarshalNullRoundTrip(t *testing.T) {
+	marshalFn := JSONMarshalFunc()
+	unmarshalFn := JSONUnmarshalFunc()
+	env, err := cel.NewEnv(marshalFn.EnvOptions[0], unmarshalFn.EnvOptions[0])
+	require.NoError(t, err)
+
+	ast, issues := env.Compile(`json.marshal(json.unmarshal('{"a":null,"b":1}'))`)
+	require.NoError(t, issues.Err())
+
+	prog, err := env.Program(ast)
+	require.NoError(t, err)
+
+	result, _, err := prog.Eval(map[string]any{})
+	require.NoError(t, err)
+
+	assert.Equal(t, `{"a":null,"b":1}`, result.Value())
+}
+
+// TestUnmarshalNullPresenceAndEquality verifies that a null value keeps has()
+// faithful (the key is present) and is comparable to null.
+func TestUnmarshalNullPresenceAndEquality(t *testing.T) {
+	fn := JSONUnmarshalFunc()
+	env, err := cel.NewEnv(fn.EnvOptions[0])
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		expr     string
+		expected bool
+	}{
+		{name: "has() true for present null key", expr: `has(json.unmarshal('{"a": null}').a)`, expected: true},
+		{name: "null equals null", expr: `json.unmarshal('{"a": null}').a == null`, expected: true},
+		{name: "null not equal to zero", expr: `json.unmarshal('{"a": null}').a == 0`, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast, issues := env.Compile(tt.expr)
+			require.NoError(t, issues.Err())
+
+			prog, err := env.Program(ast)
+			require.NoError(t, err)
+
+			result, _, err := prog.Eval(map[string]any{})
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expected, result.Value())
+		})
+	}
 }
 
 func TestYamlMarshalFunc_Metadata(t *testing.T) {

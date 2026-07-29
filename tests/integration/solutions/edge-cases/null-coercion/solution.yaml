@@ -12,6 +12,10 @@ metadata:
     type's zero value. Each resolver transforms to CEL null, then relies on the
     declared type to coerce the null to its zero value.
 
+    The nullPreserved resolver covers the complementary case: an UNTYPED
+    resolver must preserve an explicit null inside a decoded object as JSON
+    null (not silently coerce it to the integer 0).
+
 spec:
   resolvers:
     nullToString:
@@ -85,6 +89,14 @@ spec:
             inputs:
               expression: "null"
 
+    nullPreserved:
+      description: An untyped object preserves an explicit null field as null
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.unmarshal("{\"present\": 1, \"absent\": null}")'
+
   testing:
     cases:
       null-to-string:
@@ -136,3 +148,17 @@ spec:
           - expression: __exitCode == 0
           - expression: "__output.nullToObject.size() == 0"
             message: "Null must coerce to an empty object"
+
+      null-preserved:
+        description: An untyped object preserves an explicit null field as null
+        command: [run, resolver]
+        args: ["nullPreserved", "-o", "json"]
+        tags: [edge-case, coercion]
+        assertions:
+          - expression: __exitCode == 0
+          - expression: "has(__output.nullPreserved.present) && __output.nullPreserved.present == 1"
+            message: "Present field must decode to its value"
+          - expression: "has(__output.nullPreserved.absent)"
+            message: "An explicit null field must remain present, not be dropped"
+          - expression: "__output.nullPreserved.absent == null"
+            message: "An explicit null must be preserved as null, not coerced to 0"

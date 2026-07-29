@@ -351,6 +351,17 @@ spec:
             inputs:
               expression: 'json.unmarshal("{\"user\": {\"name\": \"Alice\"}}").user.name'
 
+    json_null_preserved:
+      description: "json.unmarshal preserves null (not coerced to 0)"
+      # No `type` is declared so the decoded object passes through unchanged and
+      # the explicit null is preserved as a real null instead of being coerced
+      # to a numeric 0. has()/presence checks stay faithful downstream.
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: 'json.unmarshal("{\"present\": 1, \"absent\": null}")'
+
     yaml_marshal:
       description: "yaml.marshal - Serialize to YAML"
       type: string

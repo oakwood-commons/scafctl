@@ -285,6 +285,36 @@ func TestEval_NilResult(t *testing.T) {
 	assert.Contains(t, err.Error(), "compile result or program is nil")
 }
 
+func TestEval_NullResultNormalizedToNil(t *testing.T) {
+	// A CEL expression evaluating to null must return Go nil from the low-level
+	// Eval path, not cel-go's structpb.NullValue enum (whose underlying value is
+	// the integer 0). Guards against silent null -> 0 coercion for direct callers.
+	expr := Expression("null")
+	compiled, err := expr.Compile([]cel.EnvOption{})
+	require.NoError(t, err)
+
+	t.Run("Eval", func(t *testing.T) {
+		value, err := compiled.Eval(nil)
+		require.NoError(t, err)
+		assert.Nil(t, value)
+	})
+
+	t.Run("EvalWithContext", func(t *testing.T) {
+		value, err := compiled.EvalWithContext(context.Background(), nil)
+		require.NoError(t, err)
+		assert.Nil(t, value)
+	})
+
+	t.Run("EvalAs rejects null for a concrete type", func(t *testing.T) {
+		// A typed EvalAs must not silently yield the zero value for a null
+		// result; it reports the mismatch instead. The default branch now
+		// surfaces the value as <nil> rather than cel-go's internal null type.
+		_, err := EvalAs[string](compiled, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "<nil>")
+	})
+}
+
 func BenchmarkCompile(b *testing.B) {
 	expr := Expression("x * 2 + y * 3")
 	opts := []cel.EnvOption{
