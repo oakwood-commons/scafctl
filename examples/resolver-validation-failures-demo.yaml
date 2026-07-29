@@ -3,7 +3,7 @@
 # Validation is non-fatal in `run resolver`: the resolved values are still
 # printed on stdout, validation diagnostics are written to stderr, and the
 # command exits 0. To make validation failures exit non-zero (e.g. in CI):
-#   scafctl run resolver -f resolver-validation-failures-demo.yaml --fail-on-validation
+#   scafctl run resolver -f resolver-validation-failures-demo.yaml --on-validation-error error
 # Or use the dedicated validation gate, which presets fatal validation (exit 2):
 #   scafctl validate resolver -f resolver-validation-failures-demo.yaml
 
@@ -22,7 +22,7 @@ metadata:
     Shows how scafctl reports different types of validation failures.
 
     Validation is non-fatal in `run resolver`: resolved values are still shown,
-    diagnostics go to stderr, and the command exits 0. Pass --fail-on-validation
+    diagnostics go to stderr, and the command exits 0. Pass --on-validation-error error
     (or use `scafctl validate resolver`) to exit non-zero on validation failure.
 
 spec:

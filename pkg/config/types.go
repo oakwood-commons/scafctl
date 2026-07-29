@@ -400,6 +400,14 @@ type ResolverConfig struct {
 	// (default) rejects them, "warn" proceeds with a warning, "ignore" accepts
 	// them silently. Overridden by the --on-unknown-resolver CLI flag.
 	OnUnknownResolver string `json:"onUnknownResolver,omitempty" yaml:"onUnknownResolver,omitempty" mapstructure:"onUnknownResolver" doc:"Default policy for unknown -r keys (error|warn|ignore)" enum:"error,warn,ignore" example:"error"`
+
+	// OnValidationError sets the default policy for resolver validation
+	// failures: "error" aborts the run and exits non-zero (the safe default for
+	// execution commands), "warn" reports failures as non-fatal diagnostics and
+	// continues (resolved values are preserved), "ignore" skips validation
+	// entirely. Overridden by the --on-validation-error CLI flag. Note that
+	// run resolver defaults to "warn" regardless of this setting when unset.
+	OnValidationError string `json:"onValidationError,omitempty" yaml:"onValidationError,omitempty" mapstructure:"onValidationError" doc:"Default policy for resolver validation failures (error|warn|ignore)" enum:"error,warn,ignore" example:"error"`
 }
 
 // ActionConfig holds action executor configuration.

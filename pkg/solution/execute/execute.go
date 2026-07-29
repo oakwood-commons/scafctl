@@ -202,6 +202,12 @@ const (
 	// ("failedActions", "skippedActions").
 	DiagnosticsFieldKey = "diagnostics"
 
+	// ResolversFieldKey is the plain (non-underscore) key under which the
+	// resolved (and partially-resolved) resolver values are attached to the
+	// action/solution failure envelope so successfully-resolved values are
+	// never dropped when a run aborts.
+	ResolversFieldKey = "resolvers"
+
 	// StatusFailed is the status value written when a run fails.
 	StatusFailed = "failed"
 )
@@ -227,15 +233,40 @@ func InjectResolverFailureEnvelope(results map[string]any, err error) map[string
 // BuildFailureEnvelope builds a standalone structured failure envelope for
 // commands whose output is a fixed-schema map (run solution / run action) rather
 // than a bare resolver map. It returns {status: "failed", diagnostics: [...]}
-// keyed to match action.BuildOutputData. Returns nil when err is nil.
-func BuildFailureEnvelope(err error) map[string]any {
+// keyed to match action.BuildOutputData. When resolverData is non-empty, a
+// "resolvers" key carrying the resolved (and partially-resolved) values is
+// added so successfully-resolved values are never dropped when the run aborts.
+// Returns nil when err is nil.
+func BuildFailureEnvelope(err error, resolverData map[string]any) map[string]any {
 	if err == nil {
 		return nil
 	}
-	return map[string]any{
+	envelope := map[string]any{
 		StatusFieldKey:      StatusFailed,
 		DiagnosticsFieldKey: DiagnosticsFromError(err),
 	}
+	if len(resolverData) > 0 {
+		envelope[ResolversFieldKey] = resolverData
+	}
+	return envelope
+}
+
+// InjectSolutionDiagnostics attaches non-fatal validation diagnostics (and the
+// resolved values) to an otherwise-successful action/solution output envelope.
+// It is used under the "warn" validation policy, where a validation-only
+// failure does not abort the run: the workflow still executes, but the
+// diagnostics and resolved values are surfaced in the structured output so the
+// warning is visible to machine consumers. A nil err or nil envelope is a
+// no-op. Existing keys in the envelope are preserved.
+func InjectSolutionDiagnostics(envelope map[string]any, err error, resolverData map[string]any) map[string]any {
+	if envelope == nil || err == nil {
+		return envelope
+	}
+	envelope[DiagnosticsFieldKey] = DiagnosticsFromError(err)
+	if len(resolverData) > 0 {
+		envelope[ResolversFieldKey] = resolverData
+	}
+	return envelope
 }
 
 // isValidationFailure reports whether a single resolver failure originated from

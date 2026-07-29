@@ -415,3 +415,39 @@ func TestDefaultUnknownResolverPolicy_IsStrict(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, UnknownResolverError, DefaultUnknownResolverPolicy)
 }
+
+func TestParseValidationErrorPolicy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		want    ValidationErrorPolicy
+		wantErr bool
+	}{
+		{name: "empty resolves to default", input: "", want: DefaultValidationErrorPolicy},
+		{name: "error", input: "error", want: ValidationError},
+		{name: "warn", input: "warn", want: ValidationWarn},
+		{name: "ignore", input: "ignore", want: ValidationIgnore},
+		{name: "uppercase normalized", input: "WARN", want: ValidationWarn},
+		{name: "whitespace trimmed", input: "  ignore  ", want: ValidationIgnore},
+		{name: "invalid value", input: "loud", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseValidationErrorPolicy(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "valid: error, warn, ignore")
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestDefaultValidationErrorPolicy_IsError(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, ValidationError, DefaultValidationErrorPolicy)
+}

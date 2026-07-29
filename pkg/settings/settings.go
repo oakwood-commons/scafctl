@@ -188,6 +188,58 @@ func ParseUnknownResolverPolicy(s string) (UnknownResolverPolicy, error) {
 	}
 }
 
+// ValidationErrorPolicy controls how the run commands react when a resolver
+// fails its validation phase. It unifies what used to be two separate booleans
+// (--skip-validation and --fail-on-validation) into a single tri-state control,
+// mirroring the sibling --on-unknown-resolver flag and kubectl's
+// --validate=strict|warn|ignore semantics.
+//
+// The policy governs only validation-phase failures. Resolve- and
+// transform-phase failures (where a resolver produces no value) remain fatal
+// under every policy, because downstream actions cannot run without a value.
+type ValidationErrorPolicy string
+
+const (
+	// ValidationError treats a validation failure as fatal: the run aborts (for
+	// execution commands, before any workflow action runs) and exits non-zero.
+	// Partial resolved values are still emitted in the failure envelope.
+	ValidationError ValidationErrorPolicy = "error"
+
+	// ValidationWarn runs validation but treats failures as non-fatal
+	// diagnostics: the resolved values are preserved, the failures are reported
+	// on stderr (and in the structured envelope), and execution continues
+	// (for execution commands, the workflow still runs). Only validation-only
+	// failures are softened; resolve/transform failures remain fatal.
+	ValidationWarn ValidationErrorPolicy = "warn"
+
+	// ValidationIgnore skips the validation phase entirely: no validation rules
+	// run, so no validation diagnostics are produced.
+	ValidationIgnore ValidationErrorPolicy = "ignore"
+
+	// DefaultValidationErrorPolicy is the safe default for execution commands
+	// (run solution, run action) and the validate gate: validation failures are
+	// fatal. Inspection commands (run resolver) override this to ValidationWarn.
+	DefaultValidationErrorPolicy = ValidationError
+)
+
+// ParseValidationErrorPolicy validates and normalizes a policy string. An empty
+// string resolves to DefaultValidationErrorPolicy. Unrecognized values return
+// an error naming the valid choices.
+func ParseValidationErrorPolicy(s string) (ValidationErrorPolicy, error) {
+	switch ValidationErrorPolicy(strings.ToLower(strings.TrimSpace(s))) {
+	case "":
+		return DefaultValidationErrorPolicy, nil
+	case ValidationError:
+		return ValidationError, nil
+	case ValidationWarn:
+		return ValidationWarn, nil
+	case ValidationIgnore:
+		return ValidationIgnore, nil
+	default:
+		return "", fmt.Errorf("invalid on-validation-error policy %q (valid: error, warn, ignore)", s)
+	}
+}
+
 // OTel / telemetry defaults
 const (
 	// DefaultOTelSamplerType is the default trace sampler. always_on means every

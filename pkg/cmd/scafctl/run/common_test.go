@@ -534,3 +534,62 @@ func TestEffectiveUnknownResolverPolicy(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestResolveValidationPolicy(t *testing.T) {
+	t.Run("empty resolves to safe default (error)", func(t *testing.T) {
+		opts := &sharedResolverOptions{}
+		got, err := opts.resolveValidationPolicy(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, settings.ValidationError, got)
+		assert.Equal(t, settings.ValidationError, opts.validationPolicy,
+			"resolved policy must be stored on the options")
+	})
+
+	t.Run("per-command default is honored when flag and config unset", func(t *testing.T) {
+		opts := &sharedResolverOptions{ValidationPolicyDefault: settings.ValidationWarn}
+		got, err := opts.resolveValidationPolicy(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, settings.ValidationWarn, got)
+	})
+
+	t.Run("explicit struct value is honored when flagsChanged nil", func(t *testing.T) {
+		opts := &sharedResolverOptions{
+			OnValidationError:       "ignore",
+			ValidationPolicyDefault: settings.ValidationWarn,
+		}
+		got, err := opts.resolveValidationPolicy(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, settings.ValidationIgnore, got)
+	})
+
+	t.Run("flag not set falls back to config over per-command default", func(t *testing.T) {
+		cfg := &config.Config{Resolver: config.ResolverConfig{OnValidationError: "ignore"}}
+		ctx := config.WithConfig(context.Background(), cfg)
+		opts := &sharedResolverOptions{
+			ValidationPolicyDefault: settings.ValidationWarn,
+			flagsChanged:            map[string]bool{},
+		}
+		got, err := opts.resolveValidationPolicy(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, settings.ValidationIgnore, got)
+	})
+
+	t.Run("explicit flag overrides config", func(t *testing.T) {
+		cfg := &config.Config{Resolver: config.ResolverConfig{OnValidationError: "ignore"}}
+		ctx := config.WithConfig(context.Background(), cfg)
+		opts := &sharedResolverOptions{
+			OnValidationError: "error",
+			flagsChanged:      map[string]bool{"on-validation-error": true},
+		}
+		got, err := opts.resolveValidationPolicy(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, settings.ValidationError, got)
+	})
+
+	t.Run("invalid flag value errors", func(t *testing.T) {
+		opts := &sharedResolverOptions{OnValidationError: "loud"}
+		_, err := opts.resolveValidationPolicy(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "valid: error, warn, ignore")
+	})
+}

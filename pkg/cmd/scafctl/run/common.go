@@ -167,7 +167,6 @@ type sharedResolverOptions struct {
 	ResolveAll      bool
 	Progress        bool
 	ValidateAll     bool
-	SkipValidation  bool
 	SkipTransform   bool
 	ShowMetrics     bool
 	ShowSensitive   bool
@@ -215,13 +214,26 @@ type sharedResolverOptions struct {
 	// strict default. Set via the --on-unknown-resolver flag.
 	OnUnknownResolver string
 
-	// nonFatalValidation, when true, makes executeResolvers treat resolver
-	// validation-only failures as non-fatal: it returns the populated values
-	// and resolver context alongside the error instead of discarding them.
-	// Resolve- and transform-phase failures remain fatal. Set only by
-	// inspection commands (run resolver, validate resolver), never by run
-	// solution / run action which keep validation as a hard gate.
-	nonFatalValidation bool
+	// OnValidationError is the raw --on-validation-error flag value controlling
+	// how resolver validation failures are handled: "error" aborts the run,
+	// "warn" reports non-fatal diagnostics and continues, "ignore" skips
+	// validation entirely. Empty resolves via resolveValidationPolicy to the
+	// config default, then ValidationPolicyDefault. Prefer reading the resolved
+	// value from the validationPolicy field after Run() has set it.
+	OnValidationError string
+
+	// ValidationPolicyDefault is the per-command fallback policy used when
+	// neither the --on-validation-error flag nor the config default is set.
+	// Execution commands (run solution, run action) and the validate gate leave
+	// it empty (resolving to settings.ValidationError); run resolver seeds it
+	// with settings.ValidationWarn so validation is non-fatal by default there.
+	ValidationPolicyDefault settings.ValidationErrorPolicy
+
+	// validationPolicy is the resolved validation-failure policy. It is
+	// populated by resolveValidationPolicy in each command's Run() before
+	// resolvers execute, and read by executeResolvers (to configure the
+	// executor) and by the callers (to decide fatal vs. continue).
+	validationPolicy settings.ValidationErrorPolicy
 
 	// kvx output integration (shared flags)
 	flags.KvxOutputFlags
@@ -558,14 +570,25 @@ func (o *sharedResolverOptions) executeResolvers(
 	if resolverCfg.ValidateAll {
 		executorOpts = append(executorOpts, resolver.WithValidateAll(true))
 	}
-	// Non-fatal validation (used by `run resolver`) continues execution and
-	// collects all errors like validate-all, but keeps dependents of a
-	// validation-only failure running so the data layer stays fully inspectable.
-	if o.nonFatalValidation {
-		executorOpts = append(executorOpts, resolver.WithNonFatalValidation(true))
+	// Resolve the validation-failure policy. It is normally set on
+	// o.validationPolicy by the command's Run() via resolveValidationPolicy; a
+	// zero value (e.g. direct executeResolvers calls in tests, or the state
+	// two-phase pre-load closure) falls back to the safe built-in default.
+	policy := o.validationPolicy
+	if policy == "" {
+		policy = settings.DefaultValidationErrorPolicy
 	}
-	if o.SkipValidation {
+	switch policy {
+	case settings.ValidationWarn:
+		// warn: continue execution and collect all errors like validate-all,
+		// but keep dependents of a validation-only failure running so the data
+		// layer stays fully inspectable. The caller decides fatal vs. continue.
+		executorOpts = append(executorOpts, resolver.WithNonFatalValidation(true))
+	case settings.ValidationIgnore:
+		// ignore: skip the validation phase of all resolvers entirely.
 		executorOpts = append(executorOpts, resolver.WithSkipValidation(true))
+	case settings.ValidationError:
+		// error: default hard gate — no extra executor option.
 	}
 	if o.SkipTransform {
 		executorOpts = append(executorOpts, resolver.WithSkipTransform(true))
@@ -640,8 +663,9 @@ func (o *sharedResolverOptions) executeResolvers(
 		return nil, nil, fmt.Errorf("failed to retrieve resolver results")
 	}
 
-	// Build resolver data map. In non-fatal mode, also include partial values
-	// captured by resolvers that failed validation so they remain inspectable.
+	// Build resolver data map. Partial values captured by resolvers that failed
+	// (e.g. validation) are always included so they remain inspectable in the
+	// structured output regardless of the validation policy.
 	for name := range sol.Spec.Resolvers {
 		result, ok := resolverCtx.GetResult(name)
 		if !ok {
@@ -649,7 +673,7 @@ func (o *sharedResolverOptions) executeResolvers(
 		}
 		if result.Status == resolver.ExecutionStatusSuccess {
 			resolverData[name] = result.Value
-		} else if o.nonFatalValidation && result.Value != nil {
+		} else if result.Value != nil {
 			resolverData[name] = result.Value
 		}
 	}
@@ -660,20 +684,15 @@ func (o *sharedResolverOptions) executeResolvers(
 	}
 
 	if err != nil {
-		// In non-fatal mode (run resolver / validate resolver), return the
-		// populated values and context alongside the error for ALL failure
-		// kinds so the caller can render the successfully-resolved values plus
-		// diagnostics instead of dropping them. The caller classifies the error
-		// with execute.IsValidationOnlyFailure to choose the exit code:
-		// validation-only failures are a soft gate (exit 0 unless
-		// --fail-on-validation), while resolve- and transform-phase failures
-		// remain a hard failure (non-zero exit) -- but the partial values stay
-		// inspectable in the structured output either way. In fatal mode (run
-		// solution / run action), all errors discard partial results.
-		if o.nonFatalValidation {
-			return resolverData, resolverCtx, fmt.Errorf("resolver execution failed: %w", err)
-		}
-		return nil, nil, fmt.Errorf("resolver execution failed: %w", err)
+		// Always return the populated values and resolver context alongside the
+		// error so callers can render the successfully-resolved values plus
+		// diagnostics instead of dropping them. Callers classify the error with
+		// execute.IsValidationOnlyFailure and consult the resolved validation
+		// policy to decide the outcome: under "warn" a validation-only failure
+		// is a soft gate (continue / exit 0), under "error" it aborts, and
+		// resolve- and transform-phase failures remain fatal under every policy
+		// -- but the partial values stay inspectable in the structured output.
+		return resolverData, resolverCtx, fmt.Errorf("resolver execution failed: %w", err)
 	}
 
 	lgr.V(1).Info("resolver execution complete", "resolvedCount", len(resolverData))
@@ -968,7 +987,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().BoolVar(&o.ResolveAll, "resolve-all", false, "Execute all resolvers regardless of action requirements")
 	cCmd.Flags().BoolVar(&o.Progress, "progress", false, "Show resolver phase progress bars (requires TTY)")
 	cCmd.Flags().BoolVar(&o.ValidateAll, "validate-all", false, "Continue execution and show all validation/resolver errors")
-	cCmd.Flags().BoolVar(&o.SkipValidation, "skip-validation", false, "Skip the validation phase of all resolvers")
+	cCmd.Flags().StringVar(&o.OnValidationError, "on-validation-error", "", "Policy for resolver validation failures: error (abort and exit non-zero), warn (report as non-fatal diagnostics and continue, preserving resolved values), or ignore (skip validation entirely). Defaults to warn for 'run resolver' and error for 'run solution' / 'run action'; overrides resolver.onValidationError config")
 	cCmd.Flags().BoolVar(&o.ShowMetrics, "show-metrics", false, "Show provider execution metrics after completion (output to stderr)")
 	cCmd.Flags().BoolVar(&o.ShowSensitive, "show-sensitive", false, "Reveal sensitive values in all output formats (by default, sensitive values are redacted in table output but shown in json/yaml)")
 	cCmd.Flags().BoolVar(&o.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
@@ -1171,6 +1190,39 @@ func (o *sharedResolverOptions) effectiveUnknownResolverPolicy(ctx context.Conte
 		}
 	}
 	return settings.ParseUnknownResolverPolicy(raw)
+}
+
+// resolveValidationPolicy resolves the validation-failure policy honoring
+// precedence: the --on-validation-error flag overrides the resolver config
+// default (resolver.onValidationError), which overrides the per-command
+// ValidationPolicyDefault (which itself falls back to the built-in
+// settings.DefaultValidationErrorPolicy for an empty value). It returns an error
+// if the resolved value is not a recognized policy. The resolved value is also
+// stored on o.validationPolicy so executeResolvers and callers can read it.
+func (o *sharedResolverOptions) resolveValidationPolicy(ctx context.Context) (settings.ValidationErrorPolicy, error) {
+	raw := o.OnValidationError
+	// When the flag was not explicitly set, defer to config, then to the
+	// per-command default. flagsChanged is nil outside the command-execution
+	// flow (e.g. unit tests), in which case the value on the options struct is
+	// authoritative.
+	if o.flagsChanged == nil || !o.flagsChanged["on-validation-error"] {
+		switch {
+		case raw != "":
+			// Explicitly set on the struct (tests) — honor it.
+		default:
+			if cfg := config.FromContext(ctx); cfg != nil && cfg.Resolver.OnValidationError != "" {
+				raw = cfg.Resolver.OnValidationError
+			} else if o.ValidationPolicyDefault != "" {
+				raw = string(o.ValidationPolicyDefault)
+			}
+		}
+	}
+	policy, err := settings.ParseValidationErrorPolicy(raw)
+	if err != nil {
+		return "", err
+	}
+	o.validationPolicy = policy
+	return policy, nil
 }
 
 // extractParameterKeys collects the CLI parameter keys accepted by a set of resolvers.

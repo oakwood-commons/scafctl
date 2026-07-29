@@ -59,6 +59,12 @@ type ActionOptions struct {
 
 	// DynamicArgs are resolver parameters from positional key=value syntax.
 	DynamicArgs []string
+
+	// validationWarn / validationWarnResolvers carry a non-fatal validation-only
+	// failure captured under the "warn" policy so the delegate SolutionOptions
+	// can embed its diagnostics and resolved values in the success envelope.
+	validationWarn          error
+	validationWarnResolvers map[string]any
 }
 
 // CommandAction creates the 'run action' subcommand.
@@ -367,6 +373,15 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	// Resolve the validation-failure policy up front so it governs both the
+	// state two-phase pre-load and the main resolver execution below. run
+	// action defaults to "error" (validation failures abort the workflow);
+	// "warn" continues with diagnostics, "ignore" skips validation.
+	validationPolicy, err := o.resolveValidationPolicy(ctx)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	// Inject CLI overrides into context
 	actionCtx := ctx
 	if absOutputDir != "" {
@@ -416,7 +431,26 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	start := time.Now()
 	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
-		return o.failStructured(ctx, err, exitcode.GeneralError)
+		validationOnly := execute.IsValidationOnlyFailure(err)
+		if validationPolicy == settings.ValidationWarn && validationOnly {
+			// warn: surface diagnostics on stderr and continue to the workflow
+			// with the partially-resolved values. The failure is embedded in
+			// the final success envelope (via o.validationWarn*), not treated
+			// as fatal.
+			o.renderResolverDiagnostics(ctx, err)
+			o.validationWarn = err
+			o.validationWarnResolvers = o.buildResolverOutputMap(resolverData, sol)
+		} else {
+			// Fatal: resolve/transform failures under any policy, and
+			// validation failures under the "error" policy. Preserve the
+			// resolved values in the failure envelope. Validation-only failures
+			// use the dedicated ValidationFailed code.
+			code := exitcode.GeneralError
+			if validationOnly {
+				code = exitcode.ValidationFailed
+			}
+			return o.failStructured(ctx, o.buildResolverOutputMap(resolverData, sol), err, code)
+		}
 	}
 	resolverElapsed := time.Since(start)
 
@@ -522,15 +556,16 @@ func (o *ActionOptions) exitWithCode(ctx context.Context, err error, code int) e
 }
 
 // failStructured delegates to SolutionOptions.failStructured so setup and
-// resolver-phase failures emit a parseable {status, diagnostics} document in
-// json/yaml instead of an empty stdout.
-func (o *ActionOptions) failStructured(ctx context.Context, err error, code int) error {
+// resolver-phase failures emit a parseable {status, diagnostics, resolvers}
+// document in json/yaml instead of an empty stdout. resolverOut is an
+// already-redacted resolver output map embedded under "resolvers".
+func (o *ActionOptions) failStructured(ctx context.Context, resolverOut map[string]any, err error, code int) error {
 	s := &SolutionOptions{
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,
 		ShowExecution:         o.ShowExecution,
 	}
-	return s.failStructured(ctx, err, code)
+	return s.failStructured(ctx, resolverOut, err, code)
 }
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs
@@ -554,9 +589,11 @@ func (o *ActionOptions) resolveOutputDir(ctx context.Context, dryRun bool) (stri
 // writeActionOutput writes the action execution results using the shared implementation.
 func (o *ActionOptions) writeActionOutput(ctx context.Context, result *action.ExecutionResult, executionData map[string]any) error {
 	s := &SolutionOptions{
-		sharedResolverOptions: o.sharedResolverOptions,
-		Verbose:               o.Verbose,
-		ShowExecution:         o.ShowExecution,
+		sharedResolverOptions:   o.sharedResolverOptions,
+		Verbose:                 o.Verbose,
+		ShowExecution:           o.ShowExecution,
+		validationWarn:          o.validationWarn,
+		validationWarnResolvers: o.validationWarnResolvers,
 	}
 	return s.writeActionOutput(ctx, result, executionData)
 }
