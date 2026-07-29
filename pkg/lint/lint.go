@@ -1898,6 +1898,19 @@ func lintTemplateFileDependencies(sol *solution.Solution, solutionDir string, re
 				continue
 			}
 
+			// Exclude files matched by the render-tree step's literal rawGlobs:
+			// those are emitted verbatim and never template-parsed, so resolver
+			// references inside them are not dependencies. Per-entry raw flags
+			// come from runtime entries and cannot be resolved statically, so
+			// they are not considered here (best-effort, glob-only).
+			if rawGlobs := rawGlobsFromStep(step); len(rawGlobs) > 0 {
+				root := directoryProviderRoot(sol, sourceResolverName, solutionDir)
+				templateFiles = filterOutRawTemplateFiles(templateFiles, root, rawGlobs)
+				if len(templateFiles) == 0 {
+					continue
+				}
+			}
+
 			// Honor any custom delimiters configured on the render-tree step so
 			// template parsing matches go-template runtime behavior.
 			leftDelim := stringInput(step, "leftDelim")
@@ -2053,6 +2066,87 @@ func discoverTemplateFilesFromResolver(sol *solution.Solution, resolverName, sol
 	}
 
 	return nil
+}
+
+// rawGlobsFromStep returns the literal rawGlobs patterns declared on a
+// render-tree step. Non-literal (expr/tmpl) or non-string entries are ignored;
+// only statically knowable string patterns participate in lint filtering.
+func rawGlobsFromStep(step resolver.ProviderSource) []string {
+	val, ok := step.Inputs["rawGlobs"]
+	if !ok || val == nil || val.Literal == nil {
+		return nil
+	}
+	list, ok := val.Literal.([]any)
+	if !ok {
+		return nil
+	}
+	globs := make([]string, 0, len(list))
+	for _, item := range list {
+		if s, ok := item.(string); ok && s != "" {
+			globs = append(globs, s)
+		}
+	}
+	return globs
+}
+
+// directoryProviderRoot returns the absolute base path scanned by the directory
+// provider step of the named resolver, or an empty string when it cannot be
+// determined statically (non-literal path or no directory step). rawGlobs are
+// matched against paths relative to this root.
+func directoryProviderRoot(sol *solution.Solution, resolverName, solutionDir string) string {
+	res, ok := sol.Spec.Resolvers[resolverName]
+	if !ok || res == nil || res.Resolve == nil {
+		return ""
+	}
+	for _, step := range res.Resolve.With {
+		if step.Provider != "directory" {
+			continue
+		}
+		pathVal, ok := step.Inputs["path"]
+		if !ok || pathVal == nil {
+			continue
+		}
+		pathStr, ok := pathVal.Literal.(string)
+		if !ok || pathStr == "" {
+			continue
+		}
+		absPath := pathStr
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(solutionDir, absPath)
+		}
+		return absPath
+	}
+	return ""
+}
+
+// filterOutRawTemplateFiles drops files whose path, relative to root, matches
+// any rawGlobs pattern (doublestar, slash-normalized). Files that cannot be made
+// relative to root are retained (best-effort). When root is empty, no filtering
+// is applied because the relative entry path cannot be reconstructed.
+func filterOutRawTemplateFiles(files []string, root string, rawGlobs []string) []string {
+	if len(rawGlobs) == 0 || root == "" {
+		return files
+	}
+	kept := make([]string, 0, len(files))
+	for _, f := range files {
+		rel, err := filepath.Rel(root, f)
+		if err != nil {
+			kept = append(kept, f)
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		matched := false
+		for _, g := range rawGlobs {
+			if ok, matchErr := doublestar.Match(g, rel); matchErr == nil && ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			kept = append(kept, f)
+		}
+	}
+	return kept
 }
 
 // collectReachableDependencies returns all resolver names reachable from the

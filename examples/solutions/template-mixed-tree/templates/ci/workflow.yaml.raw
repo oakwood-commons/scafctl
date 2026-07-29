@@ -1,0 +1,16 @@
+# This GitHub Actions workflow is copied VERBATIM by render-tree (matched by
+# rawGlobs "**/*.raw"). Its ${{ ... }} expressions collide with Go template
+# delimiters, so it must never be template-parsed.
+name: ci
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: echo "Building ${{ github.repository }} @ ${{ github.sha }}"
+        env:
+          TOKEN: ${{ secrets.CI_TOKEN }}

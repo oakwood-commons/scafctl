@@ -169,6 +169,7 @@ Complete solutions demonstrating real-world use cases.
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |
 | [k8s-clusters/](solutions/k8s-clusters/) | Read a Go template file, iterate 10 K8s clusters, render and write unique manifests |
+| [template-mixed-tree/](solutions/template-mixed-tree/) | Render a directory tree while copying selected files verbatim via `rawGlobs` (e.g. GitHub Actions `${{ }}` workflows) |
 | [bad-solution-yaml/](solutions/bad-solution-yaml/) | Invalid solution demonstrating error handling for conflicting ValueRef keys |
 | [tested-solution/](solutions/tested-solution/) | Functional testing features: assertions, inheritance, tags, watch mode |
 | [scaffold-demo/](solutions/scaffold-demo/) | Test scaffolding with `scafctl test init` -- generates starter test suites |

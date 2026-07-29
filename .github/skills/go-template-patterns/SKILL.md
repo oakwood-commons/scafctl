@@ -71,6 +71,25 @@ A common `outputPath` that strips a `.tpl` suffix while preserving the tree:
 {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
 ```
 
+### Verbatim (raw) entries in render-tree
+
+To copy whole files through a `render-tree` pass unchanged (fixtures that are
+themselves template syntax, GitHub Actions `${{ ... }}`, etc.), mark them raw
+instead of parsing them -- no need for a second copy pipeline or whole-file
+ignore markers. Two mechanisms (combinable), verified against
+`get_provider_schema name=go-template`:
+
+- **`rawGlobs`** -- provider-level list of doublestar patterns matched against
+  each entry's full relative `path` (`*.raw` = top-level, `**/*.raw` = nested).
+  Best for entries produced dynamically by the `directory` provider. Mirrors
+  Cookiecutter's `_copy_without_render`.
+- **`raw`** -- per-entry bool on a hand-constructed entry; overrides `rawGlobs`
+  (`true` forces verbatim, `false` forces rendering).
+
+Raw content is copied byte-for-byte (no parse, delimiters, `ignoredBlocks`, or
+per-entry `data`). The `missing-template-dependency` lint rule skips
+`rawGlobs`-matched files. See the `template-mixed-tree` example.
+
 ## Dependency Inference (resolver ref vs data context)
 
 For the full model, see `explain_concepts name=template-dependency-inference`;

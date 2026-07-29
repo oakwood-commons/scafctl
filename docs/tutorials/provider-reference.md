@@ -1167,11 +1167,12 @@ Transform data using Go text/template syntax. Supports single-template rendering
 | `operation` | string | ❌ | Operation: `render` (default) or `render-tree` |
 | `template` | string | ❌ | Go template content (required for `render`) |
 | `name` | string | ❌ | Template name for error messages (defaults to `"render-tree"` for render-tree) |
-| `entries` | array | ❌ | Array of `{path, content, data?}` objects to render (required for `render-tree`). Each entry may include an optional `data` map, shallow-merged over the shared `data` for that entry only. |
+| `entries` | array | ❌ | Array of `{path, content, data?, raw?}` objects to render (required for `render-tree`). Each entry may include an optional `data` map, shallow-merged over the shared `data` for that entry only, and an optional `raw` bool that copies the entry verbatim. |
 | `missingKey` | string | ❌ | Behavior for missing keys: `default`, `zero`, `error` |
 | `leftDelim` | string | ❌ | Left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Right delimiter (default: `}}`) |
 | `data` | any | ❌ | Additional data to merge with resolver context |
+| `rawGlobs` | array | ❌ | (render-tree only) List of doublestar glob patterns matched against each entry's full relative `path`. Matching entries are copied verbatim (no parse, no `data`). Patterns match the whole path, so `*.tf` matches only top-level files while `**/*.tf` also matches nested ones. A per-entry `raw` field overrides this. Max 20 patterns. |
 | `ignoredBlocks` | array | ❌ | Extra literal pass-through markers (on top of the always-on built-ins). Each entry uses EXACTLY ONE mode: `{ start, end }` (multi-line, markers preserved), `{ line }` (single-line), or `{ token }` (every occurrence of a literal). Built-in zero-config markers `{{/* scafctl:ignore:start */}}`...`{{/* scafctl:ignore:end */}}` (markers stripped) and `# scafctl:ignore` (per-line) need no declaration. |
 
 ### Output
@@ -1211,6 +1212,51 @@ resolve:
 Entries without a `data` field render against the shared `data` alone, so
 existing `render-tree` usage is unaffected. A non-map `data` value fails with a
 clear error naming the entry index and path.
+
+#### Verbatim passthrough (raw)
+
+To copy whole files through a `render-tree` pass unchanged -- for example a
+fixture that is entirely Go-template-like syntax, or a GitHub Actions workflow
+full of `${{ ... }}` -- mark them raw instead of parsing them. Two mechanisms,
+which can be combined:
+
+- **`rawGlobs`** (provider-level): a list of doublestar glob patterns matched
+  against each entry's full relative `path`. This is the ergonomic choice for
+  entries produced dynamically by the `directory` provider, since you cannot
+  annotate those entries individually. Mirrors Cookiecutter's
+  `_copy_without_render`.
+- **`raw`** (per-entry bool): set on a hand-constructed entry (e.g. a CEL
+  `map`). Takes precedence over `rawGlobs`: `raw: true` forces verbatim even
+  without a glob match; `raw: false` forces rendering even when a glob matches.
+
+A raw entry's `content` is copied byte-for-byte: no template parsing, no
+delimiter handling, no `ignoredBlocks` processing, and any per-entry `data` is
+ignored (a warning is emitted if `data` was supplied). Entries without string
+`content` are still skipped with a warning, exactly as for rendered entries.
+
+```yaml
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        operation: render-tree
+        rawGlobs:
+          - "**/*.raw"           # nested; use *.raw for top-level only
+        entries:
+          expr: '_.templateFiles.entries'
+        data:
+          rslvr: vars
+```
+
+Glob semantics follow doublestar: `*.tf` matches only a top-level `main.tf`,
+while `**/*.tf` also matches `modules/net/main.tf`. Unlike Cookiecutter, entry
+`path` values are already-resolved strings, so there is no path templating to
+preserve or skip.
+
+The `missing-template-dependency` lint rule honors literal `rawGlobs`: resolver
+references inside raw-matched files are not flagged, since those files are never
+parsed. (Per-entry `raw` flags come from runtime entries and cannot be resolved
+statically, so lint filtering is glob-only.)
 
 ### Ignored Blocks
 
