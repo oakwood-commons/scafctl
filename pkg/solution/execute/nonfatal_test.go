@@ -182,7 +182,13 @@ metadata:
   version: 0.0.1
 spec:
   resolvers:
-    data:
+    good:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "i-resolved"
+    bad:
       resolve:
         with:
           - provider: solution
@@ -190,7 +196,7 @@ spec:
               file: "./nonexistent.yaml"
 `
 
-func TestResolvers_NonFatalValidation_ResolvePhaseStaysFatal(t *testing.T) {
+func TestResolvers_NonFatalValidation_ResolvePhasePreservesValues(t *testing.T) {
 	ctx := context.Background()
 	reg, err := builtin.DefaultRegistry(ctx)
 	require.NoError(t, err)
@@ -199,14 +205,44 @@ func TestResolvers_NonFatalValidation_ResolvePhaseStaysFatal(t *testing.T) {
 	sol, err := inspect.LoadSolution(ctx, solFile)
 	require.NoError(t, err)
 
-	cfg := ResolverExecutionConfig{
-		Timeout:            ResolverExecutionConfigFromContext(ctx).Timeout,
-		PhaseTimeout:       ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
-		NonFatalValidation: true,
-	}
+	t.Run("non-fatal preserves successfully-resolved values plus diagnostics", func(t *testing.T) {
+		cfg := ResolverExecutionConfig{
+			Timeout:            ResolverExecutionConfigFromContext(ctx).Timeout,
+			PhaseTimeout:       ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+			NonFatalValidation: true,
+		}
 
-	_, err = Resolvers(ctx, sol, nil, reg, cfg)
-	require.Error(t, err, "resolve-phase failures must remain fatal even in non-fatal mode")
+		result, err := Resolvers(ctx, sol, nil, reg, cfg)
+		require.NoError(t, err, "non-fatal mode must not return a top-level error on a resolve-phase failure")
+		require.NotNil(t, result)
+		assert.Equal(t, "i-resolved", result.Data["good"],
+			"a resolver that resolved successfully must survive a sibling resolve-phase failure")
+		assert.NotContains(t, result.Data, "bad",
+			"a resolver that failed in the resolve phase produced no value and must be absent")
+
+		require.Error(t, result.Diagnostics, "diagnostics must be populated on a resolve-phase failure")
+		assert.False(t, IsValidationOnlyFailure(result.Diagnostics),
+			"a resolve-phase failure must not be classified as validation-only")
+
+		diags := DiagnosticsFromError(result.Diagnostics)
+		require.NotEmpty(t, diags)
+		names := make([]string, 0, len(diags))
+		for _, d := range diags {
+			names = append(names, d.Resolver)
+		}
+		assert.Contains(t, names, "bad", "diagnostics must name the failed resolver")
+	})
+
+	t.Run("fatal mode discards values and returns an error", func(t *testing.T) {
+		cfg := ResolverExecutionConfig{
+			Timeout:      ResolverExecutionConfigFromContext(ctx).Timeout,
+			PhaseTimeout: ResolverExecutionConfigFromContext(ctx).PhaseTimeout,
+		}
+
+		result, err := Resolvers(ctx, sol, nil, reg, cfg)
+		require.Error(t, err, "fatal mode must return an error on a resolve-phase failure")
+		assert.Nil(t, result, "fatal mode discards partial results")
+	})
 }
 
 func TestIsValidationOnlyFailure(t *testing.T) {

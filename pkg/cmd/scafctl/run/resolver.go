@@ -714,14 +714,14 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		results["__execution"] = executionData
 	}
 
-	// Surface non-fatal validation diagnostics on stderr so the resolved values
+	// Surface non-fatal diagnostics on stderr so the resolved values
 	// (on stdout) remain useful for troubleshooting and machine consumption.
 	if execErr != nil {
-		o.renderValidationDiagnostics(ctx, execErr)
+		o.renderResolverDiagnostics(ctx, execErr)
 		// In structured output (json/yaml), also attach the failure envelope
 		// (__status/__diagnostics) to the stdout document so machine consumers
-		// can detect and inspect the validation failure programmatically, not
-		// just via exit code + stderr.
+		// can detect and inspect the failure programmatically, and still see
+		// every successfully-resolved value, not just via exit code + stderr.
 		if o.isStructuredOutput() {
 			results = execute.InjectResolverFailureEnvelope(results, execErr)
 		}
@@ -736,10 +736,20 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return err
 	}
 
-	// In non-fatal mode the values are always shown. When --fail-on-validation
-	// is set, exit non-zero so CI/gating callers detect the failure.
-	if execErr != nil && o.FailOnValidation {
-		return exitcode.WithCode(execErr, exitcode.ValidationFailed)
+	// Choose the exit code by failure kind. The resolved values were already
+	// written to stdout above (with the failure envelope in structured mode),
+	// so returning a coded error here only sets the process exit status.
+	//   - Resolve/transform failures are a HARD failure: a resolver could not
+	//     produce a value, so exit non-zero regardless of --fail-on-validation.
+	//   - Validation-only failures are a SOFT gate in this inspection command:
+	//     exit 0 by default, and non-zero only when --fail-on-validation is set.
+	if execErr != nil {
+		if !execute.IsValidationOnlyFailure(execErr) {
+			return exitcode.WithCode(execErr, exitcode.GeneralError)
+		}
+		if o.FailOnValidation {
+			return exitcode.WithCode(execErr, exitcode.ValidationFailed)
+		}
 	}
 
 	// Gate mode ('validate resolver'): after resolver validation passes, run
@@ -844,11 +854,13 @@ func (o *ResolverOptions) failStructured(ctx context.Context, results map[string
 	return exitcode.WithCode(err, code)
 }
 
-// renderValidationDiagnostics writes a human-readable summary of resolver
-// validation-only failures to stderr. It is used by the non-fatal inspection
-// path so the resolved values on stdout are not polluted. Resolve- and
-// transform-phase failures remain fatal and are reported earlier.
-func (o *ResolverOptions) renderValidationDiagnostics(ctx context.Context, execErr error) {
+// renderResolverDiagnostics writes a human-readable summary of resolver
+// failures to stderr. It is used by the non-fatal inspection path so the
+// resolved values on stdout are not polluted. It handles both validation-only
+// failures (a soft gate) and resolve/transform failures (a hard failure): the
+// heading and the --fail-on-validation hint adapt to the failure kind so the
+// message never claims a hard failure is merely a validation issue.
+func (o *ResolverOptions) renderResolverDiagnostics(ctx context.Context, execErr error) {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		// Fall back to a writer built from the command's IO streams so
@@ -868,12 +880,21 @@ func (o *ResolverOptions) renderValidationDiagnostics(ctx context.Context, execE
 	}
 
 	diags := execute.DiagnosticsFromError(execErr)
+	validationOnly := execute.IsValidationOnlyFailure(execErr)
 	if len(diags) == 0 {
-		w.WarnStderrf("resolver validation failed: %v", execErr)
+		if validationOnly {
+			w.WarnStderrf("resolver validation failed: %v", execErr)
+		} else {
+			w.WarnStderrf("resolver execution failed: %v", execErr)
+		}
 		return
 	}
 
-	w.WarnStderrf("%d resolver(s) failed validation:", len(diags))
+	if validationOnly {
+		w.WarnStderrf("%d resolver(s) failed validation:", len(diags))
+	} else {
+		w.WarnStderrf("%d resolver(s) failed:", len(diags))
+	}
 	for _, d := range diags {
 		if d.Resolver != "" {
 			w.PlainStderrf("  - %s: %s", d.Resolver, d.Message)
@@ -881,8 +902,11 @@ func (o *ResolverOptions) renderValidationDiagnostics(ctx context.Context, execE
 			w.PlainStderrf("  - %s", d.Message)
 		}
 	}
-	if !o.FailOnValidation {
-		w.PlainStderrf("(values shown above; pass --fail-on-validation to exit non-zero)")
+	// The --fail-on-validation hint only applies to validation-only failures,
+	// which exit 0 by default. Resolve/transform failures always exit non-zero,
+	// so suppress the hint to avoid implying the exit code is opt-in.
+	if validationOnly && !o.FailOnValidation {
+		w.PlainStderrf("(resolved values are still emitted on stdout; pass --fail-on-validation to exit non-zero)")
 	}
 }
 

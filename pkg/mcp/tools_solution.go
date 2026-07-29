@@ -995,8 +995,10 @@ func (s *Server) handlePreviewResolvers(_ context.Context, request mcp.CallToolR
 		response["plan"] = planRaw
 	}
 
-	// Surface non-fatal validation diagnostics so agents can troubleshoot while
-	// still seeing the resolved values. When strict is requested, report the
+	// Surface non-fatal diagnostics so agents can troubleshoot while still
+	// seeing the resolved values. This covers both validation-only failures and
+	// resolve/transform failures -- in every case the successfully-resolved
+	// values remain in the response. When strict is requested, report the
 	// result as an error (values remain included for context).
 	diags := execute.DiagnosticsFromError(result.Diagnostics)
 	if len(diags) > 0 {

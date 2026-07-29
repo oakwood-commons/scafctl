@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/gotmplprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/staticprovider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
@@ -359,6 +361,147 @@ func TestResolverOptions_Run_ValueSizeFailure_TableUnchanged(t *testing.T) {
 		"table output must not inject the reserved diagnostics key")
 	assert.NotContains(t, stdout.String(), execute.StatusKey,
 		"table output must not inject the reserved status key")
+}
+
+// solutionWithGoodAndBadResolvers has two independent resolvers: "good" resolves
+// to a plain string, while "bad" hard-fails in the resolve phase (an undefined
+// Go-template function fails to parse, so the source produces no value at all).
+// This mirrors the issue's exact repro and exercises the
+// partial-values-on-resolve-failure path for `run resolver`.
+const solutionWithGoodAndBadResolvers = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: good-and-bad-resolvers
+  version: 1.0.0
+spec:
+  resolvers:
+    good:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: i-resolved
+    bad:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: "{{ undefinedFunc .x }}"
+              data:
+                x: hello
+`
+
+// testRegistryWithGoTemplate returns a registry with the static and go-template
+// providers, used to trigger a resolve-phase failure that produces no value.
+func testRegistryWithGoTemplate(t *testing.T) *provider.Registry {
+	t.Helper()
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(staticprovider.New()))
+	require.NoError(t, reg.Register(gotmplprovider.NewGoTemplateProvider()))
+	return reg
+}
+
+// newResolverOptionsForResolveFailure builds ResolverOptions wired with the
+// static+go-template registry (needed to trigger a resolve-phase failure) and
+// the given output format.
+func newResolverOptionsForResolveFailure(t *testing.T, solutionPath string, stdout, stderr *bytes.Buffer, format string) *ResolverOptions {
+	t.Helper()
+	streams := &terminal.IOStreams{In: nil, Out: stdout, ErrOut: stderr}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	return &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams:       streams,
+			CliParams:       cliParams,
+			File:            solutionPath,
+			KvxOutputFlags:  flags.KvxOutputFlags{Output: format},
+			ResolverTimeout: 30 * time.Second,
+			PhaseTimeout:    5 * time.Minute,
+			registry:        testRegistryWithGoTemplate(t),
+		},
+	}
+}
+
+// TestResolverOptions_Run_ResolvePhaseFailure_PreservesValues verifies that a
+// resolve/transform-phase failure keeps every successfully-resolved value in the
+// machine-readable output (alongside __status/__diagnostics) instead of dropping
+// the entire values map -- while still exiting non-zero, since a resolver that
+// could not produce a value is a hard failure (issue: run resolver -o json drops
+// the values map on a resolve-phase error).
+func TestResolverOptions_Run_ResolvePhaseFailure_PreservesValues(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range []string{"json", "yaml"} {
+		format := format
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+
+			solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
+			require.NoError(t, os.WriteFile(solutionPath, []byte(solutionWithGoodAndBadResolvers), 0o600))
+
+			var stdout, stderr bytes.Buffer
+			opts := newResolverOptionsForResolveFailure(t, solutionPath, &stdout, &stderr, format)
+
+			ctx := logger.WithLogger(context.Background(), logger.Get(0))
+			ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+			err := opts.Run(ctx)
+
+			// A resolve/transform failure is a HARD failure: it exits non-zero
+			// even without --fail-on-validation, unlike a validation-only failure.
+			require.Error(t, err, "a resolve/transform failure must exit non-zero")
+			assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err),
+				"a resolve/transform failure must use the general-error exit code")
+
+			decoded := decodeStructured(t, format, stdout.Bytes())
+			assert.Equal(t, "i-resolved", decoded["good"],
+				"a successfully-resolved value must survive a sibling resolve/transform failure")
+			assert.NotContains(t, decoded, "bad",
+				"a resolver that produced no value must be absent from the values map")
+			assert.Equal(t, execute.StatusFailed, decoded[execute.StatusKey],
+				"structured output must carry the reserved status key on failure")
+
+			diags, ok := decoded[execute.DiagnosticsKey].([]any)
+			require.True(t, ok, "structured output must carry the reserved diagnostics key")
+			require.NotEmpty(t, diags, "diagnostics must not be empty on a resolve/transform failure")
+			var namedBad bool
+			for _, d := range diags {
+				if m, ok := d.(map[string]any); ok && m["resolver"] == "bad" {
+					namedBad = true
+				}
+			}
+			assert.True(t, namedBad, "diagnostics must name the failed resolver 'bad'")
+		})
+	}
+}
+
+// TestResolverOptions_Run_ResolvePhaseFailure_TableShowsValues verifies that the
+// human (table) output still renders the successfully-resolved values on stdout
+// and summarizes the failure on stderr (as a plain failure, not a "validation"
+// failure), while exiting non-zero and not injecting the reserved envelope keys.
+func TestResolverOptions_Run_ResolvePhaseFailure_TableShowsValues(t *testing.T) {
+	t.Parallel()
+
+	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionWithGoodAndBadResolvers), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	opts := newResolverOptionsForResolveFailure(t, solutionPath, &stdout, &stderr, "table")
+
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+	err := opts.Run(ctx)
+
+	require.Error(t, err, "a resolve/transform failure must exit non-zero")
+	assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err))
+	assert.Contains(t, stdout.String(), "i-resolved",
+		"resolved values must still be shown on stdout in human output")
+	assert.Contains(t, stderr.String(), "resolver(s) failed",
+		"a hard failure must be summarized on stderr")
+	assert.NotContains(t, stderr.String(), "failed validation",
+		"a resolve/transform failure must not be mislabeled as a validation failure")
+	assert.NotContains(t, stdout.String(), execute.DiagnosticsKey,
+		"table output must not inject the reserved diagnostics key")
 }
 
 // decodeStructured parses JSON or YAML structured output into a map for

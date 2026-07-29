@@ -660,13 +660,17 @@ func (o *sharedResolverOptions) executeResolvers(
 	}
 
 	if err != nil {
-		// In non-fatal mode, return the populated values and context alongside
-		// the error so the caller can render values plus diagnostics instead of
-		// aborting -- but only for pure validation failures. Resolve- and
-		// transform-phase failures (where no value exists) remain fatal and
-		// discard partial results so the caller surfaces a hard failure. In
-		// fatal mode (run solution / run action), all errors are fatal.
-		if o.nonFatalValidation && execute.IsValidationOnlyFailure(err) {
+		// In non-fatal mode (run resolver / validate resolver), return the
+		// populated values and context alongside the error for ALL failure
+		// kinds so the caller can render the successfully-resolved values plus
+		// diagnostics instead of dropping them. The caller classifies the error
+		// with execute.IsValidationOnlyFailure to choose the exit code:
+		// validation-only failures are a soft gate (exit 0 unless
+		// --fail-on-validation), while resolve- and transform-phase failures
+		// remain a hard failure (non-zero exit) -- but the partial values stay
+		// inspectable in the structured output either way. In fatal mode (run
+		// solution / run action), all errors discard partial results.
+		if o.nonFatalValidation {
 			return resolverData, resolverCtx, fmt.Errorf("resolver execution failed: %w", err)
 		}
 		return nil, nil, fmt.Errorf("resolver execution failed: %w", err)

@@ -1329,7 +1329,62 @@ func TestIntegration_RunAction_FailureEnvelope_JSON(t *testing.T) {
 	assert.NotEmpty(t, decoded["diagnostics"])
 }
 
-// TestIntegration_RunSolution_DeferredValidationImmutableNotLocked verifies the
+// partialFailureSolution has one resolver that resolves successfully ("good")
+// and one that hard-fails in the resolve phase ("bad"): an undefined
+// Go-template function fails to parse, so no value is produced. This is the
+// exact shape from the bug report -- a resolve-phase error must not discard the
+// sibling that already resolved.
+const partialFailureSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: partial-failure-integration
+  version: 1.0.0
+spec:
+  resolvers:
+    good:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: i-resolved
+    bad:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: "{{ undefinedFunc .x }}"
+              data:
+                x: hello
+`
+
+// TestIntegration_RunResolver_ResolvePhaseFailure_PreservesValues verifies that
+// a resolve-phase failure in one resolver preserves the values of every
+// resolver that resolved successfully, alongside the __status/__diagnostics
+// envelope, instead of collapsing stdout to just the envelope.
+func TestIntegration_RunResolver_ResolvePhaseFailure_PreservesValues(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(partialFailureSolution), 0o600))
+
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver", "-f", solutionPath, "-o", "json",
+	)
+
+	t.Logf("stderr: %s", stderr)
+	assert.NotEqual(t, 0, exitCode, "resolve-phase failure must exit non-zero")
+	require.NotEmpty(t, strings.TrimSpace(stdout), "stdout must not be empty on failure")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &decoded), "stdout must be valid JSON")
+	assert.Equal(t, "i-resolved", decoded["good"],
+		"a successfully-resolved value must survive a sibling resolve-phase failure")
+	assert.NotContains(t, decoded, "bad", "the failed resolver produced no value and must be absent")
+	assert.Equal(t, "failed", decoded["__status"])
+	assert.NotEmpty(t, decoded["__diagnostics"])
+}
+
 // two-phase validation D1 guarantee: when a deferred (cross-resolver) validation
 // rule fails on an immutable resolver, execution stops before actions run and
 // the immutable value is NOT persisted to state. A subsequent run whose deferred

@@ -3207,7 +3207,7 @@ func TestResolverOptions_Run_CatalogFallbackNotFiredForMalformedSolution(t *test
 	assert.NotEqual(t, "my-proxy", opts.File, "fallback should NOT fire for a malformed solution.yaml")
 }
 
-func TestResolverOptions_renderValidationDiagnostics_NilCliParamsNoPanic(t *testing.T) {
+func TestResolverOptions_renderResolverDiagnostics_NilCliParamsNoPanic(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
@@ -3230,13 +3230,15 @@ func TestResolverOptions_renderValidationDiagnostics_NilCliParamsNoPanic(t *test
 	// No writer seeded into the context forces the IOStreams fallback path.
 	ctx := context.Background()
 
+	// A generic error is not validation-only, so it renders as a plain
+	// "resolver(s) failed" summary rather than a validation failure.
 	assert.NotPanics(t, func() {
-		opts.renderValidationDiagnostics(ctx, assert.AnError)
+		opts.renderResolverDiagnostics(ctx, assert.AnError)
 	})
-	assert.Contains(t, stderr.String(), "failed validation")
+	assert.Contains(t, stderr.String(), "resolver(s) failed")
 }
 
-func TestResolverOptions_renderValidationDiagnostics_NoIOStreamsNoPanic(t *testing.T) {
+func TestResolverOptions_renderResolverDiagnostics_NoIOStreamsNoPanic(t *testing.T) {
 	t.Parallel()
 
 	// Without a context writer and without IOStreams there is nowhere to write,
@@ -3244,6 +3246,6 @@ func TestResolverOptions_renderValidationDiagnostics_NoIOStreamsNoPanic(t *testi
 	opts := &ResolverOptions{}
 
 	assert.NotPanics(t, func() {
-		opts.renderValidationDiagnostics(context.Background(), assert.AnError)
+		opts.renderResolverDiagnostics(context.Background(), assert.AnError)
 	})
 }
