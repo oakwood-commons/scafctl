@@ -384,13 +384,15 @@ func Resolvers(
 	}
 
 	if execErr != nil {
-		if cfg.NonFatalValidation && IsValidationOnlyFailure(execErr) {
+		if cfg.NonFatalValidation {
 			// Non-fatal: return the populated values plus diagnostics instead of
-			// aborting, so the inspection path remains useful. Only pure
-			// validation failures are suppressed; resolve/transform failures
-			// (where no value exists) remain fatal below.
+			// aborting, so the inspection path remains useful for ALL failure
+			// kinds. Callers classify the error with IsValidationOnlyFailure to
+			// decide status/exit behavior: validation-only failures are a soft
+			// gate, while resolve/transform failures are a hard failure -- but
+			// the partial values stay inspectable either way.
 			if lgr != nil {
-				lgr.V(1).Info("resolver execution completed with validation diagnostics",
+				lgr.V(1).Info("resolver execution completed with diagnostics",
 					"resolvedCount", len(resolverData))
 			}
 			return &ResolverExecutionResult{

@@ -743,6 +743,69 @@ spec:
 		name := resolvers["name"].(map[string]any)
 		assert.Equal(t, "Bob", name["value"], "values must still be included in strict mode")
 	})
+
+	t.Run("resolve-phase failure preserves successfully-resolved values plus diagnostics", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		solFile := filepath.Join(tmpDir, "resolve-fail.yaml")
+		// "good" resolves to a plain string; "bad" hard-fails in the resolve
+		// phase (an undefined Go-template function fails to parse, so the source
+		// produces no value). The successful value must survive.
+		solContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: resolve-fail
+  version: 1.0.0
+spec:
+  resolvers:
+    good:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: i-resolved
+    bad:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template: "{{ undefinedFunc .x }}"
+              data:
+                x: hello
+`
+		require.NoError(t, os.WriteFile(solFile, []byte(solContent), 0o644))
+
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "preview_resolvers"
+		request.Params.Arguments = map[string]any{
+			"path": solFile,
+		}
+
+		result, err := srv.handlePreviewResolvers(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError,
+			"a resolve-phase failure must be non-fatal by default (values preserved)")
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		assert.Equal(t, false, parsed["valid"], "valid should be false on a resolve-phase failure")
+		diagnostics, ok := parsed["diagnostics"].([]any)
+		require.True(t, ok, "diagnostics should be present on a resolve-phase failure")
+		assert.NotEmpty(t, diagnostics)
+
+		resolvers := parsed["resolvers"].(map[string]any)
+		good := resolvers["good"].(map[string]any)
+		assert.Equal(t, "i-resolved", good["value"],
+			"a successfully-resolved value must survive a sibling resolve-phase failure")
+		assert.Equal(t, "resolved", good["status"])
+
+		bad := resolvers["bad"].(map[string]any)
+		assert.Equal(t, "failed", bad["status"], "the failed resolver must be reported as failed")
+	})
 }
 
 // TestHandlePreviewResolvers_RelativeToSolution verifies that resolver file
