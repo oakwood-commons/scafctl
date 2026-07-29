@@ -813,6 +813,9 @@ func TestParameterProvider_Execute_Default_TypedValues(t *testing.T) {
 	p := NewParameterProvider()
 	ctx := provider.WithParameters(context.Background(), map[string]any{})
 
+	// Under auto, an authored default keeps its YAML-authored type: a quoted
+	// string default stays a string (no inference), while a bare bool/int
+	// default passes through as-is.
 	tests := []struct {
 		name         string
 		defaultVal   any
@@ -820,11 +823,16 @@ func TestParameterProvider_Execute_Default_TypedValues(t *testing.T) {
 		expectedType string
 	}{
 		{"string literal", "fallback", "fallback", "string"},
-		{"bool string true", "true", true, "boolean"},
-		{"integer string", "42", int64(42), "integer"},
+		{"bool-looking string stays string", "true", "true", "string"},
+		{"false-looking string stays string", "false", "false", "string"},
+		{"integer-looking string stays string", "42", "42", "string"},
+		{"leading-zero id stays string", "0123", "0123", "string"},
+		{"json-looking string stays string", `{"a":1}`, `{"a":1}`, "string"},
+		{"file url stays string", "file:///etc/hosts", "file:///etc/hosts", "string"},
 		{"csv string not auto-split", "a,b,c", "a,b,c", "string"},
 		{"already-bool", true, true, "boolean"},
 		{"already-int", int64(99), int64(99), "integer"},
+		{"already-float", 3.5, 3.5, "float"},
 	}
 
 	for _, tt := range tests {
@@ -838,6 +846,87 @@ func TestParameterProvider_Execute_Default_TypedValues(t *testing.T) {
 			require.NotNil(t, output)
 			assert.Equal(t, tt.expectedData, output.Data)
 			assert.Equal(t, false, output.Metadata["exists"])
+			assert.Equal(t, tt.expectedType, output.Metadata["type"])
+		})
+	}
+}
+
+// TestParameterProvider_Execute_Default_ExplicitTypeStillCoerces confirms that
+// an explicit type still coerces the authored default (only auto treats it as a
+// literal). This is the escape hatch for authors who genuinely want a default
+// parsed from a string form.
+func TestParameterProvider_Execute_Default_ExplicitTypeStillCoerces(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	tests := []struct {
+		name         string
+		typeIn       string
+		defaultVal   any
+		expectedData any
+		expectedType string
+	}{
+		{"int from string default", TypeInt, "9090", int64(9090), "integer"},
+		{"bool from string default", TypeBool, "false", false, "boolean"},
+		{"float from string default", TypeFloat, "3.14", 3.14, "float"},
+		{"csv from string default", TypeCSV, "a,b,c", []string{"a", "b", "c"}, "array"},
+		{"json from string default", TypeJSON, `{"a":1}`, map[string]any{"a": float64(1)}, "object"},
+		{"string keeps quoted-looking default", TypeString, "false", "false", "string"},
+		{"raw keeps default verbatim", TypeRaw, "0123", "0123", "string"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := p.Execute(ctx, map[string]any{
+				"key":     "missing",
+				"type":    tt.typeIn,
+				"default": tt.defaultVal,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.expectedData, output.Data)
+			assert.Equal(t, false, output.Metadata["exists"])
+			assert.Equal(t, tt.expectedType, output.Metadata["type"])
+		})
+	}
+}
+
+// TestParameterProvider_Execute_CLIValue_StillInferred is the counterpart guard:
+// only defaults are treated as literals. A CLI-supplied value (always an untyped
+// string) still gets full auto inference, so behavior for real CLI input is
+// unchanged.
+func TestParameterProvider_Execute_CLIValue_StillInferred(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		raw          string
+		expectedData any
+		expectedType string
+	}{
+		{"bool string infers", "false", false, "boolean"},
+		{"int string infers", "42", int64(42), "integer"},
+		{"json string infers", `{"a":1}`, map[string]any{"a": float64(1)}, "object"},
+		{"plain string stays string", "hello", "hello", "string"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"val": tt.raw,
+			})
+			output, err := p.Execute(ctx, map[string]any{
+				"key":     "val",
+				"default": "unused",
+			})
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.expectedData, output.Data)
+			assert.Equal(t, true, output.Metadata["exists"])
 			assert.Equal(t, tt.expectedType, output.Metadata["type"])
 		})
 	}
@@ -1053,16 +1142,44 @@ func TestParameterProvider_Execute_Default_ParseError(t *testing.T) {
 	p := NewParameterProvider()
 	ctx := provider.WithParameters(context.Background(), map[string]any{})
 
-	// "-" triggers a parse error in parseValue (stdin should have been resolved)
+	// Under auto a default is a literal (no coercion, no error), so the parse
+	// error only surfaces with an explicit type that cannot represent the
+	// authored default.
 	output, err := p.Execute(ctx, map[string]any{
-		"key":     "env",
-		"default": "-",
+		"key":     "port",
+		"type":    TypeInt,
+		"default": "not-a-number",
 	})
 
 	assert.Error(t, err)
 	assert.Nil(t, output)
 	assert.Contains(t, err.Error(), "failed to parse default")
-	assert.Contains(t, err.Error(), "stdin value")
+	assert.Contains(t, err.Error(), "cannot parse")
+}
+
+// TestParameterProvider_Execute_Default_Auto_NeverErrorsOnSourceDirective
+// guards that source directives (stdin "-", file://) in an authored default are
+// treated as literal strings under auto rather than being resolved (and
+// therefore never error).
+func TestParameterProvider_Execute_Default_Auto_NeverErrorsOnSourceDirective(t *testing.T) {
+	t.Parallel()
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{})
+
+	for _, def := range []string{"-", "file:///path/does/not/exist"} {
+		t.Run(def, func(t *testing.T) {
+			t.Parallel()
+			output, err := p.Execute(ctx, map[string]any{
+				"key":     "env",
+				"default": def,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, def, output.Data)
+			assert.Equal(t, false, output.Metadata["exists"])
+			assert.Equal(t, "string", output.Metadata["type"])
+		})
+	}
 }
 
 func TestParameterProvider_Execute_DryRun_WithDefault_IgnoresDefault(t *testing.T) {

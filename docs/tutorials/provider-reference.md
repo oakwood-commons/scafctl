@@ -2218,7 +2218,7 @@ Access CLI parameters passed via `-r` flags.
 | `keys` | array of string | ❌ | Ordered list of parameter names. Default meaning: aliases for a single logical parameter (first provided via CLI wins), evaluated after `key`. With `as: map` it is instead a distinct set of parameter names read into a map. |
 | `as` | string | ❌ | Read-mode discriminator for `keys`. Only `map` is supported: it reinterprets `keys` as a distinct set of parameter names read into a map (instead of first-match-wins aliases). |
 | `all` | bool | ❌ | Map mode. When `true`, read every supplied CLI parameter as a map. Mutually exclusive with `key`, `keys`, and `as`. |
-| `default` | any | ❌ | Value returned when the parameter is not provided. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining `default` with `all` or `as: map` is an error. |
+| `default` | any | ❌ | Value returned when the parameter is not provided. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining `default` with `all` or `as: map` is an error. Under `auto` the default keeps its authored YAML type (a quoted `"false"` stays the string `"false"`, a bare `false` stays a bool) -- inference and `file://` resolution apply only to CLI values. Use an explicit `type` to coerce the default. |
 | `type` | string | ❌ | How the value is coerced. One of `auto` (default), `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`, `fetch`. See the table below. Only valid in single-key/alias mode; in map mode each value uses `auto` inference. |
 
 Specify one read mode: a single `key` / alias `keys`, `keys` + `as: map`, or `all: true`.
@@ -2244,7 +2244,7 @@ visible via `scafctl run provider parameter ...` but not in the resolver value.
 
 | Value | Behavior |
 |-------|----------|
-| `auto` | Default. Infers booleans, numbers, JSON, and `file://` sources, falling back to the literal string. `http://`/`https://` values are **not** fetched (they stay literal strings -- use `fetch`), and comma-separated values are **not** split into a list (opt in with `csv`). |
+| `auto` | Default. For CLI values, infers booleans, numbers, JSON, and `file://` sources, falling back to the literal string. `http://`/`https://` values are **not** fetched (they stay literal strings -- use `fetch`), and comma-separated values are **not** split into a list (opt in with `csv`). An authored `default` keeps its YAML type under `auto` (a quoted `"false"` stays a string, a bare `false` stays a bool) and is never inferred; use an explicit `type` to coerce a default. |
 | `string` | Coerces the value to a string, stripping surrounding quotes. Use to keep a numeric-looking value (leading zeros, or a value used with CEL `matches()`) as a string. |
 | `raw` | Returns the value untouched -- no coercion or quote-stripping. A numeric YAML default stays numeric; a CLI string stays verbatim. The escape hatch to disable inference. |
 | `int` | Forces integer parsing. A non-integer value is an error. |

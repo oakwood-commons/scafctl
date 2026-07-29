@@ -33,9 +33,12 @@ const (
 	// Version is the version of the parameter provider
 	Version = "1.0.0"
 
-	// TypeAuto is the default value for the "type" input. It infers booleans,
-	// numbers, JSON, and file:// sources, falling back to the literal string.
-	// http://+https:// values are NOT fetched; use TypeFetch for that.
+	// TypeAuto is the default value for the "type" input. For CLI values (which
+	// always arrive as untyped strings) it infers booleans, numbers, JSON, and
+	// file:// sources, falling back to the literal string. An authored "default"
+	// is used as-authored under auto (a quoted "false" stays the string "false",
+	// a bare false stays a bool) -- inference and source resolution apply only to
+	// CLI input. http://+https:// values are NOT fetched; use TypeFetch for that.
 	// Comma-separated values are NOT auto-split; use TypeCSV for that.
 	TypeAuto = "auto"
 	// TypeString forces the value to a string, stripping surrounding quotes and
@@ -200,9 +203,9 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					schemahelper.WithExample(AsMap)),
 				"all": schemahelper.BoolProp("When true, read every supplied CLI parameter as a map. Mutually exclusive with \"key\", \"keys\", and \"as\".",
 					schemahelper.WithExample(true)),
-				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining \"default\" with \"all\" or \"as: map\" is an error. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists.",
+				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining \"default\" with \"all\" or \"as: map\" is an error. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists. Under \"auto\" the default keeps its authored YAML type (a quoted \"false\" stays the string \"false\", a bare false stays a bool); inference and source resolution (file://) apply only to CLI values. Use an explicit \"type\" to coerce the default.",
 					schemahelper.WithExample("fallback")),
-				"type": schemahelper.StringProp("Controls how the parameter value is coerced. Only valid in single-key/alias mode; in map mode each value is returned with the provider's standard \"auto\" inference. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources, falling back to the literal string. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
+				"type": schemahelper.StringProp("Controls how the parameter value is coerced. Only valid in single-key/alias mode; in map mode each value is returned with the provider's standard \"auto\" inference. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources for CLI values, falling back to the literal string; an authored default keeps its YAML type under \"auto\" (a quoted \"false\" stays a string) and is never inferred. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
 					schemahelper.WithEnum(paramTypeEnum...),
 					schemahelper.WithExample(TypeString)),
 			}),
@@ -383,7 +386,7 @@ func (p *ParameterProvider) Execute(ctx context.Context, input any) (*provider.O
 	matchedKey, rawValue, exists := firstProvided(candidates, params)
 	if !exists {
 		if def, hasDefault := inputs["default"]; hasDefault {
-			parsedDefault, err := p.resolveValue(ctx, def, paramType)
+			parsedDefault, err := p.resolveDefault(ctx, def, paramType)
 			if err != nil {
 				return nil, fmt.Errorf("%s: failed to parse default for parameter %q: %w", ProviderName, candidates[0], err)
 			}
@@ -446,6 +449,22 @@ func (p *ParameterProvider) resolveValue(ctx context.Context, value any, paramTy
 	default:
 		return nil, fmt.Errorf("%s: unsupported type %q", ProviderName, paramType)
 	}
+}
+
+// resolveDefault returns the coerced value for an authored "default". Unlike a
+// CLI value -- which always arrives as an untyped string and therefore needs
+// inference -- a default is authored directly in YAML/JSON and already carries
+// its intended type (a quoted "false" is a string, a bare false is a bool). So
+// under TypeAuto the default is used as-authored, with no inference and no
+// source resolution (file://, stdin): quoting is the conventional "this is a
+// string, do not infer" signal, and honoring it prevents lossy coercions like
+// "0123" -> 123 or "false" -> false. Every explicit type still coerces the
+// default via resolveValue, so e.g. type: int with default: "9090" -> 9090.
+func (p *ParameterProvider) resolveDefault(ctx context.Context, value any, paramType string) (any, error) {
+	if paramType == TypeAuto {
+		return value, nil
+	}
+	return p.resolveValue(ctx, value, paramType)
 }
 
 // unquote removes a single pair of surrounding double quotes, if present.

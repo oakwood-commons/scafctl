@@ -1292,19 +1292,22 @@ scafctl run resolver -f param-demo.yaml unknown=value
 
 ### Controlling Parameter Types
 
-By default the parameter provider infers a type from the raw value: `true`/`false`
-become booleans, numeric strings become numbers, JSON objects/arrays are parsed,
-and `file://` values are loaded. `http://`/`https://` values are kept as literal
-strings -- they are not fetched. When automatic inference produces the wrong type
--- for example a numeric ID with leading zeros that should stay a string, or a
-value that must be parsed a specific way -- set the `type` input to take explicit
-control.
+By default the parameter provider infers a type from the raw CLI value:
+`true`/`false` become booleans, numeric strings become numbers, JSON
+objects/arrays are parsed, and `file://` values are loaded. `http://`/`https://`
+values are kept as literal strings -- they are not fetched. Inference applies
+only to CLI values; an authored `default` keeps its YAML type under `auto` (a
+quoted `"false"` stays the string `"false"`, a bare `false` stays a bool), so
+quoting a default is the way to keep it a string. When automatic inference
+produces the wrong type -- for example a numeric ID with leading zeros that
+should stay a string, or a value that must be parsed a specific way -- set the
+`type` input to take explicit control.
 
 The `type` input accepts these values:
 
 | Type     | Behavior                                                                 |
 | -------- | ------------------------------------------------------------------------ |
-| `auto`   | Default. Infers bool, number, JSON, and `file://` values.                |
+| `auto`   | Default. Infers bool, number, JSON, and `file://` for CLI values; an authored default keeps its YAML type. |
 | `string` | Coerces the value to a string (strips surrounding quotes).               |
 | `raw`    | Returns the value exactly as received, with no coercion or quote strip.  |
 | `int`    | Parses the value as an integer; errors if it is not a whole number.      |

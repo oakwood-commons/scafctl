@@ -1312,8 +1312,8 @@ func TestLintParameterNumericMatches_NumericStringDefault(t *testing.T) {
 	result := &Result{}
 	lintParameterNumericMatches(sol, result)
 
-	assert.Len(t, filterByNumericMatches(result.Findings), 1,
-		"numeric-looking string default should also trigger the rule")
+	assert.Empty(t, filterByNumericMatches(result.Findings),
+		"a numeric-looking string default keeps its string type under auto (matches() works), so the rule must not fire")
 }
 
 func TestLintParameterNumericMatches_ExplicitStringType(t *testing.T) {
