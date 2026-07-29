@@ -71,7 +71,7 @@ func (s *Server) registerProviderTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("capability",
 			mcp.Description("Filter by capability: from, transform, validation, authentication, action"),
-			mcp.Enum("from", "transform", "validation", "authentication", "action"),
+			mcp.Enum(providerCapabilityEnumValues...),
 		),
 		mcp.WithString("category",
 			mcp.Description("Filter by category"),
@@ -110,7 +110,7 @@ func (s *Server) registerProviderTools() {
 		),
 		mcp.WithString("capability",
 			mcp.Description("Optional capability to filter output schema (from, transform, validation, authentication, action). Omit for all capabilities."),
-			mcp.Enum("from", "transform", "validation", "authentication", "action"),
+			mcp.Enum(providerCapabilityEnumValues...),
 		),
 	)
 	s.addTool(getProviderOutputShapeTool, s.handleGetProviderOutputShape)
@@ -139,7 +139,7 @@ func (s *Server) registerProviderTools() {
 		),
 		mcp.WithString("capability",
 			mcp.Description("Capability to execute. Defaults to the provider's first declared capability."),
-			mcp.Enum("from", "transform", "validation", "authentication", "action"),
+			mcp.Enum(providerCapabilityEnumValues...),
 		),
 		mcp.WithBoolean("dry_run",
 			mcp.Description("Preview what would happen without executing. Defaults to false."),

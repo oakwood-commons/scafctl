@@ -278,219 +278,43 @@ Solution Development Workflow:
   1. Create/edit the solution YAML (or call scaffold_solution to generate a skeleton)
   2. Call lint_solution to validate structure (call explain_lint_rule for help with findings)
   3. Call validate_expression to check CEL/Go-template syntax in isolation
-  4. Call evaluate_go_template to test Go templates with sample data
-  5. Call preview_resolvers to verify resolver outputs (use resolver param to focus on one)
-  6. Call preview_action to dry-run the action graph and see materialized inputs
-  7. Call run_solution_tests to run functional tests (use verbose=true for full assertion details)
-  8. Call diff_solution to compare solution versions before committing changes
-  9. Call get_run_command to get the exact CLI command for the user
+  4. Call preview_resolvers to verify resolver outputs (use resolver param to focus on one)
+  5. Call preview_action to dry-run the action graph and see materialized inputs
+  6. Call run_solution_tests to run functional tests (use verbose=true for full assertion details)
+  7. Call diff_solution to compare solution versions before committing changes
+  8. Call get_run_command to get the exact CLI command for the user
+  For lint findings, call explain_lint_rule with the ruleName, or use the fix_lint prompt.
+  When the user wants to run a solution, use the prepare_execution prompt — it validates,
+  previews, and generates the CLI command WITHOUT executing.
 
-Lint Workflow:
-  When lint_solution returns findings:
-  1. Call list_lint_rules to see all available rules and their severities
-  2. Call explain_lint_rule with each finding's ruleName for detailed fix guidance
-  3. Use the fix_lint prompt for automated step-by-step fix guidance
+Reference tools (call these on demand instead of relying on this text):
+  - list_context_variables: injected CEL/template context variables per phase (_, __plan,
+    __execution, __actions, etc.)
+  - list_cel_functions / list_go_template_functions: full function catalogs
+  - get_provider_schema: exact input/output fields for a provider (ALWAYS check before
+    writing actions/resolvers that use it); provider://reference gives a compact overview
+  - get_run_command: exact CLI invocation, including --on-conflict/--backup/--show-execution
+    flags and structured (json/yaml) failure-output shape
+  - explain_concepts: narrative guidance (context-variables, phase-execution, cel-cost-model,
+    template-dependency-inference, snapshot-masking, authoring-workflow)
+  - extract_resolver_refs: find _.resolverName references in a tmpl/expr to populate dependsOn
+  - generate_test_scaffold / list_tests: starter functional tests and test discovery
+  - show_snapshot / diff_snapshots / analyze_execution prompt: post-execution debugging
+  - compose_solution prompt / solution://{name}/graph resource: splitting multi-file solutions
 
-Execution Preparation:
-  When the user wants to run a solution, use the prepare_execution prompt.
-  This validates, previews, and generates the CLI command WITHOUT executing — 
-  the user makes the final decision to run.
-
-Dry-Run:
-  Call dry_run_solution to perform a full dry-run of a solution. Providers execute
-  in mock mode (no side effects), resolvers return mock/placeholder values, and the
-  action graph is built but NOT executed. The response includes resolver outputs,
-  action plan with materialized inputs, and provider mock behaviors.
-
-Configuration:
-  Call get_config to see the current scafctl configuration (catalogs, settings,
-  logging, HTTP client, CEL, resolver, action, auth, build). Use the optional
-  'section' parameter to retrieve only a specific section.  Sensitive fields are
-  automatically redacted.
-
-Scaffolding a New Solution:
-  Call scaffold_solution with a name, description, and optional features/providers to 
-  generate a complete skeleton YAML with examples. This is the fastest way to start.
-
-Expression Debugging:
-  - validate_expression: syntax-check CEL expressions or Go templates without running them
-  - evaluate_go_template: render a Go template with sample data and see referenced fields
-  - evaluate_cel: evaluate a CEL expression with data context
-  - extract_resolver_refs: extract _.resolverName references from Go templates or CEL expressions
-    When creating or editing Go templates (tmpl:) or CEL expressions (expr:) that reference resolvers,
-    call extract_resolver_refs to determine which resolver names are referenced, then use those
-    names in the dependsOn field.
-  Common CEL encoding/data functions (use list_cel_functions for full reference):
-    json.unmarshal(string) / json.marshal(value) -- JSON serialization
-    yaml.unmarshal(string) / yaml.marshal(value) -- YAML serialization
-    base64.encode(string) / base64.decode(string) -- Base64 encoding
-    url.encode(string) / url.decode(string) -- URL form-encoding (application/x-www-form-urlencoded)
-    regex.match(pattern, string) / regex.replace(string, pattern, replacement)
-    map.merge(map1, map2) -- deep-merge two maps
-
-Testing Workflow:
-  - generate_test_scaffold: analyze a solution and generate starter test cases covering resolvers and actions
-  - list_tests: discover all functional tests in a solution without executing them
-  - run_solution_tests: execute the functional tests (use verbose=true for full assertion details)
-  When writing tests, first call generate_test_scaffold for a starter scaffold, then customize.
-
-Post-Execution Analysis:
-  - show_snapshot: load and inspect a resolver execution snapshot (summary, resolvers, or full detail)
-  - diff_snapshots: compare two execution snapshots to detect regressions, value changes, and status changes
-  - Use the analyze_execution prompt for guided post-execution debugging when something went wrong
-  When a user reports execution issues, use analyze_execution with the snapshot path (and optionally
-  a known-good snapshot for comparison) for structured root-cause analysis.
-
-Composition Workflow:
-  For multi-file solutions, use the compose_solution prompt to guide splitting a solution 
-  into reusable partial YAML files. The solution://{name}/graph resource shows the resolver 
-  dependency graph for a composed (or standalone) solution.
-
-Provider Schema Reference:
-  When creating or editing solution YAML (actions, resolvers), ALWAYS call 
-  get_provider_schema with the provider name to verify exact input field names,
-  types, which fields are required, and what outputs are available.
-  The provider://reference resource gives a compact overview of all providers.
-
-Template Directory Rendering (directory → render-tree → write-tree pipeline):
-  Use this pattern to render a directory tree of Go templates with shared variables
-  and write the rendered files preserving the original directory structure.
-  
-  The pipeline uses three providers in sequence:
-  1. directory provider (operation: list): reads template files, returns entries array
-     - Use recursive: true, filterGlob: "*.tpl", includeContent: true
-  2. go-template provider (operation: render-tree): batch-renders all entries
-     - Takes entries (array of {path, content}) and data (shared template variables)
-     - entries is typically: expr: '_.templateFiles.entries' (CEL sub-key access)
-     - data is typically: rslvr: vars (references a resolver with shared variables)
-     - 'name' input is optional for render-tree (defaults to "render-tree")
-     - Returns array of {path, content} with rendered content
-  3. file provider (operation: write-tree): writes rendered entries to disk
-     - Takes basePath (output directory), entries (from render-tree), and optional outputPath
-     - outputPath is a Go template for renaming files. Available variables:
-       __filePath, __fileName, __fileStem, __fileExtension, __fileDir
-     - Example outputPath to strip .tpl extension:
-       '{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}'
-  
-  IMPORTANT: Use 'expr:' (CEL) syntax to access sub-keys of resolver outputs
-  (e.g., expr: '_.templateFiles.entries'). The 'rslvr:' syntax does not support
-  dotted sub-path access.
-
-CLI Usage Reference (use these exact flags when suggesting commands to users):
-  Run a solution:       scafctl run solution -f ./solution.yaml -r key=value
-  Run resolvers only:   scafctl run resolver -f ./solution.yaml key=value
-  Run resolvers (catalog): scafctl run resolver my-catalog-solution key=value
-  Lint a solution:      scafctl lint -f ./solution.yaml
-  Inspect a solution:   scafctl explain -f ./solution.yaml
-  Run tests:            scafctl test functional -f ./solution.yaml
-  Run tests (verbose):  scafctl test functional -f ./solution.yaml -v
-
-Execution Metadata Flags:
-  Both 'run resolver' and 'run solution' support --show-execution to include
-  structured metadata in output. Off by default (clean output is the default).
-    --show-execution     Add '__execution' key with timing, phases, providers
-  Examples:
-    scafctl run resolver -f ./solution.yaml -o json --show-execution
-    scafctl run solution -f ./solution.yaml --show-execution
-
-Structured Failure Output (json/yaml):
-  On failure, 'run resolver', 'run solution', and 'run action' still write a
-  parseable document to stdout (never empty stdout) so pipelines using jq/yq can
-  detect and inspect failures programmatically:
-    run resolver -- the values map gains reserved keys '__status': "failed" and
-      '__diagnostics' (list of {resolver, phase, message}). Successful runs omit
-      these keys.
-    run solution / run action -- setup and resolver-phase failures emit a
-      {status: "failed", diagnostics: [...]} envelope; an action-execution
-      failure emits the full action result envelope (per-action error detail).
-  Human formats (table/quiet) keep the prior stderr-only error behavior.
-
-CEL Context Variables (available in resolver conditions, inputs, and action when/inputs):
-  _            Map of resolved resolver values (e.g., _.environment, _.config.port)
-  __plan       Pre-execution resolver topology (available in resolvers, populated before any resolver runs):
-                 __plan["resolverName"].phase           -- execution phase (1-based int)
-                 __plan["resolverName"].dependsOn       -- dependency list (list of strings)
-                 __plan["resolverName"].dependencyCount -- number of dependencies (int)
-  __execution  Resolver execution metadata (available in actions, populated after resolvers complete):
-                 __execution["resolvers"]["name"].status   -- "success", "failed", or "skipped"
-                 __execution["resolvers"]["name"].phase    -- phase number (int)
-                 __execution["resolvers"]["name"].duration -- e.g. "3ms"
-                 __execution["summary"].phaseCount        -- total resolver phases
-                 __execution["summary"].resolverCount     -- number of resolvers that ran
-                 __execution["summary"].totalDuration     -- total resolver execution time
-  __actions    Downstream action results (available in actions, keyed by action name):
-                 __actions["name"].results -- action output
-                 __actions["name"].status  -- "succeeded", "failed", "skipped"
-
-File Conflict Strategies:
-  When a solution writes files (file provider), use --on-conflict to control
-  behavior when targets already exist:
-    --on-conflict skip-unchanged  SHA256 compare; skip if identical (default)
-    --on-conflict overwrite       Always replace existing files
-    --on-conflict skip            Never write if file exists
-    --on-conflict error           Fail if file exists
-    --on-conflict append          Append content to existing file
-  Use --backup to create .bak backups before mutating existing files.
-  Examples:
-    scafctl run solution -f ./solution.yaml --on-conflict overwrite --backup
-    scafctl run provider file operation=write path=out.txt content=hello --on-conflict skip
-
-IMPORTANT — test CLI command:
-  • The test command is 'scafctl test functional -f <file>', NOT 'scafctl test -f <file>'.
-  • The 'functional' subcommand is REQUIRED. The -f flag belongs to the 'functional' subcommand.
-  • 'scafctl test -f' will FAIL with 'unknown shorthand flag: f'.
-
-IMPORTANT — choosing between 'run solution' and 'run resolver':
-  • 'scafctl run solution' REQUIRES the solution to have a spec.workflow section with actions.
-    It will FAIL with an error if the solution has no workflow defined.
-  • 'scafctl run resolver' runs ONLY the resolvers and does NOT require a workflow.
-    Use this when the solution has resolvers but no spec.workflow/actions section.
-  • Rule of thumb: if the solution YAML contains spec.workflow.actions → use 'run solution'.
-    If it does NOT have spec.workflow → use 'run resolver'.
-
-IMPORTANT: Resolver parameters are passed with -r/--resolver or positional key=value, NOT -p. There is no -p flag.
-Parameters can also be loaded from files (@file.yaml), piped from stdin (@-), or read as raw
-content into a single key (key=@- for stdin, key=@file for files).
-Examples:
-  scafctl run solution -f ./my-solution.yaml -r env=prod -r region=us-east1
-  scafctl run solution my-catalog-solution -r inputText="Hello World" -r operation=uppercase
-  scafctl run resolver -f ./my-solution.yaml env=prod region=us-east1
-  scafctl run resolver -f ./my-solution.yaml -r name=value
-  scafctl run resolver my-catalog-solution env=prod region=us-east1
-  scafctl run resolver my-catalog-solution@1.2.3 db config
-  scafctl run resolver -f ./my-solution.yaml -r @params.yaml
-  echo '{"env": "prod"}' | scafctl run resolver -f ./my-solution.yaml -r @-
-  cat params.yaml | scafctl run solution -f ./my-solution.yaml -r @-
-  echo hello | scafctl run provider message message=@-
-  echo hello | scafctl run resolver -f ./my-solution.yaml -r message=@-
-  scafctl run resolver -f ./my-solution.yaml body=@content.txt
-
-IMPORTANT — file path references:
-  When mentioning solution filenames in responses, ALWAYS use a "./" prefix for
-  relative paths (e.g., "./my-solution.yaml", NOT "my-solution.yaml"). Bare filenames
-  without "./" are auto-linkified by VS Code Chat into broken content-reference URLs.
-
-IMPORTANT — resolver type field:
-  The resolver "type" field is OPTIONAL. When omitted, the value passes through as-is.
-  Only set it for known scalar types (string, int, bool, etc.). NEVER set type: string
-  on resolvers using providers that return objects/maps (e.g., http returns
-  {statusCode, body, headers}). Setting the wrong type causes coercion errors.
-  When in doubt, omit the type field entirely.
-
-Tool Latency Guide (helps optimize tool selection):
-  ⚡ Instant (in-memory, no I/O):
-    get_solution_schema, list_providers, get_provider_schema, list_lint_rules,
-    explain_lint_rule, explain_kind, validate_expression, evaluate_cel,
-    get_run_command, list_auth_handlers, auth_set_profile, get_config_paths, get_version
-  🔄 Fast (local file I/O):
-    inspect_solution, lint_solution, diff_solution, list_catalog, catalog_inspect,
-    list_examples, get_example, scaffold_solution, extract_resolver_refs,
-    generate_test_scaffold, list_tests, show_snapshot, diff_snapshots,
-    get_config, evaluate_go_template, validate_expressions, list_plugins,
-    get_plugin_cache_path
-  🌐 Variable (may use network or execute code):
-    preview_resolvers, preview_action, dry_run_solution, render_solution,
-    run_solution_tests, catalog_list_plugins`
+IMPORTANT gotchas (not obvious from tool names, keep these in mind):
+  • The test command is 'scafctl test functional -f <file>', NOT 'scafctl test -f <file>' —
+    'functional' is a required subcommand and the -f flag belongs to it.
+  • 'scafctl run solution' REQUIRES spec.workflow.actions and fails without it; use
+    'scafctl run resolver' for solutions with resolvers but no workflow.
+  • Resolver parameters use -r/--resolver or positional key=value — there is NO -p flag.
+    Values can come from files (@file.yaml), stdin (@-), or raw content (key=@file).
+  • When mentioning solution filenames in responses, always use a "./" prefix
+    (e.g., "./my-solution.yaml") — bare filenames get auto-linkified into broken URLs by
+    some clients.
+  • The resolver "type" field is OPTIONAL and should usually be omitted. Only set it for
+    known scalars; NEVER set type: string on a resolver whose provider returns an
+    object/map (e.g., http returns {statusCode, body, headers}) — it causes coercion errors.`
 
 // serverInstructions returns the MCP server instructions with the binary name
 // substituted for all "scafctl" references.

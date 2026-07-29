@@ -320,11 +320,14 @@ func TestHandleGetVersion(t *testing.T) {
 
 // --- Phase 5C: Latency hints in serverInstructions ---
 
-func TestServerInstructionsContainLatencyGuide(t *testing.T) {
+func TestServerInstructionsPointToReferenceTools(t *testing.T) {
 	instructions := serverInstructions(settings.CliBinaryName)
-	assert.Contains(t, instructions, "Tool Latency Guide")
-	assert.Contains(t, instructions, "Instant")
-	assert.Contains(t, instructions, "Fast")
-	assert.Contains(t, instructions, "Variable")
-	assert.Contains(t, instructions, "get_version")
+	// The latency guide and other inlined tutorial content (CEL variables,
+	// function catalogs, CLI examples) were trimmed in favor of pointing
+	// clients at on-demand reference tools -- see issue #729.
+	assert.Contains(t, instructions, "Reference tools")
+	assert.Contains(t, instructions, "list_context_variables")
+	assert.Contains(t, instructions, "list_cel_functions")
+	assert.Contains(t, instructions, "get_provider_schema")
+	assert.Contains(t, instructions, "explain_concepts")
 }

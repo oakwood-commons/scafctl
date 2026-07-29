@@ -32,7 +32,7 @@ func (s *Server) registerDiffTools() {
 			mcp.Description("Path to the second solution file (e.g., the modified version)"),
 		),
 		mcp.WithString("cwd",
-			mcp.Description("Working directory for path resolution. When set, relative paths resolve against this directory instead of the process CWD."),
+			mcp.Description(cwdDescDefault),
 		),
 	)
 	s.addTool(diffSolutionTool, s.handleDiffSolution)
