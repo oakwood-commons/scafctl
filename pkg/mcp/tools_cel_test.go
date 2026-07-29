@@ -178,6 +178,34 @@ func TestHandleEvaluateCEL(t *testing.T) {
 		assert.Equal(t, float64(3), parsed["result"])
 	})
 
+	t.Run("unmarshal preserves null", func(t *testing.T) {
+		// Custom CEL functions (json.unmarshal) require the standard env factory,
+		// which TestMain wires via SetEnvFactory(env.New).
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "evaluate_cel"
+		request.Params.Arguments = map[string]any{
+			"expression": `json.unmarshal('{"a": null, "b": 1}')`,
+		}
+
+		result, err := srv.handleEvaluateCEL(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+
+		resultMap, ok := parsed["result"].(map[string]any)
+		require.True(t, ok, "result should be a map, got %T", parsed["result"])
+		actual, exists := resultMap["a"]
+		assert.True(t, exists, "null key must remain present")
+		assert.Nil(t, actual, "null must not be coerced to 0")
+		assert.Equal(t, float64(1), resultMap["b"])
+	})
+
 	t.Run("with inline data", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))
 		require.NoError(t, err)

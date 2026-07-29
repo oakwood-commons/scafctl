@@ -227,7 +227,7 @@ func TestToObject(t *testing.T) {
 			name:  "map with null value",
 			input: "{'value': null}",
 			expected: map[string]any{
-				"value": struct{}{}, // Special marker for null - we'll verify it exists but not the exact value
+				"value": nil, // CEL null is normalized to Go nil, not coerced to 0
 			},
 		},
 		{
@@ -291,9 +291,9 @@ func TestToObject(t *testing.T) {
 				for key, expectedVal := range tt.expected {
 					actualVal, exists := result[key]
 					assert.True(t, exists, "key %s should exist", key)
-					// For complex types (nested maps, lists, null), just verify they exist
+					// For complex types (nested maps, lists), just verify they exist
 					switch expectedVal.(type) {
-					case map[ref.Val]ref.Val, []ref.Val, struct{}:
+					case map[ref.Val]ref.Val, []ref.Val:
 						assert.NotNil(t, actualVal)
 					default:
 						assert.Equal(t, expectedVal, actualVal, "value for key %s", key)
@@ -374,9 +374,11 @@ func TestListToObjectSlice(t *testing.T) {
 			input:       "[{'value': null}, {'value': 'test'}]",
 			expectedLen: 2,
 			validateFunc: func(t *testing.T, result []map[string]any) {
-				// Just verify the key exists - CEL represents null differently than Go nil
-				_, exists := result[0]["value"]
+				// CEL null is normalized to Go nil (not coerced to 0), while the
+				// key remains present so has()-style presence checks stay faithful.
+				actual, exists := result[0]["value"]
 				assert.True(t, exists, "key 'value' should exist in first map")
+				assert.Nil(t, actual, "null value should convert to Go nil")
 				assert.Equal(t, "test", result[1]["value"])
 			},
 		},
@@ -538,4 +540,87 @@ func TestGoToCelValue_Bool(t *testing.T) {
 func TestGoToCelValue_Nil(t *testing.T) {
 	val := GoToCelValue(nil)
 	assert.NotNil(t, val)
+}
+
+func TestNullSafeValue(t *testing.T) {
+	t.Run("null converts to nil", func(t *testing.T) {
+		assert.Nil(t, NullSafeValue(types.NullValue))
+	})
+
+	t.Run("nil ref.Val converts to nil", func(t *testing.T) {
+		assert.Nil(t, NullSafeValue(nil))
+	})
+
+	t.Run("string passes through", func(t *testing.T) {
+		assert.Equal(t, "hello", NullSafeValue(types.String("hello")))
+	})
+
+	t.Run("int passes through", func(t *testing.T) {
+		assert.Equal(t, int64(42), NullSafeValue(types.Int(42)))
+	})
+
+	t.Run("bool passes through", func(t *testing.T) {
+		assert.Equal(t, true, NullSafeValue(types.Bool(true)))
+	})
+
+	t.Run("double passes through", func(t *testing.T) {
+		assert.InEpsilon(t, 3.14, NullSafeValue(types.Double(3.14)), 1e-9)
+	})
+}
+
+func TestCelValueToGo_Null(t *testing.T) {
+	out := evalCEL(t, "null")
+	assert.Nil(t, CelValueToGo(out), "top-level null should convert to Go nil")
+}
+
+func TestCelValueToGo_MapWithNull(t *testing.T) {
+	out := evalCEL(t, "{'a': null, 'b': 1}")
+	result := CelValueToGo(out)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+
+	actual, exists := m["a"]
+	assert.True(t, exists, "key 'a' should remain present")
+	assert.Nil(t, actual, "null value must not be coerced to 0")
+	assert.Equal(t, int64(1), m["b"])
+}
+
+func TestCelValueToGo_ListWithNull(t *testing.T) {
+	out := evalCEL(t, "[1, null, 2]")
+	result := CelValueToGo(out)
+	lst, ok := result.([]any)
+	require.True(t, ok)
+	require.Len(t, lst, 3)
+	assert.Equal(t, int64(1), lst[0])
+	assert.Nil(t, lst[1], "null element must not be coerced to 0")
+	assert.Equal(t, int64(2), lst[2])
+}
+
+func TestCelValueToGo_NestedNull(t *testing.T) {
+	out := evalCEL(t, "{'outer': {'inner': null}}")
+	result := CelValueToGo(out)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	inner, ok := m["outer"].(map[string]any)
+	require.True(t, ok)
+
+	actual, exists := inner["inner"]
+	assert.True(t, exists, "nested key should remain present")
+	assert.Nil(t, actual, "nested null must not be coerced to 0")
+}
+
+func BenchmarkCelValueToGo_NullMap(b *testing.B) {
+	env, err := cel.NewEnv()
+	require.NoError(b, err)
+	ast, issues := env.Compile("{'a': null, 'b': 1, 'c': 'x', 'd': null, 'e': true}")
+	require.NoError(b, issues.Err())
+	prg, err := env.Program(ast)
+	require.NoError(b, err)
+	out, _, err := prg.Eval(map[string]interface{}{})
+	require.NoError(b, err)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = CelValueToGo(out)
+	}
 }

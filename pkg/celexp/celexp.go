@@ -577,7 +577,10 @@ func (r *CompileResult) EvalWithContext(ctx context.Context, vars map[string]any
 		}
 	}
 
-	return out.Value(), nil
+	// Normalize a CEL null result to Go nil. Without this, cel-go's
+	// Null.Value() returns structpb.NullValue_NULL_VALUE (integer 0), silently
+	// coercing an explicit null into 0 for direct callers of Eval/EvalWithContext.
+	return conversion.NullSafeValue(out), nil
 }
 
 // isCostLimitError checks if an evaluation error is a cost limit exceeded error.
@@ -698,7 +701,7 @@ func EvalAsWithContext[T any](ctx context.Context, r *CompileResult, vars map[st
 			return zero, fmt.Errorf("expression result is %T, not a list", celList)
 		}
 	default:
-		result = out.Value()
+		result = conversion.NullSafeValue(out)
 	}
 
 	// Type assertion to convert to T

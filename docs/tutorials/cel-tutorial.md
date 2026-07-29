@@ -738,6 +738,14 @@ apiData:
           expression: "json.unmarshal(_.rawResponse.body)"
 ```
 
+> **Null preservation:** An explicit `null` in the source is preserved as null,
+> not coerced to `0` or `""`. For example
+> `json.unmarshal('{"present": 1, "absent": null}')` yields
+> `{"present": 1, "absent": null}`, so `has(x.absent)` is `true` and
+> `x.absent == null` is `true`. This is distinct from assigning null to a
+> resolver with a declared `type` (e.g. `type: int`), where the null coerces to
+> that type's zero value.
+
 ### Debug
 
 Functions for debugging expressions during development.

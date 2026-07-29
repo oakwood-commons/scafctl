@@ -37,6 +37,11 @@ func ListToStringSlice(listVal ref.Val) ([]string, error) {
 
 // ToObject converts a CEL map to a Go map[string]any.
 // Returns an error if the input is not a map or if any key is not a string.
+//
+// Values are converted one level deep: each value is normalized via
+// NullSafeValue (so a null value becomes Go nil, never a numeric 0), but nested
+// maps/lists are returned in their immediate CEL representation. Use
+// CelValueToGo when a fully-recursive conversion is required.
 func ToObject(mapVal ref.Val) (map[string]any, error) {
 	// Type check the map
 	mapper, ok := mapVal.(traits.Mapper)
@@ -54,7 +59,7 @@ func ToObject(mapVal ref.Val) (map[string]any, error) {
 			return nil, fmt.Errorf("map contains non-string key of type %s", key.Type())
 		}
 		value := mapper.Get(key)
-		result[keyStr] = value.Value()
+		result[keyStr] = NullSafeValue(value)
 	}
 
 	return result, nil
@@ -84,12 +89,32 @@ func ListToObjectSlice(listVal ref.Val) ([]map[string]any, error) {
 	return result, nil
 }
 
+// NullSafeValue returns the native Go value of a CEL ref.Val, mapping CEL null
+// to Go nil.
+//
+// It behaves like ref.Val.Value() for every type except null. This is required
+// because cel-go's Null.Value() returns structpb.NullValue_NULL_VALUE, whose
+// underlying value is the integer 0. Returning that raw value would silently
+// corrupt an explicit null into a numeric 0 (for example when round-tripping
+// through json.unmarshal or when serializing an evaluation result), so null is
+// normalized to Go nil here. A nil ref.Val is likewise treated as nil.
+//
+// Note that for container values (maps, lists) this returns the value's
+// immediate representation without recursing; use CelValueToGo for a deep
+// conversion that normalizes nested nulls.
+func NullSafeValue(val ref.Val) any {
+	if val == nil {
+		return nil
+	}
+	if _, ok := val.(types.Null); ok {
+		return nil
+	}
+	return val.Value()
+}
+
 // CelValueToGo recursively converts a CEL ref.Val to a native Go value.
 // This handles maps, lists, and primitive types.
 func CelValueToGo(val ref.Val) any {
-	// Get the underlying Go value
-	goVal := val.Value()
-
 	// Handle maps
 	if mapper, ok := val.(traits.Mapper); ok {
 		result := make(map[string]any)
@@ -118,8 +143,8 @@ func CelValueToGo(val ref.Val) any {
 		return result
 	}
 
-	// Return the primitive value as-is
-	return goVal
+	// Return the primitive value as-is (null is normalized to Go nil).
+	return NullSafeValue(val)
 }
 
 // GoToCelValue converts a native Go value to a CEL ref.Val.
