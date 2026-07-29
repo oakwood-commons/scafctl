@@ -458,11 +458,11 @@ Output:
 
 Resolvers execute through three ordered phases: **resolve -> transform -> validate**. You can skip phases to inspect intermediate values, or rely on the non-fatal validation behavior described below to see resolved values even when validation fails.
 
-> **Validation is non-fatal in `run resolver`.** Because `run resolver` is an inspection and troubleshooting command, validation failures never withhold the produced values. The resolved values are still printed, validation diagnostics are written to stderr, and the command exits `0`. To make validation failures exit non-zero (for example, in CI), pass `--fail-on-validation`. To gate on validation as the primary intent, use the dedicated [`scafctl validate resolver`](#validate-resolver) command, which presets fatal validation.
+> **Validation is non-fatal in `run resolver`.** Because `run resolver` is an inspection and troubleshooting command, validation failures never withhold the produced values. The resolved values are still printed, validation diagnostics are written to stderr, and the command exits `0`. To make validation failures exit non-zero (for example, in CI), pass `--on-validation-error error`. To gate on validation as the primary intent, use the dedicated [`scafctl validate resolver`](#validate-resolver) command, which presets fatal validation.
 >
 > **Dependents keep running too.** Because a resolver that fails only a validation rule still produces a usable value, its dependent resolvers continue to execute and read that value -- they are not skipped. (Resolve and transform failures still exit non-zero and their dependents are skipped because no value was produced.)
 >
-> **Partial values survive a resolve/transform failure.** When a resolver hard-fails in the resolve or transform phase, `run resolver` still emits the values of every resolver that *did* resolve successfully on stdout, plus a failure summary on stderr. In structured output (`-o json`/`-o yaml`) the stdout document additionally carries a `__status: failed` / `__diagnostics` envelope naming the failed resolver(s); table output shows only the successful values on stdout (the failure detail stays on stderr). Unlike a validation-only failure, a resolve/transform failure always exits non-zero (exit `1`) regardless of `--fail-on-validation` -- but the successful values are no longer discarded.
+> **Partial values survive a resolve/transform failure.** When a resolver hard-fails in the resolve or transform phase, `run resolver` still emits the values of every resolver that *did* resolve successfully on stdout, plus a failure summary on stderr. In structured output (`-o json`/`-o yaml`) the stdout document additionally carries a `__status: failed` / `__diagnostics` envelope naming the failed resolver(s); table output shows only the successful values on stdout (the failure detail stays on stderr). Unlike a validation-only failure, a resolve/transform failure always exits non-zero (exit `1`) regardless of `--on-validation-error` -- but the successful values are no longer discarded.
 
 Create a file called `phases-demo.yaml`. This example resolves a port number, transforms it by adding `8000`, then validates the result is within the valid port range. The input value of `60000` is intentionally too high -- after the transform, the result (`68000`) exceeds the valid range:
 
@@ -522,22 +522,22 @@ Diagnostics on stderr:
 ```
 Warning: 1 resolver(s) failed validation:
   - port: Port must be between 1024 and 65535
-(resolved values are still emitted on stdout; pass --fail-on-validation to exit non-zero)
+(resolved values are still emitted on stdout; pass --on-validation-error error to exit non-zero)
 ```
 
 You can see the resolved value (`68000`) directly, and the diagnostic explains why it is invalid -- no flags required.
 
-To make validation failures exit non-zero, add `--fail-on-validation`:
+To make validation failures exit non-zero, add `--on-validation-error error`:
 
 {{< tabs "run-resolver-tutorial-cmd-9b" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver -f phases-demo.yaml -o json --fail-on-validation
+scafctl run resolver -f phases-demo.yaml -o json --on-validation-error error
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver -f phases-demo.yaml -o json --fail-on-validation
+scafctl run resolver -f phases-demo.yaml -o json --on-validation-error error
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -546,17 +546,17 @@ The values are still printed, the diagnostics still appear on stderr, but the co
 
 ### Skip Validation
 
-Use `--skip-validation` to bypass the validation phase entirely (no diagnostics, no validation work):
+Use `--on-validation-error ignore` to bypass the validation phase entirely (no diagnostics, no validation work):
 
 {{< tabs "run-resolver-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl run resolver --skip-validation -f phases-demo.yaml -o json
+scafctl run resolver --on-validation-error ignore -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl run resolver --skip-validation -f phases-demo.yaml -o json
+scafctl run resolver --on-validation-error ignore -f phases-demo.yaml -o json
 ```
 {{% /tab %}}
 {{< /tabs >}}
@@ -569,7 +569,7 @@ Output:
 }
 ```
 
-Now you can see the problem: the transform added `8000` to `60000`, producing `68000` which exceeds the valid port range. Unlike the default non-fatal behavior, `--skip-validation` produces no validation diagnostics at all.
+Now you can see the problem: the transform added `8000` to `60000`, producing `68000` which exceeds the valid port range. Unlike the default non-fatal behavior, `--on-validation-error ignore` produces no validation diagnostics at all.
 
 ### Skip Transform (and Validation)
 
@@ -599,7 +599,7 @@ Output:
 This reveals the provider returned `60000` — confirming the root cause is the input value, not the transform logic.
 
 > [!WARNING]
-> **Note**: `--skip-transform` implies `--skip-validation` because validating a pre-transform value is misleading — validation rules are written against the expected final shape.
+> **Note**: `--skip-transform` implies skipping validation because validating a pre-transform value is misleading — validation rules are written against the expected final shape.
 
 ---
 

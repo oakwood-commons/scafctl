@@ -82,7 +82,7 @@ spec:
       equal-regions-fail:
         description: Deferred validation fails (non-zero) when regions are equal
         extends: [_base]
-        args: ["-r", "region=us-east1", "-r", "backupRegion=us-east1", "--fail-on-validation"]
+        args: ["-r", "region=us-east1", "-r", "backupRegion=us-east1", "--on-validation-error", "error"]
         tags: [negative]
         expectFailure: true
         assertions:
@@ -93,7 +93,7 @@ spec:
             message: "Failure should surface the rendered deferred validation message"
 
       equal-regions-nonfatal-shows-values:
-        description: Without --fail-on-validation, values still emit but the failure is reported
+        description: Without --on-validation-error error, values still emit but the failure is reported
         extends: [_base]
         args: ["-r", "region=us-east1", "-r", "backupRegion=us-east1"]
         assertions:

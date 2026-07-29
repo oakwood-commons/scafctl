@@ -98,9 +98,9 @@ spec:
           - expression: '__output.validValue == "good"'
 
       regex-failure:
-        description: Verify regex validation failure exits non-zero with --fail-on-validation
+        description: Verify regex validation failure exits non-zero with --on-validation-error error
         command: [run, resolver]
-        args: ["invalidRegex", "--fail-on-validation"]
+        args: ["invalidRegex", "--on-validation-error", "error"]
         tags: [edge-case, validation, negative]
         expectFailure: true
         assertions:
@@ -134,9 +134,9 @@ spec:
             message: "Dependent of a validation-only failure must still resolve using the upstream value"
 
       expression-failure:
-        description: Verify CEL expression validation failure exits non-zero with --fail-on-validation
+        description: Verify CEL expression validation failure exits non-zero with --on-validation-error error
         command: [run, resolver]
-        args: ["invalidExpression", "--fail-on-validation"]
+        args: ["invalidExpression", "--on-validation-error", "error"]
         tags: [edge-case, validation, negative]
         expectFailure: true
         assertions:
@@ -144,9 +144,9 @@ spec:
             message: "Should fail validation"
 
       not-match-failure:
-        description: Verify notMatch validation failure exits non-zero with --fail-on-validation
+        description: Verify notMatch validation failure exits non-zero with --on-validation-error error
         command: [run, resolver]
-        args: ["invalidNotMatch", "--fail-on-validation"]
+        args: ["invalidNotMatch", "--on-validation-error", "error"]
         tags: [edge-case, validation, negative]
         expectFailure: true
         assertions:

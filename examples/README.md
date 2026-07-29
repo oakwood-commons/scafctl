@@ -239,7 +239,7 @@ Standalone demo files in the root examples directory:
 |------|-------------|
 | [resolver-demo.yaml](resolver-demo.yaml) | Interactive resolver demonstration |
 | [resolver-stress-demo.yaml](resolver-stress-demo.yaml) | Performance testing with many resolvers |
-| [resolver-validation-failures-demo.yaml](resolver-validation-failures-demo.yaml) | Validation error handling; non-fatal by default (`--fail-on-validation` or `validate resolver` to exit non-zero) |
+| [resolver-validation-failures-demo.yaml](resolver-validation-failures-demo.yaml) | Validation error handling; non-fatal by default (`--on-validation-error error` or `validate resolver` to exit non-zero) |
 
 ---
 

@@ -795,7 +795,7 @@ scafctl run resolver -f my-solution.yaml -r region=us-east1 -r backupRegion=us-w
 
 In `run resolver` (non-fatal) mode, a failing deferred rule still shows the
 resolved values, reports the failure on stderr, and skips state persistence. Add
-`--fail-on-validation` to exit non-zero. See the
+`--on-validation-error error` to exit non-zero. See the
 [Two-Phase Validation design doc](../design/two-phase-validation.md) for the full
 execution order and skipped/errored semantics.
 

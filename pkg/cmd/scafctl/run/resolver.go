@@ -76,11 +76,6 @@ type ResolverOptions struct {
 	// ShowExecution includes the __execution metadata in output.
 	ShowExecution bool
 
-	// FailOnValidation makes the command exit with a non-zero status when any
-	// resolver fails validation. By default, validation failures are reported as
-	// non-fatal diagnostics (values are still shown) and the command exits 0.
-	FailOnValidation bool
-
 	// LintAfterValidate, when true, runs lint on the solution after resolver
 	// validation passes. It is set by 'validate resolver' so that command acts
 	// as a full gate (resolver validation + lint). 'run resolver' leaves it
@@ -94,7 +89,12 @@ type ResolverOptions struct {
 
 // CommandResolver creates the 'run resolver' subcommand
 func CommandResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	options := &ResolverOptions{}
+	// run resolver is an inspection command: validation failures default to the
+	// non-fatal "warn" policy so produced values are never withheld. Users can
+	// still opt into "error" (abort) or "ignore" via --on-validation-error.
+	options := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{ValidationPolicyDefault: settings.ValidationWarn},
+	}
 
 	cfg := runCommandConfig{
 		cliParams: cliParams,
@@ -143,7 +143,7 @@ RESOLVER SELECTION:
     scafctl run resolver db config -f my-app       Execute from catalog, filter to db + config
 
 SKIPPING PHASES:
-  Use --skip-validation to skip the validation phase of all resolvers.
+  Use --on-validation-error ignore to skip the validation phase of all resolvers.
   Use --skip-transform to skip both the transform and validation phases,
   returning only the raw resolved values. This is useful for inspecting
   what providers return before any transformation.
@@ -163,6 +163,16 @@ SNAPSHOT MODE:
   Use --snapshot to save a full execution snapshot to a file. Snapshots
   capture resolver values, timing, phases, parameters, and metadata for
   debugging, testing, comparison, and audit trails.
+
+VALIDATION POLICY:
+  Use --on-validation-error to control how resolver validation failures are
+  handled:
+    warn    (default) report failures as non-fatal diagnostics on stderr,
+            still emit the resolved values, and exit 0
+    error   abort and exit non-zero (exit 2) when any resolver fails validation
+    ignore  skip the validation phase entirely
+  To gate on validation as the primary intent, use the dedicated
+  'scafctl validate resolver' command, which defaults to error.
 
 `+ResolverParametersHelp+`
 
@@ -290,7 +300,6 @@ Examples:
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
 	cCmd.Flags().BoolVar(&options.ShowExecution, "show-execution", false, "Include __execution metadata (phases, timing, dependencies, providers) in output")
-	cCmd.Flags().BoolVar(&options.FailOnValidation, "fail-on-validation", false, "Exit non-zero when any resolver fails validation (by default validation failures are non-fatal diagnostics)")
 	cCmd.Flags().StringArrayVar(&options.Actions, "action", nil, "Scope resolver output to the resolvers consumed by this action (repeatable)")
 
 	setResolverHelpFunc(cCmd)
@@ -304,7 +313,10 @@ Examples:
 // 'run resolver', it does not expose graph/snapshot modes — its sole purpose is
 // to validate resolver outputs and report failures.
 func CommandValidateResolver(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
-	options := &ResolverOptions{FailOnValidation: true, LintAfterValidate: true}
+	options := &ResolverOptions{
+		sharedResolverOptions: sharedResolverOptions{ValidationPolicyDefault: settings.ValidationError},
+		LintAfterValidate:     true,
+	}
 
 	cfg := runCommandConfig{
 		cliParams: cliParams,
@@ -646,10 +658,13 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		o.sharedResolverOptions.SkipTransform = true
 	}
 
-	// run resolver is an inspection command: validation failures must never
-	// withhold the produced values. Enable non-fatal mode so executeResolvers
-	// returns partial values plus diagnostics instead of aborting.
-	o.nonFatalValidation = true
+	// Resolve the validation-failure policy (default "warn" for run resolver /
+	// "error" for validate resolver). This configures executeResolvers and
+	// drives the exit-code decision below.
+	policy, err := o.resolveValidationPolicy(ctx)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
 
 	// Track timing
 	start := time.Now()
@@ -740,14 +755,16 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// written to stdout above (with the failure envelope in structured mode),
 	// so returning a coded error here only sets the process exit status.
 	//   - Resolve/transform failures are a HARD failure: a resolver could not
-	//     produce a value, so exit non-zero regardless of --fail-on-validation.
-	//   - Validation-only failures are a SOFT gate in this inspection command:
-	//     exit 0 by default, and non-zero only when --fail-on-validation is set.
+	//     produce a value, so exit non-zero under every validation policy.
+	//   - Validation-only failures follow the resolved policy: under "warn"
+	//     (the run resolver default) they are a soft gate (exit 0); under
+	//     "error" (the validate resolver default) they exit with
+	//     ValidationFailed. ("ignore" skips validation, so none surface here.)
 	if execErr != nil {
 		if !execute.IsValidationOnlyFailure(execErr) {
 			return exitcode.WithCode(execErr, exitcode.GeneralError)
 		}
-		if o.FailOnValidation {
+		if policy == settings.ValidationError {
 			return exitcode.WithCode(execErr, exitcode.ValidationFailed)
 		}
 	}
@@ -858,9 +875,9 @@ func (o *ResolverOptions) failStructured(ctx context.Context, results map[string
 // failures to stderr. It is used by the non-fatal inspection path so the
 // resolved values on stdout are not polluted. It handles both validation-only
 // failures (a soft gate) and resolve/transform failures (a hard failure): the
-// heading and the --fail-on-validation hint adapt to the failure kind so the
+// heading and the --on-validation-error hint adapt to the failure kind so the
 // message never claims a hard failure is merely a validation issue.
-func (o *ResolverOptions) renderResolverDiagnostics(ctx context.Context, execErr error) {
+func (o *sharedResolverOptions) renderResolverDiagnostics(ctx context.Context, execErr error) {
 	w := writer.FromContext(ctx)
 	if w == nil {
 		// Fall back to a writer built from the command's IO streams so
@@ -902,11 +919,12 @@ func (o *ResolverOptions) renderResolverDiagnostics(ctx context.Context, execErr
 			w.PlainStderrf("  - %s", d.Message)
 		}
 	}
-	// The --fail-on-validation hint only applies to validation-only failures,
-	// which exit 0 by default. Resolve/transform failures always exit non-zero,
-	// so suppress the hint to avoid implying the exit code is opt-in.
-	if validationOnly && !o.FailOnValidation {
-		w.PlainStderrf("(resolved values are still emitted on stdout; pass --fail-on-validation to exit non-zero)")
+	// The hint only applies to validation-only failures, which exit 0 under the
+	// "warn" policy. Resolve/transform failures always exit non-zero, and under
+	// the "error" policy validation failures already exit non-zero, so suppress
+	// the hint in those cases to avoid implying the exit code is opt-in.
+	if validationOnly && o.validationPolicy != settings.ValidationError {
+		w.PlainStderrf("(resolved values are still emitted on stdout; pass --on-validation-error error to exit non-zero)")
 	}
 }
 
@@ -944,9 +962,10 @@ func (o *ResolverOptions) showResolverSnapshot(
 		o.sharedResolverOptions.SkipTransform = true
 	}
 
-	// Capture the snapshot even when validation fails: non-fatal mode keeps the
-	// populated resolver context so the snapshot reflects partial values.
-	o.nonFatalValidation = true
+	// Capture the snapshot even when validation fails: use the non-fatal "warn"
+	// policy so executeResolvers keeps the populated resolver context and the
+	// snapshot reflects partial values.
+	o.validationPolicy = settings.ValidationWarn
 
 	start := time.Now()
 

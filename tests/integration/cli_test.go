@@ -7866,7 +7866,7 @@ func TestIntegration_Test_Functional_Calls(t *testing.T) {
 // (deferred cross-resolver) validation feature end-to-end by running the
 // functional test cases bundled with the cross-validation fixture solution.
 // The fixture covers the load-without-cycle guarantee, deferred rules passing
-// when the cross-resolver assertion holds, and both fatal (--fail-on-validation)
+// when the cross-resolver assertion holds, and both fatal (--on-validation-error error)
 // and non-fatal failure modes when the assertion is violated.
 func TestIntegration_Test_Functional_CrossValidation(t *testing.T) {
 	t.Parallel()

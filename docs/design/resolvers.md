@@ -42,7 +42,7 @@ Resolvers do not cause side effects. They only compute values.
 | forEach nil filtering (default behavior) | ✅ Implemented | `pkg/resolver/executor.go`, `pkg/spec/foreach.go` (`KeepSkipped`) |
 | `onError` behavior | ✅ Implemented | `ErrorBehavior` type |
 | ValidateAll mode (`--validate-all`) | ✅ Implemented | `WithValidateAll()` |
-| SkipValidation mode (`--skip-validation`) | ✅ Implemented | `WithSkipValidation()` |
+| SkipValidation mode (`--on-validation-error ignore`) | ✅ Implemented | `WithSkipValidation()` |
 | Value size limits | ✅ Implemented | `WarnValueSize`, `MaxValueSize` |
 | Run resolver command | ✅ Implemented | `pkg/cmd/scafctl/run/resolver.go` |
 
@@ -1999,12 +1999,12 @@ This mode is useful for:
 
 ### Skip Validation Mode
 
-> **Status**: ✅ Implemented via `--skip-validation` flag
+> **Status**: ✅ Implemented via `--on-validation-error ignore` flag
 
 Skip the validation phase for all resolvers:
 
 ~~~bash
-scafctl run solution myapp --skip-validation
+scafctl run solution myapp --on-validation-error ignore
 ~~~
 
 This is useful during development when validation rules are being refined.

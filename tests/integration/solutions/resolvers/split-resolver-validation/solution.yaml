@@ -129,7 +129,7 @@ spec:
       non-200-fails-with-message:
         description: Raw resolver validation fails on a non-200 upstream response
         extends: [_base]
-        args: ["userMissingRaw", "--fail-on-validation"]
+        args: ["userMissingRaw", "--on-validation-error", "error"]
         tags: [negative]
         expectFailure: true
         assertions:

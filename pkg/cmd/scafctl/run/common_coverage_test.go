@@ -120,7 +120,7 @@ func TestAddSharedResolverFlags(t *testing.T) {
 		"resolve-all",
 		"progress",
 		"validate-all",
-		"skip-validation",
+		"on-validation-error",
 		"show-metrics",
 		"show-sensitive",
 		"no-cache",

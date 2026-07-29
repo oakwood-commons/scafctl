@@ -130,8 +130,8 @@ func TestResolverOptions_Run_ValidationFailure_TableUnchanged(t *testing.T) {
 }
 
 // TestValidateResolver_Run_ValidationFailure_ExitNonZeroWithEnvelope verifies
-// that the gate mode (FailOnValidation) exits non-zero AND still emits the
-// structured failure envelope on stdout.
+// that the gate mode (--on-validation-error error) exits non-zero AND still
+// emits the structured failure envelope on stdout.
 func TestValidateResolver_Run_ValidationFailure_ExitNonZeroWithEnvelope(t *testing.T) {
 	t.Parallel()
 
@@ -140,7 +140,7 @@ func TestValidateResolver_Run_ValidationFailure_ExitNonZeroWithEnvelope(t *testi
 
 	var stdout, stderr bytes.Buffer
 	opts := newResolverOptions(t, solutionPath, &stdout, &stderr)
-	opts.FailOnValidation = true
+	opts.OnValidationError = "error"
 
 	ctx := logger.WithLogger(context.Background(), logger.Get(0))
 	err := opts.Run(ctx)
@@ -412,13 +412,14 @@ func newResolverOptionsForResolveFailure(t *testing.T, solutionPath string, stdo
 
 	return &ResolverOptions{
 		sharedResolverOptions: sharedResolverOptions{
-			IOStreams:       streams,
-			CliParams:       cliParams,
-			File:            solutionPath,
-			KvxOutputFlags:  flags.KvxOutputFlags{Output: format},
-			ResolverTimeout: 30 * time.Second,
-			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistryWithGoTemplate(t),
+			IOStreams:               streams,
+			CliParams:               cliParams,
+			File:                    solutionPath,
+			KvxOutputFlags:          flags.KvxOutputFlags{Output: format},
+			ResolverTimeout:         30 * time.Second,
+			PhaseTimeout:            5 * time.Minute,
+			registry:                testRegistryWithGoTemplate(t),
+			ValidationPolicyDefault: settings.ValidationWarn,
 		},
 	}
 }
@@ -448,7 +449,7 @@ func TestResolverOptions_Run_ResolvePhaseFailure_PreservesValues(t *testing.T) {
 			err := opts.Run(ctx)
 
 			// A resolve/transform failure is a HARD failure: it exits non-zero
-			// even without --fail-on-validation, unlike a validation-only failure.
+			// under every validation policy, unlike a validation-only failure.
 			require.Error(t, err, "a resolve/transform failure must exit non-zero")
 			assert.Equal(t, exitcode.GeneralError, exitcode.GetCode(err),
 				"a resolve/transform failure must use the general-error exit code")

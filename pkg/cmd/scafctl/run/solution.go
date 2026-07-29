@@ -83,6 +83,13 @@ type SolutionOptions struct {
 	// positionalPathErr is set in PreRun when the user passes a local file
 	// path as a positional argument instead of using -f/--file.
 	positionalPathErr error
+
+	// validationWarn holds a non-fatal validation-only failure captured under
+	// the "warn" policy. When set, its diagnostics and the resolved values
+	// (validationWarnResolvers) are injected into the successful action output
+	// envelope so the warning is visible in structured output. Reset per run.
+	validationWarn          error
+	validationWarnResolvers map[string]any
 }
 
 // CommandSolution creates the 'run solution' subcommand
@@ -310,6 +317,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		o.BinaryName = settings.CliBinaryName
 	}
 
+	// Reset per-run warn state so a previous non-fatal validation run cannot
+	// leak diagnostics/resolvers into a later successful run when the same
+	// options instance is reused in-process (e.g. an embedder re-executing).
+	o.validationWarn = nil
+	o.validationWarnResolvers = nil
+
 	// Fail early if PreRun detected a local file path as positional arg
 	if o.positionalPathErr != nil {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
@@ -471,6 +484,15 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	// Resolve the validation-failure policy up front so it governs both the
+	// state two-phase pre-load and the main resolver execution below. run
+	// solution defaults to "error" (validation failures abort the workflow);
+	// "warn" continues with diagnostics, "ignore" skips validation.
+	validationPolicy, err := o.resolveValidationPolicy(ctx)
+	if err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	// Inject CLI overrides into context before dry-run or live execution,
 	// so both paths honour --output-dir, --on-conflict, and --backup.
 	actionCtx := ctx
@@ -533,7 +555,26 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 
 	resolverData, resolverCtx, err := o.executeResolvers(ctx, sol, resolvers, params, reg, withSeededResults(stateSeed))
 	if err != nil {
-		return o.failStructured(ctx, err, exitcode.GeneralError)
+		validationOnly := execute.IsValidationOnlyFailure(err)
+		if validationPolicy == settings.ValidationWarn && validationOnly {
+			// warn: surface diagnostics on stderr and continue to the workflow
+			// with the partially-resolved values. The failure is embedded in
+			// the final success envelope (via o.validationWarn*), not treated
+			// as fatal.
+			o.renderResolverDiagnostics(ctx, err)
+			o.validationWarn = err
+			o.validationWarnResolvers = o.buildResolverOutputMap(resolverData, sol)
+		} else {
+			// Fatal: resolve/transform failures under any policy, and
+			// validation failures under the "error" policy. Preserve the
+			// resolved values in the failure envelope instead of dropping them.
+			// Validation-only failures use the dedicated ValidationFailed code.
+			code := exitcode.GeneralError
+			if validationOnly {
+				code = exitcode.ValidationFailed
+			}
+			return o.failStructured(ctx, o.buildResolverOutputMap(resolverData, sol), err, code)
+		}
 	}
 
 	resolverElapsed := time.Since(start)
@@ -913,6 +954,12 @@ func (o *SolutionOptions) writeVerboseActionStatus(w *writer.Writer, name string
 // writeActionOutputStructured writes action results as JSON or YAML (the full execution envelope).
 func (o *SolutionOptions) writeActionOutputStructured(ctx context.Context, result *action.ExecutionResult, executionData map[string]any, format string) error {
 	outputData := action.BuildOutputData(result, executionData)
+	// Under the "warn" validation policy a validation-only failure did not abort
+	// the run: embed its diagnostics and the resolved values so the warning is
+	// visible in structured output alongside the successful action results.
+	if o.validationWarn != nil {
+		outputData = execute.InjectSolutionDiagnostics(outputData, o.validationWarn, o.validationWarnResolvers)
+	}
 	return o.writeStructuredData(ctx, outputData, format)
 }
 
@@ -945,17 +992,19 @@ func (o *SolutionOptions) writeStructuredData(ctx context.Context, outputData ma
 }
 
 // failStructured renders a solution/action failure so that machine-readable
-// output formats (json/yaml) still emit a parseable {status, diagnostics}
-// document on stdout instead of an empty stdout with a stderr-only error. It is
-// used for setup and resolver-phase failures that occur before an action
-// ExecutionResult exists; action-execution failures instead emit the full
-// action envelope via writeActionOutput. For human formats (table/quiet) it
-// falls back to the stderr-only exitWithCode behavior.
-func (o *SolutionOptions) failStructured(ctx context.Context, err error, code int) error {
+// output formats (json/yaml) still emit a parseable {status, diagnostics,
+// resolvers} document on stdout instead of an empty stdout with a stderr-only
+// error. It is used for setup and resolver-phase failures that occur before an
+// action ExecutionResult exists; action-execution failures instead emit the
+// full action envelope via writeActionOutput. When resolverOut (an
+// already-redacted resolver output map) is non-empty its values are embedded
+// under "resolvers" so successfully-resolved values are never dropped. For human
+// formats (table/quiet) it falls back to the stderr-only exitWithCode behavior.
+func (o *SolutionOptions) failStructured(ctx context.Context, resolverOut map[string]any, err error, code int) error {
 	if !o.isStructuredOutput() {
 		return o.exitWithCode(ctx, err, code)
 	}
-	envelope := execute.BuildFailureEnvelope(err)
+	envelope := execute.BuildFailureEnvelope(err, resolverOut)
 	if writeErr := o.writeStructuredData(ctx, envelope, o.Output); writeErr != nil {
 		return o.exitWithCode(ctx, err, code)
 	}

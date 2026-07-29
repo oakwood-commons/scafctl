@@ -277,6 +277,14 @@ resolver:
   # Default: "error"
   # onUnknownResolver: "warn"
 
+  # Default policy for resolver validation failures: "error" aborts and exits
+  # non-zero, "warn" reports failures as non-fatal diagnostics and keeps going,
+  # "ignore" skips the validation phase entirely. Overridden by the
+  # --on-validation-error CLI flag. Note that `run resolver` defaults to "warn"
+  # while `run solution` / `run action` default to "error".
+  # Default: "error"
+  # onValidationError: "warn"
+
 # =============================================================================
 # Action - Configuration for action execution
 # =============================================================================

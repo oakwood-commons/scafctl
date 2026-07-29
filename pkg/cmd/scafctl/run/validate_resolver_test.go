@@ -95,13 +95,14 @@ func newResolverOptions(t *testing.T, solutionPath string, stdout, stderr *bytes
 
 	return &ResolverOptions{
 		sharedResolverOptions: sharedResolverOptions{
-			IOStreams:       streams,
-			CliParams:       cliParams,
-			File:            solutionPath,
-			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
-			ResolverTimeout: 30 * time.Second,
-			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistryWithValidation(t),
+			IOStreams:               streams,
+			CliParams:               cliParams,
+			File:                    solutionPath,
+			KvxOutputFlags:          flags.KvxOutputFlags{Output: "json"},
+			ResolverTimeout:         30 * time.Second,
+			PhaseTimeout:            5 * time.Minute,
+			registry:                testRegistryWithValidation(t),
+			ValidationPolicyDefault: settings.ValidationWarn,
 		},
 	}
 }
@@ -142,7 +143,7 @@ func TestResolverOptions_Run_ValidationFailureDoesNotSkipDependents(t *testing.T
 	assert.Contains(t, stderr.String(), "failed validation", "diagnostics must be rendered to stderr")
 }
 
-func TestResolverOptions_Run_FailOnValidationExitsNonZero(t *testing.T) {
+func TestResolverOptions_Run_OnValidationErrorExitsNonZero(t *testing.T) {
 	t.Parallel()
 
 	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
@@ -150,12 +151,12 @@ func TestResolverOptions_Run_FailOnValidationExitsNonZero(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	opts := newResolverOptions(t, solutionPath, &stdout, &stderr)
-	opts.FailOnValidation = true
+	opts.OnValidationError = "error"
 
 	ctx := logger.WithLogger(context.Background(), logger.Get(0))
 	err := opts.Run(ctx)
 
-	require.Error(t, err, "--fail-on-validation must produce an error on validation failure")
+	require.Error(t, err, "--on-validation-error error must produce an error on validation failure")
 	assert.Equal(t, exitcode.ValidationFailed, exitcode.GetCode(err))
 	assert.Contains(t, stdout.String(), "Bob", "resolved value must still be shown even when failing")
 }
@@ -170,9 +171,10 @@ func TestCommandValidateResolver(t *testing.T) {
 
 	assert.Equal(t, "resolver [resolver-name...] [key=value...]", cmd.Use)
 	assert.NotEmpty(t, cmd.Short)
-	// The validate command does not expose the fail-on-validation toggle —
-	// it is always fatal.
+	// The validate command exposes the shared --on-validation-error flag but
+	// defaults to the fatal "error" policy (via ValidationPolicyDefault).
 	assert.Nil(t, cmd.Flags().Lookup("fail-on-validation"))
+	assert.NotNil(t, cmd.Flags().Lookup("on-validation-error"))
 	assert.NotNil(t, cmd.Flags().Lookup("file"))
 	assert.NotNil(t, cmd.Flags().Lookup("resolver"))
 }
