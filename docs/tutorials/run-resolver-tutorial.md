@@ -462,7 +462,7 @@ Resolvers execute through three ordered phases: **resolve -> transform -> valida
 >
 > **Dependents keep running too.** Because a resolver that fails only a validation rule still produces a usable value, its dependent resolvers continue to execute and read that value -- they are not skipped. (Resolve and transform failures still exit non-zero and their dependents are skipped because no value was produced.)
 >
-> **Partial values survive a resolve/transform failure.** When a resolver hard-fails in the resolve or transform phase, `run resolver` still prints the values of every resolver that *did* resolve successfully, together with a `__status: failed` / `__diagnostics` envelope naming the failed resolver(s) on stdout and a diagnostic on stderr. Unlike a validation-only failure, a resolve/transform failure always exits non-zero (exit `1`) regardless of `--fail-on-validation` -- but the successful values are no longer discarded.
+> **Partial values survive a resolve/transform failure.** When a resolver hard-fails in the resolve or transform phase, `run resolver` still emits the values of every resolver that *did* resolve successfully on stdout, plus a failure summary on stderr. In structured output (`-o json`/`-o yaml`) the stdout document additionally carries a `__status: failed` / `__diagnostics` envelope naming the failed resolver(s); table output shows only the successful values on stdout (the failure detail stays on stderr). Unlike a validation-only failure, a resolve/transform failure always exits non-zero (exit `1`) regardless of `--fail-on-validation` -- but the successful values are no longer discarded.
 
 Create a file called `phases-demo.yaml`. This example resolves a port number, transforms it by adding `8000`, then validates the result is within the valid port range. The input value of `60000` is intentionally too high -- after the transform, the result (`68000`) exceeds the valid range:
 
@@ -522,7 +522,7 @@ Diagnostics on stderr:
 ```
 Warning: 1 resolver(s) failed validation:
   - port: Port must be between 1024 and 65535
-(values shown above; pass --fail-on-validation to exit non-zero)
+(resolved values are still emitted on stdout; pass --fail-on-validation to exit non-zero)
 ```
 
 You can see the resolved value (`68000`) directly, and the diagnostic explains why it is invalid -- no flags required.

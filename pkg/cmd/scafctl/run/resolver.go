@@ -906,7 +906,7 @@ func (o *ResolverOptions) renderResolverDiagnostics(ctx context.Context, execErr
 	// which exit 0 by default. Resolve/transform failures always exit non-zero,
 	// so suppress the hint to avoid implying the exit code is opt-in.
 	if validationOnly && !o.FailOnValidation {
-		w.PlainStderrf("(values shown above; pass --fail-on-validation to exit non-zero)")
+		w.PlainStderrf("(resolved values are still emitted on stdout; pass --fail-on-validation to exit non-zero)")
 	}
 }
 
