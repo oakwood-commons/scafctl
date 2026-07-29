@@ -272,7 +272,7 @@ func lintParameterNumericMatches(sol *solution.Solution, result *Result) {
 		}
 		location := fmt.Sprintf("resolvers.%s", name)
 		result.addFinding(SeverityWarning, "type-inference", location,
-			fmt.Sprintf("resolver '%s' reads a bare numeric 'parameter' default without an explicit 'type' but calls matches() on the value; a bare YAML number stays an integer, which has no matches() method and fails at runtime", name),
+			fmt.Sprintf("resolver '%s' reads a bare numeric 'parameter' default without an explicit 'type' but calls matches() on the value; a bare YAML number stays numeric, which has no matches() method and fails at runtime", name),
 			"Quote the default as a string (a quoted default keeps its string type under auto) or add 'type: string' to the parameter source so matches() works",
 			"parameter-numeric-matches")
 	}
