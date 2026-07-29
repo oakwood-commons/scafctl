@@ -198,6 +198,14 @@ var KnownRules = map[string]RuleMeta{
 		Why:         "Invalid Go templates will cause runtime failures. Common issues include unclosed actions (missing '}}'), unclosed control blocks (if/range/with without end), and unknown functions.",
 		Fix:         "Use validate_expression with type 'go-template' to check the template syntax. Use evaluate_go_template to test the template with sample data.",
 	},
+	"invalid-function": {
+		Rule:        "invalid-function",
+		Severity:    string(SeverityError),
+		Category:    "functions",
+		Description: "A solution-author-defined template function (spec.functions) is invalid: bad name, collision with a built-in function, missing or ambiguous body (must set exactly one of cel/template), invalid body, a parameter error, or a call-graph cycle.",
+		Why:         "Invalid function definitions fail solution loading. Reporting each problem as a finding lets a single lint pass surface every issue at once instead of one at a time.",
+		Fix:         "Give the function a unique, non-built-in identifier name; set exactly one of cel or template; ensure parameters have valid unique names and known types; and avoid template bodies that call each other cyclically.",
+	},
 	"invalid-dependency": {
 		Rule:        "invalid-dependency",
 		Severity:    string(SeverityError),

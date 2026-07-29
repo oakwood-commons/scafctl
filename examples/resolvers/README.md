@@ -49,6 +49,7 @@ This directory contains practical examples demonstrating various resolver patter
 | [go-template-extensions.yaml](go-template-extensions.yaml) | Custom extension functions: toHcl, toHclValue, toYaml, fromYaml |
 | [go-template-sprig.yaml](go-template-sprig.yaml) | Sprig template functions (strings, type conversion, etc.) |
 | [go-template-ignored-blocks.yaml](go-template-ignored-blocks.yaml) | Using scafctl:ignore blocks to skip template rendering |
+| [author-functions.yaml](author-functions.yaml) | Author-defined template helpers via `spec.functions` (CEL + template bodies, composition) |
 | [template-dependency-inference.yaml](template-dependency-inference.yaml) | How go-template deps are inferred; data keys and forEach aliases vs `_.` refs |
 
 ### Integration

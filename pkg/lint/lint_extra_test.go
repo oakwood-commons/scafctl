@@ -14,6 +14,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/duration"
+	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -214,14 +215,93 @@ func TestOrValueSuggestion(t *testing.T) {
 // ---- validateTemplateSyntax ----
 
 func TestValidateTemplateSyntax_Valid(t *testing.T) {
-	assert.NoError(t, validateTemplateSyntax("Hello, {{ .Name }}!"))
-	assert.NoError(t, validateTemplateSyntax("plain text"))
-	assert.NoError(t, validateTemplateSyntax("{{ if .Cond }}yes{{ end }}"))
+	assert.NoError(t, validateTemplateSyntax("Hello, {{ .Name }}!", nil))
+	assert.NoError(t, validateTemplateSyntax("plain text", nil))
+	assert.NoError(t, validateTemplateSyntax("{{ if .Cond }}yes{{ end }}", nil))
+	assert.NoError(t, validateTemplateSyntax("{{ myHelper .Name }}", []string{"myHelper"}))
 }
 
 func TestValidateTemplateSyntax_Invalid(t *testing.T) {
-	err := validateTemplateSyntax("{{ .Name")
+	err := validateTemplateSyntax("{{ .Name", nil)
 	assert.Error(t, err)
+}
+
+// ---- lintFunctions ----
+
+func TestLintFunctions_NoFunctions(t *testing.T) {
+	sol := &solution.Solution{Spec: solution.Spec{}}
+	result := &Result{}
+	lintFunctions(sol, result)
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintFunctions_Valid(t *testing.T) {
+	sol := &solution.Solution{Spec: solution.Spec{
+		Functions: map[string]*spec.Function{
+			"doubled": {
+				Params: []*spec.ParamDef{{Name: "n", Type: spec.TypeInt, Required: true}},
+				Cel:    "_.args.n * 2",
+			},
+		},
+	}}
+	result := &Result{}
+	lintFunctions(sol, result)
+	assert.Empty(t, result.Findings)
+}
+
+func TestLintFunctions_ReportsProblems(t *testing.T) {
+	sol := &solution.Solution{Spec: solution.Spec{
+		Functions: map[string]*spec.Function{
+			"printf": {Cel: "1"}, // built-in collision
+		},
+	}}
+	result := &Result{}
+	lintFunctions(sol, result)
+	require.NotEmpty(t, result.Findings)
+	assert.True(t, hasRuleName(result.Findings, "invalid-function"))
+}
+
+func TestLintFunctions_ReportsCycle(t *testing.T) {
+	sol := &solution.Solution{Spec: solution.Spec{
+		Functions: map[string]*spec.Function{
+			"a": {Params: []*spec.ParamDef{{Name: "x"}}, Template: "{{ b .args.x }}"},
+			"b": {Params: []*spec.ParamDef{{Name: "x"}}, Template: "{{ a .args.x }}"},
+		},
+	}}
+	result := &Result{}
+	lintFunctions(sol, result)
+	require.True(t, hasRuleName(result.Findings, "invalid-function"))
+	assert.Contains(t, result.Findings[0].Message, "cycle")
+}
+
+func TestDeclaredFunctionNames(t *testing.T) {
+	assert.Nil(t, declaredFunctionNames(nil))
+	assert.Nil(t, declaredFunctionNames(&solution.Solution{Spec: solution.Spec{}}))
+
+	sol := &solution.Solution{Spec: solution.Spec{
+		Functions: map[string]*spec.Function{
+			"beta":  {Cel: "1"},
+			"alpha": {Cel: "1"},
+		},
+	}}
+	assert.Equal(t, []string{"alpha", "beta"}, declaredFunctionNames(sol))
+}
+
+func TestLintExpressions_AuthorFuncNotFalsePositive(t *testing.T) {
+	tmplContent := gotmpl.GoTemplatingContent(`{{ myHelper .x }}`)
+	inputs := map[string]*spec.ValueRef{
+		"test": {Tmpl: &tmplContent},
+	}
+
+	// Without declaring the function, the template is flagged as invalid.
+	undeclared := &Result{}
+	lintExpressions(inputs, "test.resolvers.r", undeclared, nil)
+	assert.True(t, hasRuleName(undeclared.Findings, "invalid-template"))
+
+	// Declaring the author function suppresses the false positive.
+	declared := &Result{}
+	lintExpressions(inputs, "test.resolvers.r", declared, []string{"myHelper"})
+	assert.False(t, hasRuleName(declared.Findings, "invalid-template"))
 }
 
 // ---- isCoveredByBundleInclude ----
@@ -296,7 +376,7 @@ func doLintAction(act *action.Action) *Result {
 	reg := provider.NewRegistry()
 	_ = reg.Register(newFakeProvider("known-provider", nil))
 	result := &Result{}
-	lintAction(act, "workflow.actions.myaction", map[string]bool{"step1": true}, result, reg)
+	lintAction(act, "workflow.actions.myaction", map[string]bool{"step1": true}, result, reg, nil)
 	return result
 }
 

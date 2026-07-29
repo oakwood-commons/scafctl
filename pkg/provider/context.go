@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"text/template"
 
 	sdkprovider "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
 )
@@ -174,4 +175,43 @@ func WithExecutionSettings(ctx context.Context, settings map[string]json.RawMess
 func ExecutionSettingsFromContext(ctx context.Context) (map[string]json.RawMessage, bool) {
 	settings, ok := ctx.Value(executionSettingsKey).(map[string]json.RawMessage)
 	return settings, ok
+}
+
+// TemplateFuncBinder supplies solution-author-defined Go template helper
+// functions to the go-template provider. It is implemented by the authorfuncs
+// library compiled from a solution's spec.functions. Keeping the provider layer
+// dependent only on this interface (rather than the concrete library) avoids an
+// import cycle between the provider/executor packages and the higher-level
+// solution/authorfuncs packages.
+type TemplateFuncBinder interface {
+	// Bind returns the author-defined functions as a template.FuncMap whose
+	// closures capture ctx (for CEL evaluation and nested rendering). It returns
+	// nil when there are no functions to bind.
+	Bind(ctx context.Context) template.FuncMap
+
+	// Fingerprint returns a stable identifier for the function *implementations*
+	// so template caches can distinguish same-named functions with different
+	// bodies. It returns an empty string when there are no functions.
+	Fingerprint() string
+}
+
+// templateFuncBinderKey is a scafctl-only context key carrying the author
+// function binder into provider execution.
+const templateFuncBinderKey scafctlContextKey = "scafctl.provider.templateFuncBinder"
+
+// WithTemplateFuncBinder returns a new context carrying the author-defined
+// template function binder. A nil binder is not attached, so downstream lookups
+// behave as if no functions were declared.
+func WithTemplateFuncBinder(ctx context.Context, binder TemplateFuncBinder) context.Context {
+	if binder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, templateFuncBinderKey, binder)
+}
+
+// TemplateFuncBinderFromContext retrieves the author-defined template function
+// binder. Returns the binder and true if present, nil and false otherwise.
+func TemplateFuncBinderFromContext(ctx context.Context) (TemplateFuncBinder, bool) {
+	binder, ok := ctx.Value(templateFuncBinderKey).(TemplateFuncBinder)
+	return binder, ok
 }

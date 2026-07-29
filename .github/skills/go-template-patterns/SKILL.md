@@ -186,6 +186,21 @@ rather than failing. Use `explain_lint_rule template-unknown-accessor` for detai
 
 - `pkg/gotmpl/`: Template execution, options, missing key modes
 - `pkg/provider/builtin/gotmplprovider/`: Go template provider for transform phase
+- `pkg/authorfuncs/`: Author-defined template helpers (`spec.functions`)
+
+## Author-Defined Functions (`spec.functions`)
+
+Solutions can declare reusable named template helpers under `spec.functions`,
+callable from the Go templates the solution renders through the `go-template`
+provider (in resolvers and actions) as `{{ name arg... }}`.
+
+- Ordered, positional, typed `params`; exposed inside the body under the `args`
+  namespace (`_.args.name` in CEL bodies, `{{ .args.name }}` in template bodies).
+- Exactly one body per function: `cel:` XOR `template:`.
+- Template bodies can call sibling author functions and all built-ins; CEL
+  bodies cannot call author functions. Acyclicity is enforced at compile time.
+- Run `explain function` (MCP `explain_kind kind=function`) for the field
+  reference. See `examples/resolvers/author-functions.yaml`.
 
 ## See Also
 

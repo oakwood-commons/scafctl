@@ -828,6 +828,47 @@ func TestSetContextFuncBinderFactory(t *testing.T) {
 	assert.Contains(t, fm, "ctxFunc")
 }
 
+// TestContextFuncBinder_RebindsOnCacheHit guards against a regression where a
+// context-aware function bound at first parse gets frozen into the shared
+// template cache: a second render of the same template must use the CURRENT
+// context's binding, not the one captured when the cache entry was created.
+func TestContextFuncBinder_RebindsOnCacheHit(t *testing.T) {
+	contextFuncBinderMu.Lock()
+	orig := contextFuncBinderFactory
+	contextFuncBinderMu.Unlock()
+	defer func() {
+		contextFuncBinderMu.Lock()
+		contextFuncBinderFactory = orig
+		contextFuncBinderMu.Unlock()
+	}()
+
+	type ctxKey struct{}
+	// The factory reads a value from the current context so the bound function's
+	// output depends on which context is active at execution time.
+	SetContextFuncBinderFactory(func(ctx context.Context) template.FuncMap {
+		val, _ := ctx.Value(ctxKey{}).(string)
+		return template.FuncMap{"whoami": func() string { return val }}
+	})
+
+	svc := NewService(nil)
+	content := "{{ whoami }}"
+
+	// The name must be registered at parse time (Go validates function names
+	// during Parse); the real ctx-bound closure is substituted at execution.
+	parseFuncs := template.FuncMap{"whoami": func() string { return "" }}
+
+	ctx1 := context.WithValue(context.Background(), ctxKey{}, "first")
+	out1, err := svc.Execute(ctx1, TemplateOptions{Content: content, Name: "rebind", Funcs: parseFuncs})
+	require.NoError(t, err)
+	assert.Equal(t, "first", out1.Output)
+
+	// Same content/name => cache hit. The output must reflect ctx2, not ctx1.
+	ctx2 := context.WithValue(context.Background(), ctxKey{}, "second")
+	out2, err := svc.Execute(ctx2, TemplateOptions{Content: content, Name: "rebind", Funcs: parseFuncs})
+	require.NoError(t, err)
+	assert.Equal(t, "second", out2.Output)
+}
+
 func TestNewServiceRaw(t *testing.T) {
 	svc := NewServiceRaw(nil)
 	assert.NotNil(t, svc)

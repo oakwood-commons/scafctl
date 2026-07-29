@@ -19,10 +19,11 @@ func (s *Solution) ValidateSpec() error {
 	}
 
 	// Skip only when there is nothing to validate: no resolvers, no call
-	// definitions, and no workflow actions. Workflow actions may contain call
-	// sites (action.call / args) even in a solution with no resolvers or
-	// spec.calls block, and those still need call-site validation.
-	if !s.Spec.HasResolvers() && !s.Spec.HasCalls() && !s.Spec.HasActions() {
+	// definitions, no author functions, and no workflow actions. Workflow
+	// actions may contain call sites (action.call / args) even in a solution
+	// with no resolvers or spec.calls block, and those still need call-site
+	// validation.
+	if !s.Spec.HasResolvers() && !s.Spec.HasCalls() && !s.Spec.HasFunctions() && !s.Spec.HasActions() {
 		return nil
 	}
 
@@ -31,6 +32,10 @@ func (s *Solution) ValidateSpec() error {
 	// Validate call definitions and call sites independently of resolvers so
 	// that call-only solutions (or workflow-only call sites) are still checked.
 	problems = append(problems, s.validateCalls()...)
+
+	// Validate author-defined template functions independently of resolvers so
+	// that function-only solutions are still checked.
+	problems = append(problems, s.validateFunctions()...)
 
 	// If there are no resolvers, the remaining resolver-specific checks do not
 	// apply; report any call problems and return.

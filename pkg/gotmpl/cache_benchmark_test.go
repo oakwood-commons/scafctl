@@ -133,7 +133,7 @@ func BenchmarkTemplateCacheHit(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			key := generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, nil)
+			key := generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, nil, "")
 			cache.Put(key, tmpl, name)
 
 			b.ReportAllocs()
@@ -213,14 +213,14 @@ func BenchmarkCacheKeyGeneration(b *testing.B) {
 	b.Run("no_funcs", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_ = generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, nil)
+			_ = generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, nil, "")
 		}
 	})
 
 	b.Run("with_funcs", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			_ = generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, funcKeys)
+			_ = generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, funcKeys, "")
 		}
 	})
 
@@ -228,7 +228,7 @@ func BenchmarkCacheKeyGeneration(b *testing.B) {
 		b.ReportAllocs()
 		content := benchTemplates["complex"]
 		for i := 0; i < b.N; i++ {
-			_ = generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, funcKeys)
+			_ = generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, funcKeys, "")
 		}
 	})
 }
@@ -332,7 +332,7 @@ func BenchmarkTemplateCacheParallelHit(b *testing.B) {
 	cache := NewTemplateCache(100)
 	content := benchTemplates["complex"]
 	tmpl, _ := template.New("bench").Parse(content)
-	key := generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, nil)
+	key := generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, nil, "")
 	cache.Put(key, tmpl, "bench")
 
 	b.ReportAllocs()
@@ -357,7 +357,7 @@ func BenchmarkTemplateCacheMissEviction(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		content := fmt.Sprintf("Template variant %d: {{.Name}}", i)
-		key := generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, nil)
+		key := generateTemplateCacheKey(content, "{{", "}}", MissingKeyDefault, nil, "")
 		tmpl, _ := template.New("bench").Parse(content)
 		cache.Put(key, tmpl, "bench")
 	}

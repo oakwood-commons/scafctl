@@ -1,0 +1,88 @@
+# Run: scafctl run resolver -f examples/resolvers/author-functions.yaml -o json
+# Run: scafctl run resolver -f examples/resolvers/author-functions.yaml -o yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: author-functions-showcase
+  displayName: Author-Defined Template Functions Showcase
+  category: resolvers
+  tags:
+    - resolver-example
+    - template
+    - functions
+  description: |
+    Solution-author-defined Go template helper functions declared under
+    spec.functions. Each function is callable from every Go template the
+    solution renders as {{ name arg... }}. Functions have ordered, positional,
+    typed parameters (exposed inside the body under the "args" namespace) and
+    exactly one body: a CEL expression (cel) or a Go template (template).
+
+spec:
+  # ─────────────────────────────────────────────
+  # spec.functions - author-defined template helpers
+  # ─────────────────────────────────────────────
+  functions:
+    # A CEL-bodied function. Parameters are exposed under _.args.<name>.
+    # CEL bodies CANNOT call sibling author functions.
+    greet:
+      description: "Uppercase a name and add a friendly prefix"
+      params:
+        - name: name
+          type: string
+          required: true
+      cel: '"HELLO " + _.args.name.upperAscii() + "!"'
+
+    # A CEL-bodied function with a typed numeric parameter and a default.
+    doubled:
+      description: "Double an integer"
+      params:
+        - name: value
+          type: integer
+          default: 0
+      cel: "_.args.value * 2"
+
+    # A template-bodied function. Template bodies CAN call sibling author
+    # functions and all built-ins (sprig + custom). Parameters are exposed
+    # under {{ .args.<name> }}.
+    shout:
+      description: "Compose greet with an exclamation using a sibling function"
+      params:
+        - name: who
+          type: string
+          required: true
+      template: '{{ greet .args.who }} ({{ .args.who | upper }})'
+
+  resolvers:
+    # Call a CEL-bodied author function from a template.
+    greeting:
+      description: "Uses the greet author function"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: greeting
+              template: '{{ greet "scaf" }}'
+
+    # Call a numeric author function.
+    forty_two:
+      description: "Uses the doubled author function"
+      type: integer
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: forty-two
+              template: '{{ doubled 21 }}'
+
+    # Compose author functions (template body calling a sibling function).
+    composed:
+      description: "Uses the shout author function, which calls greet"
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: composed
+              template: '{{ shout "world" }}'

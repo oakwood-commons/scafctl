@@ -504,6 +504,11 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	if sol.Spec.HasCalls() {
 		extraOpts = append(extraOpts, resolver.WithCalls(sol.Spec.Calls))
 	}
+	if binder, binderErr := sol.TemplateFuncBinder(); binderErr != nil {
+		return fmt.Errorf("compiling spec.functions: %w", binderErr)
+	} else if binder != nil {
+		extraOpts = append(extraOpts, resolver.WithTemplateFuncBinder(binder))
+	}
 	if len(stateSeed) > 0 {
 		extraOpts = append(extraOpts, resolver.WithSeededResults(stateSeed))
 	}

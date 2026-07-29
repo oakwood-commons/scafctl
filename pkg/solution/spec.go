@@ -25,6 +25,12 @@ type Spec struct {
 	// invoked from any resolve/transform/validate step or action via call + args.
 	Calls map[string]*spec.Call `json:"calls,omitempty" yaml:"calls,omitempty" doc:"Reusable, provider-agnostic call definitions keyed by name"`
 
+	// Functions is a map of solution-author-defined Go template helper functions
+	// keyed by name. Each function declares ordered, typed parameters and exactly
+	// one body (a CEL expression or a Go template) and becomes callable from every
+	// Go template the solution renders as {{ name arg... }}.
+	Functions map[string]*spec.Function `json:"functions,omitempty" yaml:"functions,omitempty" doc:"Author-defined Go template helper functions keyed by name"`
+
 	// Workflow defines the action execution specification.
 	// Actions consume resolved data from resolvers and perform side-effect operations.
 	// All resolvers are evaluated before any action execution begins.
@@ -79,6 +85,12 @@ func (s *Spec) HasResolvers() bool {
 // HasCalls returns true if the spec contains any call definitions.
 func (s *Spec) HasCalls() bool {
 	return s != nil && len(s.Calls) > 0
+}
+
+// HasFunctions returns true if the spec contains any author-defined function
+// definitions.
+func (s *Spec) HasFunctions() bool {
+	return s != nil && len(s.Functions) > 0
 }
 
 // HasWorkflow returns true if the spec contains a workflow definition.
