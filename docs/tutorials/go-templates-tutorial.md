@@ -1518,6 +1518,7 @@ Result:
 - `outputPath` is a Go template for transforming output paths (variables: `__filePath`, `__fileName`, `__fileStem`, `__fileExtension`, `__fileDir`; resolver values are also available, e.g. `{{ .environment }}`)
 - Use `expr: '_.resolver.entries'` to feed directory provider results into render-tree
 - Each entry may carry an optional `data` map, shallow-merged over the shared `data` (per-entry values win), so you can render one template per item with its own variables and output path in a single resolver
+- Mix rendered and verbatim files with `rawGlobs` (doublestar patterns copied byte-for-byte) or a per-entry `raw` bool -- handy for fixtures or GitHub Actions `${{ ... }}` files; see the [Template Directory Rendering]({{< relref "template-directory-rendering" >}}) tutorial
 
 For a complete walkthrough with advanced patterns, see the
 [Template Directory Rendering]({{< relref "template-directory-rendering" >}}) tutorial.

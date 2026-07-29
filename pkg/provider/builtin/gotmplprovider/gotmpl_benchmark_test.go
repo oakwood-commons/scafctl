@@ -142,4 +142,35 @@ func BenchmarkGoTemplateProvider_RenderTree(b *testing.B) {
 			_, _ = p.Execute(ctx, inputs)
 		}
 	})
+
+	b.Run("mixed_raw_and_rendered", func(b *testing.B) {
+		inputs := map[string]any{
+			"operation": "render-tree",
+			"name":      "mixed-tree",
+			"rawGlobs":  []any{"**/*.raw"},
+			"entries": []any{
+				map[string]any{
+					"path":    "envs/dev/backend.tf",
+					"content": "app = {{ .platformAppName }}",
+				},
+				map[string]any{
+					"path":    "fixtures/verbatim.raw",
+					"content": "literal {{ not_parsed }} content",
+				},
+				map[string]any{
+					"path":    "envs/prod/backend.tf",
+					"content": "app = {{ .platformAppName }}",
+				},
+			},
+			"data": map[string]any{
+				"platformAppName": "my-app",
+			},
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
 }

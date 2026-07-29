@@ -1297,7 +1297,8 @@ resolve:
 - `ignoredBlocks`: Extra literal pass-through markers (start/end, line, or token). Built-in zero-config markers (`{{/* scafctl:ignore:start */}}`...`{{/* scafctl:ignore:end */}}` and `# scafctl:ignore`) need no declaration
 
 **`render-tree` inputs:**
-- `entries` (required): Array of `{path, content}` objects (typically from the directory provider with `includeContent: true`)
+- `entries` (required): Array of `{path, content, data?, raw?}` objects (typically from the directory provider with `includeContent: true`). Each entry may carry an optional `data` map (shallow-merged over the shared `data`, per-entry wins) and an optional `raw` bool that copies the entry verbatim.
+- `rawGlobs`: List of doublestar glob patterns matched against each entry's full relative `path`. Matching entries are copied verbatim (no parse, no `data`, no `ignoredBlocks`). A per-entry `raw` field overrides this. Max 20 patterns.
 
 ~~~yaml
 # Batch-render a directory of templates

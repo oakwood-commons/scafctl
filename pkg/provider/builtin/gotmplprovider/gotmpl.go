@@ -7,9 +7,11 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
@@ -41,6 +43,10 @@ const (
 	// containing this substring is preserved verbatim (marker included, as a
 	// harmless trailing comment). No ignoredBlocks declaration is required.
 	DefaultRawLine = "# scafctl:ignore"
+
+	// MaxRawGlobs caps the number of rawGlobs patterns accepted by the
+	// render-tree operation, mirroring the ignoredBlocks maxItems limit.
+	MaxRawGlobs = 20
 )
 
 // GoTemplateProvider provides data transformation using Go templates
@@ -136,15 +142,23 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 					)),
 					schemahelper.WithMaxItems(20),
 				),
-				"entries": schemahelper.ArrayProp("Array of file entry objects to render (required for 'render-tree' operation). Each entry must have a 'path' (string) field; 'content' (string) is optional -- entries without string content (e.g., binary files or directories) are skipped with a warning. Each entry may also include an optional 'data' (map) field. Typically produced by the directory provider with includeContent: true.",
+				"rawGlobs": schemahelper.ArrayProp(
+					"Optional list of doublestar glob patterns (render-tree only) matched against each entry's 'path'. A matching entry is emitted verbatim -- its content is copied byte-for-byte with no template parsing, no delimiter handling, no ignoredBlocks processing, and any per-entry 'data' ignored. Patterns match the full relative path, so '*.tf' matches only top-level files while '**/*.tf' also matches nested ones. Mirrors Cookiecutter's _copy_without_render. A per-entry 'raw' field takes precedence: 'raw: true' forces verbatim even without a glob match, and an explicit 'raw: false' forces rendering even if a glob matches.",
+					schemahelper.WithItems(schemahelper.StringProp("A doublestar glob pattern matched against an entry's relative path.",
+						schemahelper.WithExample("**/*.tpl.raw"),
+						schemahelper.WithMaxLength(*ptrs.IntPtr(255)))),
+					schemahelper.WithMaxItems(MaxRawGlobs),
+				),
+				"entries": schemahelper.ArrayProp("Array of file entry objects to render (required for 'render-tree' operation). Each entry must have a 'path' (string) field; 'content' (string) is optional -- entries without string content (e.g., binary files or directories) are skipped with a warning. Each entry may also include an optional 'data' (map) field and an optional 'raw' (bool) field. Typically produced by the directory provider with includeContent: true.",
 					schemahelper.WithItems(schemahelper.ObjectProp(
-						"A file entry with a required path and optional content to render as a Go template, plus optional per-entry data. Entries without string content are skipped.",
+						"A file entry with a required path and optional content to render as a Go template, plus optional per-entry data and a raw passthrough flag. Entries without string content are skipped.",
 						[]string{"path"},
 						map[string]*jsonschema.Schema{
 							"path":    schemahelper.StringProp("Relative file path (preserved in output for downstream use)"),
 							"content": schemahelper.StringProp("File content to render as a Go template. Optional: entries without string content are skipped with a warning."),
-							"data": schemahelper.ObjectProp("Optional per-entry data map, shallow-merged over the shared top-level 'data' for this entry only. On key conflicts, per-entry values win over shared data, iteration variables, and resolver context. Enables fan-out: one template rendered per entry, each with its own variables and output path, without a separate forEach render resolver.",
+							"data": schemahelper.ObjectProp("Optional per-entry data map, shallow-merged over the shared top-level 'data' for this entry only. On key conflicts, per-entry values win over shared data, iteration variables, and resolver context. Enables fan-out: one template rendered per entry, each with its own variables and output path, without a separate forEach render resolver. Ignored for entries emitted verbatim (raw).",
 								nil, nil, schemahelper.WithAdditionalProperties(schemahelper.AnyProp("Per-entry data value of any type"))),
+							"raw": schemahelper.BoolProp("Optional per-entry verbatim flag. When true, the entry's content is copied byte-for-byte with no template parsing (per-entry 'data' is ignored). When false, the entry is rendered even if it matches a rawGlobs pattern. When omitted, rawGlobs decides. Per-entry 'raw' always wins over rawGlobs."),
 						},
 					))),
 			}),
@@ -514,6 +528,12 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 	// Parse ignored blocks configuration (shared with render)
 	ignoredBlocksCfg := parseIgnoredBlocksConfig(inputs)
 
+	// Parse rawGlobs: verbatim passthrough patterns matched against entry paths.
+	rawGlobs, err := parseRawGlobs(inputs)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build base template data from resolver context + additional data
 	baseData := p.buildTemplateData(ctx, inputs)
 
@@ -521,6 +541,7 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		"name", templateName,
 		"entryCount", len(entries),
 		"dataKeys", len(baseData),
+		"rawGlobs", len(rawGlobs),
 	)
 
 	// Handle empty entries
@@ -553,6 +574,26 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		if !ok {
 			// Skip entries without content (e.g., binary files, directories)
 			warnings = append(warnings, fmt.Sprintf("skipped %s: no string content", entryPath))
+			continue
+		}
+
+		// Decide whether this entry is emitted verbatim. Per-entry "raw" wins
+		// over rawGlobs; a non-bool "raw" is an input error.
+		raw, badType := isRawEntry(entryPath, entry, rawGlobs)
+		if badType {
+			return nil, fmt.Errorf("%s: entries[%d].raw must be a bool when present, got %T (path %q)", ProviderName, i, entry["raw"], entryPath)
+		}
+		if raw {
+			// Copy content byte-for-byte: no parse, no data merge, no ignored
+			// blocks. Per-entry data is meaningless without rendering, so warn
+			// if it was supplied to surface a likely authoring mistake.
+			if entryData, present := entry["data"]; present && entryData != nil {
+				warnings = append(warnings, fmt.Sprintf("%s: per-entry data ignored for raw (verbatim) entry", entryPath))
+			}
+			results = append(results, map[string]any{
+				"path":    entryPath,
+				"content": entryContent,
+			})
 			continue
 		}
 
@@ -620,6 +661,10 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*provider.Output, error) {
 	templateName, _ := inputs["name"].(string)
 
+	// Best-effort rawGlobs parse: dry-run should reflect verbatim entries, but a
+	// malformed rawGlobs surfaces on the real run, so ignore parse errors here.
+	rawGlobs, _ := parseRawGlobs(inputs)
+
 	entries, _ := inputs["entries"].([]any)
 	results := make([]map[string]any, 0, len(entries))
 
@@ -632,9 +677,13 @@ func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*pr
 		if entryPath == "" {
 			continue
 		}
+		content := "[dry-run rendered]"
+		if raw, badType := isRawEntry(entryPath, entry, rawGlobs); raw && !badType {
+			content = "[dry-run raw copy]"
+		}
 		results = append(results, map[string]any{
 			"path":    entryPath,
-			"content": "[dry-run rendered]",
+			"content": content,
 		})
 	}
 
@@ -770,6 +819,73 @@ func validateIgnoredBlocks(inputs map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// parseRawGlobs extracts and validates the render-tree rawGlobs input. Each
+// element must be a non-empty string and a syntactically valid doublestar
+// pattern; the number of patterns is capped at MaxRawGlobs. A nil/absent input
+// yields no patterns and no error. Patterns are matched against each entry's
+// full relative path in isRawEntry.
+func parseRawGlobs(inputs map[string]any) ([]string, error) {
+	raw, ok := inputs["rawGlobs"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: rawGlobs must be an array of strings, got %T", ProviderName, raw)
+	}
+	if len(list) > MaxRawGlobs {
+		return nil, fmt.Errorf("%s: rawGlobs has %d patterns, exceeding the maximum of %d", ProviderName, len(list), MaxRawGlobs)
+	}
+
+	patterns := make([]string, 0, len(list))
+	for i, item := range list {
+		pattern, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: rawGlobs[%d] must be a string, got %T", ProviderName, i, item)
+		}
+		if pattern == "" {
+			return nil, fmt.Errorf("%s: rawGlobs[%d] must not be empty", ProviderName, i)
+		}
+		// Probe the pattern for validity; doublestar reports malformed patterns
+		// via ErrBadPattern regardless of the input string being matched.
+		if _, err := doublestar.Match(pattern, ""); err != nil {
+			return nil, fmt.Errorf("%s: rawGlobs[%d] is not a valid glob pattern %q: %w", ProviderName, i, pattern, err)
+		}
+		patterns = append(patterns, pattern)
+	}
+	return patterns, nil
+}
+
+// isRawEntry reports whether a render-tree entry should be emitted verbatim.
+// A per-entry "raw" boolean always takes precedence over rawGlobs: an explicit
+// true forces verbatim, an explicit false forces rendering even if a pattern
+// matches. When "raw" is absent, the entry is verbatim if its path matches any
+// rawGlobs pattern. The second return value reports whether the per-entry "raw"
+// field was present but not a bool, which the caller treats as an input error.
+func isRawEntry(path string, entry map[string]any, rawGlobs []string) (raw, badType bool) {
+	if v, present := entry["raw"]; present {
+		b, ok := v.(bool)
+		if !ok {
+			return false, true
+		}
+		return b, false
+	}
+	// Normalize to forward slashes so glob matching is consistent across
+	// platforms and matches the lint rule's semantics (filterOutRawTemplateFiles
+	// also ToSlash-normalizes). doublestar.Match always treats "/" as the
+	// separator.
+	path = filepath.ToSlash(path)
+	for _, pattern := range rawGlobs {
+		// Invalid patterns are rejected up front by parseRawGlobs, so a match
+		// error here is not expected; treat it as non-matching, best-effort.
+		if matched, err := doublestar.Match(pattern, path); err == nil && matched {
+			return true, false
+		}
+	}
+	return false, false
 }
 
 // parseIgnoredBlocksConfig parses the ignoredBlocks input into a config slice without

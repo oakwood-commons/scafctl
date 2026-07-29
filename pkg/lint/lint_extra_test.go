@@ -1827,6 +1827,86 @@ env: {{ .environment }}
 		"should mention appName or environment as missing dependency")
 }
 
+func TestLintTemplateFileDependencies_RawGlobsExcludesFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	// This file references resolvers that are NOT in the render-tree resolver's
+	// dependency graph. Because it is matched by rawGlobs it is emitted verbatim
+	// (never parsed), so it must not trigger missing-template-dependency.
+	tplContent := `name: {{ .appName }}
+env: {{ .environment }}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "config.tpl"), []byte(tplContent), 0o644))
+
+	sourceResolver := "templateSource"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path":           {Literal: "templates"},
+							"operation":      {Literal: "list"},
+							"includeContent": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+		"rendered": {
+			DependsOn: []string{"templateSource"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"operation": {Literal: "render-tree"},
+							"entries":   {Resolver: &sourceResolver},
+							"rawGlobs":  {Literal: []any{"*.tpl"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintTemplateFileDependencies(sol, tmpDir, result, nil)
+
+	for _, f := range result.Findings {
+		assert.NotEqual(t, "missing-template-dependency", f.RuleName,
+			"raw-matched files must be excluded from missing-template-dependency")
+	}
+}
+
+func TestFilterOutRawTemplateFiles(t *testing.T) {
+	root := "/tmp/templates"
+	files := []string{
+		filepath.Join(root, "main.tf"),
+		filepath.Join(root, "sub", "nested.tf"),
+		filepath.Join(root, "keep.tpl"),
+	}
+
+	// Top-level-only pattern excludes only main.tf.
+	got := filterOutRawTemplateFiles(files, root, []string{"*.tf"})
+	assert.ElementsMatch(t, []string{
+		filepath.Join(root, "sub", "nested.tf"),
+		filepath.Join(root, "keep.tpl"),
+	}, got)
+
+	// Recursive pattern excludes both .tf files.
+	got = filterOutRawTemplateFiles(files, root, []string{"**/*.tf"})
+	assert.ElementsMatch(t, []string{filepath.Join(root, "keep.tpl")}, got)
+
+	// Empty root disables filtering (relative entry path unknown).
+	got = filterOutRawTemplateFiles(files, "", []string{"**/*"})
+	assert.ElementsMatch(t, files, got)
+}
+
 func TestLintTemplateFileDependencies_AllDepsPresent(t *testing.T) {
 	tmpDir := t.TempDir()
 	tplDir := filepath.Join(tmpDir, "templates")

@@ -1535,6 +1535,344 @@ func TestGoTemplateProvider_RenderTree_UnsupportedOperation(t *testing.T) {
 	assert.Contains(t, err.Error(), "unsupported operation")
 }
 
+// --- render-tree verbatim (raw) passthrough ---
+
+func TestGoTemplateProvider_RenderTree_RawGlobsCopiesVerbatim(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-globs",
+		"rawGlobs":  []any{"**/*.raw"},
+		"entries": []any{
+			map[string]any{
+				"path":    "config.yaml",
+				"content": "app: {{ .appName }}",
+			},
+			map[string]any{
+				// Content is deliberately invalid Go-template syntax; it must be
+				// copied byte-for-byte because the path matches a rawGlob.
+				"path":    "fixtures/verbatim.raw",
+				"content": "{{ this is not valid go template }}{{",
+			},
+		},
+		"data": map[string]any{"appName": "svc"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "app: svc", results[0]["content"])
+	assert.Equal(t, "{{ this is not valid go template }}{{", results[1]["content"])
+	assert.Empty(t, output.Warnings)
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsTopLevelOnly(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	// A single-star pattern matches only the top-level path segment; the nested
+	// entry must still be rendered.
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-top-level",
+		"rawGlobs":  []any{"*.tf"},
+		"entries": []any{
+			map[string]any{"path": "main.tf", "content": "x={{ .v }}"},
+			map[string]any{"path": "sub/main.tf", "content": "y={{ .v }}"},
+		},
+		"data": map[string]any{"v": "1"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "x={{ .v }}", results[0]["content"], "top-level match copied verbatim")
+	assert.Equal(t, "y=1", results[1]["content"], "nested path not matched by *.tf, rendered")
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsRecursive(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-recursive",
+		"rawGlobs":  []any{"**/*.tf"},
+		"entries": []any{
+			map[string]any{"path": "main.tf", "content": "x={{ .v }}"},
+			map[string]any{"path": "sub/main.tf", "content": "y={{ .v }}"},
+		},
+		"data": map[string]any{"v": "1"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "x={{ .v }}", results[0]["content"])
+	assert.Equal(t, "y={{ .v }}", results[1]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryRawTrue(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "per-entry-raw",
+		"entries": []any{
+			map[string]any{
+				"path":    "verbatim.gotmpl",
+				"content": "{{ literally copied }}",
+				"raw":     true,
+			},
+			map[string]any{
+				"path":    "rendered.txt",
+				"content": "hello {{ .who }}",
+			},
+		},
+		"data": map[string]any{"who": "world"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	assert.Equal(t, "{{ literally copied }}", results[0]["content"])
+	assert.Equal(t, "hello world", results[1]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_PerEntryRawFalseForcesRender(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	// The path matches rawGlobs, but an explicit raw:false forces rendering.
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-false-override",
+		"rawGlobs":  []any{"**/*.txt"},
+		"entries": []any{
+			map[string]any{
+				"path":    "note.txt",
+				"content": "hi {{ .who }}",
+				"raw":     false,
+			},
+		},
+		"data": map[string]any{"who": "there"},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "hi there", results[0]["content"])
+}
+
+func TestGoTemplateProvider_RenderTree_RawEntryIgnoresDataWithWarning(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-data-warn",
+		"entries": []any{
+			map[string]any{
+				"path":    "verbatim.txt",
+				"content": "{{ .env }}",
+				"raw":     true,
+				"data":    map[string]any{"env": "prod"},
+			},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "{{ .env }}", results[0]["content"], "data must not be applied to raw entry")
+	require.Len(t, output.Warnings, 1)
+	assert.Contains(t, output.Warnings[0], "per-entry data ignored")
+}
+
+func TestGoTemplateProvider_RenderTree_RawEntryWithoutContentSkipped(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-no-content",
+		"rawGlobs":  []any{"**/*"},
+		"entries": []any{
+			map[string]any{"path": "binary.bin"}, // no string content
+			map[string]any{"path": "keep.txt", "content": "verbatim {{"},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "keep.txt", results[0]["path"])
+	require.Len(t, output.Warnings, 1)
+	assert.Contains(t, output.Warnings[0], "binary.bin")
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsInvalidPattern(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-bad-pattern",
+		"rawGlobs":  []any{"[unterminated"},
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "x"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a valid glob pattern")
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsNotArray(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-not-array",
+		"rawGlobs":  "**/*.txt",
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "x"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rawGlobs must be an array")
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsNonStringElement(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-non-string",
+		"rawGlobs":  []any{123},
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "x"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rawGlobs[0] must be a string")
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsEmptyElement(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-empty",
+		"rawGlobs":  []any{""},
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "x"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestGoTemplateProvider_RenderTree_RawGlobsExceedsMax(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	globs := make([]any, MaxRawGlobs+1)
+	for i := range globs {
+		globs[i] = "*.txt"
+	}
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-too-many",
+		"rawGlobs":  globs,
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "x"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeding the maximum")
+}
+
+func TestGoTemplateProvider_RenderTree_EntryRawNonBool(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "raw-non-bool",
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "x", "raw": "yes"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entries[0].raw must be a bool")
+}
+
+func TestGoTemplateProvider_RenderTree_DryRunRawCopy(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := context.Background()
+	ctx = provider.WithDryRun(ctx, true)
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "dry-run-raw",
+		"rawGlobs":  []any{"**/*.raw"},
+		"entries": []any{
+			map[string]any{"path": "a.tpl", "content": "{{ .v }}"},
+			map[string]any{"path": "b.raw", "content": "{{ verbatim }}"},
+			map[string]any{"path": "c.txt", "content": "x", "raw": true},
+		},
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 3)
+	assert.Equal(t, "[dry-run rendered]", results[0]["content"])
+	assert.Equal(t, "[dry-run raw copy]", results[1]["content"])
+	assert.Equal(t, "[dry-run raw copy]", results[2]["content"])
+}
+
 func TestGoTemplateProvider_WhatIf_Operations(t *testing.T) {
 	p := NewGoTemplateProvider()
 	ctx := context.Background()

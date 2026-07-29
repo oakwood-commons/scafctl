@@ -81,6 +81,30 @@ spec:
                     }
                   ]
 
+    # Mixed tree: some entries rendered, some copied verbatim. rawGlobs marks
+    # matching paths as raw; a per-entry `raw` flag overrides rawGlobs (raw:true
+    # forces verbatim even without a glob match, raw:false forces rendering even
+    # when a glob matches).
+    mixed:
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              rawGlobs:
+                - "**/*.raw"
+              data:
+                who: world
+              entries:
+                expr: |
+                  [
+                    {"path": "rendered.txt", "content": "hello {{ .who }}"},
+                    {"path": "verbatim.raw", "content": "keep {{ .who }} literal"},
+                    {"path": "forced.txt", "content": "copy {{ .who }} too", "raw": true},
+                    {"path": "override.raw", "content": "render {{ .who }} anyway", "raw": false}
+                  ]
+
   workflow:
     actions:
       write-output:
@@ -154,3 +178,22 @@ spec:
           - expression: '__output.fanout[0].path == "envs/dev/backend.tf"'
             message: "each entry keeps its own declared output path"
 
+      mixed-raw-passthrough:
+        description: Verify rawGlobs and per-entry raw control verbatim vs rendered output
+        extends: [_base]
+        command: [run, resolver, mixed]
+        assertions:
+          - expression: size(__output.mixed) == 4
+            message: "Expected 4 mixed entries"
+          # rendered.txt: no glob match, no raw flag -> rendered.
+          - expression: '__output.mixed[0].content == "hello world"'
+            message: "unmatched entry should be rendered"
+          # verbatim.raw: matched by rawGlobs -> copied byte-for-byte.
+          - expression: '__output.mixed[1].content == "keep {{ .who }} literal"'
+            message: "rawGlobs-matched entry should be verbatim"
+          # forced.txt: raw:true overrides no glob match -> verbatim.
+          - expression: '__output.mixed[2].content == "copy {{ .who }} too"'
+            message: "per-entry raw:true should force verbatim"
+          # override.raw: raw:false overrides the glob match -> rendered.
+          - expression: '__output.mixed[3].content == "render world anyway"'
+            message: "per-entry raw:false should force rendering despite rawGlobs"

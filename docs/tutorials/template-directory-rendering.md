@@ -171,6 +171,55 @@ Entries without a `data` field render against the shared `data` alone, so
 existing `render-tree` usage is unaffected. A non-map `data` value fails with a
 clear error naming the entry index and path.
 
+### Verbatim Files in a Mixed Tree (raw)
+
+Sometimes a tree mixes templated files with files that must be copied **exactly
+as-is** -- a fixture that is itself Go-template syntax, or a GitHub Actions
+workflow full of `${{ ... }}` that collides with Go template delimiters. Rather
+than splitting into a second copy pipeline or wrapping the whole file in ignore
+markers, mark those files raw:
+
+```yaml
+resolvers:
+  rendered:
+    type: any
+    resolve:
+      with:
+        - provider: go-template
+          inputs:
+            operation: render-tree
+            rawGlobs:
+              - "**/*.raw"        # copied verbatim; everything else is rendered
+            entries:
+              expr: '_.templateFiles.entries'
+            data:
+              rslvr: vars
+```
+
+`rawGlobs` is a list of [doublestar](https://github.com/bmatcuk/doublestar)
+patterns matched against each entry's **full relative path** (so `*.tf` matches
+only top-level files, `**/*.tf` also matches nested ones). A matching entry is
+emitted byte-for-byte: no parsing, no delimiters, no `ignoredBlocks`, and any
+per-entry `data` ignored. This mirrors Cookiecutter's `_copy_without_render`.
+
+When entries are hand-constructed in CEL, a per-entry `raw` boolean takes
+precedence over `rawGlobs` -- `raw: true` forces verbatim even without a match,
+`raw: false` forces rendering even when a pattern matches:
+
+```yaml
+entries:
+  expr: |
+    [
+      {"path": "keep.txt",   "content": "{{ literal }}", "raw": true},
+      {"path": "render.raw", "content": "hi {{ .who }}", "raw": false}
+    ]
+```
+
+The `missing-template-dependency` lint rule skips raw-matched files, since they
+are never parsed. See the runnable
+[`template-mixed-tree`](https://github.com/oakwood-commons/scafctl/tree/main/examples/solutions/template-mixed-tree)
+example.
+
 ### Using a Separate Vars Resolver
 
 For cleaner solutions, define variables in their own resolver and reference them:

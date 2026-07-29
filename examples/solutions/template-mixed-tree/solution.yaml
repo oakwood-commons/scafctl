@@ -1,0 +1,95 @@
+# Run: scafctl run solution -f examples/solutions/template-mixed-tree/solution.yaml
+#
+# After running: find ./output -type f && cat ./output/ci/workflow.yaml
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-mixed-tree
+  displayName: Mixed Template Tree (rendered + verbatim)
+  category: solutions
+  tags:
+    - solution
+    - template
+    - raw
+  description: |
+    Render a directory tree where most files are Go templates but some must be
+    copied verbatim (never template-parsed) -- all in a single
+    directory -> render-tree -> write-tree pipeline.
+
+    The `ci/workflow.yaml.raw` file is a GitHub Actions workflow full of
+    `${{ ... }}` expressions that collide with Go template delimiters. Instead
+    of splitting into a second copy pipeline or wrapping the whole file in
+    ignore markers, the render-tree `rawGlobs` input marks it as verbatim.
+
+spec:
+  resolvers:
+    # -------------------------------------------------------------------------
+    # Step 1: Shared variables injected into every RENDERED template
+    # -------------------------------------------------------------------------
+    vars:
+      description: Shared variables for the rendered templates
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                appName: myapp
+                namespace: production
+                replicas: 3
+
+    # -------------------------------------------------------------------------
+    # Step 2: Read every file under templates/ (both .tpl and .raw), with content
+    # -------------------------------------------------------------------------
+    templateFiles:
+      description: Read all template files recursively, including their content
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              includeContent: true
+
+    # -------------------------------------------------------------------------
+    # Step 3: Batch-render, copying *.raw files verbatim
+    # -------------------------------------------------------------------------
+    rendered:
+      description: Render templates; copy rawGlobs-matched files byte-for-byte
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              # Any entry whose path matches one of these doublestar patterns is
+              # emitted verbatim. Patterns match the full relative path, so use
+              # ** to match nested files.
+              rawGlobs:
+                - "**/*.raw"
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: vars
+
+  # ===========================================================================
+  # ACTIONS: Write rendered + verbatim files to disk
+  # ===========================================================================
+  workflow:
+    actions:
+      write-files:
+        description: >
+          Write every entry under ./output, preserving directory structure and
+          stripping the trailing extension (config.yaml.tpl -> config.yaml,
+          workflow.yaml.raw -> workflow.yaml).
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: rendered
+          outputPath: >-
+            {{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
