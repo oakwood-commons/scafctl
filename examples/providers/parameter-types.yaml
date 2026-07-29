@@ -19,11 +19,14 @@ metadata:
     - provider-example
   description: |
     Demonstrates the parameter provider's "type" input, which controls how a
-    raw CLI value (or default) is coerced. "auto" (the default) infers bools,
-    numbers, JSON, and file:// sources. It does NOT fetch http://+https:// URLs
+    raw CLI value is coerced. "auto" (the default) infers bools, numbers, JSON,
+    and file:// sources for CLI values. It does NOT fetch http://+https:// URLs
     (they stay literal strings -- use "fetch") and does NOT split
-    comma-separated values (opt in with "csv"). Every other type forces a
-    single coercion and errors if the value does not match.
+    comma-separated values (opt in with "csv"). An authored "default" keeps its
+    YAML type under "auto" (a quoted "false" stays a string, a bare false stays
+    a bool) and is never inferred; use an explicit type to coerce a default.
+    Every other type forces a single coercion and errors if the value does not
+    match.
 
 spec:
   resolvers:

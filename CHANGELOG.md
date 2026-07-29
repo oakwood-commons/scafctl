@@ -63,6 +63,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🐛 Bug Fixes
 
+- *(provider)* [**breaking**] The `parameter` provider no longer applies `auto` type inference to an authored `default`. A default keeps its YAML-authored type (a quoted `"false"` stays the string `"false"`, `"0123"` keeps its leading zeros, a bare `false`/`42` stays a bool/int), which stops surprising, lossy coercions of quoted string defaults. Inference and `file://`/stdin source resolution now apply only to CLI-supplied values (always untyped strings), matching how Terraform/Helm treat typed defaults vs. stringly-typed overrides. Set an explicit `type` (e.g. `type: int`) to coerce a default. The `parameter-numeric-matches` lint rule now fires only for a *bare* numeric default, and quoting the default is a valid fix.
 - *(auth)* Preserve login-time client ID during token rotation (#79)
 
 ### 💼 Other

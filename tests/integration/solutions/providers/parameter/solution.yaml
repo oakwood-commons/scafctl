@@ -97,6 +97,33 @@ spec:
               key: billingId
               default: 42
 
+    quotedBoolDefault:
+      description: A quoted string default stays a string under auto (no inference)
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: missingFlag
+              default: "false"
+
+    quotedNumericDefault:
+      description: A quoted numeric-looking default keeps leading zeros as a string under auto
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: missingId
+              default: "0123"
+
+    bareBoolDefault:
+      description: A bare boolean default passes through as a bool under auto
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: missingBare
+              default: false
+
     rawValue:
       description: type raw returns the value untouched (no coercion or unquoting)
       resolve:
@@ -229,6 +256,18 @@ spec:
             message: "type string should keep the numeric value as a string"
           - expression: __output.coercedNumber == 12345
             message: "without type string the same value should be coerced to a number"
+
+      auto-default-keeps-authored-type:
+        description: Under auto, an authored default keeps its YAML type (quoted string stays a string, bare bool stays a bool)
+        extends: [_base]
+        args: ["-o", "json", "-r", "name=x", "-r", "count=1", "-r", "enabled=false", "-r", "config={}", "-r", "tags=a"]
+        assertions:
+          - expression: __output.quotedBoolDefault == "false"
+            message: "a quoted string default must stay the string \"false\", not infer to a bool"
+          - expression: __output.quotedNumericDefault == "0123"
+            message: "a quoted numeric-looking default must keep leading zeros as a string"
+          - expression: __output.bareBoolDefault == false
+            message: "a bare boolean default must pass through as a bool"
 
       csv-parameter:
         description: Verify type csv splits a comma-separated value into a string list

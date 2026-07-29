@@ -455,11 +455,11 @@ var KnownRules = map[string]RuleMeta{
 		Rule:        "parameter-numeric-matches",
 		Severity:    string(SeverityWarning),
 		Category:    "type-inference",
-		Description: "A resolver reads a 'parameter' source with a numeric default and no explicit 'type', yet a transform or validate CEL expression calls matches() on the value.",
-		Why:         "The 'parameter' provider's automatic type inference coerces numeric-looking values (defaults or CLI arguments) into integers. Integers have no matches() method in CEL, so the expression fails at runtime with a type error even though the solution passes lint. Declaring 'type: string' keeps the value a string so matches() works; other explicit types (e.g. raw, int) do not, since they preserve or coerce the value to a non-string.",
-		Fix:         "Add 'type: string' to the parameter source to keep the value a string for matches(), or quote the default as a string. Do not use 'type: raw' here: raw preserves numeric defaults as numbers, so matches() still fails.",
+		Description: "A resolver reads a 'parameter' source with a bare numeric default and no explicit 'type', yet a transform or validate CEL expression calls matches() on the value.",
+		Why:         "A bare YAML number in a 'parameter' default (e.g. 'default: 1' or 'default: 1.2') stays numeric under auto. Numeric values have no matches() method in CEL, so the expression fails at runtime with a type error even though the solution passes lint. Quoting the default (e.g. 'default: \"1\"') keeps it a string under auto because an authored default retains its YAML type, and declaring 'type: string' also keeps it a string; other explicit types (e.g. raw, int) do not, since they preserve or coerce the value to a non-string.",
+		Fix:         "Quote the default as a string (a quoted default keeps its string type under auto) or add 'type: string' to the parameter source so matches() works. Do not use 'type: raw' here: raw preserves numeric defaults as numbers, so matches() still fails.",
 		Examples: []string{
-			"# Problem: numeric default auto-coerced to int, matches() fails\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: version\n        default: 1\nvalidate:\n  with:\n    - provider: validation\n      inputs:\n        expression: '__self.matches(\"^[0-9]+$\")'\n\n# Fix: force string type\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: version\n        type: string\n        default: 1",
+			"# Problem: bare numeric default stays an int, matches() fails\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: version\n        default: 1\nvalidate:\n  with:\n    - provider: validation\n      inputs:\n        expression: '__self.matches(\"^[0-9]+$\")'\n\n# Fix: quote the default so it stays a string\nresolve:\n  with:\n    - provider: parameter\n      inputs:\n        key: version\n        default: \"1\"",
 		},
 	},
 	"null-resolver": {

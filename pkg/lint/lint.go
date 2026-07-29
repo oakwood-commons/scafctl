@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -273,8 +272,8 @@ func lintParameterNumericMatches(sol *solution.Solution, result *Result) {
 		}
 		location := fmt.Sprintf("resolvers.%s", name)
 		result.addFinding(SeverityWarning, "type-inference", location,
-			fmt.Sprintf("resolver '%s' reads a numeric 'parameter' default without an explicit 'type' but calls matches() on the value; automatic type inference coerces numbers to integers, which have no matches() method and fail at runtime", name),
-			"Add 'type: string' to the parameter source to keep the value a string for matches(), or quote the default as a string",
+			fmt.Sprintf("resolver '%s' reads a bare numeric 'parameter' default without an explicit 'type' but calls matches() on the value; a bare YAML number stays numeric, which has no matches() method and fails at runtime", name),
+			"Quote the default as a string (a quoted default keeps its string type under auto) or add 'type: string' to the parameter source so matches() works",
 			"parameter-numeric-matches")
 	}
 }
@@ -284,8 +283,11 @@ func lintParameterNumericMatches(sol *solution.Solution, result *Result) {
 const typeStringName = "string"
 
 // hasNumericParameterWithoutType reports whether any parameter source in the
-// resolve steps supplies a numeric default while relying on automatic type
-// inference (no explicit 'type', or 'type: auto').
+// resolve steps supplies a bare numeric default while relying on automatic type
+// inference (no explicit 'type', or 'type: auto'). A numeric-looking *string*
+// default (e.g. "123") is safe under auto because an authored default keeps its
+// YAML string type -- only a bare YAML number (Go int/float) stays numeric and
+// breaks matches().
 func hasNumericParameterWithoutType(steps []resolver.ProviderSource) bool {
 	for _, step := range steps {
 		if step.Provider != parameterProviderName {
@@ -320,25 +322,16 @@ func parameterHasExplicitType(step resolver.ProviderSource) bool {
 	return t != "" && !strings.EqualFold(t, parameterAutoType)
 }
 
-// isNumericLiteral reports whether a literal value is a number or a
-// numeric-looking string that automatic type inference would coerce to a number.
+// isNumericLiteral reports whether a literal value is a bare number (Go
+// int/float). A numeric-looking string is intentionally excluded: an authored
+// default keeps its YAML string type under auto, so "123" stays a string and
+// matches() works -- only a bare YAML number stays numeric.
 func isNumericLiteral(v any) bool {
-	switch t := v.(type) {
+	switch v.(type) {
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64:
 		return true
-	case string:
-		s := strings.TrimSpace(t)
-		if s == "" {
-			return false
-		}
-		if _, err := strconv.ParseInt(s, 10, 64); err == nil {
-			return true
-		}
-		if _, err := strconv.ParseFloat(s, 64); err == nil {
-			return true
-		}
 	}
 	return false
 }
