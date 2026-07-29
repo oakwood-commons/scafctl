@@ -293,8 +293,7 @@ Reference tools (call these on demand instead of relying on this text):
   - list_cel_functions / list_go_template_functions: full function catalogs
   - get_provider_schema: exact input/output fields for a provider (ALWAYS check before
     writing actions/resolvers that use it); provider://reference gives a compact overview
-  - get_run_command: exact CLI invocation, including --on-conflict/--backup/--show-execution
-    flags and structured (json/yaml) failure-output shape
+  - get_run_command: exact CLI invocation, including --on-conflict/--backup/--show-execution flags
   - explain_concepts: narrative guidance (context-variables, phase-execution, cel-cost-model,
     template-dependency-inference, snapshot-masking, authoring-workflow)
   - extract_resolver_refs: find _.resolverName references in a tmpl/expr to populate dependsOn
@@ -303,6 +302,11 @@ Reference tools (call these on demand instead of relying on this text):
   - compose_solution prompt / solution://{name}/graph resource: splitting multi-file solutions
 
 IMPORTANT gotchas (not obvious from tool names, keep these in mind):
+  • On failure, 'run resolver'/'run solution'/'run action' still write a parseable json/yaml
+    document to stdout: 'run resolver' adds '__status': "failed" and '__diagnostics'
+    (list of {resolver, phase, message}); 'run solution'/'run action' emit a
+    {status: "failed", diagnostics: [...]} envelope (or the full action-result envelope for
+    an action-execution failure). Human formats (table/quiet) keep stderr-only errors.
   • The test command is 'scafctl test functional -f <file>', NOT 'scafctl test -f <file>' —
     'functional' is a required subcommand and the -f flag belongs to it.
   • 'scafctl run solution' REQUIRES spec.workflow.actions and fails without it; use

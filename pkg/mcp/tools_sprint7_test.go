@@ -318,7 +318,7 @@ func TestHandleGetVersion(t *testing.T) {
 	assert.NotEmpty(t, data["buildTime"])
 }
 
-// --- Phase 5C: Latency hints in serverInstructions ---
+// --- Phase 5C: serverInstructions point to reference tools ---
 
 func TestServerInstructionsPointToReferenceTools(t *testing.T) {
 	instructions := serverInstructions(settings.CliBinaryName)

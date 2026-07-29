@@ -7,10 +7,13 @@ package mcp
 //
 // These exist purely to avoid repeating near-identical description text
 // across dozens of mcp.NewTool registrations in tools_*.go, which bloats
-// the ListTools response sent to every client on init. Keep each constant
-// scoped to one distinct semantic meaning -- do not collapse genuinely
-// different cwd semantics (e.g. solution-relative resolution vs. plain
-// file paths) into a single generic string.
+// the Go source (and its maintenance cost). Note this is a source-level
+// dedup only: each tool's JSON schema still serializes its own copy of the
+// description text in the ListTools response, so this does not by itself
+// shrink the wire payload sent to clients -- keep each constant scoped to
+// one distinct semantic meaning -- do not collapse genuinely different cwd
+// semantics (e.g. solution-relative resolution vs. plain file paths) into a
+// single generic string.
 
 const (
 	// cwdDescDefault is the generic cwd description for tools that only
