@@ -406,6 +406,11 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 		return
 	}
 
+	// Computed once and reused for every resolve step below: the sorted name
+	// slice is identical across all steps, so recomputing it per step would
+	// needlessly re-sort and re-allocate on large solutions.
+	declaredFuncs := declaredFunctionNames(sol)
+
 	reservedNames := map[string]bool{
 		"__actions": true,
 		"__error":   true,
@@ -472,7 +477,7 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				}
 
 				lintNilInputs(step.Inputs, stepLocation, result)
-				lintExpressions(step.Inputs, stepLocation, result, declaredFunctionNames(sol))
+				lintExpressions(step.Inputs, stepLocation, result, declaredFuncs)
 
 				// forEach on a resolve step is a valid fan-out, but it requires
 				// forEach.in: the resolve phase has no __self to default the
@@ -1106,14 +1111,17 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Reg
 		finallyNames[name] = true
 	}
 
+	// Computed once and reused for every action below (see lintResolvers).
+	declaredFuncs := declaredFunctionNames(sol)
+
 	for name, act := range workflow.Actions {
 		location := fmt.Sprintf("workflow.actions.%s", name)
-		lintAction(act, location, actionNames, result, registry, declaredFunctionNames(sol))
+		lintAction(act, location, actionNames, result, registry, declaredFuncs)
 	}
 
 	for name, act := range workflow.Finally {
 		location := fmt.Sprintf("workflow.finally.%s", name)
-		lintAction(act, location, finallyNames, result, registry, declaredFunctionNames(sol))
+		lintAction(act, location, finallyNames, result, registry, declaredFuncs)
 
 		if act.ForEach != nil {
 			result.addFinding(SeverityError, "validation", location,

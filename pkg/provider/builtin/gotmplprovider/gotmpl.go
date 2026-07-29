@@ -6,10 +6,10 @@ package gotmplprovider
 import (
 	"context"
 	"fmt"
-	"html/template"
 	"maps"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/bmatcuk/doublestar/v4"

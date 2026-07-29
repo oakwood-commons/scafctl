@@ -23,6 +23,7 @@ package authorfuncs
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -225,9 +226,23 @@ func computeFingerprint(functions map[string]*spec.Function, sortedNames []strin
 		fn := functions[name]
 		fmt.Fprintf(h, "fn:%s\x00", name)
 		for _, p := range fn.Params {
-			fmt.Fprintf(h, "param:%s:%s:%t:%v\x00", p.Name, p.Type, p.Required, p.Default)
+			fmt.Fprintf(h, "param:%s:%s:%t:%s\x00", p.Name, p.Type, p.Required, fingerprintDefault(p.Default))
 		}
 		fmt.Fprintf(h, "cel:%s\x00template:%s\x00", fn.Cel, fn.Template)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// fingerprintDefault serializes a parameter default deterministically for the
+// fingerprint. json.Marshal sorts map keys, so a map/object default hashes the
+// same across runs (unlike fmt %v, whose map iteration order is randomized). It
+// falls back to %v only if the value is not JSON-serializable.
+func fingerprintDefault(def any) string {
+	if def == nil {
+		return "null"
+	}
+	if b, err := json.Marshal(def); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", def)
 }

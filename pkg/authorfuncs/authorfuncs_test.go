@@ -202,3 +202,55 @@ func TestFingerprint_ChangesWithBody(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, a.Fingerprint(), b.Fingerprint())
 }
+
+// TestFingerprint_MapDefaultDeterministic guards the determinism of the
+// parameter-default serialization: a map default must hash identically across
+// Compile calls despite Go's randomized map iteration order. Recompiling the
+// same definition many times must always yield the same fingerprint.
+func TestFingerprint_MapDefaultDeterministic(t *testing.T) {
+	newDefs := func() map[string]*spec.Function {
+		return map[string]*spec.Function{
+			"f": {
+				Params: []*spec.ParamDef{{
+					Name: "opts",
+					Type: spec.TypeObject,
+					Default: map[string]any{
+						"alpha":   1,
+						"bravo":   "two",
+						"charlie": true,
+						"delta":   3.14,
+						"echo":    []any{"x", "y"},
+					},
+				}},
+				Template: "{{ .args.opts }}",
+			},
+		}
+	}
+
+	first, err := Compile(newDefs())
+	require.NoError(t, err)
+	want := first.Fingerprint()
+	assert.NotEmpty(t, want)
+
+	for i := 0; i < 50; i++ {
+		lib, err := Compile(newDefs())
+		require.NoError(t, err)
+		assert.Equal(t, want, lib.Fingerprint(), "fingerprint must be stable across recompiles (iteration %d)", i)
+	}
+}
+
+// TestFingerprint_ChangesWithMapDefault confirms different map defaults still
+// produce different fingerprints (the deterministic serialization did not
+// collapse distinct values).
+func TestFingerprint_ChangesWithMapDefault(t *testing.T) {
+	mk := func(def map[string]any) map[string]*spec.Function {
+		return map[string]*spec.Function{
+			"f": {Params: []*spec.ParamDef{{Name: "opts", Type: spec.TypeObject, Default: def}}, Template: "{{ .args.opts }}"},
+		}
+	}
+	a, err := Compile(mk(map[string]any{"a": 1}))
+	require.NoError(t, err)
+	b, err := Compile(mk(map[string]any{"a": 2}))
+	require.NoError(t, err)
+	assert.NotEqual(t, a.Fingerprint(), b.Fingerprint())
+}
