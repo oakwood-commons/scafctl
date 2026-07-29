@@ -4,11 +4,13 @@
 package auth
 
 import (
+	_ "embed"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -21,19 +23,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// aliasListSchema drives table rendering for 'auth alias list'. The root is an
-// array because the command writes a bare []map[string]any (one entry per
-// alias) to kvx.
-var aliasListSchema = []byte(`{
-	"type": "array",
-	"items": {
-		"type": "object",
-		"properties": {
-			"selector": { "type": "string", "title": "Selector", "maxLength": 40 },
-			"url":      { "type": "string", "title": "Endpoint URL", "maxLength": 80 }
-		}
-	}
-}`)
+// aliasListColumnHints controls table column display for 'auth alias list'.
+var aliasListColumnHints = map[string]tui.ColumnHint{
+	"selector": {MaxWidth: 40, DisplayName: "Selector"},
+	"url":      {MaxWidth: 80, DisplayName: "Endpoint URL"},
+}
+
+//go:embed alias_list_schema.json
+var aliasListDisplaySchema []byte
 
 // CommandAlias creates the 'auth alias' command group for managing static
 // hostname aliases (auth.handlers.<name>.hostname.aliases).
@@ -179,7 +176,8 @@ func commandAliasList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ 
 			outputOpts := flags.ToKvxOutputOptions(&outputFlags,
 				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputColumnOrder([]string{"selector", "url"}),
-				kvx.WithOutputSchemaJSON(aliasListSchema),
+				kvx.WithOutputColumnHints(aliasListColumnHints),
+				kvx.WithOutputDisplaySchemaJSON(aliasListDisplaySchema),
 			)
 			return outputOpts.Write(items)
 		},
