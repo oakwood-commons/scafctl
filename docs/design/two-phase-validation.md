@@ -113,7 +113,7 @@ The behavior on a deferred validation failure depends on the execution mode:
 
 | Mode | Flag | Behavior |
 | --- | --- | --- |
-| Default (fatal) | `--on-validation-error error` | Execution stops; an `AggregatedDeferredValidationError` is returned before actions run. |
+| Fatal | `--on-validation-error error` (default for `run solution` / `run action` / `validate resolver`) | Execution stops; an `AggregatedDeferredValidationError` is returned before actions run. |
 | Non-fatal | `--on-validation-error warn` (default for `run resolver`) | Values are still emitted; failures are reported as validation diagnostics on stderr; state persistence is skipped; the process exits `0`. |
 | Validate-all | `--validate-all` | Failures are folded into the aggregated execution error alongside inline failures. |
 | Skip validation | `--on-validation-error ignore` | Both phases are skipped entirely. |

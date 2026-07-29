@@ -245,6 +245,12 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		o.BinaryName = settings.CliBinaryName
 	}
 
+	// Reset per-run warn state so a previous non-fatal validation run cannot
+	// leak diagnostics/resolvers into a later successful run when the same
+	// options instance is reused in-process (e.g. an embedder re-executing).
+	o.validationWarn = nil
+	o.validationWarnResolvers = nil
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir

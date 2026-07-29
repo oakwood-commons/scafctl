@@ -250,3 +250,65 @@ func TestResolverOptions_Run_ValidationPolicy_IgnoreSkipsPhase(t *testing.T) {
 	assert.NotContains(t, stderr.String(), "name must be Alice",
 		"ignore must not emit validation diagnostics")
 }
+
+// solutionCleanWithWorkflow resolves cleanly (no validation rule) and has a
+// workflow action, used to prove that a prior warn run does not leak diagnostics
+// into a later successful run on a reused options instance.
+const solutionCleanWithWorkflow = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: validation-policy-clean
+  version: 1.0.0
+spec:
+  resolvers:
+    good:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "i-resolved"
+  workflow:
+    actions:
+      echo:
+        provider: static
+        inputs:
+          value:
+            expr: '_.good'
+`
+
+// TestSolutionOptions_Run_ValidationPolicy_WarnStateResetBetweenRuns verifies
+// that reusing a SolutionOptions instance does not leak warn diagnostics from an
+// earlier non-fatal validation run into a later clean run's output envelope.
+func TestSolutionOptions_Run_ValidationPolicy_WarnStateResetBetweenRuns(t *testing.T) {
+	t.Parallel()
+
+	warnPath := filepath.Join(t.TempDir(), "warn.yaml")
+	require.NoError(t, os.WriteFile(warnPath, []byte(solutionValidationFailWithWorkflow), 0o600))
+	cleanPath := filepath.Join(t.TempDir(), "clean.yaml")
+	require.NoError(t, os.WriteFile(cleanPath, []byte(solutionCleanWithWorkflow), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	opts := newSolutionOptionsForPolicy(t, warnPath, &stdout, &stderr, "json")
+	opts.OnValidationError = "warn"
+
+	ctx := logger.WithLogger(context.Background(), logger.Get(0))
+	ctx = writer.WithWriter(ctx, writer.New(opts.IOStreams, opts.CliParams))
+
+	// First run: validation-only failure captured as a warning.
+	require.NoError(t, opts.Run(ctx))
+	require.NotEmpty(t, decodeStructured(t, "json", stdout.Bytes())[execute.DiagnosticsFieldKey],
+		"first (warn) run must carry diagnostics")
+
+	// Second run on the SAME instance against a clean solution.
+	stdout.Reset()
+	stderr.Reset()
+	opts.File = cleanPath
+	require.NoError(t, opts.Run(ctx))
+
+	decoded := decodeStructured(t, "json", stdout.Bytes())
+	assert.NotContains(t, decoded, execute.DiagnosticsFieldKey,
+		"clean re-run must not leak diagnostics from the prior warn run")
+	assert.NotContains(t, decoded, execute.ResolversFieldKey,
+		"clean re-run must not leak the prior run's resolvers map")
+}
