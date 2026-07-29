@@ -5,7 +5,10 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"sort"
 	"testing"
 
@@ -1115,3 +1118,96 @@ func TestAuthHandlerFallsBackToCredentialStore(t *testing.T) {
 	assert.Equal(t, "docker-password", cred.Password)
 	assert.Equal(t, "docker config static auth", cat.CredentialSource())
 }
+
+func TestIsNetworkError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "context canceled is not a network error",
+			err:  context.Canceled,
+			want: false,
+		},
+		{
+			name: "wrapped context canceled is not a network error",
+			err:  fmt.Errorf("resolving: %w", context.Canceled),
+			want: false,
+		},
+		{
+			name: "context deadline exceeded is a network error",
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "dns error",
+			err:  &net.DNSError{Err: "no such host", Name: "ghcr.io", IsNotFound: true},
+			want: true,
+		},
+		{
+			name: "wrapped dns error",
+			err:  fmt.Errorf("resolving manifest: %w", &net.DNSError{Err: "no such host", Name: "ghcr.io"}),
+			want: true,
+		},
+		{
+			name: "op error",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			want: true,
+		},
+		{
+			name: "url error wrapping op error",
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://ghcr.io/v2/",
+				Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			},
+			want: true,
+		},
+		{
+			name: "timeout net.Error",
+			err:  fakeTimeoutError{},
+			want: true,
+		},
+		{
+			name: "opaque dial tcp string",
+			err:  errors.New("Get \"https://ghcr.io/v2/\": dial tcp: lookup ghcr.io: no such host"),
+			want: true,
+		},
+		{
+			name: "opaque connection refused string",
+			err:  errors.New("connection refused"),
+			want: true,
+		},
+		{
+			name: "unrelated error",
+			err:  errors.New("unexpected status code 404"),
+			want: false,
+		},
+		{
+			name: "ArtifactNotFoundError is not a network error",
+			err:  &ArtifactNotFoundError{Reference: Reference{Name: "test"}},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isNetworkError(tt.err))
+		})
+	}
+}
+
+// fakeTimeoutError implements net.Error with Timeout() == true, simulating an
+// opaque transport error that only reveals itself as network-related via the
+// net.Error interface rather than a concrete DNSError/OpError/url.Error type.
+type fakeTimeoutError struct{}
+
+func (fakeTimeoutError) Error() string   { return "fake: i/o timeout" }
+func (fakeTimeoutError) Timeout() bool   { return true }
+func (fakeTimeoutError) Temporary() bool { return true }
