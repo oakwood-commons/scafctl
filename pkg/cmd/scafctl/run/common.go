@@ -584,6 +584,12 @@ func (o *sharedResolverOptions) executeResolvers(
 		executorOpts = append(executorOpts, resolver.WithCalls(sol.Spec.Calls))
 	}
 
+	if binder, binderErr := sol.TemplateFuncBinder(); binderErr != nil {
+		return nil, nil, fmt.Errorf("compiling spec.functions: %w", binderErr)
+	} else if binder != nil {
+		executorOpts = append(executorOpts, resolver.WithTemplateFuncBinder(binder))
+	}
+
 	// Seed results from an earlier pass (e.g. the state two-phase pre-load) so
 	// those resolvers are reused rather than re-executed.
 	if len(execCfg.seed) > 0 {

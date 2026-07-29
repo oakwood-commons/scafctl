@@ -156,6 +156,11 @@ func runResolvers(ctx context.Context, sol *solution.Solution, resolvers []*reso
 	if sol.Spec.HasCalls() {
 		opts = append(opts, resolver.WithCalls(sol.Spec.Calls))
 	}
+	if binder, binderErr := sol.TemplateFuncBinder(); binderErr != nil {
+		return nil, fmt.Errorf("compiling spec.functions: %w", binderErr)
+	} else if binder != nil {
+		opts = append(opts, resolver.WithTemplateFuncBinder(binder))
+	}
 	opts = append(opts, extraOpts...)
 	executor := NewResolverExecutor(registry, cfg, opts...)
 

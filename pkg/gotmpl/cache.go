@@ -315,9 +315,15 @@ type TemplateStat struct {
 
 // generateTemplateCacheKey creates a unique cache key from template content and options.
 // The key is based on a SHA-256 hash of: content, delimiters, missingKey option,
-// and sorted function map keys. This ensures different configurations produce
-// different keys while identical configurations share cache entries.
-func generateTemplateCacheKey(content, leftDelim, rightDelim string, missingKey MissingKeyOption, funcMapKeys []string) string {
+// sorted function map keys, and an optional funcsFingerprint. This ensures
+// different configurations produce different keys while identical configurations
+// share cache entries.
+//
+// funcsFingerprint disambiguates entries whose function *names* match but whose
+// *implementations* differ (e.g. author-defined helpers of the same name but
+// different bodies across solutions). Function bodies are not otherwise part of
+// the key, so without this two such templates would collide.
+func generateTemplateCacheKey(content, leftDelim, rightDelim string, missingKey MissingKeyOption, funcMapKeys []string, funcsFingerprint string) string {
 	h := sha256.New()
 
 	// Hash template content
@@ -334,6 +340,9 @@ func generateTemplateCacheKey(content, leftDelim, rightDelim string, missingKey 
 	copy(sorted, funcMapKeys)
 	sort.Strings(sorted)
 	fmt.Fprintf(h, "funcs:%s", strings.Join(sorted, ","))
+
+	// Hash the function-implementation fingerprint (empty when not supplied)
+	fmt.Fprintf(h, "funcsfp:%s", funcsFingerprint)
 
 	return fmt.Sprintf("%x", h.Sum(nil))
 }

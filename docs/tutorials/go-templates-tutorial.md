@@ -35,7 +35,8 @@ This tutorial walks you through using Go templates in scafctl to generate struct
 18. [Filtering Lists with where / selectField](#filtering-lists-with-where--selectfield)
 19. [Inline CEL with cel](#inline-cel-with-cel)
 20. [Debugging Template Type Errors](#debugging-template-type-errors)
-21. [Discovering Available Functions](#discovering-available-functions)
+21. [Author-Defined Functions](#author-defined-functions)
+22. [Discovering Available Functions](#discovering-available-functions)
 
 ---
 
@@ -2367,6 +2368,67 @@ Hints: The 'range' action received a non-iterable value. Ensure the variable
 > `data` expression, or add an explicit `dependsOn`. The `template-unknown-accessor`
 > lint rule warns about bare accessors that match no resolver, data key, or
 > alias (likely typos, since they render empty rather than failing).
+
+---
+
+## Author-Defined Functions
+
+Beyond the built-in Sprig and custom functions, a solution can declare its own
+reusable named template helpers under `spec.functions`. Once declared, a function
+is callable from the Go templates the solution renders through the `go-template`
+provider (in resolvers and actions) as `{{ name arg... }}`.
+
+Each function has:
+
+- **Ordered, positional, typed `params`.** They are bound by position at each
+  call site, coerced to the declared `type`, and exposed inside the body under
+  the `args` namespace (`_.args.name` in a CEL body, `{{ .args.name }}` in a
+  template body). A param may declare a `default` or be `required`.
+- **Exactly one body:** a CEL expression (`cel:`) or a Go template (`template:`).
+  A template body can call sibling author functions and every built-in; a CEL
+  body cannot call author functions. Functions must be acyclic (enforced when
+  the solution is loaded).
+
+```yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: author-functions-demo
+spec:
+  functions:
+    # CEL-bodied helper: params exposed as _.args.<name>
+    greet:
+      description: "Uppercase a name and add a friendly prefix"
+      params:
+        - name: name
+          type: string
+          required: true
+      cel: '"HELLO " + _.args.name.upperAscii() + "!"'
+
+    # Template-bodied helper: calls the sibling greet function
+    shout:
+      description: "Compose greet with an exclamation"
+      params:
+        - name: who
+          type: string
+          required: true
+      template: '{{ greet .args.who }} ({{ .args.who | upper }})'
+
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              name: greeting
+              template: '{{ shout "world" }}'
+```
+
+Running this resolves `greeting` to `HELLO WORLD! (WORLD)`.
+
+Run `scafctl explain function` for the full field reference. A complete,
+runnable example lives in `examples/resolvers/author-functions.yaml`.
 
 ---
 

@@ -2228,6 +2228,27 @@ func TestIntegration_RunResolver_PlanDataNotInOutput(t *testing.T) {
 	assert.NotContains(t, stdout, `"__plan"`)
 }
 
+// TestIntegration_RunResolver_AuthorFunctions exercises solution-author-defined
+// Go template helpers (spec.functions) end to end: a CEL-bodied function, a
+// numeric function with a typed parameter, and a template-bodied function that
+// composes a sibling author function.
+func TestIntegration_RunResolver_AuthorFunctions(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "examples/resolvers/author-functions.yaml",
+		"-o", "json",
+	)
+
+	require.Equal(t, 0, exitCode, "expected exit code 0\nstdout: %s\nstderr: %s", stdout, stderr)
+	// greet (CEL body) uppercases and prefixes.
+	assert.Contains(t, stdout, `"greeting": "HELLO SCAF!"`)
+	// doubled (typed numeric param) returns 21*2.
+	assert.Contains(t, stdout, `"forty_two": 42`)
+	// shout (template body) calls the sibling greet function.
+	assert.Contains(t, stdout, `"composed": "HELLO WORLD! (WORLD)"`)
+}
+
 func TestIntegration_RunResolver_GraphASCII(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,

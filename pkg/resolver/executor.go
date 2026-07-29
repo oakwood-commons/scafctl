@@ -73,6 +73,7 @@ type Executor struct {
 	seededResults      map[string]*ExecutionResult // Pre-computed results (e.g. state pre-load phase) reused without re-execution
 	calls              map[string]*spec.Call       // Reusable call definitions invoked via call + args
 	dedupMemo          *call.Memo                  // Per-run memo for opt-in call de-duplication
+	templateFuncBinder provider.TemplateFuncBinder // Author-defined template helper functions (spec.functions)
 }
 
 // ExecutorOption is a functional option for configuring the Executor
@@ -209,6 +210,15 @@ func WithCalls(calls map[string]*spec.Call) ExecutorOption {
 	}
 }
 
+// WithTemplateFuncBinder registers the solution's author-defined template helper
+// functions (spec.functions) so that Go templates rendered during resolution can
+// invoke them as {{ name arg... }}. A nil binder is a no-op.
+func WithTemplateFuncBinder(binder provider.TemplateFuncBinder) ExecutorOption {
+	return func(e *Executor) {
+		e.templateFuncBinder = binder
+	}
+}
+
 // NewExecutor creates a new resolver executor
 func NewExecutor(registry RegistryInterface, opts ...ExecutorOption) *Executor {
 	executor := &Executor{
@@ -320,6 +330,12 @@ func (e *Executor) Execute(ctx context.Context, resolvers []*Resolver, params ma
 
 	// Add parameters to context for parameter provider
 	ctx = provider.WithParameters(ctx, params)
+
+	// Inject the author-defined template function binder (spec.functions) so the
+	// go-template provider can expose the solution's helpers to its templates.
+	if e.templateFuncBinder != nil {
+		ctx = provider.WithTemplateFuncBinder(ctx, e.templateFuncBinder)
+	}
 
 	// Also add parameters directly to resolver context for CEL expressions
 	for key, value := range params {

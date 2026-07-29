@@ -91,6 +91,18 @@ type TemplateOptions struct {
 	// These are added to the template's function map
 	Funcs template.FuncMap `json:"-" yaml:"-" doc:"Custom template functions to make available"`
 
+	// FuncsFingerprint is an optional stable identifier for the *implementations*
+	// supplied in Funcs. Funcs are bound into the parsed template at parse time
+	// and the parsed template is cached, but the cache key only records function
+	// *names* -- not their bodies. When two distinct function sets share the same
+	// names (e.g. author-defined helpers with identical names but different
+	// bodies across solutions), a name-only key would collide and return a
+	// template bound to the wrong implementations. Callers that supply
+	// content-dependent Funcs must set FuncsFingerprint to a value that changes
+	// with those implementations so cache entries stay isolated. Empty when Funcs
+	// is nil or fully determined by its names.
+	FuncsFingerprint string `json:"-" yaml:"-" doc:"Stable identifier for the implementations in Funcs; disambiguates cache entries when function names collide"`
+
 	// MissingKey controls the behavior when a map key is missing
 	// Default: MissingKeyError (stops execution with an error)
 	// Options: MissingKeyDefault, MissingKeyZero, MissingKeyError
@@ -468,7 +480,7 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 
 	// Check the cache
 	cache := s.getCache()
-	cacheKey := generateTemplateCacheKey(content, leftDelim, rightDelim, missingKey, funcMapKeys)
+	cacheKey := generateTemplateCacheKey(content, leftDelim, rightDelim, missingKey, funcMapKeys, opts.FuncsFingerprint)
 
 	if cached, ok := cache.Get(cacheKey); ok {
 		lgr.V(2).Info("template cache hit", "name", name, "key", cacheKey[:12])
@@ -703,7 +715,27 @@ func Execute(ctx context.Context, opts TemplateOptions) (*ExecuteResult, error) 
 // Use leftDelim/rightDelim to override the default "{{" / "}}" delimiters
 // (pass empty strings for defaults).
 func ValidateSyntax(content, leftDelim, rightDelim string) error {
-	tmpl := template.New("validate").Funcs(getExtensionFuncMap())
+	return ValidateSyntaxWithFuncs(content, leftDelim, rightDelim, nil)
+}
+
+// ValidateSyntaxWithFuncs is like ValidateSyntax but additionally recognizes the
+// given function names during parsing. It is used to validate templates that may
+// invoke solution-author-defined helper functions (spec.functions), which are
+// not part of the built-in extension set. Extra names are registered as no-op
+// stubs solely so parsing succeeds; they never execute here. Built-in extension
+// functions win on collision, so a stub cannot shadow a real function.
+func ValidateSyntaxWithFuncs(content, leftDelim, rightDelim string, extraFuncNames []string) error {
+	funcMap := getExtensionFuncMap()
+	if len(extraFuncNames) > 0 {
+		stub := func(_ ...any) any { return nil }
+		for _, name := range extraFuncNames {
+			if _, exists := funcMap[name]; !exists {
+				funcMap[name] = stub
+			}
+		}
+	}
+
+	tmpl := template.New("validate").Funcs(funcMap)
 
 	switch {
 	case leftDelim != "" && rightDelim != "":

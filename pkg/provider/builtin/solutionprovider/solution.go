@@ -335,6 +335,11 @@ func (p *SolutionProvider) executeResolversOnly(ctx context.Context, sol *soluti
 		if sol.Spec.HasCalls() {
 			execOpts = append(execOpts, resolver.WithCalls(sol.Spec.Calls))
 		}
+		if binder, binderErr := sol.TemplateFuncBinder(); binderErr != nil {
+			return nil, fmt.Errorf("solution %q: compiling spec.functions: %w", in.Source, binderErr)
+		} else if binder != nil {
+			execOpts = append(execOpts, resolver.WithTemplateFuncBinder(binder))
+		}
 		executor := resolver.NewExecutor(adapter, execOpts...)
 
 		resultCtx, err := executor.Execute(ctx, resolvers, in.Inputs)
@@ -378,6 +383,13 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 		defer cancel()
 	}
 
+	// Compile the sub-solution's author-defined template functions once for both
+	// the resolver and workflow phases.
+	funcBinder, err := sol.TemplateFuncBinder()
+	if err != nil {
+		return nil, fmt.Errorf("solution %q: compiling spec.functions: %w", in.Source, err)
+	}
+
 	resolverData := make(map[string]any)
 	var resolverErrors []ResolverError
 
@@ -410,6 +422,9 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 		}
 		if sol.Spec.HasCalls() {
 			resolverOpts = append(resolverOpts, resolver.WithCalls(sol.Spec.Calls))
+		}
+		if funcBinder != nil {
+			resolverOpts = append(resolverOpts, resolver.WithTemplateFuncBinder(funcBinder))
 		}
 		resolverExec := resolver.NewExecutor(adapter, resolverOpts...)
 
@@ -445,6 +460,9 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 		action.WithResolverData(resolverData),
 		action.WithCalls(sol.Spec.Calls),
 	)
+	if funcBinder != nil {
+		action.WithTemplateFuncBinder(funcBinder)(actionExec)
+	}
 
 	execResult, err := actionExec.Execute(ctx, sol.Spec.Workflow)
 

@@ -35,7 +35,7 @@ func (s *Server) registerSchemaTools() {
 
 	// explain_kind — introspect any registered kind (solution, resolver, action, etc.)
 	explainKindTool := mcp.NewTool("explain_kind",
-		mcp.WithDescription("Get detailed field documentation for a scafctl type (kind). Works like 'kubectl explain' — shows field names, types, descriptions, validation rules, and examples. Available kinds: solution, resolver, action, workflow, spec, provider, schema, retry."),
+		mcp.WithDescription("Get detailed field documentation for a scafctl type (kind). Works like 'kubectl explain' — shows field names, types, descriptions, validation rules, and examples. Available kinds: solution, resolver, action, workflow, spec, provider, schema, retry, function."),
 		mcp.WithTitleAnnotation("Explain Kind"),
 		mcp.WithToolIcons(toolIcons["schema"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -44,7 +44,7 @@ func (s *Server) registerSchemaTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("kind",
 			mcp.Required(),
-			mcp.Description("The kind to explain: solution, resolver, action, workflow, spec, provider, schema, retry"),
+			mcp.Description("The kind to explain: solution, resolver, action, workflow, spec, provider, schema, retry, function"),
 		),
 		mcp.WithString("field",
 			mcp.Description("Optional field path to drill into (dot-separated, e.g., 'metadata', 'resolve.with')"),

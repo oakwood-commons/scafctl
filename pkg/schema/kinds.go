@@ -13,6 +13,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
 // KindDefinition holds metadata and type information for an explainable kind.
@@ -253,6 +254,16 @@ It uses the standard JSON Schema specification to define types, validation rules
 			Description: `RetryConfig defines automatic retry behavior for failed actions.
 It configures the number of attempts, backoff strategy, and delays.`,
 			TypeInstance: (*action.RetryConfig)(nil),
+		},
+		{
+			Name:    "function",
+			Aliases: []string{"functions", "func", "fn"},
+			Description: `Function is a solution-author-defined, named Go template helper declared 
+under spec.functions and callable from the Go templates the solution renders 
+through the go-template provider as {{ name arg... }}. It has ordered, positional, 
+typed parameters (exposed inside the body under the args namespace) and exactly 
+one body: a CEL expression (cel) or a Go template (template).`,
+			TypeInstance: (*spec.Function)(nil),
 		},
 	}
 }

@@ -349,6 +349,11 @@ func Resolvers(
 	if sol.Spec.HasCalls() {
 		executorOpts = append(executorOpts, resolver.WithCalls(sol.Spec.Calls))
 	}
+	if binder, binderErr := sol.TemplateFuncBinder(); binderErr != nil {
+		return nil, fmt.Errorf("compiling spec.functions: %w", binderErr)
+	} else if binder != nil {
+		executorOpts = append(executorOpts, resolver.WithTemplateFuncBinder(binder))
+	}
 	executor := resolver.NewExecutor(adapter, executorOpts...)
 
 	// Apply solution-level CEL cost limit if configured

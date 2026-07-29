@@ -579,6 +579,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// regardless of whether --show-execution is set for resolver output display.
 	resolverExecutionData := execute.BuildExecutionData(resolverCtx, resolvers, resolverElapsed)
 
+	funcBinder, funcBinderErr := sol.TemplateFuncBinder()
+	if funcBinderErr != nil {
+		return fmt.Errorf("compiling spec.functions: %w", funcBinderErr)
+	}
+
 	actionExecutor := action.NewExecutor(
 		action.WithRegistry(actionAdapter),
 		action.WithResolverData(resolverData),
@@ -593,6 +598,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		action.WithNoCache(o.SkipFingerprint),
 		action.WithCalls(sol.Spec.Calls),
 	)
+	if funcBinder != nil {
+		action.WithTemplateFuncBinder(funcBinder)(actionExecutor)
+	}
 
 	result, err := actionExecutor.Execute(actionCtx, workflow)
 	if err != nil && result != nil && result.FinalStatus != action.ExecutionPartialSuccess {

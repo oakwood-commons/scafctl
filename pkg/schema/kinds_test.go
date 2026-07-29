@@ -21,7 +21,7 @@ func TestEnsureBuiltinKinds(t *testing.T) {
 	err := ensureBuiltinKinds()
 	require.NoError(t, err)
 
-	// Verify all 8 built-in kinds are registered
+	// Verify all built-in kinds are registered
 	defs := builtinKindDefinitions()
 	for _, def := range defs {
 		got, ok := globalKindRegistry.Get(def.Name)
@@ -101,7 +101,7 @@ func TestBuiltinKindDefinitions_ReturnsExpectedKinds(t *testing.T) {
 
 	expectedNames := []string{
 		"provider", "solution", "action", "workflow",
-		"resolver", "spec", "schema", "retry",
+		"resolver", "spec", "schema", "retry", "function",
 	}
 	assert.Len(t, defs, len(expectedNames))
 

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/bmatcuk/doublestar/v4"
@@ -428,15 +429,20 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 
 	replacements := buildIgnoredBlockReplacements(templateStr, ignoredBlocksCfg)
 
+	// Bind any solution-author-defined helper functions (spec.functions).
+	authorFuncs, authorFuncsFP := authorTemplateFuncs(ctx)
+
 	// Execute the template
 	result, err := p.service.Execute(ctx, gotmpl.TemplateOptions{
-		Content:      templateStr,
-		Name:         templateName,
-		Data:         templateData,
-		MissingKey:   missingKey,
-		LeftDelim:    leftDelim,
-		RightDelim:   rightDelim,
-		Replacements: replacements,
+		Content:          templateStr,
+		Name:             templateName,
+		Data:             templateData,
+		MissingKey:       missingKey,
+		LeftDelim:        leftDelim,
+		RightDelim:       rightDelim,
+		Replacements:     replacements,
+		Funcs:            authorFuncs,
+		FuncsFingerprint: authorFuncsFP,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ProviderName, err)
@@ -537,6 +543,10 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 	// Build base template data from resolver context + additional data
 	baseData := p.buildTemplateData(ctx, inputs)
 
+	// Bind any solution-author-defined helper functions (spec.functions) once
+	// for the whole tree.
+	authorFuncs, authorFuncsFP := authorTemplateFuncs(ctx)
+
 	lgr.V(1).Info("executing render-tree",
 		"name", templateName,
 		"entryCount", len(entries),
@@ -618,13 +628,15 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		// Render the entry content as a Go template
 		entryTemplateName := fmt.Sprintf("%s/%s", templateName, entryPath)
 		result, renderErr := p.service.Execute(ctx, gotmpl.TemplateOptions{
-			Content:      entryContent,
-			Name:         entryTemplateName,
-			Data:         templateData,
-			MissingKey:   missingKey,
-			LeftDelim:    leftDelim,
-			RightDelim:   rightDelim,
-			Replacements: replacements,
+			Content:          entryContent,
+			Name:             entryTemplateName,
+			Data:             templateData,
+			MissingKey:       missingKey,
+			LeftDelim:        leftDelim,
+			RightDelim:       rightDelim,
+			Replacements:     replacements,
+			Funcs:            authorFuncs,
+			FuncsFingerprint: authorFuncsFP,
 		})
 		if renderErr != nil {
 			return nil, fmt.Errorf("%s: failed to render %s: %w", ProviderName, entryPath, renderErr)
@@ -723,6 +735,18 @@ func (p *GoTemplateProvider) parseRenderingOptions(inputs map[string]any) (gotmp
 	}
 
 	return missingKey, leftDelim, rightDelim, nil
+}
+
+// authorTemplateFuncs binds the solution-author-defined helper functions
+// (spec.functions) carried on the provider context, if any. It returns the
+// bound FuncMap and its fingerprint (used to isolate template cache entries),
+// or (nil, "") when no functions are declared.
+func authorTemplateFuncs(ctx context.Context) (template.FuncMap, string) {
+	binder, ok := provider.TemplateFuncBinderFromContext(ctx)
+	if !ok || binder == nil {
+		return nil, ""
+	}
+	return binder.Bind(ctx), binder.Fingerprint()
 }
 
 // buildTemplateData constructs the template data map from resolver context, iteration context, and additional data.

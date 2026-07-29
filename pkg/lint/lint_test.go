@@ -1175,7 +1175,7 @@ func TestLintExpressions_AllPaths(t *testing.T) {
 	}
 
 	result := &Result{Findings: make([]*Finding, 0)}
-	lintExpressions(inputs, "test.resolvers.myresolver", result)
+	lintExpressions(inputs, "test.resolvers.myresolver", result, nil)
 
 	// Should have findings for invalid CEL and invalid template
 	findingRules := make([]string, 0, len(result.Findings))
@@ -1207,7 +1207,7 @@ func TestLintExpressions_SprigFunctionsNotFalsePositive(t *testing.T) {
 			"test": {Tmpl: &tmplContent},
 		}
 		result := &Result{Findings: make([]*Finding, 0)}
-		lintExpressions(inputs, "test.resolvers.myresolver", result)
+		lintExpressions(inputs, "test.resolvers.myresolver", result, nil)
 
 		for _, f := range result.Findings {
 			assert.NotEqual(t, "invalid-template", f.RuleName,

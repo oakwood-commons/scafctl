@@ -78,6 +78,11 @@ type Executor struct {
 
 	// dedupMemo is a per-run memo for opt-in call de-duplication.
 	dedupMemo *call.Memo
+
+	// templateFuncBinder holds the solution's author-defined template helper
+	// functions (spec.functions), injected into provider context so templates
+	// rendered by actions can invoke them.
+	templateFuncBinder provider.TemplateFuncBinder
 }
 
 // ExecutorOption configures the executor.
@@ -174,6 +179,15 @@ func WithNoCache(noCache bool) ExecutorOption {
 func WithCalls(calls map[string]*spec.Call) ExecutorOption {
 	return func(e *Executor) {
 		e.calls = calls
+	}
+}
+
+// WithTemplateFuncBinder sets the solution's author-defined template helper
+// functions (spec.functions) so templates rendered by actions can invoke them
+// as {{ name arg... }}. A nil binder is a no-op.
+func WithTemplateFuncBinder(binder provider.TemplateFuncBinder) ExecutorOption {
+	return func(e *Executor) {
+		e.templateFuncBinder = binder
 	}
 }
 
@@ -786,6 +800,11 @@ func (e *Executor) executeAction(ctx context.Context, graph *Graph, actionName s
 			execCtx = provider.WithResolverContext(execCtx, maps.Clone(callPlan.ResolverData))
 		case e.resolverData != nil:
 			execCtx = provider.WithResolverContext(execCtx, maps.Clone(e.resolverData))
+		}
+		// Expose the author-defined template functions to providers that render
+		// Go templates (e.g. go-template, file) during action execution.
+		if e.templateFuncBinder != nil {
+			execCtx = provider.WithTemplateFuncBinder(execCtx, e.templateFuncBinder)
 		}
 		return e.callProvider(execCtx, providerName, resolvedInputs)
 	}

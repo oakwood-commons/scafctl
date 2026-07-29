@@ -21,6 +21,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/authorfuncs"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -122,6 +123,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintTemplateAccessors(sol, result)
 	lintWorkflow(sol, result, registry)
 	lintCalls(sol, result, registry)
+	lintFunctions(sol, result)
 	lintState(sol, result, registry)
 	lintImmutableResolvers(sol, result)
 	lintParameterNumericMatches(sol, result)
@@ -404,6 +406,11 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 		return
 	}
 
+	// Computed once and reused for every resolve step below: the sorted name
+	// slice is identical across all steps, so recomputing it per step would
+	// needlessly re-sort and re-allocate on large solutions.
+	declaredFuncs := declaredFunctionNames(sol)
+
 	reservedNames := map[string]bool{
 		"__actions": true,
 		"__error":   true,
@@ -470,7 +477,7 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 				}
 
 				lintNilInputs(step.Inputs, stepLocation, result)
-				lintExpressions(step.Inputs, stepLocation, result)
+				lintExpressions(step.Inputs, stepLocation, result, declaredFuncs)
 
 				// forEach on a resolve step is a valid fan-out, but it requires
 				// forEach.in: the resolve phase has no __self to default the
@@ -1104,14 +1111,17 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Reg
 		finallyNames[name] = true
 	}
 
+	// Computed once and reused for every action below (see lintResolvers).
+	declaredFuncs := declaredFunctionNames(sol)
+
 	for name, act := range workflow.Actions {
 		location := fmt.Sprintf("workflow.actions.%s", name)
-		lintAction(act, location, actionNames, result, registry)
+		lintAction(act, location, actionNames, result, registry, declaredFuncs)
 	}
 
 	for name, act := range workflow.Finally {
 		location := fmt.Sprintf("workflow.finally.%s", name)
-		lintAction(act, location, finallyNames, result, registry)
+		lintAction(act, location, finallyNames, result, registry, declaredFuncs)
 
 		if act.ForEach != nil {
 			result.addFinding(SeverityError, "validation", location,
@@ -1202,7 +1212,7 @@ func (r *registryAdapter) Has(name string) bool {
 	return r.registry.Has(name)
 }
 
-func lintAction(act *action.Action, location string, validDeps map[string]bool, result *Result, registry *provider.Registry) {
+func lintAction(act *action.Action, location string, validDeps map[string]bool, result *Result, registry *provider.Registry, declaredFuncs []string) {
 	if act.Description == "" {
 		result.addFinding(SeverityInfo, "documentation", location,
 			"action lacks description",
@@ -1238,7 +1248,7 @@ func lintAction(act *action.Action, location string, validDeps map[string]bool, 
 		}
 	}
 
-	lintExpressions(act.Inputs, location, result)
+	lintExpressions(act.Inputs, location, result, declaredFuncs)
 
 	if act.When != nil && act.When.Expr != nil {
 		if err := validateCELSyntax(string(*act.When.Expr)); err != nil {
@@ -1325,7 +1335,7 @@ func lintNilInputs(inputs map[string]*spec.ValueRef, location string, result *Re
 	}
 }
 
-func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *Result) {
+func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *Result, declaredFuncs []string) {
 	for key, val := range inputs {
 		if val == nil {
 			continue
@@ -1347,7 +1357,7 @@ func lintExpressions(inputs map[string]*spec.ValueRef, location string, result *
 
 		if val.Tmpl != nil && string(*val.Tmpl) != "" {
 			tmplStr := string(*val.Tmpl)
-			if err := validateTemplateSyntax(tmplStr); err != nil {
+			if err := validateTemplateSyntax(tmplStr, declaredFuncs); err != nil {
 				result.addFinding(SeverityError, "template", inputLoc,
 					fmt.Sprintf("invalid Go template: %v", err),
 					"Fix the template syntax",
@@ -1575,10 +1585,48 @@ func hyphensToCamelCase(name string) string {
 }
 
 // validateTemplateSyntax checks if a Go template is syntactically valid.
-// Delegates to gotmpl.ValidateSyntax so that sprig and custom extension
-// functions are registered during parsing, matching runtime behavior.
-func validateTemplateSyntax(tmpl string) error {
-	return gotmpl.ValidateSyntax(tmpl, "", "")
+// Delegates to gotmpl.ValidateSyntaxWithFuncs so that sprig, custom extension
+// functions, and solution-author-defined helper functions (declaredFuncs) are
+// all recognized during parsing, matching runtime behavior.
+func validateTemplateSyntax(tmpl string, declaredFuncs []string) error {
+	return gotmpl.ValidateSyntaxWithFuncs(tmpl, "", "", declaredFuncs)
+}
+
+// declaredFunctionNames returns the sorted names of the solution's
+// author-defined template functions (spec.functions). Templates may invoke
+// these, so they must be recognized during lint-time syntax validation to avoid
+// false "function not defined" errors.
+func declaredFunctionNames(sol *solution.Solution) []string {
+	if sol == nil || !sol.Spec.HasFunctions() {
+		return nil
+	}
+	names := make([]string, 0, len(sol.Spec.Functions))
+	for name := range sol.Spec.Functions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// lintFunctions validates the solution's author-defined template functions
+// (spec.functions) by compiling them, surfacing each definition problem (invalid
+// name, built-in collision, missing/duplicate body, invalid body, parameter
+// errors, or a call-graph cycle) as an error finding. This mirrors what
+// execution enforces so authors see problems at lint time.
+func lintFunctions(sol *solution.Solution, result *Result) {
+	if sol == nil || !sol.Spec.HasFunctions() {
+		return
+	}
+
+	if _, err := authorfuncs.Compile(sol.Spec.Functions); err != nil {
+		msg := strings.TrimPrefix(err.Error(), "invalid spec.functions: ")
+		for _, problem := range strings.Split(msg, "; ") {
+			result.addFinding(SeverityError, "functions", "spec.functions",
+				problem,
+				"Fix the function definition so it compiles",
+				"invalid-function")
+		}
+	}
 }
 
 // lintUndefinedOptionalRefs emits an INFO finding for each optional CEL

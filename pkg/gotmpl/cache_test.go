@@ -319,38 +319,50 @@ func TestTemplateCache_ConcurrentAccess(t *testing.T) {
 
 func TestGenerateTemplateCacheKey(t *testing.T) {
 	t.Run("same inputs produce same key", func(t *testing.T) {
-		key1 := generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, []string{"upper", "lower"})
-		key2 := generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, []string{"upper", "lower"})
+		key1 := generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, []string{"upper", "lower"}, "")
+		key2 := generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, []string{"upper", "lower"}, "")
 		assert.Equal(t, key1, key2)
 	})
 
 	t.Run("different content produces different key", func(t *testing.T) {
-		key1 := generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, nil)
-		key2 := generateTemplateCacheKey("Goodbye {{.Name}}", "{{", "}}", MissingKeyDefault, nil)
+		key1 := generateTemplateCacheKey("Hello {{.Name}}", "{{", "}}", MissingKeyDefault, nil, "")
+		key2 := generateTemplateCacheKey("Goodbye {{.Name}}", "{{", "}}", MissingKeyDefault, nil, "")
 		assert.NotEqual(t, key1, key2)
 	})
 
 	t.Run("different delimiters produce different key", func(t *testing.T) {
-		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, nil)
-		key2 := generateTemplateCacheKey("Hello", "<<", ">>", MissingKeyDefault, nil)
+		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, nil, "")
+		key2 := generateTemplateCacheKey("Hello", "<<", ">>", MissingKeyDefault, nil, "")
 		assert.NotEqual(t, key1, key2)
 	})
 
 	t.Run("different missingKey produces different key", func(t *testing.T) {
-		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, nil)
-		key2 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyError, nil)
+		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, nil, "")
+		key2 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyError, nil, "")
 		assert.NotEqual(t, key1, key2)
 	})
 
 	t.Run("different func maps produce different key", func(t *testing.T) {
-		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"upper"})
-		key2 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"lower"})
+		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"upper"}, "")
+		key2 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"lower"}, "")
 		assert.NotEqual(t, key1, key2)
 	})
 
 	t.Run("func map order does not matter", func(t *testing.T) {
-		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"upper", "lower"})
-		key2 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"lower", "upper"})
+		key1 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"upper", "lower"}, "")
+		key2 := generateTemplateCacheKey("Hello", "{{", "}}", MissingKeyDefault, []string{"lower", "upper"}, "")
+		assert.Equal(t, key1, key2)
+	})
+
+	t.Run("different funcs fingerprint produces different key", func(t *testing.T) {
+		key1 := generateTemplateCacheKey("Hello {{ greet .Name }}", "{{", "}}", MissingKeyDefault, []string{"greet"}, "fp-a")
+		key2 := generateTemplateCacheKey("Hello {{ greet .Name }}", "{{", "}}", MissingKeyDefault, []string{"greet"}, "fp-b")
+		assert.NotEqual(t, key1, key2)
+	})
+
+	t.Run("same funcs fingerprint produces same key", func(t *testing.T) {
+		key1 := generateTemplateCacheKey("Hello {{ greet .Name }}", "{{", "}}", MissingKeyDefault, []string{"greet"}, "fp-a")
+		key2 := generateTemplateCacheKey("Hello {{ greet .Name }}", "{{", "}}", MissingKeyDefault, []string{"greet"}, "fp-a")
 		assert.Equal(t, key1, key2)
 	})
 }
