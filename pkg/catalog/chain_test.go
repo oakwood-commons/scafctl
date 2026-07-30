@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -97,6 +98,190 @@ func TestChainCatalog_Fetch_NotFound(t *testing.T) {
 	_, _, err = chain.Fetch(context.Background(), ref)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found in any catalog")
+	assert.True(t, errors.Is(err, ErrArtifactNotFound))
+	assert.True(t, IsNotFound(err))
+}
+
+func TestChainCatalog_Fetch_SingleCatalogUnreachable(t *testing.T) {
+	cause := fmt.Errorf("dial tcp: lookup ghcr.io: no such host")
+	c1 := NewMockCatalog("official", WithFetchFunc(func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &UnreachableError{Catalog: "official", Cause: cause}
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1)
+	require.NoError(t, err)
+
+	ref := testRef("my-plugin", "1.0.0")
+	_, _, err = chain.Fetch(context.Background(), ref)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	assert.Contains(t, err.Error(), "official")
+	assert.Contains(t, err.Error(), cause.Error())
+	assert.NotContains(t, err.Error(), "not found in")
+}
+
+func TestChainCatalog_Fetch_OfficialUnreachableOthersNotFound(t *testing.T) {
+	// Reproduces the issue #728 scenario: local catalogs report not-found
+	// normally, but the official (always-last) catalog is unreachable.
+	cause := fmt.Errorf("dial tcp: lookup ghcr.io: no such host")
+	c1 := newMockCatalog("local")
+	c2 := NewMockCatalog("official", WithFetchFunc(func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &UnreachableError{Catalog: "official", Cause: cause}
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	ref := testRef("missing", "1.0.0")
+	_, _, err = chain.Fetch(context.Background(), ref)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	assert.Contains(t, err.Error(), "official")
+	assert.Contains(t, err.Error(), cause.Error())
+	assert.Contains(t, err.Error(), "not found in")
+	assert.Contains(t, err.Error(), "local")
+}
+
+func TestChainCatalog_Fetch_AllCatalogsUnreachable(t *testing.T) {
+	cause1 := fmt.Errorf("dial tcp: lookup c1: no such host")
+	cause2 := fmt.Errorf("connection refused")
+	c1 := NewMockCatalog("c1", WithFetchFunc(func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &UnreachableError{Catalog: "c1", Cause: cause1}
+	}))
+	c2 := NewMockCatalog("c2", WithFetchFunc(func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &UnreachableError{Catalog: "c2", Cause: cause2}
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	ref := testRef("my-plugin", "1.0.0")
+	_, _, err = chain.Fetch(context.Background(), ref)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	assert.Contains(t, err.Error(), "c1")
+	assert.Contains(t, err.Error(), "c2")
+	// Only the first unreachable catalog's cause is inlined (via the wrapped
+	// error) to avoid duplicating text; other catalog names still appear.
+	assert.Contains(t, err.Error(), cause1.Error())
+	assert.NotContains(t, err.Error(), "not found in")
+}
+
+func TestChainCatalog_Resolve_CatalogUnreachable(t *testing.T) {
+	cause := fmt.Errorf("i/o timeout")
+	c1 := NewMockCatalog("official", WithResolveFunc(func(_ context.Context, _ Reference) (ArtifactInfo, error) {
+		return ArtifactInfo{}, &UnreachableError{Catalog: "official", Cause: cause}
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1)
+	require.NoError(t, err)
+
+	ref := testRef("my-plugin", "1.0.0")
+	_, err = chain.Resolve(context.Background(), ref)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	assert.Contains(t, err.Error(), "official")
+	assert.Contains(t, err.Error(), cause.Error())
+}
+
+func TestChainCatalog_Exists_CatalogUnreachable(t *testing.T) {
+	cause := fmt.Errorf("connection refused")
+	c1 := NewMockCatalog("official", WithExistsFunc(func(_ context.Context, _ Reference) (bool, error) {
+		return false, &UnreachableError{Catalog: "official", Cause: cause}
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1)
+	require.NoError(t, err)
+
+	ref := testRef("my-plugin", "1.0.0")
+	ok, err := chain.Exists(context.Background(), ref)
+	assert.False(t, ok)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	assert.Contains(t, err.Error(), "official")
+	assert.Contains(t, err.Error(), cause.Error())
+}
+
+func TestChainCatalog_Exists_AllNotFoundNoError(t *testing.T) {
+	c1 := NewMockCatalog("c1", WithExistsFunc(func(_ context.Context, _ Reference) (bool, error) {
+		return false, nil
+	}))
+	c2 := NewMockCatalog("c2", WithExistsFunc(func(_ context.Context, _ Reference) (bool, error) {
+		return false, nil
+	}))
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	ref := testRef("my-plugin", "1.0.0")
+	ok, err := chain.Exists(context.Background(), ref)
+	assert.False(t, ok)
+	assert.NoError(t, err)
+}
+
+func TestAggregateChainError(t *testing.T) {
+	t.Run("no unreachable, all not found", func(t *testing.T) {
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "c1", err: ErrArtifactNotFound},
+			{catalog: "c2", err: ErrArtifactNotFound},
+		})
+		assert.Contains(t, err.Error(), `artifact "subject" not found in any catalog`)
+		assert.False(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.True(t, errors.Is(err, ErrArtifactNotFound))
+	})
+
+	t.Run("other error, no unreachable", func(t *testing.T) {
+		cause := fmt.Errorf("permission denied")
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "c1", err: cause},
+		})
+		assert.False(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.False(t, errors.Is(err, ErrArtifactNotFound))
+		assert.Contains(t, err.Error(), "c1")
+		assert.Contains(t, err.Error(), "permission denied")
+	})
+
+	t.Run("other error mixed with not found, no unreachable", func(t *testing.T) {
+		cause := fmt.Errorf("permission denied")
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "c1", err: ErrArtifactNotFound},
+			{catalog: "c2", err: cause},
+		})
+		assert.False(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.False(t, errors.Is(err, ErrArtifactNotFound))
+		assert.Contains(t, err.Error(), "c2")
+		assert.Contains(t, err.Error(), "permission denied")
+	})
+
+	t.Run("single unreachable, no not-found", func(t *testing.T) {
+		cause := fmt.Errorf("boom")
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "c1", err: &UnreachableError{Catalog: "c1", Cause: cause}},
+		})
+		assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.Contains(t, err.Error(), "c1")
+		assert.Contains(t, err.Error(), "boom")
+		assert.NotContains(t, err.Error(), "not found in")
+	})
+
+	t.Run("unreachable and not found mixed", func(t *testing.T) {
+		cause := fmt.Errorf("boom")
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "local", err: ErrArtifactNotFound},
+			{catalog: "official", err: &UnreachableError{Catalog: "official", Cause: cause}},
+		})
+		assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.Contains(t, err.Error(), "official")
+		assert.Contains(t, err.Error(), "boom")
+		assert.Contains(t, err.Error(), "not found in")
+		assert.Contains(t, err.Error(), "local")
+	})
+
+	t.Run("no outcomes with errors", func(t *testing.T) {
+		err := aggregateChainError("subject", nil)
+		assert.Contains(t, err.Error(), `artifact "subject" not found in any catalog`)
+		assert.True(t, errors.Is(err, ErrArtifactNotFound))
+	})
 }
 
 func TestChainCatalog_FetchWithBundle_Fallback(t *testing.T) {

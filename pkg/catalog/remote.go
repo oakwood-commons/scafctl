@@ -8,9 +8,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -266,6 +269,66 @@ func isOCIServerError(err error) bool {
 	}
 	s := err.Error()
 	return strings.Contains(s, "status code 500") || strings.Contains(s, "INTERNAL_SERVER_ERROR")
+}
+
+// networkErrorSubstrings is a best-effort fallback for classifying transport
+// failures whose error values do not unwrap cleanly to a structured net.Error
+// (e.g. some ORAS/oras-go transport wrappers flatten errors to plain
+// strings). Structural checks in isNetworkError are preferred; this list only
+// catches what falls through them.
+var networkErrorSubstrings = []string{
+	"dial tcp",
+	"no such host",
+	"connection refused",
+	"i/o timeout",
+	"network is unreachable",
+	"tls handshake timeout",
+	"connection reset by peer",
+}
+
+// isNetworkError returns true if err represents a network/transport-level
+// failure (DNS resolution, dial, timeout, connection reset) reaching a
+// catalog, as opposed to the catalog being reached and reporting that an
+// artifact does not exist. This distinction lets callers surface "catalog
+// unreachable" instead of misleadingly reporting "not found".
+//
+// context.Canceled is intentionally NOT classified as a network error: it
+// indicates the caller gave up (e.g. a CLI-level timeout or explicit
+// cancellation), not that the catalog itself could not be reached.
+// context.DeadlineExceeded, by contrast, commonly originates from a dial or
+// request timeout against an unreachable catalog and is treated as such.
+func isNetworkError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	s := strings.ToLower(err.Error())
+	for _, substr := range networkErrorSubstrings {
+		if strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 // wrapWithCredentialHint enriches err with a credential diagnostic hint when
@@ -547,6 +610,9 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 	tag := c.tagForRef(ref)
 	manifestDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
+		if isNetworkError(err) {
+			return nil, ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
@@ -628,6 +694,9 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 	tag := c.tagForRef(ref)
 	manifestDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
+		if isNetworkError(err) {
+			return nil, nil, ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
@@ -735,7 +804,11 @@ func (c *RemoteCatalog) resolveAcrossKinds(ctx context.Context, ref Reference) (
 			c.logger.V(1).Info("remote catalog kind probe error",
 				"catalog", c.name, "kind", k, "error", err)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("remote catalog %q kind %q: %w", c.name, k, err)
+				if _, ok := IsCatalogUnreachable(err); ok {
+					firstErr = err
+				} else {
+					firstErr = fmt.Errorf("remote catalog %q kind %q: %w", c.name, k, err)
+				}
 			}
 		}
 	}
@@ -764,6 +837,9 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 			desc, err = repo.Resolve(ctx, tag)
 		}
 		if err != nil {
+			if isNetworkError(err) {
+				return ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
+			}
 			return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 		}
 
@@ -778,6 +854,8 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 	// No version specified - find the latest
 	versions, err := c.listVersions(ctx, ref)
 	if err != nil {
+		// listVersions already classifies network vs. list-tags failures;
+		// propagate as-is rather than re-wrapping as not-found.
 		return ArtifactInfo{}, err
 	}
 
@@ -834,11 +912,17 @@ func (c *RemoteCatalog) listVersions(ctx context.Context, ref Reference) ([]*sem
 		repo.Client = c.client
 		anonVersions, anonErr := c.fetchTags(ctx, repo)
 		if anonErr != nil {
-			return nil, fmt.Errorf("failed to list tags: %w", err)
+			if isNetworkError(anonErr) {
+				return nil, &UnreachableError{Catalog: c.name, Cause: anonErr}
+			}
+			return nil, fmt.Errorf("failed to list tags: %w", anonErr)
 		}
 		return anonVersions, nil
 	}
 	if err != nil {
+		if isNetworkError(err) {
+			return nil, &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return nil, fmt.Errorf("failed to list tags: %w", err)
 	}
 
@@ -1330,8 +1414,14 @@ func (c *RemoteCatalog) Exists(ctx context.Context, ref Reference) (bool, error)
 		repo.Client = c.client
 		_, err = repo.Resolve(ctx, tag)
 	}
-	//nolint:errcheck // Resolve error means artifact doesn't exist
-	return err == nil, nil
+	if err == nil {
+		return true, nil
+	}
+	if isNetworkError(err) {
+		return false, &UnreachableError{Catalog: c.name, Cause: err}
+	}
+	// Any other resolve error means the artifact doesn't exist.
+	return false, nil
 }
 
 // Delete removes an artifact from the catalog.
@@ -1349,6 +1439,9 @@ func (c *RemoteCatalog) Delete(ctx context.Context, ref Reference) error {
 	tag := c.tagForRef(ref)
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
+		if isNetworkError(err) {
+			return &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
@@ -1451,6 +1544,9 @@ func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) (s
 	tag := c.tagForRef(ref)
 	desc, err := repo.Resolve(ctx, tag)
 	if err != nil {
+		if isNetworkError(err) {
+			return "", &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return "", &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
@@ -1690,6 +1786,9 @@ func (c *RemoteCatalog) Attach(ctx context.Context, ref Reference, artifactType 
 	tag := c.tagForRef(ref)
 	subjectDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
+		if isNetworkError(err) {
+			return ocispec.Descriptor{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return ocispec.Descriptor{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 
@@ -1733,6 +1832,9 @@ func (c *RemoteCatalog) Referrers(ctx context.Context, ref Reference, artifactTy
 	tag := c.tagForRef(ref)
 	subjectDesc, err := repo.Resolve(ctx, tag)
 	if err != nil {
+		if isNetworkError(err) {
+			return nil, &UnreachableError{Catalog: c.name, Cause: err}
+		}
 		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
 	}
 

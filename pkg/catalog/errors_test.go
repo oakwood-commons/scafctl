@@ -195,6 +195,80 @@ func TestNewAuthDegradedError(t *testing.T) {
 	})
 }
 
+func TestUnreachableError(t *testing.T) {
+	cause := errors.New("dial tcp: lookup ghcr.io: no such host")
+
+	t.Run("error message includes catalog and cause", func(t *testing.T) {
+		err := &UnreachableError{Catalog: "official", Cause: cause}
+		assert.Contains(t, err.Error(), "official")
+		assert.Contains(t, err.Error(), cause.Error())
+	})
+
+	t.Run("unwrap returns cause", func(t *testing.T) {
+		err := &UnreachableError{Catalog: "official", Cause: cause}
+		assert.Same(t, cause, errors.Unwrap(err))
+	})
+
+	t.Run("errors.Is matches sentinel", func(t *testing.T) {
+		err := &UnreachableError{Catalog: "official", Cause: cause}
+		assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	})
+
+	t.Run("errors.Is does not match unrelated sentinel", func(t *testing.T) {
+		err := &UnreachableError{Catalog: "official", Cause: cause}
+		assert.False(t, errors.Is(err, ErrArtifactNotFound))
+	})
+
+	t.Run("errors.Is matches sentinel through wrapping", func(t *testing.T) {
+		err := &UnreachableError{Catalog: "official", Cause: cause}
+		wrapped := fmt.Errorf("chain resolve failed: %w", err)
+		assert.True(t, errors.Is(wrapped, ErrCatalogUnreachable))
+	})
+
+	t.Run("errors.As extracts typed value through wrapping", func(t *testing.T) {
+		err := &UnreachableError{Catalog: "official", Cause: cause}
+		wrapped := fmt.Errorf("chain resolve failed: %w", err)
+		var target *UnreachableError
+		assert.True(t, errors.As(wrapped, &target))
+		assert.Same(t, err, target)
+	})
+}
+
+func TestIsCatalogUnreachable(t *testing.T) {
+	t.Run("direct", func(t *testing.T) {
+		base := &UnreachableError{Catalog: "official", Cause: errors.New("boom")}
+		got, ok := IsCatalogUnreachable(base)
+		assert.True(t, ok)
+		assert.Same(t, base, got)
+	})
+
+	t.Run("wrapped", func(t *testing.T) {
+		base := &UnreachableError{Catalog: "official", Cause: errors.New("boom")}
+		wrapped := fmt.Errorf("resolving: %w", base)
+		got, ok := IsCatalogUnreachable(wrapped)
+		assert.True(t, ok)
+		assert.Same(t, base, got)
+	})
+
+	t.Run("unrelated error", func(t *testing.T) {
+		got, ok := IsCatalogUnreachable(errors.New("nope"))
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	})
+
+	t.Run("nil", func(t *testing.T) {
+		got, ok := IsCatalogUnreachable(nil)
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	})
+
+	t.Run("does not match ArtifactNotFoundError", func(t *testing.T) {
+		got, ok := IsCatalogUnreachable(&ArtifactNotFoundError{Reference: Reference{Name: "test"}})
+		assert.False(t, ok)
+		assert.Nil(t, got)
+	})
+}
+
 func TestIsAuthDegraded(t *testing.T) {
 	t.Run("direct", func(t *testing.T) {
 		base := &AuthDegradedError{Registry: "r"}

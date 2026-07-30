@@ -115,6 +115,52 @@ func IsInvalidReference(err error) bool {
 	return errors.Is(err, ErrInvalidReference)
 }
 
+// ErrCatalogUnreachable is returned when a catalog could not be contacted
+// (network, DNS, timeout, or other transport-level failure), as distinct
+// from the catalog being reachable and reporting that the artifact does not
+// exist. Distinguishing the two lets callers (e.g. ChainCatalog) tell "this
+// artifact genuinely does not exist anywhere" apart from "one catalog could
+// not be reached, so we cannot say either way."
+var ErrCatalogUnreachable = errors.New("catalog unreachable")
+
+// UnreachableError provides details about a catalog that could not be
+// contacted due to a network/transport-level failure.
+type UnreachableError struct {
+	// Catalog is the name of the catalog that could not be reached.
+	Catalog string
+	// Cause is the underlying transport error (DNS failure, connection
+	// refused, timeout, etc.).
+	Cause error
+}
+
+// Error implements the error interface.
+func (e *UnreachableError) Error() string {
+	return fmt.Sprintf("catalog %q unreachable: %v", e.Catalog, e.Cause)
+}
+
+// Unwrap returns the underlying transport error so callers can inspect the
+// root cause (e.g. errors.As for *net.DNSError).
+func (e *UnreachableError) Unwrap() error {
+	return e.Cause
+}
+
+// Is reports whether target is ErrCatalogUnreachable, allowing
+// errors.Is(err, ErrCatalogUnreachable) to match without needing to unwrap
+// to Cause (which may be an arbitrary transport error, not the sentinel).
+func (e *UnreachableError) Is(target error) bool {
+	return target == ErrCatalogUnreachable //nolint:errorlint // intentional sentinel identity check
+}
+
+// IsCatalogUnreachable reports whether err (or any error it wraps) is a
+// UnreachableError, returning the typed value when it is.
+func IsCatalogUnreachable(err error) (*UnreachableError, bool) {
+	var e *UnreachableError
+	if errors.As(err, &e) {
+		return e, true
+	}
+	return nil, false
+}
+
 // ErrEnumerationNotSupported is returned when a registry does not support
 // the _catalog endpoint for repository enumeration.
 var ErrEnumerationNotSupported = errors.New("registry does not support repository enumeration")
