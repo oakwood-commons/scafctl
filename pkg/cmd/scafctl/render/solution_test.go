@@ -499,7 +499,7 @@ func TestSolutionOptions_ModeValidation(t *testing.T) {
 		{
 			name:    "action-graph and snapshot are mutually exclusive",
 			args:    []string{"-f", solutionFile, "--action-graph", "--snapshot", "--snapshot-file=" + filepath.Join(t.TempDir(), "snap.json")},
-			wantErr: "--action-graph and --snapshot are mutually exclusive",
+			wantErr: "--action-graph, --snapshot, and --effective are mutually exclusive",
 		},
 		{
 			name:    "snapshot without snapshot-file is rejected",
@@ -515,6 +515,26 @@ func TestSolutionOptions_ModeValidation(t *testing.T) {
 			name:    "output-file flag incompatible with action-graph",
 			args:    []string{"-f", solutionFile, "--action-graph", "--output-file=out.json"},
 			wantErr: "--output-file is not applicable with --action-graph",
+		},
+		{
+			name:    "effective and snapshot are mutually exclusive",
+			args:    []string{"-f", solutionFile, "--effective", "--snapshot", "--snapshot-file=" + filepath.Join(t.TempDir(), "snap.json")},
+			wantErr: "--action-graph, --snapshot, and --effective are mutually exclusive",
+		},
+		{
+			name:    "section requires effective",
+			args:    []string{"-f", solutionFile, "--section", "workflow"},
+			wantErr: "--section is only applicable with --effective",
+		},
+		{
+			name:    "effective rejects output test",
+			args:    []string{"-f", solutionFile, "--effective", "-o", "test"},
+			wantErr: "--output test is not applicable with --effective",
+		},
+		{
+			name:    "effective rejects invalid section",
+			args:    []string{"-f", solutionFile, "--effective", "--section", "bogus"},
+			wantErr: "invalid --section",
 		},
 	}
 

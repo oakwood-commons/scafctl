@@ -119,6 +119,14 @@ func Scan(category string) ([]Example, error) {
 			return nil
 		}
 
+		// Skip rendered "effective" golden artifacts (produced by
+		// `render solution --effective`). They are kind: Solution documents but
+		// are committed fixtures for fidelity diffing, not runnable examples, and
+		// would collide by name with their source solution.
+		if strings.HasSuffix(relPath, ".effective.yaml") || strings.HasSuffix(relPath, ".effective.yml") {
+			return nil
+		}
+
 		content, err := fs.ReadFile(examplesFS, fpath)
 		if err != nil {
 			return nil //nolint:nilerr // skip unreadable file, keep scanning

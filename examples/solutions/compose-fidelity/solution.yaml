@@ -1,0 +1,27 @@
+# Effective-solution fidelity demo.
+#
+# This solution is split across compose partials. Use the effective renderer to
+# capture a deterministic golden artifact of the fully-merged document and diff
+# against it in CI to detect unintended composition changes:
+#
+#   scafctl render solution -f examples/solutions/compose-fidelity/solution.yaml \
+#     --effective -o yaml > golden.effective.yaml
+#
+# See README.md for the full workflow.
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: compose-fidelity
+  version: 1.0.0
+  displayName: Compose Fidelity Demo
+  category: solutions
+  tags:
+    - composition
+    - fidelity
+    - golden-file
+  description: Golden-file fidelity checking of a composed solution
+
+compose:
+  - resolvers.yaml
+  - workflow.yaml

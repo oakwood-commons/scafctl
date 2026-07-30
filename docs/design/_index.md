@@ -15,6 +15,7 @@ Architecture and design documentation for scafctl.
 - [Providers](providers.md) — Provider framework design
 - [Parameterized Provider Calls](parameterized-calls.md) — Reusable, argument-driven call definitions (`spec.calls`)
 - [Actions](actions.md) — Actions system design
+- [Effective Solution Rendering](effective-solution-render.md) — Deterministic post-compose document rendering for fidelity diffing
 - [Authentication](auth.md) — Authentication architecture
 - [CEL Integration](cel.md) — CEL expression language integration
 - [Go-Template Embedder Functions](gotmpl-embedder-funcs.md) -- Registering custom Go-template functions from an embedder

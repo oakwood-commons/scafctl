@@ -415,6 +415,105 @@ spec:
 	})
 }
 
+func TestHandleRenderEffectiveSolution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing path returns error", func(t *testing.T) {
+		t.Parallel()
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "render_effective_solution"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleRenderEffectiveSolution(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("nonexistent path returns error", func(t *testing.T) {
+		t.Parallel()
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "render_effective_solution"
+		request.Params.Arguments = map[string]any{
+			"path": "/nonexistent/solution.yaml",
+		}
+
+		result, err := srv.handleRenderEffectiveSolution(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "loading solution")
+	})
+
+	t.Run("renders effective document as yaml by default", func(t *testing.T) {
+		t.Parallel()
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "render_effective_solution"
+		request.Params.Arguments = map[string]any{
+			"path": "../../examples/actions/hello-world.yaml",
+		}
+
+		result, err := srv.handleRenderEffectiveSolution(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.False(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "apiVersion:")
+		assert.Contains(t, text, "kind: Solution")
+	})
+
+	t.Run("renders workflow section as json", func(t *testing.T) {
+		t.Parallel()
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "render_effective_solution"
+		request.Params.Arguments = map[string]any{
+			"path":    "../../examples/actions/hello-world.yaml",
+			"section": "workflow",
+			"format":  "json",
+		}
+
+		result, err := srv.handleRenderEffectiveSolution(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.False(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &parsed))
+		assert.Contains(t, parsed, "actions")
+	})
+
+	t.Run("invalid section returns error", func(t *testing.T) {
+		t.Parallel()
+		srv, err := NewServer(WithServerVersion("test"))
+		require.NoError(t, err)
+
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "render_effective_solution"
+		request.Params.Arguments = map[string]any{
+			"path":    "../../examples/actions/hello-world.yaml",
+			"section": "bogus",
+		}
+
+		result, err := srv.handleRenderEffectiveSolution(context.Background(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.True(t, result.IsError)
+		text := result.Content[0].(mcp.TextContent).Text
+		assert.Contains(t, text, "rendering effective solution")
+	})
+}
+
 func TestHandlePreviewResolvers(t *testing.T) {
 	t.Run("missing path returns error", func(t *testing.T) {
 		srv, err := NewServer(WithServerVersion("test"))

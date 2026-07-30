@@ -25,6 +25,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/effective"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
@@ -124,6 +125,33 @@ func (s *Server) registerSolutionTools() {
 		),
 	)
 	s.addTool(renderSolutionTool, s.handleRenderSolution)
+
+	// render_effective_solution
+	renderEffectiveSolutionTool := mcp.NewTool("render_effective_solution",
+		mcp.WithDescription("Render the effective (fully-composed) solution document as deterministic YAML or JSON WITHOUT executing resolvers or providers. This is the post-compose merge of the solution and its compose: partials, suitable for golden-file fidelity diffing, code review, and debugging composition (analogous to 'docker compose config' / 'kustomize build'). Use 'section' to scope the output to the whole document, spec.workflow, or spec.resolvers."),
+		mcp.WithTitleAnnotation("Render Effective Solution"),
+		mcp.WithToolIcons(toolIcons["solution"]),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("path",
+			mcp.Required(),
+			mcp.Description("Path to solution file, catalog name, or URL"),
+		),
+		mcp.WithString("section",
+			mcp.Description("Scope the output: all (default, whole document), workflow (spec.workflow), resolvers (spec.resolvers)"),
+			mcp.Enum(effective.ValidSections...),
+		),
+		mcp.WithString("format",
+			mcp.Description("Output format: yaml (default) or json"),
+			mcp.Enum(string(effective.FormatYAML), string(effective.FormatJSON)),
+		),
+		mcp.WithString("cwd",
+			mcp.Description(cwdDescDefault),
+		),
+	)
+	s.addTool(renderEffectiveSolutionTool, s.handleRenderEffectiveSolution)
 
 	// preview_resolvers
 	previewResolversTool := mcp.NewTool("preview_resolvers",
@@ -331,6 +359,51 @@ func (s *Server) handleInspectSolution(_ context.Context, request mcp.CallToolRe
 		mcp.NewResourceLink("solution://"+path+"/graph", "Dependency Graph", "Resolver dependency graph", "application/json"),
 	)
 	return result, nil
+}
+
+// handleRenderEffectiveSolution renders the effective (post-compose) solution
+// document as deterministic YAML or JSON without executing resolvers.
+func (s *Server) handleRenderEffectiveSolution(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := request.RequireString("path")
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("path"),
+			WithSuggestion("Provide a solution file path, catalog name, or URL"),
+		), nil
+	}
+	cwd := request.GetString("cwd", "")
+	section := request.GetString("section", string(effective.SectionAll))
+	format := request.GetString("format", string(effective.FormatYAML))
+
+	ctx, err := s.contextWithCwd(cwd)
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+			WithField("cwd"),
+			WithSuggestion("Provide a valid existing directory path"),
+		), nil
+	}
+
+	sol, err := inspect.LoadSolution(ctx, path)
+	if err != nil {
+		return newStructuredError(ErrCodeLoadFailed, fmt.Sprintf("loading solution: %v", err),
+			WithField("path"),
+			WithSuggestion("Check the file exists and contains valid YAML"),
+			WithRelatedTools("lint_solution"),
+		), nil
+	}
+
+	rendered, err := effective.Render(sol, effective.Options{
+		Section: effective.Section(section),
+		Format:  effective.Format(format),
+	})
+	if err != nil {
+		return newStructuredError(ErrCodeInvalidInput, fmt.Sprintf("rendering effective solution: %v", err),
+			WithField("section"),
+			WithSuggestion("Use section=all, workflow, or resolvers; the solution must define the requested section"),
+		), nil
+	}
+
+	return mcp.NewToolResultText(string(rendered)), nil
 }
 
 // handleLintSolution validates a solution file and returns structured findings.

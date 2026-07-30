@@ -3135,6 +3135,84 @@ func TestIntegration_RenderSolution_GraphFlagRemoved(t *testing.T) {
 	assert.Contains(t, stderr, "unknown flag")
 }
 
+// TestIntegration_RenderSolution_Effective verifies the effective-document
+// renderer emits the fully-composed solution deterministically without running
+// resolvers, and honors --section and mutual-exclusion guards.
+func TestIntegration_RenderSolution_Effective(t *testing.T) {
+	t.Parallel()
+
+	const solPath = "examples/solutions/compose-fidelity/solution.yaml"
+
+	t.Run("full document is deterministic", func(t *testing.T) {
+		t.Parallel()
+		out1, _, code1 := runScafctl(t, "render", "solution", "-f", solPath, "--effective", "-o", "yaml")
+		require.Equal(t, 0, code1)
+		out2, _, code2 := runScafctl(t, "render", "solution", "-f", solPath, "--effective", "-o", "yaml")
+		require.Equal(t, 0, code2)
+
+		assert.Equal(t, out1, out2, "effective output must be byte-stable")
+		// Composed from both partials.
+		assert.Contains(t, out1, "app_name")
+		assert.Contains(t, out1, "environment")
+		assert.Contains(t, out1, "deploy")
+		// compose: field is cleared on the merged, self-contained document.
+		assert.NotContains(t, out1, "compose:")
+	})
+
+	t.Run("section workflow scopes output", func(t *testing.T) {
+		t.Parallel()
+		stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", solPath,
+			"--effective", "--section", "workflow", "-o", "yaml")
+		require.Equal(t, 0, exitCode)
+		assert.Contains(t, stdout, "deploy")
+		// Only the workflow projection is emitted, not the resolvers map.
+		assert.NotContains(t, stdout, "resolvers:")
+	})
+
+	t.Run("section resolvers scopes output", func(t *testing.T) {
+		t.Parallel()
+		stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", solPath,
+			"--effective", "--section", "resolvers", "-o", "yaml")
+		require.Equal(t, 0, exitCode)
+		assert.Contains(t, stdout, "app_name")
+		// Only the resolvers projection is emitted, not the workflow actions.
+		assert.NotContains(t, stdout, "actions:")
+	})
+
+	t.Run("json output", func(t *testing.T) {
+		t.Parallel()
+		stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", solPath, "--effective", "-o", "json")
+		require.Equal(t, 0, exitCode)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
+		assert.Contains(t, parsed, "spec")
+	})
+
+	t.Run("defaults to yaml without -o", func(t *testing.T) {
+		t.Parallel()
+		stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", solPath, "--effective")
+		require.Equal(t, 0, exitCode)
+		// YAML, not JSON, even though the shared -o flag defaults to json.
+		assert.Contains(t, stdout, "apiVersion: scafctl.io/v1")
+		assert.NotContains(t, stdout, `"apiVersion"`)
+	})
+
+	t.Run("section without effective is rejected", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctl(t, "render", "solution", "-f", solPath, "--section", "workflow")
+		assert.NotEqual(t, 0, exitCode)
+		assert.Contains(t, stderr, "--section is only applicable with --effective")
+	})
+
+	t.Run("effective and snapshot are mutually exclusive", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctl(t, "render", "solution", "-f", solPath,
+			"--effective", "--snapshot", "--snapshot-file", "x.json")
+		assert.NotEqual(t, 0, exitCode)
+		assert.Contains(t, stderr, "mutually exclusive")
+	})
+}
+
 func TestIntegration_ActionGraphMermaid(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,

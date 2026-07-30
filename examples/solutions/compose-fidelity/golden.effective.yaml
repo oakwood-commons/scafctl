@@ -1,0 +1,44 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+    name: compose-fidelity
+    version: 1.0.0
+    displayName: Compose Fidelity Demo
+    description: Golden-file fidelity checking of a composed solution
+    category: solutions
+    tags:
+        - composition
+        - fidelity
+        - golden-file
+catalog:
+    visibility: private
+spec:
+    resolvers:
+        app_name:
+            name: ""
+            description: Application name
+            type: string
+            resolve:
+                with:
+                    - provider: static
+                      inputs:
+                        value: billing-api
+        environment:
+            name: ""
+            description: Target environment
+            type: string
+            resolve:
+                with:
+                    - provider: static
+                      inputs:
+                        value: staging
+    workflow:
+        actions:
+            deploy:
+                name: ""
+                provider: message
+                inputs:
+                    message:
+                        expr: '''Deploying '' + _.app_name + '' to '' + _.environment'
+                    type: success
+
