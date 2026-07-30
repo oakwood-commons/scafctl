@@ -116,3 +116,39 @@ func BenchmarkParameterProvider_Execute_TypedCoercion(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkParameterProvider_Execute_DeclaredType measures the auto path when
+// the enclosing resolver declares a scalar output type, which triggers the
+// declared-type context lookup and re-dispatch in resolveValue (and the
+// whole-number-float fallback in coerceInt for the int case).
+func BenchmarkParameterProvider_Execute_DeclaredType(b *testing.B) {
+	p := NewParameterProvider()
+
+	cases := []struct {
+		name     string
+		value    any
+		declared string
+	}{
+		{"declared_string", "2.0", "string"},
+		{"declared_int_whole_float", "2.0", "int"},
+		{"declared_int_fast", "8080", "int"},
+		{"declared_float", "3.14", "float"},
+		{"declared_none_auto", "8080", ""},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"val": tc.value,
+			})
+			ctx = provider.WithDeclaredScalarType(ctx, tc.declared)
+			inputs := map[string]any{"key": "val"}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = p.Execute(ctx, inputs)
+			}
+		})
+	}
+}

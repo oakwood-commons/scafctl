@@ -388,3 +388,47 @@ func TestWithExecutionSettings_Nil(t *testing.T) {
 	assert.True(t, ok)
 	assert.Nil(t, got)
 }
+
+func TestWithDeclaredScalarType_AndFromContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		set     string
+		wantVal string
+		wantOK  bool
+	}{
+		{"string", "string", "string", true},
+		{"int", "int", "int", true},
+		{"float", "float", "float", true},
+		{"bool", "bool", "bool", true},
+		{"empty clears", "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithDeclaredScalarType(context.Background(), tt.set)
+			got, ok := DeclaredScalarTypeFromContext(ctx)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantVal, got)
+		})
+	}
+}
+
+func TestDeclaredScalarTypeFromContext_NotSet(t *testing.T) {
+	got, ok := DeclaredScalarTypeFromContext(context.Background())
+	assert.False(t, ok)
+	assert.Equal(t, "", got)
+}
+
+func BenchmarkWithDeclaredScalarType(b *testing.B) {
+	ctx := context.Background()
+	for i := 0; i < b.N; i++ {
+		_ = WithDeclaredScalarType(ctx, "string")
+	}
+}
+
+func BenchmarkDeclaredScalarTypeFromContext(b *testing.B) {
+	ctx := WithDeclaredScalarType(context.Background(), "string")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = DeclaredScalarTypeFromContext(ctx)
+	}
+}

@@ -6846,6 +6846,27 @@ func TestIntegration_SolutionResolver_AuthProviderUnavailable(t *testing.T) {
 	assert.Contains(t, stderr, "nonexistent-handler-xyz", "error should reference the missing handler name")
 }
 
+// TestIntegration_SolutionResolver_DeclaredTypeGovernsParameterCoercion is the
+// regression test for issue-17: a type:string resolver reading a parameter
+// source must keep the raw CLI value "2.0" verbatim instead of inferring a
+// float and re-coercing it to "2".
+func TestIntegration_SolutionResolver_DeclaredTypeGovernsParameterCoercion(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t,
+		"run", "resolver",
+		"-f", "tests/integration/solutions/resolvers/declared-type-coercion/solution.yaml",
+		"-r", "version=2.0",
+		"-o", "json",
+	)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	require.Equal(t, 0, exitCode, "expected exit code 0, got %d", exitCode)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &decoded), "stdout must be valid JSON")
+	assert.Equal(t, "2.0", decoded["version"], "declared type:string must keep the raw CLI value verbatim")
+}
+
 // ============================================================================
 // Bundle Command Tests
 // ============================================================================

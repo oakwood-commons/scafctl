@@ -39,7 +39,11 @@ const (
 	// is used as-authored under auto (a quoted "false" stays the string "false",
 	// a bare false stays a bool) -- inference and source resolution apply only to
 	// CLI input. http://+https:// values are NOT fetched; use TypeFetch for that.
-	// Comma-separated values are NOT auto-split; use TypeCSV for that.
+	// Comma-separated values are NOT auto-split; use TypeCSV for that. When the
+	// enclosing resolver declares a scalar output type (string/int/float/bool),
+	// a CLI value is coerced directly to that type -- the declared type is
+	// authoritative -- instead of being inferred and then re-coerced (which is
+	// lossy, e.g. "2.0" -> float -> "2" for a string resolver).
 	TypeAuto = "auto"
 	// TypeString forces the value to a string, stripping surrounding quotes and
 	// coercing non-string values to their string representation.
@@ -48,7 +52,9 @@ const (
 	// quote-stripping (a numeric YAML default stays numeric, a CLI string stays
 	// verbatim). This is the "disable inference" escape hatch.
 	TypeRaw = "raw"
-	// TypeInt forces integer parsing; a non-integer value is an error.
+	// TypeInt forces integer parsing. Whole-number float syntax is accepted
+	// (e.g. "2.0" -> 2); a fractional (e.g. "2.5") or non-numeric value is an
+	// error.
 	TypeInt = "int"
 	// TypeFloat forces float parsing; a non-numeric value is an error.
 	TypeFloat = "float"
@@ -205,7 +211,7 @@ func NewParameterProvider(opts ...Option) *ParameterProvider {
 					schemahelper.WithExample(true)),
 				"default": schemahelper.AnyProp("Default value to return when the parameter is not provided via CLI. Only valid in single-key/alias mode; in map mode absent keys are omitted instead, so combining \"default\" with \"all\" or \"as: map\" is an error. Must be a literal value -- ValueRef expressions are resolved by the executor before Execute is called, so a ValueRef default would be evaluated even when the parameter exists. Under \"auto\" the default keeps its authored YAML type (a quoted \"false\" stays the string \"false\", a bare false stays a bool); inference and source resolution (file://) apply only to CLI values. Use an explicit \"type\" to coerce the default.",
 					schemahelper.WithExample("fallback")),
-				"type": schemahelper.StringProp("Controls how the parameter value is coerced. Only valid in single-key/alias mode; in map mode each value is returned with the provider's standard \"auto\" inference. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources for CLI values, falling back to the literal string; an authored default keeps its YAML type under \"auto\" (a quoted \"false\" stays a string) and is never inferred. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\", \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
+				"type": schemahelper.StringProp("Controls how the parameter value is coerced. Only valid in single-key/alias mode; in map mode each value is returned with the provider's standard \"auto\" inference. \"auto\" (default) infers booleans, numbers, JSON, and file:// sources for CLI values, falling back to the literal string; an authored default keeps its YAML type under \"auto\" (a quoted \"false\" stays a string) and is never inferred. Under \"auto\", when the enclosing resolver declares a scalar output type (string/int/float/bool), a CLI value is coerced directly to that declared type instead of being inferred (so \"2.0\" stays \"2.0\" for a string resolver); an explicit \"type\" here overrides that. \"string\" coerces to a string (stripping surrounding quotes). \"raw\" returns the value untouched. \"int\" parses an integer and also accepts whole-number float strings (\"2.0\" -> 2), erroring on fractional or non-numeric values. \"float\", \"bool\", \"json\", and \"csv\" force that specific coercion and error if the value does not match. Comma-separated values are split into a string list only when type is \"csv\". http:// and https:// values are NOT fetched under \"auto\"; use \"fetch\" to perform an SSRF-guarded HTTP GET, or the http provider for anything beyond a plain GET.",
 					schemahelper.WithEnum(paramTypeEnum...),
 					schemahelper.WithExample(TypeString)),
 			}),
@@ -445,6 +451,15 @@ func (p *ParameterProvider) resolveValue(ctx context.Context, value any, paramTy
 		}
 		return p.fetchURL(ctx, str)
 	case TypeAuto:
+		// When the enclosing resolver declares a scalar output type, coerce the
+		// raw CLI string directly to that type (Terraform-style: the declared
+		// type is authoritative) instead of inferring and then re-coercing,
+		// which is lossy (e.g. "2.0" -> float -> "2" for a string resolver).
+		if declared, ok := provider.DeclaredScalarTypeFromContext(ctx); ok {
+			if pt, mapped := resolverTypeToParamType(declared); mapped {
+				return p.resolveValue(ctx, value, pt)
+			}
+		}
 		return p.parseValue(ctx, value)
 	default:
 		return nil, fmt.Errorf("%s: unsupported type %q", ProviderName, paramType)
@@ -490,11 +505,22 @@ func coerceString(value any) string {
 func coerceInt(value any) (any, error) {
 	switch v := value.(type) {
 	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(unquote(v)), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("cannot parse %q as int", v)
+		s := strings.TrimSpace(unquote(v))
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return n, nil
 		}
-		return n, nil
+		// Accept whole-number float strings (e.g. "2.0" -> 2), mirroring the
+		// float64 branch below. Reject fractional, non-finite, or out-of-range
+		// values: int64(f) is implementation-defined when f is Inf/NaN or outside
+		// the int64 range, so guard explicitly before converting.
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			if math.IsInf(f, 0) || math.IsNaN(f) || f != math.Trunc(f) ||
+				f < float64(math.MinInt64) || f >= float64(math.MaxInt64) {
+				return nil, fmt.Errorf("cannot represent %v as int without loss", v)
+			}
+			return int64(f), nil
+		}
+		return nil, fmt.Errorf("cannot parse %q as int", v)
 	case int:
 		return int64(v), nil
 	case int8:
@@ -765,6 +791,26 @@ func (p *ParameterProvider) executeDryRun(key, paramType string) (*provider.Outp
 	}, nil
 }
 
+// resolverTypeToParamType maps a resolver's declared scalar output type
+// (canonical or aliased) to the parameter provider's coercion type. It returns
+// ("", false) for non-scalar or unknown types, in which case the caller keeps
+// automatic inference. This lets a declared resolver type govern how a raw CLI
+// string is coerced instead of the provider guessing and then re-coercing.
+func resolverTypeToParamType(declared string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(declared)) {
+	case "string":
+		return TypeString, true
+	case "int", "integer":
+		return TypeInt, true
+	case "float", "number":
+		return TypeFloat, true
+	case "bool", "boolean":
+		return TypeBool, true
+	default:
+		return "", false
+	}
+}
+
 // resolveParamType returns the requested parameter value type from the inputs,
 // defaulting to TypeAuto when "type" is absent. The provider schema constrains
 // "type" to the values in paramTypes, so this mirrors that validation for
@@ -907,6 +953,13 @@ func resolveMapMode(inputs map[string]any) (mapMode, allMode bool, err error) {
 // (and, in keys mode, the requested-but-absent list) is reported in metadata;
 // the resolver value is the bare map.
 func (p *ParameterProvider) executeMapGet(ctx context.Context, lgr *logr.Logger, rawKeys any, allMode bool) (*provider.Output, error) {
+	// Map mode returns each value with the provider's standard auto inference
+	// (an explicit "type" input is already rejected upstream). The enclosing
+	// resolver's declared scalar type describes the aggregate output, not each
+	// element, so clear it here to keep per-element inference from being
+	// governed by it.
+	ctx = provider.WithDeclaredScalarType(ctx, "")
+
 	params, ok := provider.ParametersFromContext(ctx)
 	if !ok {
 		params = make(map[string]any)

@@ -1303,14 +1303,24 @@ produces the wrong type -- for example a numeric ID with leading zeros that
 should stay a string, or a value that must be parsed a specific way -- set the
 `type` input to take explicit control.
 
+> [!NOTE]
+> When the **enclosing resolver declares a scalar `type`** (`string`, `int`,
+> `float`, `bool`), that declared type is authoritative under `auto`: the raw
+> CLI value is coerced **directly** to it instead of being inferred and then
+> re-coerced. So a `type: string` resolver keeps `-r version=2.0` as `"2.0"`
+> (not `"2"`) and `-r billingId=00042` as `"00042"` -- you don't need a separate
+> `type: string` on the parameter source. A `type: any` (or untyped) resolver
+> keeps normal inference, and an explicit `type` on the parameter source still
+> wins.
+
 The `type` input accepts these values:
 
 | Type     | Behavior                                                                 |
 | -------- | ------------------------------------------------------------------------ |
-| `auto`   | Default. Infers bool, number, JSON, and `file://` for CLI values; an authored default keeps its YAML type. |
+| `auto`   | Default. Infers bool, number, JSON, and `file://` for CLI values; an authored default keeps its YAML type. When the enclosing resolver declares a scalar type, the CLI value is coerced directly to it. |
 | `string` | Coerces the value to a string (strips surrounding quotes).               |
 | `raw`    | Returns the value exactly as received, with no coercion or quote strip.  |
-| `int`    | Parses the value as an integer; errors if it is not a whole number.      |
+| `int`    | Parses the value as an integer; whole-number float syntax like `2.0` is accepted, but a fractional value like `2.5` errors. |
 | `float`  | Parses the value as a floating-point number; errors on failure.          |
 | `bool`   | Parses `true`/`false` (case-insensitive); errors on any other value.     |
 | `json`   | Parses the value as JSON; errors on invalid JSON.                        |

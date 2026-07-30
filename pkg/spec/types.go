@@ -29,6 +29,22 @@ const (
 	TypeAny      Type = "any"
 )
 
+// IsScalar reports whether t is one of the scalar value types
+// (string, int, float, bool). Composite types (array, object), the temporal
+// types (time, duration), and TypeAny are not scalar. Callers use this to
+// gate scalar-only behavior such as the parameter provider's declared-type
+// coercion.
+func (t Type) IsScalar() bool {
+	switch t {
+	case TypeString, TypeInt, TypeFloat, TypeBool:
+		return true
+	case TypeArray, TypeObject, TypeTime, TypeDuration, TypeAny:
+		return false
+	default:
+		return false
+	}
+}
+
 // CoerceType attempts to coerce a value to the specified type.
 // Returns the coerced value or an error if coercion is not possible.
 func CoerceType(value any, targetType Type) (any, error) {
