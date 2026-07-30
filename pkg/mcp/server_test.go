@@ -140,6 +140,7 @@ func TestServerInfo(t *testing.T) {
 		// Phase 3 tools
 		assert.True(t, toolNames["evaluate_cel"])
 		assert.True(t, toolNames["render_solution"])
+		assert.True(t, toolNames["render_effective_solution"])
 		// Phase 4 tools
 		assert.True(t, toolNames["get_solution_schema"])
 		assert.True(t, toolNames["explain_kind"])

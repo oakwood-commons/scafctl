@@ -27,6 +27,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/effective"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	solrender "github.com/oakwood-commons/scafctl/pkg/solution/render"
@@ -74,6 +75,10 @@ type SolutionOptions struct {
 	Snapshot     bool   // --snapshot: Save execution snapshot
 	SnapshotFile string // --snapshot-file: Snapshot output file
 	Redact       bool   // --redact: Redact sensitive values in snapshot
+
+	// Effective mode flags
+	Effective bool   // --effective: Emit the effective (post-compose) solution document
+	Section   string // --section: Scope the effective output (all, workflow, resolvers)
 
 	// TestName is the desired test name when using -o test output format.
 	// When empty, a name is derived from the command and resolver parameters.
@@ -136,6 +141,12 @@ Examples:
   # Save snapshot with sensitive data redacted
   scafctl render solution -f ./solution.yaml --snapshot --snapshot-file=snapshot.json --redact
 
+  # Emit the effective (post-compose) solution document as YAML
+  scafctl render solution -f ./solution.yaml --effective -o yaml
+
+  # Emit only the effective workflow actions (for fidelity diffing)
+  scafctl render solution -f ./solution.yaml --effective --section workflow -o yaml > golden.yaml
+
   # Render solution from catalog by name
   scafctl render solution my-app
 
@@ -183,8 +194,18 @@ Examples:
 			if options.Snapshot {
 				modeCount++
 			}
+			if options.Effective {
+				modeCount++
+			}
 			if modeCount > 1 {
-				err := fmt.Errorf("--action-graph and --snapshot are mutually exclusive")
+				err := fmt.Errorf("--action-graph, --snapshot, and --effective are mutually exclusive")
+				writeSolutionError(options, err.Error())
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+
+			// --section is only meaningful in effective mode.
+			if options.flagsChanged["section"] && !options.Effective {
+				err := fmt.Errorf("--section is only applicable with --effective")
 				writeSolutionError(options, err.Error())
 				return exitcode.WithCode(err, exitcode.InvalidInput)
 			}
@@ -215,6 +236,21 @@ Examples:
 				}
 			}
 
+			// Effective mode only supports json/yaml (not the test generator),
+			// and requires a valid --section.
+			if options.Effective {
+				if options.Output == "test" {
+					err := fmt.Errorf("--output test is not applicable with --effective; use json or yaml")
+					writeSolutionError(options, err.Error())
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+				if err := output.ValidateOutputType(options.Section, effective.ValidSections); err != nil {
+					err = fmt.Errorf("invalid --section: %w", err)
+					writeSolutionError(options, err.Error())
+					return exitcode.WithCode(err, exitcode.InvalidInput)
+				}
+			}
+
 			return options.Run(ctx)
 		},
 		SilenceUsage: true,
@@ -240,6 +276,10 @@ Examples:
 	cCmd.Flags().BoolVar(&options.Snapshot, "snapshot", false, "Save execution snapshot instead of rendering")
 	cCmd.Flags().StringVar(&options.SnapshotFile, "snapshot-file", "", "Snapshot output file (required with --snapshot)")
 	cCmd.Flags().BoolVar(&options.Redact, "redact", false, "Redact sensitive values in snapshot")
+
+	// Effective mode flags
+	cCmd.Flags().BoolVar(&options.Effective, "effective", false, "Emit the effective (post-compose) solution document without executing resolvers")
+	cCmd.Flags().StringVar(&options.Section, "section", string(effective.SectionAll), fmt.Sprintf("Scope the effective output: %s (only with --effective)", strings.Join(effective.ValidSections, ", ")))
 
 	// Test generation flag
 	cCmd.Flags().StringVar(&options.TestName, "test-name", "", "Test name for -o test output (derived from command and args when not set)")
@@ -272,7 +312,47 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	if o.Snapshot {
 		return o.runSnapshot(ctx, *lgr)
 	}
+	if o.Effective {
+		return o.runEffective(ctx, *lgr)
+	}
 	return o.runActionGraph(ctx, *lgr)
+}
+
+// runEffective emits the effective (post-compose) solution document.
+//
+// Unlike the other render modes, this performs NO resolver execution and NO
+// provider calls. It loads the solution (compose is applied on load) and emits
+// the canonical, deterministic document for golden-file fidelity diffing and
+// composition debugging.
+func (o *SolutionOptions) runEffective(ctx context.Context, lgr logr.Logger) error {
+	lgr.V(1).Info("rendering effective solution",
+		"file", o.File,
+		"output", o.Output,
+		"section", o.Section)
+
+	sol, err := o.loadSolution(ctx)
+	if err != nil {
+		return o.exitWithCode(err, exitcode.FileNotFound)
+	}
+
+	// Effective mode defaults to YAML (the golden-file format), independent of
+	// the shared -o default of "json". Only switch to JSON when the user
+	// explicitly requested it via -o json.
+	format := effective.FormatYAML
+	if o.flagsChanged["output"] && o.Output == string(effective.FormatJSON) {
+		format = effective.FormatJSON
+	}
+
+	rendered, err := effective.Render(sol, effective.Options{
+		Section: effective.Section(o.Section),
+		Format:  format,
+		Compact: o.Compact,
+	})
+	if err != nil {
+		return o.exitWithCode(err, exitcode.RenderFailed)
+	}
+
+	return o.writeEffectiveOutput(ctx, rendered)
 }
 
 // runActionGraph renders the action graph (default mode)
@@ -690,6 +770,24 @@ func (o *SolutionOptions) writeOutput(ctx context.Context, data []byte) error {
 
 	if w := writer.FromContext(ctx); w != nil {
 		w.Plainln(string(data))
+	}
+	return nil
+}
+
+// writeEffectiveOutput writes the effective solution document verbatim.
+//
+// Unlike writeOutput, it does NOT append a trailing newline and writes to
+// --output-file at the exact path given (no extension munging). This keeps
+// stdout byte-identical to both the bytes returned by effective.Render and the
+// bytes written via --output-file, which is essential for byte-exact
+// golden-file fidelity diffing.
+func (o *SolutionOptions) writeEffectiveOutput(ctx context.Context, data []byte) error {
+	if o.OutputFile != "" {
+		return os.WriteFile(o.OutputFile, data, 0o600)
+	}
+
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plain(string(data))
 	}
 	return nil
 }

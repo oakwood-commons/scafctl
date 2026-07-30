@@ -165,6 +165,7 @@ Complete solutions demonstrating real-world use cases.
 |---------|-------------|
 | [comprehensive/](solutions/comprehensive/) | Full-featured solution with all capabilities |
 | [composition/](solutions/composition/) | Parent solution composes a child via the `solution` provider, including the child-opt-in value override contract |
+| [compose-fidelity/](solutions/compose-fidelity/) | Golden-file fidelity checking of a `compose:`-split solution via `render solution --effective` |
 | [terraform/](solutions/terraform/) | Terraform project scaffolding |
 | [taskfile/](solutions/taskfile/) | Taskfile.yaml generation |
 | [email-notifier/](solutions/email-notifier/) | Email notification workflow |

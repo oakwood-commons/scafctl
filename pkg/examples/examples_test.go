@@ -327,6 +327,20 @@ func TestExampleNamesAreUnique(t *testing.T) {
 	}
 }
 
+func TestScanSkipsEffectiveGoldenArtifacts(t *testing.T) {
+	t.Parallel()
+	// Rendered `.effective.yaml` golden artifacts are kind: Solution documents
+	// but must not be listed as runnable examples (they collide by name with
+	// their source solution).
+	items, err := Scan("")
+	require.NoError(t, err)
+	for _, it := range items {
+		assert.False(t,
+			strings.HasSuffix(it.Path, ".effective.yaml") || strings.HasSuffix(it.Path, ".effective.yml"),
+			"effective golden artifact must not be listed as an example: %s", it.Path)
+	}
+}
+
 func TestResolveExample_NotFound(t *testing.T) {
 	t.Parallel()
 	_, err := ResolveExample("this-does-not-exist-anywhere")
