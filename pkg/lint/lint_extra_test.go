@@ -1963,6 +1963,77 @@ env: {{ .environment }}
 	}
 }
 
+func TestLintTemplateFileDependencies_FanOutAliasExcluded(t *testing.T) {
+	tmpDir := t.TempDir()
+	tplDir := filepath.Join(tmpDir, "templates")
+	require.NoError(t, os.MkdirAll(tplDir, 0o755))
+
+	// The template references only the forEach `item` alias (`env`), which is
+	// injected per fan-out item -- it is NOT a resolver, so it must not be
+	// flagged as a missing dependency.
+	tplContent := `name: {{ .env.name }}
+region: {{ .env.region }}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(tplDir, "app.tpl"), []byte(tplContent), 0o644))
+
+	sourceResolver := "templateSource"
+	sol := &solution.Solution{}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"environments": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{Provider: "static", Inputs: map[string]*spec.ValueRef{
+						"value": {Literal: []any{map[string]any{"name": "dev"}}},
+					}},
+				},
+			},
+		},
+		"templateSource": {
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "directory",
+						Inputs: map[string]*spec.ValueRef{
+							"path":           {Literal: "templates"},
+							"operation":      {Literal: "list"},
+							"includeContent": {Literal: true},
+						},
+					},
+				},
+			},
+		},
+		"rendered": {
+			DependsOn: []string{"templateSource", "environments"},
+			Resolve: &resolver.ResolvePhase{
+				With: []resolver.ProviderSource{
+					{
+						Provider: "go-template",
+						Inputs: map[string]*spec.ValueRef{
+							"operation": {Literal: "render-tree"},
+							"entries":   {Resolver: &sourceResolver},
+							"forEach": {Literal: map[string]any{
+								"item": "env",
+								"in":   map[string]any{"rslvr": "environments"},
+							}},
+							"pathTemplate": {Literal: "envs/{{ .env.name }}/{{ .__fileName }}"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := &Result{}
+	lintTemplateFileDependencies(sol, tmpDir, result, nil)
+
+	for _, f := range result.Findings {
+		if f.RuleName == "missing-template-dependency" {
+			assert.NotContains(t, f.Message, "env",
+				"forEach item alias must not be flagged as a missing dependency")
+		}
+	}
+}
+
 func TestFilterOutRawTemplateFiles(t *testing.T) {
 	root := "/tmp/templates"
 	files := []string{

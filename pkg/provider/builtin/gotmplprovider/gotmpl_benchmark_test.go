@@ -173,4 +173,35 @@ func BenchmarkGoTemplateProvider_RenderTree(b *testing.B) {
 			_, _ = p.Execute(ctx, inputs)
 		}
 	})
+
+	b.Run("foreach_fanout", func(b *testing.B) {
+		inputs := map[string]any{
+			"operation": "render-tree",
+			"name":      "foreach-tree",
+			"entries": []any{
+				map[string]any{
+					"path":    "backend.tf",
+					"content": "app = {{ .platformAppName }}\nenv = {{ .env }}",
+				},
+				map[string]any{
+					"path":    "sub/main.tf",
+					"content": "resource {{ .platformAppName }}-{{ .env }} {}",
+				},
+			},
+			"data": map[string]any{
+				"platformAppName": "my-app",
+			},
+			"forEach": map[string]any{
+				"item": "env",
+				"in":   []any{"dev", "staging", "prod"},
+			},
+			"pathTemplate": "envs/{{ .env }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileName }}",
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for b.Loop() {
+			_, _ = p.Execute(ctx, inputs)
+		}
+	})
 }

@@ -7,7 +7,9 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"path"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"text/template"
 
@@ -162,6 +164,25 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 							"raw": schemahelper.BoolProp("Optional per-entry verbatim flag. When true, the entry's content is copied byte-for-byte with no template parsing (per-entry 'data' is ignored). When false, the entry is rendered even if it matches a rawGlobs pattern. When omitted, rawGlobs decides. Per-entry 'raw' always wins over rawGlobs."),
 						},
 					))),
+				"forEach": schemahelper.ObjectProp(
+					"Optional per-item fan-out (render-tree only). When set, every entry is rendered once per element of 'in', producing a single flat output array (item x entries). Each iteration injects the current element (as the 'item' alias and __item) and its 0-based index (as the 'index' alias and __index) into the per-entry template data, and 'pathTemplate' (required with forEach) computes each entry's output path so items never collide. Mirrors the forEach clause on resolve/action steps and Terraform's module for_each. Omit for the default one-pass behavior.",
+					[]string{"in"},
+					map[string]*jsonschema.Schema{
+						"item": schemahelper.StringProp("Variable name alias for the current element, available in entry content, per-entry data, and pathTemplate (also exposed as __item).",
+							schemahelper.WithExample("env"),
+							schemahelper.WithPattern("^[a-zA-Z_][a-zA-Z0-9_]*$"),
+							schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
+						"index": schemahelper.StringProp("Optional variable name alias for the current 0-based index (also exposed as __index).",
+							schemahelper.WithExample("i"),
+							schemahelper.WithPattern("^[a-zA-Z_][a-zA-Z0-9_]*$"),
+							schemahelper.WithMaxLength(*ptrs.IntPtr(50))),
+						"in": schemahelper.AnyProp("The collection to fan out over. A ValueRef ({rslvr: name}, {expr: CEL}, {literal: [...]}, {tmpl: ...}) or a literal array; it must resolve to an array. One rendered copy of every entry is produced per element."),
+					},
+				),
+				"pathTemplate": schemahelper.StringProp(
+					"Go template that computes each entry's output path during fan-out (required when 'forEach' is set; ignored otherwise). Rendered per (item, entry) with the forEach aliases, __item/__index, resolver context, shared data, and the per-entry path parts __filePath, __fileName, __fileStem, __fileExtension, __fileDir (same variables as the file provider's write-tree outputPath). Must produce a distinct, non-empty path for every item so outputs never collide.",
+					schemahelper.WithExample("envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}"),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(1024))),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
@@ -344,6 +365,22 @@ inputs:
         "data":    {"environment": env}
       })`,
 				},
+				{
+					Name:        "Tree fan-out (forEach + pathTemplate)",
+					Description: "Render a whole template tree once per item in a collection (Terraform module for_each style). forEach.in is resolved by the spec layer to an array; pathTemplate routes each item's copy to a distinct path using the item alias, __index, and the reserved __file* path parts. Rendered paths must be unique across the fan-out.",
+					YAML: `name: per-env-tree
+provider: go-template
+inputs:
+  operation: render-tree
+  entries:
+    expr: '_.templateFiles.entries'
+  forEach:
+    item: env
+    in:
+      rslvr: environments
+  pathTemplate: >-
+    envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}`,
+				},
 			},
 		},
 	}
@@ -387,7 +424,7 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 
 	// Check for dry-run mode
 	if provider.DryRunFromContext(ctx) {
-		return p.executeDryRun(inputs)
+		return p.executeDryRun(ctx, inputs)
 	}
 
 	// Extract template (required for render)
@@ -459,7 +496,7 @@ func (p *GoTemplateProvider) executeRender(ctx context.Context, inputs map[strin
 	}, nil
 }
 
-func (p *GoTemplateProvider) executeDryRun(inputs map[string]any) (*provider.Output, error) {
+func (p *GoTemplateProvider) executeDryRun(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
 	// Check if this is a render-tree dry-run
 	operation := OperationRender
 	if op, ok := inputs["operation"].(string); ok && op != "" {
@@ -467,7 +504,7 @@ func (p *GoTemplateProvider) executeDryRun(inputs map[string]any) (*provider.Out
 	}
 
 	if operation == OperationRenderTree {
-		return p.executeDryRunRenderTree(inputs)
+		return p.executeDryRunRenderTree(ctx, inputs)
 	}
 
 	templateStr, _ := inputs["template"].(string)
@@ -500,7 +537,7 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 
 	// Check for dry-run mode
 	if provider.DryRunFromContext(ctx) {
-		return p.executeDryRunRenderTree(inputs)
+		return p.executeDryRunRenderTree(ctx, inputs)
 	}
 
 	// Extract name (optional for render-tree, defaults to "render-tree")
@@ -547,6 +584,36 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 	// for the whole tree.
 	authorFuncs, authorFuncsFP := authorTemplateFuncs(ctx)
 
+	// Parse optional per-item fan-out. When present, every entry is rendered
+	// once per item into a single flat output array.
+	fanOut, err := p.parseRenderTreeFanOut(ctx, inputs)
+	if err != nil {
+		return nil, err
+	}
+
+	opts := &renderTreeOpts{
+		templateName:     templateName,
+		baseData:         baseData,
+		rawGlobs:         rawGlobs,
+		ignoredBlocksCfg: ignoredBlocksCfg,
+		missingKey:       missingKey,
+		leftDelim:        leftDelim,
+		rightDelim:       rightDelim,
+		authorFuncs:      authorFuncs,
+		authorFuncsFP:    authorFuncsFP,
+	}
+
+	if fanOut != nil {
+		lgr.V(1).Info("executing render-tree fan-out",
+			"name", templateName,
+			"entryCount", len(entries),
+			"itemCount", len(fanOut.items),
+			"dataKeys", len(baseData),
+			"rawGlobs", len(rawGlobs),
+		)
+		return p.renderTreeFanOut(ctx, entries, opts, fanOut)
+	}
+
 	lgr.V(1).Info("executing render-tree",
 		"name", templateName,
 		"entryCount", len(entries),
@@ -556,13 +623,7 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 
 	// Handle empty entries
 	if len(entries) == 0 {
-		return &provider.Output{
-			Data: []map[string]any{},
-			Metadata: map[string]any{
-				"templateName": templateName,
-				"entryCount":   0,
-			},
-		}, nil
+		return emptyRenderTreeOutput(templateName), nil
 	}
 
 	// Render each entry
@@ -575,77 +636,16 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 			return nil, fmt.Errorf("%s: entries[%d] must be a map, got %T", ProviderName, i, entryRaw)
 		}
 
-		entryPath, ok := entry["path"].(string)
-		if !ok || entryPath == "" {
-			return nil, fmt.Errorf("%s: entries[%d].path is required and must be a string", ProviderName, i)
+		out, warn, rerr := p.renderTreeEntry(ctx, opts, entry, i, nil, "")
+		if rerr != nil {
+			return nil, rerr
 		}
-
-		entryContent, ok := entry["content"].(string)
-		if !ok {
-			// Skip entries without content (e.g., binary files, directories)
-			warnings = append(warnings, fmt.Sprintf("skipped %s: no string content", entryPath))
-			continue
+		if warn != "" {
+			warnings = append(warnings, warn)
 		}
-
-		// Decide whether this entry is emitted verbatim. Per-entry "raw" wins
-		// over rawGlobs; a non-bool "raw" is an input error.
-		raw, badType := isRawEntry(entryPath, entry, rawGlobs)
-		if badType {
-			return nil, fmt.Errorf("%s: entries[%d].raw must be a bool when present, got %T (path %q)", ProviderName, i, entry["raw"], entryPath)
+		if out != nil {
+			results = append(results, out)
 		}
-		if raw {
-			// Copy content byte-for-byte: no parse, no data merge, no ignored
-			// blocks. Per-entry data is meaningless without rendering, so warn
-			// if it was supplied to surface a likely authoring mistake.
-			if entryData, present := entry["data"]; present && entryData != nil {
-				warnings = append(warnings, fmt.Sprintf("%s: per-entry data ignored for raw (verbatim) entry", entryPath))
-			}
-			results = append(results, map[string]any{
-				"path":    entryPath,
-				"content": entryContent,
-			})
-			continue
-		}
-
-		// Build per-entry template data: base data + per-entry data overrides.
-		templateData := make(map[string]any, len(baseData))
-		maps.Copy(templateData, baseData)
-
-		// Merge optional per-entry data (shallow: top-level keys win over shared
-		// data, iteration variables, and resolver context). baseData is left
-		// untouched so entries never leak values into one another.
-		if entryDataRaw, present := entry["data"]; present && entryDataRaw != nil {
-			entryData, ok := entryDataRaw.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("%s: entries[%d].data must be a map when present, got %T (path %q)", ProviderName, i, entryDataRaw, entryPath)
-			}
-			maps.Copy(templateData, entryData)
-		}
-
-		// Build ignored block replacements for this entry's content
-		replacements := buildIgnoredBlockReplacements(entryContent, ignoredBlocksCfg)
-
-		// Render the entry content as a Go template
-		entryTemplateName := fmt.Sprintf("%s/%s", templateName, entryPath)
-		result, renderErr := p.service.Execute(ctx, gotmpl.TemplateOptions{
-			Content:          entryContent,
-			Name:             entryTemplateName,
-			Data:             templateData,
-			MissingKey:       missingKey,
-			LeftDelim:        leftDelim,
-			RightDelim:       rightDelim,
-			Replacements:     replacements,
-			Funcs:            authorFuncs,
-			FuncsFingerprint: authorFuncsFP,
-		})
-		if renderErr != nil {
-			return nil, fmt.Errorf("%s: failed to render %s: %w", ProviderName, entryPath, renderErr)
-		}
-
-		results = append(results, map[string]any{
-			"path":    entryPath,
-			"content": result.Output,
-		})
 	}
 
 	lgr.V(1).Info("render-tree completed",
@@ -654,6 +654,339 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 		"warningCount", len(warnings),
 	)
 
+	return renderTreeOutput(templateName, results, warnings), nil
+}
+
+// renderTreeOpts holds the shared rendering configuration for a render-tree
+// invocation, so the per-entry renderer can be reused by both the default
+// one-pass path and the per-item fan-out path.
+type renderTreeOpts struct {
+	templateName     string
+	baseData         map[string]any
+	rawGlobs         []string
+	ignoredBlocksCfg []ignoredBlockConfig
+	missingKey       gotmpl.MissingKeyOption
+	leftDelim        string
+	rightDelim       string
+	authorFuncs      template.FuncMap
+	authorFuncsFP    string
+}
+
+// renderTreeFanOutConfig is the resolved per-item fan-out configuration.
+type renderTreeFanOutConfig struct {
+	itemAlias    string
+	indexAlias   string
+	pathTemplate string
+	items        []any
+}
+
+// renderTreeFanOut renders every entry once per fan-out item, producing a single
+// flat output array (item x entries). Each item's rendered entries are routed to
+// distinct paths via pathTemplate; a collision is a hard error so a mis-written
+// pathTemplate can never silently collapse the output to a single item.
+func (p *GoTemplateProvider) renderTreeFanOut(ctx context.Context, entries []any, opts *renderTreeOpts, fanOut *renderTreeFanOutConfig) (*provider.Output, error) {
+	lgr := logger.FromContext(ctx)
+
+	// An empty collection (or no entries) yields an empty flat result, matching
+	// the empty-array behavior of forEach on resolve steps.
+	if len(fanOut.items) == 0 || len(entries) == 0 {
+		return emptyRenderTreeOutput(opts.templateName), nil
+	}
+
+	var warnings []string
+	// seenWarn dedupes identical per-entry warnings (e.g. a skipped entry or a
+	// raw entry carrying data) so one problematic entry does not emit the same
+	// message once per fan-out item.
+	seenWarn := make(map[string]struct{})
+	results := make([]map[string]any, 0, len(fanOut.items)*len(entries))
+	// seen maps an output path to a human-readable origin for collision errors.
+	seen := make(map[string]string, len(fanOut.items)*len(entries))
+
+	for idx, item := range fanOut.items {
+		itemData := make(map[string]any, 4)
+		if fanOut.itemAlias != "" {
+			itemData[fanOut.itemAlias] = item
+		}
+		if fanOut.indexAlias != "" {
+			itemData[fanOut.indexAlias] = idx
+		}
+		itemData["__item"] = item
+		itemData["__index"] = idx
+
+		for j, entryRaw := range entries {
+			entry, ok := entryRaw.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("%s: entries[%d] must be a map, got %T", ProviderName, j, entryRaw)
+			}
+
+			out, warn, err := p.renderTreeEntry(ctx, opts, entry, j, itemData, fanOut.pathTemplate)
+			if err != nil {
+				return nil, fmt.Errorf("%s: forEach item %d: %w", ProviderName, idx, err)
+			}
+			if warn != "" {
+				if _, dup := seenWarn[warn]; !dup {
+					seenWarn[warn] = struct{}{}
+					warnings = append(warnings, warn)
+				}
+			}
+			if out == nil {
+				continue
+			}
+
+			outPath, _ := out["path"].(string)
+			origin := fmt.Sprintf("item %d / entries[%d]", idx, j)
+			if prev, dup := seen[outPath]; dup {
+				return nil, fmt.Errorf("%s: forEach produced duplicate output path %q (from %s and %s); make pathTemplate yield a distinct path per item", ProviderName, outPath, prev, origin)
+			}
+			seen[outPath] = origin
+			results = append(results, out)
+		}
+	}
+
+	lgr.V(1).Info("render-tree fan-out completed",
+		"name", opts.templateName,
+		"renderedCount", len(results),
+		"warningCount", len(warnings),
+	)
+
+	return renderTreeOutput(opts.templateName, results, warnings), nil
+}
+
+// renderTreeEntry renders one render-tree entry. itemData carries the fan-out
+// iteration variables (nil for the default one-pass path). When pathTemplate is
+// non-empty (fan-out), the entry's output path is computed from it using the
+// entry's __file* path parts plus the merged template data; otherwise the
+// entry's own path is preserved. It returns the rendered {path, content} map, or
+// a nil map plus a warning when the entry is skipped (no string content).
+func (p *GoTemplateProvider) renderTreeEntry(ctx context.Context, opts *renderTreeOpts, entry map[string]any, idx int, itemData map[string]any, pathTemplate string) (map[string]any, string, error) {
+	entryPath, ok := entry["path"].(string)
+	if !ok || entryPath == "" {
+		return nil, "", fmt.Errorf("%s: entries[%d].path is required and must be a string", ProviderName, idx)
+	}
+
+	entryContent, ok := entry["content"].(string)
+	if !ok {
+		// Skip entries without content (e.g., binary files, directories).
+		return nil, fmt.Sprintf("skipped %s: no string content", entryPath), nil
+	}
+
+	entryData, hasEntryData, err := entryDataMap(entry, idx, entryPath)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Decide whether this entry is emitted verbatim. Per-entry "raw" wins over
+	// rawGlobs; a non-bool "raw" is an input error.
+	raw, badType := isRawEntry(entryPath, entry, opts.rawGlobs)
+	if badType {
+		return nil, "", fmt.Errorf("%s: entries[%d].raw must be a bool when present, got %T (path %q)", ProviderName, idx, entry["raw"], entryPath)
+	}
+
+	// Compute the output path. Fan-out always routes through pathTemplate so each
+	// item lands in a distinct location; the default pass preserves the path.
+	outPath := entryPath
+	if pathTemplate != "" {
+		pathData := make(map[string]any, len(opts.baseData)+len(itemData)+8)
+		maps.Copy(pathData, opts.baseData)
+		maps.Copy(pathData, itemData)
+		if hasEntryData {
+			maps.Copy(pathData, entryData)
+		}
+		// Reserved __file* parts win over any colliding user keys.
+		maps.Copy(pathData, fileTemplateVars(entryPath))
+
+		rendered, perr := p.renderPathTemplate(ctx, opts, pathTemplate, pathData)
+		if perr != nil {
+			return nil, "", fmt.Errorf("%s: pathTemplate failed for entries[%d] (%s): %w", ProviderName, idx, entryPath, perr)
+		}
+		if rendered == "" {
+			return nil, "", fmt.Errorf("%s: pathTemplate resolved to an empty path for entries[%d] (%s)", ProviderName, idx, entryPath)
+		}
+		outPath = rendered
+	}
+
+	if raw {
+		// Copy content byte-for-byte: no parse, no data merge, no ignored
+		// blocks. Per-entry data is meaningless without rendering, so warn if it
+		// was supplied to surface a likely authoring mistake.
+		warn := ""
+		if hasEntryData {
+			warn = fmt.Sprintf("%s: per-entry data ignored for raw (verbatim) entry", entryPath)
+		}
+		return map[string]any{"path": outPath, "content": entryContent}, warn, nil
+	}
+
+	// Build per-entry template data: base data + fan-out vars + per-entry data
+	// overrides (shallow; per-entry keys win). baseData is left untouched so
+	// entries never leak values into one another.
+	templateData := make(map[string]any, len(opts.baseData)+len(itemData)+4)
+	maps.Copy(templateData, opts.baseData)
+	maps.Copy(templateData, itemData)
+	if hasEntryData {
+		maps.Copy(templateData, entryData)
+	}
+
+	// Build ignored block replacements for this entry's content.
+	replacements := buildIgnoredBlockReplacements(entryContent, opts.ignoredBlocksCfg)
+
+	// Render the entry content as a Go template.
+	entryTemplateName := fmt.Sprintf("%s/%s", opts.templateName, entryPath)
+	result, renderErr := p.service.Execute(ctx, gotmpl.TemplateOptions{
+		Content:          entryContent,
+		Name:             entryTemplateName,
+		Data:             templateData,
+		MissingKey:       opts.missingKey,
+		LeftDelim:        opts.leftDelim,
+		RightDelim:       opts.rightDelim,
+		Replacements:     replacements,
+		Funcs:            opts.authorFuncs,
+		FuncsFingerprint: opts.authorFuncsFP,
+	})
+	if renderErr != nil {
+		return nil, "", fmt.Errorf("%s: failed to render %s: %w", ProviderName, entryPath, renderErr)
+	}
+
+	return map[string]any{"path": outPath, "content": result.Output}, "", nil
+}
+
+// renderPathTemplate renders a fan-out pathTemplate to a cleaned relative path.
+func (p *GoTemplateProvider) renderPathTemplate(ctx context.Context, opts *renderTreeOpts, pathTemplate string, data map[string]any) (string, error) {
+	result, err := p.service.Execute(ctx, gotmpl.TemplateOptions{
+		Content:          pathTemplate,
+		Name:             opts.templateName + "/pathTemplate",
+		Data:             data,
+		MissingKey:       opts.missingKey,
+		LeftDelim:        opts.leftDelim,
+		RightDelim:       opts.rightDelim,
+		Funcs:            opts.authorFuncs,
+		FuncsFingerprint: opts.authorFuncsFP,
+	})
+	if err != nil {
+		return "", err
+	}
+	out := strings.TrimSpace(result.Output)
+	if out == "" {
+		return "", nil
+	}
+	// Canonicalize so textually-distinct-but-equivalent paths ("envs//dev/x",
+	// "./envs/dev/x") collapse to one key -- otherwise the duplicate-path guard
+	// would treat them as distinct yet write-tree would overwrite one with the
+	// other, defeating the hard-error guarantee.
+	out = path.Clean(filepath.ToSlash(out))
+	out = strings.TrimPrefix(out, "/")
+	return out, nil
+}
+
+// parseRenderTreeFanOut extracts the optional render-tree fan-out configuration.
+// It returns (nil, nil) when no forEach is declared. forEach.in is expected to
+// already be a concrete array: like every other provider input, nested value
+// references (rslvr/expr/tmpl) are resolved by the spec layer before the
+// provider runs, so the provider never re-resolves them. pathTemplate is
+// required whenever forEach is set so every item routes to a distinct path.
+func (p *GoTemplateProvider) parseRenderTreeFanOut(_ context.Context, inputs map[string]any) (*renderTreeFanOutConfig, error) {
+	raw, present := inputs["forEach"]
+	if !present || raw == nil {
+		return nil, nil
+	}
+
+	fe, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: forEach must be a map, got %T", ProviderName, raw)
+	}
+
+	itemAlias, _ := fe["item"].(string)
+	indexAlias, _ := fe["index"].(string)
+
+	pathTemplate, _ := inputs["pathTemplate"].(string)
+	if strings.TrimSpace(pathTemplate) == "" {
+		return nil, fmt.Errorf("%s: pathTemplate is required when forEach is set on render-tree", ProviderName)
+	}
+
+	inRaw, ok := fe["in"]
+	if !ok || inRaw == nil {
+		return nil, fmt.Errorf("%s: forEach.in is required for render-tree fan-out", ProviderName)
+	}
+
+	items, ok := toAnySlice(inRaw)
+	if !ok {
+		return nil, fmt.Errorf("%s: forEach.in must resolve to an array, got %T", ProviderName, inRaw)
+	}
+
+	return &renderTreeFanOutConfig{
+		itemAlias:    itemAlias,
+		indexAlias:   indexAlias,
+		pathTemplate: pathTemplate,
+		items:        items,
+	}, nil
+}
+
+// entryDataMap extracts and validates the optional per-entry "data" map.
+func entryDataMap(entry map[string]any, idx int, entryPath string) (map[string]any, bool, error) {
+	raw, present := entry["data"]
+	if !present || raw == nil {
+		return nil, false, nil
+	}
+	data, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false, fmt.Errorf("%s: entries[%d].data must be a map when present, got %T (path %q)", ProviderName, idx, raw, entryPath)
+	}
+	return data, true, nil
+}
+
+// fileTemplateVars computes the reserved __file* path-part variables for a
+// relative entry path, matching the file provider's write-tree outputPath so a
+// pathTemplate can reuse the exact same variables.
+func fileTemplateVars(relPath string) map[string]any {
+	name := filepath.Base(relPath)
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	dir := filepath.ToSlash(filepath.Dir(relPath))
+	if dir == "." {
+		dir = ""
+	}
+	return map[string]any{
+		"__filePath":      filepath.ToSlash(relPath),
+		"__fileName":      name,
+		"__fileStem":      stem,
+		"__fileExtension": ext,
+		"__fileDir":       dir,
+	}
+}
+
+// toAnySlice normalizes any slice/array value into []any, reporting false for
+// non-slice inputs. It accepts the []any that CEL and literal inputs produce as
+// well as typed slices (e.g. []map[string]any) that resolver bindings may carry.
+func toAnySlice(v any) ([]any, bool) {
+	if v == nil {
+		return nil, false
+	}
+	if s, ok := v.([]any); ok {
+		return s, true
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return nil, false
+	}
+	out := make([]any, rv.Len())
+	for i := range rv.Len() {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
+}
+
+// emptyRenderTreeOutput returns the standard empty render-tree result.
+func emptyRenderTreeOutput(templateName string) *provider.Output {
+	return &provider.Output{
+		Data: []map[string]any{},
+		Metadata: map[string]any{
+			"templateName": templateName,
+			"entryCount":   0,
+		},
+	}
+}
+
+// renderTreeOutput builds a render-tree provider output from rendered results.
+func renderTreeOutput(templateName string, results []map[string]any, warnings []string) *provider.Output {
 	output := &provider.Output{
 		Data: results,
 		Metadata: map[string]any{
@@ -661,16 +994,17 @@ func (p *GoTemplateProvider) executeRenderTree(ctx context.Context, inputs map[s
 			"entryCount":   len(results),
 		},
 	}
-
 	if len(warnings) > 0 {
 		output.Warnings = warnings
 	}
-
-	return output, nil
+	return output
 }
 
-// executeDryRunRenderTree returns a dry-run placeholder for render-tree.
-func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*provider.Output, error) {
+// executeDryRunRenderTree returns a dry-run placeholder for render-tree. When
+// fan-out is configured it previews one placeholder per (item, entry), routing
+// each through pathTemplate so the planned output tree is visible; resolution
+// and path-render errors are ignored here since they surface on the real run.
+func (p *GoTemplateProvider) executeDryRunRenderTree(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
 	templateName, _ := inputs["name"].(string)
 
 	// Best-effort rawGlobs parse: dry-run should reflect verbatim entries, but a
@@ -678,7 +1012,65 @@ func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*pr
 	rawGlobs, _ := parseRawGlobs(inputs)
 
 	entries, _ := inputs["entries"].([]any)
+
+	// Best-effort fan-out preview: ignore config errors so a dry-run never fails
+	// on a misconfiguration the real run will report.
+	fanOut, _ := p.parseRenderTreeFanOut(ctx, inputs)
+
 	results := make([]map[string]any, 0, len(entries))
+
+	dryContent := func(entryPath string, entry map[string]any) string {
+		if raw, badType := isRawEntry(entryPath, entry, rawGlobs); raw && !badType {
+			return "[dry-run raw copy]"
+		}
+		return "[dry-run rendered]"
+	}
+
+	if fanOut != nil && len(fanOut.items) > 0 {
+		baseData := p.buildTemplateData(ctx, inputs)
+		opts := &renderTreeOpts{templateName: templateName, baseData: baseData, missingKey: gotmpl.MissingKeyDefault}
+		for idx, item := range fanOut.items {
+			itemData := map[string]any{"__item": item, "__index": idx}
+			if fanOut.itemAlias != "" {
+				itemData[fanOut.itemAlias] = item
+			}
+			if fanOut.indexAlias != "" {
+				itemData[fanOut.indexAlias] = idx
+			}
+			for _, entryRaw := range entries {
+				entry, ok := entryRaw.(map[string]any)
+				if !ok {
+					continue
+				}
+				entryPath, _ := entry["path"].(string)
+				if entryPath == "" {
+					continue
+				}
+				pathData := make(map[string]any, len(baseData)+len(itemData)+8)
+				maps.Copy(pathData, baseData)
+				maps.Copy(pathData, itemData)
+				maps.Copy(pathData, fileTemplateVars(entryPath))
+				outPath := entryPath
+				if rendered, err := p.renderPathTemplate(ctx, opts, fanOut.pathTemplate, pathData); err == nil && rendered != "" {
+					outPath = rendered
+				}
+				results = append(results, map[string]any{
+					"path":    outPath,
+					"content": dryContent(entryPath, entry),
+				})
+			}
+		}
+
+		return &provider.Output{
+			Data: results,
+			Metadata: map[string]any{
+				"dryRun":       true,
+				"templateName": templateName,
+				"entryCount":   len(results),
+				"fanOutItems":  len(fanOut.items),
+			},
+		}, nil
+	}
 
 	for _, entryRaw := range entries {
 		entry, ok := entryRaw.(map[string]any)
@@ -689,13 +1081,9 @@ func (p *GoTemplateProvider) executeDryRunRenderTree(inputs map[string]any) (*pr
 		if entryPath == "" {
 			continue
 		}
-		content := "[dry-run rendered]"
-		if raw, badType := isRawEntry(entryPath, entry, rawGlobs); raw && !badType {
-			content = "[dry-run raw copy]"
-		}
 		results = append(results, map[string]any{
 			"path":    entryPath,
-			"content": content,
+			"content": dryContent(entryPath, entry),
 		})
 	}
 
@@ -1051,22 +1439,45 @@ func extractDependencies(inputs map[string]any) []string {
 		}
 	}
 
-	// For the "render" operation, also extract Go template references from
-	// the template content (if provided as a literal string).
-	templateContent, ok := inputs["template"].(string)
-	if !ok {
-		return deps
-	}
+	// Fan-out (render-tree): forEach.in may reference resolvers, and pathTemplate
+	// is a Go template that may reference resolvers. The fan-out aliases
+	// (forEach.item/index) are locally bound, never resolver dependencies.
+	fanOutAliases := extractFanOutDeps(inputs, addDep)
 
-	// Get delimiters (default to standard Go template delimiters)
+	// Get delimiters (default to standard Go template delimiters), shared by the
+	// pathTemplate and inline-template scans below.
 	leftDelim := "{{"
 	rightDelim := "}}"
-
 	if ld, ok := inputs["leftDelim"].(string); ok && ld != "" {
 		leftDelim = ld
 	}
 	if rd, ok := inputs["rightDelim"].(string); ok && rd != "" {
 		rightDelim = rd
+	}
+
+	// pathTemplate references (render-tree fan-out): scan for resolver deps,
+	// excluding the fan-out aliases and reserved __* variables.
+	if pathTmpl, ok := inputs["pathTemplate"].(string); ok && pathTmpl != "" {
+		scan := resolveDepScanContext(inputs)
+		if scan.Aliases == nil {
+			scan.Aliases = make(map[string]bool, len(fanOutAliases))
+		}
+		for a := range fanOutAliases {
+			scan.Aliases[a] = true
+		}
+		scan.Template = pathTmpl
+		scan.LeftDelim = leftDelim
+		scan.RightDelim = rightDelim
+		for _, name := range gotmpl.ExtractResolverDeps(scan) {
+			addDep(name)
+		}
+	}
+
+	// For the "render" operation, also extract Go template references from
+	// the template content (if provided as a literal string).
+	templateContent, ok := inputs["template"].(string)
+	if !ok {
+		return deps
 	}
 
 	// Strip ignored/raw regions (built-in markers + declared ignoredBlocks)
@@ -1091,6 +1502,42 @@ func extractDependencies(inputs map[string]any) []string {
 	}
 
 	return deps
+}
+
+// extractFanOutDeps scans render-tree fan-out inputs (forEach.in) for resolver
+// references via addDep and returns the fan-out alias names (item/index) so the
+// caller can exclude them when scanning pathTemplate. A missing or non-map
+// forEach yields no dependencies and an empty alias set.
+func extractFanOutDeps(inputs map[string]any, addDep func(string)) map[string]bool {
+	aliases := make(map[string]bool, 2)
+	fe, ok := inputs["forEach"].(map[string]any)
+	if !ok {
+		return aliases
+	}
+	if item, ok := fe["item"].(string); ok && item != "" {
+		aliases[item] = true
+	}
+	if index, ok := fe["index"].(string); ok && index != "" {
+		aliases[index] = true
+	}
+	inRaw, ok := fe["in"].(map[string]any)
+	if !ok {
+		return aliases
+	}
+	if rslvr, ok := inRaw["rslvr"].(string); ok {
+		if idx := strings.Index(rslvr, "."); idx > 0 {
+			addDep(rslvr[:idx])
+		} else {
+			addDep(rslvr)
+		}
+	}
+	if expr, ok := inRaw["expr"].(string); ok {
+		extractCELDeps(expr, addDep)
+	}
+	// A {tmpl: ...} form of forEach.in is intentionally not scanned: a rendered
+	// template yields a string, which fails the "must resolve to an array"
+	// check at runtime, so it is never a valid fan-out collection.
+	return aliases
 }
 
 // resolveDepScanContext builds the resolver-dependency scan context for the

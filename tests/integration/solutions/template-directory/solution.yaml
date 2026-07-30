@@ -105,6 +105,42 @@ spec:
                     {"path": "override.raw", "content": "render {{ .who }} anyway", "raw": false}
                   ]
 
+    # Collection to fan the whole template tree out over.
+    environments:
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: dev
+                  region: us-east1
+                - name: prod
+                  region: us-central1
+
+    # Tree fan-out: render every template file once per environment, routing
+    # each environment's copy to a distinct envs/<name>/... path via
+    # pathTemplate. forEach.in is a resolver reference (resolved by the spec
+    # layer before the provider runs); the `env` alias and the reserved __file*
+    # path parts are available in pathTemplate.
+    treeFanout:
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              data:
+                rslvr: vars
+              forEach:
+                item: env
+                in:
+                  rslvr: environments
+              pathTemplate: >-
+                envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+
   workflow:
     actions:
       write-output:
@@ -125,6 +161,16 @@ spec:
           basePath: $OUTPUT_DIR
           entries:
             rslvr: fanout
+
+      # Write the tree fan-out output; each entry already carries its
+      # environment-scoped path from pathTemplate.
+      write-tree-fanout:
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: $OUTPUT_DIR
+          entries:
+            rslvr: treeFanout
 
   testing:
     config:
@@ -197,3 +243,27 @@ spec:
           # override.raw: raw:false overrides the glob match -> rendered.
           - expression: '__output.mixed[3].content == "render world anyway"'
             message: "per-entry raw:false should force rendering despite rawGlobs"
+
+      tree-fanout-cross-product:
+        description: Verify forEach renders the whole tree once per item into distinct paths
+        extends: [_base]
+        command: [run, resolver, treeFanout]
+        assertions:
+          # 4 template files x 2 environments = 8 entries.
+          - expression: size(__output.treeFanout) == 8
+            message: "Expected 4 templates x 2 environments = 8 entries"
+          # Every output path is environment-scoped and .tpl-stripped; all
+          # distinct (a duplicate path would be a hard error at render time).
+          - expression: '__output.treeFanout.all(e, e.path.startsWith("envs/"))'
+            message: "every fanned-out path should be routed under envs/<name>/"
+          - expression: '__output.treeFanout.exists(e, e.path.startsWith("envs/dev/"))'
+            message: "dev environment copies should exist"
+          - expression: '__output.treeFanout.exists(e, e.path.startsWith("envs/prod/"))'
+            message: "prod environment copies should exist"
+          # Shared data (vars) is available inside every rendered copy.
+          - expression: '__output.treeFanout.exists(e, e.content.contains("test-app"))'
+            message: "shared data should be available in fanned-out content"
+          # The .tpl suffix is stripped and subdirectories are preserved.
+          - expression: '__output.treeFanout.exists(e, e.path == "envs/dev/k8s/deployment.yaml")'
+            message: "pathTemplate should strip .tpl and preserve subdirectories per env"
+

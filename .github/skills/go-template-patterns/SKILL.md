@@ -90,6 +90,39 @@ Raw content is copied byte-for-byte (no parse, delimiters, `ignoredBlocks`, or
 per-entry `data`). The `missing-template-dependency` lint rule skips
 `rawGlobs`-matched files. See the `template-mixed-tree` example.
 
+### Tree fan-out in render-tree (forEach + pathTemplate)
+
+Per-entry `data` fans out a hand-built entry list; to fan a whole template
+*tree* out once per item in a collection (Terraform module `for_each` style),
+use `forEach` with `pathTemplate` (verified against
+`get_provider_schema name=go-template`):
+
+- **`forEach`** -- `{ item?, index?, in }`. `in` is the collection (an array,
+  resolved by the spec layer, so `{rslvr: ...}`/`{expr: ...}` both work);
+  `item`/`index` name the aliases bound per item (default `__item`/`__index`).
+- **`pathTemplate`** (required with `forEach`) -- a Go template that computes
+  each fanned-out entry's output path from the item alias, `__index`, shared
+  `data`, and the `__file*` path parts above.
+
+N template entries x M items yields one flat array of N x M rendered entries,
+ready for the `file` provider's `write-tree`. Data precedence per copy:
+per-entry `data` > fan-out aliases > shared `data` > resolver context. Rendered
+paths must be unique across the fan-out (a duplicate path is a hard error); an
+empty collection yields no entries. See the `template-tree-fanout` example.
+
+```yaml
+inputs:
+  operation: render-tree
+  entries:
+    expr: '_.templateFiles.entries'
+  forEach:
+    item: env
+    in:
+      rslvr: environments
+  pathTemplate: >-
+    envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+```
+
 ## Dependency Inference (resolver ref vs data context)
 
 For the full model, see `explain_concepts name=template-dependency-inference`;

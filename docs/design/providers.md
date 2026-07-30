@@ -1299,6 +1299,8 @@ resolve:
 **`render-tree` inputs:**
 - `entries` (required): Array of `{path, content, data?, raw?}` objects (typically from the directory provider with `includeContent: true`). Each entry may carry an optional `data` map (shallow-merged over the shared `data`, per-entry wins) and an optional `raw` bool that copies the entry verbatim.
 - `rawGlobs`: List of doublestar glob patterns matched against each entry's full relative `path`. Matching entries are copied verbatim (no parse, no `data`, no `ignoredBlocks`). A per-entry `raw` field overrides this. Max 20 patterns.
+- `forEach`: Fan the whole entry set out once per item in a collection: `{ item?, index?, in }`. `in` is the collection (array, resolved by the spec layer), `item`/`index` name the injected aliases (default `__item`/`__index`). Requires `pathTemplate`.
+- `pathTemplate` (required with `forEach`): Go template computing each fanned-out entry's output path. Has access to the item alias, `__index`, shared `data`, and the reserved `__file*` path parts (`__fileDir`, `__fileStem`, `__fileName`, `__fileExtension`, `__filePath`). Rendered paths must be unique across the fan-out.
 
 ~~~yaml
 # Batch-render a directory of templates
@@ -1311,6 +1313,23 @@ resolve:
           expr: '_.templateFiles.entries'
         data:
           rslvr: vars
+~~~
+
+~~~yaml
+# Fan the whole template tree out once per environment (Terraform for_each style)
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        operation: render-tree
+        entries:
+          expr: '_.templateFiles.entries'
+        forEach:
+          item: env
+          in:
+            rslvr: environments
+        pathTemplate: >-
+          envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
 ~~~
 
 ---

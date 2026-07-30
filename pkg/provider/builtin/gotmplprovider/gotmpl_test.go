@@ -2290,3 +2290,443 @@ func TestGoTemplateProvider_UnderscoreAlias(t *testing.T) {
 		assert.Equal(t, "<no value>", output.Data)
 	})
 }
+
+// --- render-tree fan-out (forEach + pathTemplate) ---
+
+func TestGoTemplateProvider_RenderTree_FanOut_LiteralItems(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"name":      "fanout",
+		"entries": []any{
+			map[string]any{"path": "deployment.yaml", "content": "app: {{ .appName }}\nenv: {{ .env }}"},
+			map[string]any{"path": "service.yaml", "content": "svc: {{ .appName }}-{{ .env }}"},
+		},
+		"data": map[string]any{"appName": "web"},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev", "prod"},
+		},
+		"pathTemplate": "envs/{{ .env }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 4, "2 items x 2 entries")
+
+	got := map[string]string{}
+	for _, r := range results {
+		got[r["path"].(string)] = r["content"].(string)
+	}
+	assert.Equal(t, "app: web\nenv: dev", got["envs/dev/deployment.yaml"])
+	assert.Equal(t, "svc: web-dev", got["envs/dev/service.yaml"])
+	assert.Equal(t, "app: web\nenv: prod", got["envs/prod/deployment.yaml"])
+	assert.Equal(t, "svc: web-prod", got["envs/prod/service.yaml"])
+	assert.Equal(t, 4, output.Metadata["entryCount"])
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_IndexAlias(t *testing.T) {
+	p := NewGoTemplateProvider()
+	// forEach.in arrives pre-resolved (the spec layer resolves nested rslvr/expr
+	// before the provider runs), so the provider is given a concrete array.
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "region.txt", "content": "region={{ .region }} idx={{ .i }}"},
+		},
+		"forEach": map[string]any{
+			"item":  "region",
+			"index": "i",
+			"in":    []any{"us-east", "eu-west"},
+		},
+		"pathTemplate": "{{ .region }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	got := map[string]string{}
+	for _, r := range results {
+		got[r["path"].(string)] = r["content"].(string)
+	}
+	assert.Equal(t, "region=us-east idx=0", got["us-east/region.txt"])
+	assert.Equal(t, "region=eu-west idx=1", got["eu-west/region.txt"])
+}
+
+// TestGoTemplateProvider_RenderTree_FanOut_TypedSliceIn covers the toAnySlice
+// reflect path: resolver bindings can carry a typed slice (e.g.
+// []map[string]any) rather than the []any that CEL/literal inputs produce, and
+// the provider must still fan out over it.
+func TestGoTemplateProvider_RenderTree_FanOut_TypedSliceIn(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "app.yaml", "content": "name: {{ .env.name }}\nregion: {{ .env.region }}"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			// A concrete typed slice, not []any -- exercises the reflect branch.
+			"in": []map[string]any{
+				{"name": "dev", "region": "us-east1"},
+				{"name": "prod", "region": "us-central1"},
+			},
+		},
+		"pathTemplate": "envs/{{ .env.name }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	got := map[string]string{}
+	for _, r := range results {
+		got[r["path"].(string)] = r["content"].(string)
+	}
+	assert.Equal(t, "name: dev\nregion: us-east1", got["envs/dev/app.yaml"])
+	assert.Equal(t, "name: prod\nregion: us-central1", got["envs/prod/app.yaml"])
+}
+
+// TestGoTemplateProvider_RenderTree_FanOut_PathCanonicalization asserts that a
+// pathTemplate emitting a non-canonical path (leading "./", doubled slashes) is
+// cleaned, so distinct-but-equivalent paths collapse to one key and the
+// duplicate-path guard stays meaningful.
+func TestGoTemplateProvider_RenderTree_FanOut_PathCanonicalization(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "app.yaml", "content": "env={{ .env }}"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev"},
+		},
+		// Deliberately non-canonical: leading "./" and a doubled slash.
+		"pathTemplate": "./envs//{{ .env }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "envs/dev/app.yaml", results[0]["path"])
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_UnresolvedInErrors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	// A ValueRef-shaped forEach.in that was never resolved to an array (e.g. a
+	// direct `run provider` invocation) yields a clear array-required error
+	// rather than silently collapsing.
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "f.txt", "content": "{{ .e }}"},
+		},
+		"forEach": map[string]any{
+			"item": "e",
+			"in":   map[string]any{"expr": "_.cfg.envs"},
+		},
+		"pathTemplate": "{{ .e }}/{{ .__fileName }}",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must resolve to an array")
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_ObjectItemsAndFileVars(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "sub/app.yaml.tpl", "content": "name: {{ .svc.name }}"},
+		},
+		"forEach": map[string]any{
+			"item": "svc",
+			"in": []any{
+				map[string]any{"name": "api"},
+				map[string]any{"name": "worker"},
+			},
+		},
+		// Use __fileDir + __fileStem (strip .tpl) with the item field.
+		"pathTemplate": "{{ .svc.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+
+	got := map[string]string{}
+	for _, r := range results {
+		got[r["path"].(string)] = r["content"].(string)
+	}
+	assert.Equal(t, "name: api", got["api/sub/app.yaml"])
+	assert.Equal(t, "name: worker", got["worker/sub/app.yaml"])
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_DuplicatePathErrors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "f.txt", "content": "{{ .env }}"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev", "prod"},
+		},
+		// pathTemplate ignores the item -> both items collide on the same path.
+		"pathTemplate": "static/{{ .__fileName }}",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate output path")
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_MissingPathTemplateErrors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "f.txt", "content": "{{ .env }}"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev"},
+		},
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pathTemplate is required")
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_NonArrayItemsErrors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "f.txt", "content": "x"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   "not-an-array",
+		},
+		"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must resolve to an array")
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_MissingInErrors(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "f.txt", "content": "x"},
+		},
+		"forEach":      map[string]any{"item": "env"},
+		"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+	}
+
+	_, err := p.Execute(ctx, inputs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forEach.in is required")
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_EmptyItems(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "f.txt", "content": "{{ .env }}"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{},
+		},
+		"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, results)
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_PerEntryDataWins(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{
+				"path":    "f.txt",
+				"content": "{{ .tier }}-{{ .env }}",
+				"data":    map[string]any{"tier": "gold"},
+			},
+		},
+		"data": map[string]any{"tier": "bronze"},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev"},
+		},
+		"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 1)
+	assert.Equal(t, "gold-dev", results[0]["content"], "per-entry data wins over shared data")
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_RawEntryVerbatim(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithResolverContext(context.Background(), map[string]any{})
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "raw.txt", "content": "{{ literal }}", "raw": true},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev", "prod"},
+		},
+		"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 2)
+	got := map[string]string{}
+	for _, r := range results {
+		got[r["path"].(string)] = r["content"].(string)
+	}
+	assert.Equal(t, "{{ literal }}", got["dev/raw.txt"], "raw content copied verbatim, still routed by pathTemplate")
+	assert.Equal(t, "{{ literal }}", got["prod/raw.txt"])
+}
+
+func TestGoTemplateProvider_RenderTree_FanOut_DryRunPreview(t *testing.T) {
+	p := NewGoTemplateProvider()
+	ctx := provider.WithDryRun(provider.WithResolverContext(context.Background(), map[string]any{}), true)
+
+	inputs := map[string]any{
+		"operation": "render-tree",
+		"entries": []any{
+			map[string]any{"path": "a.txt", "content": "{{ .env }}"},
+			map[string]any{"path": "b.txt", "content": "{{ .env }}"},
+		},
+		"forEach": map[string]any{
+			"item": "env",
+			"in":   []any{"dev", "prod"},
+		},
+		"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+	}
+
+	output, err := p.Execute(ctx, inputs)
+	require.NoError(t, err)
+	results, ok := output.Data.([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, results, 4, "dry-run previews one entry per (item, entry)")
+
+	paths := map[string]bool{}
+	for _, r := range results {
+		paths[r["path"].(string)] = true
+		assert.Equal(t, "[dry-run rendered]", r["content"])
+	}
+	assert.True(t, paths["dev/a.txt"])
+	assert.True(t, paths["prod/b.txt"])
+	assert.Equal(t, 2, output.Metadata["fanOutItems"])
+}
+
+func TestExtractDependencies_FanOut(t *testing.T) {
+	t.Run("forEach.in rslvr is a dependency", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"forEach": map[string]any{
+				"item": "env",
+				"in":   map[string]any{"rslvr": "envs.list"},
+			},
+			"pathTemplate": "{{ .env }}/{{ .__fileName }}",
+		})
+		assert.Contains(t, deps, "envs")
+		assert.NotContains(t, deps, "env", "fan-out alias is not a dependency")
+	})
+
+	t.Run("forEach.in expr references are dependencies", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"forEach": map[string]any{
+				"item": "e",
+				"in":   map[string]any{"expr": "_.cfg.envs"},
+			},
+			"pathTemplate": "{{ .e }}/{{ .__fileName }}",
+		})
+		assert.Contains(t, deps, "cfg")
+	})
+
+	t.Run("pathTemplate resolver refs are dependencies, aliases excluded", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"forEach": map[string]any{
+				"item": "env",
+				"in":   []any{"dev"},
+			},
+			"pathTemplate": "{{ ._.prefix }}/{{ .env }}/{{ .__fileName }}",
+		})
+		assert.Contains(t, deps, "prefix")
+		assert.NotContains(t, deps, "env")
+	})
+
+	t.Run("no forEach yields no fan-out deps", func(t *testing.T) {
+		deps := extractDependencies(map[string]any{
+			"entries": map[string]any{"rslvr": "files"},
+		})
+		assert.Equal(t, []string{"files"}, deps)
+	})
+}

@@ -1961,6 +1961,10 @@ func lintTemplateFileDependencies(sol *solution.Solution, solutionDir string, re
 			// context, not resolver references, and must not require dependsOn.
 			dataKeys := literalDataKeys(step)
 
+			// Fan-out alias names (forEach.item/index) are locally bound
+			// iteration variables, not resolver references, so exclude them too.
+			aliasKeys := fanOutAliasKeys(step)
+
 			// Collect all resolver names referenced in template files.
 			templateRefs := make(map[string]bool)
 			for _, f := range templateFiles {
@@ -1985,6 +1989,10 @@ func lintTemplateFileDependencies(sol *solution.Solution, solutionDir string, re
 				}
 				// Skip refs satisfied by a literal data map key, not a resolver.
 				if dataKeys[ref] {
+					continue
+				}
+				// Skip refs that are fan-out aliases (locally bound iteration vars).
+				if aliasKeys[ref] {
 					continue
 				}
 				// Skip if the referenced resolver doesn't exist (could be a template variable).
@@ -2032,6 +2040,32 @@ func literalDataKeys(step resolver.ProviderSource) map[string]bool {
 	keys := make(map[string]bool, len(dataMap))
 	for k := range dataMap {
 		keys[k] = true
+	}
+	return keys
+}
+
+// fanOutAliasKeys returns the set of fan-out alias names (forEach.item and
+// forEach.index) declared on a render-tree step's literal "forEach" map. These
+// are locally bound iteration variables, not resolver references, and must not
+// be treated as template dependencies.
+func fanOutAliasKeys(step resolver.ProviderSource) map[string]bool {
+	val, ok := step.Inputs["forEach"]
+	if !ok || val == nil || val.Literal == nil {
+		return nil
+	}
+	feMap, ok := val.Literal.(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make(map[string]bool, 2)
+	if item, ok := feMap["item"].(string); ok && item != "" {
+		keys[item] = true
+	}
+	if index, ok := feMap["index"].(string); ok && index != "" {
+		keys[index] = true
+	}
+	if len(keys) == 0 {
+		return nil
 	}
 	return keys
 }
