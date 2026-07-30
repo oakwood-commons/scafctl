@@ -698,9 +698,9 @@ func (p *GoTemplateProvider) renderTreeFanOut(ctx context.Context, entries []any
 	// raw entry carrying data) so one problematic entry does not emit the same
 	// message once per fan-out item.
 	seenWarn := make(map[string]struct{})
-	results := make([]map[string]any, 0, len(fanOut.items)*len(entries))
+	results := make([]map[string]any, 0, len(entries))
 	// seen maps an output path to a human-readable origin for collision errors.
-	seen := make(map[string]string, len(fanOut.items)*len(entries))
+	seen := make(map[string]string, len(entries))
 
 	for idx, item := range fanOut.items {
 		itemData := make(map[string]any, 4)
@@ -786,7 +786,7 @@ func (p *GoTemplateProvider) renderTreeEntry(ctx context.Context, opts *renderTr
 	// item lands in a distinct location; the default pass preserves the path.
 	outPath := entryPath
 	if pathTemplate != "" {
-		pathData := make(map[string]any, len(opts.baseData)+len(itemData)+8)
+		pathData := make(map[string]any, len(opts.baseData))
 		maps.Copy(pathData, opts.baseData)
 		maps.Copy(pathData, itemData)
 		if hasEntryData {
@@ -819,7 +819,7 @@ func (p *GoTemplateProvider) renderTreeEntry(ctx context.Context, opts *renderTr
 	// Build per-entry template data: base data + fan-out vars + per-entry data
 	// overrides (shallow; per-entry keys win). baseData is left untouched so
 	// entries never leak values into one another.
-	templateData := make(map[string]any, len(opts.baseData)+len(itemData)+4)
+	templateData := make(map[string]any, len(opts.baseData))
 	maps.Copy(templateData, opts.baseData)
 	maps.Copy(templateData, itemData)
 	if hasEntryData {
@@ -968,7 +968,7 @@ func toAnySlice(v any) ([]any, bool) {
 		return nil, false
 	}
 	out := make([]any, rv.Len())
-	for i := range rv.Len() {
+	for i := 0; i < rv.Len(); i++ {
 		out[i] = rv.Index(i).Interface()
 	}
 	return out, true
@@ -1046,7 +1046,7 @@ func (p *GoTemplateProvider) executeDryRunRenderTree(ctx context.Context, inputs
 				if entryPath == "" {
 					continue
 				}
-				pathData := make(map[string]any, len(baseData)+len(itemData)+8)
+				pathData := make(map[string]any, len(baseData))
 				maps.Copy(pathData, baseData)
 				maps.Copy(pathData, itemData)
 				maps.Copy(pathData, fileTemplateVars(entryPath))
