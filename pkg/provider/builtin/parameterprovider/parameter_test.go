@@ -1520,3 +1520,146 @@ func TestToStringKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestResolverTypeToParamType(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		declared string
+		want     string
+		wantOK   bool
+	}{
+		{"string", "string", TypeString, true},
+		{"int", "int", TypeInt, true},
+		{"integer alias", "integer", TypeInt, true},
+		{"float", "float", TypeFloat, true},
+		{"number alias", "number", TypeFloat, true},
+		{"bool", "bool", TypeBool, true},
+		{"boolean alias", "boolean", TypeBool, true},
+		{"mixed case", "String", TypeString, true},
+		{"whitespace", "  int  ", TypeInt, true},
+		{"array not scalar", "array", "", false},
+		{"object not scalar", "object", "", false},
+		{"any not scalar", "any", "", false},
+		{"time not scalar", "time", "", false},
+		{"empty", "", "", false},
+		{"unknown", "weird", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := resolverTypeToParamType(tt.declared)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParameterProvider_Execute_DeclaredScalarType(t *testing.T) {
+	tests := []struct {
+		name     string
+		declared string
+		raw      any
+		want     any
+		wantErr  bool
+	}{
+		// Declared string keeps the raw CLI string verbatim (no lossy inference).
+		{"string 2.0 stays 2.0", "string", "2.0", "2.0", false},
+		{"string 1.10 stays 1.10", "string", "1.10", "1.10", false},
+		{"string 007 stays 007", "string", "007", "007", false},
+		{"string true stays true", "string", "true", "true", false},
+		// Declared float coerces a bare int string to a float.
+		{"float 2 becomes 2.0", "float", "2", 2.0, false},
+		// Declared bool coerces.
+		{"bool false becomes false", "bool", "false", false, false},
+		// Declared int coerces, including whole-number float strings.
+		{"int 2 becomes 2", "int", "2", int64(2), false},
+		{"int 2.0 becomes 2", "int", "2.0", int64(2), false},
+		{"int 2.5 errors", "int", "2.5", nil, true},
+		// Non-scalar declared types fall back to auto inference.
+		{"array falls back to inference", "array", "2.0", float64(2.0), false},
+		{"object falls back to inference", "object", "2.0", float64(2.0), false},
+		{"any falls back to inference", "any", "2.0", float64(2.0), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParameterProvider()
+			ctx := provider.WithParameters(context.Background(), map[string]any{
+				"version": tt.raw,
+			})
+			ctx = provider.WithDeclaredScalarType(ctx, tt.declared)
+
+			output, err := p.Execute(ctx, map[string]any{"key": "version"})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			assert.Equal(t, tt.want, output.Data)
+		})
+	}
+}
+
+// TestParameterProvider_Execute_ExplicitTypeWinsOverDeclared verifies that an
+// explicit provider "type:" input takes precedence over the resolver's declared
+// scalar type (the declared type only governs the default auto path).
+func TestParameterProvider_Execute_ExplicitTypeWinsOverDeclared(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"version": "2.0",
+	})
+	ctx = provider.WithDeclaredScalarType(ctx, "string")
+
+	// type: raw returns the value untouched, ignoring the declared "string".
+	output, err := p.Execute(ctx, map[string]any{"key": "version", "type": TypeRaw})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	assert.Equal(t, "2.0", output.Data)
+}
+
+// TestParameterProvider_Execute_MapModeIgnoresDeclaredType verifies map mode
+// (all: true) uses standard auto inference per element and is not governed by
+// the enclosing resolver's declared scalar type, which describes the aggregate
+// output rather than each element.
+func TestParameterProvider_Execute_MapModeIgnoresDeclaredType(t *testing.T) {
+	p := NewParameterProvider()
+	ctx := provider.WithParameters(context.Background(), map[string]any{
+		"version": "2.0",
+	})
+	// A declared "string" must not force each element to a string.
+	ctx = provider.WithDeclaredScalarType(ctx, "string")
+
+	output, err := p.Execute(ctx, map[string]any{"all": true})
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	m, ok := output.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(2.0), m["version"], "map mode must auto-infer, not honor the declared scalar type")
+}
+
+func TestCoerceInt_WholeFloatString(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		want    int64
+		wantErr bool
+	}{
+		{"whole float string", "2.0", 2, false},
+		{"whole float string negative", "-3.0", -3, false},
+		{"plain int string", "5", 5, false},
+		{"fractional string errors", "2.5", 0, true},
+		{"non-numeric errors", "abc", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := coerceInt(tt.value)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

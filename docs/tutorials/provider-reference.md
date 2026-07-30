@@ -2244,10 +2244,10 @@ visible via `scafctl run provider parameter ...` but not in the resolver value.
 
 | Value | Behavior |
 |-------|----------|
-| `auto` | Default. For CLI values, infers booleans, numbers, JSON, and `file://` sources, falling back to the literal string. `http://`/`https://` values are **not** fetched (they stay literal strings -- use `fetch`), and comma-separated values are **not** split into a list (opt in with `csv`). An authored `default` keeps its YAML type under `auto` (a quoted `"false"` stays a string, a bare `false` stays a bool) and is never inferred; use an explicit `type` to coerce a default. |
-| `string` | Coerces the value to a string, stripping surrounding quotes. Use to keep a numeric-looking value (leading zeros, or a value used with CEL `matches()`) as a string. |
+| `auto` | Default. For CLI values, infers booleans, numbers, JSON, and `file://` sources, falling back to the literal string. `http://`/`https://` values are **not** fetched (they stay literal strings -- use `fetch`), and comma-separated values are **not** split into a list (opt in with `csv`). An authored `default` keeps its YAML type under `auto` (a quoted `"false"` stays a string, a bare `false` stays a bool) and is never inferred; use an explicit `type` to coerce a default. When the enclosing resolver declares a scalar output type (`string`/`int`/`float`/`bool`), that declared type is authoritative -- the CLI value is coerced directly to it instead of being inferred and re-coerced (so `-r version=2.0` on a `type: string` resolver stays `"2.0"`). |
+| `string` | Coerces the value to a string, stripping surrounding quotes. Use to keep a numeric-looking value (leading zeros, or a value used with CEL `matches()`) as a string. A resolver that already declares `type: string` gets this automatically under `auto`. |
 | `raw` | Returns the value untouched -- no coercion or quote-stripping. A numeric YAML default stays numeric; a CLI string stays verbatim. The escape hatch to disable inference. |
-| `int` | Forces integer parsing. A non-integer value is an error. |
+| `int` | Forces integer parsing. Whole-number float syntax (e.g. `2.0`) is accepted; a fractional (e.g. `2.5`) or non-numeric value is an error. |
 | `float` | Forces floating-point parsing. A non-numeric value is an error. |
 | `bool` | Forces boolean parsing, accepting only `true`/`false` (case-insensitive). Any other value is an error. |
 | `json` | Parses a string value as JSON. Invalid JSON is an error; non-string values pass through unchanged. |

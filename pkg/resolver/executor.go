@@ -832,7 +832,18 @@ func (e *Executor) executeResolver(ctx context.Context, r *Resolver, phaseNum in
 
 	// Execute resolve phase
 	phaseStart := time.Now()
-	value, providerCalls, err := e.executeResolvePhase(resolverContext, r.Resolve)
+	// Propagate the resolver's declared scalar output type into the resolve
+	// phase only, so the parameter provider can coerce a raw CLI string
+	// directly to the intended type instead of guessing (avoids lossy
+	// "2.0" -> float -> "2"). Non-scalar and "any"/unset types are left for the
+	// provider's normal auto inference. Scoping this to the resolve phase keeps
+	// it from governing intermediate parameter reads inside a transform, whose
+	// values are not the resolver's output contract.
+	resolveContext := resolverContext
+	if r.Type != "" && r.Type != TypeAny {
+		resolveContext = provider.WithDeclaredScalarType(resolverContext, string(r.Type))
+	}
+	value, providerCalls, err := e.executeResolvePhase(resolveContext, r.Resolve)
 	providerCallCount += providerCalls
 	result.PhaseMetrics = append(result.PhaseMetrics, PhaseMetrics{
 		Phase:    "resolve",

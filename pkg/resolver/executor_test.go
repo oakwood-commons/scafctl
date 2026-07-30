@@ -13,6 +13,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/parameterprovider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2261,4 +2262,118 @@ func TestExecutor_WriteOperationGuard_AllowsReadInResolver(t *testing.T) {
 	results, err := executor.Execute(ctx, resolvers, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, results)
+}
+
+// TestExecutor_Execute_DeclaredTypeGovernsParameterCoercion verifies the
+// declared scalar output type is authoritative over the parameter provider's
+// auto inference: a CLI value "2.0" resolved by a type:string resolver stays
+// "2.0" (no lossy float round-trip), while a type:any resolver still infers a
+// float.
+func TestExecutor_Execute_DeclaredTypeGovernsParameterCoercion(t *testing.T) {
+	tests := []struct {
+		name         string
+		resolverType Type
+		want         any
+	}{
+		{"string keeps 2.0 verbatim", TypeString, "2.0"},
+		{"any infers float", TypeAny, float64(2.0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := newMockRegistry()
+			require.NoError(t, registry.Register(parameterprovider.NewParameterProvider()))
+
+			executor := NewExecutor(registry)
+			resolvers := []*Resolver{
+				{
+					Name: "version",
+					Type: tt.resolverType,
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{
+								Provider: "parameter",
+								Inputs: map[string]*ValueRef{
+									"key": {Literal: "version"},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			ctx := context.Background()
+			ctx, err := executor.Execute(ctx, resolvers, map[string]any{
+				"version": "2.0",
+			})
+			require.NoError(t, err)
+
+			result, _ := FromContext(ctx)
+			require.NotNil(t, result)
+			value, ok := result.Get("version")
+			require.True(t, ok)
+			assert.Equal(t, tt.want, value)
+		})
+	}
+}
+
+// TestExecutor_Execute_DeclaredTypeScopedToResolvePhase verifies the declared
+// scalar type is propagated into the resolve phase only, not the transform
+// phase. A parameter read inside a transform must use the provider's normal
+// auto inference, because a mid-chain value is not the resolver's output
+// contract.
+func TestExecutor_Execute_DeclaredTypeScopedToResolvePhase(t *testing.T) {
+	registry := newMockRegistry()
+
+	var resolveDeclared, transformDeclared string
+	var resolveOK, transformOK bool
+
+	// A capturing provider records the declared scalar type visible in whichever
+	// phase invokes it.
+	capture := &mockProvider{
+		name: "capture",
+		executeFunc: func(ctx context.Context, inputs map[string]any) (*provider.Output, error) {
+			phase, _ := inputs["phase"].(string)
+			declared, ok := provider.DeclaredScalarTypeFromContext(ctx)
+			switch phase {
+			case "resolve":
+				resolveDeclared, resolveOK = declared, ok
+			case "transform":
+				transformDeclared, transformOK = declared, ok
+			}
+			return &provider.Output{Data: "x"}, nil
+		},
+	}
+	require.NoError(t, registry.Register(capture))
+
+	executor := NewExecutor(registry)
+	resolvers := []*Resolver{
+		{
+			Name: "value",
+			Type: TypeString,
+			Resolve: &ResolvePhase{
+				With: []ProviderSource{
+					{
+						Provider: "capture",
+						Inputs:   map[string]*ValueRef{"phase": {Literal: "resolve"}},
+					},
+				},
+			},
+			Transform: &TransformPhase{
+				With: []ProviderTransform{
+					{
+						Provider: "capture",
+						Inputs:   map[string]*ValueRef{"phase": {Literal: "transform"}},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := executor.Execute(context.Background(), resolvers, nil)
+	require.NoError(t, err)
+
+	assert.True(t, resolveOK, "declared scalar type must be visible in the resolve phase")
+	assert.Equal(t, string(TypeString), resolveDeclared)
+	assert.False(t, transformOK, "declared scalar type must NOT leak into the transform phase")
+	assert.Empty(t, transformDeclared)
 }

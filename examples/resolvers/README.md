@@ -31,6 +31,7 @@ This directory contains practical examples demonstrating various resolver patter
 | [validation-conditional-rule.yaml](validation-conditional-rule.yaml) | Rule-level when to skip a validate rule conditionally |
 | [split-resolver-validation.yaml](split-resolver-validation.yaml) | Validate a raw upstream response, then reshape downstream |
 | [null-coercion.yaml](null-coercion.yaml) | Typed resolvers coerce null (absent optional fields) to zero values |
+| [declared-type-coercion.yaml](declared-type-coercion.yaml) | Declared scalar type governs parameter inference (e.g. `type: string` keeps `2.0` verbatim) |
 
 ### CEL Expressions
 

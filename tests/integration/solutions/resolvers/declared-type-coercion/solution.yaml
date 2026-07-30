@@ -1,0 +1,22 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: test-resolver-declared-type-coercion
+  version: 1.0.0
+  description: |
+    Regression fixture for issue-17: a resolver's declared scalar type is
+    authoritative over the parameter provider's auto inference. A CLI value
+    like "2.0" resolved by a type:string resolver must stay "2.0" instead of
+    being inferred to a float and re-coerced to "2".
+
+spec:
+  resolvers:
+    version:
+      description: String parameter that must keep its raw CLI form verbatim
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version

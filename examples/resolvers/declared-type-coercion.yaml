@@ -1,0 +1,87 @@
+# Run: scafctl run resolver -f declared-type-coercion.yaml -r version=2.0 -r build=007 -r replicas=3.0 -o json
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: declared-type-coercion
+  displayName: Declared Type Governs Parameter Coercion
+  category: resolvers
+  tags:
+    - resolver-example
+  description: |
+    A resolver's declared scalar `type` is authoritative over the parameter
+    provider's automatic inference (Terraform-style). Under the default `auto`
+    inference, the raw CLI value is coerced DIRECTLY to the declared type
+    instead of being inferred and then re-coerced -- which is lossy. So a
+    `type: string` resolver keeps `-r version=2.0` as "2.0" instead of the
+    inferred float re-stringified to "2", and a `type: int` resolver accepts
+    whole-number float syntax like "3.0". A `type: any` (or untyped) resolver
+    keeps normal inference, and an explicit `type` on the parameter source
+    still wins.
+
+spec:
+  resolvers:
+    # Declared type:string keeps the raw CLI form verbatim. Without a declared
+    # type, "2.0" would be inferred to the float 2.0 and re-coerced to "2".
+    version:
+      description: Version string that must keep its trailing zero ("2.0")
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+              default: "1.0"
+
+    # Declared type:string preserves leading zeros without a separate
+    # type: string on the parameter source.
+    build:
+      description: Build number that must keep its leading zeros ("007")
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: build
+              default: "001"
+
+    # Declared type:int coerces directly and accepts whole-number float
+    # syntax like "3.0" -> 3 (a fractional value like "3.5" would error).
+    replicas:
+      description: Replica count coerced to an int (whole-number float accepted)
+      type: int
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: replicas
+              default: 1
+
+    # No declared scalar type (any) -> normal auto inference. "2.0" becomes
+    # the float 2.0. Contrast this with the version resolver above.
+    versionInferred:
+      description: Same CLI value, but untyped -- auto inference makes it a float
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: version
+              default: "1.0"
+
+    # Downstream consumer: the declared types above give each field a concrete,
+    # predictable shape, so they compose directly without re-coercion.
+    summary:
+      description: Normalized config assembled from the typed values
+      type: object
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: |
+                {
+                  "version": _.version,
+                  "build": _.build,
+                  "replicas": _.replicas,
+                  "versionInferred": _.versionInferred,
+                }
+

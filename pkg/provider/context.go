@@ -177,6 +177,29 @@ func ExecutionSettingsFromContext(ctx context.Context) (map[string]json.RawMessa
 	return settings, ok
 }
 
+// declaredScalarTypeKey is a scafctl-only context key carrying the enclosing
+// resolver's declared scalar output type (string/int/float/bool). The builtin
+// parameter provider consults it so a raw CLI string is coerced directly to the
+// intended type instead of being inferred and then re-coerced (which loses e.g.
+// the trailing ".0" of "2.0" when the declared type is string).
+const declaredScalarTypeKey scafctlContextKey = "scafctl.provider.declaredScalarType"
+
+// WithDeclaredScalarType returns a new context carrying the enclosing resolver's
+// declared scalar output type. An empty string clears/omits it.
+func WithDeclaredScalarType(ctx context.Context, t string) context.Context {
+	return context.WithValue(ctx, declaredScalarTypeKey, t)
+}
+
+// DeclaredScalarTypeFromContext retrieves the declared scalar output type.
+// Returns the type and true when a non-empty one was set, "" and false otherwise.
+func DeclaredScalarTypeFromContext(ctx context.Context) (string, bool) {
+	t, ok := ctx.Value(declaredScalarTypeKey).(string)
+	if !ok || t == "" {
+		return "", false
+	}
+	return t, true
+}
+
 // TemplateFuncBinder supplies solution-author-defined Go template helper
 // functions to the go-template provider. It is implemented by the authorfuncs
 // library compiled from a solution's spec.functions. Keeping the provider layer
