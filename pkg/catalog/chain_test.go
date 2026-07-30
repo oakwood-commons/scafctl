@@ -98,6 +98,8 @@ func TestChainCatalog_Fetch_NotFound(t *testing.T) {
 	_, _, err = chain.Fetch(context.Background(), ref)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found in any catalog")
+	assert.True(t, errors.Is(err, ErrArtifactNotFound))
+	assert.True(t, IsNotFound(err))
 }
 
 func TestChainCatalog_Fetch_SingleCatalogUnreachable(t *testing.T) {
@@ -223,8 +225,32 @@ func TestAggregateChainError(t *testing.T) {
 			{catalog: "c1", err: ErrArtifactNotFound},
 			{catalog: "c2", err: ErrArtifactNotFound},
 		})
-		assert.Equal(t, `artifact "subject" not found in any catalog`, err.Error())
+		assert.Contains(t, err.Error(), `artifact "subject" not found in any catalog`)
 		assert.False(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.True(t, errors.Is(err, ErrArtifactNotFound))
+	})
+
+	t.Run("other error, no unreachable", func(t *testing.T) {
+		cause := fmt.Errorf("permission denied")
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "c1", err: cause},
+		})
+		assert.False(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.False(t, errors.Is(err, ErrArtifactNotFound))
+		assert.Contains(t, err.Error(), "c1")
+		assert.Contains(t, err.Error(), "permission denied")
+	})
+
+	t.Run("other error mixed with not found, no unreachable", func(t *testing.T) {
+		cause := fmt.Errorf("permission denied")
+		err := aggregateChainError("subject", []catalogOutcome{
+			{catalog: "c1", err: ErrArtifactNotFound},
+			{catalog: "c2", err: cause},
+		})
+		assert.False(t, errors.Is(err, ErrCatalogUnreachable))
+		assert.False(t, errors.Is(err, ErrArtifactNotFound))
+		assert.Contains(t, err.Error(), "c2")
+		assert.Contains(t, err.Error(), "permission denied")
 	})
 
 	t.Run("single unreachable, no not-found", func(t *testing.T) {
@@ -253,7 +279,8 @@ func TestAggregateChainError(t *testing.T) {
 
 	t.Run("no outcomes with errors", func(t *testing.T) {
 		err := aggregateChainError("subject", nil)
-		assert.Equal(t, `artifact "subject" not found in any catalog`, err.Error())
+		assert.Contains(t, err.Error(), `artifact "subject" not found in any catalog`)
+		assert.True(t, errors.Is(err, ErrArtifactNotFound))
 	})
 }
 

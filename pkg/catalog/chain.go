@@ -59,26 +59,39 @@ func (c *ChainCatalog) Store(ctx context.Context, ref Reference, content, bundle
 }
 
 // catalogOutcome records the result of trying one catalog in a chain, used
-// to build an aggregated error that distinguishes "unreachable" catalogs
-// from "checked and reported not found" catalogs.
+// to build an aggregated error that distinguishes "unreachable" catalogs,
+// catalogs that were "checked and reported not found", and catalogs that
+// failed with some other (non-not-found, non-unreachable) error such as an
+// auth failure or malformed manifest.
 type catalogOutcome struct {
 	catalog string
 	err     error
 }
 
 // aggregateChainError builds a final error from the per-catalog outcomes of
-// a failed chain operation. When one or more catalogs were unreachable
-// (network/transport failure), the message calls that out explicitly and
-// separately from catalogs that were reached and genuinely reported the
-// artifact does not exist — this is the fix for the misleading "not found"
-// message when the real problem is that a catalog (often the official one,
-// always last in the chain) could not be contacted. When no catalog was
-// unreachable, the message is unchanged from before this behavior existed,
+// a failed chain operation, classifying each outcome into one of three
+// buckets: unreachable (network/transport failure), not-found (the catalog
+// was reached and reported errors.Is(err, ErrArtifactNotFound)), or other
+// (any other error, e.g. auth failure or malformed data). When one or more
+// catalogs were unreachable, the message calls that out explicitly and
+// separately from catalogs that genuinely reported the artifact does not
+// exist — this is the fix for the misleading "not found" message when the
+// real problem is that a catalog (often the official one, always last in
+// the chain) could not be contacted. When there are "other" errors and no
+// unreachable ones, the representative other error is surfaced directly
+// instead of being folded into "not found". When every outcome is a genuine
+// not-found, the returned error wraps ErrArtifactNotFound so callers using
+// errors.Is/IsNotFound still recognize an ordinary chain miss. When no
+// catalog was unreachable and none had an "other" error, the message is
+// unchanged from before this behavior existed, so existing "not found"
+// tests continue to pass unmodified.
 // so existing "not found" tests continue to pass unmodified.
 func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 	var unreachable []string
 	var notFound []string
+	var other []string
 	var firstUnreachableErr error
+	var firstOtherErr error
 
 	for _, o := range outcomes {
 		if o.err == nil {
@@ -91,19 +104,35 @@ func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 			}
 			continue
 		}
-		notFound = append(notFound, o.catalog)
+		if errors.Is(o.err, ErrArtifactNotFound) {
+			notFound = append(notFound, o.catalog)
+			continue
+		}
+		other = append(other, o.catalog)
+		if firstOtherErr == nil {
+			firstOtherErr = o.err
+		}
+	}
+
+	if len(unreachable) == 0 && len(other) == 0 {
+		return fmt.Errorf("artifact %q not found in any catalog: %w", subject, ErrArtifactNotFound)
 	}
 
 	if len(unreachable) == 0 {
-		return fmt.Errorf("artifact %q not found in any catalog", subject)
+		// Only "other" (non-not-found, non-unreachable) errors: surface the
+		// representative cause instead of masking it as a plain not-found.
+		return fmt.Errorf("%q failed in %s: %w", subject, strings.Join(other, ", "), firstOtherErr)
 	}
 
-	if len(notFound) == 0 {
+	if len(notFound) == 0 && len(other) == 0 {
 		return fmt.Errorf("%q unavailable: %s: %w", subject, strings.Join(unreachable, "; "), firstUnreachableErr)
 	}
 
+	checked := make([]string, 0, len(notFound)+len(other))
+	checked = append(checked, notFound...)
+	checked = append(checked, other...)
 	return fmt.Errorf("%q unavailable: %s; not found in %s: %w",
-		subject, strings.Join(unreachable, "; "), strings.Join(notFound, ", "), firstUnreachableErr)
+		subject, strings.Join(unreachable, "; "), strings.Join(checked, ", "), firstUnreachableErr)
 }
 
 // Fetch tries each catalog in order, returning the first successful result.
