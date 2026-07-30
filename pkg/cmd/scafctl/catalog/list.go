@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -53,6 +54,9 @@ type ArtifactListItem struct {
 	Catalog     string `json:"catalog" yaml:"catalog"`
 }
 
+//go:embed list_schema.json
+var listSchemaJSON []byte
+
 // listColumnHints controls table column display for catalog list.
 var listColumnHints = map[string]tui.ColumnHint{
 	"name":        {MaxWidth: 30, Priority: 10},
@@ -61,29 +65,10 @@ var listColumnHints = map[string]tui.ColumnHint{
 	"displayName": {MaxWidth: 25, Priority: 6, DisplayName: "display name"},
 	"category":    {MaxWidth: 15, Priority: 4},
 	"catalog":     {MaxWidth: 25, Priority: 8},
+	"createdAt":   {Hidden: true},
+	"digest":      {Hidden: true},
+	"version":     {Hidden: true},
 }
-
-// artifactListSchema controls table column display. Columns in the "required" array
-// (name, tag, kind, catalog) resist truncation.
-// version, createdAt, and digest are hidden in table view but included in json/yaml output.
-var artifactListSchema = []byte(`{
-	"type": "array",
-	"items": {
-		"type": "object",
-		"required": ["name", "tag", "kind", "catalog"],
-		"properties": {
-			"name":        { "type": "string", "title": "Name" },
-			"tag":         { "type": "string", "title": "Tag" },
-			"kind":        { "type": "string", "title": "Kind" },
-			"displayName": { "type": "string", "title": "Display Name" },
-			"category":    { "type": "string", "title": "Category" },
-			"catalog":     { "type": "string", "title": "Catalog" },
-			"version":     { "type": "string", "deprecated": true },
-			"digest":      { "type": "string", "deprecated": true },
-			"createdAt":   { "type": "string", "deprecated": true }
-		}
-	}
-}`)
 
 // CommandList creates the list command.
 func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -158,7 +143,7 @@ func CommandList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
 				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputColumnOrder([]string{"name", "tag", "kind", "displayName", "category", "digest", "catalog"}),
-				kvx.WithOutputSchemaJSON(artifactListSchema),
+				kvx.WithOutputDisplaySchemaJSON(listSchemaJSON),
 				kvx.WithOutputColumnHints(listColumnHints),
 			)
 			return runList(cmd.Context(), options, kvxOpts)
