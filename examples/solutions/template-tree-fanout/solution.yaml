@@ -1,0 +1,112 @@
+# Run: scafctl run solution -f examples/solutions/template-tree-fanout/solution.yaml
+#
+# After running:
+#   find ./output -type f
+#   cat ./output/envs/prod/backend.tf
+#   cat ./output/envs/prod/modules/app.tf
+
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: template-tree-fanout
+  displayName: Template Tree Fan-Out (forEach + pathTemplate)
+  category: solutions
+  tags:
+    - solution
+    - template
+    - fan-out
+  description: |
+    Render an entire directory tree of Go templates once per environment,
+    routing each environment's copy to its own output directory. This is the
+    native render-tree fan-out: `forEach` iterates a collection and
+    `pathTemplate` computes a distinct output path per (item, template), so a
+    whole template tree is cross-producted across items in one resolver -- no
+    per-item duplication and no external looping.
+
+spec:
+  resolvers:
+    # -------------------------------------------------------------------------
+    # Step 1: The collection to fan out over. The template tree is rendered
+    # once per element of this array.
+    # -------------------------------------------------------------------------
+    environments:
+      description: Environments to generate an infrastructure tree for
+      type: any
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                - name: dev
+                  bucket: tfstate-dev
+                  region: us-east1
+                - name: staging
+                  bucket: tfstate-staging
+                  region: us-east1
+                - name: prod
+                  bucket: tfstate-prod
+                  region: us-central1
+
+    # -------------------------------------------------------------------------
+    # Step 2: Read the shared template tree from disk (one set of templates,
+    # reused for every environment).
+    # -------------------------------------------------------------------------
+    templateFiles:
+      description: Read all .tpl files recursively, including their content
+      type: any
+      resolve:
+        with:
+          - provider: directory
+            inputs:
+              operation: list
+              path: templates
+              recursive: true
+              filterGlob: "*.tpl"
+              includeContent: true
+
+    # -------------------------------------------------------------------------
+    # Step 3: Fan the template tree out across every environment. Each template
+    # is rendered once per environment; `env` (the item alias) and the reserved
+    # __file* path parts are available in both the template content and the
+    # pathTemplate.
+    # -------------------------------------------------------------------------
+    rendered:
+      description: The full template tree rendered once per environment
+      type: any
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              operation: render-tree
+              entries:
+                expr: '_.templateFiles.entries'
+              # Shared variables injected into every rendered file.
+              data:
+                platformAppName: myapp
+              # Render the whole tree once per environment.
+              forEach:
+                item: env
+                in:
+                  rslvr: environments
+              # Route each environment's copy to envs/<name>/... and strip .tpl.
+              #   backend.tf.tpl        -> envs/dev/backend.tf
+              #   modules/app.tf.tpl    -> envs/dev/modules/app.tf
+              pathTemplate: >-
+                envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+
+  # ===========================================================================
+  # ACTIONS: Write the fanned-out tree to disk. Every entry already carries its
+  # final, environment-scoped path from pathTemplate.
+  # ===========================================================================
+  workflow:
+    actions:
+      write-rendered-files:
+        description: >
+          Write the rendered tree under ./output, preserving each entry's
+          environment-scoped path (envs/<name>/...).
+        provider: file
+        inputs:
+          operation: write-tree
+          basePath: ./output
+          entries:
+            rslvr: rendered

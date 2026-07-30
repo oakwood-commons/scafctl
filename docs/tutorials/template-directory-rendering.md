@@ -171,6 +171,44 @@ Entries without a `data` field render against the shared `data` alone, so
 existing `render-tree` usage is unaffected. A non-map `data` value fails with a
 clear error naming the entry index and path.
 
+### Tree fan-out (forEach + pathTemplate)
+
+Per-entry `data` fans out a hand-built entry list. To fan out the **whole
+template tree** -- rendering every entry once per item in a collection, the way
+a Terraform module is instantiated once per `for_each` value -- use `forEach`
+together with `pathTemplate`. The template set stays defined once (here from the
+`directory` provider) and each item's copy is routed to a distinct subtree:
+
+```yaml
+resolvers:
+  perEnvTree:
+    type: any
+    resolve:
+      with:
+        - provider: go-template
+          inputs:
+            operation: render-tree
+            entries:
+              expr: '_.templateFiles.entries'   # the shared template tree
+            data:
+              platformAppName: myapp            # shared across every copy
+            forEach:
+              item: env                         # alias for the current item
+              in:
+                rslvr: environments             # array resolved by the spec layer
+            pathTemplate: >-
+              envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+```
+
+Given N template entries and M items, the result is one flat array of N x M
+rendered entries -- ready to hand straight to the `file` provider's
+`write-tree`. For each copy the current item is bound under the `forEach.item`
+alias (`env`) and `__item`, its position under `forEach.index` (if set) and
+`__index`, and `pathTemplate` is rendered with access to those plus the shared
+`data` and the reserved `__file*` path parts (`__fileDir`, `__fileStem`, and so
+on). Rendered paths must be unique across the fan-out -- a duplicate is a hard
+error, so a mis-written `pathTemplate` can never silently collapse the output.
+
 ### Verbatim Files in a Mixed Tree (raw)
 
 Sometimes a tree mixes templated files with files that must be copied **exactly

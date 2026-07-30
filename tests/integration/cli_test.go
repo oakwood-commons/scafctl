@@ -2929,6 +2929,24 @@ func TestIntegration_RunSolution_TemplateDirectory(t *testing.T) {
 			path:     "README.md",
 			contains: []string{"# test-app", "Version: 2.0.0"},
 		},
+		// Tree fan-out (forEach + pathTemplate): the whole template tree is
+		// rendered once per environment into a distinct envs/<name>/ subtree.
+		{
+			path:     "envs/dev/k8s/deployment.yaml",
+			contains: []string{"name: test-app", "namespace: test-ns"},
+		},
+		{
+			path:     "envs/prod/k8s/deployment.yaml",
+			contains: []string{"name: test-app", "namespace: test-ns"},
+		},
+		{
+			path:     "envs/dev/config/app.yaml",
+			contains: []string{"port: 8080", "level: debug"},
+		},
+		{
+			path:     "envs/prod/README.md",
+			contains: []string{"# test-app", "Version: 2.0.0"},
+		},
 	}
 
 	for _, ef := range expected {
@@ -2947,6 +2965,8 @@ func TestIntegration_RunSolution_TemplateDirectory(t *testing.T) {
 	// Ensure .tpl files do NOT exist — extension should be stripped
 	assert.NoFileExists(t, filepath.Join(outputDir, "k8s/deployment.yaml.tpl"))
 	assert.NoFileExists(t, filepath.Join(outputDir, "README.md.tpl"))
+	// Fan-out paths are also .tpl-stripped.
+	assert.NoFileExists(t, filepath.Join(outputDir, "envs/dev/k8s/deployment.yaml.tpl"))
 }
 
 func TestIntegration_RunSolution_RetryIfWithCommandNotFound(t *testing.T) {

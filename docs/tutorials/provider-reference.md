@@ -1172,6 +1172,8 @@ Transform data using Go text/template syntax. Supports single-template rendering
 | `leftDelim` | string | ❌ | Left delimiter (default: `{{`) |
 | `rightDelim` | string | ❌ | Right delimiter (default: `}}`) |
 | `data` | any | ❌ | Additional data to merge with resolver context |
+| `forEach` | object | ❌ | (render-tree only) Fan the whole entry set out once per item in a collection. `{ item?, index?, in }` -- `in` is the collection (array), `item`/`index` name the injected aliases (default `__item`/`__index`). Requires `pathTemplate`. |
+| `pathTemplate` | string | ❌ | (render-tree only, required with `forEach`) Go template that computes each fanned-out entry's output path. Has access to the item alias, `__index`, shared `data`, and the reserved `__file*` path parts (`__fileDir`, `__fileStem`, `__fileName`, `__fileExtension`, `__filePath`). Rendered paths must be unique across the fan-out. |
 | `rawGlobs` | array | ❌ | (render-tree only) List of doublestar glob patterns matched against each entry's full relative `path`. Matching entries are copied verbatim (no parse, no `data`). Patterns match the whole path, so `*.tf` matches only top-level files while `**/*.tf` also matches nested ones. A per-entry `raw` field overrides this. Max 20 patterns. |
 | `ignoredBlocks` | array | ❌ | Extra literal pass-through markers (on top of the always-on built-ins). Each entry uses EXACTLY ONE mode: `{ start, end }` (multi-line, markers preserved), `{ line }` (single-line), or `{ token }` (every occurrence of a literal). Built-in zero-config markers `{{/* scafctl:ignore:start */}}`...`{{/* scafctl:ignore:end */}}` (markers stripped) and `# scafctl:ignore` (per-line) need no declaration. |
 
@@ -1212,6 +1214,55 @@ resolve:
 Entries without a `data` field render against the shared `data` alone, so
 existing `render-tree` usage is unaffected. A non-map `data` value fails with a
 clear error naming the entry index and path.
+
+#### Tree fan-out (forEach + pathTemplate)
+
+Per-entry `data` fans out a hand-built entry list. To fan out a whole template
+*tree* -- rendering every entry once per item in a collection, the way a
+Terraform module is instantiated once per `for_each` value -- use `forEach`
+together with `pathTemplate`. This keeps the template set defined once (e.g.
+from a `directory` provider) and routes each item's copy to a distinct output
+subtree:
+
+```yaml
+resolve:
+  with:
+    - provider: go-template
+      inputs:
+        operation: render-tree
+        entries:
+          expr: '_.templateFiles.entries'   # the shared template tree
+        data:
+          platformAppName: my-app           # shared across every copy
+        forEach:
+          item: env                         # alias for the current item
+          in:
+            rslvr: environments             # array resolved by the spec layer
+        pathTemplate: >-
+          envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}
+```
+
+Given N template entries and M items, the result is a single flat array of
+N x M rendered entries -- ready to hand straight to the `file` provider's
+`write-tree`. For each copy:
+
+- The current item is bound under the `forEach.item` alias (here `env`) and
+  also under the reserved `__item`; the zero-based position is bound under
+  `forEach.index` (if set) and `__index`.
+- Template data precedence is: per-entry `data` > fan-out aliases
+  (`item`/`index`, `__item`/`__index`) > shared `data` > resolver context.
+- `pathTemplate` is rendered per copy with access to the item alias, `__index`,
+  the shared `data`, and the reserved `__file*` path parts (`__fileDir`,
+  `__fileStem`, `__fileName`, `__fileExtension`, `__filePath`) drawn from the
+  entry's original `path`. `__fileStem` drops the extension (e.g. a trailing
+  `.tpl`), and `__fileDir` preserves the source subdirectory.
+
+`forEach.in` is resolved by the spec layer before the provider runs, so it may
+be a resolver reference (`{rslvr: ...}`) or CEL (`{expr: ...}`) that yields an
+array. A non-array value, a missing `in`, or a missing `pathTemplate` fails with
+a clear error. Rendered output paths must be unique across the fan-out -- a
+duplicate path is a hard error (it would otherwise silently collapse two copies
+into one). An empty collection simply produces no entries.
 
 #### Verbatim passthrough (raw)
 

@@ -121,14 +121,14 @@ var builtinVariables = []ContextVariable{
 		Name:        celexp.VarItem, // "__item"
 		Languages:   langBoth,
 		Phases:      []string{PhaseForEach},
-		Description: "The current element in a forEach iteration (resolve or transform). Available in CEL (__item) and Go templates ({{ .__item }}).",
+		Description: "The current element in a forEach iteration. In a resolve/transform forEach it iterates values; in a go-template render-tree fan-out (forEach.in) it is the current collection item, injected into both entry data and the pathTemplate and also bound under the user-chosen forEach.item alias. Available in CEL (__item) and Go templates ({{ .__item }}).",
 		Example:     "__item.name",
 	},
 	{
 		Name:        celexp.VarIndex, // "__index"
 		Languages:   langBoth,
 		Phases:      []string{PhaseForEach},
-		Description: "The current zero-based index in a forEach iteration (resolve or transform). Available in CEL (__index) and Go templates ({{ .__index }}).",
+		Description: "The current zero-based index in a forEach iteration (resolve/transform forEach or a go-template render-tree fan-out). Also bound under the user-chosen forEach.index alias when set. Available in CEL (__index) and Go templates ({{ .__index }}).",
 		Example:     "__index == 0",
 	},
 	{
@@ -177,7 +177,7 @@ var builtinVariables = []ContextVariable{
 		Name:        "__filePath",
 		Languages:   langTemplateOnly,
 		Phases:      []string{PhaseTemplateFile},
-		Description: "Full source path of the current file during directory -> render-tree -> write-tree generation. Available in the file provider's outputPath template for renaming files.",
+		Description: "Full source path of the current file during directory -> render-tree -> write-tree generation. Available in the file provider's outputPath template and in the go-template render-tree pathTemplate for renaming/routing files.",
 		Example:     "{{ .__fileDir }}/{{ .__fileStem }}",
 	},
 	{
