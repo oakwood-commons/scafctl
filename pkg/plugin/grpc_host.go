@@ -67,10 +67,9 @@ type HostServiceDeps struct {
 	// May be nil if auth is unavailable.
 	AuthTokenFunc func(ctx context.Context, handler, scope string, minValidFor int64, forceRefresh bool) (*proto.GetAuthTokenResponse, error) `json:"-" yaml:"-" doc:"Auth token callback (not serialized)."`
 	// AuthGroupsFunc retrieves group memberships for the authenticated user.
-	// Only handlers that implement group queries (e.g. Entra) will return results.
-	// May be nil if group queries are unavailable.
-	// TODO: Wire this callback in production code (e.g. via RootOptions or plugin SDK)
-	// once an auth handler with group query support is available.
+	// Only handlers that implement auth.GroupsProvider (e.g. Entra) return
+	// results; others yield an actionable error. Wired in production by
+	// HostDepsFromAuthRegistry. May be nil if group queries are unavailable.
 	AuthGroupsFunc func(ctx context.Context, handler string) ([]string, error) `json:"-" yaml:"-" doc:"Auth groups callback (not serialized)."`
 	// ProfileResolverFunc resolves the active auth profile for a handler when
 	// the plugin request does not specify one explicitly. This bridges the gap
@@ -620,6 +619,33 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 						"scoped token can be minted to derive identity claims", handler)
 			}
 			return claimsToProto(st.Claims), nil
+		},
+		AuthGroupsFunc: func(ctx context.Context, handler string) ([]string, error) {
+			// Resolve empty handler name to the default handler (the first in
+			// authReg.List(), which is sorted, i.e. first alphabetically).
+			if handler == "" {
+				handlers := authReg.List()
+				if len(handlers) == 0 {
+					return nil, fmt.Errorf("no auth handlers registered")
+				}
+				handler = handlers[0]
+			}
+			h, err := authReg.Get(handler)
+			if err != nil {
+				return nil, fmt.Errorf("auth handler %q: %w", handler, err)
+			}
+			// Group membership is served via the optional GroupsProvider
+			// interface (a separate paginated callback), not the claim set,
+			// because Entra emits a _claim_names.groups overage past 200 groups.
+			gp, ok := h.(auth.GroupsProvider)
+			if !ok {
+				return nil, fmt.Errorf("auth handler %q does not support group membership queries (GroupsProvider not implemented)", handler)
+			}
+			groups, err := gp.GetGroups(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("get groups from %q: %w", handler, err)
+			}
+			return groups, nil
 		},
 	}
 }

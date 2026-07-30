@@ -61,7 +61,7 @@ type Handler interface {
 
 ### Optional Interfaces
 
-Auth handlers can optionally implement these interfaces for token management:
+Auth handlers can optionally implement these interfaces:
 
 ```go
 // TokenLister enumerates all cached tokens (refresh + access).
@@ -72,6 +72,15 @@ type TokenLister interface {
 // TokenPurger removes expired access tokens from the cache.
 type TokenPurger interface {
     PurgeExpiredTokens(ctx context.Context) (int, error)
+}
+
+// GroupsProvider returns the authenticated user's group memberships as
+// ObjectIDs. Implementing it enables the host's GetAuthGroups callback and
+// the identity provider's `operation: groups`. Implementations must handle
+// pagination transparently so all memberships are returned even beyond a
+// per-token cap (e.g. Entra's 200-group JWT overage).
+type GroupsProvider interface {
+    GetGroups(ctx context.Context) ([]string, error)
 }
 ```
 

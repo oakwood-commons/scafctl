@@ -1014,6 +1014,7 @@ Plugins that need host-side resources can access the **HostService** callback se
 - **GetAuthIdentity** -- retrieve identity claims from the host's auth registry
 - **ListAuthHandlers** -- list available auth handlers (filtered by AllowedAuthHandlers)
 - **GetAuthToken** -- retrieve a valid access token from the host's auth registry
+- **GetAuthGroups** -- retrieve the authenticated user's group memberships (requires the handler to implement `GroupsProvider`; served separately from claims because Entra emits a `_claim_names.groups` overage past 200 groups)
 
 The host registers HostService via the go-plugin GRPCBroker during plugin startup. Plugins receive the broker service ID in `ProviderConfig.HostServiceID` from the `ConfigureProvider` call. Use this ID to dial the HostService via the broker.
 

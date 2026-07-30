@@ -300,6 +300,120 @@ func TestHostDepsFromAuthRegistry_IdentityFunc_EmptyHandlerResolvesToDefault(t *
 	assert.Equal(t, "alpha-sub", claims.Subject)
 }
 
+// mockGroupsHandler embeds *auth.MockHandler and additionally implements
+// auth.GroupsProvider so the AuthGroupsFunc closure can type-assert to it.
+type mockGroupsHandler struct {
+	*auth.MockHandler
+	groups   []string
+	groupErr error
+}
+
+func (m *mockGroupsHandler) GetGroups(_ context.Context) ([]string, error) {
+	return m.groups, m.groupErr
+}
+
+// Compile-time assertion that mockGroupsHandler satisfies GroupsProvider.
+var _ auth.GroupsProvider = (*mockGroupsHandler)(nil)
+
+func TestHostDepsFromAuthRegistry_GroupsFunc(t *testing.T) {
+	tests := []struct {
+		name       string
+		register   func(t *testing.T, reg *auth.Registry)
+		handler    string
+		wantGroups []string
+		wantErr    string
+	}{
+		{
+			name: "success returns groups",
+			register: func(t *testing.T, reg *auth.Registry) {
+				require.NoError(t, reg.Register(&mockGroupsHandler{
+					MockHandler: auth.NewMockHandler("entra"),
+					groups:      []string{"group-a", "group-b"},
+				}))
+			},
+			handler:    "entra",
+			wantGroups: []string{"group-a", "group-b"},
+		},
+		{
+			name: "success returns empty membership",
+			register: func(t *testing.T, reg *auth.Registry) {
+				require.NoError(t, reg.Register(&mockGroupsHandler{
+					MockHandler: auth.NewMockHandler("entra"),
+					groups:      []string{},
+				}))
+			},
+			handler:    "entra",
+			wantGroups: []string{},
+		},
+		{
+			name: "empty handler resolves to default",
+			register: func(t *testing.T, reg *auth.Registry) {
+				require.NoError(t, reg.Register(&mockGroupsHandler{
+					MockHandler: auth.NewMockHandler("alpha"),
+					groups:      []string{"alpha-group"},
+				}))
+				require.NoError(t, reg.Register(&mockGroupsHandler{
+					MockHandler: auth.NewMockHandler("beta"),
+					groups:      []string{"beta-group"},
+				}))
+			},
+			handler:    "",
+			wantGroups: []string{"alpha-group"},
+		},
+		{
+			name:     "no handlers registered",
+			register: func(_ *testing.T, _ *auth.Registry) {},
+			handler:  "",
+			wantErr:  "no auth handlers registered",
+		},
+		{
+			name:     "unknown handler",
+			register: func(_ *testing.T, _ *auth.Registry) {},
+			handler:  "missing",
+			wantErr:  `auth handler "missing"`,
+		},
+		{
+			name: "handler does not implement GroupsProvider",
+			register: func(t *testing.T, reg *auth.Registry) {
+				require.NoError(t, reg.Register(auth.NewMockHandler("plain")))
+			},
+			handler: "plain",
+			wantErr: "does not support group membership queries (GroupsProvider not implemented)",
+		},
+		{
+			name: "GetGroups returns an error",
+			register: func(t *testing.T, reg *auth.Registry) {
+				require.NoError(t, reg.Register(&mockGroupsHandler{
+					MockHandler: auth.NewMockHandler("entra"),
+					groupErr:    fmt.Errorf("graph API unavailable"),
+				}))
+			},
+			handler: "entra",
+			wantErr: `get groups from "entra": graph API unavailable`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := auth.NewRegistry()
+			tt.register(t, reg)
+
+			deps := HostDepsFromAuthRegistry(reg)
+			require.NotNil(t, deps.AuthGroupsFunc)
+
+			groups, err := deps.AuthGroupsFunc(context.Background(), tt.handler)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Nil(t, groups)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantGroups, groups)
+		})
+	}
+}
+
 func BenchmarkHostDepsFromAuthRegistry(b *testing.B) {
 	reg := auth.NewRegistry()
 	mock := auth.NewMockHandler("bench")
