@@ -209,6 +209,7 @@ service HostService {
   rpc GetAuthIdentity(GetAuthIdentityRequest) returns (GetAuthIdentityResponse);
   rpc ListAuthHandlers(ListAuthHandlersRequest) returns (ListAuthHandlersResponse);
   rpc GetAuthToken(GetAuthTokenRequest) returns (GetAuthTokenResponse);
+  rpc GetAuthGroups(GetAuthGroupsRequest) returns (GetAuthGroupsResponse);
 }
 ```
 
@@ -278,8 +279,20 @@ Plugins that need host-side resources (secrets, auth tokens) use the `HostServic
 | `GetAuthIdentity` | Retrieve identity claims from the host's auth registry |
 | `ListAuthHandlers` | List available auth handlers (filtered by AllowedAuthHandlers) |
 | `GetAuthToken` | Retrieve a valid access token from the host's auth registry |
+| `GetAuthGroups` | Retrieve the authenticated user's group memberships |
 
 Plugins access HostService via a client injected during `ConfigureProvider`.
+
+`GetAuthGroups` returns the authenticated user's group memberships (as
+ObjectIDs) for the named handler, resolving an empty name to the default
+handler. Group membership is served by a separate paginated callback rather
+than being folded into `GetAuthIdentity`'s `Claims`: Microsoft Entra emits a
+`_claim_names.groups` overage (instead of a `groups` claim) once a user belongs
+to more than 200 groups, so the full list must be fetched out of band. The
+callback requires the resolved handler to implement the `auth.GroupsProvider`
+interface; handlers that do not implement it return an actionable error rather
+than an empty list. As with the other auth callbacks, the request is gated by
+`AllowedAuthHandlers`.
 
 ### Diagnostics and Exit Codes
 

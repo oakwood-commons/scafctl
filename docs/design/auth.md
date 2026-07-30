@@ -150,6 +150,22 @@ This design makes plugin-loaded auth handlers work without CLI code changes -- a
 **Example**: Running `scafctl auth token github --scope repo` returns an error:
 > the "github" auth handler does not support per-request scopes; scopes are fixed at login time. Use 'scafctl auth login github --scope <scope>' to change scopes
 
+### Group Membership (GroupsProvider)
+
+Group membership is served separately from identity claims. A handler may
+optionally implement the `auth.GroupsProvider` interface
+(`GetGroups(ctx) ([]string, error)`) to return the authenticated user's group
+memberships as ObjectIDs. This is intentionally **not** part of `auth.Claims`:
+Microsoft Entra caps the `groups` claim and instead emits a
+`_claim_names.groups` overage once a user belongs to more than 200 groups, so
+the full list must be fetched out of band (e.g. via Microsoft Graph) with
+transparent pagination.
+
+Callers -- including the `auth token` command and plugins via the
+`GetAuthGroups` host RPC (see the plugins design doc) -- type-assert the
+resolved handler to `GroupsProvider` before querying it. Handlers that do not
+implement the interface return an actionable error rather than an empty list.
+
 ### Handler Registry
 
 Auth handlers are managed via a thread-safe registry (`auth.Registry`). CLI commands look up handlers by name from the registry in context, rather than using hardcoded switch statements. This supports:

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl-plugin-sdk/plugin/proto"
+	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,6 +72,51 @@ func TestHostServiceServer_GetAuthGroups_FuncError(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Error, "graph API unavailable")
+}
+
+// TestHostServiceServer_GetAuthGroups_WiredFromRegistry exercises the full path:
+// deps produced by HostDepsFromAuthRegistry driving the RPC server against a
+// real auth.Registry whose handler implements GroupsProvider.
+func TestHostServiceServer_GetAuthGroups_WiredFromRegistry(t *testing.T) {
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(&mockGroupsHandler{
+		MockHandler: auth.NewMockHandler("entra"),
+		groups:      []string{"g1", "g2", "g3"},
+	}))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	require.NotNil(t, deps)
+	server := &HostServiceServer{Deps: *deps}
+
+	resp, err := server.GetAuthGroups(context.Background(), &proto.GetAuthGroupsRequest{
+		HandlerName: "entra",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp.Error)
+	assert.Equal(t, []string{"g1", "g2", "g3"}, resp.Groups)
+}
+
+// TestHostServiceServer_GetAuthGroups_WiredFromRegistry_Denied verifies the
+// allowlist gate still blocks a disallowed handler even when the callback is
+// wired from a real registry.
+func TestHostServiceServer_GetAuthGroups_WiredFromRegistry_Denied(t *testing.T) {
+	reg := auth.NewRegistry()
+	require.NoError(t, reg.Register(&mockGroupsHandler{
+		MockHandler: auth.NewMockHandler("entra"),
+		groups:      []string{"g1"},
+	}))
+
+	deps := HostDepsFromAuthRegistry(reg)
+	require.NotNil(t, deps)
+	deps.AllowedAuthHandlers = []string{"github"}
+	server := &HostServiceServer{Deps: *deps}
+
+	resp, err := server.GetAuthGroups(context.Background(), &proto.GetAuthGroupsRequest{
+		HandlerName: "entra",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp.Error, "access denied")
+	assert.Nil(t, resp.Groups)
 }
 
 // --- GetAuthGroups client tests ---
