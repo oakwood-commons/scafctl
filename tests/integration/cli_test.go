@@ -3159,6 +3159,17 @@ func TestIntegration_RenderSolution_Effective(t *testing.T) {
 		assert.NotContains(t, out1, "compose:")
 	})
 
+	t.Run("stdout matches committed golden byte-for-byte", func(t *testing.T) {
+		t.Parallel()
+		stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", solPath, "--effective", "-o", "yaml")
+		require.Equal(t, 0, exitCode)
+		golden, err := os.ReadFile(filepath.Join(findProjectRoot(), "examples/solutions/compose-fidelity/golden.effective.yaml"))
+		require.NoError(t, err)
+		// Verbatim: stdout must equal the committed golden exactly (no extra
+		// trailing newline), which is the core golden-file fidelity guarantee.
+		assert.Equal(t, string(golden), stdout)
+	})
+
 	t.Run("section workflow scopes output", func(t *testing.T) {
 		t.Parallel()
 		stdout, _, exitCode := runScafctl(t, "render", "solution", "-f", solPath,

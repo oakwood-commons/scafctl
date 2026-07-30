@@ -7,12 +7,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/effective"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
@@ -115,6 +118,53 @@ func TestSolutionOptions_Run_EffectiveRoute_JSON(t *testing.T) {
 	require.NoError(t, opts.Run(ctx))
 
 	assert.Contains(t, buf.String(), `"name": "effective-cli"`)
+}
+
+// TestSolutionOptions_Run_EffectiveRoute_VerbatimStdout asserts that effective
+// mode emits bytes to stdout byte-identical to effective.Render (no extra
+// trailing newline). This keeps stdout, --output-file, and effective.Render in
+// agreement so golden-file diffing is exact.
+func TestSolutionOptions_Run_EffectiveRoute_VerbatimStdout(t *testing.T) {
+	t.Parallel()
+
+	sol := effectiveTestSolution(t)
+	opts, buf, ctx := newEffectiveOptions(sol, nil, "yaml", "all")
+	require.NoError(t, opts.Run(ctx))
+
+	want, err := effective.Render(sol, effective.Options{
+		Section: effective.SectionAll,
+		Format:  effective.FormatYAML,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, string(want), buf.String())
+	assert.True(t, bytes.HasSuffix(buf.Bytes(), []byte("\n")))
+	assert.False(t, bytes.HasSuffix(buf.Bytes(), []byte("\n\n")),
+		"stdout must not carry a doubled trailing newline")
+}
+
+// TestSolutionOptions_Run_EffectiveRoute_OutputFileVerbatim asserts that
+// --output-file receives the exact bytes of effective.Render (no extension
+// munging, no trailing-newline drift) so a file written this way is identical
+// to stdout.
+func TestSolutionOptions_Run_EffectiveRoute_OutputFileVerbatim(t *testing.T) {
+	t.Parallel()
+
+	sol := effectiveTestSolution(t)
+	opts, _, ctx := newEffectiveOptions(sol, nil, "yaml", "all")
+	outFile := filepath.Join(t.TempDir(), "golden.effective.yaml")
+	opts.OutputFile = outFile
+	require.NoError(t, opts.Run(ctx))
+
+	want, err := effective.Render(sol, effective.Options{
+		Section: effective.SectionAll,
+		Format:  effective.FormatYAML,
+	})
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	assert.Equal(t, string(want), string(got))
 }
 
 func TestSolutionOptions_Run_EffectiveRoute_SectionWorkflow(t *testing.T) {

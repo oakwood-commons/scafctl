@@ -134,7 +134,10 @@ func (s *Server) registerSolutionTools() {
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
-		mcp.WithOpenWorldHintAnnotation(false),
+		// openWorld: the path may be a catalog name or URL that inspect.LoadSolution
+		// resolves against remote catalogs, so this tool can touch the network --
+		// matching inspect_solution and render_solution.
+		mcp.WithOpenWorldHintAnnotation(true),
 		mcp.WithString("path",
 			mcp.Required(),
 			mcp.Description("Path to solution file, catalog name, or URL"),

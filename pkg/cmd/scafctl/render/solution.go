@@ -352,7 +352,7 @@ func (o *SolutionOptions) runEffective(ctx context.Context, lgr logr.Logger) err
 		return o.exitWithCode(err, exitcode.RenderFailed)
 	}
 
-	return o.writeOutput(ctx, rendered)
+	return o.writeEffectiveOutput(ctx, rendered)
 }
 
 // runActionGraph renders the action graph (default mode)
@@ -770,6 +770,24 @@ func (o *SolutionOptions) writeOutput(ctx context.Context, data []byte) error {
 
 	if w := writer.FromContext(ctx); w != nil {
 		w.Plainln(string(data))
+	}
+	return nil
+}
+
+// writeEffectiveOutput writes the effective solution document verbatim.
+//
+// Unlike writeOutput, it does NOT append a trailing newline and writes to
+// --output-file at the exact path given (no extension munging). This keeps
+// stdout byte-identical to both the bytes returned by effective.Render and the
+// bytes written via --output-file, which is essential for byte-exact
+// golden-file fidelity diffing.
+func (o *SolutionOptions) writeEffectiveOutput(ctx context.Context, data []byte) error {
+	if o.OutputFile != "" {
+		return os.WriteFile(o.OutputFile, data, 0o600)
+	}
+
+	if w := writer.FromContext(ctx); w != nil {
+		w.Plain(string(data))
 	}
 	return nil
 }

@@ -41,4 +41,3 @@ spec:
                     message:
                         expr: '''Deploying '' + _.app_name + '' to '' + _.environment'
                     type: success
-
