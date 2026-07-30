@@ -23,6 +23,7 @@ const (
 	TypeFloat    = spec.TypeFloat
 	TypeBool     = spec.TypeBool
 	TypeArray    = spec.TypeArray
+	TypeObject   = spec.TypeObject
 	TypeTime     = spec.TypeTime
 	TypeDuration = spec.TypeDuration
 	TypeAny      = spec.TypeAny

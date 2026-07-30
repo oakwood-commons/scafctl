@@ -530,3 +530,28 @@ func TestCoerceType_Bool_EdgeCases(t *testing.T) {
 	_, err = CoerceType(map[string]any{"k": "v"}, TypeBool)
 	assert.Error(t, err)
 }
+
+// TestType_IsScalar verifies only the scalar value types report true.
+func TestType_IsScalar(t *testing.T) {
+	tests := []struct {
+		typ  Type
+		want bool
+	}{
+		{TypeString, true},
+		{TypeInt, true},
+		{TypeFloat, true},
+		{TypeBool, true},
+		{TypeArray, false},
+		{TypeObject, false},
+		{TypeTime, false},
+		{TypeDuration, false},
+		{TypeAny, false},
+		{Type(""), false},
+		{Type("bogus"), false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.typ), func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.typ.IsScalar())
+		})
+	}
+}

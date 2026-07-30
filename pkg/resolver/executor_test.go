@@ -2377,3 +2377,65 @@ func TestExecutor_Execute_DeclaredTypeScopedToResolvePhase(t *testing.T) {
 	assert.False(t, transformOK, "declared scalar type must NOT leak into the transform phase")
 	assert.Empty(t, transformDeclared)
 }
+
+// TestExecutor_Execute_DeclaredTypeOnlyForScalarTypes verifies the declared
+// type is propagated into the resolve phase only for scalar types
+// (string/int/float/bool). Composite, temporal, and any/untyped resolvers must
+// not carry a declared scalar type, keeping the parameter provider on its
+// normal auto inference.
+func TestExecutor_Execute_DeclaredTypeOnlyForScalarTypes(t *testing.T) {
+	tests := []struct {
+		name         string
+		resolverType Type
+		wantOK       bool
+		wantDeclared string
+	}{
+		{"string is scalar", TypeString, true, string(TypeString)},
+		{"int is scalar", TypeInt, true, string(TypeInt)},
+		{"float is scalar", TypeFloat, true, string(TypeFloat)},
+		{"bool is scalar", TypeBool, true, string(TypeBool)},
+		{"array is not scalar", TypeArray, false, ""},
+		{"object is not scalar", TypeObject, false, ""},
+		{"time is not scalar", TypeTime, false, ""},
+		{"duration is not scalar", TypeDuration, false, ""},
+		{"any is not scalar", TypeAny, false, ""},
+		{"unset is not scalar", Type(""), false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := newMockRegistry()
+
+			var gotDeclared string
+			var gotOK bool
+			capture := &mockProvider{
+				name: "capture",
+				executeFunc: func(ctx context.Context, _ map[string]any) (*provider.Output, error) {
+					gotDeclared, gotOK = provider.DeclaredScalarTypeFromContext(ctx)
+					// Return a value compatible with every declared type so
+					// coercion never fails and masks the assertion.
+					return &provider.Output{Data: nil}, nil
+				},
+			}
+			require.NoError(t, registry.Register(capture))
+
+			executor := NewExecutor(registry)
+			resolvers := []*Resolver{
+				{
+					Name: "value",
+					Type: tt.resolverType,
+					Resolve: &ResolvePhase{
+						With: []ProviderSource{
+							{Provider: "capture"},
+						},
+					},
+				},
+			}
+
+			_, err := executor.Execute(context.Background(), resolvers, nil)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantOK, gotOK)
+			assert.Equal(t, tt.wantDeclared, gotDeclared)
+		})
+	}
+}

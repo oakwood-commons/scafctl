@@ -1650,6 +1650,11 @@ func TestCoerceInt_WholeFloatString(t *testing.T) {
 		{"plain int string", "5", 5, false},
 		{"fractional string errors", "2.5", 0, true},
 		{"non-numeric errors", "abc", 0, true},
+		{"positive infinity errors", "Inf", 0, true},
+		{"negative infinity errors", "-Inf", 0, true},
+		{"nan errors", "NaN", 0, true},
+		{"whole float above int64 range errors", "1e19", 0, true},
+		{"whole float below int64 range errors", "-1e19", 0, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

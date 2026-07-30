@@ -510,12 +510,15 @@ func coerceInt(value any) (any, error) {
 			return n, nil
 		}
 		// Accept whole-number float strings (e.g. "2.0" -> 2), mirroring the
-		// float64 branch below. Reject fractional or out-of-range values.
+		// float64 branch below. Reject fractional, non-finite, or out-of-range
+		// values: int64(f) is implementation-defined when f is Inf/NaN or outside
+		// the int64 range, so guard explicitly before converting.
 		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			if f == math.Trunc(f) && float64(int64(f)) == f {
-				return int64(f), nil
+			if math.IsInf(f, 0) || math.IsNaN(f) || f != math.Trunc(f) ||
+				f < float64(math.MinInt64) || f >= float64(math.MaxInt64) {
+				return nil, fmt.Errorf("cannot represent %v as int without loss", v)
 			}
-			return nil, fmt.Errorf("cannot represent %v as int without loss", v)
+			return int64(f), nil
 		}
 		return nil, fmt.Errorf("cannot parse %q as int", v)
 	case int:
