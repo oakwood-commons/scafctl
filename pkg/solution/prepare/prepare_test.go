@@ -1250,6 +1250,20 @@ func TestHostEntrypoint(t *testing.T) {
 		assert.Equal(t, EntrypointMCP, got)
 	})
 
+	t.Run("reads entrypoint set via SetBaseProviderConfigIfAbsent (pkg/mcp path)", func(t *testing.T) {
+		// Regression for issue #715: a host (e.g. pkg/mcp) declaring its
+		// entrypoint on a bare pool via SetBaseProviderConfigIfAbsent must be
+		// honored by hostEntrypoint on the per-execution path, so the metadata
+		// provider reports "mcp" instead of "unknown".
+		reg := provider.NewRegistry()
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
+		applied := pool.SetBaseProviderConfigIfAbsent(HostStaticProviderConfig("mycli", EntrypointMCP))
+		require.True(t, applied)
+
+		got := hostEntrypoint(&prepareConfig{pluginPool: pool})
+		assert.Equal(t, EntrypointMCP, got)
+	})
+
 	t.Run("falls back to CLI heuristic when binary name set (per-call)", func(t *testing.T) {
 		got := hostEntrypoint(&prepareConfig{pluginCfg: &plugin.ProviderConfig{BinaryName: "scafctl"}})
 		assert.Equal(t, EntrypointCLI, got)

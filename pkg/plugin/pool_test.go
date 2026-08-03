@@ -156,6 +156,188 @@ func TestNewPool_WithBaseProviderConfig(t *testing.T) {
 	})
 }
 
+func TestPool_BaseEntrypoint(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	t.Run("empty when no base config", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+		assert.Empty(t, p.BaseEntrypoint())
+	})
+
+	t.Run("empty when metadata key absent", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"httpClient": json.RawMessage(`{"allowPrivateIPs":true}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+		assert.Empty(t, p.BaseEntrypoint())
+	})
+
+	t.Run("empty when entrypoint field absent", func(t *testing.T) {
+		base := ProviderConfig{
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"version":"1.2.3"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+		assert.Empty(t, p.BaseEntrypoint())
+	})
+
+	t.Run("empty when metadata is malformed", func(t *testing.T) {
+		base := ProviderConfig{
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`not-json`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+		assert.Empty(t, p.BaseEntrypoint())
+	})
+
+	t.Run("returns the declared entrypoint", func(t *testing.T) {
+		base := ProviderConfig{
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(`{"entrypoint":"mcp"}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+		assert.Equal(t, "mcp", p.BaseEntrypoint())
+	})
+}
+
+func TestPool_SetBaseProviderConfigIfAbsent(t *testing.T) {
+	reg := provider.NewRegistry()
+
+	newBase := func(entrypoint string) ProviderConfig {
+		return ProviderConfig{
+			BinaryName: "mycli",
+			Settings: map[string]json.RawMessage{
+				"metadata": json.RawMessage(fmt.Sprintf(`{"entrypoint":%q}`, entrypoint)),
+			},
+		}
+	}
+
+	t.Run("applies when no entrypoint is present", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+
+		applied := p.SetBaseProviderConfigIfAbsent(newBase("mcp"))
+		assert.True(t, applied)
+		assert.Equal(t, "mcp", p.BaseEntrypoint())
+		assert.Equal(t, "mycli", p.BaseProviderConfig().BinaryName)
+	})
+
+	t.Run("no-op when an entrypoint is already declared", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(newBase("api")))
+		defer p.Shutdown()
+
+		applied := p.SetBaseProviderConfigIfAbsent(newBase("mcp"))
+		assert.False(t, applied)
+		assert.Equal(t, "api", p.BaseEntrypoint(), "existing entrypoint must win")
+	})
+
+	t.Run("no-op after a plugin has been loaded", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+
+		// Simulate a loaded plugin: any entry means a plugin was already
+		// Configure'd with the current (empty) base config.
+		p.mu.Lock()
+		p.entries["dummy"] = &poolEntry{}
+		p.mu.Unlock()
+
+		applied := p.SetBaseProviderConfigIfAbsent(newBase("mcp"))
+		assert.False(t, applied)
+		assert.Empty(t, p.BaseEntrypoint())
+	})
+
+	t.Run("no-op after shutdown", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		p.Shutdown()
+
+		applied := p.SetBaseProviderConfigIfAbsent(newBase("mcp"))
+		assert.False(t, applied)
+	})
+
+	t.Run("preserves unrelated settings and existing binary name on merge", func(t *testing.T) {
+		base := ProviderConfig{
+			BinaryName: "embedder-cli",
+			Settings: map[string]json.RawMessage{
+				"httpClient": json.RawMessage(`{"allowPrivateIPs":true}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+
+		// The pool has settings but no entrypoint -- the merge must add the
+		// entrypoint without discarding httpClient or overwriting the name.
+		applied := p.SetBaseProviderConfigIfAbsent(newBase("mcp"))
+		assert.True(t, applied)
+
+		got := p.BaseProviderConfig()
+		assert.Equal(t, "mcp", p.BaseEntrypoint(), "entrypoint should be added")
+		assert.Equal(t, "embedder-cli", got.BinaryName, "existing binary name must be preserved")
+		assert.Equal(t, json.RawMessage(`{"allowPrivateIPs":true}`), got.Settings["httpClient"],
+			"unrelated settings must be preserved")
+	})
+
+	t.Run("adopts incoming binary name when pool has none", func(t *testing.T) {
+		base := ProviderConfig{
+			Settings: map[string]json.RawMessage{
+				"httpClient": json.RawMessage(`{"allowPrivateIPs":true}`),
+			},
+		}
+		p := NewPool(context.Background(), nil, reg, logr.Discard(), WithBaseProviderConfig(base))
+		defer p.Shutdown()
+
+		require.True(t, p.SetBaseProviderConfigIfAbsent(newBase("mcp")))
+		assert.Equal(t, "mycli", p.BaseProviderConfig().BinaryName)
+	})
+
+	t.Run("deep-clones the provided config", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+
+		base := newBase("mcp")
+		require.True(t, p.SetBaseProviderConfigIfAbsent(base))
+
+		// Mutating the caller's map/bytes afterward must not affect the pool.
+		base.Settings["metadata"][0] = 'X'
+		base.Settings["injected"] = json.RawMessage(`true`)
+
+		assert.Equal(t, "mcp", p.BaseEntrypoint())
+		assert.NotContains(t, p.BaseProviderConfig().Settings, "injected")
+	})
+
+	t.Run("concurrent callers apply exactly once", func(t *testing.T) {
+		p := NewPool(context.Background(), nil, reg, logr.Discard())
+		defer p.Shutdown()
+
+		const goroutines = 16
+		var applies atomic.Int32
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+		for i := 0; i < goroutines; i++ {
+			go func() {
+				defer wg.Done()
+				if p.SetBaseProviderConfigIfAbsent(newBase("mcp")) {
+					applies.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+
+		assert.Equal(t, int32(1), applies.Load(), "exactly one caller must apply the config")
+		assert.Equal(t, "mcp", p.BaseEntrypoint())
+	})
+}
+
 func TestBuildSpawnClientOpts(t *testing.T) {
 	// applyOpts applies a slice of ClientOption to a fresh clientOptions struct
 	// and returns the result for assertion.

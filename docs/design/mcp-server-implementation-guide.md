@@ -47,6 +47,7 @@ go get github.com/mark3labs/mcp-go@latest
 ```
 
 This adds:
+
 - `github.com/mark3labs/mcp-go/mcp` — Types, tool builders, result helpers
 - `github.com/mark3labs/mcp-go/server` — Server implementation, stdio/SSE transports
 
@@ -136,6 +137,19 @@ func WithServerVersion(version string) ServerOption {
 func WithServerContext(ctx context.Context) ServerOption {
     return func(c *serverConfig) {
         c.ctx = ctx
+    }
+}
+
+// WithEntrypoint declares the host entrypoint this MCP server represents
+// (defaults to "mcp"). It is delivered to pooled plugins so the metadata
+// provider reports "mcp" rather than "unknown". Applied to the configured
+// plugin pool at construction only if the pool has not already declared an
+// entrypoint, so an embedder or the CLI that wired its own base
+// ProviderConfig always wins. Embedders wrapping pkg/mcp rarely need to set
+// this -- the "mcp" default is correct.
+func WithEntrypoint(entrypoint string) ServerOption {
+    return func(c *serverConfig) {
+        c.entrypoint = entrypoint
     }
 }
 ```
@@ -517,6 +531,7 @@ func (s *Server) handleToolName(ctx context.Context, request mcp.CallToolRequest
 ```
 
 **Important conventions:**
+
 - Tool errors are returned via `mcp.NewToolResultError()` (sets `isError: true`), **not** as Go errors. Go errors are only for protocol-level failures (e.g., the server itself is broken).
 - All tools use `s.ctx` (the pre-built MCP context) for library calls, not the handler's `ctx` parameter. The handler `ctx` is for MCP-level cancellation; `s.ctx` has the scafctl dependencies injected.
 - Progress notifications use the `ProgressToken` from `request.Params.Meta.ProgressToken` when available.
@@ -582,6 +597,7 @@ func (s *Server) handleListSolutions(ctx context.Context, request mcp.CallToolRe
 ```
 
 **Library integration points:**
+
 - `pkg/catalog.NewLocalCatalog()` → `List(ctx, "solution", name)`
 - Returns `[]ArtifactListItem` which has JSON tags
 
@@ -622,10 +638,12 @@ func (s *Server) handleInspectSolution(ctx context.Context, request mcp.CallTool
 ```
 
 **Library integration points:**
+
 - `explain.LoadSolution(ctx, path)` — loads solution from file/catalog/URL
 - `explain.BuildSolutionExplanation(sol)` — returns `*SolutionExplanation` with full JSON tags
 
 **Annotations:**
+
 - `OpenWorldHint: true` — may access remote catalog to load solution
 
 ### Step 2.3: `lint_solution` Tool
@@ -685,6 +703,7 @@ func (s *Server) handleLintSolution(ctx context.Context, request mcp.CallToolReq
 ```
 
 **Library integration points:**
+
 - `prepare.Solution(ctx, path)` — loads solution + builds registry
 - `lint.LintSolution(sol, path, reg)` — returns `*Result` with `[]Finding`
 - `lint.FilterBySeverity(result, severity)` — filters findings
@@ -780,6 +799,7 @@ func (s *Server) handleListProviders(ctx context.Context, request mcp.CallToolRe
 ```
 
 **Library integration points:**
+
 - `s.registry.ListProviders()` — already sorted, no CLI deps
 - `s.registry.ListByCapability()` / `ListByCategory()` — filter methods
 - `provider.Descriptor` — has all the metadata fields
@@ -818,6 +838,7 @@ func (s *Server) handleGetProviderSchema(ctx context.Context, request mcp.CallTo
 ```
 
 **Library integration points:**
+
 - `explain.LookupProvider(ctx, name, reg)` — returns `*provider.Descriptor` with full schema
 
 ### Step 2.6: `list_cel_functions` Tool
@@ -895,6 +916,7 @@ func (s *Server) handleListCELFunctions(ctx context.Context, request mcp.CallToo
 ```
 
 **Library integration points:**
+
 - `ext.All()`, `ext.Custom()`, `ext.BuiltIn()` — returns `celexp.ExtFunctionList`
 - `celexp.ExtFunction` struct has JSON tags
 
@@ -975,6 +997,7 @@ func (s *Server) handleEvaluateCEL(ctx context.Context, request mcp.CallToolRequ
 ```
 
 **Library integration points:**
+
 - `celexp.EvaluateExpression(ctx, exprStr, rootData, additionalVars)` — the primary evaluation API
 - CEL environment factory must be initialized (happens in `PersistentPreRun` → inherited by `scafctl mcp serve`)
 
@@ -1053,6 +1076,7 @@ func (s *Server) handleRenderSolution(ctx context.Context, request mcp.CallToolR
 ```
 
 **Annotations:**
+
 - `OpenWorldHint: true` — resolver execution may access external systems
 - `IdempotentHint: true` — same inputs produce the same graph
 
@@ -1136,6 +1160,7 @@ func (s *Server) handleAuthStatus(ctx context.Context, request mcp.CallToolReque
 ```
 
 **Library integration points:**
+
 - `s.authReg.All()` — returns `map[string]Handler`
 - `handler.Status(ctx)` — returns `*auth.Status` with `Authenticated`, `ExpiresAt`, `IdentityType`, etc.
 
@@ -1272,6 +1297,7 @@ Returns JSON Schema for a solution's input parameters.
 **Implementation note:** The design originally referenced a hypothetical `schema.GenerateConfigSchema(sol)` function. Instead, `generateSolutionInputSchema()` was implemented directly in `pkg/mcp/resources.go` — it introspects the solution's resolver definitions to identify which resolvers use the `parameter` provider (user-supplied inputs) and builds a JSON Schema from their type, description, and example fields. This approach avoids adding a new public API to the schema package for a single consumer.
 
 **Key behaviors:**
+
 - Only resolvers using the `parameter` provider are included in the schema
 - Resolvers with only a `parameter` source (no fallback chain) are marked as `required`
 - Resolver types are mapped to JSON Schema types (`int` → `integer`, `float` → `number`, etc.)
@@ -1545,6 +1571,7 @@ Structure (all sections implemented):
 ### Step 6.3: Update Design Docs ✅
 
 Updated `docs/design/mcp-server.md` with:
+
 - Marked all implementation phases (2-6) as complete in the Recommended Approach section
 - Added links to this implementation guide, the tutorial, and example configs
 - Updated step numbering to reflect the completed work and remaining deferred items
@@ -1552,6 +1579,7 @@ Updated `docs/design/mcp-server.md` with:
 ### Step 6.4: CLI Help Text ✅
 
 The `scafctl mcp serve` command's `Long` description (in `pkg/cmd/scafctl/mcp/serve.go`) already includes:
+
 - What the MCP server does (one paragraph)
 - Example VS Code configuration (copy-paste ready)
 - How to use `--info` for debugging
@@ -1716,11 +1744,13 @@ if err != nil {
 ### Error Messages
 
 Error messages should be:
+
 - **Actionable** — Tell the AI what went wrong and how to fix it
 - **Contextual** — Include the relevant input (file path, provider name, etc.)
 - **Not technical** — Avoid Go stack traces or internal package paths
 
 Examples:
+
 - `"Solution file not found: /path/to/solution.yaml — verify the file exists and the path is correct"`
 - `"Provider 'nonexistent' not found. Available providers: http, file, parameter, cel, ..."`
 - `"CEL evaluation error at position 15: undeclared reference to 'foo'. Available variables: _, __self"`

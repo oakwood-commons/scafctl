@@ -28,6 +28,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
 
 // configReloaderTTL is how long the MCP server caches config before
@@ -65,6 +66,10 @@ type Server struct {
 	// initialization and idle eviction. When set, provider tool handlers
 	// auto-resolve official plugins on demand.
 	pluginPool *plugin.Pool
+
+	// entrypoint is the host entrypoint this server declares to pooled plugins
+	// (e.g. "mcp"), so the metadata provider reports it. See WithEntrypoint.
+	entrypoint string
 
 	// cfgReloader provides TTL-based config reloading so long-lived MCP
 	// sessions pick up config changes (e.g. auth profile switches).
@@ -122,6 +127,7 @@ type serverConfig struct {
 	supplementalInstructions string
 	rootCmd                  *cobra.Command
 	pluginPool               *plugin.Pool
+	entrypoint               string
 	upstreamServers          map[string]config.MCPServerConfig
 }
 
@@ -139,6 +145,23 @@ func WithRootCommand(cmd *cobra.Command) ServerOption {
 func WithServerPluginPool(pool *plugin.Pool) ServerOption {
 	return func(c *serverConfig) {
 		c.pluginPool = pool
+	}
+}
+
+// WithEntrypoint declares the host entrypoint this MCP server represents (e.g.
+// "mcp", "api"), delivered to pooled plugins so the metadata provider reports it
+// instead of "unknown". It defaults to prepare.EntrypointMCP ("mcp") -- an MCP
+// server is by definition an MCP host -- so embedders rarely need to set it. It
+// exists so a custom host wrapping pkg/mcp can label itself accurately. An empty
+// value is normalized back to the "mcp" default.
+//
+// The entrypoint is applied to the configured plugin pool at construction only
+// if that pool does not already declare one (see
+// plugin.Pool.SetBaseProviderConfigIfAbsent), so an embedder or the CLI that
+// wired its own base ProviderConfig always wins.
+func WithEntrypoint(entrypoint string) ServerOption {
+	return func(c *serverConfig) {
+		c.entrypoint = entrypoint
 	}
 }
 
@@ -387,10 +410,27 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cfg.name = settings.CliBinaryName
 	}
 
+	// An MCP server is by definition an MCP host: default (and normalize an
+	// empty override of) the declared entrypoint to "mcp" so pooled plugins'
+	// metadata provider reports "mcp" rather than "unknown".
+	if strings.TrimSpace(cfg.entrypoint) == "" {
+		cfg.entrypoint = prepare.EntrypointMCP
+	}
+
 	// Validate that a registry is set when a plugin pool is configured,
 	// otherwise ensureProvider would panic on nil registry access.
 	if cfg.pluginPool != nil && cfg.registry == nil {
 		return nil, errors.New("WithServerPluginPool requires WithServerRegistry")
+	}
+
+	// Declare this host's entrypoint to the plugin pool so pooled plugins
+	// receive it at load time. This is set-once and skipped if the caller (an
+	// embedder or the CLI) already wired a base ProviderConfig carrying an
+	// entrypoint, so an explicit configuration always wins.
+	if cfg.pluginPool != nil {
+		cfg.pluginPool.SetBaseProviderConfigIfAbsent(
+			prepare.HostStaticProviderConfig(cfg.name, cfg.entrypoint),
+		)
 	}
 
 	// Build the MCP context for tool handlers
@@ -429,6 +469,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		config:          cfg.config,
 		rootCmd:         cfg.rootCmd,
 		pluginPool:      cfg.pluginPool,
+		entrypoint:      cfg.entrypoint,
 		coreTools:       make(map[string]struct{}, 64),
 		corePrompts:     make(map[string]struct{}, 16),
 		upstreamTools:   make(map[string]string),

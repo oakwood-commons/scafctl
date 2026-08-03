@@ -576,6 +576,11 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry, cancel context.Cance
 		// host-static runtime metadata (build info, entrypoint, command, args)
 		// so pooled plugins that read ProviderConfig.Settings match per-call
 		// hosts; it is empty by default.
+		//
+		// This lockless read of p.opts.baseConfig is race-free: baseConfig is
+		// frozen once any entry exists -- SetBaseProviderConfigIfAbsent refuses
+		// to mutate it when len(p.entries) > 0, and this entry was inserted
+		// under p.mu before this spawn goroutine ran.
 		if cErr := wrapper.Configure(ctx, p.opts.baseConfig); cErr != nil {
 			p.logger.V(1).Info("failed to configure plugin provider",
 				"plugin", entry.dep.Name, "provider", provName, "error", cErr)
@@ -824,7 +829,103 @@ func (p *Pool) ClientOptsLen() int {
 // Settings map is a deep clone (map and value bytes), so callers cannot mutate
 // the pool's stored config.
 func (p *Pool) BaseProviderConfig() ProviderConfig {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return cloneProviderConfig(p.opts.baseConfig)
+}
+
+// baseConfigMetadataKey is the ProviderConfig.Settings key under which host
+// runtime metadata (including the host entrypoint) is delivered to pooled
+// plugins. It mirrors the prepare package's hostMetadataSettingsKey; the value
+// must stay in sync, but the packages cannot share a constant without an import
+// cycle (prepare imports plugin).
+const baseConfigMetadataKey = "metadata"
+
+// BaseEntrypoint returns the host entrypoint (e.g. "cli", "api", "mcp") declared
+// in the pool's host-static base ProviderConfig -- that is, the "entrypoint"
+// field of Settings["metadata"]. It returns "" when no base config, no metadata
+// entry, or no (or malformed) entrypoint is present. Safe for concurrent use.
+func (p *Pool) BaseEntrypoint() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return baseEntrypoint(p.opts.baseConfig)
+}
+
+// baseEntrypoint extracts the host entrypoint from a base ProviderConfig without
+// locking; callers must hold p.mu (or own cfg exclusively).
+func baseEntrypoint(cfg ProviderConfig) string {
+	raw, ok := cfg.Settings[baseConfigMetadataKey]
+	if !ok {
+		return ""
+	}
+	var meta struct {
+		Entrypoint string `json:"entrypoint"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return ""
+	}
+	return meta.Entrypoint
+}
+
+// SetBaseProviderConfigIfAbsent declares the host-static metadata carried by
+// cfg (crucially its entrypoint) on the pool's base ProviderConfig, but ONLY IF
+// the pool has not yet declared a host entrypoint and no plugin has been loaded
+// (or adopted) yet. It is a guarded, one-time escape hatch for a host package
+// (e.g. pkg/mcp) to declare the entrypoint it represents on a caller-supplied
+// pool without violating the set-once contract of [WithBaseProviderConfig].
+//
+// It MERGES rather than replaces: cfg's Settings keys are overlaid onto any the
+// pool already carried (so an embedder's unrelated settings, e.g. "httpClient",
+// are preserved), and cfg.BinaryName is applied only when the pool does not
+// already have one. This avoids silently discarding a base config an embedder
+// wired for another reason but without an entrypoint.
+//
+// It is a deliberate no-op (returning false) when the pool already carries an
+// entrypoint -- so an embedder or CLI that declared its own entrypoint always
+// wins -- or when any plugin has already been loaded, because such a plugin was
+// already Configure'd with the previous base config and a late mutation would
+// create a configure/execute mismatch. cfg is deep-cloned before merge, and the
+// whole operation is mutex-guarded, so it is safe for concurrent use.
+//
+// Returns true if cfg was applied, false if the call was skipped.
+func (p *Pool) SetBaseProviderConfigIfAbsent(cfg ProviderConfig) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return false
+	}
+	// A loaded/loading plugin was already configured with the current base
+	// config; mutating it now would desync configure- vs execute-time metadata.
+	if len(p.entries) > 0 {
+		return false
+	}
+	// Respect any entrypoint the caller already declared (set-once contract).
+	if baseEntrypoint(p.opts.baseConfig) != "" {
+		return false
+	}
+
+	incoming := cloneProviderConfig(cfg)
+	merged := p.opts.baseConfig
+
+	// Preserve an already-set binary name; otherwise adopt the incoming one.
+	if merged.BinaryName == "" {
+		merged.BinaryName = incoming.BinaryName
+	}
+
+	// Overlay incoming Settings keys onto any the pool already carried so
+	// unrelated embedder settings are never dropped.
+	if len(incoming.Settings) > 0 {
+		if merged.Settings == nil {
+			merged.Settings = make(map[string]json.RawMessage, len(incoming.Settings))
+		}
+		for k, v := range incoming.Settings {
+			merged.Settings[k] = v
+		}
+	}
+
+	p.opts.baseConfig = merged
+	return true
 }
 
 // Shutdown kills all managed plugin processes. Called once on server stop.

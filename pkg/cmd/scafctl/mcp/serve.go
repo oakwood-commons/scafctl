@@ -232,6 +232,13 @@ func buildMCPPluginPool(ctx context.Context, cfg *config.Config, reg *provider.R
 	// args) to pooled plugins so the metadata provider and any other
 	// Settings-driven plugin behave the same under this long-lived host as
 	// under one-shot per-call hosts.
+	//
+	// pkg/mcp also defaults this pool's entrypoint to "mcp" (see
+	// mcp.WithEntrypoint / Pool.SetBaseProviderConfigIfAbsent), so this call is
+	// not strictly required for the entrypoint alone. It is kept as the CLI's
+	// explicit declaration of intent -- and because it also carries the resolved
+	// binary name and the full host-static blob -- and, being set first, it
+	// wins over the pkg/mcp default (which is a no-op once an entrypoint is set).
 	poolOpts = append(poolOpts, plugin.WithBaseProviderConfig(
 		prepare.HostStaticProviderConfig(settings.BinaryNameFromContext(ctx), prepare.EntrypointMCP),
 	))
