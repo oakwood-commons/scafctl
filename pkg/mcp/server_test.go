@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -439,5 +440,69 @@ func TestNewServer_PluginPoolRequiresRegistry(t *testing.T) {
 		srv, err := NewServer(WithServerPluginPool(pool), WithServerRegistry(reg))
 		require.NoError(t, err)
 		assert.NotNil(t, srv)
+	})
+}
+
+func TestNewServer_DeclaresEntrypointToPool(t *testing.T) {
+	t.Run("defaults a bare pool's entrypoint to mcp", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
+		defer pool.Shutdown()
+
+		srv, err := NewServer(WithServerName("mycli"), WithServerPluginPool(pool), WithServerRegistry(reg))
+		require.NoError(t, err)
+		assert.Equal(t, prepare.EntrypointMCP, srv.entrypoint)
+		assert.Equal(t, prepare.EntrypointMCP, pool.BaseEntrypoint())
+		assert.Equal(t, "mycli", pool.BaseProviderConfig().BinaryName)
+	})
+
+	t.Run("WithEntrypoint overrides the default", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
+		defer pool.Shutdown()
+
+		srv, err := NewServer(
+			WithServerPluginPool(pool),
+			WithServerRegistry(reg),
+			WithEntrypoint(prepare.EntrypointAPI),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, prepare.EntrypointAPI, srv.entrypoint)
+		assert.Equal(t, prepare.EntrypointAPI, pool.BaseEntrypoint())
+	})
+
+	t.Run("empty WithEntrypoint normalizes to mcp", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard())
+		defer pool.Shutdown()
+
+		srv, err := NewServer(
+			WithServerPluginPool(pool),
+			WithServerRegistry(reg),
+			WithEntrypoint("   "),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, prepare.EntrypointMCP, srv.entrypoint)
+		assert.Equal(t, prepare.EntrypointMCP, pool.BaseEntrypoint())
+	})
+
+	t.Run("does not clobber a pool that already declares an entrypoint", func(t *testing.T) {
+		reg := provider.NewRegistry()
+		// Simulate the CLI (or an embedder) wiring its own base config first.
+		pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(),
+			plugin.WithBaseProviderConfig(prepare.HostStaticProviderConfig("cli-name", prepare.EntrypointCLI)),
+		)
+		defer pool.Shutdown()
+
+		_, err := NewServer(WithServerPluginPool(pool), WithServerRegistry(reg))
+		require.NoError(t, err)
+		assert.Equal(t, prepare.EntrypointCLI, pool.BaseEntrypoint(), "explicit config must win")
+		assert.Equal(t, "cli-name", pool.BaseProviderConfig().BinaryName)
+	})
+
+	t.Run("no pool is a no-op", func(t *testing.T) {
+		srv, err := NewServer()
+		require.NoError(t, err)
+		assert.Equal(t, prepare.EntrypointMCP, srv.entrypoint)
 	})
 }

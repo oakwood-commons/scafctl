@@ -2090,7 +2090,7 @@ None. The metadata provider accepts no inputs.
 | `version.buildTime` | string | Timestamp of the build |
 | `args` | string[] | Command-line arguments passed to scafctl |
 | `cwd` | string | Current working directory |
-| `entrypoint` | string | How scafctl was invoked: `"cli"`, `"api"`, `"mcp"`, or `"unknown"` |
+| `entrypoint` | string | How scafctl was invoked: `"cli"`, `"api"`, `"mcp"`, or `"unknown"`. Long-lived hosts declare their own entrypoint to the plugin pool: the CLI's `mcp serve` and the `pkg/mcp` server report `"mcp"`, the API server reports `"api"`. An embedder that wraps `pkg/mcp` gets `"mcp"` automatically (override via `mcp.WithEntrypoint`); `"unknown"` only appears when a custom pool-mode host neglects to declare one. |
 | `command` | string | The command path (e.g. `scafctl/run/solution`) |
 | `solution` | object | Metadata about the currently-running solution |
 | `solution.name` | string | Solution name |
@@ -2392,14 +2392,18 @@ Usage:
 
 {{< tabs "provider-reference-cmd-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f sol.yaml -r environment=production
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f sol.yaml -r environment=production
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -2449,16 +2453,20 @@ Manage secrets via CLI:
 
 {{< tabs "provider-reference-cmd-2" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl secrets set api-key "my-secret-value"
 scafctl secrets list
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl secrets set api-key "my-secret-value"
 scafctl secrets list
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
