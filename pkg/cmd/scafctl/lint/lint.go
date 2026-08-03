@@ -81,33 +81,13 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 		Use:     "lint [name[@version]]",
 		Aliases: []string{"l", "check"},
 		Short:   "Report authoring warnings and best practices (the advisory subset of 'validate')",
-		Long: heredoc.Doc(`
+		Long: strings.ReplaceAll(heredoc.Docf(`
 			Analyze a solution file for potential issues, anti-patterns, and best practices.
 
-			LINT RULES:
-			  Errors (will cause execution failures):
-			    - unused-resolver          Resolver defined but never referenced
-			    - invalid-dependency       Action depends on non-existent action
-			    - resolver-undefined-dependency  Resolver dependsOn references an undefined resolver
-			    - missing-provider         Referenced provider not registered
-			    - invalid-expression       Invalid CEL expression syntax
-			    - invalid-template         Invalid Go template syntax
-			    - unbundled-test-file      Test file not covered by bundle.include
-			    - invalid-test-name        Test name does not match naming pattern
-			    - schema-violation         Solution YAML violates the JSON Schema
-			    - unknown-provider-input   Input key not declared in provider schema
-			    - invalid-provider-input-type  Literal input value violates provider schema type
+			%s
 
-			  Warnings (may cause problems):
-			    - empty-workflow       Workflow defined but no actions
-			    - finally-with-foreach forEach not allowed in finally actions
-			    - unused-template      Test template not referenced by any extends
-
-			  Info (suggestions):
-			    - missing-description  Action/resolver lacks description
-			    - long-timeout        Timeout exceeds recommended maximum
-			    - unused-finally      Finally actions with no regular actions
-			    - undefined-optional-reference  Optional CEL ref (_.?name) targets an undefined resolver
+			  Run 'scafctl lint rules' for the full rule list with descriptions,
+			  or 'scafctl lint rule <name>' to explain a single rule.
 
 			SOME OUTPUT FORMATS:
 			  table   Human-readable bordered table
@@ -117,7 +97,7 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			  Use -o to select a format, -i for interactive exploration,
 			  -e for CEL expression filtering, -w for per-finding filters.
-		`),
+		`, pkglint.RuleSummaryText()), settings.CliBinaryName, cliParams.BinaryName),
 		Example: strings.ReplaceAll(heredoc.Doc(`
 			# Lint a solution file
 			scafctl lint -f ./solution.yaml

@@ -4321,9 +4321,36 @@ func TestIntegration_Lint_Help(t *testing.T) {
 
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Analyze a solution file")
-	assert.Contains(t, stdout, "LINT RULES:")
+	// The rule catalog is generated from KnownRules (issue #748): the header
+	// reports a total and the help points at the detail commands.
+	assert.Contains(t, stdout, "LINT RULES (")
+	assert.Contains(t, stdout, "scafctl lint rules")
+	assert.Contains(t, stdout, "scafctl lint rule <name>")
+	// Rules must not be presented under the wrong severity tier. unused-resolver
+	// is a warning and finally-with-foreach is an error; assert both land in the
+	// correct block rather than the mis-tiered locations the old catalog used.
+	errorsBlock, warningsBlock := lintHelpSeverityBlocks(t, stdout)
+	assert.Contains(t, warningsBlock, "unused-resolver")
+	assert.NotContains(t, errorsBlock, "unused-resolver")
+	assert.Contains(t, errorsBlock, "finally-with-foreach")
+	assert.NotContains(t, warningsBlock, "finally-with-foreach")
 	assert.Contains(t, stdout, "--file")
 	assert.Contains(t, stdout, "--severity")
+}
+
+// lintHelpSeverityBlocks splits the generated LINT RULES section of `lint
+// --help` output into the text under "Errors (" and under "Warnings (" so a
+// test can assert a rule appears in the correct severity tier. The "Info ("
+// heading terminates the warnings block.
+func lintHelpSeverityBlocks(t *testing.T, help string) (errorsBlock, warningsBlock string) {
+	t.Helper()
+	errStart := strings.Index(help, "\n  Errors (")
+	warnStart := strings.Index(help, "\n  Warnings (")
+	infoStart := strings.Index(help, "\n  Info (")
+	require.GreaterOrEqual(t, errStart, 0, "help should contain an Errors tier")
+	require.Greater(t, warnStart, errStart, "Warnings tier should follow Errors")
+	require.Greater(t, infoStart, warnStart, "Info tier should follow Warnings")
+	return help[errStart:warnStart], help[warnStart:infoStart]
 }
 
 func TestIntegration_Lint_RequiresFile(t *testing.T) {

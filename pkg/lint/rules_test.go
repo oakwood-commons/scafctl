@@ -4,6 +4,8 @@
 package lint
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,4 +74,103 @@ func TestGetRule(t *testing.T) {
 		_, ok := GetRule("nonexistent-rule")
 		assert.False(t, ok)
 	})
+}
+
+// parseSummaryTiers parses RuleSummaryText output into a map of severity tier
+// heading ("Errors"/"Warnings"/"Info") to the set of rule names listed under
+// it. It mirrors the exact format produced by RuleSummaryText so the drift
+// guard tests can assert every rule lands under its true severity tier.
+func parseSummaryTiers(t *testing.T, summary string) map[string]map[string]bool {
+	t.Helper()
+	tiers := map[string]map[string]bool{}
+	current := ""
+	for _, line := range strings.Split(summary, "\n") {
+		switch {
+		case strings.HasPrefix(line, "    "): // category line: "    cat:  rule1, rule2"
+			require.NotEmpty(t, current, "category line before any tier heading: %q", line)
+			_, rest, ok := strings.Cut(strings.TrimSpace(line), ":")
+			require.True(t, ok, "category line missing colon: %q", line)
+			for _, name := range strings.Split(rest, ",") {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					tiers[current][name] = true
+				}
+			}
+		case strings.HasPrefix(line, "  "): // tier heading: "  Errors (38):"
+			heading := strings.TrimSpace(line)
+			heading, _, _ = strings.Cut(heading, " ") // drop the " (N):" suffix
+			current = heading
+			if tiers[current] == nil {
+				tiers[current] = map[string]bool{}
+			}
+		}
+	}
+	return tiers
+}
+
+func TestRuleSummaryText(t *testing.T) {
+	summary := RuleSummaryText()
+
+	// Header reports the exact total from the registry.
+	assert.Contains(t, summary, fmt.Sprintf("LINT RULES (%d total):", len(KnownRules)))
+
+	tiers := parseSummaryTiers(t, summary)
+
+	headingForSeverity := map[string]string{
+		string(SeverityError):   "Errors",
+		string(SeverityWarning): "Warnings",
+		string(SeverityInfo):    "Info",
+	}
+
+	// Drift guard: every rule appears exactly once, under its true severity
+	// tier. This is the structural protection the hand-maintained catalog
+	// lacked -- it cannot diverge from KnownRules because it is generated from
+	// it and verified against it here.
+	seen := map[string]int{}
+	for _, tier := range tiers {
+		for name := range tier {
+			seen[name]++
+		}
+	}
+	for name, rule := range KnownRules {
+		wantHeading := headingForSeverity[rule.Severity]
+		require.NotEmpty(t, wantHeading, "rule %q has unknown severity %q", name, rule.Severity)
+		assert.Truef(t, tiers[wantHeading][name],
+			"rule %q (severity %q) must be listed under %q", name, rule.Severity, wantHeading)
+		assert.Equalf(t, 1, seen[name], "rule %q must appear exactly once in summary", name)
+	}
+
+	// Per-tier counts match ListRules() grouping.
+	wantCounts := map[string]int{}
+	for _, r := range ListRules() {
+		wantCounts[headingForSeverity[r.Severity]]++
+	}
+	for heading, names := range tiers {
+		assert.Equalf(t, wantCounts[heading], len(names),
+			"tier %q count mismatch", heading)
+	}
+}
+
+func TestRuleSummaryTextRegressionPins(t *testing.T) {
+	// Regression pins for issue #748: the hand-maintained catalog listed these
+	// two rules under the wrong tier. Assert they now render under their real
+	// severity, so the drift can never silently return.
+	tiers := parseSummaryTiers(t, RuleSummaryText())
+
+	assert.True(t, tiers["Warnings"]["unused-resolver"],
+		"unused-resolver is a warning, not an error")
+	assert.False(t, tiers["Errors"]["unused-resolver"],
+		"unused-resolver must not be listed under Errors")
+
+	assert.True(t, tiers["Errors"]["finally-with-foreach"],
+		"finally-with-foreach is an error, not a warning")
+	assert.False(t, tiers["Warnings"]["finally-with-foreach"],
+		"finally-with-foreach must not be listed under Warnings")
+}
+
+func BenchmarkRuleSummaryText(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = RuleSummaryText()
+	}
 }

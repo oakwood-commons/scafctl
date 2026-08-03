@@ -6,6 +6,7 @@ package lint
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,41 @@ func TestCommandLint(t *testing.T) {
 	assert.Contains(t, cmdNames, "rules")
 	assert.Contains(t, cmdNames, "rule")
 	assert.Contains(t, cmdNames, "explain")
+}
+
+func TestCommandLint_LongHelpGeneratedRuleSummary(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandLint(cliParams, ioStreams, "scafctl")
+
+	// The rule catalog in Long is generated from KnownRules, so it must include
+	// rules the old hand-maintained block omitted (regression against drift).
+	for _, rule := range []string{"resolver-cycle", "exec-command-injection", "deprecated-field"} {
+		assert.Containsf(t, cmd.Long, rule, "generated help should list rule %q", rule)
+	}
+
+	// Regression pins for issue #748: the two mis-tiered rules and the total.
+	assert.Contains(t, cmd.Long, fmt.Sprintf("LINT RULES (%d total):", len(pkglint.KnownRules)))
+	assert.Contains(t, cmd.Long, "unused-resolver")
+	assert.Contains(t, cmd.Long, "finally-with-foreach")
+
+	// Help stays self-contained but points at the detail commands.
+	assert.Contains(t, cmd.Long, "scafctl lint rules")
+	assert.Contains(t, cmd.Long, "scafctl lint rule <name>")
+}
+
+func TestCommandLint_LongHelpEmbedderSafe(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandLint(cliParams, ioStreams, "mycli")
+
+	// Pointer commands must use the embedder's binary name, never hardcoded
+	// "scafctl". Rule identifiers themselves are not binary names, so the
+	// assertion targets the command references only.
+	assert.Contains(t, cmd.Long, "mycli lint rules")
+	assert.Contains(t, cmd.Long, "mycli lint rule <name>")
+	assert.NotContains(t, cmd.Long, "scafctl lint rule")
 }
 
 func TestCommandLint_Flags(t *testing.T) {
