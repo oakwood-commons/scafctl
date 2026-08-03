@@ -27,11 +27,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4 (codeql-bundle-v2.25.0)
+      - uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4 (codeql-bundle-v2.25.0)
         with:
           languages: go
 
       - name: Build
         run: go build ./...
 
-      - uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4 (codeql-bundle-v2.25.0)
+      - uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4 (codeql-bundle-v2.25.0)
