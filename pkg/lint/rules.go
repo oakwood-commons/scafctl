@@ -92,9 +92,20 @@ var KnownRules = map[string]RuleMeta{
 		Rule:        "unused-resolver",
 		Severity:    string(SeverityWarning),
 		Category:    "usage",
-		Description: "A resolver is defined but never referenced by any other resolver, action input, when clause, or expression.",
-		Why:         "Unused resolvers add complexity without benefit. They may indicate a typo in a reference or leftover code from refactoring.",
-		Fix:         "Either remove the unused resolver, reference it in an action input (rslvr: resolver-name), use it in a CEL expression (_.resolver_name), or add it as a dependency (dependsOn).",
+		Description: "A resolver is defined but never referenced by any other resolver, action input, when clause, or expression. Severity is context-dependent: WARNING when the solution has a workflow, INFO when it does not.",
+		Why:         "Unused resolvers add complexity without benefit. They may indicate a typo in a reference or leftover code from refactoring. In a workflow-less solution, however, every graph-terminal resolver IS the intended output (such solutions are reference/demo material run directly via 'run resolver <name>'), so the finding is reported at INFO instead of WARNING to keep the warning tier meaningful. An explicit but empty 'workflow: {}' counts as having a workflow and opts back into WARNING.",
+		Fix:         "Either remove the unused resolver, reference it in an action input (rslvr: resolver-name), use it in a CEL expression (_.resolver_name), or add it as a dependency (dependsOn). For a resolver-only solution with no workflow, no action is needed -- the INFO finding is informational.",
+	},
+	"unknown-resolver-reference": {
+		Rule:        "unknown-resolver-reference",
+		Severity:    string(SeverityError),
+		Category:    "dependency",
+		Description: "An unambiguous resolver reference (hard CEL access _.name / _[\"name\"], an explicit rslvr: reference, or a {{ ._.name }} template accessor) names a resolver that is not defined.",
+		Why:         "The reference cannot resolve, so building the dependency graph fails at run time with \"depends on X but X wasn't present\". Reporting it at lint time surfaces the typo without executing the solution. Only unambiguous references are checked: bare Go-template accessors ({{ .field }}) are covered by template-unknown-accessor (which understands data-key and forEach-alias scope), and optional access (_.?name) by undefined-optional-reference.",
+		Fix:         "Define a resolver with the referenced name, fix the typo, or switch to optional access (_.?name, paired with .orValue(...)) if the value may legitimately be absent.",
+		Examples: []string{
+			"# Typo -- 'greetng' is not defined:\nresolvers:\n  greeting:\n    resolve:\n      with:\n        - provider: static\n          inputs:\n            value: \"hello\"\n  consumer:\n    resolve:\n      with:\n        - provider: cel\n          inputs:\n            expression: '_.greetng'   # -> unknown-resolver-reference",
+		},
 	},
 	"missing-provider": {
 		Rule:        "missing-provider",

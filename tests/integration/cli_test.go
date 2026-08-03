@@ -2107,6 +2107,70 @@ func TestIntegration_Lint_NullResolver(t *testing.T) {
 	assert.Contains(t, stdout, "unused-resolver")
 }
 
+// TestIntegration_Lint_UnusedResolverSeverityByWorkflow verifies the
+// context-dependent severity of unused-resolver through the CLI: INFO in a
+// workflow-less (resolver-only) solution, WARNING once a workflow exists that
+// could have consumed the resolver.
+func TestIntegration_Lint_UnusedResolverSeverityByWorkflow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		solution     string
+		wantSeverity string
+		wantLocation string
+	}{
+		{
+			name:         "workflow-less is info",
+			solution:     "tests/integration/solutions/lint-unused-resolver/solution.yaml",
+			wantSeverity: "info",
+			wantLocation: "resolvers.terminalOutput",
+		},
+		{
+			name:         "workflow present is warning",
+			solution:     "tests/integration/solutions/lint-unused-resolver-workflow/solution.yaml",
+			wantSeverity: "warning",
+			wantLocation: "resolvers.orphaned",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			stdout, _, exitCode := runScafctl(t, "lint", "-f", tt.solution, "-o", "json")
+
+			// Neither info nor warning findings fail the default gate.
+			assert.Equal(t, 0, exitCode)
+
+			var payload struct {
+				Findings []struct {
+					Severity string `json:"severity"`
+					RuleName string `json:"ruleName"`
+					Location string `json:"location"`
+				} `json:"findings"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(stdout), &payload),
+				"lint -o json must emit a parseable document")
+
+			var found bool
+			for _, f := range payload.Findings {
+				if f.RuleName != "unused-resolver" {
+					continue
+				}
+				// Every unused-resolver finding in these fixtures must carry the
+				// expected severity for the solution shape.
+				assert.Equal(t, tt.wantSeverity, f.Severity,
+					"unused-resolver severity for %s", f.Location)
+				if f.Location == tt.wantLocation {
+					found = true
+				}
+			}
+			assert.True(t, found,
+				"expected an unused-resolver finding at %s", tt.wantLocation)
+		})
+	}
+}
+
 func TestIntegration_RunSolution_DryRun(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t,

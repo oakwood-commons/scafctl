@@ -435,6 +435,85 @@ func ExtractOptionalRefsFromValueRef(ref *ValueRef, optional map[string]bool) {
 	extractOptionalFromValueRef(ref, optional)
 }
 
+// ExtractHardCelRefsFromValueRef collects resolver names that a ValueRef
+// references via HARD CEL access (_.name, _["name"]), accumulating them into the
+// provided set. Optional access (_.?name, _[?"name"]) is excluded -- that syntax
+// declares the author tolerates an absent resolver.
+//
+// This is deliberately CEL-only. Go-template accessors ({{ .name }}) are
+// ambiguous: a bare accessor may resolve against a step's `data` keys or a
+// forEach alias rather than a resolver, so template roots must NOT be treated as
+// resolver references when validating that a reference names a defined resolver
+// (the template-unknown-accessor rule handles those with full data/alias scope
+// awareness). A `_.` prefix inside a template IS unambiguous and is collected.
+//
+// Passing a nil ref or nil set is a no-op (the set must be non-nil to collect).
+func ExtractHardCelRefsFromValueRef(ref *ValueRef, hard map[string]bool) {
+	if hard == nil {
+		return
+	}
+	extractHardCelFromValueRef(ref, hard)
+}
+
+func extractHardCelFromValueRef(ref *ValueRef, hard map[string]bool) {
+	if ref == nil {
+		return
+	}
+	switch {
+	case ref.Resolver != nil:
+		// A `rslvr:` reference is an explicit, unambiguous resolver name.
+		hard[*ref.Resolver] = true
+	case ref.Expr != nil:
+		extractHardDepsFromExpression(string(*ref.Expr), hard)
+	case ref.Tmpl != nil:
+		// Only `_.`-prefixed accessors inside a template are unambiguous
+		// resolver references; bare `.field` accessors are not (see doc above).
+		extractHardCelFromTemplateUnderscore(string(*ref.Tmpl), hard)
+	case ref.Literal != nil:
+		extractHardCelFromLiteral(ref.Literal, hard)
+	}
+}
+
+// extractHardCelFromTemplateUnderscore collects `._.name` style references from
+// a Go template, which are explicit resolver references regardless of the
+// template's data scope.
+func extractHardCelFromTemplateUnderscore(tmpl string, hard map[string]bool) {
+	for _, name := range gotmpl.ExtractExplicitResolverRefs(tmpl, "", "") {
+		hard[name] = true
+	}
+}
+
+// extractHardCelFromLiteral recursively collects hard CEL references from a
+// literal value, mirroring extractOptionalFromLiteral's traversal.
+func extractHardCelFromLiteral(literal any, hard map[string]bool) {
+	switch v := literal.(type) {
+	case string:
+		if strings.Contains(v, "_.") || strings.Contains(v, "_[") {
+			extractHardDepsFromExpression(v, hard)
+		}
+	case map[string]any:
+		if expr, ok := v["expr"].(string); ok {
+			extractHardDepsFromExpression(expr, hard)
+		}
+		if rslvr, ok := v["rslvr"].(string); ok {
+			hard[rslvr] = true
+		}
+		if tmpl, ok := v["tmpl"].(string); ok {
+			extractHardCelFromTemplateUnderscore(tmpl, hard)
+		}
+		for key, val := range v {
+			if key == "expr" || key == "rslvr" || key == "tmpl" {
+				continue
+			}
+			extractHardCelFromLiteral(val, hard)
+		}
+	case []any:
+		for _, item := range v {
+			extractHardCelFromLiteral(item, hard)
+		}
+	}
+}
+
 func extractOptionalFromValueRef(ref *ValueRef, optional map[string]bool) {
 	if ref == nil {
 		return

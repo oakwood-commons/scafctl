@@ -145,6 +145,39 @@ func ExtractResolverDeps(in ResolverDepsInput) []string {
 	return deps
 }
 
+// ExtractExplicitResolverRefs returns only the resolver names referenced with
+// EXPLICIT resolver syntax ({{ ._.name }} / {{ ._name }}) in a Go template.
+//
+// Unlike ExtractResolverDeps, bare data-context accessors ({{ .field }}) are
+// never returned, because a bare accessor may legitimately resolve against a
+// step's `data` keys or a forEach alias rather than a resolver. Callers that
+// must know a reference definitely names a resolver (e.g. validating that the
+// referenced resolver exists) need this stricter view.
+//
+// The returned names are de-duplicated and preserve first-seen order. Template
+// parse errors yield a nil slice (extraction is best-effort).
+func ExtractExplicitResolverRefs(template, leftDelim, rightDelim string) []string {
+	refs, err := GetGoTemplateReferences(template, leftDelim, rightDelim)
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var out []string
+	for _, ref := range refs {
+		if ref.Scoped {
+			continue
+		}
+		name, kind := classifyTemplatePath(ref.Path)
+		if kind != pathExplicitResolver || name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 // classifyTemplatePath maps a dot-notation template reference path to the
 // dependency name of its root segment and a classification. The recognised
 // prefixes are:

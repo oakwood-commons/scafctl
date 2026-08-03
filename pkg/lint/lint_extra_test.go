@@ -696,6 +696,104 @@ func TestLintResolvers_NoValidateBlockFlaggedUnused(t *testing.T) {
 	assert.Contains(t, rules, "unused-resolver")
 }
 
+// TestUnusedResolverSeverity covers the workflow-shape heuristic that decides
+// whether an unused-resolver finding is a WARNING (real orphan) or INFO
+// (expected terminal output of a resolver-only solution).
+func TestUnusedResolverSeverity(t *testing.T) {
+	t.Parallel()
+
+	withWorkflow := &solution.Solution{}
+	withWorkflow.Spec.Workflow = &action.Workflow{
+		Actions: map[string]*action.Action{"build": {Provider: "static"}},
+	}
+
+	// An explicit but EMPTY workflow deliberately opts back into WARNING: the
+	// boundary is "spec.workflow present at all", which keeps the rule
+	// predictable (omit the block entirely to get INFO).
+	emptyWorkflow := &solution.Solution{}
+	emptyWorkflow.Spec.Workflow = &action.Workflow{}
+
+	tests := []struct {
+		name string
+		sol  *solution.Solution
+		want SeverityLevel
+	}{
+		{name: "workflow with actions is warning", sol: withWorkflow, want: SeverityWarning},
+		{name: "empty workflow is warning", sol: emptyWorkflow, want: SeverityWarning},
+		{name: "workflow-less is info", sol: &solution.Solution{}, want: SeverityInfo},
+		{name: "nil solution is info", sol: nil, want: SeverityInfo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, unusedResolverSeverity(tt.sol))
+		})
+	}
+}
+
+// TestLintResolvers_UnusedResolverSeverityByWorkflow asserts the emission site
+// honors the heuristic end-to-end: the same unreferenced resolver is INFO in a
+// workflow-less solution and WARNING once a workflow exists that could have
+// consumed it.
+func TestLintResolvers_UnusedResolverSeverityByWorkflow(t *testing.T) {
+	t.Parallel()
+
+	newSol := func(withWorkflow bool) *solution.Solution {
+		sol := &solution.Solution{}
+		sol.Spec.Resolvers = map[string]*resolver.Resolver{
+			"terminal": {
+				Resolve: &resolver.ResolvePhase{
+					With: []resolver.ProviderSource{{Provider: "static"}},
+				},
+			},
+		}
+		if withWorkflow {
+			sol.Spec.Workflow = &action.Workflow{
+				Actions: map[string]*action.Action{
+					// Deliberately does NOT reference the terminal resolver.
+					"noop": {Provider: "static"},
+				},
+			}
+		}
+		return sol
+	}
+
+	findUnused := func(t *testing.T, sol *solution.Solution) *Finding {
+		t.Helper()
+		reg := provider.NewRegistry()
+		require.NoError(t, reg.Register(newFakeProvider("static", nil)))
+
+		result := &Result{}
+		lintResolvers(sol, result, reg, collectReferencedResolvers(sol))
+
+		for _, f := range result.Findings {
+			if f.RuleName == "unused-resolver" {
+				return f
+			}
+		}
+		t.Fatalf("expected an unused-resolver finding, got %+v", result.Findings)
+		return nil
+	}
+
+	t.Run("workflow-less is info with run-resolver guidance", func(t *testing.T) {
+		t.Parallel()
+		f := findUnused(t, newSol(false))
+		assert.Equal(t, SeverityInfo, f.Severity)
+		assert.Contains(t, f.Suggestion, "run resolver",
+			"info-tier suggestion should point at running the resolver directly")
+		assert.Contains(t, f.Suggestion, `"terminal"`,
+			"info-tier suggestion should name the resolver")
+	})
+
+	t.Run("workflow present is warning", func(t *testing.T) {
+		t.Parallel()
+		f := findUnused(t, newSol(true))
+		assert.Equal(t, SeverityWarning, f.Severity)
+		assert.Contains(t, f.Suggestion, "Remove unused resolver")
+	})
+}
+
 func TestLintResolvers_CELExpressionInputNotFlaggedUnused(t *testing.T) {
 	// Resolvers referenced only via _.name in a CEL provider's expression
 	// input (a string literal) should NOT be flagged as unused.

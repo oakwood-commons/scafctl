@@ -146,7 +146,8 @@ This shows:
 | ID | Severity | Category | Description |
 |----|----------|----------|-------------|
 | missing-description | warning | best-practice | Solution should have a description |
-| unused-resolver | warning | correctness | Resolver is defined but never referenced |
+| unused-resolver | warning | usage | Resolver is defined but never referenced (reported at `info` in workflow-less solutions -- see below) |
+| unknown-resolver-reference | error | dependency | An unambiguous reference (`_.name`, `rslvr:`, `{{ ._.name }}`) names a resolver that is not defined |
 | parameter-numeric-matches | warning | type-inference | Numeric `parameter` default without an explicit `type` is used with `matches()`, which fails at runtime because inference coerces it to an integer |
 | deferred-validation-not-fail-fast | info | validation | Resolver has a cross-resolver validation rule that runs in the deferred phase rather than failing fast |
 | ... | ... | ... | ... |
@@ -414,6 +415,99 @@ metadata:
   name: my-solution
   version: 1.0.0
   description: "Collects configuration from multiple sources"
+```
+
+### Unused Resolver (severity depends on the solution shape)
+
+`unused-resolver` fires when nothing references a resolver -- no other resolver,
+action input, `when` clause, `dependsOn` entry, or expression. Its severity
+depends on whether the solution has a workflow:
+
+| Solution shape | Severity | Rationale |
+|----------------|----------|-----------|
+| Has `spec.workflow` | `warning` | A workflow could have consumed the resolver, so an unreferenced one is a genuine orphan -- dead config or a typo'd reference. |
+| No `spec.workflow` | `info` | Every graph-terminal resolver IS the intended output. Resolver-only solutions are reference/demo material run directly with `run resolver <name>`, so "nothing references it" is expected. |
+
+```yaml
+# Workflow-less: 'greeting' is the output -> info, no action needed.
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+```
+
+```yaml
+# Has a workflow that never uses 'greeting' -> warning (genuine orphan).
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+  workflow:
+    actions:
+      build:
+        provider: exec
+        inputs:
+          command: "make build"
+```
+
+An explicit but empty `workflow: {}` counts as "has a workflow" and opts back
+into `warning`. To get `info`, omit the workflow block entirely.
+
+Note that `lint` itself only exits non-zero on **error**-severity findings, so
+neither tier fails `lint` on its own. The tier matters when you filter
+(`lint --severity warning`) or gate with `validate solution --strict`, which
+treats warnings as failures. A typo'd reference is still caught regardless --
+see the next section.
+
+### Unknown Resolver Reference
+
+`unknown-resolver-reference` is an **error**: an unambiguous reference names a
+resolver that does not exist, which fails at run time when the dependency graph
+is built ("depends on X but X wasn't present").
+
+```yaml
+# Typo: '_.greetng' -> unknown-resolver-reference (error)
+spec:
+  resolvers:
+    greeting:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: "hello"
+    consumer:
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.greetng'
+```
+
+Only *unambiguous* references are checked -- hard CEL access (`_.name`,
+`_["name"]`), explicit `rslvr:` references, and `{{ ._.name }}` template
+accessors. Two related rules cover the ambiguous cases:
+
+- **Bare template accessors** (`{{ .field }}`) are handled by
+  `template-unknown-accessor`, which knows about a step's `data` keys and
+  `forEach` aliases -- a bare accessor may legitimately resolve against those
+  rather than a resolver.
+- **Optional CEL access** (`_.?name`) is handled by
+  `undefined-optional-reference` at `info`, since optional access explicitly
+  declares that the resolver may be absent.
+
+If a value may legitimately be missing, switch to optional access and pair it
+with `.orValue(...)`:
+
+```yaml
+expression: '_.?maybeMissing.orValue("default")'
 ```
 
 ### Invalid Resolver Reference
