@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/adrg/xdg"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -202,4 +203,20 @@ func TestCommandAliasSet_Embedder(t *testing.T) {
 	cfg, err := config.NewManager("").Load()
 	require.NoError(t, err)
 	assert.Equal(t, "https://api.prod.example.com:6443", cfg.Auth.Handlers["openshift"].Hostname.Aliases["prod"])
+}
+
+// TestAliasListDisplaySchema_IsValidJSON verifies alias_list_schema.json is valid JSON.
+func TestAliasListDisplaySchema_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(aliasListDisplaySchema), "alias_list_schema.json must be valid JSON")
+}
+
+// TestAliasListDisplaySchema_ParsesWithDisplay verifies alias_list_schema.json
+// is a valid display schema with list/detail extensions.
+func TestAliasListDisplaySchema_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(aliasListDisplaySchema)
+	require.NoError(t, err, "alias_list_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
 }

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hostname Aliases",
+  "description": "Static hostname aliases for a scafctl auth handler",
+  "type": "array",
+
+  "x-kvx-icon": "🔗",
+  "x-kvx-collectionTitle": "Hostname Aliases",
+
+  "x-kvx-list": {
+    "titleField": "selector",
+    "subtitleField": "url",
+    "subtitleMaxLines": 1
+  },
+
+  "x-kvx-detail": {
+    "titleField": "selector",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["selector", "url"],
+        "layout": "inline"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["selector", "url"],
+    "properties": {
+      "selector": {
+        "type": "string",
+        "title": "Selector",
+        "description": "Short alias name for the hostname",
+        "maxLength": 40
+      },
+      "url": {
+        "type": "string",
+        "title": "Endpoint URL",
+        "description": "Full endpoint URL the alias resolves to",
+        "maxLength": 80
+      }
+    }
+  }
+}
