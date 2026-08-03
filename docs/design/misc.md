@@ -218,9 +218,9 @@ scafctl supports:
 
 Linting rules include:
 
-**Errors**: empty solutions, reserved names, missing providers, invalid expressions/templates, invalid dependencies, finally-with-forEach, workflow validation, unbundled test files, invalid test names, undefined required properties, invalid result schemas, **schema violations** (unknown fields, type mismatches against JSON Schema), **unknown provider inputs**, **invalid provider input types**
+**Errors**: empty solutions, reserved names, missing providers, unknown resolver references, invalid expressions/templates, invalid dependencies, finally-with-forEach, workflow validation, unbundled test files, invalid test names, undefined required properties, invalid result schemas, **schema violations** (unknown fields, type mismatches against JSON Schema), **unknown provider inputs**, **invalid provider input types**
 
-**Warnings**: unused resolvers, empty workflows, unused templates
+**Warnings**: unused resolvers (info in workflow-less solutions -- see `lint rule unused-resolver`), empty workflows, unused templates
 
 **Info**: missing descriptions, long timeouts, unused finally actions, permissive result schemas
 

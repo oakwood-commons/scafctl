@@ -1,0 +1,77 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-unused-resolver
+  version: 1.0.0
+  description: |
+    Tests the context-dependent severity of the unused-resolver lint rule.
+
+    This solution has NO workflow, so every graph-terminal resolver is the
+    intended output (run directly via `run resolver <name>`). Unreferenced
+    resolvers are therefore reported at INFO rather than WARNING.
+
+    The companion fixture lint-unused-resolver-workflow covers the inverse:
+    once a workflow exists that could have consumed the resolver, an
+    unreferenced resolver is a genuine orphan and stays a WARNING.
+
+spec:
+  resolvers:
+    # Terminal resolver: nothing references it, and there is no workflow that
+    # could have consumed it -> info, not warning.
+    terminalOutput:
+      description: Terminal resolver that is the intended output
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    # Referenced by consumer below -> not flagged at all.
+    upstream:
+      description: Resolver consumed by another resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: world
+
+    # Also terminal (nothing references it), so it is likewise reported at info.
+    consumer:
+      description: References upstream, so upstream is not unused
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.upstream + "!"'
+
+  testing:
+    cases:
+      unused-resolver-is-info-without-workflow:
+        description: unused-resolver is info severity in a workflow-less solution
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, unused-resolver]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Info-level findings must not cause a non-zero exit"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "unused-resolver")
+            message: "Should still record the unused terminal resolver"
+          - expression: >
+              __output.findings.filter(f, f.ruleName == "unused-resolver")
+                .all(f, f.severity == "info")
+            message: "Every unused-resolver finding must be info in a workflow-less solution"
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "unused-resolver" && f.severity == "warning")
+            message: "No unused-resolver finding may be warning severity here"
+
+      referenced-resolver-not-flagged:
+        description: A resolver referenced via a CEL expression is not flagged as unused
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, unused-resolver]
+        assertions:
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "unused-resolver" && f.location == "resolvers.upstream")
+            message: "upstream is referenced by consumer and must not be flagged"

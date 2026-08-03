@@ -138,3 +138,66 @@ func TestExtractResolverDeps(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractExplicitResolverRefs verifies that only EXPLICIT resolver
+// accessors ({{ ._.name }} / {{ ._name }}) are returned -- bare data-context
+// accessors must be excluded, because they may resolve against a step's data
+// keys or a forEach alias rather than a resolver.
+func TestExtractExplicitResolverRefs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		template string
+		want     []string
+	}{
+		{
+			name:     "explicit underscore accessor",
+			template: "{{ ._.greeting }}",
+			want:     []string{"greeting"},
+		},
+		{
+			name:     "bare accessor is excluded",
+			template: "{{ .someDataKey }}",
+			want:     nil,
+		},
+		{
+			name:     "mixed: only explicit is returned",
+			template: "{{ ._.greeting }} {{ .dataKey }}",
+			want:     []string{"greeting"},
+		},
+		{
+			name:     "special variables excluded",
+			template: "{{ .__item }} {{ .__index }}",
+			want:     nil,
+		},
+		{
+			name:     "nested field uses root segment only",
+			template: "{{ ._.config.host }}",
+			want:     []string{"config"},
+		},
+		{
+			name:     "deduplicated",
+			template: "{{ ._.a }} {{ ._.a }}",
+			want:     []string{"a"},
+		},
+		{
+			name:     "parse error yields nil",
+			template: "{{ ._.unclosed",
+			want:     nil,
+		},
+		{
+			name:     "empty template",
+			template: "",
+			want:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ExtractExplicitResolverRefs(tt.template, "", "")
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

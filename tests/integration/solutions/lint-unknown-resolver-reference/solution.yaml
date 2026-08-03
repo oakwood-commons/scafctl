@@ -1,0 +1,97 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-unknown-resolver-reference
+  version: 1.0.0
+  description: |
+    Tests the unknown-resolver-reference lint rule: an unambiguous reference to
+    a resolver that is not defined is an ERROR, because building the dependency
+    graph fails at run time.
+
+    This is the rule that keeps a typo'd reference visible even though
+    unused-resolver is down-ranked to INFO in workflow-less solutions (see the
+    lint-unused-resolver fixture).
+
+    Only unambiguous references are checked here. Bare Go-template accessors are
+    covered by template-unknown-accessor, and optional CEL access by
+    undefined-optional-reference.
+
+spec:
+  resolvers:
+    greeting:
+      description: Correctly spelled resolver
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+    # Typo: '_.greetng' does not exist -> unknown-resolver-reference (error).
+    typoConsumer:
+      description: References a misspelled resolver name
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.greetng + " world"'
+
+    # Optional access to a missing resolver is NOT this rule's concern --
+    # undefined-optional-reference reports it at info instead.
+    optionalConsumer:
+      description: Optional reference to a missing resolver
+      resolve:
+        with:
+          - provider: cel
+            inputs:
+              expression: '_.?alsoMissing.orValue("fallback")'
+
+  testing:
+    config:
+      # lint: the solution intentionally contains a typo'd resolver reference
+      # resolve-defaults: the dependency graph cannot be built because of it
+      skipBuiltins: [lint, resolve-defaults]
+
+    cases:
+      typo-is-error:
+        description: An unambiguous reference to an undefined resolver is an error
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, unknown-resolver-reference]
+        assertions:
+          - expression: __exitCode == 2
+            message: "An error finding makes lint exit 2"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "unknown-resolver-reference"
+                && f.severity == "error")
+            message: "A typo'd hard reference must be reported as an error"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "unknown-resolver-reference"
+                && f.message.contains("greetng"))
+            message: "The finding must name the misspelled resolver"
+
+      optional-reference-not-reported-by-this-rule:
+        description: Optional access is handled by undefined-optional-reference, not this rule
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, unknown-resolver-reference]
+        assertions:
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "unknown-resolver-reference"
+                && f.message.contains("alsoMissing"))
+            message: "Optional access must not be reported as an unknown resolver reference"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "undefined-optional-reference"
+                && f.message.contains("alsoMissing"))
+            message: "Optional access to a missing resolver should be reported at info by its own rule"
+
+      defined-reference-not-flagged:
+        description: A reference to a defined resolver is never flagged
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, unknown-resolver-reference]
+        assertions:
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "unknown-resolver-reference"
+                && f.message.contains("\"greeting\""))
+            message: "The correctly spelled resolver must not be flagged"

@@ -248,6 +248,12 @@ func TestResolverOptions_Run_LintGateWarningFailsStrict(t *testing.T) {
 
 	// A lone unused resolver produces an unused-resolver warning while still
 	// passing resolver validation.
+	//
+	// The workflow is required for the finding to be a WARNING: unused-resolver
+	// is reported at INFO in workflow-less solutions (where a terminal resolver
+	// is the intended output). This test needs a warning-severity finding to
+	// exercise the --strict gate, so the fixture declares a workflow whose
+	// action does not reference the orphan.
 	orphanSolution := `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
@@ -263,6 +269,13 @@ spec:
           - provider: static
             inputs:
               value: "x"
+  workflow:
+    actions:
+      noop:
+        description: does not reference the orphan resolver
+        provider: static
+        inputs:
+          value: "noop"
 `
 	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
 	require.NoError(t, os.WriteFile(solutionPath, []byte(orphanSolution), 0o600))
@@ -289,6 +302,9 @@ spec:
 func TestResolverOptions_Run_LintGateQuietSuppressesOutput(t *testing.T) {
 	t.Parallel()
 
+	// The workflow makes the unused-resolver finding a WARNING (it is INFO in
+	// workflow-less solutions), which is what the --strict half of this test
+	// needs in order to fail the gate.
 	orphanSolution := `apiVersion: scafctl.io/v1
 kind: Solution
 metadata:
@@ -304,6 +320,13 @@ spec:
           - provider: static
             inputs:
               value: "x"
+  workflow:
+    actions:
+      noop:
+        description: does not reference the orphan resolver
+        provider: static
+        inputs:
+          value: "noop"
 `
 	solutionPath := filepath.Join(t.TempDir(), "solution.yaml")
 	require.NoError(t, os.WriteFile(solutionPath, []byte(orphanSolution), 0o600))

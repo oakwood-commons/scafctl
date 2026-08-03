@@ -117,6 +117,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
 	lintResolverDependencies(sol, result)
 	lintResolverCycles(sol, result, registry)
+	lintUnknownResolverRefs(sol, result)
 	lintUndefinedOptionalRefs(sol, result)
 	lintDeferredValidation(sol, result, registry)
 	lintTemplateAccessors(sol, result)
@@ -394,6 +395,42 @@ func exprContainsMatches(ref *resolver.ValueRef) bool {
 	return false
 }
 
+// reservedNames are built-in context variables injected by the engine. They
+// share the root/`_.` namespace with resolvers but are never resolver names, so
+// they are neither valid resolver names nor undefined-reference candidates.
+var reservedNames = map[string]bool{
+	"__actions": true,
+	"__error":   true,
+	"__item":    true,
+	"__index":   true,
+	"_":         true,
+}
+
+// unusedResolverSeverity returns the severity for an unused-resolver finding
+// based on the shape of the solution.
+//
+// In a workflow-less solution every graph-terminal resolver IS the intended
+// output -- such solutions are reference/demo material meant to be run directly
+// with `run resolver <name>`, so "nothing references it" is the expected state
+// rather than a smell. Reporting those at WARNING drowns the warning tier in
+// benign findings, so they are reported at INFO instead (the finding is still
+// recorded, just not escalated).
+//
+// When a workflow exists it could have consumed the resolver, so an
+// unreferenced resolver is a genuine orphan (dead config or a typo'd
+// reference) and stays a WARNING.
+//
+// The boundary is deliberately `HasWorkflow()` (i.e. `spec.workflow` present at
+// all) rather than "has actions": an explicit but empty `workflow: {}` opts the
+// solution back into WARNING. That keeps the rule predictable -- omit the
+// workflow block entirely to get INFO.
+func unusedResolverSeverity(sol *solution.Solution) SeverityLevel {
+	if sol == nil || !sol.Spec.HasWorkflow() {
+		return SeverityInfo
+	}
+	return SeverityWarning
+}
+
 func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Registry, referencedResolvers map[string]bool) {
 	if sol.Spec.Resolvers == nil {
 		return
@@ -403,14 +440,6 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 	// slice is identical across all steps, so recomputing it per step would
 	// needlessly re-sort and re-allocate on large solutions.
 	declaredFuncs := declaredFunctionNames(sol)
-
-	reservedNames := map[string]bool{
-		"__actions": true,
-		"__error":   true,
-		"__item":    true,
-		"__index":   true,
-		"_":         true,
-	}
 
 	for name, res := range sol.Spec.Resolvers {
 		location := fmt.Sprintf("resolvers.%s", name)
@@ -443,9 +472,18 @@ func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Re
 		// resolver or action references it.
 		hasValidation := res.Validate != nil && len(res.Validate.With) > 0
 		if !referencedResolvers[name] && !hasValidation {
-			result.addFinding(SeverityWarning, "usage", location,
+			// Severity depends on solution shape: a terminal resolver in a
+			// workflow-less solution is the intended output, not an orphan.
+			severity := unusedResolverSeverity(sol)
+			suggestion := "Remove unused resolver or reference it in actions/other resolvers"
+			if severity == SeverityInfo {
+				suggestion = fmt.Sprintf(
+					"This solution has no workflow, so a terminal resolver is expected to be run directly via the 'run resolver' command (resolver %q). Add a workflow or reference it elsewhere if it should be consumed.",
+					name)
+			}
+			result.addFinding(severity, "usage", location,
 				fmt.Sprintf("resolver '%s' is defined but never referenced", name),
-				"Remove unused resolver or reference it in actions/other resolvers",
+				suggestion,
 				"unused-resolver")
 		}
 
@@ -1678,6 +1716,100 @@ func lintUndefinedOptionalRefs(sol *solution.Solution, result *Result) {
 			return nil
 		},
 	})
+}
+
+// collectHardResolverRefs collects resolver references made with UNAMBIGUOUS
+// syntax: hard CEL access (_.name, _["name"]), explicit `rslvr:` references, and
+// explicit `._.name` template accessors. Optional CEL access (_.?name) and bare
+// Go-template accessors ({{ .field }}) are excluded -- the former declares the
+// resolver may be absent, the latter may resolve against a step's data keys or a
+// forEach alias.
+//
+// The result is keyed by resolver name with the first location seen, so callers
+// can report a finding against a real path in the solution.
+func collectHardResolverRefs(sol *solution.Solution) map[string]string {
+	locations := make(map[string]string)
+
+	record := func(path string, refs map[string]bool) {
+		names := make([]string, 0, len(refs))
+		for n := range refs {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			if _, seen := locations[n]; !seen {
+				locations[n] = path
+			}
+		}
+	}
+
+	_ = walk.Walk(sol, &walk.Visitor{
+		ValueRef: func(path string, vr *spec.ValueRef) error {
+			refs := make(map[string]bool)
+			resolver.ExtractHardCelRefsFromValueRef(vr, refs)
+			record(path, refs)
+			return nil
+		},
+		Condition: func(path, _ string, expr *celexp.Expression) error {
+			refs := make(map[string]bool)
+			resolver.ExtractHardCelRefsFromValueRef(&spec.ValueRef{Expr: expr}, refs)
+			record(path, refs)
+			return nil
+		},
+	})
+
+	return locations
+}
+
+// lintUnknownResolverRefs emits an ERROR for each unambiguous resolver reference
+// whose target resolver is not defined.
+//
+// This is almost always a typo (`_.greetng` for `_.greeting`). Such a reference
+// hard-fails at run time when the dependency graph is built ("depends on X but X
+// wasn't present"), so reporting it as an error at lint time surfaces the same
+// problem without executing the solution.
+//
+// Only unambiguous references are checked (see collectHardResolverRefs):
+// bare Go-template accessors are handled by template-unknown-accessor, which
+// understands data-key and forEach-alias scope, and optional CEL access is
+// handled by undefined-optional-reference.
+func lintUnknownResolverRefs(sol *solution.Solution, result *Result) {
+	refs := collectHardResolverRefs(sol)
+	if len(refs) == 0 {
+		return
+	}
+
+	names := make([]string, 0, len(refs))
+	for name := range refs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if _, defined := sol.Spec.Resolvers[name]; defined {
+			continue
+		}
+		// Built-in context variables (__actions, __item, ...) share the root
+		// namespace but are not resolvers. Any `__`-prefixed key is treated as
+		// engine-injected, not just the names in reservedNames: the engine also
+		// injects keys that are not enumerable here (e.g. __plan, see
+		// resolver.Executor), and `__` is reserved for the engine by convention.
+		// This mirrors undefined-optional-reference's handling of injected keys.
+		if reservedNames[name] || strings.HasPrefix(name, "__") {
+			continue
+		}
+		// A declared spec.function shares the `_.` namespace in some contexts;
+		// do not report those as undefined resolvers.
+		if sol.Spec.Functions != nil {
+			if _, isFunc := sol.Spec.Functions[name]; isFunc {
+				continue
+			}
+		}
+		result.addFinding(SeverityError, "dependency", refs[name],
+			fmt.Sprintf("reference to undefined resolver %q", name),
+			fmt.Sprintf("Define a resolver named %q, fix the typo, or use optional access (_.?%s) if the value may be absent", name, name),
+			"unknown-resolver-reference")
+	}
 }
 
 func collectReferencedResolvers(sol *solution.Solution) map[string]bool {

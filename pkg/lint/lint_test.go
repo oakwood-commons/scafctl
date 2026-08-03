@@ -580,6 +580,11 @@ func exprPtr(s string) *celexp.Expression {
 	return &e
 }
 
+func tmplPtr(s string) *gotmpl.GoTemplatingContent {
+	t := gotmpl.GoTemplatingContent(s)
+	return &t
+}
+
 func filterFindingsByRule(result *Result, rule string) []*Finding {
 	if rule == "" {
 		return nil
@@ -819,6 +824,170 @@ func TestLintUndefinedOptionalReference_InjectedKeyNotFlagged(t *testing.T) {
 
 	findings := filterFindingsByRule(result, "undefined-optional-reference")
 	assert.Empty(t, findings)
+}
+
+// TestLintUnknownResolverRefs covers the unknown-resolver-reference rule: an
+// unambiguous reference (hard CEL / rslvr: / {{ ._.name }}) to a resolver that
+// is not defined is an ERROR, because building the dependency graph fails at run
+// time. This is the rule that keeps a typo'd reference visible even when
+// unused-resolver is down-ranked to INFO in workflow-less solutions.
+func TestLintUnknownResolverRefs(t *testing.T) {
+	newReg := func() *provider.Registry {
+		staticProv := newFakeProvider("static", map[string]*jsonschema.Schema{
+			"value": {Type: "string"},
+		})
+		celProv := newFakeProvider("cel", map[string]*jsonschema.Schema{
+			"expression": {Type: "string"},
+		})
+		reg := provider.NewRegistry()
+		_ = reg.Register(staticProv)
+		_ = reg.Register(celProv)
+		return reg
+	}
+
+	// Helper: a solution with a defined `greeting` resolver plus a consumer
+	// whose CEL expression is supplied by the caller.
+	solWithExpr := func(expr string) *solution.Solution {
+		return &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"greeting": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "static",
+								Inputs:   map[string]*spec.ValueRef{"value": {Literal: "hi"}},
+							}},
+						},
+					},
+					"consumer": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "cel",
+								Inputs: map[string]*spec.ValueRef{
+									"expression": {Expr: exprPtr(expr)},
+								},
+							}},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("typo'd hard reference is an error", func(t *testing.T) {
+		result := Solution(solWithExpr(`_.greetng + "!"`), "test.yaml", newReg())
+
+		findings := filterFindingsByRule(result, "unknown-resolver-reference")
+		require.Len(t, findings, 1)
+		assert.Equal(t, SeverityError, findings[0].Severity)
+		assert.Contains(t, findings[0].Message, "greetng")
+	})
+
+	t.Run("defined hard reference is not flagged", func(t *testing.T) {
+		result := Solution(solWithExpr(`_.greeting + "!"`), "test.yaml", newReg())
+		assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
+	})
+
+	t.Run("optional reference to undefined resolver is not flagged here", func(t *testing.T) {
+		// undefined-optional-reference owns that case; this rule must not
+		// double-report it.
+		result := Solution(solWithExpr(`_.?missing.orValue("")`), "test.yaml", newReg())
+		assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
+	})
+
+	t.Run("reserved context variable is not flagged", func(t *testing.T) {
+		// __actions and friends share the root namespace but are not resolvers.
+		result := Solution(solWithExpr(`has(_.__actions)`), "test.yaml", newReg())
+		assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
+	})
+
+	t.Run("bare go-template accessor is not flagged", func(t *testing.T) {
+		// A bare {{ .field }} accessor may resolve against a step's data keys or
+		// a forEach alias, so it is NOT an unambiguous resolver reference.
+		// template-unknown-accessor handles those with full scope awareness.
+		sol := &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"rendered": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "static",
+								Inputs: map[string]*spec.ValueRef{
+									"value": {Tmpl: tmplPtr("{{ .someDataKey }}")},
+								},
+							}},
+						},
+					},
+				},
+			},
+		}
+
+		result := Solution(sol, "test.yaml", newReg())
+		assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
+	})
+
+	t.Run("explicit template resolver accessor is flagged", func(t *testing.T) {
+		// {{ ._.name }} IS unambiguous, so a typo there is reported.
+		sol := &solution.Solution{
+			Spec: solution.Spec{
+				Resolvers: map[string]*resolver.Resolver{
+					"rendered": {
+						Resolve: &resolver.ResolvePhase{
+							With: []resolver.ProviderSource{{
+								Provider: "static",
+								Inputs: map[string]*spec.ValueRef{
+									"value": {Tmpl: tmplPtr("{{ ._.greetng }}")},
+								},
+							}},
+						},
+					},
+				},
+			},
+		}
+
+		result := Solution(sol, "test.yaml", newReg())
+		findings := filterFindingsByRule(result, "unknown-resolver-reference")
+		require.Len(t, findings, 1)
+		assert.Contains(t, findings[0].Message, "greetng")
+	})
+
+	t.Run("engine-injected __ keys are not flagged", func(t *testing.T) {
+		// Hard access to an engine-injected context key must never be reported
+		// as an undefined resolver. The engine injects keys beyond the ones
+		// enumerated in reservedNames (notably __plan, injected by
+		// resolver.Executor before any resolver runs), so the rule exempts the
+		// whole `__` namespace rather than a hardcoded list -- matching
+		// undefined-optional-reference.
+		exprs := []string{
+			`_["__plan"]["app"].phase`,
+			`_.__plan`,
+			`_["__actions"]`,
+			`_.__item`,
+		}
+		for _, expr := range exprs {
+			t.Run(expr, func(t *testing.T) {
+				sol := &solution.Solution{
+					Spec: solution.Spec{
+						Resolvers: map[string]*resolver.Resolver{
+							"app": {
+								Resolve: &resolver.ResolvePhase{
+									With: []resolver.ProviderSource{{
+										Provider: "cel",
+										Inputs: map[string]*spec.ValueRef{
+											"expression": {Expr: exprPtr(expr)},
+										},
+									}},
+								},
+							},
+						},
+					},
+				}
+
+				result := Solution(sol, "test.yaml", newReg())
+				assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
+			})
+		}
+	})
 }
 
 func TestLintUndefinedOptionalReference_NoResolvers(t *testing.T) {

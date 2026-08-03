@@ -1,0 +1,64 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-unused-resolver-workflow
+  version: 1.0.0
+  description: |
+    Companion to lint-unused-resolver: verifies that unused-resolver stays at
+    WARNING severity when the solution HAS a workflow.
+
+    A workflow could have consumed the resolver, so an unreferenced resolver
+    here is a genuine orphan (dead config or a typo'd reference) rather than
+    the intended output. This guards against the workflow-less INFO
+    down-ranking over-suppressing real findings.
+
+spec:
+  resolvers:
+    # Nothing references this, and a workflow exists that could have used it
+    # -> warning (genuine orphan).
+    orphaned:
+      description: Unreferenced resolver in a solution that has a workflow
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: orphan
+
+    # Consumed by the workflow action below -> not flagged.
+    greeting:
+      description: Resolver consumed by the workflow
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+
+  workflow:
+    actions:
+      showGreeting:
+        description: Consumes greeting but not orphaned
+        provider: message
+        inputs:
+          message:
+            rslvr: greeting
+
+  testing:
+    cases:
+      unused-resolver-is-warning-with-workflow:
+        description: unused-resolver stays warning severity when a workflow exists
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, unused-resolver]
+        assertions:
+          - expression: __exitCode == 0
+            message: "Warning-level findings must not cause a non-zero exit without --strict"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "unused-resolver" && f.severity == "warning")
+            message: "An orphaned resolver must remain warning severity when a workflow exists"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "unused-resolver" && f.location == "resolvers.orphaned")
+            message: "The orphaned resolver specifically must be flagged"
+          - expression: >
+              !__output.findings.exists(f, f.ruleName == "unused-resolver" && f.location == "resolvers.greeting")
+            message: "greeting is consumed by the workflow and must not be flagged"

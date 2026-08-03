@@ -2151,3 +2151,84 @@ func TestExtractRefsFromValueRefs_NestedValueRefMaps(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractHardCelRefsFromValueRef covers the CEL-only, hard-access extractor
+// used by the unknown-resolver-reference lint rule. It must collect only
+// UNAMBIGUOUS resolver references: hard CEL access, explicit rslvr:, and
+// {{ ._.name }} template accessors -- never optional CEL access or bare
+// {{ .field }} template accessors.
+func TestExtractHardCelRefsFromValueRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  *ValueRef
+		want map[string]bool
+	}{
+		{
+			name: "nil ref is a no-op",
+			ref:  nil,
+			want: map[string]bool{},
+		},
+		{
+			name: "hard cel select",
+			ref:  &ValueRef{Expr: celExpPtr(`_.greeting + "!"`)},
+			want: map[string]bool{"greeting": true},
+		},
+		{
+			name: "bracket access",
+			ref:  &ValueRef{Expr: celExpPtr(`_["my-resolver"]`)},
+			want: map[string]bool{"my-resolver": true},
+		},
+		{
+			name: "optional access is excluded",
+			ref:  &ValueRef{Expr: celExpPtr(`_.?maybe.orValue("")`)},
+			want: map[string]bool{},
+		},
+		{
+			name: "explicit rslvr reference",
+			ref:  &ValueRef{Resolver: stringPtr("greeting")},
+			want: map[string]bool{"greeting": true},
+		},
+		{
+			name: "explicit template resolver accessor",
+			ref:  &ValueRef{Tmpl: tmplPtr("{{ ._.greeting }}")},
+			want: map[string]bool{"greeting": true},
+		},
+		{
+			name: "bare template accessor is excluded (may be a data key or alias)",
+			ref:  &ValueRef{Tmpl: tmplPtr("{{ .someDataKey }}")},
+			want: map[string]bool{},
+		},
+		{
+			name: "literal string containing cel",
+			ref:  &ValueRef{Literal: `_.greeting`},
+			want: map[string]bool{"greeting": true},
+		},
+		{
+			name: "nested literal map with expr",
+			ref:  &ValueRef{Literal: map[string]any{"expr": `_.greeting`}},
+			want: map[string]bool{"greeting": true},
+		},
+		{
+			name: "nested literal list",
+			ref:  &ValueRef{Literal: []any{map[string]any{"rslvr": "greeting"}}},
+			want: map[string]bool{"greeting": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := make(map[string]bool)
+			ExtractHardCelRefsFromValueRef(tt.ref, got)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExtractHardCelRefsFromValueRef_NilMapIsNoOp(t *testing.T) {
+	t.Parallel()
+	// Must not panic when the destination map is nil.
+	ExtractHardCelRefsFromValueRef(&ValueRef{Expr: celExpPtr(`_.greeting`)}, nil)
+}
