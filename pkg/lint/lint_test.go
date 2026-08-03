@@ -950,6 +950,44 @@ func TestLintUnknownResolverRefs(t *testing.T) {
 		require.Len(t, findings, 1)
 		assert.Contains(t, findings[0].Message, "greetng")
 	})
+
+	t.Run("engine-injected __ keys are not flagged", func(t *testing.T) {
+		// Hard access to an engine-injected context key must never be reported
+		// as an undefined resolver. The engine injects keys beyond the ones
+		// enumerated in reservedNames (notably __plan, injected by
+		// resolver.Executor before any resolver runs), so the rule exempts the
+		// whole `__` namespace rather than a hardcoded list -- matching
+		// undefined-optional-reference.
+		exprs := []string{
+			`_["__plan"]["app"].phase`,
+			`_.__plan`,
+			`_["__actions"]`,
+			`_.__item`,
+		}
+		for _, expr := range exprs {
+			t.Run(expr, func(t *testing.T) {
+				sol := &solution.Solution{
+					Spec: solution.Spec{
+						Resolvers: map[string]*resolver.Resolver{
+							"app": {
+								Resolve: &resolver.ResolvePhase{
+									With: []resolver.ProviderSource{{
+										Provider: "cel",
+										Inputs: map[string]*spec.ValueRef{
+											"expression": {Expr: exprPtr(expr)},
+										},
+									}},
+								},
+							},
+						},
+					},
+				}
+
+				result := Solution(sol, "test.yaml", newReg())
+				assert.Empty(t, filterFindingsByRule(result, "unknown-resolver-reference"))
+			})
+		}
+	})
 }
 
 func TestLintUndefinedOptionalReference_NoResolvers(t *testing.T) {

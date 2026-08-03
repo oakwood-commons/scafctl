@@ -1790,8 +1790,12 @@ func lintUnknownResolverRefs(sol *solution.Solution, result *Result) {
 			continue
 		}
 		// Built-in context variables (__actions, __item, ...) share the root
-		// namespace but are not resolvers.
-		if reservedNames[name] {
+		// namespace but are not resolvers. Any `__`-prefixed key is treated as
+		// engine-injected, not just the names in reservedNames: the engine also
+		// injects keys that are not enumerable here (e.g. __plan, see
+		// resolver.Executor), and `__` is reserved for the engine by convention.
+		// This mirrors undefined-optional-reference's handling of injected keys.
+		if reservedNames[name] || strings.HasPrefix(name, "__") {
 			continue
 		}
 		// A declared spec.function shares the `_.` namespace in some contexts;
