@@ -33,18 +33,14 @@ flowchart LR
 
 {{< tabs "linting-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint -f solution.yaml
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint -f solution.yaml
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -52,18 +48,14 @@ If your solution file is in a well-known location (`solution.yaml`, `scafctl.yam
 
 {{< tabs "linting-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -75,18 +67,14 @@ Get structured results for CI/CD integration:
 
 {{< tabs "linting-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint -f solution.yaml -o json
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint -f solution.yaml -o json
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -113,7 +101,6 @@ For scripts and CI pipelines -- exit code only:
 
 {{< tabs "linting-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
-
 ```bash
 if scafctl lint -f solution.yaml -o quiet; then
   echo "Lint passed"
@@ -122,10 +109,8 @@ else
   exit 1
 fi
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 if (scafctl lint -f solution.yaml -o quiet) {
   Write-Output "Lint passed"
@@ -134,7 +119,6 @@ if (scafctl lint -f solution.yaml -o quiet) {
   exit 1
 }
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -146,18 +130,14 @@ See all available lint rules:
 
 {{< tabs "linting-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rules
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rules
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -176,7 +156,6 @@ This shows:
 
 {{< tabs "linting-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
-
 ```bash
 # JSON output for tooling
 scafctl lint rules -o json
@@ -184,10 +163,8 @@ scafctl lint rules -o json
 # YAML output
 scafctl lint rules -o yaml
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 # JSON output for tooling
 scafctl lint rules -o json
@@ -195,7 +172,6 @@ scafctl lint rules -o json
 # YAML output
 scafctl lint rules -o yaml
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -205,18 +181,14 @@ Get detailed information about any lint rule:
 
 {{< tabs "linting-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule <rule-id>
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule <rule-id>
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -224,18 +196,14 @@ For example:
 
 {{< tabs "linting-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule missing-description
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule missing-description
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -256,18 +224,14 @@ This shows:
 
 {{< tabs "linting-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule missing-description -o json
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule missing-description -o json
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -305,18 +269,14 @@ Explain the rule for full guidance:
 
 {{< tabs "linting-tutorial-cmd-orvalue" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule orvalue-on-non-optional
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule orvalue-on-non-optional
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -377,20 +337,16 @@ Explain either rule for full guidance:
 
 {{< tabs "linting-tutorial-cmd-deprecated" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule deprecated-field
 scafctl lint rule deprecated-field-conflict
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule deprecated-field
 scafctl lint rule deprecated-field-conflict
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -414,7 +370,6 @@ scafctl lint rule deprecated-field-conflict
 
 {{< tabs "linting-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
-
 ```bash
 #!/bin/bash
 # .git/hooks/pre-commit
@@ -422,10 +377,8 @@ git diff --cached --name-only --diff-filter=ACM | grep 'solution.yaml$' | while 
   scafctl lint -f "$file" -o quiet || exit 1
 done
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 # PowerShell equivalent
 # .git/hooks/pre-commit
@@ -436,7 +389,6 @@ git diff --cached --name-only --diff-filter=ACM |
     if ($LASTEXITCODE -ne 0) { exit 1 }
   }
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -653,18 +605,14 @@ For more details:
 
 {{< tabs "linting-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule unreachable-test-path
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule unreachable-test-path
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -869,18 +817,14 @@ For more details:
 
 {{< tabs "linting-tutorial-cmd-12" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule transform-shape-mismatch
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule transform-shape-mismatch
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -946,18 +890,14 @@ For more details:
 
 {{< tabs "linting-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule resolver-cycle
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule resolver-cycle
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -1032,18 +972,14 @@ For more details:
 
 {{< tabs "linting-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule missing-template-dependency
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule missing-template-dependency
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -1126,18 +1062,14 @@ For more details:
 
 {{< tabs "linting-tutorial-cmd-15" >}}
 {{% tab "Bash" %}}
-
 ```bash
 scafctl lint rule resolver-undefined-dependency
 ```
-
 {{% /tab %}}
 {{% tab "PowerShell" %}}
-
 ```powershell
 scafctl lint rule resolver-undefined-dependency
 ```
-
 {{% /tab %}}
 {{< /tabs >}}
 
