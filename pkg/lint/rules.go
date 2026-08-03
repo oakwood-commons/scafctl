@@ -3,7 +3,11 @@
 
 package lint
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // RuleMeta describes a single lint rule, including its severity, category,
 // and human-readable guidance. This is the authoritative source of truth
@@ -702,4 +706,66 @@ func ListRules() []RuleMeta {
 func GetRule(name string) (RuleMeta, bool) {
 	r, ok := KnownRules[name]
 	return r, ok
+}
+
+// summaryTiers lists the severity tiers in display order alongside their
+// human-readable heading. It is the single ordering used by RuleSummaryText so
+// the generated help block always presents errors, then warnings, then info.
+var summaryTiers = []struct {
+	severity string
+	heading  string
+}{
+	{string(SeverityError), "Errors"},
+	{string(SeverityWarning), "Warnings"},
+	{string(SeverityInfo), "Info"},
+}
+
+// RuleSummaryText renders a compact, drift-proof summary of every lint rule in
+// KnownRules, grouped by severity tier (errors, then warnings, then info) and
+// by category within each tier. It is derived entirely from the authoritative
+// registry via ListRules(), so the tier labels can never diverge from the rule
+// definitions -- unlike a hand-maintained catalog.
+//
+// The output is intended for embedding in the 'lint' command's Long help text.
+// It lists rule names only (not descriptions) to stay scannable; readers are
+// pointed at 'lint rules' / 'lint rule <name>' for full detail. Output is
+// deterministic: tiers follow summaryTiers, categories and rule names are
+// sorted alphabetically.
+func RuleSummaryText() string {
+	// Bucket rules by severity, then by category. ListRules() already sorts by
+	// severity then rule name, so per-category name slices come out sorted.
+	byTier := make(map[string]map[string][]string)
+	counts := make(map[string]int)
+	total := 0
+	for _, r := range ListRules() {
+		if byTier[r.Severity] == nil {
+			byTier[r.Severity] = make(map[string][]string)
+		}
+		byTier[r.Severity][r.Category] = append(byTier[r.Severity][r.Category], r.Rule)
+		counts[r.Severity]++
+		total++
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "LINT RULES (%d total):", total)
+
+	for _, tier := range summaryTiers {
+		categories := byTier[tier.severity]
+		if len(categories) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n  %s (%d):", tier.heading, counts[tier.severity])
+
+		catNames := make([]string, 0, len(categories))
+		for cat := range categories {
+			catNames = append(catNames, cat)
+		}
+		sort.Strings(catNames)
+
+		for _, cat := range catNames {
+			fmt.Fprintf(&b, "\n    %-16s %s", cat+":", strings.Join(categories[cat], ", "))
+		}
+	}
+
+	return b.String()
 }
