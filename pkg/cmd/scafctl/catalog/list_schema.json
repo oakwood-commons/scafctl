@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Catalog Artifact List",
+  "description": "Schema for catalog artifact list with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "📦",
+  "x-kvx-collectionTitle": "Artifacts",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "displayName",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["kind", "category"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "tag", "kind"],
+        "layout": "inline"
+      },
+      {
+        "title": "Display Name",
+        "fields": ["displayName"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Catalog",
+        "fields": ["catalog"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Category",
+        "fields": ["category"],
+        "layout": "inline"
+      },
+      {
+        "title": "Metadata",
+        "fields": ["version", "digest", "createdAt"],
+        "layout": "table"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "tag", "kind", "catalog"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "maxLength": 30,
+        "x-kvx-priority": 10
+      },
+      "tag": {
+        "type": "string",
+        "title": "Tag",
+        "maxLength": 12,
+        "x-kvx-priority": 8
+      },
+      "kind": {
+        "type": "string",
+        "title": "Kind",
+        "maxLength": 12,
+        "x-kvx-priority": 10
+      },
+      "displayName": {
+        "type": "string",
+        "title": "Display Name",
+        "maxLength": 25,
+        "x-kvx-priority": 6
+      },
+      "category": {
+        "type": "string",
+        "title": "Category",
+        "maxLength": 15,
+        "x-kvx-priority": 4
+      },
+      "catalog": {
+        "type": "string",
+        "title": "Catalog",
+        "maxLength": 25,
+        "x-kvx-priority": 8
+      },
+      "version": {
+        "type": "string",
+        "title": "Version",
+        "deprecated": true
+      },
+      "digest": {
+        "type": "string",
+        "title": "Digest",
+        "deprecated": true
+      },
+      "createdAt": {
+        "type": "string",
+        "title": "Created At",
+        "deprecated": true
+      }
+    }
+  }
+}

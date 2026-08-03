@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -185,8 +186,8 @@ func TestArtifactListSchema_ValidJSON(t *testing.T) {
 	t.Parallel()
 
 	var schema map[string]any
-	err := json.Unmarshal(artifactListSchema, &schema)
-	require.NoError(t, err, "artifactListSchema must be valid JSON")
+	err := json.Unmarshal(listSchemaJSON, &schema)
+	require.NoError(t, err, "list_schema.json must be valid JSON")
 
 	items, ok := schema["items"].(map[string]any)
 	require.True(t, ok, "schema must have items object")
@@ -206,7 +207,7 @@ func TestArtifactListSchema_RequiredFields(t *testing.T) {
 	t.Parallel()
 
 	var schema map[string]any
-	err := json.Unmarshal(artifactListSchema, &schema)
+	err := json.Unmarshal(listSchemaJSON, &schema)
 	require.NoError(t, err)
 
 	items := schema["items"].(map[string]any)
@@ -228,39 +229,54 @@ func TestArtifactListSchema_RequiredFields(t *testing.T) {
 	assert.NotContains(t, requiredNames, "digest")
 }
 
+func TestListSchemaJSON_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(listSchemaJSON)
+	require.NoError(t, err, "list_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
+}
+
 func TestArtifactListSchema_DigestHiddenInTable(t *testing.T) {
 	t.Parallel()
 
 	var schema map[string]any
-	err := json.Unmarshal(artifactListSchema, &schema)
+	err := json.Unmarshal(listSchemaJSON, &schema)
 	require.NoError(t, err)
 
 	items := schema["items"].(map[string]any)
 	props := items["properties"].(map[string]any)
 	digest := props["digest"].(map[string]any)
 
-	// Digest should be hidden from table view (deprecated flag set)
+	// Digest should be hidden from table view (deprecated flag in schema)
 	deprecated, ok := digest["deprecated"]
 	assert.True(t, ok, "digest column should have deprecated flag")
 	assert.Equal(t, true, deprecated, "digest column should be deprecated (hidden from table view)")
+
+	// Column hint also marks it hidden (the mechanism that drives table output)
+	assert.True(t, listColumnHints["digest"].Hidden, "digest column hint should be Hidden")
 }
 
 func TestArtifactListSchema_HiddenFields(t *testing.T) {
 	t.Parallel()
 
 	var schema map[string]any
-	err := json.Unmarshal(artifactListSchema, &schema)
+	err := json.Unmarshal(listSchemaJSON, &schema)
 	require.NoError(t, err)
 
 	items := schema["items"].(map[string]any)
 	props := items["properties"].(map[string]any)
 
-	// version, createdAt, and digest should be hidden
+	// version, createdAt, and digest should be hidden in both schema and column hints
 	for _, field := range []string{"version", "createdAt", "digest"} {
 		fieldMap := props[field].(map[string]any)
 		deprecated, ok := fieldMap["deprecated"]
 		assert.True(t, ok, "field %q should have deprecated", field)
 		assert.Equal(t, true, deprecated, "field %q should be deprecated", field)
+
+		hint, exists := listColumnHints[field]
+		assert.True(t, exists, "field %q should have a column hint", field)
+		assert.True(t, hint.Hidden, "field %q column hint should be Hidden", field)
 	}
 }
 
