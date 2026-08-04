@@ -1,0 +1,77 @@
+{
+  "name": "scafctl",
+  "displayName": "scafctl",
+  "description": "Language support for scafctl solution files: diagnostics, go-to-definition, find references, and rename.",
+  "version": "0.1.0",
+  "publisher": "oakwood-commons",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "scafctl",
+    "solution",
+    "lsp",
+    "yaml"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/{solution,scafctl}.{yaml,yml}",
+    "onCommand:scafctl.restartServer"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "scafctl.restartServer",
+        "title": "scafctl: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "scafctl",
+      "properties": {
+        "scafctl.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `scafctl` executable used as the language server. When empty, `scafctl` is resolved from your `PATH`."
+        },
+        "scafctl.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the scafctl language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "node --import tsx --test src/serverResolution.test.ts",
+    "package": "vsce package --no-dependencies -o scafctl.vsix"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.82.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.12.0"
+  }
+}
