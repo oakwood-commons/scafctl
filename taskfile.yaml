@@ -653,6 +653,28 @@ tasks:
       - cmd: '{{ if eq .GOOS "darwin" }}codesign --force --sign - {{.DIST}}/{{.OUTPUT_FILE}}{{ end }}'
         platforms: [darwin]
 
+  vscode:install:
+    desc: "Install the VS Code extension's npm dependencies"
+    dir: editors/vscode
+    cmds:
+      - npm ci
+
+  vscode:build:
+    desc: "Type-check, lint, test, and bundle the VS Code extension"
+    dir: editors/vscode
+    cmds:
+      - npm run check
+      - npm run lint
+      - npm test
+      - npm run build
+
+  vscode:package:
+    desc: "Build and package the VS Code extension into a .vsix"
+    dir: editors/vscode
+    cmds:
+      - npm run build
+      - npm run package
+
   build-container-image:
     deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the container image layer"
