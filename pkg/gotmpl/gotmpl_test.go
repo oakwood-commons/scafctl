@@ -869,6 +869,76 @@ func TestContextFuncBinder_RebindsOnCacheHit(t *testing.T) {
 	assert.Equal(t, "second", out2.Output)
 }
 
+// TestContextFuncBinder_ParsesWithoutExplicitFuncs guards the fix for
+// context-bound functions (e.g. author-defined spec.functions helpers) that are
+// supplied ONLY by the binder factory: a template invoking one must parse and
+// execute even when the caller does NOT pass it in opts.Funcs. Before the fix,
+// such a template failed to parse ("function X not defined") because context
+// funcs were bound only at execution, not registered at parse time.
+func TestContextFuncBinder_ParsesWithoutExplicitFuncs(t *testing.T) {
+	contextFuncBinderMu.Lock()
+	orig := contextFuncBinderFactory
+	contextFuncBinderMu.Unlock()
+	defer func() {
+		contextFuncBinderMu.Lock()
+		contextFuncBinderFactory = orig
+		contextFuncBinderMu.Unlock()
+	}()
+
+	SetContextFuncBinderFactory(func(ctx context.Context) template.FuncMap {
+		return template.FuncMap{"greet": func(who string) string { return "hi " + who }}
+	})
+
+	svc := NewService(nil)
+	// No opts.Funcs -- greet is available only via the context binder factory.
+	out, err := svc.Execute(context.Background(), TemplateOptions{
+		Content: `{{ greet "world" }}`,
+		Name:    "ctx-only-func",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "hi world", out.Output)
+}
+
+// TestContextFuncBinder_CacheKeyIncludesFuncNames ensures two renders of the
+// same content under different context function name sets do not collide in the
+// template cache: a name available for one render must not leak into another
+// where it is undefined.
+func TestContextFuncBinder_CacheKeyIncludesFuncNames(t *testing.T) {
+	contextFuncBinderMu.Lock()
+	orig := contextFuncBinderFactory
+	contextFuncBinderMu.Unlock()
+	defer func() {
+		contextFuncBinderMu.Lock()
+		contextFuncBinderFactory = orig
+		contextFuncBinderMu.Unlock()
+	}()
+
+	type ctxKey struct{}
+	// The available function set depends on the active context.
+	SetContextFuncBinderFactory(func(ctx context.Context) template.FuncMap {
+		if v, _ := ctx.Value(ctxKey{}).(bool); v {
+			return template.FuncMap{"greet": func() string { return "hi" }}
+		}
+		return nil
+	})
+
+	svc := NewService(nil)
+	content := `{{ greet }}`
+
+	// First render: greet is defined -> parses and executes.
+	ctxWith := context.WithValue(context.Background(), ctxKey{}, true)
+	out, err := svc.Execute(ctxWith, TemplateOptions{Content: content, Name: "cachekey"})
+	require.NoError(t, err)
+	assert.Equal(t, "hi", out.Output)
+
+	// Same content, but greet is NOT defined in this context. The cache key must
+	// differ (it includes the context func names), so this does not reuse the
+	// first parse and instead fails as an undefined function.
+	ctxWithout := context.Background()
+	_, err = svc.Execute(ctxWithout, TemplateOptions{Content: content, Name: "cachekey"})
+	require.Error(t, err)
+}
+
 func TestNewServiceRaw(t *testing.T) {
 	svc := NewServiceRaw(nil)
 	assert.NotNil(t, svc)

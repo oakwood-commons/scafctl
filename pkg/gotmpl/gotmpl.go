@@ -481,8 +481,28 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 		return nil, fmt.Errorf("invalid missingKey value %q: must be 'default', 'zero', or 'error'", missingKey)
 	}
 
-	// Build the effective function map keys for cache key generation
+	// Build the effective function map keys for cache key generation.
 	funcMapKeys := s.collectFuncMapKeys(opts)
+
+	// Context-bound functions (author-defined helpers, cel, ...) supplied by the
+	// registered binder factory must be known at PARSE time too -- otherwise a
+	// template that invokes them (e.g. a `tmpl:` ValueRef calling a spec.functions
+	// helper) fails to parse even though they would be bound at execution. Their
+	// implementations are (re)bound per request in executeTemplate; here only the
+	// names matter, both for parsing and for cache-key uniqueness (two solutions
+	// with different author functions must not share a cache entry).
+	ctxFuncs := getContextFuncBinder(ctx)
+	if len(ctxFuncs) > 0 {
+		present := make(map[string]struct{}, len(funcMapKeys))
+		for _, k := range funcMapKeys {
+			present[k] = struct{}{}
+		}
+		for name := range ctxFuncs {
+			if _, ok := present[name]; !ok {
+				funcMapKeys = append(funcMapKeys, name)
+			}
+		}
+	}
 
 	// Check the cache
 	cache := s.getCache()
@@ -535,6 +555,16 @@ func (s *Service) createTemplate(ctx context.Context, name, content string, opts
 				"function", k)
 		}
 		funcMap[k] = v
+	}
+
+	// Register context-bound function names (author-defined helpers, cel, ...) so
+	// templates that invoke them parse. Explicit opts.Funcs and built-in defaults
+	// take precedence; the real implementations are (re)bound with the request
+	// context in executeTemplate, so only the names matter here.
+	for k, v := range ctxFuncs {
+		if _, exists := funcMap[k]; !exists {
+			funcMap[k] = v
+		}
 	}
 
 	if len(funcMap) > 0 {
