@@ -47,7 +47,7 @@ func (s *Server) registerRefactorTools() {
 		mcp.WithDeferLoading(true),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("file",
 			mcp.Description("Path to the solution YAML file"),
@@ -133,7 +133,7 @@ func (s *Server) handleRenameResolver(_ context.Context, request mcp.CallToolReq
 
 	renameResult, err := refactor.RenameResolver(sol, oldName, newName)
 	if err != nil {
-		return newStructuredError(ErrCodeInvalidInput, err.Error(),
+		return newStructuredError(ErrCodeValidationError, err.Error(),
 			WithSuggestion("Fix the new name, resolve the collision, or make ambiguous references explicit (_.name in CEL, ._.name in templates), then retry"),
 			WithRelatedTools("find_resolver_references")), nil
 	}
@@ -173,6 +173,10 @@ func (s *Server) loadSolutionRaw(file, cwd string) (*solution.Solution, error) {
 		return nil, err
 	}
 	sol := &solution.Solution{}
+	// Set the path before unmarshalling so the SourceMap/Range positions built
+	// during FromYAML carry a non-empty file, keeping positioned outputs and
+	// refindex metadata accurate.
+	sol.SetPath(path)
 	if err := sol.UnmarshalFromBytes(raw); err != nil {
 		return nil, err
 	}

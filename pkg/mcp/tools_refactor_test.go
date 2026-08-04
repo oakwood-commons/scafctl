@@ -140,6 +140,51 @@ func TestHandleRenameResolver_InvalidName(t *testing.T) {
 		srv.handleRenameResolver)
 	assert.True(t, result.IsError)
 	assert.Contains(t, extractText(t, result), "not a valid resolver name")
+
+	// A refused rename on valid arguments is a semantic validation error, not a
+	// bad-request-shape INVALID_INPUT -- lock down the code so clients can
+	// distinguish the two.
+	var te struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &te))
+	assert.Equal(t, ErrCodeValidationError, te.Code)
+}
+
+func TestLoadSolutionRaw_SetsPath(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, refactorFixture)
+
+	// The loaded solution must carry its path so SourceMap/Range positions built
+	// during parsing get a non-empty file (empty otherwise).
+	sol, err := srv.loadSolutionRaw(path, "")
+	require.NoError(t, err)
+	assert.Equal(t, path, sol.GetPath())
+
+	// A cwd-relative file resolves to the joined path.
+	dir := filepath.Dir(path)
+	solRel, err := srv.loadSolutionRaw("solution.yaml", dir)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(dir, "solution.yaml"), solRel.GetPath())
+}
+
+func TestRenameResolver_IdempotentAnnotation(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+
+	// rename_resolver is read-only with no side effects (it only returns
+	// rewritten content), so repeated calls with the same inputs are safe --
+	// it must advertise the idempotent hint so clients may cache/retry.
+	var found bool
+	for _, st := range srv.mcpServer.ListTools() {
+		if st.Tool.Name != "rename_resolver" {
+			continue
+		}
+		found = true
+		require.NotNil(t, st.Tool.Annotations.IdempotentHint)
+		assert.True(t, *st.Tool.Annotations.IdempotentHint)
+	}
+	assert.True(t, found, "rename_resolver tool must be registered")
 }
 
 func TestHandleRenameResolver_RefusesWhenUnresolved(t *testing.T) {
