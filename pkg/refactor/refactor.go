@@ -56,47 +56,60 @@ func (r *RenameResult) Apply(raw []byte) ([]byte, error) {
 
 // RenameResolver computes the edits to rename a resolver and every reference to
 // it (dependsOn entries, rslvr values, CEL _.name uses, explicit template
-// ._.name uses, and the definition key).
-//
-// It returns an error, producing NO edits, when:
-//   - newName is not a valid resolver name;
+// ._.name uses, and the definition key). It is RenameSymbol for resolvers; see
+// RenameSymbol for the refusal conditions.
+func RenameResolver(sol *solution.Solution, oldName, newName string) (*RenameResult, error) {
+	return RenameSymbol(sol, refindex.SymbolResolver, oldName, newName)
+}
+
+// RenameAction computes the edits to rename an action and every reference to it
+// (dependsOn entries, __actions.name CEL uses, and .__actions.name template
+// uses, plus the definition). It refuses (producing no edits) under the same
+// conditions as RenameResolver.
+func RenameAction(sol *solution.Solution, oldName, newName string) (*RenameResult, error) {
+	return RenameSymbol(sol, refindex.SymbolAction, oldName, newName)
+}
+
+// RenameSymbol computes the edits to rename a symbol of the given kind and every
+// reference to it. It returns an error, producing NO edits, when:
+//   - newName is not a valid name;
 //   - newName equals oldName;
 //   - oldName is not defined in the solution;
-//   - newName already names a resolver (collision); or
-//   - the reference index is incomplete (some references could not be located),
-//     which would make a rename partial and unsafe.
-func RenameResolver(sol *solution.Solution, oldName, newName string) (*RenameResult, error) {
+//   - newName already names a symbol of the same kind (collision); or
+//   - the reference index is incomplete for oldName (some references could not be
+//     located), which would make a rename partial and unsafe.
+func RenameSymbol(sol *solution.Solution, kind refindex.SymbolKind, oldName, newName string) (*RenameResult, error) {
 	if sol == nil {
-		return nil, fmt.Errorf("rename resolver: nil solution")
+		return nil, fmt.Errorf("rename %s: nil solution", kind)
 	}
 	if !resolverNameRe.MatchString(newName) {
-		return nil, fmt.Errorf("rename resolver: %q is not a valid resolver name (must match %s)", newName, ResolverNamePattern)
+		return nil, fmt.Errorf("rename %s: %q is not a valid %s name (must match %s)", kind, newName, kind, ResolverNamePattern)
 	}
 	if oldName == newName {
-		return nil, fmt.Errorf("rename resolver: new name equals old name %q", oldName)
+		return nil, fmt.Errorf("rename %s: new name equals old name %q", kind, oldName)
 	}
 
 	idx, err := refindex.Build(sol)
 	if err != nil {
-		return nil, fmt.Errorf("rename resolver: %w", err)
+		return nil, fmt.Errorf("rename %s: %w", kind, err)
 	}
 
-	if _, ok := idx.Definition(oldName); !ok {
-		return nil, fmt.Errorf("rename resolver: resolver %q is not defined", oldName)
+	if _, ok := idx.Definition(kind, oldName); !ok {
+		return nil, fmt.Errorf("rename %s: %s %q is not defined", kind, kind, oldName)
 	}
-	if _, ok := idx.Definition(newName); ok {
-		return nil, fmt.Errorf("rename resolver: resolver %q already exists", newName)
+	if _, ok := idx.Definition(kind, newName); ok {
+		return nil, fmt.Errorf("rename %s: %s %q already exists", kind, kind, newName)
 	}
 
 	// Refuse a partial rewrite: if any reference to oldName could not be located
 	// byte-exact, a rename might miss it and silently break the solution. This is
-	// name-scoped -- unlocatable references to OTHER resolvers do not block this
+	// symbol-scoped -- unlocatable references to OTHER symbols do not block this
 	// rename, but references whose target could not be determined at all do.
-	if n := idx.UnresolvedFor(oldName); n > 0 {
-		return nil, fmt.Errorf("rename resolver: %d reference(s) to %q could not be located; aborting to avoid a partial rename", n, oldName)
+	if n := idx.UnresolvedFor(kind, oldName); n > 0 {
+		return nil, fmt.Errorf("rename %s: %d reference(s) to %q could not be located; aborting to avoid a partial rename", kind, n, oldName)
 	}
 
-	occ := idx.Occurrences(oldName)
+	occ := idx.Occurrences(kind, oldName)
 	edits := make([]TextEdit, 0, len(occ))
 	for _, r := range occ {
 		edits = append(edits, TextEdit{Range: r.Range, NewText: newName})

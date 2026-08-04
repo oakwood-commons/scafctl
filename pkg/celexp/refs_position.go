@@ -61,6 +61,15 @@ func (r VariableRef) End() int { return r.Offset + r.Len }
 //	refs, _ := celexp.Expression(`_.a + _.b`).UnderscoreVariableRefs(ctx)
 //	// refs == [{Name:"a", Offset:2, Len:1}, {Name:"b", Offset:8, Len:1}]
 func (e Expression) UnderscoreVariableRefs(ctx context.Context) ([]VariableRef, error) {
+	return e.PrefixedVariableRefs(ctx, "_.")
+}
+
+// PrefixedVariableRefs is the prefix-parameterized form of UnderscoreVariableRefs.
+// It returns every occurrence of a reference under the given prefix (e.g. "_." for
+// resolver data, "__actions." for action results) with its byte range within the
+// expression source. The prefix must end in "." (select-style). Semantics --
+// including the Offset == -1 "unpositioned" sentinel -- match UnderscoreVariableRefs.
+func (e Expression) PrefixedVariableRefs(ctx context.Context, prefix string) ([]VariableRef, error) {
 	env, err := NewParseEnv(ctx)
 	if err != nil {
 		return nil, err
@@ -83,7 +92,7 @@ func (e Expression) UnderscoreVariableRefs(ctx context.Context) ([]VariableRef, 
 	exprRunes := []rune(string(e))
 
 	var refs []VariableRef
-	walkVariablesWithPrefix(parsedExpr.GetExpr(), "_.", func(name string, id int64, optional bool) {
+	walkVariablesWithPrefix(parsedExpr.GetExpr(), prefix, func(name string, id int64, optional bool) {
 		anchor := int(positions[id])
 		runeOff := findIdentNear(exprRunes, []rune(name), anchor)
 		if runeOff < 0 {

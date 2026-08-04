@@ -6,8 +6,9 @@ weight: 46
 # Refactoring Tutorial
 
 This tutorial covers `scafctl refactor`, which applies source-preserving edits to
-a solution file. The first refactoring is `refactor rename resolver`, which
-renames a resolver and rewrites every reference to it.
+a solution file. It can rename a **resolver** (`refactor rename resolver`) or a
+**workflow action** (`refactor rename action`), rewriting every reference to the
+renamed symbol.
 
 ## Overview
 
@@ -133,18 +134,51 @@ does not block your rename. When a rename is refused, update the ambiguous
 reference to an explicit form (`._.name` in templates, `_.name` in CEL) and try
 again.
 
+## Renaming actions
+
+`refactor rename action <old> <new>` renames a workflow action defined under
+`spec.workflow.actions` (or `spec.workflow.finally`) and rewrites every
+reference to it:
+
+- the action definition (the map key)
+- `dependsOn` entries
+- CEL `__actions.name` uses (in inputs and in `when`/`until` conditions)
+- explicit Go-template `.__actions.name` uses
+
+```bash
+# Preview, then apply (see examples/refactor/action-solution.yaml)
+scafctl refactor rename action build compile \
+  -f examples/refactor/action-solution.yaml --dry-run
+scafctl refactor rename action build compile -f examples/refactor/action-solution.yaml
+```
+
+The example solution at `examples/refactor/action-solution.yaml` references the
+action `build` three ways (a `dependsOn` entry, a CEL `__actions.build` use, and
+a template `.__actions.build` use) plus its definition, so the rename reports
+four occurrences. The action also carries `alias: b`, which is left unchanged.
+
+An action's `alias` is a **separate** top-level name, not a reference to the
+action, so renaming the action leaves the `alias` untouched. The rename is
+kind-scoped: renaming an action never rewrites a resolver that happens to share
+its name (and vice versa). Every other guarantee -- byte-exact edits,
+comment/formatting preservation, and the all-or-nothing fail-safe below --
+applies identically to actions.
+
 ## Exit codes
 
 | Code | Meaning |
 | ---- | ------- |
 | 0    | Rename applied (or previewed with `--dry-run`) |
-| 2    | Validation error: invalid new name, name collision, undefined resolver, or an unlocatable reference blocked the rename |
+| 2    | Validation error: invalid new name, name collision, undefined symbol, or an unlocatable reference blocked the rename |
 | 4    | The solution file could not be resolved, read, or parsed |
 
 ## Summary
 
 - `refactor rename resolver <old> <new>` renames a resolver and every reference
   to it, preserving comments and formatting.
+- `refactor rename action <old> <new>` does the same for a workflow action
+  (rewriting `dependsOn`, CEL `__actions.name`, and template `.__actions.name`
+  uses); the action's `alias` is left unchanged.
 - Use `--dry-run` to preview; use `-f` to target a specific file.
 - The rename refuses rather than performing a partial, solution-breaking rewrite.
 

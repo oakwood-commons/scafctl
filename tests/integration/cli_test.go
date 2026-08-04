@@ -13705,6 +13705,85 @@ func TestIntegration_RefactorHelp(t *testing.T) {
 	assert.Contains(t, stdout, "rename")
 }
 
+// ── refactor rename action ───────────────────────────────────────────────────
+
+const refactorRenameActionFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-action-int # keep this comment
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      build:
+        alias: b
+        provider: message
+        inputs:
+          message: make build
+      deploy:
+        dependsOn:
+          - build
+        provider: message
+        when:
+          expr: __actions.build.success
+        inputs:
+          message:
+            tmpl: 'deploy {{ .__actions.build.message }}'
+`
+
+func writeRefactorActionFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(refactorRenameActionFixture), 0o600))
+	return path
+}
+
+func TestIntegration_RefactorRenameActionDryRun(t *testing.T) {
+	t.Parallel()
+	path := writeRefactorActionFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "action", "build", "compile", "-f", path, "--dry-run")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Would rename action")
+	assert.Contains(t, stdout, "build -> compile")
+
+	// Dry-run must not modify the file.
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, refactorRenameActionFixture, string(got))
+}
+
+func TestIntegration_RefactorRenameActionApply(t *testing.T) {
+	t.Parallel()
+	path := writeRefactorActionFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "action", "build", "compile", "-f", path)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Renamed action")
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	s := string(got)
+	assert.Contains(t, s, "compile:")
+	assert.Contains(t, s, "- compile")
+	assert.Contains(t, s, "__actions.compile.success")
+	assert.Contains(t, s, ".__actions.compile.message")
+	// The action's alias is a separate name and must be left untouched.
+	assert.Contains(t, s, "alias: b")
+	// Unrelated literal text is preserved.
+	assert.Contains(t, s, "message: make build")
+	assert.Contains(t, s, "# keep this comment")
+}
+
+func TestIntegration_RefactorRenameActionCollision(t *testing.T) {
+	t.Parallel()
+	path := writeRefactorActionFixture(t)
+
+	_, stderr, exitCode := runScafctl(t, "refactor", "rename", "action", "build", "deploy", "-f", path)
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+	assert.Contains(t, stderr, "already exists")
+}
+
 // ── lsp (language server over stdio) ─────────────────────────────────────────
 
 // lspFrame wraps a JSON-RPC message in an LSP Content-Length frame.

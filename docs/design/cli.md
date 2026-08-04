@@ -1058,12 +1058,19 @@ invalid, `4` a file was not found.
 
 ## Refactoring Solutions
 
-`refactor` applies source-preserving edits to a solution. `refactor rename
-resolver <old> <new>` renames a resolver and rewrites every reference to it --
-the definition, `dependsOn` entries, `rslvr:` values, CEL `_.name` uses, and
-explicit template `._.name` uses -- replacing only the exact bytes of each
+`refactor` applies source-preserving edits to a solution. It renames a symbol
+and rewrites every reference to it, replacing only the exact bytes of each
 occurrence, so comments, key order, and formatting are preserved (no YAML
 round-trip).
+
+`refactor rename resolver <old> <new>` renames a resolver and rewrites the
+definition, `dependsOn` entries, `rslvr:` values, CEL `_.name` uses, and
+explicit template `._.name` uses.
+
+`refactor rename action <old> <new>` renames a workflow action and rewrites the
+definition, `dependsOn` entries, CEL `__actions.name` uses, and explicit
+template `.__actions.name` uses. An action's `alias` is a separate name and is
+**not** changed by the rename.
 
 ~~~bash
 # Preview the change without writing (lists every occurrence and location)
@@ -1071,17 +1078,21 @@ scafctl refactor rename resolver environment env -f ./solution.yaml --dry-run
 
 # Apply it in place (auto-discovers the solution file if -f is omitted)
 scafctl refactor rename resolver environment env
+
+# Rename a workflow action and every reference to it
+scafctl refactor rename action deploy release
 ~~~
 
-The rename is all-or-nothing: if any reference to the target resolver cannot be
+The rename is all-or-nothing: if any reference to the target symbol cannot be
 located byte-exact -- a context-dependent bare `{{ .name }}` accessor, a
 `$`-rooted `{{ $.name }}` accessor, or a reference nested inside a literal
 value -- it aborts rather than performing a partial rewrite that would silently
-break the solution. The check is name-scoped, so an unlocatable reference to a
-*different* resolver does not block the rename.
+break the solution. The check is name- and kind-scoped, so an unlocatable
+reference to a *different* symbol (or a resolver that shares an action's name)
+does not block the rename.
 
 Exit codes: `0` applied (or previewed), `2` a validation error (invalid new
-name, name collision, undefined resolver, or an unlocatable reference blocked
+name, name collision, undefined symbol, or an unlocatable reference blocked
 the rename), `4` the solution file could not be resolved, read, or parsed.
 
 ---
@@ -1104,17 +1115,18 @@ rule name to an LSP diagnostic anchored at the finding's location. It advertises
 full-document sync and reuses the same `lint` engine as `scafctl lint`, so
 editor diagnostics match the CLI.
 
-It also provides resolver navigation and refactoring, reusing the same
-positioned reference index (`refindex`) and rename engine (`refactor`) as
-`refactor rename resolver`:
+It also provides resolver and action navigation and refactoring, reusing the
+same positioned reference index (`refindex`) and rename engine (`refactor`) as
+`refactor rename`:
 
-- **Go-to-definition** (`textDocument/definition`) -- jump from any resolver
-  reference to its definition.
-- **Find references** (`textDocument/references`) -- list every use of a resolver.
-- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename a resolver
-  and every reference to it as a single `WorkspaceEdit`. The same fail-safe
-  applies: if a reference cannot be located, the rename is refused and the error
-  is surfaced to the editor rather than a partial rewrite being applied.
+- **Go-to-definition** (`textDocument/definition`) -- jump from any resolver or
+  action reference to its definition.
+- **Find references** (`textDocument/references`) -- list every use of a resolver
+  or action.
+- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename a resolver or
+  action and every reference to it as a single `WorkspaceEdit`. The same
+  fail-safe applies: if a reference cannot be located, the rename is refused and
+  the error is surfaced to the editor rather than a partial rewrite being applied.
 
 An editor client configures the server by pointing at the `scafctl lsp` command
 and associating it with the solution file language (YAML).

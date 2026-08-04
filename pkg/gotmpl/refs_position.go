@@ -20,6 +20,9 @@ const (
 	// RefKindExplicitResolver is an explicit resolver reference ({{ ._.name }}
 	// or {{ ._name }}), which always names a resolver.
 	RefKindExplicitResolver
+	// RefKindExplicitAction is an explicit action reference
+	// ({{ .__actions.name }}), which always names a workflow action.
+	RefKindExplicitAction
 )
 
 // PositionedRef is a single root-level reference occurrence in a Go template,
@@ -89,10 +92,54 @@ func (s *Service) GetPositionedReferences(opts TemplateOptions) ([]PositionedRef
 	var out []PositionedRef
 	for _, tree := range trees {
 		if tree.Root != nil {
-			walkPositioned(tree.Root, opts.Content, 0, &out)
+			walkPositioned(tree.Root, opts.Content, 0, fieldRootRange, &out)
 		}
 	}
 	return out, nil
+}
+
+// GetPositionedActionReferences extracts positioned action references
+// ({{ .__actions.name... }}) from a Go template, in source order. The name is
+// the action referenced (the segment after __actions). Scoped references
+// (inside {{ with }}/{{ range }}) are returned with Scoped set.
+func (s *Service) GetPositionedActionReferences(opts TemplateOptions) ([]PositionedRef, error) {
+	leftDelim := opts.LeftDelim
+	rightDelim := opts.RightDelim
+	if leftDelim == "" {
+		leftDelim = DefaultLeftDelim
+	}
+	if rightDelim == "" {
+		rightDelim = DefaultRightDelim
+	}
+	name := opts.Name
+	if name == "" {
+		name = "unnamed-template"
+	}
+	if opts.Content == "" {
+		return nil, fmt.Errorf("template content cannot be empty")
+	}
+
+	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNames())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	var out []PositionedRef
+	for _, tree := range trees {
+		if tree.Root != nil {
+			walkPositioned(tree.Root, opts.Content, 0, fieldActionRange, &out)
+		}
+	}
+	return out, nil
+}
+
+// GetGoTemplatePositionedActionReferences is a convenience wrapper.
+func GetGoTemplatePositionedActionReferences(templateContent, leftDelim, rightDelim string) ([]PositionedRef, error) {
+	return NewService(nil).GetPositionedActionReferences(TemplateOptions{
+		Content:    templateContent,
+		LeftDelim:  leftDelim,
+		RightDelim: rightDelim,
+	})
 }
 
 // GetGoTemplatePositionedReferences is a convenience wrapper that extracts
@@ -119,44 +166,49 @@ func (s *Service) templateFuncNames() map[string]any {
 	return funcNames
 }
 
+// fieldExtractor computes a PositionedRef from a FieldNode, or reports ok=false
+// when the field is not a reference of the kind being collected.
+type fieldExtractor func(src string, fn *parse.FieldNode, scoped bool) (PositionedRef, bool)
+
 // walkPositioned recursively walks the parse tree, emitting a PositionedRef for
-// each root-level FieldNode. scopeDepth tracks {{ with }}/{{ range }} bodies
-// where dot is rebound (matching walkNodes in refs.go).
-func walkPositioned(node parse.Node, src string, scopeDepth int, out *[]PositionedRef) {
+// each root-level FieldNode that extract accepts. scopeDepth tracks
+// {{ with }}/{{ range }} bodies where dot is rebound (matching walkNodes in
+// refs.go).
+func walkPositioned(node parse.Node, src string, scopeDepth int, extract fieldExtractor, out *[]PositionedRef) {
 	switch n := node.(type) {
 	case *parse.ListNode:
 		if n == nil {
 			return
 		}
 		for _, child := range n.Nodes {
-			walkPositioned(child, src, scopeDepth, out)
+			walkPositioned(child, src, scopeDepth, extract, out)
 		}
 
 	case *parse.ActionNode:
-		walkPositionedPipe(n.Pipe, src, scopeDepth, out)
+		walkPositionedPipe(n.Pipe, src, scopeDepth, extract, out)
 
 	case *parse.IfNode:
-		walkPositionedPipe(n.Pipe, src, scopeDepth, out)
-		walkPositioned(n.List, src, scopeDepth, out)
-		walkPositioned(n.ElseList, src, scopeDepth, out)
+		walkPositionedPipe(n.Pipe, src, scopeDepth, extract, out)
+		walkPositioned(n.List, src, scopeDepth, extract, out)
+		walkPositioned(n.ElseList, src, scopeDepth, extract, out)
 
 	case *parse.RangeNode:
 		// The pipe is evaluated in the outer scope; the body rebinds dot.
-		walkPositionedPipe(n.Pipe, src, scopeDepth, out)
-		walkPositioned(n.List, src, scopeDepth+1, out)
-		walkPositioned(n.ElseList, src, scopeDepth, out)
+		walkPositionedPipe(n.Pipe, src, scopeDepth, extract, out)
+		walkPositioned(n.List, src, scopeDepth+1, extract, out)
+		walkPositioned(n.ElseList, src, scopeDepth, extract, out)
 
 	case *parse.WithNode:
-		walkPositionedPipe(n.Pipe, src, scopeDepth, out)
-		walkPositioned(n.List, src, scopeDepth+1, out)
-		walkPositioned(n.ElseList, src, scopeDepth, out)
+		walkPositionedPipe(n.Pipe, src, scopeDepth, extract, out)
+		walkPositioned(n.List, src, scopeDepth+1, extract, out)
+		walkPositioned(n.ElseList, src, scopeDepth, extract, out)
 
 	case *parse.TemplateNode:
-		walkPositionedPipe(n.Pipe, src, scopeDepth, out)
+		walkPositionedPipe(n.Pipe, src, scopeDepth, extract, out)
 	}
 }
 
-func walkPositionedPipe(p *parse.PipeNode, src string, scopeDepth int, out *[]PositionedRef) {
+func walkPositionedPipe(p *parse.PipeNode, src string, scopeDepth int, extract fieldExtractor, out *[]PositionedRef) {
 	if p == nil {
 		return
 	}
@@ -164,14 +216,33 @@ func walkPositionedPipe(p *parse.PipeNode, src string, scopeDepth int, out *[]Po
 		for _, arg := range cmd.Args {
 			switch a := arg.(type) {
 			case *parse.FieldNode:
-				if ref, ok := fieldRootRange(src, a, scopeDepth > 0); ok {
+				if ref, ok := extract(src, a, scopeDepth > 0); ok {
 					*out = append(*out, ref)
 				}
 			case *parse.PipeNode:
-				walkPositionedPipe(a, src, scopeDepth, out)
+				walkPositionedPipe(a, src, scopeDepth, extract, out)
 			}
 		}
 	}
+}
+
+// fieldActionRange computes the byte range of an action reference in a FieldNode
+// of the form {{ .__actions.name... }}. The name is the segment after __actions.
+func fieldActionRange(src string, fn *parse.FieldNode, scoped bool) (PositionedRef, bool) {
+	if len(fn.Ident) < 2 || fn.Ident[0] != actionNamespace {
+		return PositionedRef{}, false
+	}
+	fieldStart, ok := fieldStartOffset(src, fn)
+	if !ok {
+		return PositionedRef{}, false
+	}
+	name := fn.Ident[1]
+	if name == "" {
+		return PositionedRef{}, false
+	}
+	// Segment 1 starts after the leading '.', "__actions", and its trailing '.'.
+	offset := fieldStart + 1 + len(fn.Ident[0]) + 1
+	return PositionedRef{Name: name, Offset: offset, Len: len(name), Kind: RefKindExplicitAction, Scoped: scoped}, true
 }
 
 // fieldRootRange computes the byte range of the resolver-relevant root name of a

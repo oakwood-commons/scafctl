@@ -11,6 +11,7 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
+	pkgrefactor "github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -72,7 +73,7 @@ func TestRunRenameResolver_HappyPath(t *testing.T) {
 	path := writeFixture(t, cmdFixture)
 	ctx, bufs := testContext(t)
 
-	err := runRenameResolver(ctx, &renameResolverOptions{File: path, CliParams: testCliParams()}, "environment", "env")
+	err := runRename(ctx, &renameOptions{File: path, CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, "environment", "env")
 	require.NoError(t, err)
 
 	got, readErr := os.ReadFile(path) //nolint:gosec // test-controlled path
@@ -87,7 +88,7 @@ func TestRunRenameResolver_DryRunLeavesFileUnchanged(t *testing.T) {
 	path := writeFixture(t, cmdFixture)
 	ctx, bufs := testContext(t)
 
-	err := runRenameResolver(ctx, &renameResolverOptions{File: path, DryRun: true, CliParams: testCliParams()}, "environment", "env")
+	err := runRename(ctx, &renameOptions{File: path, DryRun: true, CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, "environment", "env")
 	require.NoError(t, err)
 
 	got, _ := os.ReadFile(path) //nolint:gosec // test-controlled path
@@ -113,7 +114,7 @@ func TestRunRenameResolver_Errors(t *testing.T) {
 			path := writeFixture(t, cmdFixture)
 			ctx, bufs := testContext(t)
 
-			err := runRenameResolver(ctx, &renameResolverOptions{File: path, CliParams: testCliParams()}, tt.old, tt.newName)
+			err := runRename(ctx, &renameOptions{File: path, CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, tt.old, tt.newName)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantCode, exitcode.GetCode(err))
 			assert.Contains(t, bufs.errOut.String(), tt.wantMsg)
@@ -127,7 +128,7 @@ func TestRunRenameResolver_Errors(t *testing.T) {
 
 func TestRunRenameResolver_FileNotFound(t *testing.T) {
 	ctx, _ := testContext(t)
-	err := runRenameResolver(ctx, &renameResolverOptions{File: "/no/such/solution.yaml", CliParams: testCliParams()}, "a", "b")
+	err := runRename(ctx, &renameOptions{File: "/no/such/solution.yaml", CliParams: testCliParams()}, "resolver", pkgrefactor.RenameResolver, "a", "b")
 	require.Error(t, err)
 	assert.Equal(t, exitcode.FileNotFound, exitcode.GetCode(err))
 }

@@ -47,7 +47,7 @@ func Definition(content []byte, uri protocol.DocumentUri, pos protocol.Position)
 	if !ok {
 		return nil
 	}
-	def, ok := idx.Definition(ref.Symbol.Name)
+	def, ok := idx.Definition(ref.Symbol.Kind, ref.Symbol.Name)
 	if !ok {
 		return nil
 	}
@@ -69,9 +69,9 @@ func References(content []byte, uri protocol.DocumentUri, pos protocol.Position,
 
 	var refs []refindex.Reference
 	if includeDeclaration {
-		refs = idx.Occurrences(ref.Symbol.Name)
+		refs = idx.Occurrences(ref.Symbol.Kind, ref.Symbol.Name)
 	} else {
-		refs = idx.References(ref.Symbol.Name)
+		refs = idx.References(ref.Symbol.Kind, ref.Symbol.Name)
 	}
 
 	locs := make([]protocol.Location, 0, len(refs))
@@ -110,7 +110,7 @@ func Rename(content []byte, uri protocol.DocumentUri, pos protocol.Position, new
 		return nil, fmt.Errorf("no renameable symbol at the cursor position")
 	}
 
-	result, err := refactor.RenameResolver(sol, ref.Symbol.Name, newName)
+	result, err := refactor.RenameSymbol(sol, ref.Symbol.Kind, ref.Symbol.Name, newName)
 	if err != nil {
 		return nil, err
 	}
