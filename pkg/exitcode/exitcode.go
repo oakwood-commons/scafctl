@@ -48,6 +48,12 @@ const (
 
 	// TestFailed indicates one or more functional tests failed.
 	TestFailed = 11
+
+	// PartialSuccess indicates the run completed but one or more actions failed
+	// while permitted to continue via continueOnError (FinalStatus
+	// partial-success). It is only returned by run solution/run action when
+	// --detailed-exit-code is set; otherwise partial success exits Success (0).
+	PartialSuccess = 12
 )
 
 // Description returns a human-readable description of an exit code.
@@ -77,6 +83,8 @@ func Description(code int) string {
 		return "permission denied"
 	case TestFailed:
 		return "one or more tests failed"
+	case PartialSuccess:
+		return "partial success"
 	default:
 		return "unknown error"
 	}

@@ -17,6 +17,7 @@ flowchart LR
 ```
 
 **Key Principles:**
+
 - Resolvers compute data, actions perform work
 - All resolvers evaluate before any action executes
 - Actions can depend on other actions
@@ -60,14 +61,18 @@ spec:
 Run it:
 {{< tabs "actions-tutorial-cmd-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f hello-actions.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f hello-actions.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -116,14 +121,18 @@ Run it:
 
 {{< tabs "actions-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f build-pipeline.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f build-pipeline.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -175,6 +184,7 @@ spec:
 ```
 
 This creates a diamond pattern:
+
 ```
     init
     /  \
@@ -187,14 +197,18 @@ Run it:
 
 {{< tabs "actions-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f parallel.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f parallel.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -270,14 +284,18 @@ spec:
 
 {{< tabs "actions-tutorial-cmd-4" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f conditional-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f conditional-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -295,14 +313,18 @@ The `prod-deploy` action is skipped because the condition `_.environment == 'pro
 
 {{< tabs "actions-tutorial-cmd-5" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f conditional-demo.yaml -r environment=prod
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f conditional-demo.yaml -r environment=prod
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -383,14 +405,18 @@ spec:
 
 {{< tabs "actions-tutorial-cmd-6" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f foreach-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f foreach-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -465,14 +491,18 @@ spec:
 
 {{< tabs "actions-tutorial-cmd-7" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f error-handling-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f error-handling-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -487,6 +517,62 @@ Doing main work...
 The `optional-cleanup` action fails (`exit 1`), but because `continueOnError: true` is set, the workflow continues. The `main-work` action still runs.
 
 Without `continueOnError: true`, the workflow would stop at `optional-cleanup` and `main-work` would be skipped.
+
+### Detecting partial success in CI
+
+When a `continueOnError` action fails but the run otherwise completes, the run
+ends in **partial success**: no action failed hard, but not everything
+succeeded. By default this exits `0` -- identical to a clean run -- because the
+solution author explicitly chose to tolerate the failure.
+
+CI pipelines sometimes need to tell "everything worked" apart from "we tolerated
+some failures" without parsing the JSON envelope. Pass `--detailed-exit-code`
+(opt-in) to make partial success return a distinct exit code instead:
+
+| Outcome | Default exit | With `--detailed-exit-code` |
+|---------|--------------|-----------------------------|
+| Clean success (all actions succeeded) | `0` | `0` |
+| Partial success (a `continueOnError` action failed) | `0` | `12` |
+| Hard failure (an action failed with `continueOnError: false`) | `6` | `6` |
+
+The flag is off by default, so existing scripts that gate on `$?` are
+unaffected. It is available on both `run solution` and `run action`:
+
+{{< tabs "actions-tutorial-detailed-exit" >}}
+{{% tab "Bash" %}}
+
+```bash
+scafctl run solution -f error-handling-demo.yaml --detailed-exit-code
+case $? in
+  0)  echo "clean success" ;;
+  12) echo "partial success -- some tolerated failures" ;;
+  *)  echo "run failed" ;;
+esac
+```
+
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+
+```powershell
+scafctl run solution -f error-handling-demo.yaml --detailed-exit-code
+switch ($LASTEXITCODE) {
+  0       { "clean success" }
+  12      { "partial success -- some tolerated failures" }
+  default { "run failed" }
+}
+```
+
+{{% /tab %}}
+{{< /tabs >}}
+
+Structured output is unaffected: the full action envelope (with
+`status: partial-success` and per-action detail) is still written to stdout
+before the process exits, so `-o json`/`-o yaml` remain parseable regardless of
+the exit code.
+
+Embedders that wrap scafctl as a library can set the same default for their
+callers via `RootOptions.DetailedExitCode` (the per-invocation
+`--detailed-exit-code` flag still overrides it).
 
 ---
 
@@ -531,14 +617,18 @@ spec:
 
 {{< tabs "actions-tutorial-cmd-8" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f results-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f results-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -592,6 +682,7 @@ spec:
 With the alias `config`, you can write `config.results.region` instead of `__actions['fetch-configuration'].results.region`. The `__actions` form still works alongside aliases.
 
 **Alias Rules:**
+
 - Must match `^[a-zA-Z_][a-zA-Z0-9_-]*$`
 - Cannot start with `__` (reserved prefix)
 - Cannot conflict with action names or reserved names (`true`, `false`, `null`, etc.)
@@ -671,14 +762,18 @@ Run it:
 
 {{< tabs "actions-tutorial-execution-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f execution-aware-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f execution-aware-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -771,14 +866,18 @@ spec:
 
 {{< tabs "actions-tutorial-cmd-9" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f retry-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f retry-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -904,14 +1003,18 @@ Run it:
 
 {{< tabs "actions-tutorial-cmd-10" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f exclusive-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f exclusive-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -995,14 +1098,18 @@ spec:
 
 {{< tabs "actions-tutorial-cmd-11" >}}
 {{% tab "Bash" %}}
+
 ```bash
 scafctl run solution -f finally-demo.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 scafctl run solution -f finally-demo.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -1054,6 +1161,7 @@ finally:
 Inputs are passed to the provider and support several value types:
 
 **Literal values:**
+
 ```yaml
 inputs:
   command: "echo hello"
@@ -1062,6 +1170,7 @@ inputs:
 ```
 
 **Resolver references:**
+
 ```yaml
 inputs:
   environment:
@@ -1069,6 +1178,7 @@ inputs:
 ```
 
 **CEL expressions:**
+
 ```yaml
 inputs:
   url:
@@ -1076,6 +1186,7 @@ inputs:
 ```
 
 **Go templates:**
+
 ```yaml
 inputs:
   message:
@@ -1111,6 +1222,7 @@ Run a solution (resolvers + actions):
 
 {{< tabs "actions-tutorial-cmd-12" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Basic execution
 scafctl run solution -f hello-world.yaml
@@ -1136,8 +1248,10 @@ scafctl run resolver -f conditional-demo.yaml -r environment=staging
 # Run specific resolvers for inspection
 scafctl run resolver config -f conditional-demo.yaml -r environment=staging
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Basic execution
 scafctl run solution -f hello-world.yaml
@@ -1163,6 +1277,7 @@ scafctl run resolver -f conditional-demo.yaml -r environment=staging
 # Run specific resolvers for inspection
 scafctl run resolver config -f conditional-demo.yaml -r environment=staging
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -1172,6 +1287,7 @@ Generate an executor-ready artifact:
 
 {{< tabs "actions-tutorial-cmd-13" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Render to JSON (default)
 scafctl render solution -f hello-world.yaml
@@ -1182,8 +1298,10 @@ scafctl render solution -f hello-world.yaml -o yaml
 # Write to file
 scafctl render solution -f hello-world.yaml -o json > graph.json
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Render to JSON (default)
 scafctl render solution -f hello-world.yaml
@@ -1194,6 +1312,7 @@ scafctl render solution -f hello-world.yaml -o yaml
 # Write to file
 scafctl render solution -f hello-world.yaml -o json > graph.json
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -1203,6 +1322,7 @@ Use `--cwd` (`-C`) to run solutions from a different directory. All file paths i
 
 {{< tabs "actions-tutorial-cmd-14" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Run a solution in a different project directory
 scafctl --cwd /path/to/project run solution -f solution.yaml
@@ -1210,8 +1330,10 @@ scafctl --cwd /path/to/project run solution -f solution.yaml
 # Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
 scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Run a solution in a different project directory
 scafctl --cwd /path/to/project run solution -f solution.yaml
@@ -1219,10 +1341,12 @@ scafctl --cwd /path/to/project run solution -f solution.yaml
 # Combine with --output-dir: resolvers read from --cwd, actions write to --output-dir
 scafctl -C /path/to/project run solution -f solution.yaml --output-dir /tmp/output
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
 The rendered output includes:
+
 - Expanded actions (ForEach iterations)
 - Materialized inputs
 - Execution phases
@@ -1345,12 +1469,14 @@ See the [examples/actions/](../examples/actions/) directory for complete working
 ### Action Skipped
 
 Check:
+
 1. `when` condition evaluated to false
 2. A dependency failed (see `SkipReasonDependencyFailed`)
 
 ### Timeout Exceeded
 
 The action took longer than its timeout. Consider:
+
 1. Increasing the timeout
 2. Breaking into smaller actions
 3. Checking for hanging processes
@@ -1358,6 +1484,7 @@ The action took longer than its timeout. Consider:
 ### Retry Exhausted
 
 All retry attempts failed. Check:
+
 1. The underlying service availability
 2. Network connectivity
 3. Consider increasing `maxAttempts`
@@ -1365,6 +1492,7 @@ All retry attempts failed. Check:
 ### Cycle Detected
 
 Actions have circular dependencies. Check `dependsOn` references:
+
 ```yaml
 # Invalid: circular dependency
 actions:

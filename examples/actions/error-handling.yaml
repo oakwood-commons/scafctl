@@ -1,4 +1,10 @@
 # Run: scafctl run solution -f examples/actions/error-handling.yaml
+#
+# When an action fails but is tolerated via continueOnError, the run ends in
+# "partial success". By default that exits 0 (same as a clean run). To make CI
+# distinguish it, add --detailed-exit-code so partial success exits 12 instead:
+#   scafctl run solution -f examples/actions/error-handling.yaml --detailed-exit-code
+# (Hard failures still exit 6; clean success still exits 0.)
 
 apiVersion: scafctl.io/v1
 kind: Solution

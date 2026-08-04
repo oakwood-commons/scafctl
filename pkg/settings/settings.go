@@ -577,6 +577,15 @@ type Run struct {
 	// state metadata.
 	EmbedderVersion string `json:"embedderVersion,omitempty" yaml:"embedderVersion,omitempty" doc:"Version of the embedding CLI/frontend" maxLength:"64" example:"1.2.3"`
 
+	// DetailedExitCode sets the default for the --detailed-exit-code flag on
+	// run solution/run action. When true, a partial-success run (some
+	// continueOnError actions failed, none failed hard) returns
+	// exitcode.PartialSuccess (12) instead of 0. Defaults to false, so partial
+	// success exits 0 (non-breaking). Set via the --detailed-exit-code flag or
+	// an embedder via RootOptions.DetailedExitCode; the per-invocation flag
+	// overrides this default.
+	DetailedExitCode bool `json:"detailedExitCode" yaml:"detailedExitCode" doc:"Return a distinct exit code on partial success"`
+
 	// ActionDiscoveryFileNames overrides the file names used by "run action"
 	// auto-discovery. When empty, defaults from ActionFileNamesFor are used.
 	ActionDiscoveryFileNames []string `json:"-" yaml:"-"`
