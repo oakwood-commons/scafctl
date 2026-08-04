@@ -87,6 +87,34 @@ func TestServer_DidChangeRepublishes(t *testing.T) {
 	assert.NotEmpty(t, params.Diagnostics, "changed content should be re-linted")
 }
 
+func TestServer_DidChangeIgnoresRangedChangeUnderFullSync(t *testing.T) {
+	s := newTestServer(t)
+
+	// Seed a document via didOpen (uses a throwaway context).
+	var openMethod string
+	var openParams protocol.PublishDiagnosticsParams
+	require.NoError(t, s.didOpen(captureContext(&openMethod, &openParams), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: "file:///t.yaml", Text: badSolution},
+	}))
+
+	// A client that ignores the negotiated full-sync and sends a ranged
+	// (incremental) change: the server cannot apply it, so it must not update
+	// stored content nor republish diagnostics.
+	var method string
+	var params protocol.PublishDiagnosticsParams
+	ctx := captureContext(&method, &params)
+	err := s.didChange(ctx, &protocol.DidChangeTextDocumentParams{
+		TextDocument: protocol.VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: "file:///t.yaml"},
+		},
+		ContentChanges: []any{protocol.TextDocumentContentChangeEvent{
+			Range: &protocol.Range{}, Text: "ignored",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, method, "a ranged change under full-sync must not republish diagnostics")
+}
+
 func TestServer_DidCloseClearsDiagnostics(t *testing.T) {
 	s := newTestServer(t)
 	var method string
@@ -135,4 +163,7 @@ func TestNewServer_DefaultsBinaryName(t *testing.T) {
 func TestURIToPath(t *testing.T) {
 	assert.Equal(t, "/tmp/solution.yaml", uriToPath("file:///tmp/solution.yaml"))
 	assert.Equal(t, "not-a-uri", uriToPath("not-a-uri"))
+	// url.Parse decodes percent-escapes into u.Path, so the returned path is a
+	// real filesystem path (spaces, not %20).
+	assert.Equal(t, "/tmp/my dir/solution.yaml", uriToPath("file:///tmp/my%20dir/solution.yaml"))
 }

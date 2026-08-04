@@ -88,19 +88,27 @@ func (s *Server) didOpen(ctx *glsp.Context, params *protocol.DidOpenTextDocument
 }
 
 func (s *Server) didChange(ctx *glsp.Context, params *protocol.DidChangeTextDocumentParams) error {
+	updated := false
 	for _, change := range params.ContentChanges {
 		switch c := change.(type) {
 		case protocol.TextDocumentContentChangeEventWhole:
 			s.setDoc(params.TextDocument.URI, c.Text)
+			updated = true
 		case protocol.TextDocumentContentChangeEvent:
 			// Full sync: a rangeless change carries the whole document. glsp
 			// normally maps these to the Whole type; handle the raw form too.
 			if c.Range == nil {
 				s.setDoc(params.TextDocument.URI, c.Text)
+				updated = true
 			}
 		}
 	}
-	s.publish(ctx, params.TextDocument.URI)
+	// Only republish when the stored content actually changed. A client that
+	// ignores the negotiated full-sync and sends ranged changes would otherwise
+	// trigger a redundant publish of diagnostics for unchanged content.
+	if updated {
+		s.publish(ctx, params.TextDocument.URI)
+	}
 	return nil
 }
 

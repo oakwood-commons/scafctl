@@ -13715,6 +13715,25 @@ func lspFrame(t *testing.T, v any) []byte {
 	return append([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))), body...)
 }
 
+// lockedBuffer is a bytes.Buffer safe for concurrent Write (by the child
+// process pipe) and String reads (by the test poll loop).
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestIntegration_LspHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "lsp", "--help")
@@ -13742,15 +13761,25 @@ func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
 	cmd.Dir = findProjectRoot()
 	stdin, err := cmd.StdinPipe()
 	require.NoError(t, err)
-	var outBuf bytes.Buffer
+	var outBuf lockedBuffer
 	cmd.Stdout = &outBuf
 	require.NoError(t, cmd.Start())
 
 	for _, m := range msgs {
-		_, _ = stdin.Write(m)
-		time.Sleep(150 * time.Millisecond)
+		_, werr := stdin.Write(m)
+		require.NoError(t, werr, "write LSP frame to server stdin")
 	}
-	time.Sleep(700 * time.Millisecond)
+
+	// Wait until the diagnostics notification for the bad solution appears
+	// instead of sleeping a fixed amount, so the test is not flaky under load.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(outBuf.String(), "publishDiagnostics") &&
+			strings.Contains(outBuf.String(), "doesNotExist") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	_ = stdin.Close()
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()

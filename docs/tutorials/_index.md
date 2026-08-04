@@ -24,7 +24,7 @@ Step-by-step guides for learning scafctl features.
 - [Eval Tutorial](eval-tutorial.md) — Test CEL expressions and Go templates from the CLI
 - [Linting Tutorial](linting-tutorial.md) — Validate solutions, explore lint rules, and fix issues
 - [Refactoring Tutorial](refactor-tutorial.md) — Rename a resolver and every reference to it with `refactor rename resolver`
-- [Language Server (LSP) Tutorial](lsp-tutorial.md) — Run `scafctl lsp` for in-editor diagnostics
+- [Language Server (LSP) Tutorial](lsp-tutorial.md) -- Run `scafctl lsp` for in-editor diagnostics
 - [CEL Expressions Tutorial](cel-tutorial.md) — Master CEL expressions and extension functions
 - [Go Templates Tutorial](go-templates-tutorial.md) — Generate files with Go template rendering
 - [Reference-Data Lookups](reference-data-lookups.md) -- Look up taxonomy values from inline, file, or HTTP datasets
