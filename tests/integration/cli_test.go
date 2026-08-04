@@ -6565,6 +6565,7 @@ func TestIntegration_CacheInfo_Empty(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "totalSize")
 	assert.Contains(t, stdout, "totalFiles")
+	assert.Contains(t, stdout, "HTTP Cache")
 }
 
 func TestIntegration_CacheClear_Empty(t *testing.T) {
