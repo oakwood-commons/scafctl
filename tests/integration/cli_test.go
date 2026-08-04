@@ -13704,3 +13704,60 @@ func TestIntegration_RefactorHelp(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "rename")
 }
+
+// ── lsp (language server over stdio) ─────────────────────────────────────────
+
+// lspFrame wraps a JSON-RPC message in an LSP Content-Length frame.
+func lspFrame(t *testing.T, v any) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	require.NoError(t, err)
+	return append([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))), body...)
+}
+
+func TestIntegration_LspHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lsp", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "language server")
+	assert.Contains(t, stdout, "LSP")
+}
+
+func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	badSolution := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: bad\nspec:\n  resolvers:\n    appName:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.doesNotExist\n"
+
+	msgs := [][]byte{
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///tmp/bad.yaml", "languageId": "yaml", "version": 1, "text": badSolution},
+		}}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
+	cmd.Dir = findProjectRoot()
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	require.NoError(t, cmd.Start())
+
+	for _, m := range msgs {
+		_, _ = stdin.Write(m)
+		time.Sleep(150 * time.Millisecond)
+	}
+	time.Sleep(700 * time.Millisecond)
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	out := outBuf.String()
+	assert.Contains(t, out, `"capabilities"`, "initialize response")
+	assert.Contains(t, out, "scafctl lsp", "server info")
+	assert.Contains(t, out, "publishDiagnostics", "diagnostics notification")
+	assert.Contains(t, out, "doesNotExist", "the finding message")
+}

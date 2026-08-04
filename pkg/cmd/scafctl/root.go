@@ -30,6 +30,7 @@ import (
 	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
 	kubecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/kube"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lint"
+	lspcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/lsp"
 	mcpcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/mcp"
 	newcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/new"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/options"
@@ -952,6 +953,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 
 	// Server Commands
 	cCmd.AddCommand(withGroup(groupServer, servecmd.CommandServe(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupServer, lspcmd.CommandLsp(cliParams, ioStreams, binaryName)))
 
 	// Other Commands (no group — shown under "Additional Commands:")
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, binaryName, opts.VersionExtra))

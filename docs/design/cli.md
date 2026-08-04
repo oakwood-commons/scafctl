@@ -1086,6 +1086,31 @@ the rename), `4` the solution file could not be resolved, read, or parsed.
 
 ---
 
+## Language Server (LSP)
+
+`scafctl lsp` runs a Language Server Protocol server over stdio for editor
+integration. It is meant to be launched by an editor / LSP client, not run
+interactively -- stdout is the JSON-RPC channel.
+
+~~~bash
+# Started by an editor; not typically run by hand
+scafctl lsp
+~~~
+
+Currently the server publishes **lint diagnostics** for solution files as you
+edit them: on open/change/save it lints the in-memory document and sends
+`textDocument/publishDiagnostics`, mapping each finding's severity, message, and
+rule name to an LSP diagnostic anchored at the finding's location. It advertises
+full-document sync and reuses the same `lint` engine as `scafctl lint`, so
+editor diagnostics match the CLI.
+
+An editor client configures the server by pointing at the `scafctl lsp` command
+and associating it with the solution file language (YAML). Future revisions will
+add go-to-definition, find-references, and rename (reusing the same reference
+index that powers `refactor rename`).
+
+---
+
 ## Exploring Lint Rules
 
 ### List Rules
