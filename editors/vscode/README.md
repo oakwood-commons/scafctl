@@ -74,7 +74,7 @@ VSCodium, Cursor, Windsurf, etc.).
 ### Automated (recommended)
 
 Bump the version and push a `vscode/v*` tag; the
-[`VS Code Extension Release`](../../.github/workflows/vscode-release.yml) workflow
+[`VS Code Extension Release`](https://github.com/oakwood-commons/scafctl/blob/main/.github/workflows/vscode-release.yml) workflow
 verifies the tag matches `package.json`, builds/tests/packages, and publishes to
 both registries.
 

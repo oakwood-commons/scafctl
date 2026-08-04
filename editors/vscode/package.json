@@ -5,6 +5,15 @@
   "version": "0.1.0",
   "publisher": "oakwood-commons",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oakwood-commons/scafctl.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://github.com/oakwood-commons/scafctl/tree/main/editors/vscode",
+  "bugs": {
+    "url": "https://github.com/oakwood-commons/scafctl/issues"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },
