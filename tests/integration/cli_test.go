@@ -13704,3 +13704,138 @@ func TestIntegration_RefactorHelp(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "rename")
 }
+
+// ── lsp (language server over stdio) ─────────────────────────────────────────
+
+// lspFrame wraps a JSON-RPC message in an LSP Content-Length frame.
+func lspFrame(t *testing.T, v any) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	require.NoError(t, err)
+	return append([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))), body...)
+}
+
+// lockedBuffer is a bytes.Buffer safe for concurrent Write (by the child
+// process pipe) and String reads (by the test poll loop).
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestIntegration_LspHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lsp", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "language server")
+	assert.Contains(t, stdout, "LSP")
+}
+
+func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	badSolution := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: bad\nspec:\n  resolvers:\n    appName:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.doesNotExist\n"
+
+	msgs := [][]byte{
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///tmp/bad.yaml", "languageId": "yaml", "version": 1, "text": badSolution},
+		}}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
+	cmd.Dir = findProjectRoot()
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	var outBuf lockedBuffer
+	cmd.Stdout = &outBuf
+	require.NoError(t, cmd.Start())
+
+	for _, m := range msgs {
+		_, werr := stdin.Write(m)
+		require.NoError(t, werr, "write LSP frame to server stdin")
+	}
+
+	// Wait until the diagnostics notification for the bad solution appears
+	// instead of sleeping a fixed amount, so the test is not flaky under load.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(outBuf.String(), "publishDiagnostics") &&
+			strings.Contains(outBuf.String(), "doesNotExist") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	out := outBuf.String()
+	assert.Contains(t, out, `"capabilities"`, "initialize response")
+	assert.Contains(t, out, "scafctl lsp", "server info")
+	assert.Contains(t, out, "publishDiagnostics", "diagnostics notification")
+	assert.Contains(t, out, "doesNotExist", "the finding message")
+	// Navigation capabilities are advertised.
+	assert.Contains(t, out, "definitionProvider", "go-to-definition capability")
+	assert.Contains(t, out, "referencesProvider", "find-references capability")
+	assert.Contains(t, out, "renameProvider", "rename capability")
+}
+
+func TestIntegration_LspRename(t *testing.T) {
+	t.Parallel()
+
+	// "environment:" is defined on line 6 (0-based); the cursor at line 6 char 6
+	// sits inside that identifier.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      dependsOn:\n        - environment\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.environment\n"
+
+	msgs := [][]byte{
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///nav.yaml", "languageId": "yaml", "version": 1, "text": sol},
+		}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///nav.yaml"},
+			"position":     map[string]any{"line": 6, "character": 6},
+			"newName":      "env",
+		}}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
+	cmd.Dir = findProjectRoot()
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	require.NoError(t, cmd.Start())
+
+	for _, m := range msgs {
+		_, _ = stdin.Write(m)
+		time.Sleep(150 * time.Millisecond)
+	}
+	time.Sleep(700 * time.Millisecond)
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	out := outBuf.String()
+	assert.Contains(t, out, `"changes"`, "rename returns a workspace edit")
+	assert.Contains(t, out, `"newText":"env"`, "edits rename to env")
+	assert.Contains(t, out, "file:///nav.yaml", "edits target the document")
+}
