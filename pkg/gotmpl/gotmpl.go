@@ -95,7 +95,7 @@ type TemplateOptions struct {
 	// spec.functions helpers) to register with the parser so templates invoking
 	// them parse successfully during reference extraction. It affects parsing
 	// only, not execution -- no implementations are bound. Names duplicate-safe.
-	DeclaredFuncs []string `json:"-" yaml:"-"`
+	DeclaredFuncs []string `json:"-" yaml:"-" doc:"Additional function names to register with the parser so templates that invoke them parse successfully during reference extraction; affects parsing only, not execution"`
 
 	// FuncsFingerprint is an optional stable identifier for the *implementations*
 	// supplied in Funcs. Funcs are bound into the parsed template at parse time
