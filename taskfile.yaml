@@ -675,6 +675,19 @@ tasks:
       - npm run build
       - npm run package
 
+  vscode:publish:
+    desc: "Publish the packaged VS Code extension to the Marketplace and Open VSX (needs VSCE_PAT and OVSX_PAT)"
+    dir: editors/vscode
+    preconditions:
+      - sh: '[ -n "$VSCE_PAT" ]'
+        msg: "VSCE_PAT is not set. Export an Azure DevOps PAT (Marketplace > Manage scope) before publishing."
+      - sh: '[ -n "$OVSX_PAT" ]'
+        msg: "OVSX_PAT is not set. Export an Open VSX access token before publishing."
+    cmds:
+      - task: vscode:package
+      - npm run publish:vsce
+      - npm run publish:ovsx
+
   build-container-image:
     deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the container image layer"
