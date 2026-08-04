@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/oakwood-commons/scafctl/pkg/refindex"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,6 +69,20 @@ func callTool(t *testing.T, name string, args map[string]any, handler func(conte
 	return result, data
 }
 
+// findResolverRefs and renameResolver bind the generic kind-aware handlers to
+// the resolver kind for the resolver-focused tests below.
+func findResolverRefs(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleFindReferences(ctx, request, refindex.SymbolResolver, "resolver")
+	}
+}
+
+func renameResolver(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleRename(ctx, request, refindex.SymbolResolver, "resolver")
+	}
+}
+
 func TestHandleFindResolverReferences(t *testing.T) {
 	srv, err := NewServer(WithServerVersion("test"))
 	require.NoError(t, err)
@@ -75,7 +90,7 @@ func TestHandleFindResolverReferences(t *testing.T) {
 
 	_, data := callTool(t, "find_resolver_references",
 		map[string]any{"file": path, "resolver": "environment"},
-		srv.handleFindResolverReferences)
+		findResolverRefs(srv))
 
 	assert.Equal(t, true, data["defined"])
 	assert.NotNil(t, data["definition"])
@@ -101,7 +116,7 @@ func TestHandleFindResolverReferences_Undefined(t *testing.T) {
 
 	_, data := callTool(t, "find_resolver_references",
 		map[string]any{"file": path, "resolver": "nope"},
-		srv.handleFindResolverReferences)
+		findResolverRefs(srv))
 
 	assert.Equal(t, false, data["defined"])
 	refs, _ := data["references"].([]any)
@@ -114,7 +129,7 @@ func TestHandleRenameResolver(t *testing.T) {
 
 	_, data := callTool(t, "rename_resolver",
 		map[string]any{"file": path, "old_name": "environment", "new_name": "env"},
-		srv.handleRenameResolver)
+		renameResolver(srv))
 
 	assert.Equal(t, "environment", data["oldName"])
 	assert.Equal(t, "env", data["newName"])
@@ -137,7 +152,7 @@ func TestHandleRenameResolver_InvalidName(t *testing.T) {
 
 	result, _ := callTool(t, "rename_resolver",
 		map[string]any{"file": path, "old_name": "environment", "new_name": "1bad"},
-		srv.handleRenameResolver)
+		renameResolver(srv))
 	assert.True(t, result.IsError)
 	assert.Contains(t, extractText(t, result), "not a valid resolver name")
 
@@ -215,7 +230,7 @@ spec:
 
 	result, _ := callTool(t, "rename_resolver",
 		map[string]any{"file": path, "old_name": "environment", "new_name": "env"},
-		srv.handleRenameResolver)
+		renameResolver(srv))
 	assert.True(t, result.IsError)
 	assert.Contains(t, extractText(t, result), "could not be located")
 }
@@ -224,7 +239,7 @@ func TestHandleRenameResolver_FileNotFound(t *testing.T) {
 	srv, _ := NewServer(WithServerVersion("test"))
 	result, _ := callTool(t, "rename_resolver",
 		map[string]any{"file": "/no/such/solution.yaml", "old_name": "a", "new_name": "b"},
-		srv.handleRenameResolver)
+		renameResolver(srv))
 	assert.True(t, result.IsError)
 	assert.Contains(t, extractText(t, result), "loading solution")
 }
@@ -232,10 +247,10 @@ func TestHandleRenameResolver_FileNotFound(t *testing.T) {
 func TestHandleRefactor_MissingArgs(t *testing.T) {
 	srv, _ := NewServer(WithServerVersion("test"))
 
-	r1, _ := callTool(t, "find_resolver_references", map[string]any{"file": "x.yaml"}, srv.handleFindResolverReferences)
+	r1, _ := callTool(t, "find_resolver_references", map[string]any{"file": "x.yaml"}, findResolverRefs(srv))
 	assert.True(t, r1.IsError, "missing 'resolver' should error")
 
-	r2, _ := callTool(t, "rename_resolver", map[string]any{"file": "x.yaml", "old_name": "a"}, srv.handleRenameResolver)
+	r2, _ := callTool(t, "rename_resolver", map[string]any{"file": "x.yaml", "old_name": "a"}, renameResolver(srv))
 	assert.True(t, r2.IsError, "missing 'new_name' should error")
 }
 
@@ -247,6 +262,111 @@ func TestHandleFindResolverReferences_CwdRelativePath(t *testing.T) {
 	// Relative file resolved against cwd.
 	_, data := callTool(t, "find_resolver_references",
 		map[string]any{"file": "solution.yaml", "resolver": "environment", "cwd": dir},
-		srv.handleFindResolverReferences)
+		findResolverRefs(srv))
 	assert.Equal(t, true, data["defined"])
+}
+
+// actionRefactorFixture references action "build" via dependsOn, CEL, and
+// template forms; "make build" is unrelated literal text left untouched.
+const actionRefactorFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mcp-refactor-action
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      build:
+        provider: shell
+        inputs:
+          command: make build
+      deploy:
+        dependsOn:
+          - build
+        provider: shell
+        when:
+          expr: __actions.build.results.exitCode == 0
+        inputs:
+          command:
+            tmpl: 'deploy {{ .__actions.build.results.stdout }}'
+`
+
+func findActionRefs(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleFindReferences(ctx, request, refindex.SymbolAction, "action")
+	}
+}
+
+func renameAction(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleRename(ctx, request, refindex.SymbolAction, "action")
+	}
+}
+
+func TestHandleFindActionReferences(t *testing.T) {
+	srv, err := NewServer(WithServerVersion("test"))
+	require.NoError(t, err)
+	path := writeRefactorFixture(t, actionRefactorFixture)
+
+	_, data := callTool(t, "find_action_references",
+		map[string]any{"file": path, "action": "build"},
+		findActionRefs(srv))
+
+	assert.Equal(t, true, data["defined"])
+	assert.NotNil(t, data["definition"])
+	assert.EqualValues(t, 0, data["unresolved"])
+
+	refs, ok := data["references"].([]any)
+	require.True(t, ok)
+	// dependsOn + CEL + template = 3 uses.
+	assert.Len(t, refs, 3)
+
+	origins := map[string]bool{}
+	for _, r := range refs {
+		origins[r.(map[string]any)["origin"].(string)] = true
+	}
+	assert.True(t, origins["dependsOn"])
+	assert.True(t, origins["cel"])
+	assert.True(t, origins["template"])
+}
+
+func TestHandleRenameAction(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, actionRefactorFixture)
+
+	_, data := callTool(t, "rename_action",
+		map[string]any{"file": path, "old_name": "build", "new_name": "compile"},
+		renameAction(srv))
+
+	assert.Equal(t, "build", data["oldName"])
+	assert.Equal(t, "compile", data["newName"])
+
+	occ, ok := data["occurrences"].([]any)
+	require.True(t, ok)
+	// definition + dependsOn + CEL + template = 4.
+	assert.Len(t, occ, 4)
+
+	content, ok := data["content"].(string)
+	require.True(t, ok)
+	assert.Contains(t, content, "compile:")
+	assert.Contains(t, content, "__actions.compile.results.exitCode")
+	assert.NotContains(t, content, "__actions.build")
+	// Unrelated literal text is preserved.
+	assert.Contains(t, content, "make build")
+}
+
+func TestHandleRenameAction_InvalidName(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, actionRefactorFixture)
+
+	result, _ := callTool(t, "rename_action",
+		map[string]any{"file": path, "old_name": "build", "new_name": "1bad"},
+		renameAction(srv))
+	assert.True(t, result.IsError)
+
+	var te struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &te))
+	assert.Equal(t, ErrCodeValidationError, te.Code)
 }

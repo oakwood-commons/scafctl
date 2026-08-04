@@ -52,7 +52,7 @@ func celRefPosition(t *testing.T, content string) protocol.Position {
 	t.Helper()
 	_, idx, err := loadIndex([]byte(content))
 	require.NoError(t, err)
-	for _, r := range idx.References("environment") {
+	for _, r := range idx.References(refindex.SymbolResolver, "environment") {
 		if r.Origin == refindex.OriginCEL {
 			return toLSPPosition(r.Range.Start)
 		}

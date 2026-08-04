@@ -31,6 +31,7 @@ func CommandRefactor(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 			performing a partial (and potentially breaking) rewrite.
 
 			  refactor rename resolver <old> <new>   Rename a resolver everywhere
+			  refactor rename action <old> <new>     Rename a workflow action everywhere
 		`),
 		SilenceUsage: true,
 	})
@@ -48,10 +49,12 @@ func CommandRename(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 			Rename a symbol and rewrite every reference to it in place.
 
 			  refactor rename resolver <old> <new>   Rename a resolver
+			  refactor rename action <old> <new>     Rename a workflow action
 		`),
 		SilenceUsage: true,
 	})
 
 	cCmd.AddCommand(CommandRenameResolver(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(CommandRenameAction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	return cCmd
 }

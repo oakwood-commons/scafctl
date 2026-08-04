@@ -75,11 +75,11 @@ func assertByteExact(t *testing.T, raw []byte, li *sourcepos.LineIndex, r Refere
 func TestBuild_NamesAndDefinitions(t *testing.T) {
 	idx, raw, li := buildFixture(t, fixtureYAML)
 
-	assert.Equal(t, []string{"aliasRef", "appName", "environment", "greeting"}, idx.Names())
+	assert.Equal(t, []string{"aliasRef", "appName", "environment", "greeting"}, idx.Names(SymbolResolver))
 	assert.Zero(t, idx.Unresolved(), "clean fixture should have no unresolved refs")
 
-	for _, name := range idx.Names() {
-		def, ok := idx.Definition(name)
+	for _, name := range idx.Names(SymbolResolver) {
+		def, ok := idx.Definition(SymbolResolver, name)
 		require.Truef(t, ok, "definition for %q", name)
 		assert.True(t, def.IsDef)
 		assert.Equal(t, OriginDefinition, def.Origin)
@@ -93,7 +93,7 @@ func TestBuild_ReferencesByOrigin(t *testing.T) {
 
 	// "environment" is referenced four ways: dependsOn, CEL (when), CEL (expr),
 	// and template.
-	envRefs := idx.References("environment")
+	envRefs := idx.References(SymbolResolver, "environment")
 	origins := map[Origin]int{}
 	for _, r := range envRefs {
 		origins[r.Origin]++
@@ -106,7 +106,7 @@ func TestBuild_ReferencesByOrigin(t *testing.T) {
 	assert.Len(t, envRefs, 4)
 
 	// "appName" is referenced by a template (._.appName) and a rslvr.
-	appRefs := idx.References("appName")
+	appRefs := idx.References(SymbolResolver, "appName")
 	appOrigins := map[Origin]int{}
 	for _, r := range appRefs {
 		appOrigins[r.Origin]++
@@ -120,7 +120,7 @@ func TestBuild_ReferencesByOrigin(t *testing.T) {
 func TestBuild_Occurrences_IncludesDefinition(t *testing.T) {
 	idx, raw, li := buildFixture(t, fixtureYAML)
 
-	occ := idx.Occurrences("environment")
+	occ := idx.Occurrences(SymbolResolver, "environment")
 	// 1 definition + 4 uses.
 	assert.Len(t, occ, 5)
 
@@ -179,7 +179,7 @@ spec:
               value: yes
 `
 	idx, raw, li := buildFixture(t, y)
-	refs := idx.References("environment")
+	refs := idx.References(SymbolResolver, "environment")
 	require.Len(t, refs, 1)
 	assert.Equal(t, OriginCEL, refs[0].Origin)
 	assertByteExact(t, raw, li, refs[0])
@@ -207,7 +207,7 @@ spec:
                 expr: '_.environment'
 `
 	idx, raw, li := buildFixture(t, y)
-	refs := idx.References("environment")
+	refs := idx.References(SymbolResolver, "environment")
 	require.Len(t, refs, 1)
 	assert.Equal(t, OriginCEL, refs[0].Origin)
 	assertByteExact(t, raw, li, refs[0])
@@ -257,7 +257,7 @@ spec:
 	idx, raw, li := buildFixture(t, y)
 
 	// Line-1 explicit ref in the block resolves byte-exact.
-	appRefs := idx.References("appName")
+	appRefs := idx.References(SymbolResolver, "appName")
 	require.Len(t, appRefs, 1)
 	assert.Equal(t, OriginTemplate, appRefs[0].Origin)
 	assertByteExact(t, raw, li, appRefs[0])
@@ -270,15 +270,15 @@ func TestBuild_Nil(t *testing.T) {
 	idx, err := Build(nil)
 	require.NoError(t, err)
 	assert.Empty(t, idx.All())
-	assert.Empty(t, idx.Names())
-	_, ok := idx.Definition("x")
+	assert.Empty(t, idx.Names(SymbolResolver))
+	_, ok := idx.Definition(SymbolResolver, "x")
 	assert.False(t, ok)
 }
 
 func TestBuild_EmptyReferencesForUnknown(t *testing.T) {
 	idx, _, _ := buildFixture(t, fixtureYAML)
-	assert.Empty(t, idx.References("does-not-exist"))
-	assert.Empty(t, idx.Occurrences("does-not-exist"))
+	assert.Empty(t, idx.References(SymbolResolver, "does-not-exist"))
+	assert.Empty(t, idx.Occurrences(SymbolResolver, "does-not-exist"))
 }
 
 func TestBuild_MalformedExpressionsAreSkipped(t *testing.T) {
@@ -304,9 +304,9 @@ spec:
 	require.NoError(t, sol.UnmarshalFromBytes([]byte(y)))
 	idx, err := Build(sol)
 	require.NoError(t, err)
-	assert.Empty(t, idx.References("a"))
-	assert.Empty(t, idx.References("x"))
-	_, ok := idx.Definition("broken")
+	assert.Empty(t, idx.References(SymbolResolver, "a"))
+	assert.Empty(t, idx.References(SymbolResolver, "x"))
+	_, ok := idx.Definition(SymbolResolver, "broken")
 	assert.True(t, ok)
 }
 
@@ -392,18 +392,18 @@ spec:
 	idx, _, _ := buildFixture(t, y)
 
 	// Every reference above targets "environment" and is unpositioned.
-	assert.GreaterOrEqual(t, idx.UnresolvedFor("environment"), 3,
+	assert.GreaterOrEqual(t, idx.UnresolvedFor(SymbolResolver, "environment"), 3,
 		"nested rslvr + nested expr + $-template must all count against environment")
 
 	// The fail-safe is name-scoped: renaming an unrelated resolver is not blocked.
-	assert.Zero(t, idx.UnresolvedFor("other"))
-	assert.Zero(t, idx.UnresolvedFor("nestedRslvr"))
+	assert.Zero(t, idx.UnresolvedFor(SymbolResolver, "other"))
+	assert.Zero(t, idx.UnresolvedFor(SymbolResolver, "nestedRslvr"))
 }
 
 func TestBuild_CleanFixtureHasNoPerNameUnresolved(t *testing.T) {
 	idx, _, _ := buildFixture(t, fixtureYAML)
-	for _, name := range idx.Names() {
-		assert.Zerof(t, idx.UnresolvedFor(name), "resolver %q should have no unresolved refs", name)
+	for _, name := range idx.Names(SymbolResolver) {
+		assert.Zerof(t, idx.UnresolvedFor(SymbolResolver, name), "resolver %q should have no unresolved refs", name)
 	}
 }
 
@@ -432,7 +432,7 @@ spec:
                   - tmpl: "{{ ._.environment }}"
 `
 	idx, _, _ := buildFixture(t, y)
-	assert.GreaterOrEqual(t, idx.UnresolvedFor("environment"), 1)
+	assert.GreaterOrEqual(t, idx.UnresolvedFor(SymbolResolver, "environment"), 1)
 }
 
 func TestBuild_MalformedNestedExprBlocksAllRenames(t *testing.T) {
@@ -456,8 +456,8 @@ spec:
 	idx, _, _ := buildFixture(t, y)
 	assert.Positive(t, idx.Unresolved())
 	// unresolvedOther is included for every name.
-	assert.Positive(t, idx.UnresolvedFor("environment"))
-	assert.Positive(t, idx.UnresolvedFor("anything-at-all"))
+	assert.Positive(t, idx.UnresolvedFor(SymbolResolver, "environment"))
+	assert.Positive(t, idx.UnresolvedFor(SymbolResolver, "anything-at-all"))
 }
 
 func TestBuild_UnpositionableCELRefIsUnresolved(t *testing.T) {
@@ -480,5 +480,5 @@ spec:
 `
 	idx, _, _ := buildFixture(t, y)
 	assert.Positive(t, idx.Unresolved())
-	assert.Positive(t, idx.UnresolvedFor(`a"b`))
+	assert.Positive(t, idx.UnresolvedFor(SymbolResolver, `a"b`))
 }

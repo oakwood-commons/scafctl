@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -45,6 +46,8 @@ type SymbolKind int
 const (
 	// SymbolResolver is a resolver defined under spec.resolvers.
 	SymbolResolver SymbolKind = iota
+	// SymbolAction is an action defined under spec.workflow.actions or finally.
+	SymbolAction
 )
 
 // String returns the lowercase kind name.
@@ -52,6 +55,8 @@ func (k SymbolKind) String() string {
 	switch k {
 	case SymbolResolver:
 		return "resolver"
+	case SymbolAction:
+		return "action"
 	default:
 		return "unknown"
 	}
@@ -106,19 +111,26 @@ type Reference struct {
 	IsDef bool
 }
 
+// symbolKey identifies a symbol by kind and name; resolvers and actions may
+// share a name, so references are indexed per (kind, name).
+type symbolKey struct {
+	kind SymbolKind
+	name string
+}
+
 // Index is a queryable set of positioned references over one solution.
 type Index struct {
-	file   string
-	refs   []Reference
-	byName map[string][]Reference
-	// unresolvedByName counts references that were identified semantically but
-	// could not be located byte-exact, attributed to the resolver name they
-	// target. This makes the fail-safe name-scoped: a rename of X is blocked
+	file  string
+	refs  []Reference
+	byKey map[symbolKey][]Reference
+	// unresolvedByKey counts references that were identified semantically but
+	// could not be located byte-exact, attributed to the (kind, name) they
+	// target. This makes the fail-safe symbol-scoped: a rename of X is blocked
 	// only by unlocatable references to X, not by unrelated ones.
-	unresolvedByName map[string]int
-	// unresolvedOther counts unlocatable references whose target name could not
-	// be determined (e.g. an expression/template that failed to parse). These
-	// conservatively block every rename, since they might reference any name.
+	unresolvedByKey map[symbolKey]int
+	// unresolvedOther counts unlocatable references whose target could not be
+	// determined (e.g. an expression/template that failed to parse). These
+	// conservatively block every rename, since they might reference any symbol.
 	unresolvedOther int
 }
 
@@ -129,19 +141,19 @@ func (i *Index) All() []Reference {
 	return out
 }
 
-// Occurrences returns every occurrence of name (definition and uses), sorted by
-// position. This is the set a rename must rewrite.
-func (i *Index) Occurrences(name string) []Reference {
-	src := i.byName[name]
+// Occurrences returns every occurrence of the (kind, name) symbol (definition
+// and uses), sorted by position. This is the set a rename must rewrite.
+func (i *Index) Occurrences(kind SymbolKind, name string) []Reference {
+	src := i.byKey[symbolKey{kind, name}]
 	out := make([]Reference, len(src))
 	copy(out, src)
 	return out
 }
 
-// References returns the non-definition uses of name, sorted by position.
-func (i *Index) References(name string) []Reference {
+// References returns the non-definition uses of the (kind, name) symbol.
+func (i *Index) References(kind SymbolKind, name string) []Reference {
 	var out []Reference
-	for _, r := range i.byName[name] {
+	for _, r := range i.byKey[symbolKey{kind, name}] {
 		if !r.IsDef {
 			out = append(out, r)
 		}
@@ -149,9 +161,10 @@ func (i *Index) References(name string) []Reference {
 	return out
 }
 
-// Definition returns the defining occurrence of name, if one exists.
-func (i *Index) Definition(name string) (Reference, bool) {
-	for _, r := range i.byName[name] {
+// Definition returns the defining occurrence of the (kind, name) symbol, if one
+// exists.
+func (i *Index) Definition(kind SymbolKind, name string) (Reference, bool) {
+	for _, r := range i.byKey[symbolKey{kind, name}] {
 		if r.IsDef {
 			return r, true
 		}
@@ -159,11 +172,13 @@ func (i *Index) Definition(name string) (Reference, bool) {
 	return Reference{}, false
 }
 
-// Names returns the sorted set of symbol names known to the index.
-func (i *Index) Names() []string {
-	out := make([]string, 0, len(i.byName))
-	for n := range i.byName {
-		out = append(out, n)
+// Names returns the sorted set of symbol names of the given kind.
+func (i *Index) Names(kind SymbolKind) []string {
+	var out []string
+	for k := range i.byKey {
+		if k.kind == kind {
+			out = append(out, k.name)
+		}
 	}
 	sort.Strings(out)
 	return out
@@ -174,24 +189,24 @@ func (i *Index) Names() []string {
 // value means the index is not a complete picture of every reference.
 func (i *Index) Unresolved() int {
 	total := i.unresolvedOther
-	for _, n := range i.unresolvedByName {
+	for _, n := range i.unresolvedByKey {
 		total += n
 	}
 	return total
 }
 
 // UnresolvedFor returns the number of unlocatable references that could affect a
-// rename of name: those attributed to name plus any whose target could not be
-// determined. A rename of name must refuse when this is non-zero, or it risks a
-// partial (solution-breaking) rewrite.
-func (i *Index) UnresolvedFor(name string) int {
-	return i.unresolvedByName[name] + i.unresolvedOther
+// rename of the (kind, name) symbol: those attributed to it plus any whose
+// target could not be determined. A rename must refuse when this is non-zero, or
+// it risks a partial (solution-breaking) rewrite.
+func (i *Index) UnresolvedFor(kind SymbolKind, name string) int {
+	return i.unresolvedByKey[symbolKey{kind, name}] + i.unresolvedOther
 }
 
 // Build constructs a positioned reference index for the solution. It returns an
 // empty (non-nil) index when sol is nil.
 func Build(sol *solution.Solution) (*Index, error) {
-	idx := &Index{byName: map[string][]Reference{}, unresolvedByName: map[string]int{}}
+	idx := &Index{byKey: map[symbolKey][]Reference{}, unresolvedByKey: map[symbolKey]int{}}
 	if sol == nil {
 		return idx, nil
 	}
@@ -214,9 +229,16 @@ func Build(sol *solution.Solution) (*Index, error) {
 
 	v := &walk.Visitor{
 		Resolver: func(path, name string, r *resolver.Resolver) error {
-			b.addDefinition(path, name)
+			b.addDefinition(path, name, SymbolResolver)
 			for i, dep := range r.DependsOn {
-				b.addWholeScalarRef(fmt.Sprintf("%s.dependsOn[%d]", path, i), dep, OriginDependsOn)
+				b.addWholeScalarRef(fmt.Sprintf("%s.dependsOn[%d]", path, i), dep, SymbolResolver, OriginDependsOn)
+			}
+			return nil
+		},
+		Action: func(path, name, _ string, act *action.Action) error {
+			b.addDefinition(path, name, SymbolAction)
+			for i, dep := range act.DependsOn {
+				b.addWholeScalarRef(fmt.Sprintf("%s.dependsOn[%d]", path, i), dep, SymbolAction, OriginDependsOn)
 			}
 			return nil
 		},
@@ -227,7 +249,7 @@ func Build(sol *solution.Solution) (*Index, error) {
 		ValueRef: func(path string, vr *spec.ValueRef) error {
 			switch {
 			case vr.Resolver != nil:
-				b.addWholeScalarRef(path+".rslvr", *vr.Resolver, OriginResolverRef)
+				b.addWholeScalarRef(path+".rslvr", *vr.Resolver, SymbolResolver, OriginResolverRef)
 			case vr.Expr != nil:
 				b.addCELRefs(path, vr.Expr)
 			case vr.Tmpl != nil:
@@ -236,7 +258,7 @@ func Build(sol *solution.Solution) (*Index, error) {
 				// walk.Walk does not descend into literal maps/arrays, but scafctl
 				// resolves inline ValueRefs ({rslvr}/{expr}/{tmpl}) nested inside
 				// them. Those references are not positioned here, so record their
-				// target names as unresolved to keep rename fail-safe (C1).
+				// target names as unresolved to keep rename fail-safe.
 				b.markLiteralResolverRefs(vr.Literal)
 			}
 			return nil
@@ -260,174 +282,228 @@ type builder struct {
 	nodes map[string]*yaml.Node
 }
 
-// markUnresolved records that a reference to name could not be located.
-func (b *builder) markUnresolved(name string) { b.idx.unresolvedByName[name]++ }
+// markUnresolved records that a reference to the (kind, name) symbol could not
+// be located.
+func (b *builder) markUnresolved(kind SymbolKind, name string) {
+	b.idx.unresolvedByKey[symbolKey{kind, name}]++
+}
 
-// markUnresolvedUnknown records an unlocatable reference whose target name could
-// not be determined (e.g. a parse failure). It conservatively blocks every
-// rename.
+// markUnresolvedUnknown records an unlocatable reference whose target could not
+// be determined (e.g. a parse failure). It conservatively blocks every rename.
 func (b *builder) markUnresolvedUnknown() { b.idx.unresolvedOther++ }
 
-// addDefinition records the defining site of a resolver, located at its map key.
-func (b *builder) addDefinition(path, name string) {
+// addDefinition records the defining site of a symbol, located at its map key.
+func (b *builder) addDefinition(path, name string, kind SymbolKind) {
 	pos, ok := b.sm.Get(path)
 	if !ok {
-		b.markUnresolved(name)
+		b.markUnresolved(kind, name)
 		return
 	}
 	start := b.li.Offset(pos)
-	b.emitAt(start, name, OriginDefinition, true)
+	b.emitAt(start, name, kind, OriginDefinition, true)
 }
 
 // addWholeScalarRef records a reference whose entire scalar value is the name
 // (dependsOn entries, rslvr values).
-func (b *builder) addWholeScalarRef(path, name string, origin Origin) {
+func (b *builder) addWholeScalarRef(path, name string, kind SymbolKind, origin Origin) {
 	node, ok := b.scalarAt(path)
 	if !ok {
-		b.markUnresolved(name)
+		b.markUnresolved(kind, name)
 		return
 	}
 	start, ok := b.contentStart(node)
 	if !ok {
-		b.markUnresolved(name)
+		b.markUnresolved(kind, name)
 		return
 	}
-	b.emitAt(start, name, origin, false)
+	b.emitAt(start, name, kind, origin, false)
 }
 
-// addCELRefs records every _.name reference inside a CEL expression. basePath is
-// the ValueRef or condition path; the scalar is at basePath.expr (object form)
-// or basePath itself (condition scalar shorthand).
+// celPrefixes are the CEL namespaces this index tracks, each mapped to the
+// symbol kind its references target: "_." for resolver data, "__actions." for
+// action results.
+var celPrefixes = []struct {
+	prefix string
+	kind   SymbolKind
+}{
+	{"_.", SymbolResolver},
+	{celexp.VarActions + ".", SymbolAction},
+}
+
+// addCELRefs records every namespaced reference inside a CEL expression, for
+// each tracked prefix. basePath is the ValueRef or condition path; the scalar is
+// at basePath.expr (object form) or basePath itself (condition scalar shorthand).
 //
-// It reconciles the positioned references against the authoritative underscore
-// variable set: any resolver name the parser reports that a positioned ref did
-// not cover is recorded as unresolved, so a rename fails safe.
+// It reconciles positioned references against the authoritative variable set for
+// each prefix: any name the parser reports that a positioned ref did not cover
+// is recorded as unresolved, so a rename fails safe.
 func (b *builder) addCELRefs(basePath string, expr *celexp.Expression) {
 	if expr == nil {
 		return
 	}
 	node := b.celScalar(basePath)
-	if node == nil {
-		// No scalar to position against; treat all underscore vars as unresolved.
-		if names, err := expr.GetUnderscoreVariables(context.Background()); err == nil {
-			for _, name := range names {
-				b.markUnresolved(name)
-			}
-		} else {
-			b.markUnresolvedUnknown()
+	start := -1
+	if node != nil {
+		if s, ok := b.contentStart(node); ok {
+			start = s
 		}
-		return
 	}
 
-	refs, err := expr.UnderscoreVariableRefs(context.Background())
+	for _, p := range celPrefixes {
+		if start < 0 {
+			b.markCELNamesUnresolved(expr, p.prefix, p.kind)
+			continue
+		}
+		b.addCELPrefixRefs(start, expr, p.prefix, p.kind)
+	}
+}
+
+// markCELNamesUnresolved records all of an expression's names under prefix as
+// unresolved (used when there is no scalar to position against).
+func (b *builder) markCELNamesUnresolved(expr *celexp.Expression, prefix string, kind SymbolKind) {
+	names, err := expr.GetVariablesWithPrefix(context.Background(), prefix)
 	if err != nil {
 		b.markUnresolvedUnknown()
 		return
 	}
-	start, ok := b.contentStart(node)
-	if !ok {
-		for _, r := range refs {
-			b.markUnresolved(r.Name)
-		}
+	for _, name := range names {
+		b.markUnresolved(kind, name)
+	}
+}
+
+// addCELPrefixRefs positions and reconciles the references of one prefix.
+func (b *builder) addCELPrefixRefs(start int, expr *celexp.Expression, prefix string, kind SymbolKind) {
+	refs, err := expr.PrefixedVariableRefs(context.Background(), prefix)
+	if err != nil {
+		b.markUnresolvedUnknown()
 		return
 	}
-
 	attempted := make(map[string]bool, len(refs))
 	for _, r := range refs {
 		attempted[r.Name] = true
 		if r.Offset < 0 {
-			// The occurrence exists but could not be positioned; treat it as
-			// unlocatable so a rename of this name fails safe.
-			b.markUnresolved(r.Name)
+			b.markUnresolved(kind, r.Name)
 			continue
 		}
-		b.emitAt(start+r.Offset, r.Name, OriginCEL, false)
+		b.emitAt(start+r.Offset, r.Name, kind, OriginCEL, false)
 	}
-	// Cross-check: any authoritative underscore variable that the positioned
-	// walker never returned (e.g. an occurrence it could not anchor) is unlocatable.
-	if auth, err := expr.GetUnderscoreVariables(context.Background()); err == nil {
+	// Cross-check against the authoritative name set for this prefix.
+	if auth, err := expr.GetVariablesWithPrefix(context.Background(), prefix); err == nil {
 		for _, name := range auth {
 			if !attempted[name] {
-				b.markUnresolved(name)
+				b.markUnresolved(kind, name)
 			}
 		}
 	}
 }
 
-// addTemplateRefs records explicit ._.name resolver references inside a Go
-// template, and reconciles against the authoritative unscoped reference set so
-// that references it cannot position -- bare {{ .field }}, $-rooted {{ $.name }},
-// or an explicit ref whose bytes do not validate -- are recorded as unresolved
-// (C2). Bare/$ references are conservatively attributed by name: they only block
-// renaming a resolver that shares that exact name.
+// addTemplateRefs records both explicit resolver references ({{ ._.name }}) and
+// action references ({{ .__actions.name }}) inside a Go template, reconciling
+// each against its authoritative unscoped set so unpositionable references are
+// recorded as unresolved (fail-safe).
 func (b *builder) addTemplateRefs(path string, tmpl *gotmpl.GoTemplatingContent) {
 	if tmpl == nil {
 		return
 	}
 	tmplStr := string(*tmpl)
+	node, nodeOk := b.scalarAt(path)
+	start := -1
+	if nodeOk {
+		if s, ok := b.contentStart(node); ok {
+			start = s
+		}
+	}
+	b.addTemplateResolverRefs(tmplStr, start)
+	b.addTemplateActionRefs(tmplStr, start)
+}
 
+// addTemplateResolverRefs handles the resolver forms ({{ ._.name }}, and
+// context-dependent bare/$-rooted fields which are conservatively marked).
+func (b *builder) addTemplateResolverRefs(tmplStr string, start int) {
 	candidates, cerr := gotmpl.UnscopedResolverRefs(tmplStr, "", "")
 	if cerr != nil {
 		b.markUnresolvedUnknown()
 		return
 	}
-
-	node, ok := b.scalarAt(path)
-	if !ok {
+	if start < 0 {
 		for _, c := range candidates {
-			b.markUnresolved(c.Name)
+			b.markUnresolved(SymbolResolver, c.Name)
 		}
 		return
 	}
-	start, ok := b.contentStart(node)
-	if !ok {
-		for _, c := range candidates {
-			b.markUnresolved(c.Name)
-		}
-		return
-	}
-
 	refs, err := gotmpl.GetGoTemplatePositionedReferences(tmplStr, "", "")
 	if err != nil {
 		b.markUnresolvedUnknown()
 		return
 	}
-
-	// Emit the explicit resolver references we can position byte-exact.
 	positionedExplicit := make(map[string]bool)
 	for _, r := range refs {
 		if r.Scoped || r.Kind != gotmpl.RefKindExplicitResolver {
 			continue
 		}
-		if b.emitAt(start+r.Offset, r.Name, OriginTemplate, false) {
+		if b.emitAt(start+r.Offset, r.Name, SymbolResolver, OriginTemplate, false) {
 			positionedExplicit[r.Name] = true
 		}
 	}
-
-	// Reconcile against the authoritative candidate set.
 	for _, c := range candidates {
 		if c.Explicit {
 			if !positionedExplicit[c.Name] {
-				b.markUnresolved(c.Name)
+				b.markUnresolved(SymbolResolver, c.Name)
 			}
 			continue
 		}
-		// Bare or $-rooted reference: cannot be safely positioned.
-		b.markUnresolved(c.Name)
+		b.markUnresolved(SymbolResolver, c.Name)
+	}
+}
+
+// addTemplateActionRefs handles the action form ({{ .__actions.name }}).
+func (b *builder) addTemplateActionRefs(tmplStr string, start int) {
+	names, err := gotmpl.UnscopedActionRefs(tmplStr, "", "")
+	if err != nil {
+		b.markUnresolvedUnknown()
+		return
+	}
+	if len(names) == 0 {
+		return
+	}
+	if start < 0 {
+		for _, n := range names {
+			b.markUnresolved(SymbolAction, n)
+		}
+		return
+	}
+	refs, err := gotmpl.GetGoTemplatePositionedActionReferences(tmplStr, "", "")
+	if err != nil {
+		b.markUnresolvedUnknown()
+		return
+	}
+	positioned := make(map[string]bool)
+	for _, r := range refs {
+		if r.Scoped {
+			continue
+		}
+		if b.emitAt(start+r.Offset, r.Name, SymbolAction, OriginTemplate, false) {
+			positioned[r.Name] = true
+		}
+	}
+	for _, n := range names {
+		if !positioned[n] {
+			b.markUnresolved(SymbolAction, n)
+		}
 	}
 }
 
 // emitAt validates that the bytes at [start, start+len(name)) equal name and, if
 // so, records the reference and returns true. A mismatch (or out-of-range span)
-// is attributed to name as unresolved and returns false.
-func (b *builder) emitAt(start int, name string, origin Origin, isDef bool) bool {
+// is attributed to the (kind, name) symbol as unresolved and returns false.
+func (b *builder) emitAt(start int, name string, kind SymbolKind, origin Origin, isDef bool) bool {
 	end := start + len(name)
 	if start < 0 || end > len(b.raw) || string(b.raw[start:end]) != name {
-		b.markUnresolved(name)
+		b.markUnresolved(kind, name)
 		return false
 	}
 	b.idx.record(Reference{
-		Symbol: Symbol{Kind: SymbolResolver, Name: name},
+		Symbol: Symbol{Kind: kind, Name: name},
 		Range:  b.li.Range(start, end),
 		Origin: origin,
 		IsDef:  isDef,
@@ -468,25 +544,36 @@ func (b *builder) markLiteralResolverRefsDepth(v any, depth int) {
 	}
 }
 
-// markLiteralValueRef records the resolver names referenced by a single nested
-// inline ValueRef as unresolved.
+// markLiteralValueRef records the symbol names referenced by a single nested
+// inline ValueRef as unresolved (both resolver and action namespaces).
 func (b *builder) markLiteralValueRef(payload, kind string) {
 	switch kind {
 	case "rslvr":
-		b.markUnresolved(payload)
+		b.markUnresolved(SymbolResolver, payload)
 	case "expr":
 		expr := celexp.Expression(payload)
-		if names, err := expr.GetUnderscoreVariables(context.Background()); err == nil {
-			for _, n := range names {
-				b.markUnresolved(n)
+		for _, p := range celPrefixes {
+			names, err := expr.GetVariablesWithPrefix(context.Background(), p.prefix)
+			if err != nil {
+				b.markUnresolvedUnknown()
+				return
 			}
-		} else {
-			b.markUnresolvedUnknown()
+			for _, n := range names {
+				b.markUnresolved(p.kind, n)
+			}
 		}
 	case "tmpl":
 		if cands, err := gotmpl.UnscopedResolverRefs(payload, "", ""); err == nil {
 			for _, c := range cands {
-				b.markUnresolved(c.Name)
+				b.markUnresolved(SymbolResolver, c.Name)
+			}
+		} else {
+			b.markUnresolvedUnknown()
+			return
+		}
+		if names, err := gotmpl.UnscopedActionRefs(payload, "", ""); err == nil {
+			for _, n := range names {
+				b.markUnresolved(SymbolAction, n)
 			}
 		} else {
 			b.markUnresolvedUnknown()
@@ -561,16 +648,17 @@ func (b *builder) contentStart(n *yaml.Node) (int, bool) {
 // finalize sorts references by position for deterministic output.
 func (i *Index) finalize() {
 	sort.SliceStable(i.refs, func(a, c int) bool { return lessRange(i.refs[a].Range, i.refs[c].Range) })
-	for name := range i.byName {
-		refs := i.byName[name]
+	for key := range i.byKey {
+		refs := i.byKey[key]
 		sort.SliceStable(refs, func(a, c int) bool { return lessRange(refs[a].Range, refs[c].Range) })
-		i.byName[name] = refs
+		i.byKey[key] = refs
 	}
 }
 
 func (i *Index) record(r Reference) {
+	key := symbolKey{r.Symbol.Kind, r.Symbol.Name}
 	i.refs = append(i.refs, r)
-	i.byName[r.Symbol.Name] = append(i.byName[r.Symbol.Name], r)
+	i.byKey[key] = append(i.byKey[key], r)
 }
 
 func lessRange(a, b sourcepos.Range) bool {

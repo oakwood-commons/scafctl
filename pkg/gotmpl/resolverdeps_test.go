@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClassifyTemplatePath(t *testing.T) {
@@ -252,5 +253,51 @@ func TestUnscopedResolverRefs(t *testing.T) {
 
 func TestUnscopedResolverRefs_ParseError(t *testing.T) {
 	_, err := UnscopedResolverRefs(`{{ .x `, "", "")
+	assert.Error(t, err)
+}
+
+func TestUnscopedActionRefs(t *testing.T) {
+	tests := []struct {
+		name string
+		tmpl string
+		want []string
+	}{
+		{
+			name: "single action ref with trailing path",
+			tmpl: `{{ .__actions.build.results }}`,
+			want: []string{"build"},
+		},
+		{
+			name: "multiple action refs de-duplicated in first-seen order",
+			tmpl: `{{ .__actions.a }}{{ .__actions.b }}{{ .__actions.a.x }}`,
+			want: []string{"a", "b"},
+		},
+		{
+			name: "bare __actions root yields nothing",
+			tmpl: `{{ .__actions }}`,
+			want: nil,
+		},
+		{
+			name: "resolver and plain refs are excluded",
+			tmpl: `{{ ._.env }}{{ .field }}{{ .__actions.deploy }}`,
+			want: []string{"deploy"},
+		},
+		{
+			name: "scoped action refs excluded",
+			tmpl: `{{ with .ctx }}{{ .__actions.inner }}{{ end }}{{ .__actions.outer }}`,
+			want: []string{"outer"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := UnscopedActionRefs(tt.tmpl, "", "")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestUnscopedActionRefs_ParseError(t *testing.T) {
+	_, err := UnscopedActionRefs(`{{ .__actions.x `, "", "")
 	assert.Error(t, err)
 }

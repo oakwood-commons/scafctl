@@ -770,6 +770,8 @@ The AI calls `inspect_solution` with `path: "solution.yaml"` and the response in
 | `extract_resolver_refs` | Find all resolver cross-references (`_.resolverName`) in a solution — shows which resolvers reference which others |
 | `find_resolver_references` | Find a resolver's definition and every reference to it in a solution (dependsOn, rslvr, CEL, template) with source locations — use before editing to see impact |
 | `rename_resolver` | Rename a resolver and every reference to it, returning the rewritten solution content (comments/formatting preserved). Refuses if the new name is invalid, collides, or a reference cannot be located |
+| `find_action_references` | Find a workflow action's definition and every reference to it in a solution (dependsOn, CEL `__actions.name`, template `.__actions.name`) with source locations — use before editing to see impact |
+| `rename_action` | Rename a workflow action and every reference to it, returning the rewritten solution content (comments/formatting preserved; the action's `alias` is unchanged). Refuses if the new name is invalid, collides, or a reference cannot be located |
 | `generate_test_scaffold` | Generate functional test case scaffolding for a solution — creates test YAML with assertions, tags, auto-populated file dependencies, and sandbox guidance |
 | `list_tests` | List functional tests defined in a solution's `spec.testing.cases` — shows test names, descriptions, assertions, and tags |
 | `show_snapshot` | Display the contents of a resolver execution snapshot file — resolver values, timing, status, and errors |

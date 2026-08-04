@@ -257,3 +257,36 @@ func firstSegment(path string) string {
 	}
 	return path
 }
+
+// actionNamespace is the reserved template root identifier under which prior
+// action results are exposed, e.g. {{ .__actions.deploy.results }}.
+const actionNamespace = "__actions"
+
+// actionRefPathPrefix is the template path prefix for an action reference,
+// e.g. ".__actions.deploy.results" references action "deploy".
+const actionRefPathPrefix = "." + actionNamespace + "."
+
+// UnscopedActionRefs returns the action names referenced via {{ .__actions.name }}
+// (unscoped) in a Go template, de-duplicated in first-seen order. It is the
+// authoritative set a positioned action-reference consumer reconciles against so
+// a rename fails safe. Parse errors yield a nil slice and error.
+func UnscopedActionRefs(template, leftDelim, rightDelim string) ([]string, error) {
+	refs, err := GetGoTemplateReferences(template, leftDelim, rightDelim)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, ref := range refs {
+		if ref.Scoped || !strings.HasPrefix(ref.Path, actionRefPathPrefix) {
+			continue
+		}
+		name := firstSegment(strings.TrimPrefix(ref.Path, actionRefPathPrefix))
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, nil
+}

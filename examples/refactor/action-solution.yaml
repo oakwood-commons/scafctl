@@ -1,0 +1,35 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-rename-action-demo
+  description: >-
+    Demonstrates `scafctl refactor rename action`. The action `build` is
+    referenced three different ways -- a dependsOn entry, a CEL `__actions.name`
+    use, and an explicit template `.__actions.name` use -- so a single rename
+    must update all of them while preserving comments and formatting. The
+    action's `alias` is a separate name and is left untouched.
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      # The action we will rename (try: refactor rename action build compile).
+      build:
+        alias: b # NOTE: an alias is independent -- renaming `build` leaves this.
+        description: Build the artifact
+        provider: message
+        inputs:
+          message: Building the artifact
+
+      # Reference #1: an explicit dependsOn entry.
+      deploy:
+        description: Deploy once the build has completed
+        dependsOn:
+          - build
+        # Reference #2: a CEL expression using the `__actions` namespace.
+        when:
+          expr: __actions.build.success
+        provider: message
+        inputs:
+          # Reference #3: an explicit Go-template `.__actions.name` reference.
+          message:
+            tmpl: "Deploying now that {{ .__actions.build.message }} completed"

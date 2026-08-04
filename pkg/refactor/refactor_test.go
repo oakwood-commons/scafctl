@@ -77,11 +77,11 @@ func TestRenameResolver_HappyPath(t *testing.T) {
 	idx, err := refindex.Build(newSol)
 	require.NoError(t, err)
 	assert.Zero(t, idx.Unresolved())
-	def, ok := idx.Definition("env")
+	def, ok := idx.Definition(refindex.SymbolResolver, "env")
 	require.True(t, ok)
 	assert.True(t, def.IsDef)
-	assert.Len(t, idx.Occurrences("env"), 4)
-	_, stillThere := idx.Definition("environment")
+	assert.Len(t, idx.Occurrences(refindex.SymbolResolver, "env"), 4)
+	_, stillThere := idx.Definition(refindex.SymbolResolver, "environment")
 	assert.False(t, stillThere)
 }
 

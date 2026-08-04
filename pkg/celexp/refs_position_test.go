@@ -193,3 +193,53 @@ func TestUnderscoreVariableRefs_UnpositionableIsReportedNotDropped(t *testing.T)
 	assert.Equal(t, `a"b`, refs[0].Name)
 	assert.Equal(t, -1, refs[0].Offset, "unpositionable occurrence must be reported with Offset -1")
 }
+
+func TestPrefixedVariableRefs_ActionsPrefix(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		expr string
+		want []VariableRef
+	}{
+		{
+			name: "single action ref with trailing path",
+			expr: `__actions.build.results.exitCode`,
+			want: []VariableRef{{Name: "build", Offset: 10, Len: 5}},
+		},
+		{
+			name: "two action refs in source order",
+			expr: `__actions.a + __actions.b`,
+			want: []VariableRef{
+				{Name: "a", Offset: 10, Len: 1},
+				{Name: "b", Offset: 24, Len: 1},
+			},
+		},
+		{
+			name: "resolver refs are ignored under the actions prefix",
+			expr: `_.env + __actions.deploy`,
+			want: []VariableRef{{Name: "deploy", Offset: 18, Len: 6}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs, err := Expression(tt.expr).PrefixedVariableRefs(ctx, "__actions.")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, refs)
+
+			// Byte-exact invariant: each positioned range slices out its name.
+			for _, r := range refs {
+				if r.Offset < 0 {
+					continue
+				}
+				assert.Equal(t, r.Name, tt.expr[r.Offset:r.Offset+r.Len])
+			}
+		})
+	}
+}
+
+func TestPrefixedVariableRefs_ParseError(t *testing.T) {
+	_, err := Expression(`__actions.a +`).PrefixedVariableRefs(context.Background(), "__actions.")
+	require.Error(t, err)
+}

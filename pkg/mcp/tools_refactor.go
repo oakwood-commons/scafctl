@@ -17,9 +17,42 @@ import (
 
 // registerRefactorTools registers positioned reference-finding and rename tools.
 func (s *Server) registerRefactorTools() {
-	findRefsTool := mcp.NewTool("find_resolver_references",
-		mcp.WithDescription("Find every reference to a resolver in a solution file -- its definition and all uses (dependsOn entries, rslvr values, CEL '_.name' expressions, and explicit template '._.name') with source locations. Use this to understand the impact of changing a resolver before editing, or to navigate a solution. Distinct from extract_resolver_refs, which analyses a single expression rather than a whole solution."),
-		mcp.WithTitleAnnotation("Find Resolver References"),
+	s.addTool(newFindReferencesTool(
+		"find_resolver_references", "Find Resolver References", "resolver",
+		"Find every reference to a resolver in a solution file -- its definition and all uses (dependsOn entries, rslvr values, CEL '_.name' expressions, and explicit template '._.name') with source locations. Use this to understand the impact of changing a resolver before editing, or to navigate a solution. Distinct from extract_resolver_refs, which analyses a single expression rather than a whole solution.",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleFindReferences(ctx, request, refindex.SymbolResolver, "resolver")
+	})
+
+	s.addTool(newRenameTool(
+		"rename_resolver", "Rename Resolver", "resolver",
+		"Rename a resolver and every reference to it in a solution file, returning the rewritten content with comments and formatting preserved (only the affected identifiers change). Refuses without changes if the new name is invalid, collides with an existing resolver, or any reference cannot be located byte-exact -- so it never produces a partial, broken rename. Returns the new content for you to write back; operates on a single solution file (not composed/bundled solutions).",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleRename(ctx, request, refindex.SymbolResolver, "resolver")
+	})
+
+	s.addTool(newFindReferencesTool(
+		"find_action_references", "Find Action References", "action",
+		"Find every reference to a workflow action in a solution file -- its definition and all uses (dependsOn entries, CEL '__actions.name' expressions, and explicit template '.__actions.name') with source locations. Use this to understand the impact of changing an action before editing, or to navigate a solution's workflow. Note: an action's 'alias' is a separate name and is not reported as a reference to the action.",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleFindReferences(ctx, request, refindex.SymbolAction, "action")
+	})
+
+	s.addTool(newRenameTool(
+		"rename_action", "Rename Action", "action",
+		"Rename a workflow action and every reference to it in a solution file, returning the rewritten content with comments and formatting preserved (only the affected identifiers change). Rewrites dependsOn entries, CEL '__actions.name' uses, explicit template '.__actions.name' uses, and the definition. Refuses without changes if the new name is invalid, collides with an existing action, or any reference cannot be located byte-exact -- so it never produces a partial, broken rename. An action's 'alias' is independent and is not changed. Returns the new content for you to write back; operates on a single solution file (not composed/bundled solutions).",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleRename(ctx, request, refindex.SymbolAction, "action")
+	})
+}
+
+// newFindReferencesTool builds a find-references tool for a given symbol kind.
+// symbolParam is both the tool's required parameter name and appears in the
+// description ("resolver"/"action").
+func newFindReferencesTool(name, title, symbolParam, description string) mcp.Tool {
+	return mcp.NewTool(name,
+		mcp.WithDescription(description),
+		mcp.WithTitleAnnotation(title),
 		mcp.WithToolIcons(toolIcons["refs"]),
 		mcp.WithDeferLoading(true),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -30,19 +63,22 @@ func (s *Server) registerRefactorTools() {
 			mcp.Description("Path to the solution YAML file"),
 			mcp.Required(),
 		),
-		mcp.WithString("resolver",
-			mcp.Description("Name of the resolver to find references for"),
+		mcp.WithString(symbolParam,
+			mcp.Description(fmt.Sprintf("Name of the %s to find references for", symbolParam)),
 			mcp.Required(),
 		),
 		mcp.WithString("cwd",
 			mcp.Description(cwdDescFilePaths),
 		),
 	)
-	s.addTool(findRefsTool, s.handleFindResolverReferences)
+}
 
-	renameTool := mcp.NewTool("rename_resolver",
-		mcp.WithDescription("Rename a resolver and every reference to it in a solution file, returning the rewritten content with comments and formatting preserved (only the affected identifiers change). Refuses without changes if the new name is invalid, collides with an existing resolver, or any reference cannot be located byte-exact -- so it never produces a partial, broken rename. Returns the new content for you to write back; operates on a single solution file (not composed/bundled solutions)."),
-		mcp.WithTitleAnnotation("Rename Resolver"),
+// newRenameTool builds a rename tool for a given symbol kind. symbolLabel
+// ("resolver"/"action") appears only in parameter descriptions.
+func newRenameTool(name, title, symbolLabel, description string) mcp.Tool {
+	return mcp.NewTool(name,
+		mcp.WithDescription(description),
+		mcp.WithTitleAnnotation(title),
 		mcp.WithToolIcons(toolIcons["refs"]),
 		mcp.WithDeferLoading(true),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -54,32 +90,32 @@ func (s *Server) registerRefactorTools() {
 			mcp.Required(),
 		),
 		mcp.WithString("old_name",
-			mcp.Description("Current resolver name"),
+			mcp.Description(fmt.Sprintf("Current %s name", symbolLabel)),
 			mcp.Required(),
 		),
 		mcp.WithString("new_name",
-			mcp.Description("New resolver name"),
+			mcp.Description(fmt.Sprintf("New %s name", symbolLabel)),
 			mcp.Required(),
 		),
 		mcp.WithString("cwd",
 			mcp.Description(cwdDescFilePaths),
 		),
 	)
-	s.addTool(renameTool, s.handleRenameResolver)
 }
 
-// handleFindResolverReferences returns the definition and all references of a
-// resolver within a solution file.
-func (s *Server) handleFindResolverReferences(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// handleFindReferences returns the definition and all references of a symbol of
+// the given kind within a solution file. symbolParam names the request field and
+// the primary key in the JSON result ("resolver"/"action").
+func (s *Server) handleFindReferences(_ context.Context, request mcp.CallToolRequest, kind refindex.SymbolKind, symbolParam string) (*mcp.CallToolResult, error) {
 	file, err := request.RequireString("file")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(), WithField("file"),
 			WithSuggestion("Provide the path to a solution YAML file")), nil
 	}
-	name, err := request.RequireString("resolver")
+	name, err := request.RequireString(symbolParam)
 	if err != nil {
-		return newStructuredError(ErrCodeInvalidInput, err.Error(), WithField("resolver"),
-			WithSuggestion("Provide the resolver name to find references for")), nil
+		return newStructuredError(ErrCodeInvalidInput, err.Error(), WithField(symbolParam),
+			WithSuggestion(fmt.Sprintf("Provide the %s name to find references for", symbolParam))), nil
 	}
 	cwd := request.GetString("cwd", "")
 
@@ -94,12 +130,12 @@ func (s *Server) handleFindResolverReferences(_ context.Context, request mcp.Cal
 		return newStructuredError(ErrCodeExecFailed, fmt.Sprintf("indexing solution: %v", err), WithField("file")), nil
 	}
 
-	def, defined := idx.Definition(name)
+	def, defined := idx.Definition(kind, name)
 	result := map[string]any{
-		"resolver":   name,
+		symbolParam:  name,
 		"defined":    defined,
-		"references": referencesJSON(idx.References(name)),
-		"unresolved": idx.UnresolvedFor(name),
+		"references": referencesJSON(idx.References(kind, name)),
+		"unresolved": idx.UnresolvedFor(kind, name),
 	}
 	if defined {
 		result["definition"] = locationJSON(def)
@@ -107,9 +143,9 @@ func (s *Server) handleFindResolverReferences(_ context.Context, request mcp.Cal
 	return mcp.NewToolResultJSON(result)
 }
 
-// handleRenameResolver computes the rewritten solution content for a resolver
-// rename, or a structured error explaining why the rename was refused.
-func (s *Server) handleRenameResolver(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// handleRename computes the rewritten solution content for a rename of the given
+// symbol kind, or a structured error explaining why the rename was refused.
+func (s *Server) handleRename(_ context.Context, request mcp.CallToolRequest, kind refindex.SymbolKind, symbolLabel string) (*mcp.CallToolResult, error) {
 	file, err := request.RequireString("file")
 	if err != nil {
 		return newStructuredError(ErrCodeInvalidInput, err.Error(), WithField("file"),
@@ -131,11 +167,15 @@ func (s *Server) handleRenameResolver(_ context.Context, request mcp.CallToolReq
 			WithField("file"), WithSuggestion("Check the file exists and contains valid solution YAML")), nil
 	}
 
-	renameResult, err := refactor.RenameResolver(sol, oldName, newName)
+	renameResult, err := refactor.RenameSymbol(sol, kind, oldName, newName)
 	if err != nil {
+		relatedTool := "find_resolver_references"
+		if kind == refindex.SymbolAction {
+			relatedTool = "find_action_references"
+		}
 		return newStructuredError(ErrCodeValidationError, err.Error(),
-			WithSuggestion("Fix the new name, resolve the collision, or make ambiguous references explicit (_.name in CEL, ._.name in templates), then retry"),
-			WithRelatedTools("find_resolver_references")), nil
+			WithSuggestion(fmt.Sprintf("Fix the new name, resolve the collision, or make ambiguous %s references explicit, then retry", symbolLabel)),
+			WithRelatedTools(relatedTool)), nil
 	}
 
 	newContent, err := renameResult.Apply(sol.RawContent())

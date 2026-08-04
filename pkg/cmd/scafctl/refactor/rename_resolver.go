@@ -23,16 +23,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// renameResolverOptions holds flags for the rename resolver command.
-type renameResolverOptions struct {
+// renameOptions holds flags for a `refactor rename <kind>` command.
+type renameOptions struct {
 	File      string
 	DryRun    bool
 	CliParams *settings.Run
 }
 
-// CommandRenameResolver creates the `refactor rename resolver` command.
-func CommandRenameResolver(cliParams *settings.Run, _ *terminal.IOStreams, path string) *cobra.Command {
-	opts := &renameResolverOptions{CliParams: cliParams}
+// renameCommandConfig captures the kind-specific pieces of a `refactor rename
+// <kind>` subcommand; the wiring is shared by newRenameCommand.
+type renameCommandConfig struct {
+	use     string // cobra Use line, e.g. "resolver <old-name> <new-name>"
+	short   string
+	long    string
+	example string // uses settings.CliBinaryName as a placeholder for the binary name
+	kind    string // symbol label used in output ("resolver"/"action")
+	rename  renameFunc
+}
+
+// newRenameCommand builds a `refactor rename <kind>` subcommand. All rename
+// subcommands share identical flag/context wiring and differ only by the
+// kind-specific config, so the logic lives here once.
+func newRenameCommand(cliParams *settings.Run, path string, cfg renameCommandConfig) *cobra.Command {
+	opts := &renameOptions{CliParams: cliParams}
 
 	binaryName := cliParams.BinaryName
 	if binaryName == "" {
@@ -40,9 +53,32 @@ func CommandRenameResolver(cliParams *settings.Run, _ *terminal.IOStreams, path 
 	}
 
 	cmd := &cobra.Command{
-		Use:   "resolver <old-name> <new-name>",
-		Short: "Rename a resolver and update every reference to it",
-		Long: heredoc.Doc(`
+		Use:          cfg.use,
+		Short:        cfg.short,
+		Long:         cfg.long,
+		Example:      strings.ReplaceAll(cfg.example, settings.CliBinaryName, binaryName),
+		Args:         cobra.ExactArgs(2),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
+			ctx := settings.IntoContext(cmd.Context(), cliParams)
+			ctx = logger.WithLogger(ctx, logger.FromContext(cmd.Context()))
+			return runRename(ctx, opts, cfg.kind, cfg.rename, args[0], args[1])
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would change without modifying the file")
+
+	return cmd
+}
+
+// CommandRenameResolver creates the `refactor rename resolver` command.
+func CommandRenameResolver(cliParams *settings.Run, _ *terminal.IOStreams, path string) *cobra.Command {
+	return newRenameCommand(cliParams, path, renameCommandConfig{
+		use:   "resolver <old-name> <new-name>",
+		short: "Rename a resolver and update every reference to it",
+		long: heredoc.Doc(`
 			Rename a resolver and rewrite every reference to it -- dependsOn
 			entries, rslvr values, CEL '_.name' uses, explicit template
 			'._.name' uses, and the definition itself -- preserving comments,
@@ -54,32 +90,25 @@ func CommandRenameResolver(cliParams *settings.Run, _ *terminal.IOStreams, path 
 			inline reference nested inside a literal), so it never performs a
 			partial rewrite that would silently break the solution.
 		`),
-		Example: strings.ReplaceAll(heredoc.Doc(`
+		example: heredoc.Doc(`
 			# Rename resolver 'environment' to 'env' in the discovered solution
 			scafctl refactor rename resolver environment env
 
 			# Target a specific file and preview the change without writing
 			scafctl refactor rename resolver environment env -f ./solution.yaml --dry-run
-		`), settings.CliBinaryName, binaryName),
-		Args:         cobra.ExactArgs(2),
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cliParams.EntryPointSettings.Path = filepath.Join(path, cmd.Name())
-			ctx := settings.IntoContext(cmd.Context(), cliParams)
-			ctx = logger.WithLogger(ctx, logger.FromContext(cmd.Context()))
-			return runRenameResolver(ctx, opts, args[0], args[1])
-		},
-	}
-
-	cmd.Flags().StringVarP(&opts.File, "file", "f", "", "Solution file path (auto-discovered if not provided)")
-	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would change without modifying the file")
-
-	return cmd
+		`),
+		kind:   "resolver",
+		rename: pkgrefactor.RenameResolver,
+	})
 }
 
-// runRenameResolver resolves the target file, computes the rename edits via
-// pkg/refactor, and either writes the result or previews it (--dry-run).
-func runRenameResolver(ctx context.Context, opts *renameResolverOptions, oldName, newName string) error {
+// renameFunc computes rename edits for a symbol of a specific kind.
+type renameFunc func(sol *solution.Solution, oldName, newName string) (*pkgrefactor.RenameResult, error)
+
+// runRename resolves the target file, computes the rename edits via pkg/refactor,
+// and either writes the result or previews it (--dry-run). kind labels the symbol
+// ("resolver", "action") in output.
+func runRename(ctx context.Context, opts *renameOptions, kind string, rename renameFunc, oldName, newName string) error {
 	w := writer.FromContext(ctx)
 
 	getter := get.NewGetterFromContext(ctx)
@@ -103,7 +132,7 @@ func runRenameResolver(ctx context.Context, opts *renameResolverOptions, oldName
 		return fail(w, exitcode.FileNotFound, fmt.Errorf("failed to parse %s: %w", resolvedPath, err))
 	}
 
-	result, err := pkgrefactor.RenameResolver(sol, oldName, newName)
+	result, err := rename(sol, oldName, newName)
 	if err != nil {
 		return fail(w, exitcode.ValidationFailed, err)
 	}
@@ -114,7 +143,7 @@ func runRenameResolver(ctx context.Context, opts *renameResolverOptions, oldName
 	}
 
 	if opts.DryRun {
-		printRenamePreview(w, resolvedPath, result)
+		printRenamePreview(w, resolvedPath, kind, result)
 		return nil
 	}
 
@@ -127,7 +156,7 @@ func runRenameResolver(ctx context.Context, opts *renameResolverOptions, oldName
 	}
 
 	if w != nil {
-		w.Successf("Renamed resolver %q to %q (%d occurrence(s)) in %s", oldName, newName, len(result.Edits), resolvedPath)
+		w.Successf("Renamed %s %q to %q (%d occurrence(s)) in %s", kind, oldName, newName, len(result.Edits), resolvedPath)
 	}
 	return nil
 }
@@ -174,11 +203,11 @@ func fail(w *writer.Writer, code int, err error) error {
 }
 
 // printRenamePreview lists the planned edits without modifying the file.
-func printRenamePreview(w *writer.Writer, path string, res *pkgrefactor.RenameResult) {
+func printRenamePreview(w *writer.Writer, path, kind string, res *pkgrefactor.RenameResult) {
 	if w == nil {
 		return
 	}
-	w.Plainlnf("Would rename resolver %q to %q (%d occurrence(s)):", res.OldName, res.NewName, len(res.Edits))
+	w.Plainlnf("Would rename %s %q to %q (%d occurrence(s)):", kind, res.OldName, res.NewName, len(res.Edits))
 	for _, e := range res.Edits {
 		w.Plainlnf("  %s:%d:%d  %s -> %s", path, e.Range.Start.Line, e.Range.Start.Column, res.OldName, res.NewName)
 	}
