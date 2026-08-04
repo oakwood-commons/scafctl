@@ -29,5 +29,8 @@ function describeError(command: string, err: NodeJS.ErrnoException): string {
   if (err.code === 'ENOENT') {
     return `Could not find the '${command}' executable. Install scafctl and ensure it is on your PATH, or set 'scafctl.serverPath' in Settings.`;
   }
+  if (err.code === 'EACCES') {
+    return `The '${command}' executable is not runnable (permission denied). Check its file permissions, or set 'scafctl.serverPath' to a valid scafctl binary.`;
+  }
   return `The '${command}' executable does not support the language server ('${command} lsp' failed: ${err.message}). Update scafctl, or set 'scafctl.serverPath'.`;
 }
