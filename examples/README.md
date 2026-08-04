@@ -203,6 +203,8 @@ Source-preserving edits to a solution with `scafctl refactor`.
 | Example | Description | Run |
 |---------|-------------|-----|
 | [refactor/solution.yaml](refactor/solution.yaml) | A resolver referenced five ways (dependsOn, CEL, template, rslvr, definition) for `refactor rename resolver` | `scafctl refactor rename resolver environment env -f examples/refactor/solution.yaml --dry-run` |
+| [refactor/action-solution.yaml](refactor/action-solution.yaml) | A workflow action referenced four ways (dependsOn, CEL, template, definition; `alias` left untouched) for `refactor rename action` | `scafctl refactor rename action build compile -f examples/refactor/action-solution.yaml --dry-run` |
+| [refactor/call-function-solution.yaml](refactor/call-function-solution.yaml) | A reusable call and an author function, each referenced multiple ways, for `refactor rename call` and `refactor rename function` | `scafctl refactor rename function greet salute -f examples/refactor/call-function-solution.yaml --dry-run` |
 
 ---
 

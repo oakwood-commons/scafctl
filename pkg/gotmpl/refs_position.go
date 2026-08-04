@@ -23,6 +23,10 @@ const (
 	// RefKindExplicitAction is an explicit action reference
 	// ({{ .__actions.name }}), which always names a workflow action.
 	RefKindExplicitAction
+	// RefKindFunctionCall is the identifier at the head of a command
+	// ({{ name ... }}), i.e. a function invocation. It may name a built-in,
+	// an extension function, or an author-defined function; callers filter.
+	RefKindFunctionCall
 )
 
 // PositionedRef is a single root-level reference occurrence in a Go template,
@@ -84,7 +88,7 @@ func (s *Service) GetPositionedReferences(opts TemplateOptions) ([]PositionedRef
 		name = "unnamed-template"
 	}
 
-	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNames())
+	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
@@ -119,7 +123,7 @@ func (s *Service) GetPositionedActionReferences(opts TemplateOptions) ([]Positio
 		return nil, fmt.Errorf("template content cannot be empty")
 	}
 
-	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNames())
+	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
@@ -133,22 +137,28 @@ func (s *Service) GetPositionedActionReferences(opts TemplateOptions) ([]Positio
 	return out, nil
 }
 
-// GetGoTemplatePositionedActionReferences is a convenience wrapper.
-func GetGoTemplatePositionedActionReferences(templateContent, leftDelim, rightDelim string) ([]PositionedRef, error) {
+// GetGoTemplatePositionedActionReferences is a convenience wrapper. declaredFuncs
+// registers additional (author-defined) function names so a template invoking
+// them parses successfully.
+func GetGoTemplatePositionedActionReferences(templateContent, leftDelim, rightDelim string, declaredFuncs []string) ([]PositionedRef, error) {
 	return NewService(nil).GetPositionedActionReferences(TemplateOptions{
-		Content:    templateContent,
-		LeftDelim:  leftDelim,
-		RightDelim: rightDelim,
+		Content:       templateContent,
+		LeftDelim:     leftDelim,
+		RightDelim:    rightDelim,
+		DeclaredFuncs: declaredFuncs,
 	})
 }
 
 // GetGoTemplatePositionedReferences is a convenience wrapper that extracts
-// positioned references without constructing a Service.
-func GetGoTemplatePositionedReferences(templateContent, leftDelim, rightDelim string) ([]PositionedRef, error) {
+// positioned references without constructing a Service. declaredFuncs registers
+// additional (author-defined) function names so a template invoking them parses
+// successfully.
+func GetGoTemplatePositionedReferences(templateContent, leftDelim, rightDelim string, declaredFuncs []string) ([]PositionedRef, error) {
 	return NewService(nil).GetPositionedReferences(TemplateOptions{
-		Content:    templateContent,
-		LeftDelim:  leftDelim,
-		RightDelim: rightDelim,
+		Content:       templateContent,
+		LeftDelim:     leftDelim,
+		RightDelim:    rightDelim,
+		DeclaredFuncs: declaredFuncs,
 	})
 }
 
@@ -162,6 +172,17 @@ func (s *Service) templateFuncNames() map[string]any {
 	}
 	for k := range s.defaultFuncs {
 		funcNames[k] = true
+	}
+	return funcNames
+}
+
+// templateFuncNamesWith returns templateFuncNames plus the given extra names
+// (e.g. author-defined spec.functions helpers), so a template invoking them
+// parses without an "unknown function" error during reference extraction.
+func (s *Service) templateFuncNamesWith(extra []string) map[string]any {
+	funcNames := s.templateFuncNames()
+	for _, name := range extra {
+		funcNames[name] = true
 	}
 	return funcNames
 }

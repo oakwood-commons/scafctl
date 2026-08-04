@@ -13918,3 +13918,123 @@ func TestIntegration_LspRename(t *testing.T) {
 	assert.Contains(t, out, `"newText":"env"`, "edits rename to env")
 	assert.Contains(t, out, "file:///nav.yaml", "edits target the document")
 }
+
+// ── refactor rename call / function ──────────────────────────────────────────
+
+const refactorRenameCallFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-call-int # keep this comment
+spec:
+  calls:
+    fetch:
+      provider: message
+      inputs:
+        message: fetching
+  resolvers:
+    r1:
+      resolve:
+        with:
+          - call: fetch
+  workflow:
+    actions:
+      a1:
+        call: fetch
+`
+
+func TestIntegration_RefactorRenameCallDryRun(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(refactorRenameCallFixture), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "call", "fetch", "download", "-f", path, "--dry-run")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Would rename call")
+	assert.Contains(t, stdout, "fetch -> download")
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, refactorRenameCallFixture, string(got), "dry-run must not modify the file")
+}
+
+func TestIntegration_RefactorRenameCallApply(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(refactorRenameCallFixture), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "call", "fetch", "download", "-f", path)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Renamed call")
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	s := string(got)
+	assert.Contains(t, s, "download:")
+	assert.Contains(t, s, "- call: download")
+	assert.NotContains(t, s, "call: fetch")
+	assert.Contains(t, s, "message: fetching") // unrelated literal preserved
+	assert.Contains(t, s, "# keep this comment")
+}
+
+const refactorRenameFunctionFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-func-int # keep this comment
+spec:
+  functions:
+    greet:
+      params:
+        - name: who
+      template: "hello {{ .args.who }}"
+    loud:
+      params:
+        - name: msg
+      template: "{{ greet .args.msg }}!"
+  resolvers:
+    env:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+    msg:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              value:
+                tmpl: "{{ greet ._.env }}"
+`
+
+func TestIntegration_RefactorRenameFunctionDryRun(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(refactorRenameFunctionFixture), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "function", "greet", "welcome", "-f", path, "--dry-run")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Would rename function")
+	assert.Contains(t, stdout, "greet -> welcome")
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, refactorRenameFunctionFixture, string(got))
+}
+
+func TestIntegration_RefactorRenameFunctionApply(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(refactorRenameFunctionFixture), 0o600))
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "function", "greet", "welcome", "-f", path)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Renamed function")
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	s := string(got)
+	assert.Contains(t, s, "welcome:")
+	assert.Contains(t, s, "{{ welcome .args.msg }}")
+	assert.Contains(t, s, "{{ welcome ._.env }}")
+	assert.NotContains(t, s, "greet")
+}

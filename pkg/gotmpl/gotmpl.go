@@ -91,6 +91,12 @@ type TemplateOptions struct {
 	// These are added to the template's function map
 	Funcs template.FuncMap `json:"-" yaml:"-" doc:"Custom template functions to make available"`
 
+	// DeclaredFuncs lists additional function NAMES (typically author-defined
+	// spec.functions helpers) to register with the parser so templates invoking
+	// them parse successfully during reference extraction. It affects parsing
+	// only, not execution -- no implementations are bound. Names duplicate-safe.
+	DeclaredFuncs []string `json:"-" yaml:"-"`
+
 	// FuncsFingerprint is an optional stable identifier for the *implementations*
 	// supplied in Funcs. Funcs are bound into the parsed template at parse time
 	// and the parsed template is cached, but the cache key only records function

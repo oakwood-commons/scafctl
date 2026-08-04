@@ -1,0 +1,67 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-rename-call-function-demo
+  description: >-
+    Demonstrates `scafctl refactor rename call` and
+    `scafctl refactor rename function`. The call `fetch` is referenced from a
+    resolver step and a workflow action; the function `greet` is invoked from a
+    resolver template and from inside another function's body. A single rename
+    of either updates all references while preserving comments and formatting.
+spec:
+  # Author-defined template helper functions (try:
+  # refactor rename function greet salute).
+  functions:
+    greet:
+      description: Render a greeting for the given name
+      params:
+        - name: who
+      template: "hello {{ .args.who }}"
+    loud:
+      description: Greet loudly by delegating to greet
+      params:
+        - name: msg
+      # Reference: greet is invoked inside another function's body.
+      template: "{{ greet .args.msg }}!"
+
+  # Reusable, provider-agnostic call definitions (try:
+  # refactor rename call fetch download).
+  calls:
+    fetch:
+      description: Emit a fetching message
+      provider: message
+      inputs:
+        message: fetching
+
+  resolvers:
+    env:
+      description: The target environment
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message: dev
+
+    # Reference #1 to the call: a call: entry in a resolve step.
+    fromCall:
+      description: Invoke the reusable fetch call
+      resolve:
+        with:
+          - call: fetch
+
+    # Reference to the function: a {{ greet ... }} invocation in a template.
+    greeting:
+      description: Greet using the greet function
+      resolve:
+        with:
+          - provider: message
+            inputs:
+              message:
+                tmpl: "{{ greet ._.env }}"
+
+  workflow:
+    actions:
+      # Reference #2 to the call: a call: entry on an action.
+      run:
+        description: Run the reusable fetch call
+        call: fetch

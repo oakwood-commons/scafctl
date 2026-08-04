@@ -175,3 +175,31 @@ func TestCompile_AggregatesProblems(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a valid identifier")
 	assert.Contains(t, err.Error(), "reserved prefix")
 }
+
+func TestValidateFunctionName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{"valid simple", "greet", ""},
+		{"valid underscore", "greet_user", ""},
+		{"valid leading underscore", "_greet", ""},
+		{"empty", "", "not a valid function name"},
+		{"leading digit", "1greet", "not a valid function name"},
+		{"hyphen not allowed", "greet-user", "not a valid function name"},
+		{"reserved prefix", "__greet", "reserved prefix"},
+		{"builtin collision", "printf", "built-in template function"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFunctionName(tt.input)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}

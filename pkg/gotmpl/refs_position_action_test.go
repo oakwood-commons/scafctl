@@ -48,7 +48,7 @@ func TestGetPositionedActionReferences(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetGoTemplatePositionedActionReferences(tt.tmpl, "", "")
+			got, err := GetGoTemplatePositionedActionReferences(tt.tmpl, "", "", nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 
@@ -65,7 +65,7 @@ func TestGetPositionedActionReferences(t *testing.T) {
 func TestGetPositionedActionReferences_Scoped(t *testing.T) {
 	// Inside {{ with }} the dot is rebound, so the action ref is scoped.
 	tmpl := `{{ with .ctx }}{{ .__actions.deploy }}{{ end }}`
-	got, err := GetGoTemplatePositionedActionReferences(tmpl, "", "")
+	got, err := GetGoTemplatePositionedActionReferences(tmpl, "", "", nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "deploy", got[0].Name)
@@ -74,17 +74,17 @@ func TestGetPositionedActionReferences_Scoped(t *testing.T) {
 }
 
 func TestGetPositionedActionReferences_CustomDelims(t *testing.T) {
-	got, err := GetGoTemplatePositionedActionReferences(`[[ .__actions.x ]]`, "[[", "]]")
+	got, err := GetGoTemplatePositionedActionReferences(`[[ .__actions.x ]]`, "[[", "]]", nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, PositionedRef{Name: "x", Offset: 14, Len: 1, Kind: RefKindExplicitAction}, got[0])
 }
 
 func TestGetPositionedActionReferences_Errors(t *testing.T) {
-	_, err := GetGoTemplatePositionedActionReferences("", "", "")
+	_, err := GetGoTemplatePositionedActionReferences("", "", "", nil)
 	assert.Error(t, err, "empty content")
 
-	_, err = GetGoTemplatePositionedActionReferences(`{{ .__actions.x `, "", "")
+	_, err = GetGoTemplatePositionedActionReferences(`{{ .__actions.x `, "", "", nil)
 	assert.Error(t, err, "unterminated action")
 }
 
@@ -93,6 +93,6 @@ func BenchmarkGetPositionedActionReferences(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = GetGoTemplatePositionedActionReferences(tmpl, "", "")
+		_, _ = GetGoTemplatePositionedActionReferences(tmpl, "", "", nil)
 	}
 }

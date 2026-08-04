@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 
+	"github.com/oakwood-commons/scafctl/pkg/authorfuncs"
 	"github.com/oakwood-commons/scafctl/pkg/refindex"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
@@ -70,6 +71,38 @@ func RenameAction(sol *solution.Solution, oldName, newName string) (*RenameResul
 	return RenameSymbol(sol, refindex.SymbolAction, oldName, newName)
 }
 
+// RenameCall computes the edits to rename a spec.calls definition and every
+// call: reference to it (in resolver with/transform/validate steps and workflow
+// actions), plus the definition key. It refuses (producing no edits) under the
+// same conditions as RenameResolver.
+func RenameCall(sol *solution.Solution, oldName, newName string) (*RenameResult, error) {
+	return RenameSymbol(sol, refindex.SymbolCall, oldName, newName)
+}
+
+// RenameFunction computes the edits to rename a spec.functions definition and
+// every {{ name ... }} invocation of it across templates (including other
+// function bodies), plus the definition key. It refuses (producing no edits)
+// under the same conditions as RenameResolver.
+func RenameFunction(sol *solution.Solution, oldName, newName string) (*RenameResult, error) {
+	return RenameSymbol(sol, refindex.SymbolFunction, oldName, newName)
+}
+
+// validateNewName checks that name is a valid new name for a symbol of the given
+// kind. Author functions are Go-template identifiers with a stricter grammar (no
+// hyphens, no reserved "__" prefix, no collision with a built-in/extension
+// function) than resolver/action/call names, so they are validated with the same
+// rule the loader enforces. A rename to an invalid name would produce a broken
+// solution, so this guard is what keeps the rename all-or-nothing.
+func validateNewName(kind refindex.SymbolKind, name string) error {
+	if kind == refindex.SymbolFunction {
+		return authorfuncs.ValidateFunctionName(name)
+	}
+	if !resolverNameRe.MatchString(name) {
+		return fmt.Errorf("%q is not a valid %s name (must match %s)", name, kind, ResolverNamePattern)
+	}
+	return nil
+}
+
 // RenameSymbol computes the edits to rename a symbol of the given kind and every
 // reference to it. It returns an error, producing NO edits, when:
 //   - newName is not a valid name;
@@ -82,8 +115,8 @@ func RenameSymbol(sol *solution.Solution, kind refindex.SymbolKind, oldName, new
 	if sol == nil {
 		return nil, fmt.Errorf("rename %s: nil solution", kind)
 	}
-	if !resolverNameRe.MatchString(newName) {
-		return nil, fmt.Errorf("rename %s: %q is not a valid %s name (must match %s)", kind, newName, kind, ResolverNamePattern)
+	if err := validateNewName(kind, newName); err != nil {
+		return nil, fmt.Errorf("rename %s: %w", kind, err)
 	}
 	if oldName == newName {
 		return nil, fmt.Errorf("rename %s: new name equals old name %q", kind, oldName)

@@ -48,6 +48,10 @@ const (
 	SymbolResolver SymbolKind = iota
 	// SymbolAction is an action defined under spec.workflow.actions or finally.
 	SymbolAction
+	// SymbolCall is a reusable call defined under spec.calls.
+	SymbolCall
+	// SymbolFunction is an author-defined template helper under spec.functions.
+	SymbolFunction
 )
 
 // String returns the lowercase kind name.
@@ -57,6 +61,10 @@ func (k SymbolKind) String() string {
 		return "resolver"
 	case SymbolAction:
 		return "action"
+	case SymbolCall:
+		return "call"
+	case SymbolFunction:
+		return "function"
 	default:
 		return "unknown"
 	}
@@ -82,6 +90,11 @@ const (
 	OriginCEL
 	// OriginTemplate is an explicit ._.name reference inside a Go template.
 	OriginTemplate
+	// OriginCallRef is a call: value reference to a spec.calls definition.
+	OriginCallRef
+	// OriginFunctionCall is a {{ name ... }} invocation of an author-defined
+	// function inside a Go template.
+	OriginFunctionCall
 )
 
 // String returns a short label for the origin.
@@ -97,6 +110,10 @@ func (o Origin) String() string {
 		return "cel"
 	case OriginTemplate:
 		return "template"
+	case OriginCallRef:
+		return "call"
+	case OriginFunctionCall:
+		return "function"
 	default:
 		return "unknown"
 	}
@@ -226,6 +243,7 @@ func Build(sol *solution.Solution) (*Index, error) {
 		sm:    sol.SourceMap(),
 		nodes: nodes,
 	}
+	b.funcNames, b.funcNameList = functionNameSet(sol)
 
 	v := &walk.Visitor{
 		Resolver: func(path, name string, r *resolver.Resolver) error {
@@ -239,6 +257,27 @@ func Build(sol *solution.Solution) (*Index, error) {
 			b.addDefinition(path, name, SymbolAction)
 			for i, dep := range act.DependsOn {
 				b.addWholeScalarRef(fmt.Sprintf("%s.dependsOn[%d]", path, i), dep, SymbolAction, OriginDependsOn)
+			}
+			if act.HasCall() {
+				b.addWholeScalarRef(path+".call", act.Call, SymbolCall, OriginCallRef)
+			}
+			return nil
+		},
+		ProviderSource: func(path string, ps *resolver.ProviderSource) error {
+			if ps.HasCall() {
+				b.addWholeScalarRef(path+".call", ps.Call, SymbolCall, OriginCallRef)
+			}
+			return nil
+		},
+		ProviderTransform: func(path string, pt *resolver.ProviderTransform) error {
+			if pt.HasCall() {
+				b.addWholeScalarRef(path+".call", pt.Call, SymbolCall, OriginCallRef)
+			}
+			return nil
+		},
+		ProviderValidation: func(path string, pv *resolver.ProviderValidation) error {
+			if pv.HasCall() {
+				b.addWholeScalarRef(path+".call", pv.Call, SymbolCall, OriginCallRef)
 			}
 			return nil
 		},
@@ -269,8 +308,45 @@ func Build(sol *solution.Solution) (*Index, error) {
 		return nil, fmt.Errorf("refindex: walk: %w", err)
 	}
 
+	// Call and function definitions (and function bodies that invoke other
+	// functions) are not reached by walk.Walk, so index them directly.
+	b.addCallDefinitions(sol)
+	b.addFunctionDefinitionsAndBodies(sol)
+
 	idx.finalize()
 	return idx, nil
+}
+
+// functionNameSet returns the set (and sorted slice) of author-defined function
+// names declared under spec.functions.
+func functionNameSet(sol *solution.Solution) (map[string]bool, []string) {
+	set := make(map[string]bool, len(sol.Spec.Functions))
+	list := make([]string, 0, len(sol.Spec.Functions))
+	for name := range sol.Spec.Functions {
+		set[name] = true
+		list = append(list, name)
+	}
+	sort.Strings(list)
+	return set, list
+}
+
+// addCallDefinitions records the defining site of each spec.calls entry.
+func (b *builder) addCallDefinitions(sol *solution.Solution) {
+	for name := range sol.Spec.Calls {
+		b.addDefinition("spec.calls."+name, name, SymbolCall)
+	}
+}
+
+// addFunctionDefinitionsAndBodies records each spec.functions definition and
+// scans template function bodies for invocations of other author functions (a
+// function body is not reached by walk.Walk).
+func (b *builder) addFunctionDefinitionsAndBodies(sol *solution.Solution) {
+	for name, fn := range sol.Spec.Functions {
+		b.addDefinition("spec.functions."+name, name, SymbolFunction)
+		if fn.HasTemplate() {
+			b.addTemplateFunctionRefsAt("spec.functions."+name+".template", fn.Template)
+		}
+	}
 }
 
 // builder accumulates references during the walk.
@@ -280,6 +356,13 @@ type builder struct {
 	li    *sourcepos.LineIndex
 	sm    *sourcepos.SourceMap
 	nodes map[string]*yaml.Node
+	// funcNames is the set of author-defined function names (spec.functions
+	// keys). Template function-call scanning is filtered to this set, so
+	// built-in and extension functions are never treated as renameable symbols.
+	funcNames map[string]bool
+	// funcNameList is funcNames as a slice, passed to the template parser so
+	// author-function invocations parse without error.
+	funcNameList []string
 }
 
 // markUnresolved records that a reference to the (kind, name) symbol could not
@@ -415,12 +498,77 @@ func (b *builder) addTemplateRefs(path string, tmpl *gotmpl.GoTemplatingContent)
 	}
 	b.addTemplateResolverRefs(tmplStr, start)
 	b.addTemplateActionRefs(tmplStr, start)
+	b.addTemplateFunctionRefs(tmplStr, start)
+}
+
+// addTemplateFunctionRefsAt positions the scalar at path and scans it for
+// author-function invocations. Used for function bodies (spec.functions.<name>.
+// template), which walk.Walk does not reach.
+func (b *builder) addTemplateFunctionRefsAt(path, tmplStr string) {
+	start := -1
+	if node, ok := b.scalarAt(path); ok {
+		if s, ok := b.contentStart(node); ok {
+			start = s
+		}
+	}
+	b.addTemplateFunctionRefs(tmplStr, start)
+}
+
+// addTemplateFunctionRefs records invocations of author-defined functions
+// ({{ name ... }}) inside a Go template. Only names declared under
+// spec.functions are treated as references; built-in and extension functions
+// are ignored. Each author-function name the parser reports but that a
+// positioned occurrence did not cover is recorded as unresolved (fail-safe).
+func (b *builder) addTemplateFunctionRefs(tmplStr string, start int) {
+	if len(b.funcNames) == 0 {
+		return
+	}
+	// Authoritative set: author functions actually invoked in this template.
+	invoked, err := gotmpl.ExtractFunctionCalls(tmplStr, "", "", b.funcNameList)
+	if err != nil {
+		b.markUnresolvedUnknown()
+		return
+	}
+	var authInvoked []string
+	for _, name := range invoked {
+		if b.funcNames[name] {
+			authInvoked = append(authInvoked, name)
+		}
+	}
+	if len(authInvoked) == 0 {
+		return
+	}
+	if start < 0 {
+		for _, name := range authInvoked {
+			b.markUnresolved(SymbolFunction, name)
+		}
+		return
+	}
+	refs, err := gotmpl.GetGoTemplatePositionedFunctionCalls(tmplStr, "", "", b.funcNameList)
+	if err != nil {
+		b.markUnresolvedUnknown()
+		return
+	}
+	positioned := make(map[string]bool)
+	for _, r := range refs {
+		if !b.funcNames[r.Name] {
+			continue // built-in or extension function; not a renameable symbol
+		}
+		if b.emitAt(start+r.Offset, r.Name, SymbolFunction, OriginFunctionCall, false) {
+			positioned[r.Name] = true
+		}
+	}
+	for _, name := range authInvoked {
+		if !positioned[name] {
+			b.markUnresolved(SymbolFunction, name)
+		}
+	}
 }
 
 // addTemplateResolverRefs handles the resolver forms ({{ ._.name }}, and
 // context-dependent bare/$-rooted fields which are conservatively marked).
 func (b *builder) addTemplateResolverRefs(tmplStr string, start int) {
-	candidates, cerr := gotmpl.UnscopedResolverRefs(tmplStr, "", "")
+	candidates, cerr := gotmpl.UnscopedResolverRefs(tmplStr, "", "", b.funcNameList)
 	if cerr != nil {
 		b.markUnresolvedUnknown()
 		return
@@ -431,7 +579,7 @@ func (b *builder) addTemplateResolverRefs(tmplStr string, start int) {
 		}
 		return
 	}
-	refs, err := gotmpl.GetGoTemplatePositionedReferences(tmplStr, "", "")
+	refs, err := gotmpl.GetGoTemplatePositionedReferences(tmplStr, "", "", b.funcNameList)
 	if err != nil {
 		b.markUnresolvedUnknown()
 		return
@@ -458,7 +606,7 @@ func (b *builder) addTemplateResolverRefs(tmplStr string, start int) {
 
 // addTemplateActionRefs handles the action form ({{ .__actions.name }}).
 func (b *builder) addTemplateActionRefs(tmplStr string, start int) {
-	names, err := gotmpl.UnscopedActionRefs(tmplStr, "", "")
+	names, err := gotmpl.UnscopedActionRefs(tmplStr, "", "", b.funcNameList)
 	if err != nil {
 		b.markUnresolvedUnknown()
 		return
@@ -472,7 +620,7 @@ func (b *builder) addTemplateActionRefs(tmplStr string, start int) {
 		}
 		return
 	}
-	refs, err := gotmpl.GetGoTemplatePositionedActionReferences(tmplStr, "", "")
+	refs, err := gotmpl.GetGoTemplatePositionedActionReferences(tmplStr, "", "", b.funcNameList)
 	if err != nil {
 		b.markUnresolvedUnknown()
 		return
@@ -563,7 +711,7 @@ func (b *builder) markLiteralValueRef(payload, kind string) {
 			}
 		}
 	case "tmpl":
-		if cands, err := gotmpl.UnscopedResolverRefs(payload, "", ""); err == nil {
+		if cands, err := gotmpl.UnscopedResolverRefs(payload, "", "", b.funcNameList); err == nil {
 			for _, c := range cands {
 				b.markUnresolved(SymbolResolver, c.Name)
 			}
@@ -571,7 +719,7 @@ func (b *builder) markLiteralValueRef(payload, kind string) {
 			b.markUnresolvedUnknown()
 			return
 		}
-		if names, err := gotmpl.UnscopedActionRefs(payload, "", ""); err == nil {
+		if names, err := gotmpl.UnscopedActionRefs(payload, "", "", b.funcNameList); err == nil {
 			for _, n := range names {
 				b.markUnresolved(SymbolAction, n)
 			}

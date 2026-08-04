@@ -243,3 +243,24 @@ func TestPrefixedVariableRefs_ParseError(t *testing.T) {
 	_, err := Expression(`__actions.a +`).PrefixedVariableRefs(context.Background(), "__actions.")
 	require.Error(t, err)
 }
+
+func TestPrefixedVariableRefs_InvalidPrefix(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name   string
+		prefix string
+	}{
+		{name: "missing trailing dot", prefix: "__actions"},
+		{name: "empty prefix", prefix: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A prefix that is not select-style must fail loudly rather than
+			// silently falling back to identifier-prefix matching (which would
+			// miss __actions.<name> SelectExpr references and defeat the rename
+			// fail-safe).
+			_, err := Expression(`__actions.build`).PrefixedVariableRefs(ctx, tt.prefix)
+			require.Error(t, err)
+		})
+	}
+}

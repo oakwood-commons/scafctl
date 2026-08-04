@@ -27,15 +27,16 @@ the in-memory document and reports each finding (severity, message, rule name)
 at its source location, using the same engine as `scafctl lint` -- so what you
 see in the editor matches the CLI.
 
-It also supports resolver and action **navigation and rename**, reusing the same
-reference index and rename engine as `scafctl refactor rename`:
+It also supports resolver, action, call, and function **navigation and rename**,
+reusing the same reference index and rename engine as `scafctl refactor rename`:
 
-- **Go to definition** on a resolver or action reference jumps to where it is
-  defined.
-- **Find all references** lists every use of a resolver or action.
-- **Rename** a resolver or action updates its definition and every reference in
-  one edit. If any reference cannot be located, the rename is refused (the editor
-  shows the error) rather than applying a partial, solution-breaking change.
+- **Go to definition** on a resolver, action, call, or function reference jumps
+  to where it is defined.
+- **Find all references** lists every use of a resolver, action, call, or
+  function.
+- **Rename** any of them updates its definition and every reference in one edit.
+  If any reference cannot be located, the rename is refused (the editor shows the
+  error) rather than applying a partial, solution-breaking change.
 
 ## Trying it by hand
 

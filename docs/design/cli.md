@@ -1072,6 +1072,17 @@ definition, `dependsOn` entries, CEL `__actions.name` uses, and explicit
 template `.__actions.name` uses. An action's `alias` is a separate name and is
 **not** changed by the rename.
 
+`refactor rename call <old> <new>` renames a reusable call (`spec.calls`) and
+rewrites the definition and every `call:` reference (in resolver
+with/transform/validate steps and workflow actions). Calls are only referenced
+structurally via the `call:` field -- never from CEL or templates.
+
+`refactor rename function <old> <new>` renames an author-defined function
+(`spec.functions`) and rewrites the definition and every `{{ name ... }}`
+invocation across all templates, including inside other function bodies.
+Built-in and extension functions (`printf`, `upper`, ...) that share the new
+name are left untouched.
+
 ~~~bash
 # Preview the change without writing (lists every occurrence and location)
 scafctl refactor rename resolver environment env -f ./solution.yaml --dry-run
@@ -1081,6 +1092,10 @@ scafctl refactor rename resolver environment env
 
 # Rename a workflow action and every reference to it
 scafctl refactor rename action deploy release
+
+# Rename a reusable call, or an author-defined function
+scafctl refactor rename call fetch download
+scafctl refactor rename function greet salute
 ~~~
 
 The rename is all-or-nothing: if any reference to the target symbol cannot be
@@ -1115,18 +1130,18 @@ rule name to an LSP diagnostic anchored at the finding's location. It advertises
 full-document sync and reuses the same `lint` engine as `scafctl lint`, so
 editor diagnostics match the CLI.
 
-It also provides resolver and action navigation and refactoring, reusing the
-same positioned reference index (`refindex`) and rename engine (`refactor`) as
-`refactor rename`:
+It also provides resolver, action, call, and function navigation and refactoring,
+reusing the same positioned reference index (`refindex`) and rename engine
+(`refactor`) as `refactor rename`:
 
-- **Go-to-definition** (`textDocument/definition`) -- jump from any resolver or
-  action reference to its definition.
-- **Find references** (`textDocument/references`) -- list every use of a resolver
-  or action.
-- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename a resolver or
-  action and every reference to it as a single `WorkspaceEdit`. The same
-  fail-safe applies: if a reference cannot be located, the rename is refused and
-  the error is surfaced to the editor rather than a partial rewrite being applied.
+- **Go-to-definition** (`textDocument/definition`) -- jump from any resolver,
+  action, call, or function reference to its definition.
+- **Find references** (`textDocument/references`) -- list every use of a resolver,
+  action, call, or function.
+- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename any of them
+  and every reference to it as a single `WorkspaceEdit`. The same fail-safe
+  applies: if a reference cannot be located, the rename is refused and the error
+  is surfaced to the editor rather than a partial rewrite being applied.
 
 An editor client configures the server by pointing at the `scafctl lsp` command
 and associating it with the solution file language (YAML).

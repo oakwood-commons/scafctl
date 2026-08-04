@@ -64,7 +64,7 @@ func TestGetPositionedReferences(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetGoTemplatePositionedReferences(tt.tmpl, "", "")
+			got, err := GetGoTemplatePositionedReferences(tt.tmpl, "", "", nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 
@@ -81,7 +81,7 @@ func TestGetPositionedReferences(t *testing.T) {
 func TestGetPositionedReferences_Scoped(t *testing.T) {
 	// Inside {{ range }} the dot is rebound: .items is unscoped, .inner is scoped.
 	tmpl := `{{ range .items }}{{ .inner }}{{ end }}`
-	got, err := GetGoTemplatePositionedReferences(tmpl, "", "")
+	got, err := GetGoTemplatePositionedReferences(tmpl, "", "", nil)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 
@@ -98,7 +98,7 @@ func TestGetPositionedReferences_Scoped(t *testing.T) {
 func TestGetPositionedReferences_MultibytePrefix(t *testing.T) {
 	// A 2-byte rune before the reference must shift the BYTE offset accordingly.
 	tmpl := `{{ "é" }}{{ .afterMultibyte }}`
-	got, err := GetGoTemplatePositionedReferences(tmpl, "", "")
+	got, err := GetGoTemplatePositionedReferences(tmpl, "", "", nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 
@@ -108,7 +108,7 @@ func TestGetPositionedReferences_MultibytePrefix(t *testing.T) {
 }
 
 func TestGetPositionedReferences_CustomDelims(t *testing.T) {
-	got, err := GetGoTemplatePositionedReferences(`[[ ._.env ]]`, "[[", "]]")
+	got, err := GetGoTemplatePositionedReferences(`[[ ._.env ]]`, "[[", "]]", nil)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, PositionedRef{Name: "env", Offset: 6, Len: 3, Kind: RefKindExplicitResolver}, got[0])
@@ -116,10 +116,10 @@ func TestGetPositionedReferences_CustomDelims(t *testing.T) {
 }
 
 func TestGetPositionedReferences_Errors(t *testing.T) {
-	_, err := GetGoTemplatePositionedReferences("", "", "")
+	_, err := GetGoTemplatePositionedReferences("", "", "", nil)
 	assert.Error(t, err, "empty content")
 
-	_, err = GetGoTemplatePositionedReferences(`{{ .x `, "", "")
+	_, err = GetGoTemplatePositionedReferences(`{{ .x `, "", "", nil)
 	assert.Error(t, err, "unterminated action")
 }
 
@@ -168,7 +168,7 @@ func TestGetPositionedReferences_ControlFlow(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := GetGoTemplatePositionedReferences(tt.tmpl, "", "")
+			got, err := GetGoTemplatePositionedReferences(tt.tmpl, "", "", nil)
 			require.NoError(t, err)
 			require.Len(t, got, len(tt.want))
 			for i, w := range tt.want {
@@ -220,6 +220,6 @@ func BenchmarkGetPositionedReferences(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		_, _ = GetGoTemplatePositionedReferences(tmpl, "", "")
+		_, _ = GetGoTemplatePositionedReferences(tmpl, "", "", nil)
 	}
 }

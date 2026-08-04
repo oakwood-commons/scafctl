@@ -19,6 +19,30 @@ import (
 // the pattern documented on spec.ParamDef.Name.
 var identifierPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
+// FunctionNamePattern is the canonical pattern an author-defined function name
+// must match: a Go-template identifier (no hyphens, unlike resolver/action/call
+// names). Exposed so tooling (e.g. rename) can validate a candidate name with
+// the same rule the loader enforces.
+const FunctionNamePattern = `^[a-zA-Z_][a-zA-Z0-9_]*$`
+
+// ValidateFunctionName reports whether name is a valid author-defined function
+// name, applying the same rules the loader enforces in compileOne: it must be a
+// valid Go-template identifier, must not use the reserved "__" prefix, and must
+// not collide with a built-in or extension template function. It returns a
+// descriptive error when name is invalid, or nil when it is acceptable.
+func ValidateFunctionName(name string) error {
+	if !identifierPattern.MatchString(name) {
+		return fmt.Errorf("%q is not a valid function name (must match %s)", name, FunctionNamePattern)
+	}
+	if strings.HasPrefix(name, "__") {
+		return fmt.Errorf("%q is not a valid function name (may not start with %q, a reserved prefix)", name, "__")
+	}
+	if gotmpl.IsBuiltinFunc(name) {
+		return fmt.Errorf("%q is not a valid function name (collides with a built-in template function)", name)
+	}
+	return nil
+}
+
 // knownParamTypes is the set of accepted parameter type strings (canonical names
 // plus the aliases spec.CoerceType/normalizeType understand). The empty type is
 // allowed separately and means "pass through unchanged".
