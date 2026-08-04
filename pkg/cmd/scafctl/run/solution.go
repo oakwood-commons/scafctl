@@ -693,13 +693,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Partial success: some continueOnError actions failed but the run did not
 	// fail hard. When --detailed-exit-code is set, emit the full output envelope
 	// (so json/yaml/table still show per-action detail) and then return the
-	// distinct PartialSuccess code. When the flag is off, fall through to the
-	// normal exit-0 success path (non-breaking default).
+	// distinct PartialSuccess code via exitWithCode so the stderr diagnostic is
+	// printed (Cobra silences the returned error at the root). When the flag is
+	// off, fall through to the normal exit-0 success path (non-breaking default).
 	if result != nil && result.FinalStatus == action.ExecutionPartialSuccess && o.DetailedExitCode {
 		if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr != nil {
 			return writeErr
 		}
-		return exitcode.WithCode(
+		return o.exitWithCode(ctx,
 			fmt.Errorf("run completed with partial success: %d action(s) failed with continueOnError", len(result.FailedActions)),
 			exitcode.PartialSuccess,
 		)

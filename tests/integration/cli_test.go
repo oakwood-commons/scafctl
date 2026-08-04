@@ -1517,6 +1517,10 @@ func TestIntegration_RunDetailedExitCode(t *testing.T) {
 						"stdout must remain parseable JSON on partial success")
 					assert.Equal(t, "partial-success", decoded["status"],
 						"envelope must report the partial-success status")
+					// The exit-code diagnostic must be printed to stderr (routed
+					// through exitWithCode) so the user sees why the run exited 12.
+					assert.Contains(t, stderr, "partial success",
+						"partial-success exit must print a stderr diagnostic")
 				}
 			})
 		}
