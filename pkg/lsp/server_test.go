@@ -167,3 +167,71 @@ func TestURIToPath(t *testing.T) {
 	// real filesystem path (spaces, not %20).
 	assert.Equal(t, "/tmp/my dir/solution.yaml", uriToPath("file:///tmp/my%20dir/solution.yaml"))
 }
+
+func TestServer_NavigationHandlers(t *testing.T) {
+	s := newTestServer(t)
+	uri := protocol.DocumentUri("file:///nav.yaml")
+	noop := &glsp.Context{Notify: func(string, any) {}}
+	require.NoError(t, s.didOpen(noop, &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: uri, Text: navFixture},
+	}))
+
+	pos := celRefPosition(t, navFixture)
+	tdp := protocol.TextDocumentPositionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     pos,
+	}
+
+	def, err := s.definition(nil, &protocol.DefinitionParams{TextDocumentPositionParams: tdp})
+	require.NoError(t, err)
+	require.NotNil(t, def)
+
+	refs, err := s.references(nil, &protocol.ReferenceParams{
+		TextDocumentPositionParams: tdp,
+		Context:                    protocol.ReferenceContext{IncludeDeclaration: true},
+	})
+	require.NoError(t, err)
+	assert.Len(t, refs, 3)
+
+	prep, err := s.prepareRename(nil, &protocol.PrepareRenameParams{TextDocumentPositionParams: tdp})
+	require.NoError(t, err)
+	require.NotNil(t, prep)
+
+	we, err := s.rename(nil, &protocol.RenameParams{TextDocumentPositionParams: tdp, NewName: "env"})
+	require.NoError(t, err)
+	require.NotNil(t, we)
+	assert.Len(t, we.Changes[uri], 3)
+}
+
+func TestServer_NavigationHandlersOnUnknownDoc(t *testing.T) {
+	s := newTestServer(t)
+	tdp := protocol.TextDocumentPositionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///missing.yaml"},
+		Position:     protocol.Position{Line: 0, Character: 0},
+	}
+	def, err := s.definition(nil, &protocol.DefinitionParams{TextDocumentPositionParams: tdp})
+	require.NoError(t, err)
+	assert.Nil(t, def)
+
+	refs, err := s.references(nil, &protocol.ReferenceParams{TextDocumentPositionParams: tdp})
+	require.NoError(t, err)
+	assert.Nil(t, refs)
+
+	we, err := s.rename(nil, &protocol.RenameParams{TextDocumentPositionParams: tdp, NewName: "x"})
+	require.NoError(t, err)
+	assert.Nil(t, we)
+}
+
+func TestServer_InitializeAdvertisesNavigationCapabilities(t *testing.T) {
+	s := newTestServer(t)
+	res, err := s.Handler().Initialize(&glsp.Context{}, &protocol.InitializeParams{})
+	require.NoError(t, err)
+	init := res.(protocol.InitializeResult)
+
+	assert.Equal(t, true, init.Capabilities.DefinitionProvider)
+	assert.Equal(t, true, init.Capabilities.ReferencesProvider)
+	rename, ok := init.Capabilities.RenameProvider.(*protocol.RenameOptions)
+	require.True(t, ok, "rename should advertise prepare support")
+	require.NotNil(t, rename.PrepareProvider)
+	assert.True(t, *rename.PrepareProvider)
+}

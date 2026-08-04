@@ -13789,4 +13789,53 @@ func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
 	assert.Contains(t, out, "scafctl lsp", "server info")
 	assert.Contains(t, out, "publishDiagnostics", "diagnostics notification")
 	assert.Contains(t, out, "doesNotExist", "the finding message")
+	// Navigation capabilities are advertised.
+	assert.Contains(t, out, "definitionProvider", "go-to-definition capability")
+	assert.Contains(t, out, "referencesProvider", "find-references capability")
+	assert.Contains(t, out, "renameProvider", "rename capability")
+}
+
+func TestIntegration_LspRename(t *testing.T) {
+	t.Parallel()
+
+	// "environment:" is defined on line 6 (0-based); the cursor at line 6 char 6
+	// sits inside that identifier.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      dependsOn:\n        - environment\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.environment\n"
+
+	msgs := [][]byte{
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///nav.yaml", "languageId": "yaml", "version": 1, "text": sol},
+		}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///nav.yaml"},
+			"position":     map[string]any{"line": 6, "character": 6},
+			"newName":      "env",
+		}}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
+	cmd.Dir = findProjectRoot()
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	require.NoError(t, cmd.Start())
+
+	for _, m := range msgs {
+		_, _ = stdin.Write(m)
+		time.Sleep(150 * time.Millisecond)
+	}
+	time.Sleep(700 * time.Millisecond)
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	out := outBuf.String()
+	assert.Contains(t, out, `"changes"`, "rename returns a workspace edit")
+	assert.Contains(t, out, `"newText":"env"`, "edits rename to env")
+	assert.Contains(t, out, "file:///nav.yaml", "edits target the document")
 }

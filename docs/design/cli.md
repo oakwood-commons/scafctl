@@ -1104,10 +1104,20 @@ rule name to an LSP diagnostic anchored at the finding's location. It advertises
 full-document sync and reuses the same `lint` engine as `scafctl lint`, so
 editor diagnostics match the CLI.
 
+It also provides resolver navigation and refactoring, reusing the same
+positioned reference index (`refindex`) and rename engine (`refactor`) as
+`refactor rename resolver`:
+
+- **Go-to-definition** (`textDocument/definition`) -- jump from any resolver
+  reference to its definition.
+- **Find references** (`textDocument/references`) -- list every use of a resolver.
+- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename a resolver
+  and every reference to it as a single `WorkspaceEdit`. The same fail-safe
+  applies: if a reference cannot be located, the rename is refused and the error
+  is surfaced to the editor rather than a partial rewrite being applied.
+
 An editor client configures the server by pointing at the `scafctl lsp` command
-and associating it with the solution file language (YAML). Future revisions will
-add go-to-definition, find-references, and rename (reusing the same reference
-index that powers `refactor rename`).
+and associating it with the solution file language (YAML).
 
 ---
 
