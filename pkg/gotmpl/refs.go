@@ -73,14 +73,7 @@ func (s *Service) GetReferences(ctx context.Context, opts TemplateOptions) ([]Te
 	// extension functions (e.g. index, printf, sprig helpers). Without this,
 	// templates that call these functions fail to parse and their variable
 	// references are silently lost.
-	funcNames := make(map[string]any, len(s.defaultFuncs)+len(goTemplateBuiltins))
-	for _, name := range goTemplateBuiltins {
-		funcNames[name] = true
-	}
-	for k := range s.defaultFuncs {
-		funcNames[k] = true // parse.Parse only checks existence, not the value
-	}
-	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim, funcNames)
+	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim, s.templateFuncNames())
 	if err != nil {
 		lgr.Error(err, "failed to parse template for reference extraction",
 			"name", opts.Name)

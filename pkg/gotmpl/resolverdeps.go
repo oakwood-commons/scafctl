@@ -145,6 +145,54 @@ func ExtractResolverDeps(in ResolverDepsInput) []string {
 	return deps
 }
 
+// UnscopedResolverRef is a root-level, unscoped reference candidate in a Go
+// template that could denote a resolver, with whether it was written using
+// explicit resolver syntax.
+type UnscopedResolverRef struct {
+	// Name is the root reference name (with any resolver prefix removed).
+	Name string
+	// Explicit reports that the reference used explicit resolver syntax
+	// ({{ ._.name }} / {{ ._name }}) as opposed to a bare or $-rooted accessor.
+	Explicit bool
+}
+
+// UnscopedResolverRefs returns every root-level, unscoped reference in a
+// template that could denote a resolver -- explicit resolver refs
+// ({{ ._.name }} / {{ ._name }}), bare data-context accessors ({{ .name }}),
+// and $-rooted accessors ({{ $.name }}) -- each flagged with whether it used
+// explicit resolver syntax. Special variables ({{ .__x }}) and scoped
+// references (inside {{ with }}/{{ range }} bodies) are excluded.
+//
+// This is the authoritative set a positioned-reference consumer must reconcile
+// against: any name returned here that a positioned walker cannot locate is a
+// reference that must be treated as unresolved (so a rename fails safe rather
+// than silently missing it). Results are de-duplicated per (name, explicit)
+// pair, preserving first-seen order. Parse errors yield a nil slice and error.
+func UnscopedResolverRefs(template, leftDelim, rightDelim string) ([]UnscopedResolverRef, error) {
+	refs, err := GetGoTemplateReferences(template, leftDelim, rightDelim)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[UnscopedResolverRef]bool)
+	var out []UnscopedResolverRef
+	for _, ref := range refs {
+		if ref.Scoped {
+			continue
+		}
+		name, kind := classifyTemplatePath(ref.Path)
+		if name == "" || kind == pathSpecial {
+			continue
+		}
+		u := UnscopedResolverRef{Name: name, Explicit: kind == pathExplicitResolver}
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
 // ExtractExplicitResolverRefs returns only the resolver names referenced with
 // EXPLICIT resolver syntax ({{ ._.name }} / {{ ._name }}) in a Go template.
 //

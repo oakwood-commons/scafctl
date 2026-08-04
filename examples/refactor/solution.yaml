@@ -1,0 +1,48 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-rename-demo
+  description: >-
+    Demonstrates `scafctl refactor rename resolver`. The resolver `environment`
+    is referenced four different ways -- a dependsOn entry, a CEL `_.name` use,
+    an explicit template `._.name` use, and a rslvr reference -- so a single
+    rename must update all of them while preserving comments and formatting.
+spec:
+  resolvers:
+    # The resolver we will rename (try: refactor rename resolver environment env).
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+
+    # Reference #1: an explicit dependsOn entry.
+    appName:
+      dependsOn:
+        - environment
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              # Reference #2: a CEL expression using the `_.` resolver namespace.
+              value:
+                expr: '_.environment == "dev" ? "app-dev" : "app-prod"'
+
+    # Reference #3: an explicit Go-template resolver reference (`._.name`).
+    greeting:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              template:
+                tmpl: "Deploying {{ ._.appName }} to {{ ._.environment }}"
+
+    # Reference #4: a direct rslvr reference.
+    envAlias:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value:
+                rslvr: environment

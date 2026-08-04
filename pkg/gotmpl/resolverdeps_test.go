@@ -201,3 +201,56 @@ func TestExtractExplicitResolverRefs(t *testing.T) {
 		})
 	}
 }
+
+func TestUnscopedResolverRefs(t *testing.T) {
+	tests := []struct {
+		name string
+		tmpl string
+		want []UnscopedResolverRef
+	}{
+		{
+			name: "explicit and bare and dollar",
+			tmpl: `{{ ._.a }}{{ .b }}{{ $.c }}`,
+			want: []UnscopedResolverRef{
+				{Name: "a", Explicit: true},
+				{Name: "b", Explicit: false},
+				{Name: "c", Explicit: false},
+			},
+		},
+		{
+			name: "underscore form is explicit",
+			tmpl: `{{ ._d }}`,
+			want: []UnscopedResolverRef{{Name: "d", Explicit: true}},
+		},
+		{
+			name: "special variables excluded",
+			tmpl: `{{ .__self }}{{ .__item }}`,
+			want: nil,
+		},
+		{
+			name: "scoped references excluded",
+			tmpl: `{{ range .items }}{{ .inner }}{{ end }}`,
+			want: []UnscopedResolverRef{{Name: "items", Explicit: false}},
+		},
+		{
+			name: "same name explicit and bare both reported",
+			tmpl: `{{ ._.env }}{{ .env }}`,
+			want: []UnscopedResolverRef{
+				{Name: "env", Explicit: true},
+				{Name: "env", Explicit: false},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := UnscopedResolverRefs(tt.tmpl, "", "")
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestUnscopedResolverRefs_ParseError(t *testing.T) {
+	_, err := UnscopedResolverRefs(`{{ .x `, "", "")
+	assert.Error(t, err)
+}

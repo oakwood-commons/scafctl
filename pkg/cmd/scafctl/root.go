@@ -35,6 +35,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/options"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/packagecmd"
 	pluginscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/plugins"
+	refactorcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/render"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/run"
 	secretscmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/secrets"
@@ -921,6 +922,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	cCmd.AddCommand(withGroup(groupCore, lint.CommandLint(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, testcmd.CommandTest(cliParams, ioStreams, binaryName)))
 	cCmd.AddCommand(withGroup(groupCore, validatecmd.CommandValidate(cliParams, ioStreams, binaryName)))
+	cCmd.AddCommand(withGroup(groupCore, refactorcmd.CommandRefactor(cliParams, ioStreams, binaryName)))
 
 	// Inspection Commands — explore and understand solutions
 	cCmd.AddCommand(withGroup(groupInspect, get.CommandGet(cliParams, ioStreams, binaryName)))

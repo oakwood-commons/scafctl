@@ -69,6 +69,7 @@ scafctl get examples -o json
 | [mcp/](mcp/) | MCP server configurations for AI clients |
 
 > **Terminology Note**: The `plugins/` directory contains go-plugin source code for developing custom providers. When distributing via the catalog, these are pushed as **provider** or **auth-handler** artifacts:
+>
 > ```bash
 > # Package and push a provider to the catalog
 > scafctl package plugin --name my-provider --kind provider --version 1.0.0 --platform linux/amd64=./my-provider
@@ -195,6 +196,16 @@ Snapshots capture resolver execution state for debugging, testing, and compariso
 
 ---
 
+## Refactor Examples
+
+Source-preserving edits to a solution with `scafctl refactor`.
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [refactor/solution.yaml](refactor/solution.yaml) | A resolver referenced five ways (dependsOn, CEL, template, rslvr, definition) for `refactor rename resolver` | `scafctl refactor rename resolver environment env -f examples/refactor/solution.yaml --dry-run` |
+
+---
+
 ## Catalog Examples
 
 Catalog build and distribution examples.
@@ -273,21 +284,25 @@ AI client configuration examples for connecting to scafctl's MCP server.
 ## Tips
 
 ### View Output as JSON
+
 ```bash
 scafctl run resolver -f examples/resolvers/hello-world.yaml -o json
 ```
 
 ### Dry Run Mode
+
 ```bash
 scafctl run solution -f examples/actions/hello-world.yaml --dry-run
 ```
 
 ### Debug Logging
+
 ```bash
 scafctl run resolver -f examples/resolvers/dependencies.yaml -v
 ```
 
 ### Pass Multiple Parameters
+
 ```bash
 scafctl run resolver -f examples/resolvers/parameters.yaml \
   -r name=Bob \
@@ -296,18 +311,21 @@ scafctl run resolver -f examples/resolvers/parameters.yaml \
 ```
 
 ### Interactive Mode
+
 ```bash
 # Explore output in a TUI (navigate, search, filter)
 scafctl run resolver -f examples/resolvers/dependencies.yaml -i
 ```
 
 ### Filter with CEL Expressions
+
 ```bash
 # Extract specific values from output
 scafctl run resolver -f examples/resolvers/dependencies.yaml -e '_.fullName'
 ```
 
 ### Snapshots
+
 ```bash
 # Capture a snapshot during render
 scafctl render solution -f examples/snapshots/basic-snapshot.yaml \
@@ -325,6 +343,7 @@ scafctl diff snapshot /tmp/snap-a.json /tmp/snap-b.json
 ## Catalog Workflows
 
 ### Build and Run from Catalog
+
 ```bash
 # Package a solution into the catalog
 scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
@@ -337,6 +356,7 @@ scafctl catalog list
 ```
 
 ### Export and Import (Air-Gapped Transfer)
+
 ```bash
 # Build and export a solution
 scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
@@ -350,6 +370,7 @@ scafctl run resolver resolver-demo
 ```
 
 ### Version Management
+
 ```bash
 # Build multiple versions
 scafctl package solution -f examples/resolver-demo.yaml --version 1.0.0
