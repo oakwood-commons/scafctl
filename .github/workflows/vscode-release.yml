@@ -61,6 +61,19 @@ jobs:
             exit 1
           fi
 
+      - name: Verify publishing secrets are set
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          missing=""
+          [ -z "${VSCE_PAT}" ] && missing="${missing} VSCE_PAT"
+          [ -z "${OVSX_PAT}" ] && missing="${missing} OVSX_PAT"
+          if [ -n "${missing}" ]; then
+            echo "::error title=Missing publishing secret::Required repository secret(s) not set:${missing}. Add them under Settings > Secrets and variables > Actions before tagging a release."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
 
