@@ -1,0 +1,98 @@
+name: VS Code Extension Release
+
+# Publishes the editors/vscode extension to BOTH registries -- the Visual Studio
+# Marketplace (via vsce) and the Open VSX Registry (via ovsx) -- from a single
+# byte-identical .vsix artifact.
+#
+# Trigger: push a tag of the form `vscode/vX.Y.Z` (a dedicated prefix so it never
+# collides with the Go binary's `v*` tags handled by release.yml).
+#
+# Release procedure:
+#   cd editors/vscode
+#   npm version <patch|minor|major> --no-git-tag-version   # bump package.json
+#   # commit the bump (signed + DCO), then:
+#   git tag vscode/v0.1.1
+#   git push origin vscode/v0.1.1
+#
+# Required repository secrets:
+#   VSCE_PAT  - Azure DevOps PAT with Marketplace > Manage scope (publisher: oakwood-commons)
+#   OVSX_PAT  - Open VSX access token (namespace oakwood-commons must exist)
+
+on:
+  push:
+    tags:
+      - 'vscode/v*'
+
+permissions:
+  contents: write   # create the GitHub release and upload the .vsix asset
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to Marketplace + Open VSX
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Verify tag matches package.json version
+        env:
+          GIT_REF: ${{ github.ref }}
+        run: |
+          tag_version="${GIT_REF#refs/tags/vscode/v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          echo "Tag version:     ${tag_version}"
+          echo "package.json:    ${pkg_version}"
+          if [ "${tag_version}" != "${pkg_version}" ]; then
+            echo "::error title=Version mismatch::Tag vscode/v${tag_version} does not match package.json version ${pkg_version}. Bump package.json and re-tag."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package (.vsix)
+        run: npm run package
+
+      - name: Publish to Visual Studio Marketplace
+        run: npm run publish:vsce
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX Registry
+        run: npm run publish:ovsx
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+      - name: Create GitHub release with .vsix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_REF: ${{ github.ref }}
+        run: |
+          tag="${GIT_REF#refs/tags/}"
+          gh release create "$tag" scafctl.vsix \
+            --title "VS Code extension ${tag}" \
+            --notes "Published to the Visual Studio Marketplace and Open VSX Registry." \
+            --verify-tag

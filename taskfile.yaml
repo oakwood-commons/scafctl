@@ -675,6 +675,14 @@ tasks:
       - npm run build
       - npm run package
 
+  vscode:publish:
+    desc: "Publish the packaged VS Code extension to the Marketplace and Open VSX (needs VSCE_PAT and OVSX_PAT)"
+    dir: editors/vscode
+    deps: [vscode:package]
+    cmds:
+      - npm run publish:vsce
+      - npm run publish:ovsx
+
   build-container-image:
     deps: [mod, git-unshallow-clone, embed-examples]
     desc: "Build the container image layer"
