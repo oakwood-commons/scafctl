@@ -58,6 +58,10 @@ func (s *Server) Handler() *protocol.Handler {
 			full := protocol.TextDocumentSyncKindFull
 			sync.Change = &full
 		}
+		// Advertise rename with prepare support so clients validate the cursor
+		// position before prompting for a new name.
+		prepare := true
+		capabilities.RenameProvider = &protocol.RenameOptions{PrepareProvider: &prepare}
 		result := protocol.InitializeResult{
 			Capabilities: capabilities,
 			ServerInfo: &protocol.InitializeResultServerInfo{
@@ -77,6 +81,11 @@ func (s *Server) Handler() *protocol.Handler {
 	handler.TextDocumentDidChange = s.didChange
 	handler.TextDocumentDidSave = s.didSave
 	handler.TextDocumentDidClose = s.didClose
+
+	handler.TextDocumentDefinition = s.definition
+	handler.TextDocumentReferences = s.references
+	handler.TextDocumentPrepareRename = s.prepareRename
+	handler.TextDocumentRename = s.rename
 
 	return handler
 }
@@ -128,6 +137,44 @@ func (s *Server) didClose(ctx *glsp.Context, params *protocol.DidCloseTextDocume
 		Diagnostics: []protocol.Diagnostic{},
 	})
 	return nil
+}
+
+func (s *Server) definition(_ *glsp.Context, params *protocol.DefinitionParams) (any, error) {
+	content, ok := s.getDoc(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	if loc := Definition([]byte(content), params.TextDocument.URI, params.Position); loc != nil {
+		return *loc, nil
+	}
+	return nil, nil
+}
+
+func (s *Server) references(_ *glsp.Context, params *protocol.ReferenceParams) ([]protocol.Location, error) {
+	content, ok := s.getDoc(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	return References([]byte(content), params.TextDocument.URI, params.Position, params.Context.IncludeDeclaration), nil
+}
+
+func (s *Server) prepareRename(_ *glsp.Context, params *protocol.PrepareRenameParams) (any, error) {
+	content, ok := s.getDoc(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	if rng := PrepareRename([]byte(content), params.Position); rng != nil {
+		return *rng, nil
+	}
+	return nil, nil
+}
+
+func (s *Server) rename(_ *glsp.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
+	content, ok := s.getDoc(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+	return Rename([]byte(content), params.TextDocument.URI, params.Position, params.NewName)
 }
 
 // publish computes and sends diagnostics for the current content of uri.
