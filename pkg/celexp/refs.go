@@ -119,7 +119,7 @@ func (e Expression) GetUnderscoreVariablesByOptionality(ctx context.Context) (ha
 
 	hardSet := make(map[string]struct{})
 	optionalSet := make(map[string]struct{})
-	walkVariablesWithPrefix(parsedExpr.GetExpr(), "_.", func(name string, opt bool) {
+	walkVariablesWithPrefix(parsedExpr.GetExpr(), "_.", func(name string, _ int64, opt bool) {
 		if opt {
 			optionalSet[name] = struct{}{}
 		} else {
@@ -269,16 +269,18 @@ func (e Expression) RequiredVariables(ctx context.Context) ([]string, error) {
 	return result, nil
 }
 
-// refVisitor receives each discovered prefix-scoped reference along with whether
-// it was reached through optional-access syntax (_.?name or _[?"name"]). The same
-// name may be reported more than once (e.g. both hard and optional); callers
-// reconcile duplicates (a hard occurrence dominates an optional one).
-type refVisitor func(name string, optional bool)
+// refVisitor receives each discovered prefix-scoped reference along with the id
+// of the AST node that produced it (usable to look up its source offset via
+// SourceInfo.Positions) and whether it was reached through optional-access
+// syntax (_.?name or _[?"name"]). The same name may be reported more than once
+// (e.g. both hard and optional); callers reconcile duplicates (a hard
+// occurrence dominates an optional one).
+type refVisitor func(name string, id int64, optional bool)
 
 // extractVariablesWithPrefix recursively walks the AST and collects variable
 // names starting with the given prefix into vars, ignoring optionality.
 func extractVariablesWithPrefix(expr *exprpb.Expr, prefix string, vars map[string]struct{}) {
-	walkVariablesWithPrefix(expr, prefix, func(name string, _ bool) {
+	walkVariablesWithPrefix(expr, prefix, func(name string, _ int64, _ bool) {
 		vars[name] = struct{}{}
 	})
 }
@@ -318,7 +320,7 @@ func walkVariablesWithPrefix(expr *exprpb.Expr, prefix string, visit refVisitor)
 			// For "$" style, check if identifier starts with prefix
 			if len(ident) >= len(prefix) && ident[:len(prefix)] == prefix {
 				// Store without the prefix
-				visit(ident[len(prefix):], false)
+				visit(ident[len(prefix):], expr.GetId(), false)
 			}
 		}
 
@@ -330,7 +332,7 @@ func walkVariablesWithPrefix(expr *exprpb.Expr, prefix string, visit refVisitor)
 			// For "_." style prefix, check if the operand is the base identifier
 			if operand.GetIdentExpr() != nil && operand.GetIdentExpr().GetName() == baseIdent {
 				// This is a _.something expression - capture it as a hard reference.
-				visit(selectExpr.GetField(), false)
+				visit(selectExpr.GetField(), expr.GetId(), false)
 			} else {
 				// Continue traversing for other variables
 				walkVariablesWithPrefix(operand, prefix, visit)
@@ -360,7 +362,7 @@ func walkVariablesWithPrefix(expr *exprpb.Expr, prefix string, visit refVisitor)
 					if key.GetConstExpr() != nil && key.GetConstExpr().GetStringValue() != "" {
 						// Only the two optional operators signal optionality; a
 						// plain bracket index (_[_]) is a hard reference.
-						visit(key.GetConstExpr().GetStringValue(), fn != "_[_]")
+						visit(key.GetConstExpr().GetStringValue(), expr.GetId(), fn != "_[_]")
 					}
 				}
 			}

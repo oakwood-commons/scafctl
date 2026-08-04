@@ -13623,3 +13623,84 @@ func TestIntegration_StateClearPreservesMetadata(t *testing.T) {
 	assert.NotContains(t, string(data), "k1")
 	assert.NotContains(t, string(data), "k2")
 }
+
+// ── refactor rename resolver ─────────────────────────────────────────────────
+
+const refactorRenameFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: refactor-int # keep this comment
+spec:
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+    appName:
+      dependsOn:
+        - environment
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value:
+                expr: _.environment
+`
+
+func writeRefactorFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(refactorRenameFixture), 0o600))
+	return path
+}
+
+func TestIntegration_RefactorRenameDryRun(t *testing.T) {
+	t.Parallel()
+	path := writeRefactorFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "resolver", "environment", "env", "-f", path, "--dry-run")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Would rename resolver")
+	assert.Contains(t, stdout, "environment -> env")
+
+	// Dry-run must not modify the file.
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, refactorRenameFixture, string(got))
+}
+
+func TestIntegration_RefactorRenameApply(t *testing.T) {
+	t.Parallel()
+	path := writeRefactorFixture(t)
+
+	stdout, _, exitCode := runScafctl(t, "refactor", "rename", "resolver", "environment", "env", "-f", path)
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "Renamed resolver")
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.NotContains(t, string(got), "environment")
+	assert.Contains(t, string(got), "env:")
+	assert.Contains(t, string(got), "- env")
+	assert.Contains(t, string(got), "expr: _.env")
+	// Comments/formatting preserved.
+	assert.Contains(t, string(got), "# keep this comment")
+}
+
+func TestIntegration_RefactorRenameCollision(t *testing.T) {
+	t.Parallel()
+	path := writeRefactorFixture(t)
+
+	_, stderr, exitCode := runScafctl(t, "refactor", "rename", "resolver", "environment", "appName", "-f", path)
+	assert.Equal(t, exitcode.ValidationFailed, exitCode)
+	assert.Contains(t, stderr, "already exists")
+}
+
+func TestIntegration_RefactorHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "refactor", "--help")
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "rename")
+}

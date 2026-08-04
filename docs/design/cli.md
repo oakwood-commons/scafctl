@@ -75,6 +75,7 @@ scafctl <verb> <kind> <name[@version(or constraint)]> [flags]
 Names identify an object within a kind.
 
 Versions are optional and may be:
+
 - an exact version (`1.0.0`)
 - a constraint (`^1.2`, `>=1.0 <2.0`) *(planned - requires catalog)*
 - omitted (default resolution rules apply)
@@ -153,6 +154,7 @@ Show metadata of version 1.0.0 of the example solution:
 ~~~bash
 scafctl get solution example@1.0.0
 ~~~
+
 ### Listing Resources
 
 Following kubectl conventions, use singular or plural forms:
@@ -170,7 +172,7 @@ scafctl get solution example
 
 Both singular and plural forms without a name will list all resources of that kind.
 
-The `get providers` output includes a `source` column indicating whether each provider is `builtin` (compiled in) or `official` (auto-fetched from the OCI catalog). When filters (`--capability`, `--category`) are active, only built-in providers are shown since official providers do not expose capability/category metadata.
+The `get providers` output includes a `source` column indicating whether each provider is `builtin` (compiled in) or `official` (auto-fetched from the OCI catalog). When filters (`--capability`, `--category`) are active, only built-in providers are shown since official providers do not expose capability/category metadata
 ---
 
 ## Rendering a Solution
@@ -304,6 +306,7 @@ scafctl run solution example \
 #### Usage Patterns
 
 **Separate flags (traditional):**
+
 ~~~bash
 scafctl run solution example \
   -r key1=value1 \
@@ -311,12 +314,14 @@ scafctl run solution example \
 ~~~
 
 **CSV in single flag (convenient for multiple pairs):**
+
 ~~~bash
 scafctl run solution example \
   -r "key1=value1,key2=value2"
 ~~~
 
 **Mixed approach:**
+
 ~~~bash
 scafctl run solution example \
   -r "env=prod,region=us-east1" \
@@ -353,6 +358,7 @@ scafctl run solution example \
 **Important**: The scheme prefix is preserved and should be processed by your solution logic.
 
 **Validation**: Values with URI schemes are automatically validated:
+
 - `json://` - Validated as well-formed JSON
 - `yaml://` - Validated as well-formed YAML
 - `base64://` - Validated as proper base64 encoding
@@ -411,6 +417,7 @@ scafctl run resolver -f solution.yaml -r name=Alice body=@template.txt
 > A single trailing newline is trimmed automatically (matching shell `echo` behavior).
 
 **Restrictions:**
+
 - `@-` can only appear once (stdin is consumed on first read) — this applies across both standalone `@-` and `key=@-`
 - `@-` cannot be combined with `-f -` (both read from stdin)
 
@@ -703,6 +710,7 @@ These flags are available on all commands. Run `scafctl options` to see them:
 **Note**: The `-o/--output` flag is available per-command (not global) on commands that support structured output.
 
 **Output format support**:
+
 - `get`, `render`, `explain`, `config view`: Full support for `-o` flag
 - `run`: Supports `-o` flag for result output
 - `auth status`, `secrets list`: Support `-o` flag
@@ -823,6 +831,7 @@ scafctl secrets rotate
 ~~~
 
 Secrets are encrypted with AES-256-GCM and stored in platform-specific locations:
+
 - **macOS**: `~/.local/share/scafctl/secrets/`
 - **Linux**: `~/.local/share/scafctl/secrets/`
 - **Windows**: `%APPDATA%\scafctl\secrets\`
@@ -849,6 +858,7 @@ scafctl auth logout entra
 ~~~
 
 **Supported auth handlers**:
+
 - `entra` - Microsoft Entra ID (formerly Azure AD)
 
 ---
@@ -1046,6 +1056,36 @@ invalid, `4` a file was not found.
 
 ---
 
+## Refactoring Solutions
+
+`refactor` applies source-preserving edits to a solution. `refactor rename
+resolver <old> <new>` renames a resolver and rewrites every reference to it --
+the definition, `dependsOn` entries, `rslvr:` values, CEL `_.name` uses, and
+explicit template `._.name` uses -- replacing only the exact bytes of each
+occurrence, so comments, key order, and formatting are preserved (no YAML
+round-trip).
+
+~~~bash
+# Preview the change without writing (lists every occurrence and location)
+scafctl refactor rename resolver environment env -f ./solution.yaml --dry-run
+
+# Apply it in place (auto-discovers the solution file if -f is omitted)
+scafctl refactor rename resolver environment env
+~~~
+
+The rename is all-or-nothing: if any reference to the target resolver cannot be
+located byte-exact -- a context-dependent bare `{{ .name }}` accessor, a
+`$`-rooted `{{ $.name }}` accessor, or a reference nested inside a literal
+value -- it aborts rather than performing a partial rewrite that would silently
+break the solution. The check is name-scoped, so an unlocatable reference to a
+*different* resolver does not block the rename.
+
+Exit codes: `0` applied (or previewed), `2` a validation error (invalid new
+name, name collision, undefined resolver, or an unlocatable reference blocked
+the rename), `4` the solution file could not be resolved, read, or parsed.
+
+---
+
 ## Exploring Lint Rules
 
 ### List Rules
@@ -1074,7 +1114,6 @@ scafctl lint rule <rule-id> -o json
 
 > The former `scafctl lint explain <rule-id>` still works as a hidden,
 > deprecated alias for `scafctl lint rule <rule-id>`.
-
 
 ---
 
