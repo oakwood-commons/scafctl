@@ -1289,3 +1289,16 @@ func TestValueRef_ReferencedVariables_ScopedRefs(t *testing.T) {
 	_, hasHost := vars["host"]
 	assert.False(t, hasHost, "scoped ref inside {{ with }} should be excluded")
 }
+
+// TestValueRef_ReferencedVariables_AuthorFunction is a regression test: a
+// template that invokes an author-defined function (unknown to the parser) must
+// still yield its data references rather than silently dropping them because the
+// template failed to parse.
+func TestValueRef_ReferencedVariables_AuthorFunction(t *testing.T) {
+	tmpl := gotmpl.GoTemplatingContent(`{{ greet .config }} and {{ loud .env }}`)
+	vr := ValueRef{Tmpl: &tmpl}
+	vars := vr.ReferencedVariables()
+
+	assert.Contains(t, vars, "config", "ref inside an author-function call must be captured")
+	assert.Contains(t, vars, "env", "ref inside an author-function call must be captured")
+}

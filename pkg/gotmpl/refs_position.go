@@ -88,7 +88,7 @@ func (s *Service) GetPositionedReferences(opts TemplateOptions) ([]PositionedRef
 		name = "unnamed-template"
 	}
 
-	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
+	trees, err := parseTemplatesTolerant(name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}
@@ -123,7 +123,7 @@ func (s *Service) GetPositionedActionReferences(opts TemplateOptions) ([]Positio
 		return nil, fmt.Errorf("template content cannot be empty")
 	}
 
-	trees, err := parse.Parse(name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
+	trees, err := parseTemplatesTolerant(name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse template: %w", err)
 	}

@@ -70,10 +70,10 @@ func (s *Service) GetReferences(ctx context.Context, opts TemplateOptions) ([]Te
 
 	// Parse the template using text/template/parse.
 	// Pass the service's function map so the parser recognises built-in and
-	// extension functions (e.g. index, printf, sprig helpers). Without this,
-	// templates that call these functions fail to parse and their variable
-	// references are silently lost.
-	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
+	// extension functions (e.g. index, printf, sprig helpers). Unknown
+	// author-defined functions (spec.functions) are tolerated so their invoking
+	// templates still yield references rather than failing to parse.
+	trees, err := parseTemplatesTolerant(opts.Name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
 	if err != nil {
 		lgr.Error(err, "failed to parse template for reference extraction",
 			"name", opts.Name)
