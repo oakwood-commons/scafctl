@@ -983,6 +983,9 @@ func (s *Server) registerTools() {
 	// Lint explanation tools
 	s.registerLintTools()
 
+	// Refactoring tools (positioned find-references and rename)
+	s.registerRefactorTools()
+
 	// Error explanation tools
 	s.registerErrorTools()
 
