@@ -1747,6 +1747,16 @@ func TestLintTemplateUnderscorePrefix(t *testing.T) {
 			tmpl:        "{{ .__actions.build.result }}",
 			expectError: false,
 		},
+		{
+			// Regression: an underscore ref inside a call to an author-defined
+			// function must still be flagged. Before reference extraction
+			// tolerated unknown functions, the template failed to parse and the
+			// lint silently produced nothing.
+			name:        "underscore ref inside author-function call is flagged",
+			tmpl:        "{{ greet ._.config.appName }}",
+			expectError: true,
+			errorCount:  1,
+		},
 	}
 
 	for _, tt := range tests {

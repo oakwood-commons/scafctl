@@ -1386,3 +1386,15 @@ func TestLoad_MissingParamsError(t *testing.T) {
 		assert.False(t, result.Skipped)
 	})
 }
+
+// TestExtractParamRefs_AuthorFunction is a regression test: a __params
+// reference wrapped in a call to an author-defined function must still be
+// tracked, so state up-to-date checks see the param dependency rather than
+// dropping it because the template failed to parse.
+func TestExtractParamRefs_AuthorFunction(t *testing.T) {
+	tmpl := gotmpl.GoTemplatingContent(`{{ greet .__params.project }}`)
+	vr := &spec.ValueRef{Tmpl: &tmpl}
+	seen := make(map[string]struct{})
+	extractParamRefs(context.Background(), vr, seen)
+	assert.Contains(t, seen, "project")
+}

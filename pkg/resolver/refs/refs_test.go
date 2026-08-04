@@ -193,3 +193,15 @@ func TestExtractFromTemplate_ScopedReferences(t *testing.T) {
 		assert.NotContains(t, refs, "name")
 	})
 }
+
+// TestExtractFromTemplate_AuthorFunction is a regression test: extracting
+// resolver references from a template on stdin/a file has no solution context
+// and thus cannot know author-function names, but the extractor must still
+// tolerate the unknown function and return the resolver references rather than
+// failing to parse.
+func TestExtractFromTemplate_AuthorFunction(t *testing.T) {
+	t.Parallel()
+	refs, err := ExtractFromTemplate(`{{ greet ._.env }} and {{ loud ._.appName }}`, "{{", "}}")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"env", "appName"}, refs)
+}

@@ -1144,6 +1144,17 @@ func TestExtractRefsFromExpression_WithActions(t *testing.T) {
 	assert.Contains(t, refs, "build")
 }
 
+// TestExtractRefsFromTemplate_AuthorFunction is a regression test: an __actions
+// reference wrapped in a call to an author-defined function must still be
+// extracted, so the action dependency graph infers the edge rather than
+// silently dropping it because the template failed to parse.
+func TestExtractRefsFromTemplate_AuthorFunction(t *testing.T) {
+	refs := make(map[string]struct{})
+	tmpl := gotmpl.GoTemplatingContent(`{{ greet .__actions.build.message }}`)
+	extractRefsFromTemplate(&tmpl, refs)
+	assert.Contains(t, refs, "build")
+}
+
 func TestValidateGlobSafety(t *testing.T) {
 	tests := []struct {
 		name    string
