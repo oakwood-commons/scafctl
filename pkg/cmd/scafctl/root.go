@@ -222,6 +222,14 @@ type RootOptions struct {
 	// cluster data; embedders with a cluster registry provide the
 	// implementation.
 	ClusterResolver kube.ClusterResolver
+
+	// DetailedExitCode sets the default for the --detailed-exit-code flag on
+	// run solution and run action. When true, a partial-success run (some
+	// continueOnError actions failed, none failed hard) exits with
+	// exitcode.PartialSuccess (12) instead of 0. When unset (false, the
+	// default), partial success exits 0, matching direct scafctl behavior.
+	// The per-invocation --detailed-exit-code flag overrides this default.
+	DetailedExitCode bool
 }
 
 // NewRootOptions returns a RootOptions with production defaults
@@ -272,6 +280,12 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	envPrefix := settings.SafeEnvPrefix(binaryName)
 	cliParams.BinaryName = binaryName
 	paths.SetAppName(binaryName)
+
+	// Seed the embedder-supplied default for the --detailed-exit-code flag.
+	// RootOptions does not thread into the run subcommand tree, so the default
+	// is carried on settings.Run, where the run commands read it as the flag
+	// default. The per-invocation --detailed-exit-code flag overrides it.
+	cliParams.DetailedExitCode = opts.DetailedExitCode
 
 	// Record the embedder's version (if supplied) so state metadata can capture
 	// the invoking CLI/frontend provenance distinctly from the engine version.

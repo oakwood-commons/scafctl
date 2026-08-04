@@ -60,6 +60,7 @@ func TestCommandSolution(t *testing.T) {
 	assert.NotNil(t, flags.Lookup("show-execution"))
 	assert.NotNil(t, flags.Lookup("on-conflict"))
 	assert.NotNil(t, flags.Lookup("backup"))
+	assert.NotNil(t, flags.Lookup("detailed-exit-code"))
 }
 
 func TestCommandSolution_FlagDefaults(t *testing.T) {
@@ -123,6 +124,31 @@ func TestCommandSolution_FlagDefaults(t *testing.T) {
 	noState, err := flags.GetBool("no-state")
 	require.NoError(t, err)
 	assert.False(t, noState)
+}
+
+func TestCommandSolution_DetailedExitCodeFlag(t *testing.T) {
+	t.Parallel()
+
+	streams, _, _ := terminal.NewTestIOStreams()
+
+	t.Run("defaults to false when embedder default unset", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		cmd := CommandSolution(cliParams, streams, "")
+		v, err := cmd.Flags().GetBool("detailed-exit-code")
+		require.NoError(t, err)
+		assert.False(t, v)
+	})
+
+	t.Run("flag default reflects embedder default", func(t *testing.T) {
+		t.Parallel()
+		cliParams := settings.NewCliParams()
+		cliParams.DetailedExitCode = true
+		cmd := CommandSolution(cliParams, streams, "")
+		v, err := cmd.Flags().GetBool("detailed-exit-code")
+		require.NoError(t, err)
+		assert.True(t, v, "embedder default should seed the flag default")
+	})
 }
 
 func TestSolutionOptions_getEffectiveActionConfig_OutputDir(t *testing.T) {

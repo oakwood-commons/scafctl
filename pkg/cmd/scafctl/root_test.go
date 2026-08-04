@@ -15,6 +15,7 @@ import (
 	"text/template"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/kube"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -502,4 +503,81 @@ func TestRoot_GoTemplateFuncs_ReExecuteNoSelfCollision(t *testing.T) {
 	require.NoError(t, cmd.Execute(), "second execution must not self-collide")
 	assert.False(t, exitCalled,
 		"re-executing the same command must not fail the embedder registration")
+}
+
+// partialSuccessSolutionYAML is a workflow whose second action fails but is
+// tolerated via continueOnError, yielding FinalStatus partial-success. The run
+// completes (no hard failure), so without --detailed-exit-code it exits 0.
+//
+// The actions are serialized via dependsOn so they run in separate phases: the
+// in-process test IOStreams use a plain bytes.Buffer, which the concurrent
+// same-phase progress-callback writes would race on under -race (the real
+// binary writes to os.Stderr and is unaffected).
+const partialSuccessSolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: embedder-partial-success
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      good:
+        provider: message
+        inputs:
+          message: "GOOD_RAN"
+          type: info
+      bad:
+        provider: go-template
+        dependsOn: [good]
+        continueOnError: true
+        inputs:
+          template: "{{ undefinedFunc .x }}"
+          data:
+            x: hello
+`
+
+// TestRoot_DetailedExitCode_EmbedderDefault verifies that an embedder can opt
+// into the distinct partial-success exit code via RootOptions.DetailedExitCode
+// WITHOUT the caller passing the --detailed-exit-code flag. This proves the
+// default flows through settings.Run (RootOptions does not thread into the run
+// subcommand tree). It covers both run subcommands (independent call sites) and
+// the three precedence cases: default true (exit 12), default false
+// (non-breaking exit 0), and an explicit --detailed-exit-code=false overriding
+// an embedder default of true.
+func TestRoot_DetailedExitCode_EmbedderDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(partialSuccessSolutionYAML), 0o600))
+
+	run := func(t *testing.T, subcmd string, embedderDefault bool, extraArgs ...string) int {
+		t.Helper()
+		ioStreams, _, _ := terminal.NewTestIOStreams()
+		cmd, cleanup := Root(&RootOptions{
+			IOStreams:        ioStreams,
+			ExitFunc:         func(int) {}, // never terminate the test process
+			DetailedExitCode: embedderDefault,
+		})
+		defer cleanup()
+		args := append([]string{"run", subcmd, "-f", solutionPath, "-o", "json"}, extraArgs...)
+		cmd.SetArgs(args)
+		return exitcode.GetCode(cmd.Execute())
+	}
+
+	for _, subcmd := range []string{"solution", "action"} {
+		t.Run(subcmd+"/default true returns PartialSuccess without CLI flag", func(t *testing.T) {
+			assert.Equal(t, exitcode.PartialSuccess, run(t, subcmd, true),
+				"RootOptions.DetailedExitCode=true must yield exit 12 on partial success")
+		})
+
+		t.Run(subcmd+"/default false returns Success (non-breaking)", func(t *testing.T) {
+			assert.Equal(t, exitcode.Success, run(t, subcmd, false),
+				"RootOptions.DetailedExitCode=false must keep partial success at exit 0")
+		})
+
+		t.Run(subcmd+"/explicit flag=false overrides embedder default true", func(t *testing.T) {
+			assert.Equal(t, exitcode.Success, run(t, subcmd, true, "--detailed-exit-code=false"),
+				"an explicit --detailed-exit-code=false must override an embedder default of true")
+		})
+	}
 }

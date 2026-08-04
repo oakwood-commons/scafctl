@@ -26,6 +26,8 @@ func TestExitCodes(t *testing.T) {
 	assert.Equal(t, 8, CatalogError)
 	assert.Equal(t, 9, TimeoutError)
 	assert.Equal(t, 10, PermissionDenied)
+	assert.Equal(t, 11, TestFailed)
+	assert.Equal(t, 12, PartialSuccess)
 }
 
 func TestDescription(t *testing.T) {
@@ -46,6 +48,8 @@ func TestDescription(t *testing.T) {
 		{CatalogError, "catalog error"},
 		{TimeoutError, "timeout"},
 		{PermissionDenied, "permission denied"},
+		{TestFailed, "one or more tests failed"},
+		{PartialSuccess, "partial success"},
 		{999, "unknown error"},
 		{-1, "unknown error"},
 	}
@@ -121,5 +125,10 @@ func TestGetCode(t *testing.T) {
 		exitErr := WithCode(errors.New("test"), ActionFailed)
 		wrapped := fmt.Errorf("wrapper: %w", exitErr)
 		assert.Equal(t, ActionFailed, GetCode(wrapped))
+	})
+
+	t.Run("round-trips PartialSuccess code", func(t *testing.T) {
+		err := WithCode(errors.New("partial"), PartialSuccess)
+		assert.Equal(t, PartialSuccess, GetCode(err))
 	})
 }

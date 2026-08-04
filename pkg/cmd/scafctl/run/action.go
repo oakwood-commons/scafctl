@@ -57,6 +57,13 @@ type ActionOptions struct {
 	// SkipFingerprint disables fingerprint-based up-to-date checks.
 	SkipFingerprint bool
 
+	// DetailedExitCode, when true, returns exitcode.PartialSuccess (12) instead
+	// of 0 when the run ends in partial success (some continueOnError actions
+	// failed, none failed hard). Defaults from settings.Run (embedder/config)
+	// and is overridden by the --detailed-exit-code flag. When false, partial
+	// success exits 0 (non-breaking).
+	DetailedExitCode bool
+
 	// DynamicArgs are resolver parameters from positional key=value syntax.
 	DynamicArgs []string
 
@@ -125,12 +132,13 @@ FAILURE OUTPUT (json/yaml):
   detail). Human formats (table/quiet) keep the prior stderr-only behavior.
 
 EXIT CODES:
-  0  Success
-  1  Resolver execution failed
-  2  Validation failed
-  3  Invalid solution (no workflow, cycle, or parse error)
-  4  File not found
-  6  Action/workflow execution failed
+  0   Success (also partial success unless --detailed-exit-code is set)
+  1   Resolver execution failed
+  2   Validation failed
+  3   Invalid solution (no workflow, cycle, or parse error)
+  4   File not found
+  6   Action/workflow execution failed
+  12  Partial success (only with --detailed-exit-code; some continueOnError actions failed)
 
 Examples:
   # Run the 'lint' action (auto-discovery)
@@ -179,6 +187,10 @@ Examples:
 
 	// Fingerprint flags
 	cCmd.Flags().BoolVar(&options.SkipFingerprint, "skip-fingerprint", false, "Disable fingerprint-based up-to-date checks (re-run all actions)")
+
+	// Detailed exit code: opt-in distinct exit code (12) on partial success.
+	// Defaults from cliParams (embedder/config); the flag overrides it.
+	cCmd.Flags().BoolVar(&options.DetailedExitCode, "detailed-exit-code", cliParams.DetailedExitCode, "Return a distinct exit code (12) when the run completes with partial success (some continueOnError actions failed); default off (partial success exits 0)")
 
 	return cCmd
 }
@@ -549,6 +561,23 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	if o.ShowExecution {
 		executionData = resolverExecutionData
 	}
+
+	// Partial success: some continueOnError actions failed but the run did not
+	// fail hard. When --detailed-exit-code is set, emit the full output envelope
+	// then return the distinct PartialSuccess code via exitWithCode so the
+	// stderr diagnostic is printed (Cobra silences the returned error at the
+	// root); otherwise fall through to the normal exit-0 success path
+	// (non-breaking default).
+	if result != nil && result.FinalStatus == action.ExecutionPartialSuccess && o.DetailedExitCode {
+		if writeErr := o.writeActionOutput(ctx, result, executionData); writeErr != nil {
+			return writeErr
+		}
+		return o.exitWithCode(ctx,
+			fmt.Errorf("run completed with partial success: %d action(s) failed with continueOnError", len(result.FailedActions)),
+			exitcode.PartialSuccess,
+		)
+	}
+
 	return o.writeActionOutput(ctx, result, executionData)
 }
 

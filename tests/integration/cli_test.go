@@ -1385,7 +1385,148 @@ func TestIntegration_RunResolver_ResolvePhaseFailure_PreservesValues(t *testing.
 	assert.NotEmpty(t, decoded["__diagnostics"])
 }
 
-// two-phase validation D1 guarantee: when a deferred (cross-resolver) validation
+// Action-phase outcome fixtures for the --detailed-exit-code matrix.
+//
+// actionCleanSuccessSolution: every action succeeds -> FinalStatus success.
+// actionPartialSuccessSolution: one action fails but is tolerated via
+//
+//	continueOnError -> FinalStatus partial-success (no hard failure).
+//
+// actionHardFailureSolution: one action fails with the default onError (fail)
+//
+//	-> FinalStatus failed (exit 6), unaffected by --detailed-exit-code.
+const actionCleanSuccessSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: detailed-exit-clean
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      good:
+        provider: message
+        inputs:
+          message: "GOOD_RAN"
+          type: info
+`
+
+const actionPartialSuccessSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: detailed-exit-partial
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      good:
+        provider: message
+        inputs:
+          message: "GOOD_RAN"
+          type: info
+      bad:
+        provider: go-template
+        continueOnError: true
+        inputs:
+          template: "{{ undefinedFunc .x }}"
+          data:
+            x: hello
+`
+
+const actionHardFailureSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: detailed-exit-hard
+  version: 1.0.0
+spec:
+  resolvers: {}
+  workflow:
+    actions:
+      good:
+        provider: message
+        inputs:
+          message: "GOOD_RAN"
+          type: info
+      bad:
+        provider: go-template
+        inputs:
+          template: "{{ undefinedFunc .x }}"
+          data:
+            x: hello
+`
+
+// TestIntegration_RunDetailedExitCode verifies the opt-in --detailed-exit-code
+// flag across the full outcome matrix (clean / partial / hard-failure) with the
+// flag both off and on, for BOTH `run solution` and `run action` (the two CLI
+// call sites are independent copies and must behave identically):
+//
+//	clean, flag off   -> 0     clean, flag on   -> 0
+//	partial, flag off -> 0     partial, flag on -> 12  (the new behavior)
+//	hard, flag off    -> 6     hard, flag on    -> 6   (unchanged)
+//
+// The default (flag off) keeps partial success at 0 -- the non-breaking guarantee.
+func TestIntegration_RunDetailedExitCode(t *testing.T) {
+	t.Parallel()
+
+	fixtures := map[string]string{
+		"clean":   actionCleanSuccessSolution,
+		"partial": actionPartialSuccessSolution,
+		"hard":    actionHardFailureSolution,
+	}
+	tmpDir := t.TempDir()
+	paths := make(map[string]string, len(fixtures))
+	for name, content := range fixtures {
+		p := filepath.Join(tmpDir, name+".yaml")
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o600))
+		paths[name] = p
+	}
+
+	cases := []struct {
+		outcome  string
+		detailed bool
+		wantExit int
+	}{
+		{"clean", false, 0},
+		{"clean", true, 0},
+		{"partial", false, 0}, // non-breaking default: partial stays 0
+		{"partial", true, 12}, // opt-in: distinct PartialSuccess code
+		{"hard", false, 6},    // hard failure unchanged
+		{"hard", true, 6},     // hard failure unaffected by the flag
+	}
+
+	for _, subcmd := range []string{"solution", "action"} {
+		for _, tc := range cases {
+			name := fmt.Sprintf("%s/%s/detailed=%v", subcmd, tc.outcome, tc.detailed)
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				args := []string{"run", subcmd, "-f", paths[tc.outcome], "-o", "json"}
+				if tc.detailed {
+					args = append(args, "--detailed-exit-code")
+				}
+				stdout, stderr, exitCode := runScafctl(t, args...)
+				t.Logf("stderr: %s", stderr)
+				assert.Equal(t, tc.wantExit, exitCode,
+					"%s: expected exit %d, got %d", name, tc.wantExit, exitCode)
+
+				// Partial success with the flag on must still emit the full,
+				// parseable action envelope on stdout (output before non-zero exit).
+				if tc.outcome == "partial" && tc.detailed {
+					var decoded map[string]any
+					require.NoError(t, json.Unmarshal([]byte(stdout), &decoded),
+						"stdout must remain parseable JSON on partial success")
+					assert.Equal(t, "partial-success", decoded["status"],
+						"envelope must report the partial-success status")
+					// The exit-code diagnostic must be printed to stderr (routed
+					// through exitWithCode) so the user sees why the run exited 12.
+					assert.Contains(t, stderr, "partial success",
+						"partial-success exit must print a stderr diagnostic")
+				}
+			})
+		}
+	}
+}
+
 // rule fails on an immutable resolver, execution stops before actions run and
 // the immutable value is NOT persisted to state. A subsequent run whose deferred
 // validation passes then locks the value and runs the action.
