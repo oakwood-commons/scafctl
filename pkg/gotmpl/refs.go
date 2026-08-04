@@ -73,7 +73,7 @@ func (s *Service) GetReferences(ctx context.Context, opts TemplateOptions) ([]Te
 	// extension functions (e.g. index, printf, sprig helpers). Without this,
 	// templates that call these functions fail to parse and their variable
 	// references are silently lost.
-	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim, s.templateFuncNames())
+	trees, err := parse.Parse(opts.Name, opts.Content, leftDelim, rightDelim, s.templateFuncNamesWith(opts.DeclaredFuncs))
 	if err != nil {
 		lgr.Error(err, "failed to parse template for reference extraction",
 			"name", opts.Name)
@@ -101,11 +101,18 @@ func (s *Service) GetReferences(ctx context.Context, opts TemplateOptions) ([]Te
 // GetGoTemplateReferences is a convenience function that creates a service and extracts references
 // For one-off reference extraction without needing to create a service
 func GetGoTemplateReferences(templateContent, leftDelim, rightDelim string) ([]TemplateReference, error) {
+	return getGoTemplateReferencesWithFuncs(templateContent, leftDelim, rightDelim, nil)
+}
+
+// getGoTemplateReferencesWithFuncs is GetGoTemplateReferences with additional
+// author-defined function names registered so a template invoking them parses.
+func getGoTemplateReferencesWithFuncs(templateContent, leftDelim, rightDelim string, declaredFuncs []string) ([]TemplateReference, error) {
 	svc := NewService(nil)
 	return svc.GetReferences(context.Background(), TemplateOptions{
-		Content:    templateContent,
-		LeftDelim:  leftDelim,
-		RightDelim: rightDelim,
+		Content:       templateContent,
+		LeftDelim:     leftDelim,
+		RightDelim:    rightDelim,
+		DeclaredFuncs: declaredFuncs,
 	})
 }
 

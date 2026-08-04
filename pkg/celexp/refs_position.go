@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/cel-go/cel"
 )
@@ -69,7 +70,18 @@ func (e Expression) UnderscoreVariableRefs(ctx context.Context) ([]VariableRef, 
 // resolver data, "__actions." for action results) with its byte range within the
 // expression source. The prefix must end in "." (select-style). Semantics --
 // including the Offset == -1 "unpositioned" sentinel -- match UnderscoreVariableRefs.
+//
+// The prefix must end in "." (select-style). This invariant is enforced up
+// front: a non-select prefix (e.g. "__actions" without the trailing dot) would
+// make walkVariablesWithPrefix fall back to identifier-prefix matching and
+// silently miss SelectExpr references like "__actions.build", producing an
+// incomplete reference set that would defeat the rename fail-safe. Returning an
+// error keeps that failure loud rather than silent.
 func (e Expression) PrefixedVariableRefs(ctx context.Context, prefix string) ([]VariableRef, error) {
+	if !strings.HasSuffix(prefix, ".") {
+		return nil, fmt.Errorf("prefix %q must end in \".\" (select-style)", prefix)
+	}
+
 	env, err := NewParseEnv(ctx)
 	if err != nil {
 		return nil, err

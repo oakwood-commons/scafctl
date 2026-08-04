@@ -32,6 +32,8 @@ func CommandRefactor(cliParams *settings.Run, ioStreams *terminal.IOStreams, pat
 
 			  refactor rename resolver <old> <new>   Rename a resolver everywhere
 			  refactor rename action <old> <new>     Rename a workflow action everywhere
+			  refactor rename call <old> <new>       Rename a reusable call everywhere
+			  refactor rename function <old> <new>   Rename an author function everywhere
 		`),
 		SilenceUsage: true,
 	})
@@ -50,11 +52,15 @@ func CommandRename(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 
 			  refactor rename resolver <old> <new>   Rename a resolver
 			  refactor rename action <old> <new>     Rename a workflow action
+			  refactor rename call <old> <new>       Rename a reusable call
+			  refactor rename function <old> <new>   Rename an author function
 		`),
 		SilenceUsage: true,
 	})
 
 	cCmd.AddCommand(CommandRenameResolver(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	cCmd.AddCommand(CommandRenameAction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(CommandRenameCall(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
+	cCmd.AddCommand(CommandRenameFunction(cliParams, ioStreams, fmt.Sprintf("%s/%s", path, cCmd.Use)))
 	return cCmd
 }

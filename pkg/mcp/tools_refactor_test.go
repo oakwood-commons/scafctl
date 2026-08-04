@@ -370,3 +370,166 @@ func TestHandleRenameAction_InvalidName(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &te))
 	assert.Equal(t, ErrCodeValidationError, te.Code)
 }
+
+// callRefactorFixture references call "fetch" from a resolve step and an action.
+const callRefactorFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mcp-refactor-call
+spec:
+  calls:
+    fetch:
+      provider: message
+      inputs:
+        message: fetching
+  resolvers:
+    r1:
+      resolve:
+        with:
+          - call: fetch
+  workflow:
+    actions:
+      a1:
+        call: fetch
+`
+
+// functionRefactorFixture invokes author function "greet" from a function body
+// and a resolver template (explicit resolver ref, no sprig helpers).
+const functionRefactorFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: mcp-refactor-function
+spec:
+  functions:
+    greet:
+      params:
+        - name: who
+      template: "hello {{ .args.who }}"
+    loud:
+      params:
+        - name: msg
+      template: "{{ greet .args.msg }}!"
+  resolvers:
+    env:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+    msg:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              value:
+                tmpl: "{{ greet ._.env }}"
+`
+
+func findCallRefs(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleFindReferences(ctx, request, refindex.SymbolCall, "call")
+	}
+}
+
+func renameCall(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleRename(ctx, request, refindex.SymbolCall, "call")
+	}
+}
+
+func findFunctionRefs(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleFindReferences(ctx, request, refindex.SymbolFunction, "function")
+	}
+}
+
+func renameFunction(srv *Server) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return srv.handleRename(ctx, request, refindex.SymbolFunction, "function")
+	}
+}
+
+func TestHandleFindCallReferences(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, callRefactorFixture)
+
+	_, data := callTool(t, "find_call_references",
+		map[string]any{"file": path, "call": "fetch"}, findCallRefs(srv))
+
+	assert.Equal(t, true, data["defined"])
+	refs, ok := data["references"].([]any)
+	require.True(t, ok)
+	// resolve.with + action = 2 uses.
+	assert.Len(t, refs, 2)
+	for _, r := range refs {
+		assert.Equal(t, "call", r.(map[string]any)["origin"])
+	}
+}
+
+func TestHandleRenameCall(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, callRefactorFixture)
+
+	_, data := callTool(t, "rename_call",
+		map[string]any{"file": path, "old_name": "fetch", "new_name": "download"}, renameCall(srv))
+
+	assert.Equal(t, "download", data["newName"])
+	occ, ok := data["occurrences"].([]any)
+	require.True(t, ok)
+	// definition + 2 uses = 3.
+	assert.Len(t, occ, 3)
+	content, _ := data["content"].(string)
+	assert.Contains(t, content, "download:")
+	assert.Contains(t, content, "- call: download")
+	// Unrelated literal preserved.
+	assert.Contains(t, content, "message: fetching")
+}
+
+func TestHandleFindFunctionReferences(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, functionRefactorFixture)
+
+	_, data := callTool(t, "find_function_references",
+		map[string]any{"file": path, "function": "greet"}, findFunctionRefs(srv))
+
+	assert.Equal(t, true, data["defined"])
+	refs, ok := data["references"].([]any)
+	require.True(t, ok)
+	// loud's body + msg template = 2 invocations.
+	assert.Len(t, refs, 2)
+	for _, r := range refs {
+		assert.Equal(t, "function", r.(map[string]any)["origin"])
+	}
+}
+
+func TestHandleRenameFunction(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, functionRefactorFixture)
+
+	_, data := callTool(t, "rename_function",
+		map[string]any{"file": path, "old_name": "greet", "new_name": "welcome"}, renameFunction(srv))
+
+	assert.Equal(t, "welcome", data["newName"])
+	occ, ok := data["occurrences"].([]any)
+	require.True(t, ok)
+	// definition + 2 invocations = 3.
+	assert.Len(t, occ, 3)
+	content, _ := data["content"].(string)
+	assert.Contains(t, content, "welcome:")
+	assert.Contains(t, content, "{{ welcome .args.msg }}")
+	assert.Contains(t, content, "{{ welcome ._.env }}")
+}
+
+func TestHandleRenameFunction_InvalidName(t *testing.T) {
+	srv, _ := NewServer(WithServerVersion("test"))
+	path := writeRefactorFixture(t, functionRefactorFixture)
+
+	result, _ := callTool(t, "rename_function",
+		map[string]any{"file": path, "old_name": "greet", "new_name": "1bad"}, renameFunction(srv))
+	assert.True(t, result.IsError)
+	var te struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(extractText(t, result)), &te))
+	assert.Equal(t, ErrCodeValidationError, te.Code)
+}

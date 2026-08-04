@@ -6,9 +6,10 @@ weight: 46
 # Refactoring Tutorial
 
 This tutorial covers `scafctl refactor`, which applies source-preserving edits to
-a solution file. It can rename a **resolver** (`refactor rename resolver`) or a
-**workflow action** (`refactor rename action`), rewriting every reference to the
-renamed symbol.
+a solution file. It can rename a **resolver** (`refactor rename resolver`), a
+**workflow action** (`refactor rename action`), a reusable **call**
+(`refactor rename call`), or an author-defined **function**
+(`refactor rename function`), rewriting every reference to the renamed symbol.
 
 ## Overview
 
@@ -164,6 +165,42 @@ its name (and vice versa). Every other guarantee -- byte-exact edits,
 comment/formatting preservation, and the all-or-nothing fail-safe below --
 applies identically to actions.
 
+## Renaming calls
+
+`refactor rename call <old> <new>` renames a reusable call defined under
+`spec.calls` and rewrites every `call:` reference to it -- in resolver
+`with`/`transform`/`validate` steps and in workflow actions -- plus the
+definition key. Calls are only referenced structurally through the `call:`
+field, never from CEL or templates, so this is the simplest rename.
+
+```bash
+scafctl refactor rename call fetch download --dry-run
+scafctl refactor rename call fetch download
+```
+
+The rename is kind-scoped: a resolver or action that happens to share the call's
+name is not touched. See `examples/refactor/call-function-solution.yaml`, where
+`fetch` is referenced from a resolve step and a workflow action.
+
+## Renaming functions
+
+`refactor rename function <old> <new>` renames an author-defined function under
+`spec.functions` and rewrites every `{{ name ... }}` invocation of it across all
+templates -- including invocations inside **other function bodies** -- plus the
+definition key.
+
+```bash
+scafctl refactor rename function greet salute --dry-run
+scafctl refactor rename function greet salute
+```
+
+Only author-defined functions are renamed. Built-in and extension helpers
+(`printf`, `upper`, sprig functions, ...) that share the new name are left
+untouched, because the rename is scoped to the names declared in
+`spec.functions`. See `examples/refactor/call-function-solution.yaml`, where
+`greet` is invoked from a resolver template and from inside the `loud` function's
+body.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -179,6 +216,11 @@ applies identically to actions.
 - `refactor rename action <old> <new>` does the same for a workflow action
   (rewriting `dependsOn`, CEL `__actions.name`, and template `.__actions.name`
   uses); the action's `alias` is left unchanged.
+- `refactor rename call <old> <new>` renames a reusable call (`spec.calls`),
+  rewriting every `call:` reference.
+- `refactor rename function <old> <new>` renames an author-defined function
+  (`spec.functions`), rewriting every `{{ name ... }}` invocation (including in
+  other function bodies); built-in/extension helpers are left unchanged.
 - Use `--dry-run` to preview; use `-f` to target a specific file.
 - The rename refuses rather than performing a partial, solution-breaking rewrite.
 

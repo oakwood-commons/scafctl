@@ -168,8 +168,8 @@ type UnscopedResolverRef struct {
 // reference that must be treated as unresolved (so a rename fails safe rather
 // than silently missing it). Results are de-duplicated per (name, explicit)
 // pair, preserving first-seen order. Parse errors yield a nil slice and error.
-func UnscopedResolverRefs(template, leftDelim, rightDelim string) ([]UnscopedResolverRef, error) {
-	refs, err := GetGoTemplateReferences(template, leftDelim, rightDelim)
+func UnscopedResolverRefs(template, leftDelim, rightDelim string, declaredFuncs []string) ([]UnscopedResolverRef, error) {
+	refs, err := getGoTemplateReferencesWithFuncs(template, leftDelim, rightDelim, declaredFuncs)
 	if err != nil {
 		return nil, err
 	}
@@ -270,8 +270,8 @@ const actionRefPathPrefix = "." + actionNamespace + "."
 // (unscoped) in a Go template, de-duplicated in first-seen order. It is the
 // authoritative set a positioned action-reference consumer reconciles against so
 // a rename fails safe. Parse errors yield a nil slice and error.
-func UnscopedActionRefs(template, leftDelim, rightDelim string) ([]string, error) {
-	refs, err := GetGoTemplateReferences(template, leftDelim, rightDelim)
+func UnscopedActionRefs(template, leftDelim, rightDelim string, declaredFuncs []string) ([]string, error) {
+	refs, err := getGoTemplateReferencesWithFuncs(template, leftDelim, rightDelim, declaredFuncs)
 	if err != nil {
 		return nil, err
 	}

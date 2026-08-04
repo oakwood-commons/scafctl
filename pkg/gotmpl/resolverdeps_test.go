@@ -244,7 +244,7 @@ func TestUnscopedResolverRefs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := UnscopedResolverRefs(tt.tmpl, "", "")
+			got, err := UnscopedResolverRefs(tt.tmpl, "", "", nil)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -252,7 +252,7 @@ func TestUnscopedResolverRefs(t *testing.T) {
 }
 
 func TestUnscopedResolverRefs_ParseError(t *testing.T) {
-	_, err := UnscopedResolverRefs(`{{ .x `, "", "")
+	_, err := UnscopedResolverRefs(`{{ .x `, "", "", nil)
 	assert.Error(t, err)
 }
 
@@ -290,7 +290,7 @@ func TestUnscopedActionRefs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := UnscopedActionRefs(tt.tmpl, "", "")
+			got, err := UnscopedActionRefs(tt.tmpl, "", "", nil)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -298,6 +298,6 @@ func TestUnscopedActionRefs(t *testing.T) {
 }
 
 func TestUnscopedActionRefs_ParseError(t *testing.T) {
-	_, err := UnscopedActionRefs(`{{ .__actions.x `, "", "")
+	_, err := UnscopedActionRefs(`{{ .__actions.x `, "", "", nil)
 	assert.Error(t, err)
 }

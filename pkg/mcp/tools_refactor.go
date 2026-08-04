@@ -44,6 +44,34 @@ func (s *Server) registerRefactorTools() {
 	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return s.handleRename(ctx, request, refindex.SymbolAction, "action")
 	})
+
+	s.addTool(newFindReferencesTool(
+		"find_call_references", "Find Call References", "call",
+		"Find every reference to a reusable call (spec.calls) in a solution file -- its definition and all 'call:' uses in resolver with/transform/validate steps and workflow actions -- with source locations. Calls are only referenced structurally via the 'call:' field, never from CEL or templates. Use before editing to see impact.",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleFindReferences(ctx, request, refindex.SymbolCall, "call")
+	})
+
+	s.addTool(newRenameTool(
+		"rename_call", "Rename Call", "call",
+		"Rename a reusable call (spec.calls) and every 'call:' reference to it in a solution file, returning the rewritten content with comments and formatting preserved (only the affected identifiers change). Refuses without changes if the new name is invalid, collides with an existing call, or any reference cannot be located byte-exact -- so it never produces a partial, broken rename. Returns the new content for you to write back; operates on a single solution file (not composed/bundled solutions).",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleRename(ctx, request, refindex.SymbolCall, "call")
+	})
+
+	s.addTool(newFindReferencesTool(
+		"find_function_references", "Find Function References", "function",
+		"Find every reference to an author-defined function (spec.functions) in a solution file -- its definition and all '{{ name ... }}' invocations across templates (including inside other function bodies) -- with source locations. Built-in and extension functions that share the name are not reported. Use before editing to see impact.",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleFindReferences(ctx, request, refindex.SymbolFunction, "function")
+	})
+
+	s.addTool(newRenameTool(
+		"rename_function", "Rename Function", "function",
+		"Rename an author-defined function (spec.functions) and every '{{ name ... }}' invocation of it across templates (including other function bodies) in a solution file, returning the rewritten content with comments and formatting preserved (only the affected identifiers change). Built-in and extension functions that share the name are not touched. Refuses without changes if the new name is invalid, collides with an existing function, or any invocation cannot be located byte-exact -- so it never produces a partial, broken rename. Returns the new content for you to write back; operates on a single solution file (not composed/bundled solutions).",
+	), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return s.handleRename(ctx, request, refindex.SymbolFunction, "function")
+	})
 }
 
 // newFindReferencesTool builds a find-references tool for a given symbol kind.
@@ -170,8 +198,15 @@ func (s *Server) handleRename(_ context.Context, request mcp.CallToolRequest, ki
 	renameResult, err := refactor.RenameSymbol(sol, kind, oldName, newName)
 	if err != nil {
 		relatedTool := "find_resolver_references"
-		if kind == refindex.SymbolAction {
+		switch kind {
+		case refindex.SymbolResolver:
+			relatedTool = "find_resolver_references"
+		case refindex.SymbolAction:
 			relatedTool = "find_action_references"
+		case refindex.SymbolCall:
+			relatedTool = "find_call_references"
+		case refindex.SymbolFunction:
+			relatedTool = "find_function_references"
 		}
 		return newStructuredError(ErrCodeValidationError, err.Error(),
 			WithSuggestion(fmt.Sprintf("Fix the new name, resolve the collision, or make ambiguous %s references explicit, then retry", symbolLabel)),
