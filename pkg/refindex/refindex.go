@@ -335,6 +335,12 @@ func (b *builder) addCELRefs(basePath string, expr *celexp.Expression) {
 	attempted := make(map[string]bool, len(refs))
 	for _, r := range refs {
 		attempted[r.Name] = true
+		if r.Offset < 0 {
+			// The occurrence exists but could not be positioned; treat it as
+			// unlocatable so a rename of this name fails safe.
+			b.markUnresolved(r.Name)
+			continue
+		}
 		b.emitAt(start+r.Offset, r.Name, OriginCEL, false)
 	}
 	// Cross-check: any authoritative underscore variable that the positioned

@@ -181,3 +181,15 @@ func BenchmarkUnderscoreVariableRefs(b *testing.B) {
 		_, _ = expr.UnderscoreVariableRefs(ctx)
 	}
 }
+
+func TestUnderscoreVariableRefs_UnpositionableIsReportedNotDropped(t *testing.T) {
+	// A bracket key whose decoded value differs from the source (escaped quote)
+	// cannot be located byte-exact. It must be reported with Offset -1 (so a
+	// rename can fail safe) rather than silently dropped.
+	ctx := context.Background()
+	refs, err := Expression(`_["a\"b"]`).UnderscoreVariableRefs(ctx)
+	require.NoError(t, err)
+	require.Len(t, refs, 1)
+	assert.Equal(t, `a"b`, refs[0].Name)
+	assert.Equal(t, -1, refs[0].Offset, "unpositionable occurrence must be reported with Offset -1")
+}

@@ -22,10 +22,11 @@ type VariableRef struct {
 	// Name is the referenced name with the "_." (or "_[\"...\"]") prefix removed.
 	Name string
 
-	// Offset is the 0-based BYTE offset of Name within the expression source.
-	// It is a byte offset (not a rune offset) so callers can compose it directly
-	// with byte-based file positions; CEL's internal rune offsets are converted
-	// here.
+	// Offset is the 0-based BYTE offset of Name within the expression source, or
+	// -1 when the occurrence could not be positioned (its exact bytes could not
+	// be located, e.g. a bracket key whose decoded value differs from the source
+	// due to escapes). A -1 offset signals to consumers that the occurrence
+	// exists but must be treated as unpositioned rather than silently dropped.
 	Offset int
 
 	// Len is the byte length of Name (== len(Name)). Offset+Len is the exclusive
@@ -43,6 +44,10 @@ func (r VariableRef) End() int { return r.Offset + r.Len }
 // UnderscoreVariableRefs parses the expression and returns every "_"-scoped
 // reference occurrence with its byte range within the expression source, in
 // source order (by offset).
+//
+// Every occurrence is returned: one that could not be located byte-exact is
+// reported with Offset == -1 (unpositioned) rather than dropped, so consumers
+// such as rename can fail safe instead of silently missing a reference.
 //
 // It uses the CEL AST to decide WHICH names are genuine "_"-scoped references
 // (so a name that only appears inside a string literal is not matched), then an
@@ -82,8 +87,11 @@ func (e Expression) UnderscoreVariableRefs(ctx context.Context) ([]VariableRef, 
 		anchor := int(positions[id])
 		runeOff := findIdentNear(exprRunes, []rune(name), anchor)
 		if runeOff < 0 {
-			// Could not locate the occurrence (should not happen for valid
-			// identifier references); skip rather than emit a wrong range.
+			// The occurrence exists but its exact bytes could not be located
+			// (e.g. a bracket key with escapes). Report it as unpositioned
+			// (Offset -1) instead of dropping it, so a rename fails safe rather
+			// than silently missing this reference.
+			refs = append(refs, VariableRef{Name: name, Offset: -1, Len: len(name), Optional: optional})
 			return
 		}
 		byteOff := len(string(exprRunes[:runeOff]))

@@ -165,3 +165,24 @@ func TestCommandRefactor_EmbedderBinaryName(t *testing.T) {
 	assert.Contains(t, resolver.Example, "mycli refactor rename resolver")
 	assert.NotContains(t, resolver.Example, "scafctl refactor rename resolver")
 }
+
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("original"), 0o640))
+
+	require.NoError(t, writeFileAtomic(path, []byte("replaced content"), 0o640))
+
+	got, err := os.ReadFile(path) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Equal(t, "replaced content", string(got))
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), fi.Mode().Perm(), "mode preserved")
+
+	// No leftover temp files in the directory.
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "no temp files left behind")
+}

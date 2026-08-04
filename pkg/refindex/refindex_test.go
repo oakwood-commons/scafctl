@@ -459,3 +459,26 @@ spec:
 	assert.Positive(t, idx.UnresolvedFor("environment"))
 	assert.Positive(t, idx.UnresolvedFor("anything-at-all"))
 }
+
+func TestBuild_UnpositionableCELRefIsUnresolved(t *testing.T) {
+	// A CEL bracket key with an escaped quote cannot be positioned byte-exact;
+	// it must be recorded as unresolved (attributed to that name) rather than
+	// silently dropped, so a rename of that name fails safe.
+	y := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: unpositionable
+spec:
+  resolvers:
+    weird:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value:
+                expr: '_["a\"b"]'
+`
+	idx, _, _ := buildFixture(t, y)
+	assert.Positive(t, idx.Unresolved())
+	assert.Positive(t, idx.UnresolvedFor(`a"b`))
+}

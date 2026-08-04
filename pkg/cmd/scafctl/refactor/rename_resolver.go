@@ -122,12 +122,43 @@ func runRenameResolver(ctx context.Context, opts *renameResolverOptions, oldName
 	if fi, statErr := os.Stat(resolvedPath); statErr == nil {
 		mode = fi.Mode().Perm()
 	}
-	if err := os.WriteFile(resolvedPath, newContent, mode); err != nil { //nolint:gosec // path resolved from user-provided solution reference
+	if err := writeFileAtomic(resolvedPath, newContent, mode); err != nil {
 		return fail(w, exitcode.GeneralError, fmt.Errorf("failed to write %s: %w", resolvedPath, err))
 	}
 
 	if w != nil {
 		w.Successf("Renamed resolver %q to %q (%d occurrence(s)) in %s", oldName, newName, len(result.Edits), resolvedPath)
+	}
+	return nil
+}
+
+// writeFileAtomic writes data to path atomically by writing to a temporary file
+// in the same directory and renaming it over path. os.Rename is atomic on the
+// same filesystem, so a crash mid-write cannot leave the solution file
+// truncated or partially written.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*") //nolint:gosec // temp file created in the target's own directory
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup if we return before a successful rename; a no-op once
+	// the temp file has been renamed away.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // path resolved from user-provided solution reference
+		return err
 	}
 	return nil
 }
