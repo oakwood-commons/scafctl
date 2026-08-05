@@ -52,6 +52,7 @@ linters:
       - third_party$
       - builtin$
       - examples$
+      - node_modules
     rules:
       # Exclude some linters from running on tests files.
       - path: _test\.go
@@ -139,3 +140,4 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+      - node_modules

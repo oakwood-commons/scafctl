@@ -6,7 +6,7 @@ powered by the `scafctl lsp` language server.
 
 ## Features
 
-For `solution.yaml` / `scafctl.yaml` files:
+For scafctl solution and action files:
 
 - **Diagnostics** -- lint findings appear inline as you edit, matching `scafctl lint`.
 - **Go to Definition** -- jump from a resolver reference to its definition.
@@ -17,6 +17,27 @@ For `solution.yaml` / `scafctl.yaml` files:
 
 The feature set grows automatically as the language server gains capabilities --
 the extension is a thin client.
+
+### Which files get language features
+
+The extension attaches the language server to exactly the files the `scafctl`
+binary auto-discovers -- it queries the binary at startup (via
+`scafctl lsp document-selectors`) instead of hardcoding a list, so editor
+targeting never drifts from CLI discovery. Out of the box this covers, in any
+folder:
+
+- `solution.yaml` / `solution.yml` / `solution.json`
+- `<binary>.yaml` / `<binary>.yml` / `<binary>.json` (e.g. `scafctl.yaml`; for an
+  embedding CLI this is that CLI's name)
+- `taskfile.yaml` / `taskfile.yml`
+- `actions.yaml` / `actions.yml`
+
+JSON solution files are attached as JSON documents (not YAML), so language
+features work regardless of the on-disk format.
+
+For a differently named file, either **rename it to a standard name** (simplest
+-- this also enables `scafctl` CLI auto-discovery), or add a glob to
+`scafctl.solutionFilePatterns` (see Settings).
 
 ## Requirements
 
@@ -31,7 +52,37 @@ Settings; it does not download anything.
 | Setting | Default | Description |
 | --- | --- | --- |
 | `scafctl.serverPath` | `""` | Path to the `scafctl` executable. Empty resolves `scafctl` from `PATH`. |
+| `scafctl.solutionFilePatterns` | `[]` | Extra glob patterns for solution files with non-standard names (e.g. `**/my-solution.yaml`). By default these **extend** the auto-discovered set. |
+| `scafctl.solutionFilePatterns.replaceDefaults` | `false` | When `true`, the patterns above **replace** the auto-discovered defaults instead of extending them. |
+| `scafctl.language.enable` | `false` | Opt in to a dedicated `scafctl` language mode (see below). |
 | `scafctl.trace.server` | `off` | Trace LSP traffic (`off` / `messages` / `verbose`). |
+
+Changing any of these recreates the language client automatically -- no window
+reload needed.
+
+Server logs and (when `scafctl.trace.server` is `messages`/`verbose`) JSON-RPC
+traces appear in the **scafctl** Output channel; it is revealed automatically if
+the server reports an error.
+
+### The `scafctl` language mode (opt-in)
+
+By default, solution files keep their built-in `yaml` / `json` language. This is
+deliberate: it preserves other extensions' features on those files -- most
+notably the Red Hat YAML extension's schema validation, autocompletion, and
+formatting -- while the scafctl language server adds its diagnostics and
+navigation on top. This matches how tools like GitHub Actions layer over YAML.
+
+Enabling `scafctl.language.enable` contributes a dedicated `scafctl` language
+(YAML syntax highlighting, scafctl diagnostics). It does **not** re-associate
+files automatically; you opt a file in by setting its language mode to `scafctl`
+(or via `files.associations`). Note that switching a file to the `scafctl`
+language turns off the YAML/JSON extensions' schema features for that file, so
+leave this off unless you specifically want it.
+
+> Non-standard file names only receive features once the extension is active. It
+> activates when a workspace contains a standard solution file; if your workspace
+> has only custom-named files, run **scafctl: Restart Language Server** once to
+> activate it.
 
 ## Commands
 

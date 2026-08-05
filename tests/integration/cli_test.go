@@ -13821,6 +13821,27 @@ func TestIntegration_LspHelp(t *testing.T) {
 	assert.Contains(t, stdout, "LSP")
 }
 
+func TestIntegration_LspDocumentSelectors(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "lsp", "document-selectors", "-o", "json")
+	require.Equal(t, 0, exitCode)
+
+	var got struct {
+		BinaryName string   `json:"binaryName"`
+		YAMLNames  []string `json:"yamlNames"`
+		JSONNames  []string `json:"jsonNames"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "output must be valid JSON: %s", stdout)
+
+	// The full recognized set the extension previously missed must be reported.
+	assert.Contains(t, got.YAMLNames, "solution.yaml")
+	assert.Contains(t, got.YAMLNames, "taskfile.yaml")
+	assert.Contains(t, got.YAMLNames, "actions.yaml")
+	// JSON solutions are routed to jsonNames, never yamlNames.
+	assert.Contains(t, got.JSONNames, "solution.json")
+	assert.NotContains(t, got.YAMLNames, "solution.json")
+}
+
 func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
 	t.Parallel()
 

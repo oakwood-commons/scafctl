@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { basename } from 'node:path';
 
 /** DefaultServerCommand is the command used when no explicit path is configured. */
 export const DefaultServerCommand = 'scafctl';
@@ -10,6 +11,17 @@ export const DefaultServerCommand = 'scafctl';
 export function resolveCommand(configuredPath: string | undefined): string {
   const trimmed = (configuredPath ?? '').trim();
   return trimmed.length > 0 ? trimmed : DefaultServerCommand;
+}
+
+/**
+ * binaryNameFromCommand derives a CLI binary name from a resolved command path
+ * (e.g. `/opt/mycli` -> `mycli`, `mycli.exe` -> `mycli`, `scafctl` -> `scafctl`).
+ * Used as the fallback binary name when the server cannot report its own
+ * recognized files, so an embedder's `<binary>.yaml` still matches.
+ */
+export function binaryNameFromCommand(command: string): string {
+  const name = basename(command.trim()).replace(/\.exe$/i, '');
+  return name.length > 0 ? name : DefaultServerCommand;
 }
 
 /**

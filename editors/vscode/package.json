@@ -29,7 +29,7 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:**/{solution,scafctl}.{yaml,yml}",
+    "workspaceContains:**/{solution,scafctl,taskfile,actions}.{yaml,yml,json}",
     "onCommand:scafctl.restartServer"
   ],
   "contributes": {
@@ -39,6 +39,23 @@
         "title": "scafctl: Restart Language Server"
       }
     ],
+    "languages": [
+      {
+        "id": "scafctl",
+        "aliases": [
+          "scafctl",
+          "scafctl Solution"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "scafctl",
+        "scopeName": "source.scafctl",
+        "path": "./syntaxes/scafctl.tmLanguage.json"
+      }
+    ],
     "configuration": {
       "title": "scafctl",
       "properties": {
@@ -46,6 +63,24 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Path to the `scafctl` executable used as the language server. When empty, `scafctl` is resolved from your `PATH`."
+        },
+        "scafctl.solutionFilePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Additional glob patterns for solution files with non-standard names (e.g. `**/my-solution.yaml`). By default these **extend** the file set the `scafctl` binary auto-discovers (`solution.*`, `<binary>.*`, `taskfile.*`, `actions.*`, plus `.json` variants). Set `#scafctl.solutionFilePatterns.replaceDefaults#` to replace the discovered defaults instead."
+        },
+        "scafctl.solutionFilePatterns.replaceDefaults": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When `true`, `#scafctl.solutionFilePatterns#` **replaces** the auto-discovered default solution file set instead of extending it. Leave `false` (recommended) to keep language features on the standard solution files."
+        },
+        "scafctl.language.enable": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable the dedicated `scafctl` language mode. When `false` (default, recommended), solution files stay associated with the built-in `yaml`/`json` languages, preserving other extensions' schema validation, autocompletion, and formatting (e.g. the Red Hat YAML extension). Enable this only if you want to set a file's language to `scafctl` explicitly; it does not change file associations automatically."
         },
         "scafctl.trace.server": {
           "type": "string",
@@ -66,7 +101,7 @@
     "watch": "node esbuild.js --watch",
     "check": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "node --import tsx --test src/serverResolution.test.ts",
+    "test": "node --import tsx --test src/serverResolution.test.ts src/documentSelectors.test.ts",
     "package": "vsce package --no-dependencies -o scafctl.vsix",
     "publish:vsce": "vsce publish --no-dependencies --packagePath scafctl.vsix",
     "publish:ovsx": "ovsx publish scafctl.vsix"

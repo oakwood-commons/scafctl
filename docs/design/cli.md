@@ -1144,7 +1144,22 @@ reusing the same positioned reference index (`refindex`) and rename engine
   is surfaced to the editor rather than a partial rewrite being applied.
 
 An editor client configures the server by pointing at the `scafctl lsp` command
-and associating it with the solution file language (YAML).
+and attaching it to solution files. To keep editor targeting in lockstep with
+CLI auto-discovery instead of hardcoding a file list, the server reports the
+exact set of file names it recognizes:
+
+~~~bash
+# Machine-readable contract consumed by editor integrations
+scafctl lsp document-selectors -o json
+~~~
+
+This prints the auto-discovered solution/action file names partitioned by editor
+language, plus the effective binary name -- covering `solution.{yaml,yml,json}`,
+`<binary>.{yaml,yml,json}`, `taskfile.{yaml,yml}`, and `actions.{yaml,yml}`.
+JSON solutions are reported separately from YAML so the client attaches them as
+JSON documents. The bundled VS Code extension queries this at startup to build
+its document selector dynamically (including any embedder binary name), rather
+than a hardcoded, drift-prone glob.
 
 ---
 
