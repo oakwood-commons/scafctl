@@ -6,6 +6,7 @@ package lint
 import (
 	"testing"
 
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/stretchr/testify/assert"
@@ -57,18 +58,18 @@ func applyAndValidate(t *testing.T, sol *solution.Solution, edits []refactor.Tex
 
 func TestQuickFixFor_UnsupportedRule(t *testing.T) {
 	sol := loadQuickFixSolution(t, unusedResolverFixture)
-	edits, ok := QuickFixFor(sol, &Finding{RuleName: "some-other-rule", Location: "resolvers.x"})
+	edits, ok := QuickFixFor(sol, &Finding{RuleName: "some-other-rule", Location: "resolvers.x"}, nil)
 	assert.False(t, ok)
 	assert.Nil(t, edits)
 }
 
 func TestQuickFixFor_NilInputs(t *testing.T) {
-	edits, ok := QuickFixFor(nil, &Finding{RuleName: "unused-resolver"})
+	edits, ok := QuickFixFor(nil, &Finding{RuleName: "unused-resolver"}, nil)
 	assert.False(t, ok)
 	assert.Nil(t, edits)
 
 	sol := loadQuickFixSolution(t, unusedResolverFixture)
-	edits, ok = QuickFixFor(sol, nil)
+	edits, ok = QuickFixFor(sol, nil, nil)
 	assert.False(t, ok)
 	assert.Nil(t, edits)
 }
@@ -102,7 +103,7 @@ func TestQuickFixFor_DeprecatedField_ResolveContinue(t *testing.T) {
 	f := findingByRule(t, sol, "deprecated-field")
 	require.Equal(t, "resolvers.a.resolve.with[0].onError", f.Location)
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	require.Len(t, edits, 1)
 
@@ -130,7 +131,7 @@ func TestQuickFixFor_DeprecatedField_ActionFail(t *testing.T) {
 	f := findingByRule(t, sol, "deprecated-field")
 	require.Equal(t, "workflow.actions.deploy.onError", f.Location)
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	out := applyAndValidate(t, sol, edits)
 	assert.Contains(t, out, "continueOnError: false")
@@ -159,7 +160,7 @@ func TestQuickFixFor_DeprecatedField_ForEachContinue(t *testing.T) {
 	f := findingByRule(t, sol, "deprecated-field")
 	require.Equal(t, "workflow.actions.deploy.forEach.onError", f.Location)
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	out := applyAndValidate(t, sol, edits)
 	assert.Contains(t, out, "continueOnError: true")
@@ -195,7 +196,7 @@ func TestQuickFixFor_RedundantDependsOn_All(t *testing.T) {
 	f := findingByRule(t, sol, "redundant-depends-on")
 	require.Equal(t, "resolvers.app.dependsOn", f.Location)
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	out := applyAndValidate(t, sol, edits)
 	assert.NotContains(t, out, "dependsOn:", "the whole dependsOn entry is removed")
@@ -236,7 +237,7 @@ func TestQuickFixFor_RedundantDependsOn_Partial(t *testing.T) {
 	sol := loadQuickFixSolution(t, redundantPartialFixture)
 	f := findingByRule(t, sol, "redundant-depends-on")
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	// Only 'env' is inferred (via expr:), 'other' is a genuine ordering dep.
 	require.Len(t, edits, 1)
@@ -244,6 +245,97 @@ func TestQuickFixFor_RedundantDependsOn_Partial(t *testing.T) {
 	assert.Contains(t, out, "dependsOn:", "the list survives")
 	assert.NotContains(t, out, "- env")
 	assert.Contains(t, out, "- other", "the non-redundant entry survives")
+}
+
+// redundantDivergentFixture exercises a provider whose custom dependency
+// extraction diverges from generic extraction: resolver "app" declares
+// dependsOn [seed, extra] but references both only through the "divergent"
+// provider's inputs. Provider-aware lint (used to produce the finding) infers
+// only "seed" as redundant, leaving "extra" as a genuine ordering dependency.
+// A generic (nil-lookup) recompute would infer BOTH and delete the whole
+// dependsOn block -- removing the non-redundant "extra". The fix must keep the
+// quick fix in lockstep with the finding by using the same provider lookup.
+const redundantDivergentFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: divergent
+spec:
+  resolvers:
+    seed:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+    extra:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: x
+    app:
+      dependsOn:
+        - seed
+        - extra
+      resolve:
+        with:
+          - provider: divergent
+            inputs:
+              a:
+                expr: _.seed
+              b:
+                expr: _.extra
+  workflow:
+    actions:
+      show:
+        provider: message
+        inputs:
+          message:
+            expr: _.app
+`
+
+// TestQuickFixFor_RedundantDependsOn_ProviderLookupLockstep is a regression test
+// for the quick fix removing a dependsOn entry the finding did not flag. Without
+// threading the registry into QuickFixFor, the redundant set was recomputed with
+// a nil (generic) lookup that diverged from the provider-aware finding, deleting
+// the non-redundant "extra" entry (and, since that made all entries "redundant",
+// the whole dependsOn block). With the registry threaded through, the recompute
+// matches the finding: only "seed" is removed.
+func TestQuickFixFor_RedundantDependsOn_ProviderLookupLockstep(t *testing.T) {
+	fp := newFakeProvider("divergent", nil)
+	fp.desc.ExtractDependencies = func(_ map[string]any) []string {
+		// Report only "seed"; "extra" is intentionally NOT inferred so it must
+		// survive as a genuine ordering dependency.
+		return []string{"seed"}
+	}
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(fp))
+	require.NoError(t, reg.Register(newFakeProvider("parameter", nil)))
+	require.NoError(t, reg.Register(newFakeProvider("message", nil)))
+
+	sol := loadQuickFixSolution(t, redundantDivergentFixture)
+
+	// The finding is produced with the provider registry (as the LSP does).
+	result := Solution(sol, "solution.yaml", reg)
+	var f *Finding
+	for _, ff := range result.Findings {
+		if ff.RuleName == "redundant-depends-on" {
+			f = ff
+		}
+	}
+	require.NotNil(t, f, "expected a redundant-depends-on finding; got %v", ruleNames(result.Findings))
+	require.Contains(t, f.Message, "seed")
+	require.NotContains(t, f.Message, "extra", "provider-aware lint must not flag 'extra'")
+
+	// The quick fix must use the SAME registry lookup, removing only "seed".
+	edits, ok := QuickFixFor(sol, f, reg)
+	require.True(t, ok)
+	require.Len(t, edits, 1, "only the single redundant entry is removed")
+
+	out := applyAndValidate(t, sol, edits)
+	assert.Contains(t, out, "dependsOn:", "the dependsOn block survives")
+	assert.NotContains(t, out, "- seed", "the redundant 'seed' entry is removed")
+	assert.Contains(t, out, "- extra", "the non-redundant 'extra' ordering dependency survives")
 }
 
 // ── unused-resolver ──────────────────────────────────────────────────────────
@@ -280,7 +372,7 @@ func TestQuickFixFor_UnusedResolver(t *testing.T) {
 	f := findingByRule(t, sol, "unused-resolver")
 	require.Equal(t, "resolvers.orphan", f.Location)
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	out := applyAndValidate(t, sol, edits)
 	assert.NotContains(t, out, "orphan:", "the orphan resolver is removed")
@@ -314,7 +406,7 @@ func TestQuickFixFor_UnusedResolver_SoleResolverRemovesParent(t *testing.T) {
 	f := findingByRule(t, sol, "unused-resolver")
 	require.Equal(t, "resolvers.orphan", f.Location)
 
-	edits, ok := QuickFixFor(sol, f)
+	edits, ok := QuickFixFor(sol, f, nil)
 	require.True(t, ok)
 	out := applyAndValidate(t, sol, edits)
 

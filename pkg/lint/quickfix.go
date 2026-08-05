@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/refindex"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -22,6 +23,12 @@ import (
 // edits into a WorkspaceEdit rather than re-deriving fixes, so the fix stays in
 // lockstep with the lint rules that produce the findings.
 //
+// registry is the same provider registry used to produce f (may be nil). It is
+// threaded into the redundant-dependsOn fix so the redundant set is recomputed
+// with the identical provider-aware dependency extraction the lint rule used --
+// keeping the removal in exact lockstep with the finding rather than a possibly
+// divergent generic recompute.
+//
 // Supported rules: "deprecated-field" (replace the deprecated key with its
 // tagged replacement, translating the value), "redundant-depends-on" (remove the
 // redundant dependsOn entry or entries), and "unused-resolver" (remove the whole
@@ -29,7 +36,7 @@ import (
 // deterministically from sol -- yields (nil, false). It never panics on odd
 // input: a fix that cannot be built safely is reported as "no fix" rather than a
 // broken edit.
-func QuickFixFor(sol *solution.Solution, f *Finding) (edits []refactor.TextEdit, ok bool) {
+func QuickFixFor(sol *solution.Solution, f *Finding, registry *provider.Registry) (edits []refactor.TextEdit, ok bool) {
 	if sol == nil || f == nil {
 		return nil, false
 	}
@@ -42,7 +49,7 @@ func QuickFixFor(sol *solution.Solution, f *Finding) (edits []refactor.TextEdit,
 	case "deprecated-field":
 		return quickFixDeprecatedField(raw, f)
 	case "redundant-depends-on":
-		return quickFixRedundantDependsOn(sol, raw, f)
+		return quickFixRedundantDependsOn(sol, raw, f, registry)
 	case "unused-resolver":
 		return quickFixUnusedResolver(sol, raw, f)
 	default:
@@ -135,12 +142,11 @@ func translateOnErrorValue(v string) (string, bool) {
 }
 
 // quickFixRedundantDependsOn recomputes the redundant dependsOn set from sol (the
-// same way lintRedundantDependsOn does, tolerating a nil registry/lookup) and
-// builds the removal edits: remove the whole dependsOn entry when every listed
-// dependency is redundant, or remove just the redundant list elements otherwise.
-// It returns (nil,false) when nothing is actually redundant, so a stale finding
-// never yields an empty edit.
-func quickFixRedundantDependsOn(sol *solution.Solution, raw []byte, f *Finding) ([]refactor.TextEdit, bool) {
+// same way lintRedundantDependsOn does) and builds the removal edits: remove the
+// whole dependsOn entry when every listed dependency is redundant, or remove just
+// the redundant list elements otherwise. It returns (nil,false) when nothing is
+// actually redundant, so a stale finding never yields an empty edit.
+func quickFixRedundantDependsOn(sol *solution.Solution, raw []byte, f *Finding, registry *provider.Registry) ([]refactor.TextEdit, bool) {
 	name := resolverNameFromDependsOnLoc(f.Location)
 	if name == "" {
 		return nil, false
@@ -150,14 +156,18 @@ func quickFixRedundantDependsOn(sol *solution.Solution, raw []byte, f *Finding) 
 		return nil, false
 	}
 
-	// Recompute the redundant set from the solution. A nil lookup performs only
-	// generic ValueRef-based extraction; the lint rule additionally consults the
-	// registry's per-provider ExtractDependencies. For all built-in providers the
-	// two converge, so the redundant set matches the finding. A plugin provider
-	// with custom dependency extraction could diverge; if any element cannot be
-	// confirmed redundant here, the guards below decline the fix rather than
-	// remove something the finding did not flag.
-	inferred := resolver.ExtractInferredDependencies(res, nil)
+	// Recompute the redundant set with the SAME provider-aware lookup the lint
+	// rule used to produce the finding (mirroring lintRedundantDependsOn). Using
+	// the identical lookup -- rather than a nil/generic recompute -- guarantees
+	// the redundant set matches exactly what the finding flagged, even when a
+	// provider's custom ExtractDependencies diverges from generic extraction. The
+	// guards below still decline the fix for anything not confirmed redundant, so
+	// a dependency a provider considers required is never removed.
+	var lookup resolver.DescriptorLookup
+	if registry != nil {
+		lookup = registry.DescriptorLookup()
+	}
+	inferred := resolver.ExtractInferredDependencies(res, lookup)
 	inferredSet := make(map[string]bool, len(inferred))
 	for _, dep := range inferred {
 		inferredSet[dep] = true

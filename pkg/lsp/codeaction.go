@@ -57,7 +57,7 @@ func (s *Server) codeAction(_ *glsp.Context, params *protocol.CodeActionParams) 
 
 	actions := make([]protocol.CodeAction, 0)
 	for _, f := range result.Findings {
-		edits, fixable := lint.QuickFixFor(entry.Sol, f)
+		edits, fixable := lint.QuickFixFor(entry.Sol, f, s.registry)
 		if !fixable || len(edits) == 0 {
 			continue
 		}
