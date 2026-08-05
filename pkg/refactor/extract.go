@@ -120,6 +120,16 @@ func extractCall(sol *solution.Solution, blockPath, callName string, replaceIden
 		return nil, fmt.Errorf("extract call: spec.calls is present but has no entries (empty or inline); populate or remove it before extracting")
 	}
 
+	// The byte-insertion below assumes the insertion target is block-style YAML:
+	// when spec.calls already exists it APPENDS a block entry after the last one,
+	// and when it does not it inserts a new block "calls:" child of spec. A
+	// flow-style target -- an existing "calls: {a: {...}}", or a flow-style
+	// "spec: {...}" -- cannot receive that block text without producing invalid
+	// YAML. Refuse rather than emit a corrupt edit set (all-or-nothing).
+	if err := requireBlockStyleInsertion(nodes, sol.Spec.HasCalls()); err != nil {
+		return nil, fmt.Errorf("extract call: %w", err)
+	}
+
 	// The extracted block bytes (spliced, re-indented) become the call body.
 	startByte, endByte, markerIndent, err := stepBlockRange(raw, li, node)
 	if err != nil {
@@ -162,6 +172,24 @@ func extractCall(sol *solution.Solution, blockPath, callName string, replaceIden
 	edits = append(edits, insert)
 
 	return &RenameResult{OldName: blockPath, NewName: callName, Edits: edits}, nil
+}
+
+// requireBlockStyleInsertion rejects solutions whose spec.calls insertion target
+// is flow-style YAML, which the block-style byte insertion in callsInsertion
+// would corrupt. When spec.calls already exists, the target is spec.calls
+// itself (appending a block entry to a flow "calls: {a: ...}" yields invalid
+// YAML); when it does not, the target is spec (a new block "calls:" child cannot
+// be spliced into a flow-style "spec: {...}"). Either way, refuse rather than
+// emit a document that no longer parses (all-or-nothing).
+func requireBlockStyleInsertion(nodes map[string]*yaml.Node, hasCalls bool) error {
+	target := "spec"
+	if hasCalls {
+		target = "spec.calls"
+	}
+	if n, ok := nodes[target]; ok && n != nil && n.Style&yaml.FlowStyle != 0 {
+		return fmt.Errorf("%s is written in flow style; rewrite it in block style before extracting", target)
+	}
+	return nil
 }
 
 // requireProviderStep verifies node is a mapping that represents a direct

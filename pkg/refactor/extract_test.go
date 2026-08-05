@@ -411,6 +411,53 @@ spec:
 	}
 }
 
+// TestExtractCall_RejectsFlowStyleCalls guards a second corruption case: a
+// flow-style spec.calls ("calls: {a: {...}}") or flow-style spec cannot receive
+// the block-style entry the byte-insertion produces, so extracting would emit a
+// document that no longer parses. It must be rejected, not corrupted.
+func TestExtractCall_RejectsFlowStyleCalls(t *testing.T) {
+	cases := map[string]struct {
+		yaml    string
+		wantMsg string
+	}{
+		"flow-style non-empty calls": {
+			yaml: `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: flow-calls
+spec:
+  calls: {existing: {provider: parameter, inputs: {value: x}}}
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+`,
+			wantMsg: "spec.calls is written in flow style",
+		},
+		"flow-style spec (no calls yet)": {
+			yaml: `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: flow-spec
+spec: {resolvers: {environment: {resolve: {with: [{provider: parameter, inputs: {value: dev}}]}}}}
+`,
+			wantMsg: "spec is written in flow style",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sol := loadSolution(t, tc.yaml)
+			res, err := ExtractCall(sol, "spec.resolvers.environment.resolve.with[0]", "getEnv")
+			require.Error(t, err)
+			assert.Nil(t, res)
+			assert.Contains(t, err.Error(), tc.wantMsg)
+		})
+	}
+}
+
 // extractFixtureWithCallStep returns a solution containing an existing call, a
 // provider step, and a step that already uses a call: reference (non-extractable).
 func extractFixtureWithCallStep() string {
