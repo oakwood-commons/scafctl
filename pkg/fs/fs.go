@@ -22,6 +22,9 @@ type ReadFileFunc func(filename string) ([]byte, error)
 // in the same directory and renaming it over path. os.Rename is atomic on the
 // same filesystem, so a crash mid-write cannot leave the destination file
 // truncated or partially written. mode sets the final file's permission bits.
+//
+// On Windows, renaming over an existing destination is not permitted, so a
+// failed rename falls back to removing the destination and retrying.
 func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*") //nolint:gosec // temp file created in the target's own directory
@@ -44,6 +47,15 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // path resolved from user-provided reference
+		// Windows does not allow rename-over-existing. Remove the destination
+		// and retry so the write is still atomic-enough on those platforms.
+		if _, statErr := os.Stat(path); statErr == nil {
+			if rmErr := os.Remove(path); rmErr == nil {
+				if retryErr := os.Rename(tmpName, path); retryErr == nil { //nolint:gosec // path resolved from user-provided reference
+					return nil
+				}
+			}
+		}
 		return err
 	}
 	return nil

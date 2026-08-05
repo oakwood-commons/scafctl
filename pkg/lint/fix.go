@@ -145,12 +145,28 @@ func ComputeFixPlan(raw []byte, filePath string, registry *provider.Registry) (*
 	}
 	result := Solution(sol, filePath, registry)
 
-	current := append([]byte(nil), raw...)
+	// Findings originate from ranging over Go maps (e.g. spec.resolvers), so
+	// their order is nondeterministic across runs. Collect the fixable ones and
+	// sort by rule then location so the applied edits -- and therefore the
+	// resulting bytes and any --diff preview -- are stable and reproducible, and
+	// interacting renames (e.g. target-name collisions) resolve identically
+	// every run.
+	fixable := make([]*Finding, 0, len(result.Findings))
 	for _, f := range result.Findings {
-		fx, ok := defaultFixers[f.RuleName]
-		if !ok {
-			continue
+		if _, ok := defaultFixers[f.RuleName]; ok {
+			fixable = append(fixable, f)
 		}
+	}
+	sort.SliceStable(fixable, func(i, j int) bool {
+		if fixable[i].RuleName != fixable[j].RuleName {
+			return fixable[i].RuleName < fixable[j].RuleName
+		}
+		return fixable[i].Location < fixable[j].Location
+	})
+
+	current := append([]byte(nil), raw...)
+	for _, f := range fixable {
+		fx := defaultFixers[f.RuleName]
 
 		// Re-parse the current bytes so the fixer computes edits against
 		// up-to-date offsets after any preceding rename.
