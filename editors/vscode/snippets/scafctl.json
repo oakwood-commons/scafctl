@@ -1,0 +1,188 @@
+{
+  "scafctl: solution scaffold": {
+    "prefix": "solution",
+    "body": [
+      "apiVersion: scafctl.io/v1",
+      "kind: Solution",
+      "",
+      "metadata:",
+      "  name: ${1:my-solution}",
+      "  version: ${2:0.1.0}",
+      "  description: ${3:A short description of what this solution does.}",
+      "",
+      "spec:",
+      "  resolvers:",
+      "    ${4:myResolver}:",
+      "      description: ${5:What this resolver produces}",
+      "      type: ${6:string}",
+      "      resolve:",
+      "        with:",
+      "          - provider: ${7:static}",
+      "            inputs:",
+      "              value: ${8:placeholder}",
+      "$0"
+    ],
+    "description": "Full minimal solution scaffold (apiVersion, kind, metadata, spec with one resolver)"
+  },
+  "scafctl: resolver": {
+    "prefix": "resolver",
+    "body": [
+      "${1:myResolver}:",
+      "  description: ${2:Describe what this resolver produces}",
+      "  type: ${3:string}",
+      "  resolve:",
+      "    with:",
+      "      - provider: ${4:static}",
+      "        inputs:",
+      "          ${5:value}: ${6:placeholder}",
+      "$0"
+    ],
+    "description": "A generic resolver block under spec.resolvers"
+  },
+  "scafctl: resolver (parameter provider)": {
+    "prefix": "resolver-parameter",
+    "body": [
+      "${1:myResolver}:",
+      "  description: ${2:A CLI-supplied parameter value}",
+      "  type: ${3:string}",
+      "  resolve:",
+      "    with:",
+      "      - provider: parameter",
+      "        inputs:",
+      "          key: ${4:paramName}",
+      "          default: ${5:defaultValue}",
+      "$0"
+    ],
+    "description": "A resolver using the parameter-type provider"
+  },
+  "scafctl: resolver (http provider)": {
+    "prefix": "resolver-http",
+    "body": [
+      "${1:myResolver}:",
+      "  description: ${2:Fetch data from an HTTP endpoint}",
+      "  type: ${3:any}",
+      "  resolve:",
+      "    with:",
+      "      - provider: http",
+      "        inputs:",
+      "          url: ${4:https://example.com/api/resource}",
+      "          method: ${5:GET}",
+      "$0"
+    ],
+    "description": "A resolver using the http-type provider"
+  },
+  "scafctl: resolver (static provider)": {
+    "prefix": "resolver-static",
+    "body": [
+      "${1:myResolver}:",
+      "  description: ${2:A fixed, hard-coded value}",
+      "  type: ${3:string}",
+      "  resolve:",
+      "    with:",
+      "      - provider: static",
+      "        inputs:",
+      "          value: ${4:placeholder}",
+      "$0"
+    ],
+    "description": "A resolver using the static-type provider"
+  },
+  "scafctl: action": {
+    "prefix": "action",
+    "body": [
+      "${1:myAction}:",
+      "  description: ${2:Describe what this action does}",
+      "  provider: ${3:message}",
+      "  inputs:",
+      "    ${4:message}:",
+      "      tmpl: \"${5:Hello}\"",
+      "$0"
+    ],
+    "description": "An action block under spec.workflow.actions"
+  },
+  "scafctl: call": {
+    "prefix": "call",
+    "body": [
+      "${1:myCall}:",
+      "  description: ${2:Describe what this reusable call does}",
+      "  provider: ${3:static}",
+      "  args:",
+      "    ${4:value}:",
+      "      type: ${5:string}",
+      "      required: ${6:true}",
+      "  inputs:",
+      "    ${7:value}:",
+      "      expr: _.args.${4:value}",
+      "$0"
+    ],
+    "description": "A call block (spec.calls entry) -- a reusable, argument-driven provider request"
+  },
+  "scafctl: function": {
+    "prefix": "function",
+    "body": [
+      "${1:myFunction}:",
+      "  description: ${2:Describe what this function does}",
+      "  params:",
+      "    - name: ${3:value}",
+      "      type: ${4:string}",
+      "      required: ${5:true}",
+      "  cel: ${6:_.args.value}",
+      "$0"
+    ],
+    "description": "A function block under spec.functions -- an author-defined template helper"
+  },
+  "scafctl: workflow": {
+    "prefix": "workflow",
+    "body": [
+      "workflow:",
+      "  actions:",
+      "    ${1:myAction}:",
+      "      description: ${2:Describe what this action does}",
+      "      provider: ${3:message}",
+      "      inputs:",
+      "        ${4:message}:",
+      "          tmpl: \"${5:Hello}\"",
+      "$0"
+    ],
+    "description": "A workflow block (spec.workflow) with one action"
+  },
+  "scafctl: dependsOn": {
+    "prefix": "dependsOn",
+    "body": [
+      "dependsOn:",
+      "  - ${1:otherAction}",
+      "$0"
+    ],
+    "description": "A dependsOn key -- ordering constraint referencing another action or resolver name"
+  },
+  "scafctl: CEL reference": {
+    "prefix": "cel-ref",
+    "body": [
+      "_.${1:name}"
+    ],
+    "description": "CEL expression reference to another resolver's value (used inside expr:)"
+  },
+  "scafctl: Go-template reference": {
+    "prefix": "tmpl-ref",
+    "body": [
+      "{{ ._.${1:name} }}"
+    ],
+    "description": "Go-template reference to another resolver's value (used inside tmpl:)"
+  },
+  "scafctl: call reference": {
+    "prefix": "call-ref",
+    "body": [
+      "call: ${1:myCall}",
+      "args:",
+      "  ${2:argName}: ${3:value}",
+      "$0"
+    ],
+    "description": "A call reference (spec.calls invocation) from a resolve/transform/validate step or action"
+  },
+  "scafctl: resolver reference": {
+    "prefix": "rslvr-ref",
+    "body": [
+      "rslvr: ${1:resolverName}"
+    ],
+    "description": "A ValueRef resolver reference -- points at another resolver by name"
+  }
+}

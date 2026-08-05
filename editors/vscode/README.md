@@ -85,6 +85,29 @@ leave this off unless you specifically want it.
 > on the built-in `yaml`/`json` language, run **scafctl: Restart Language Server**
 > once to activate it.
 
+## Snippets
+
+Type a prefix below and press Tab (or accept the completion) in a `.yaml`/`.yml`
+file (or a file set to the `scafctl` language) to expand it, then Tab through
+the placeholders to fill in the fields.
+
+| Prefix | Expands to |
+| --- | --- |
+| `solution` | Full minimal solution scaffold (`apiVersion`, `kind`, `metadata`, `spec` with one resolver) |
+| `resolver` | A generic resolver block under `spec.resolvers` |
+| `resolver-parameter` | A resolver using the `parameter` provider |
+| `resolver-http` | A resolver using the `http` provider |
+| `resolver-static` | A resolver using the `static` provider |
+| `action` | An action block under `spec.workflow.actions` |
+| `call` | A reusable call block (`spec.calls` entry) |
+| `function` | An author-defined function block under `spec.functions` |
+| `workflow` | A `spec.workflow` block with one action |
+| `dependsOn` | A `dependsOn` key for ordering actions/resolvers |
+| `cel-ref` | A CEL reference to another resolver's value (`_.name`) |
+| `tmpl-ref` | A Go-template reference to another resolver's value (`{{ ._.name }}`) |
+| `call-ref` | A call reference (invoking a `spec.calls` definition) |
+| `rslvr-ref` | A resolver reference (`rslvr: name`) inside a value |
+
 ## Commands
 
 - **scafctl: Restart Language Server** -- restart the server (for example after
