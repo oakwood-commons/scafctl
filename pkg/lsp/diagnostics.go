@@ -31,7 +31,14 @@ func Diagnostics(content []byte, filePath, source string, registry *provider.Reg
 	if err := sol.UnmarshalFromBytes(content); err != nil {
 		return []protocol.Diagnostic{parseErrorDiagnostic(err, source)}
 	}
+	return diagnosticsFromSolution(sol, content, filePath, source, registry)
+}
 
+// diagnosticsFromSolution runs lint on an already-parsed solution and maps the
+// findings to LSP diagnostics. It lets the server reuse the per-document cache's
+// parse instead of re-unmarshalling on every publish. content is the raw source
+// used to compute per-line squiggle ranges.
+func diagnosticsFromSolution(sol *solution.Solution, content []byte, filePath, source string, registry *provider.Registry) []protocol.Diagnostic {
 	result := lint.Solution(sol, filePath, registry)
 	lines := bytes.Split(content, []byte("\n"))
 

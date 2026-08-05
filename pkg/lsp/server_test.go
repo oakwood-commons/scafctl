@@ -87,6 +87,71 @@ func TestServer_DidChangeRepublishes(t *testing.T) {
 	assert.NotEmpty(t, params.Diagnostics, "changed content should be re-linted")
 }
 
+func TestServer_DidSaveReparsesAndReusesVersion(t *testing.T) {
+	s := newTestServer(t)
+	uri := protocol.DocumentUri("file:///t.yaml")
+
+	// Open at version 3 with clean content.
+	var m string
+	var p protocol.PublishDiagnosticsParams
+	clean := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: ok\nspec:\n  resolvers:\n    a:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: x\n"
+	require.NoError(t, s.didOpen(captureContext(&m, &p), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: uri, Version: 3, Text: clean},
+	}))
+
+	// Save carries new text but no version; the cached version is reused.
+	var method string
+	var params protocol.PublishDiagnosticsParams
+	ctx := captureContext(&method, &params)
+	saved := badSolution
+	require.NoError(t, s.didSave(ctx, &protocol.DidSaveTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Text:         &saved,
+	}))
+
+	assert.NotEmpty(t, params.Diagnostics, "saved content should be re-linted")
+	entry, ok := s.getDoc(uri)
+	require.True(t, ok)
+	assert.Equal(t, int32(3), entry.Version, "save reuses the last synced version")
+	assert.Equal(t, []byte(badSolution), entry.Raw)
+}
+
+func TestServer_DidSaveWithoutTextRepublishes(t *testing.T) {
+	s := newTestServer(t)
+	uri := protocol.DocumentUri("file:///t.yaml")
+
+	var m string
+	var p protocol.PublishDiagnosticsParams
+	require.NoError(t, s.didOpen(captureContext(&m, &p), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: uri, Version: 1, Text: badSolution},
+	}))
+
+	// A save without text (client did not negotiate includeText) still
+	// republishes diagnostics for the existing content.
+	var method string
+	var params protocol.PublishDiagnosticsParams
+	require.NoError(t, s.didSave(captureContext(&method, &params), &protocol.DidSaveTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	}))
+	assert.NotEmpty(t, params.Diagnostics)
+}
+
+func TestServer_DidOpenMalformedDocPublishesParseError(t *testing.T) {
+	s := newTestServer(t)
+	uri := protocol.DocumentUri("file:///t.yaml")
+
+	var method string
+	var params protocol.PublishDiagnosticsParams
+	// Malformed YAML fails to parse; publish must fall back to the raw-content
+	// path and surface a parse-error diagnostic.
+	require.NoError(t, s.didOpen(captureContext(&method, &params), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: uri, Version: 1, Text: malformedCacheSolution},
+	}))
+	require.Len(t, params.Diagnostics, 1)
+	require.NotNil(t, params.Diagnostics[0].Code)
+	assert.Equal(t, "parse-error", params.Diagnostics[0].Code.Value)
+}
+
 func TestServer_DidChangeIgnoresRangedChangeUnderFullSync(t *testing.T) {
 	s := newTestServer(t)
 
@@ -230,6 +295,28 @@ func TestServer_NavigationHandlersOnUnknownDoc(t *testing.T) {
 	we, err := s.rename(nil, &protocol.RenameParams{TextDocumentPositionParams: tdp, NewName: "x"})
 	require.NoError(t, err)
 	assert.Nil(t, we)
+}
+
+func TestServer_RenameOnUnparseableDocReturnsWellFormedError(t *testing.T) {
+	s := newTestServer(t)
+	uri := protocol.DocumentUri("file:///t.yaml")
+
+	// Open a malformed document (fails to parse) directly into the cache.
+	s.setDoc(uri, 1, malformedCacheSolution)
+	entry, ok := s.getDoc(uri)
+	require.True(t, ok)
+	require.Error(t, entry.ParseErr, "fixture must fail to parse for this test")
+
+	tdp := protocol.TextDocumentPositionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 0, Character: 0},
+	}
+	we, err := s.rename(nil, &protocol.RenameParams{TextDocumentPositionParams: tdp, NewName: "whatever"})
+	require.Error(t, err)
+	assert.Nil(t, we)
+	// The message must be well-formed -- no fmt %!w(<nil>) verb leak.
+	assert.Contains(t, err.Error(), "failed to parse solution")
+	assert.NotContains(t, err.Error(), "%!w")
 }
 
 func TestServer_InitializeAdvertisesNavigationCapabilities(t *testing.T) {
