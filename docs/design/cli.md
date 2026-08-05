@@ -1110,6 +1110,26 @@ Exit codes: `0` applied (or previewed), `2` a validation error (invalid new
 name, name collision, undefined symbol, or an unlocatable reference blocked
 the rename), `4` the solution file could not be resolved, read, or parsed.
 
+### Extract Call (engine)
+
+A second source-preserving refactoring, **Extract Call**, hoists a single
+resolve/transform/validate step (a `with[i]` provider+inputs block) out of a
+resolver into a reusable `spec.calls` definition and rewrites the selected step
+to a `call: <name>` reference. Like rename, it emits byte-exact edits, so
+comments and formatting elsewhere are preserved; the extracted block's provider
+and inputs (including any inline comments) are spliced verbatim into the new
+call, re-indented to the file's style. v1 is conservative: only direct provider
+steps are extractable (a step that already uses `call:` is rejected), and no
+arguments are inferred -- the call reproduces the inputs literally (inferring
+args from near-duplicate steps with varying values is deferred). An opt-in
+variant additionally rewrites every *structurally identical* step into the same
+`call:` reference; the base extraction never mass-rewrites.
+
+The engine lives in `pkg/refactor` (domain-only, no LSP/protocol imports) and is
+designed to back a future LSP `ExtractCall` code action. **The `scafctl refactor
+extract-call` CLI subcommand is deferred to a later PR** -- this change ships the
+engine only.
+
 ---
 
 ## Language Server (LSP)
