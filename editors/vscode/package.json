@@ -59,6 +59,16 @@
         "path": "./syntaxes/scafctl.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "yaml",
+        "path": "./snippets/scafctl.json"
+      },
+      {
+        "language": "scafctl",
+        "path": "./snippets/scafctl.json"
+      }
+    ],
     "configuration": {
       "title": "scafctl",
       "properties": {
