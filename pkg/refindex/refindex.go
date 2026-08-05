@@ -819,7 +819,19 @@ func lessRange(a, b sourcepos.Range) bool {
 // buildValueNodeMap parses raw YAML and returns a map from logical path to the
 // VALUE node at that path, using the same path scheme as sourcepos and walk.Walk
 // (dotted keys, [i] for sequence elements).
+//
+// It is a thin alias for the exported NodeMap, kept for readability at the
+// internal call sites.
 func buildValueNodeMap(raw []byte) (map[string]*yaml.Node, error) {
+	return NodeMap(raw)
+}
+
+// NodeMap parses raw YAML and returns a map from logical path to the VALUE node
+// at that path, using the same path scheme as sourcepos and walk.Walk (dotted
+// keys, [i] for sequence elements). It is a pure function with no dependency on
+// a built Index, so editor features (hover, completion, signature help) can ask
+// "what YAML node/path is under the cursor" directly from raw bytes.
+func NodeMap(raw []byte) (map[string]*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)

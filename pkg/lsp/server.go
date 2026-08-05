@@ -4,8 +4,8 @@
 package lsp
 
 import (
+	"fmt"
 	"net/url"
-	"sync"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -14,15 +14,15 @@ import (
 	glspserver "github.com/tliron/glsp/server"
 )
 
-// Server is a language server for solution files. It keeps an in-memory copy of
-// each open document and republishes lint diagnostics on open/change/save.
+// Server is a language server for solution files. It keeps a per-document
+// parse+index cache for each open document and republishes lint diagnostics on
+// open/change/save.
 type Server struct {
 	binaryName string
 	version    string
 	registry   *provider.Registry
 
-	mu   sync.RWMutex
-	docs map[protocol.DocumentUri]string
+	docs *DocumentCache
 }
 
 // NewServer constructs a language server. binaryName labels diagnostics and the
@@ -36,7 +36,7 @@ func NewServer(binaryName, version string, registry *provider.Registry) *Server 
 		binaryName: binaryName,
 		version:    version,
 		registry:   registry,
-		docs:       make(map[protocol.DocumentUri]string),
+		docs:       NewDocumentCache(),
 	}
 }
 
@@ -98,7 +98,7 @@ func (s *Server) Handler() *protocol.Handler {
 }
 
 func (s *Server) didOpen(ctx *glsp.Context, params *protocol.DidOpenTextDocumentParams) error {
-	s.setDoc(params.TextDocument.URI, params.TextDocument.Text)
+	s.setDoc(params.TextDocument.URI, params.TextDocument.Version, params.TextDocument.Text)
 	s.publish(ctx, params.TextDocument.URI)
 	return nil
 }
@@ -108,13 +108,13 @@ func (s *Server) didChange(ctx *glsp.Context, params *protocol.DidChangeTextDocu
 	for _, change := range params.ContentChanges {
 		switch c := change.(type) {
 		case protocol.TextDocumentContentChangeEventWhole:
-			s.setDoc(params.TextDocument.URI, c.Text)
+			s.setDoc(params.TextDocument.URI, params.TextDocument.Version, c.Text)
 			updated = true
 		case protocol.TextDocumentContentChangeEvent:
 			// Full sync: a rangeless change carries the whole document. glsp
 			// normally maps these to the Whole type; handle the raw form too.
 			if c.Range == nil {
-				s.setDoc(params.TextDocument.URI, c.Text)
+				s.setDoc(params.TextDocument.URI, params.TextDocument.Version, c.Text)
 				updated = true
 			}
 		}
@@ -130,7 +130,13 @@ func (s *Server) didChange(ctx *glsp.Context, params *protocol.DidChangeTextDocu
 
 func (s *Server) didSave(ctx *glsp.Context, params *protocol.DidSaveTextDocumentParams) error {
 	if params.Text != nil {
-		s.setDoc(params.TextDocument.URI, *params.Text)
+		// DidSave carries no document version; reuse the version of the cached
+		// entry (the save reflects the last synced content).
+		var version int32
+		if entry, ok := s.getDoc(params.TextDocument.URI); ok {
+			version = entry.Version
+		}
+		s.setDoc(params.TextDocument.URI, version, *params.Text)
 	}
 	s.publish(ctx, params.TextDocument.URI)
 	return nil
@@ -147,73 +153,80 @@ func (s *Server) didClose(ctx *glsp.Context, params *protocol.DidCloseTextDocume
 }
 
 func (s *Server) definition(_ *glsp.Context, params *protocol.DefinitionParams) (any, error) {
-	content, ok := s.getDoc(params.TextDocument.URI)
-	if !ok {
+	entry, ok := s.getDoc(params.TextDocument.URI)
+	if !ok || entry.Index == nil {
 		return nil, nil
 	}
-	if loc := Definition([]byte(content), params.TextDocument.URI, params.Position); loc != nil {
+	if loc := definitionFromIndex(entry.Index, params.TextDocument.URI, params.Position); loc != nil {
 		return *loc, nil
 	}
 	return nil, nil
 }
 
 func (s *Server) references(_ *glsp.Context, params *protocol.ReferenceParams) ([]protocol.Location, error) {
-	content, ok := s.getDoc(params.TextDocument.URI)
-	if !ok {
+	entry, ok := s.getDoc(params.TextDocument.URI)
+	if !ok || entry.Index == nil {
 		return nil, nil
 	}
-	return References([]byte(content), params.TextDocument.URI, params.Position, params.Context.IncludeDeclaration), nil
+	return referencesFromIndex(entry.Index, params.TextDocument.URI, params.Position, params.Context.IncludeDeclaration), nil
 }
 
 func (s *Server) prepareRename(_ *glsp.Context, params *protocol.PrepareRenameParams) (any, error) {
-	content, ok := s.getDoc(params.TextDocument.URI)
-	if !ok {
+	entry, ok := s.getDoc(params.TextDocument.URI)
+	if !ok || entry.Index == nil {
 		return nil, nil
 	}
-	if rng := PrepareRename([]byte(content), params.Position); rng != nil {
+	if rng := prepareRenameFromIndex(entry.Index, params.Position); rng != nil {
 		return *rng, nil
 	}
 	return nil, nil
 }
 
 func (s *Server) rename(_ *glsp.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
-	content, ok := s.getDoc(params.TextDocument.URI)
+	entry, ok := s.getDoc(params.TextDocument.URI)
 	if !ok {
 		return nil, nil
 	}
-	return Rename([]byte(content), params.TextDocument.URI, params.Position, params.NewName)
+	if entry.ParseErr != nil {
+		return nil, fmt.Errorf("failed to parse solution: %w", entry.ParseErr)
+	}
+	if entry.Sol == nil || entry.Index == nil {
+		return nil, fmt.Errorf("solution is not indexed")
+	}
+	return renameFromIndex(entry.Sol, entry.Index, params.TextDocument.URI, params.Position, params.NewName)
 }
 
-// publish computes and sends diagnostics for the current content of uri.
+// publish computes and sends diagnostics for the current content of uri. When
+// the document parsed cleanly it reuses the cached solution (no re-parse); a
+// parse failure falls back to the raw-content path, which reports the parse
+// error itself.
 func (s *Server) publish(ctx *glsp.Context, uri protocol.DocumentUri) {
-	content, ok := s.getDoc(uri)
+	entry, ok := s.getDoc(uri)
 	if !ok {
 		return
 	}
-	diags := Diagnostics([]byte(content), uriToPath(uri), s.binaryName, s.registry)
+	var diags []protocol.Diagnostic
+	if entry.Sol != nil {
+		diags = diagnosticsFromSolution(entry.Sol, entry.Raw, uriToPath(uri), s.binaryName, s.registry)
+	} else {
+		diags = Diagnostics(entry.Raw, uriToPath(uri), s.binaryName, s.registry)
+	}
 	ctx.Notify(protocol.ServerTextDocumentPublishDiagnostics, protocol.PublishDiagnosticsParams{
 		URI:         uri,
 		Diagnostics: diags,
 	})
 }
 
-func (s *Server) setDoc(uri protocol.DocumentUri, content string) {
-	s.mu.Lock()
-	s.docs[uri] = content
-	s.mu.Unlock()
+func (s *Server) setDoc(uri protocol.DocumentUri, version int32, content string) {
+	s.docs.Set(uri, version, content)
 }
 
-func (s *Server) getDoc(uri protocol.DocumentUri) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c, ok := s.docs[uri]
-	return c, ok
+func (s *Server) getDoc(uri protocol.DocumentUri) (*DocEntry, bool) {
+	return s.docs.Get(uri)
 }
 
 func (s *Server) deleteDoc(uri protocol.DocumentUri) {
-	s.mu.Lock()
-	delete(s.docs, uri)
-	s.mu.Unlock()
+	s.docs.Delete(uri)
 }
 
 // uriToPath converts a file:// document URI to a filesystem path, falling back

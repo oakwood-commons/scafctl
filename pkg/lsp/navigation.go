@@ -43,6 +43,13 @@ func Definition(content []byte, uri protocol.DocumentUri, pos protocol.Position)
 	if err != nil {
 		return nil
 	}
+	return definitionFromIndex(idx, uri, pos)
+}
+
+// definitionFromIndex resolves the definition location from an already-built
+// index, allowing the server to reuse the per-document cache instead of
+// re-parsing on every request.
+func definitionFromIndex(idx *refindex.Index, uri protocol.DocumentUri, pos protocol.Position) *protocol.Location {
 	ref, ok := symbolAt(idx, pos)
 	if !ok {
 		return nil
@@ -62,6 +69,11 @@ func References(content []byte, uri protocol.DocumentUri, pos protocol.Position,
 	if err != nil {
 		return []protocol.Location{}
 	}
+	return referencesFromIndex(idx, uri, pos, includeDeclaration)
+}
+
+// referencesFromIndex resolves reference locations from an already-built index.
+func referencesFromIndex(idx *refindex.Index, uri protocol.DocumentUri, pos protocol.Position, includeDeclaration bool) []protocol.Location {
 	ref, ok := symbolAt(idx, pos)
 	if !ok {
 		return []protocol.Location{}
@@ -88,6 +100,12 @@ func PrepareRename(content []byte, pos protocol.Position) *protocol.Range {
 	if err != nil {
 		return nil
 	}
+	return prepareRenameFromIndex(idx, pos)
+}
+
+// prepareRenameFromIndex resolves the renameable range from an already-built
+// index.
+func prepareRenameFromIndex(idx *refindex.Index, pos protocol.Position) *protocol.Range {
 	ref, ok := symbolAt(idx, pos)
 	if !ok {
 		return nil
@@ -105,6 +123,12 @@ func Rename(content []byte, uri protocol.DocumentUri, pos protocol.Position, new
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse solution: %w", err)
 	}
+	return renameFromIndex(sol, idx, uri, pos, newName)
+}
+
+// renameFromIndex computes the rename edit from an already-built solution and
+// index.
+func renameFromIndex(sol *solution.Solution, idx *refindex.Index, uri protocol.DocumentUri, pos protocol.Position, newName string) (*protocol.WorkspaceEdit, error) {
 	ref, ok := symbolAt(idx, pos)
 	if !ok {
 		return nil, fmt.Errorf("no renameable symbol at the cursor position")
