@@ -225,16 +225,23 @@ func funcHover(name string) string {
 // plus a related concept summary when one matches the key name.
 func keyHover(path string) string {
 	var b strings.Builder
+	// Derive the displayed name and concept key from the NORMALIZED path so the
+	// label matches the field actually introspected. fieldInfoForPath normalizes
+	// via schemaPath, which strips dynamic map-key segments (e.g. a resolver or
+	// input name under a mapContainerKeys parent). Labeling with the raw last
+	// segment would show the container field's doc under the wrong (instance)
+	// name -- e.g. hovering "myInput" under inputs: would display the inputs
+	// field doc labeled "myInput".
+	label := lastSegment(schemaPath(path))
 	if fi, ok := fieldInfoForPath(path); ok && fi.Description != "" {
-		key := lastSegment(path)
-		fmt.Fprintf(&b, "**field** `%s`", key)
+		fmt.Fprintf(&b, "**field** `%s`", label)
 		if fi.Type != "" {
 			fmt.Fprintf(&b, " (%s)", fi.Type)
 		}
 		b.WriteString("\n\n")
 		b.WriteString(fi.Description)
 	}
-	if c, ok := concepts.Get(lastSegment(path)); ok {
+	if c, ok := concepts.Get(label); ok {
 		if b.Len() > 0 {
 			b.WriteString("\n\n")
 		}

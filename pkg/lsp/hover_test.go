@@ -229,3 +229,14 @@ func TestKeyHover_Concept(t *testing.T) {
 	assert.Contains(t, md, "concept")
 	assert.Contains(t, md, "Workflow")
 }
+
+func TestKeyHover_DynamicMapKeyUsesNormalizedLabel(t *testing.T) {
+	// Hovering a dynamic map-key segment (a resolver instance name under
+	// resolvers:) must label the hover with the normalized container field
+	// ("resolvers") whose doc is actually shown -- not the raw instance name,
+	// which would mislabel the container field's doc.
+	md := keyHover("spec.resolvers.myResolver")
+	assert.Contains(t, md, "**field** `resolvers`", "labels with the normalized field, not the instance name")
+	assert.Contains(t, md, "Resolver definitions keyed by name", "shows the resolvers field doc")
+	assert.NotContains(t, md, "myResolver", "must not label the container doc with the dynamic key name")
+}

@@ -70,6 +70,44 @@ func TestLookupFunc_ExamplesPopulated(t *testing.T) {
 	assert.NotEmpty(t, fi.Examples)
 }
 
+func TestLookupFunc_ExamplesAreACopy(t *testing.T) {
+	// The returned Examples slice must be a copy: mutating an element (or
+	// appending into spare capacity) must not corrupt the shared index that
+	// subsequent hover/completion/signature-help calls read.
+	fi, ok := LookupFunc("arrays.groupBy")
+	require.True(t, ok)
+	require.NotEmpty(t, fi.Examples)
+	orig := fi.Examples[0]
+	fi.Examples[0] = "mutated"
+
+	fresh, ok := LookupFunc("arrays.groupBy")
+	require.True(t, ok)
+	require.NotEmpty(t, fresh.Examples)
+	assert.Equal(t, orig, fresh.Examples[0], "mutating a returned example must not affect the index")
+}
+
+func TestAllFuncs_ExamplesAreACopy(t *testing.T) {
+	// AllFuncs promises a copy the caller may retain or mutate; that guarantee
+	// must extend to each entry's Examples slice, not just the outer slice.
+	all := AllFuncs()
+	idx := -1
+	for i := range all {
+		if len(all[i].Examples) > 0 {
+			idx = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, idx, 0, "expected at least one function with examples")
+	orig := all[idx].Examples[0]
+	name := all[idx].Name
+	all[idx].Examples[0] = "mutated"
+
+	fresh, ok := LookupFunc(name)
+	require.True(t, ok)
+	require.NotEmpty(t, fresh.Examples)
+	assert.Equal(t, orig, fresh.Examples[0], "mutating an AllFuncs example must not affect the index")
+}
+
 func TestLookupFunc_CELFirstPrecedence(t *testing.T) {
 	// A name registered in both the CEL and template registries must resolve to
 	// its CEL definition (CEL is the primary expression language). This locks the

@@ -109,18 +109,40 @@ func (i *funcIndex) add(info FuncInfo, subNames []string) {
 
 // LookupFunc returns the metadata for the function named name, searching CEL
 // functions first, then Go-template functions. ok is false when no function of
-// that name exists in either registry.
+// that name exists in either registry. The returned FuncInfo's Examples slice is
+// a copy, so callers may retain or mutate it without corrupting the shared,
+// effectively-immutable function index.
 func LookupFunc(name string) (FuncInfo, bool) {
 	info, ok := getFuncIndex().byName[name]
-	return info, ok
+	if !ok {
+		return FuncInfo{}, false
+	}
+	info.Examples = cloneExamples(info.Examples)
+	return info, true
 }
 
 // AllFuncs returns every known function's metadata (CEL first, then template),
-// de-duplicated by primary name. The returned slice is a copy the caller may
-// retain.
+// de-duplicated by primary name. The returned slice -- including each entry's
+// Examples slice -- is a copy the caller may retain or mutate without affecting
+// the shared function index.
 func AllFuncs() []FuncInfo {
 	src := getFuncIndex().all
 	out := make([]FuncInfo, len(src))
+	copy(out, src)
+	for i := range out {
+		out[i].Examples = cloneExamples(out[i].Examples)
+	}
+	return out
+}
+
+// cloneExamples returns a copy of the examples slice, or nil when empty, so
+// callers cannot mutate the function index's shared backing storage. Element
+// strings are immutable, so a shallow copy of the slice suffices.
+func cloneExamples(src []string) []string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]string, len(src))
 	copy(out, src)
 	return out
 }
