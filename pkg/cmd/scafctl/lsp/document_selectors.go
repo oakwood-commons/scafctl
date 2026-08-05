@@ -58,7 +58,7 @@ func commandDocumentSelectors(cliParams *settings.Run, ioStreams *terminal.IOStr
 				return fmt.Errorf("writer not initialized in context")
 			}
 
-			files := pkglsp.RecognizedFilesFor(cliParams.BinaryName)
+			files := pkglsp.RecognizedFilesFor(effectiveBinaryName)
 
 			// Build options from the populated outputFlags so --where,
 			// FormatExplicit, and AppName survive; use the effective binary

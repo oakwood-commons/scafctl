@@ -39,12 +39,17 @@ type RecognizedFiles struct {
 // given binary name, deduplicated and partitioned by extension. It unions the
 // solution discovery set with the action discovery set so editors attach to
 // every file the CLI would auto-discover (including .json solutions,
-// taskfile.*, and actions.*). An empty binaryName falls back to
-// settings.CliBinaryName.
+// taskfile.*, and actions.*). The binary name is sanitized via
+// settings.SanitizeBinaryName, so a path, extension, or empty value is
+// normalized (empty falls back to settings.CliBinaryName).
 func RecognizedFilesFor(binaryName string) RecognizedFiles {
-	if binaryName == "" {
-		binaryName = settings.CliBinaryName
-	}
+	// Normalize at the boundary: settings.SolutionFileNamesFor/ActionFileNamesFor
+	// expect an already-sanitized name, so a caller passing a path
+	// ("/opt/mycli"), an extension ("mycli.exe"), or an empty value would
+	// otherwise produce an invalid editor contract. SanitizeBinaryName strips
+	// directory/extension, replaces unsafe characters, and falls back to
+	// CliBinaryName when the result is empty.
+	binaryName = settings.SanitizeBinaryName(binaryName)
 
 	// Union solution and action discovery sets; order is preserved by first
 	// appearance so the output is deterministic and stable across releases.

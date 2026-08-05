@@ -51,6 +51,22 @@ func TestRecognizedFilesFor_EmptyBinaryFallsBack(t *testing.T) {
 	assert.Contains(t, rf.YAMLNames, "solution.yaml")
 }
 
+func TestRecognizedFilesFor_SanitizesUnsafeInput(t *testing.T) {
+	// A path or extension must be normalized to a bare binary name so the
+	// recognized filenames are valid (matching the CLI/embedder contract).
+	for _, raw := range []string{"/opt/tools/mycli", "mycli.exe", "./mycli"} {
+		rf := RecognizedFilesFor(raw)
+		assert.Equalf(t, "mycli", rf.BinaryName, "input %q", raw)
+		assert.Containsf(t, rf.YAMLNames, "mycli.yaml", "input %q", raw)
+		assert.Containsf(t, rf.JSONNames, "mycli.json", "input %q", raw)
+		// No path/extension debris should leak into any recognized name.
+		for _, name := range append(append([]string{}, rf.YAMLNames...), rf.JSONNames...) {
+			assert.NotContainsf(t, name, "/", "input %q produced %q", raw, name)
+			assert.NotContainsf(t, name, ".exe", "input %q produced %q", raw, name)
+		}
+	}
+}
+
 func TestRecognizedFilesFor_Deduplicates(t *testing.T) {
 	rf := RecognizedFilesFor(settings.CliBinaryName)
 
