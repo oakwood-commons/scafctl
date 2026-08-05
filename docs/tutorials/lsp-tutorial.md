@@ -56,7 +56,9 @@ any lint findings for that document.
 The exact steps depend on the editor's LSP client, but the shape is always the
 same:
 
-1. Point the client at the `scafctl lsp` command (the server process).
+1. Point the client at the `scafctl lsp` command (the server process). Clients
+   that pass a transport flag by convention can use `scafctl lsp --stdio`; it is
+   accepted as a no-op since stdio is the only transport.
 2. Attach it to the solution files scafctl recognizes. To avoid hardcoding a
    file list that drifts from CLI discovery, ask the binary which files it
    auto-discovers:

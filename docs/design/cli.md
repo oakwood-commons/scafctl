@@ -1121,6 +1121,10 @@ interactively -- stdout is the JSON-RPC channel.
 ~~~bash
 # Started by an editor; not typically run by hand
 scafctl lsp
+
+# --stdio is accepted for clients that pass it by convention (no-op; stdio is
+# the only transport)
+scafctl lsp --stdio
 ~~~
 
 Currently the server publishes **lint diagnostics** for solution files as you

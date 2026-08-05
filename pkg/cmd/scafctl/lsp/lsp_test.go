@@ -27,6 +27,23 @@ func TestCommandLsp_Construction(t *testing.T) {
 	assert.Error(t, cmd.Args(cmd, []string{"unexpected"}), "lsp takes no positional args")
 }
 
+func TestCommandLsp_StdioFlag(t *testing.T) {
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandLsp(testCliParams(), ioStreams, "scafctl")
+
+	// The --stdio flag must be registered (LSP clients pass it by convention) so
+	// the server is not rejected with "unknown flag".
+	flag := cmd.Flags().Lookup("stdio")
+	require.NotNil(t, flag, "--stdio flag must be registered")
+	assert.Equal(t, "false", flag.DefValue)
+
+	// Parsing --stdio must succeed without error.
+	require.NoError(t, cmd.ParseFlags([]string{"--stdio"}))
+	v, err := cmd.Flags().GetBool("stdio")
+	require.NoError(t, err)
+	assert.True(t, v)
+}
+
 func TestCommandLsp_EmbedderBinaryName(t *testing.T) {
 	p := settings.NewCliParams()
 	p.ExitOnError = false

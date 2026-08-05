@@ -155,6 +155,16 @@ func TestServer_InitializeAdvertisesFullSync(t *testing.T) {
 	assert.Equal(t, protocol.TextDocumentSyncKindFull, *sync.Change)
 }
 
+func TestServer_CancelRequestIsNoOp(t *testing.T) {
+	// $/cancelRequest is an optional notification; the server must accept it
+	// (returning nil) rather than leaving the handler nil, which would make glsp
+	// respond with "method not supported" and log an error for every client
+	// cancellation.
+	handler := newTestServer(t).Handler()
+	require.NotNil(t, handler.CancelRequest, "CancelRequest handler must be registered")
+	assert.NoError(t, handler.CancelRequest(&glsp.Context{}, &protocol.CancelParams{}))
+}
+
 func TestNewServer_DefaultsBinaryName(t *testing.T) {
 	s := NewServer("", "", nil)
 	assert.Equal(t, settings.CliBinaryName, s.binaryName)
