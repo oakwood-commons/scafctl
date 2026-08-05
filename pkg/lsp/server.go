@@ -16,13 +16,20 @@ import (
 
 // Server is a language server for solution files. It keeps a per-document
 // parse+index cache for each open document and republishes lint diagnostics on
-// open/change/save.
+// open/change/save. Editor features are registered explicitly as a table of
+// feature descriptors (see capabilities.go).
 type Server struct {
 	binaryName string
 	version    string
 	registry   *provider.Registry
 
 	docs *DocumentCache
+
+	// features is the explicit, ordered set of editor capabilities this server
+	// exposes. Handler() ranges it to wire handler callbacks; the Initialize
+	// closure ranges it to advertise capabilities. Adding a feature is one
+	// alphabetized entry in defaultFeatures().
+	features []feature
 }
 
 // NewServer constructs a language server. binaryName labels diagnostics and the
@@ -37,6 +44,7 @@ func NewServer(binaryName, version string, registry *provider.Registry) *Server 
 		version:    version,
 		registry:   registry,
 		docs:       NewDocumentCache(),
+		features:   defaultFeatures(),
 	}
 }
 
@@ -47,21 +55,17 @@ func (s *Server) Run() error {
 }
 
 // Handler builds the glsp protocol handler wired to this server's callbacks.
+// Core lifecycle methods (initialize/shutdown/cancel) are wired directly here;
+// editor features are wired from the s.features table so adding a feature does
+// not touch this function.
 func (s *Server) Handler() *protocol.Handler {
 	handler := &protocol.Handler{}
 
 	handler.Initialize = func(_ *glsp.Context, _ *protocol.InitializeParams) (any, error) {
+		// glsp derives most capabilities from which handler callbacks are set;
+		// each feature's advertise func then applies any computed values.
 		capabilities := handler.CreateServerCapabilities()
-		// Use full-document sync so each change carries the whole text; the
-		// server does not need to apply incremental patches.
-		if sync, ok := capabilities.TextDocumentSync.(*protocol.TextDocumentSyncOptions); ok {
-			full := protocol.TextDocumentSyncKindFull
-			sync.Change = &full
-		}
-		// Advertise rename with prepare support so clients validate the cursor
-		// position before prompting for a new name.
-		prepare := true
-		capabilities.RenameProvider = &protocol.RenameOptions{PrepareProvider: &prepare}
+		s.advertiseFeatures(&capabilities)
 		result := protocol.InitializeResult{
 			Capabilities: capabilities,
 			ServerInfo: &protocol.InitializeResultServerInfo{
@@ -84,15 +88,8 @@ func (s *Server) Handler() *protocol.Handler {
 	// does not cancel to simply complete the request normally.
 	handler.CancelRequest = func(_ *glsp.Context, _ *protocol.CancelParams) error { return nil }
 
-	handler.TextDocumentDidOpen = s.didOpen
-	handler.TextDocumentDidChange = s.didChange
-	handler.TextDocumentDidSave = s.didSave
-	handler.TextDocumentDidClose = s.didClose
-
-	handler.TextDocumentDefinition = s.definition
-	handler.TextDocumentReferences = s.references
-	handler.TextDocumentPrepareRename = s.prepareRename
-	handler.TextDocumentRename = s.rename
+	// Wire editor features from the explicit registration table.
+	s.wireFeatures(handler)
 
 	return handler
 }
