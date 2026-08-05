@@ -29,7 +29,8 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "workspaceContains:**/{solution,scafctl,taskfile,actions}.{yaml,yml,json}",
+    "workspaceContains:**/{solution,scafctl,taskfile,actions}.{yaml,yml}",
+    "workspaceContains:**/{solution,scafctl}.json",
     "onCommand:scafctl.restartServer"
   ],
   "contributes": {

@@ -81,3 +81,39 @@ func TestCommandDocumentSelectors_EmbedderBinaryName(t *testing.T) {
 	// Standard names still recognized alongside the embedder name.
 	assert.Contains(t, got.YAMLNames, "solution.yaml")
 }
+
+// TestCommandDocumentSelectors_OptionsCarryFlags verifies that output options
+// are built from the populated outputFlags struct (via ToKvxOutputOptions) so
+// FormatExplicit and AppName survive -- they were previously dropped because
+// options were built via NewKvxOutputOptionsFromFlags. The --where flag is
+// accepted (plumbed through) even though this command emits a single object.
+func TestCommandDocumentSelectors_OptionsCarryFlags(t *testing.T) {
+	// -o json is explicit here; FormatExplicit must be honored so the JSON
+	// document is emitted rather than falling back to auto/table rendering.
+	out := runDocumentSelectors(t, "", "-o", "json")
+	var got pkglsp.RecognizedFiles
+	require.NoError(t, json.Unmarshal([]byte(out), &got), "explicit -o json must produce JSON: %s", out)
+
+	// The --where flag is registered on this command and must be accepted
+	// without a parse error (it is plumbed into kvx options).
+	cmd := commandDocumentSelectors(settings.NewCliParams(), func() *terminal.IOStreams {
+		s, _, _ := terminal.NewTestIOStreams()
+		return s
+	}())
+	assert.NotNil(t, cmd.Flags().Lookup("where"), "--where flag must be registered")
+}
+
+// TestCommandDocumentSelectors_EmptyBinaryNameHelp verifies that an embedder
+// passing an empty binary name does not strip "scafctl" from the help text --
+// the replacement uses the effective (fallback) binary name instead.
+func TestCommandDocumentSelectors_EmptyBinaryNameHelp(t *testing.T) {
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = ""
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := commandDocumentSelectors(cliParams, ioStreams)
+
+	// With an empty binary name the effective name falls back to CliBinaryName,
+	// so the usage example must still name a real binary (not an empty string).
+	assert.Contains(t, cmd.Long, settings.CliBinaryName+" lsp document-selectors",
+		"empty binary name must fall back to the effective name in help text")
+}

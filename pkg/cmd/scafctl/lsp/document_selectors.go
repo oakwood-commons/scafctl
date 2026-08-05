@@ -25,6 +25,11 @@ import (
 func commandDocumentSelectors(cliParams *settings.Run, ioStreams *terminal.IOStreams) *cobra.Command {
 	var outputFlags flags.KvxOutputFlags
 
+	// Resolve the effective binary name once (falls back to CliBinaryName when
+	// an embedder passes an empty name), so help text, discovery, and the kvx
+	// app title all use the same non-empty value.
+	effectiveBinaryName := settings.SanitizeBinaryName(cliParams.BinaryName)
+
 	cmd := &cobra.Command{
 		Use:   "document-selectors",
 		Short: "Print the solution file names editors should attach the language server to",
@@ -43,7 +48,7 @@ func commandDocumentSelectors(cliParams *settings.Run, ioStreams *terminal.IOStr
 			Use -o json for a stable, parseable contract:
 
 			  scafctl lsp document-selectors -o json
-		`), settings.CliBinaryName, cliParams.BinaryName),
+		`), settings.CliBinaryName, effectiveBinaryName),
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -52,17 +57,18 @@ func commandDocumentSelectors(cliParams *settings.Run, ioStreams *terminal.IOStr
 			if w == nil {
 				return fmt.Errorf("writer not initialized in context")
 			}
-			outputFlags.AppName = cliParams.BinaryName
 
 			files := pkglsp.RecognizedFilesFor(cliParams.BinaryName)
 
-			outputOpts := flags.NewKvxOutputOptionsFromFlags(
-				outputFlags.Output,
-				outputFlags.Interactive,
-				outputFlags.Expression,
+			// Build options from the populated outputFlags so --where,
+			// FormatExplicit, and AppName survive; use the effective binary
+			// name (files.BinaryName is already resolved with fallback) for the
+			// kvx app title.
+			outputFlags.AppName = files.BinaryName + " lsp document-selectors"
+			outputOpts := flags.ToKvxOutputOptions(
+				&outputFlags,
 				kvx.WithOutputContext(ctx),
 				kvx.WithOutputNoColor(cliParams.NoColor),
-				kvx.WithOutputAppName(cliParams.BinaryName+" lsp document-selectors"),
 			)
 			outputOpts.IOStreams = ioStreams
 
