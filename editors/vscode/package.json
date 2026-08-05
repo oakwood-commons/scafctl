@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "oakwood-commons",
   "license": "Apache-2.0",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/oakwood-commons/scafctl.git",

@@ -76,6 +76,13 @@ func (s *Server) Handler() *protocol.Handler {
 	handler.Initialized = func(_ *glsp.Context, _ *protocol.InitializedParams) error { return nil }
 	handler.Shutdown = func(_ *glsp.Context) error { return nil }
 	handler.SetTrace = func(_ *glsp.Context, _ *protocol.SetTraceParams) error { return nil }
+	// Accept and ignore client cancellations. We do not support mid-flight
+	// request cancellation (handlers are fast and synchronous), but
+	// $/cancelRequest is an optional notification the client sends frequently
+	// (e.g. while typing). Registering a no-op handler avoids logging an
+	// "unsupported method" error for each one; the spec allows a server that
+	// does not cancel to simply complete the request normally.
+	handler.CancelRequest = func(_ *glsp.Context, _ *protocol.CancelParams) error { return nil }
 
 	handler.TextDocumentDidOpen = s.didOpen
 	handler.TextDocumentDidChange = s.didChange

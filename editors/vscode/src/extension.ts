@@ -4,7 +4,6 @@ import {
   LanguageClientOptions,
   RevealOutputChannelOn,
   ServerOptions,
-  TransportKind,
 } from 'vscode-languageclient/node';
 import { binaryNameFromCommand, checkBinary, resolveCommand } from './serverResolution';
 import { buildDocumentSelector, fetchRecognizedFiles } from './documentSelectors';
@@ -89,10 +88,14 @@ async function startClient(): Promise<void> {
     return;
   }
 
+  // Communicate over the child process's stdio. Do NOT set
+  // `transport: TransportKind.stdio` -- for an Executable, vscode-languageclient
+  // appends a `--stdio` flag when that transport is set explicitly, which the
+  // `scafctl lsp` cobra command rejects as an unknown flag (exit 1). Omitting
+  // `transport` still uses stdio (the Executable default) without the flag.
   const serverOptions: ServerOptions = {
     command,
     args: ['lsp'],
-    transport: TransportKind.stdio,
   };
 
   // Query the binary for the exact set of solution/action file names it

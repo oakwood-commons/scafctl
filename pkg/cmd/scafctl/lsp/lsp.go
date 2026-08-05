@@ -25,6 +25,14 @@ func CommandLsp(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 		binaryName = settings.CliBinaryName
 	}
 
+	// stdio selects the stdio transport. It is a no-op flag because stdio is the
+	// only (and default) transport, but many LSP clients -- following the
+	// convention established by typescript-language-server and Microsoft's own
+	// json/html/css servers -- append `--stdio` when launching a server, and
+	// vscode-languageclient does so for TransportKind.stdio. Accepting it makes
+	// the server usable by any such client instead of exiting on an unknown flag.
+	var stdio bool
+
 	cmd := &cobra.Command{
 		Use:   "lsp",
 		Short: "Run the language server over stdio (for editor integration)",
@@ -37,6 +45,10 @@ func CommandLsp(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 			VS Code extension), not run interactively -- stdout is the JSON-RPC
 			channel, so anything written there other than protocol messages would
 			corrupt the session.
+
+			The --stdio flag is accepted for compatibility with LSP clients that
+			pass it by convention; stdio is the only transport, so it has no
+			effect.
 		`), settings.CliBinaryName, binaryName),
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
@@ -57,6 +69,10 @@ func CommandLsp(cliParams *settings.Run, ioStreams *terminal.IOStreams, path str
 			return server.Run()
 		},
 	}
+
+	// Accept --stdio as a transport selector (see the stdio var comment). It is
+	// intentionally not marked hidden so `lsp --help` documents the convention.
+	cmd.Flags().BoolVar(&stdio, "stdio", false, "Use the stdio transport (default and only transport; accepted for LSP client compatibility)")
 
 	cmd.AddCommand(commandDocumentSelectors(cliParams, ioStreams))
 

@@ -13940,6 +13940,51 @@ func TestIntegration_LspRename(t *testing.T) {
 	assert.Contains(t, out, "file:///nav.yaml", "edits target the document")
 }
 
+// TestIntegration_LspStdioFlag verifies that `lsp --stdio` starts the server and
+// serves the LSP protocol. Many LSP clients (and vscode-languageclient for
+// TransportKind.stdio) append `--stdio`; the server must accept it rather than
+// exit with "unknown flag", which this exercises end-to-end.
+func TestIntegration_LspStdioFlag(t *testing.T) {
+	t.Parallel()
+
+	badSolution := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: bad\nspec:\n  resolvers:\n    appName:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.doesNotExist\n"
+
+	msgs := [][]byte{
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///tmp/bad.yaml", "languageId": "yaml", "version": 1, "text": badSolution},
+		}}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// The --stdio flag is the key part of this test: it must not error.
+	cmd := exec.CommandContext(ctx, binaryPath, "lsp", "--stdio")
+	cmd.Dir = findProjectRoot()
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	out := &lockedBuffer{}
+	var errBuf bytes.Buffer
+	cmd.Stdout = out
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Start())
+
+	for _, m := range msgs {
+		_, _ = stdin.Write(m)
+		time.Sleep(150 * time.Millisecond)
+	}
+	time.Sleep(700 * time.Millisecond)
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	// The server must not have rejected the flag, and must have served the
+	// protocol (published diagnostics for the bad solution).
+	assert.NotContains(t, errBuf.String(), "unknown flag", "--stdio must be accepted")
+	assert.Contains(t, out.String(), "publishDiagnostics", "server serves LSP over stdio with --stdio")
+}
+
 // ── refactor rename call / function ──────────────────────────────────────────
 
 const refactorRenameCallFixture = `apiVersion: scafctl.io/v1
