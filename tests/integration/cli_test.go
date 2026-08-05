@@ -13863,6 +13863,29 @@ func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
 	assert.Contains(t, out, "renameProvider", "rename capability")
 }
 
+func TestIntegration_LspDocumentSymbol(t *testing.T) {
+	t.Parallel()
+
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: symbols\nspec:\n  calls:\n    fetch:\n      provider: message\n      inputs:\n        message: fetching\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n"
+
+	out := runLSPSession(t, sol, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "textDocument/documentSymbol", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+		},
+	})
+
+	// The provider is advertised in the initialize response.
+	assert.Contains(t, out, "documentSymbolProvider", "documentSymbol capability advertised")
+	// The response lists the spec root, both groups, and their symbols.
+	assert.Contains(t, out, `"name":"spec"`, "spec root symbol")
+	assert.Contains(t, out, `"name":"resolvers"`, "resolvers group")
+	assert.Contains(t, out, `"name":"environment"`, "resolver symbol")
+	assert.Contains(t, out, `"name":"calls"`, "calls group")
+	assert.Contains(t, out, `"name":"fetch"`, "call symbol")
+	// Hierarchy is expressed via children.
+	assert.Contains(t, out, `"children"`, "symbols nested as children")
+}
+
 func TestIntegration_LspRename(t *testing.T) {
 	t.Parallel()
 
