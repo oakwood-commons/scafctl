@@ -330,6 +330,87 @@ spec:
 	}
 }
 
+// TestExtractCall_RejectsUnsupportedStepFields guards the silent-behavior-loss
+// case: a step that carries a step-level field a call definition cannot model
+// (when, continueOnError, onError, forEach, or a validation message) must be
+// rejected, not hoisted verbatim -- otherwise the field is silently spliced into
+// the call body (where spec.Call ignores it) AND stripped from the call site,
+// changing conditional/iteration/error-handling behavior with no error.
+func TestExtractCall_RejectsUnsupportedStepFields(t *testing.T) {
+	cases := map[string]string{
+		"when": `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: field-when
+spec:
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+            when: "1 == 1"
+`,
+		"continueOnError": `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: field-coe
+spec:
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+            continueOnError: true
+`,
+		"forEach": `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: field-foreach
+spec:
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+            forEach:
+              in: "[1, 2, 3]"
+`,
+		"validate message": `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: field-message
+spec:
+  resolvers:
+    environment:
+      validate:
+        with:
+          - provider: validation
+            inputs:
+              rule: __self != ""
+            message: must not be empty
+`,
+	}
+	for name, y := range cases {
+		t.Run(name, func(t *testing.T) {
+			sol := loadSolution(t, y)
+			phase := "resolve"
+			if name == "validate message" {
+				phase = "validate"
+			}
+			res, err := ExtractCall(sol, "spec.resolvers.environment."+phase+".with[0]", "getEnv")
+			require.Error(t, err)
+			assert.Nil(t, res)
+			assert.Contains(t, err.Error(), "unsupported field")
+		})
+	}
+}
+
 // extractFixtureWithCallStep returns a solution containing an existing call, a
 // provider step, and a step that already uses a call: reference (non-extractable).
 func extractFixtureWithCallStep() string {

@@ -39,6 +39,10 @@ const maxColumn = 1 << 30
 // v1 scope and conservatism:
 //   - Only a DIRECT provider step is extractable. A step that already uses
 //     "call:" (or that is not a provider step) is rejected.
+//   - Only provider/inputs steps are extractable. A step that carries any
+//     step-level field a call definition cannot model (when, continueOnError,
+//     onError, forEach, or a validation message) is rejected rather than
+//     silently dropping that field on extraction.
 //   - Argument inference is conservative: a literal block is extracted with NO
 //     args (empty Args); the call reproduces the inputs literally. Inferring
 //     arguments from near-duplicate steps with varying values is deferred.
@@ -161,20 +165,34 @@ func extractCall(sol *solution.Solution, blockPath, callName string, replaceIden
 }
 
 // requireProviderStep verifies node is a mapping that represents a direct
-// provider step: it must declare a "provider" key and must NOT declare a "call"
-// key. Steps that already use a call, or that are not provider steps, are not
-// extractable in v1.
+// provider step that is safe to hoist verbatim: it must declare a "provider"
+// key, must NOT declare a "call" key, and must NOT declare any step-level field
+// other than provider/inputs. Steps that already use a call, that are not
+// provider steps, or that carry conditional/iteration/error-handling fields
+// (when, continueOnError, onError, forEach, message) are not extractable in v1.
+//
+// The restriction to provider/inputs exists because a step is hoisted verbatim
+// into a spec.calls definition, whose type (spec.Call) only models provider/
+// inputs (plus description/args/dedup, which a step never has). Splicing any
+// other step field into the call body would silently drop it (spec.Call ignores
+// unknown keys) AND strip it from the call site, changing behavior with no error.
 func requireProviderStep(node *yaml.Node) error {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return fmt.Errorf("step is not a mapping block")
 	}
 	hasProvider, hasCall := false, false
+	var unsupported []string
 	for i := 0; i+1 < len(node.Content); i += 2 {
-		switch node.Content[i].Value {
+		key := node.Content[i].Value
+		switch key {
 		case "provider":
 			hasProvider = true
 		case "call":
 			hasCall = true
+		case "inputs":
+			// allowed
+		default:
+			unsupported = append(unsupported, key)
 		}
 	}
 	if hasCall {
@@ -182,6 +200,11 @@ func requireProviderStep(node *yaml.Node) error {
 	}
 	if !hasProvider {
 		return fmt.Errorf("step is not a provider step (no provider key); only direct provider steps are extractable")
+	}
+	if len(unsupported) > 0 {
+		sort.Strings(unsupported)
+		return fmt.Errorf("step declares unsupported field(s) %v; only provider/inputs steps are extractable in v1 "+
+			"(step-level when/continueOnError/onError/forEach/message would be silently lost)", unsupported)
 	}
 	return nil
 }
