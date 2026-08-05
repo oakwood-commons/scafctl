@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkBinary, DefaultServerCommand, resolveCommand } from './serverResolution';
+import { binaryNameFromCommand } from './serverResolution';
 
 test('resolveCommand uses the configured path when set', () => {
   assert.equal(resolveCommand('/usr/local/bin/scafctl'), '/usr/local/bin/scafctl');
@@ -14,6 +15,37 @@ test('resolveCommand falls back to the default when empty or undefined', () => {
   assert.equal(resolveCommand(''), DefaultServerCommand);
   assert.equal(resolveCommand('   '), DefaultServerCommand);
   assert.equal(resolveCommand(undefined), DefaultServerCommand);
+});
+
+test('binaryNameFromCommand extracts the binary name from a path', () => {
+  assert.equal(binaryNameFromCommand('scafctl'), 'scafctl');
+  assert.equal(binaryNameFromCommand('/opt/tools/mycli'), 'mycli');
+  assert.equal(binaryNameFromCommand('C:\\tools\\mycli.exe'.replace(/\\/g, '/')), 'mycli');
+  assert.equal(binaryNameFromCommand('  /opt/mycli  '), 'mycli');
+});
+
+test('binaryNameFromCommand strips non-.exe extensions (Windows launchers)', () => {
+  assert.equal(binaryNameFromCommand('mycli.cmd'), 'mycli');
+  assert.equal(binaryNameFromCommand('mycli.bat'), 'mycli');
+  assert.equal(binaryNameFromCommand('/opt/mycli.ps1'), 'mycli');
+});
+
+test('binaryNameFromCommand replaces unsafe characters', () => {
+  // Mirrors Go settings.SanitizeBinaryName (safeNameRe [^A-Za-z0-9._-]).
+  assert.equal(binaryNameFromCommand('my cli'), 'my_cli');
+  assert.equal(binaryNameFromCommand('my@cli'), 'my_cli');
+});
+
+test('binaryNameFromCommand falls back to the default for empty input', () => {
+  assert.equal(binaryNameFromCommand(''), DefaultServerCommand);
+  assert.equal(binaryNameFromCommand('   '), DefaultServerCommand);
+});
+
+test('binaryNameFromCommand falls back to the default for dot-only names', () => {
+  // Parity with Go settings.SanitizeBinaryName, which returns the default for
+  // '.' and '..'.
+  assert.equal(binaryNameFromCommand('.'), DefaultServerCommand);
+  assert.equal(binaryNameFromCommand('..'), DefaultServerCommand);
 });
 
 test('checkBinary reports a missing executable', async () => {

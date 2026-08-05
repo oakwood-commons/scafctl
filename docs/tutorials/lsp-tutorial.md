@@ -57,8 +57,27 @@ The exact steps depend on the editor's LSP client, but the shape is always the
 same:
 
 1. Point the client at the `scafctl lsp` command (the server process).
-2. Associate it with the solution file language (YAML).
-3. Open a `solution.yaml` -- diagnostics appear inline as you edit.
+2. Attach it to the solution files scafctl recognizes. To avoid hardcoding a
+   file list that drifts from CLI discovery, ask the binary which files it
+   auto-discovers:
+
+   ~~~bash
+   scafctl lsp document-selectors -o json
+   ~~~
+
+   This reports the recognized file names partitioned by editor language --
+   `solution.{yaml,yml,json}`, `<binary>.{yaml,yml,json}`, `taskfile.{yaml,yml}`,
+   and `actions.{yaml,yml}` -- along with the effective binary name. JSON
+   solutions are listed separately so the client attaches them as JSON (not
+   YAML) documents.
+3. Open a `solution.yaml` (or `solution.json`, `taskfile.yaml`, ...) --
+   diagnostics appear inline as you edit.
+
+The bundled VS Code extension does this automatically: it queries
+`scafctl lsp document-selectors` at startup and builds its document selector
+from the result, so it always matches CLI auto-discovery -- including any
+embedder binary name. Users can add globs for non-standard file names via the
+`scafctl.solutionFilePatterns` setting.
 
 Because the server reuses the CLI's `lint` engine, no separate configuration is
 needed to keep editor and CLI diagnostics consistent.

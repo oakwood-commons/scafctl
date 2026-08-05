@@ -19,7 +19,7 @@ import (
 )
 
 // CommandLsp creates the `lsp` command.
-func CommandLsp(cliParams *settings.Run, _ *terminal.IOStreams, path string) *cobra.Command {
+func CommandLsp(cliParams *settings.Run, ioStreams *terminal.IOStreams, path string) *cobra.Command {
 	binaryName := cliParams.BinaryName
 	if binaryName == "" {
 		binaryName = settings.CliBinaryName
@@ -57,6 +57,8 @@ func CommandLsp(cliParams *settings.Run, _ *terminal.IOStreams, path string) *co
 			return server.Run()
 		},
 	}
+
+	cmd.AddCommand(commandDocumentSelectors(cliParams, ioStreams))
 
 	return cmd
 }

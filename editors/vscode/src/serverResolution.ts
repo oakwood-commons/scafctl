@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { basename } from 'node:path';
 
 /** DefaultServerCommand is the command used when no explicit path is configured. */
 export const DefaultServerCommand = 'scafctl';
@@ -10,6 +11,33 @@ export const DefaultServerCommand = 'scafctl';
 export function resolveCommand(configuredPath: string | undefined): string {
   const trimmed = (configuredPath ?? '').trim();
   return trimmed.length > 0 ? trimmed : DefaultServerCommand;
+}
+
+/**
+ * binaryNameFromCommand derives a CLI binary name from a resolved command path
+ * (e.g. `/opt/mycli` -> `mycli`, `mycli.exe` -> `mycli`, `scafctl` -> `scafctl`).
+ * It mirrors Go's settings.SanitizeBinaryName: strip the directory, strip the
+ * final extension (so `mycli.cmd`/`.bat`/`.ps1` don't leak into selectors),
+ * replace unsafe characters, and fall back to the default when empty. Keeping it
+ * aligned with the Go sanitizer ensures the fallback binary name matches the
+ * CLI's discovery names when the server cannot report its own recognized files.
+ */
+export function binaryNameFromCommand(command: string): string {
+  let name = basename(command.trim());
+  // Strip a single trailing extension, matching Go's filepath.Ext stripping.
+  const dot = name.lastIndexOf('.');
+  if (dot > 0) {
+    name = name.slice(0, dot);
+  }
+  // Replace unsafe characters with underscores and trim them (mirrors safeNameRe
+  // [^A-Za-z0-9._-] plus a leading/trailing underscore trim).
+  name = name.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^_+|_+$/g, '');
+  // Fall back to the default for empty or dot-only names, matching Go's
+  // SanitizeBinaryName (which returns the default for "", ".", and "..").
+  if (name.length === 0 || name === '.' || name === '..') {
+    return DefaultServerCommand;
+  }
+  return name;
 }
 
 /**
