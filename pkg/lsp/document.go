@@ -4,6 +4,7 @@
 package lsp
 
 import (
+	"bytes"
 	"sync"
 
 	"github.com/oakwood-commons/scafctl/pkg/refindex"
@@ -52,7 +53,27 @@ func NewDocumentCache() *DocumentCache {
 // snapshot, and returns it. Parsing is done once here; every feature reuses the
 // snapshot. A parse failure is captured in the entry's ParseErr (and the entry
 // is still stored) so the cache never panics on malformed, mid-edit content.
+//
+// Set short-circuits when the cache already holds the same (version, text)
+// snapshot for uri: it returns the existing immutable entry without re-parsing
+// or re-indexing. This honors the "computed once per (URI, version)" contract
+// for duplicate notifications -- most notably didSave, which re-sends the last
+// synced content under the cached version, but also any repeated didChange for
+// an unchanged version.
 func (c *DocumentCache) Set(uri protocol.DocumentUri, version int32, text string) *DocEntry {
+	raw := []byte(text)
+
+	// Fast path: an identical snapshot is already cached. Check under the read
+	// lock so concurrent readers are never blocked by a redundant Set.
+	c.mu.RLock()
+	existing, ok := c.entries[uri]
+	c.mu.RUnlock()
+	if ok && existing.Version == version && bytes.Equal(existing.Raw, raw) {
+		return existing
+	}
+
+	// Parse outside the write lock so concurrent Get callers keep reading the
+	// current snapshot while the new one is built; only the map swap is locked.
 	entry := buildDocEntry(uri, version, text)
 	c.mu.Lock()
 	c.entries[uri] = entry

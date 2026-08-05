@@ -75,6 +75,37 @@ func TestDocumentCache_VersionBumpInvalidates(t *testing.T) {
 	assert.Equal(t, int32(2), got.Version)
 }
 
+// TestDocumentCache_SetDedupesIdenticalSnapshot verifies that re-Setting the
+// same (version, text) returns the already-cached entry without re-parsing --
+// the didSave case, where the last synced content is re-sent under the cached
+// version. Reusing the same pointer proves no rebuild happened.
+func TestDocumentCache_SetDedupesIdenticalSnapshot(t *testing.T) {
+	c := NewDocumentCache()
+	first := c.Set(cacheURI, 1, validCacheSolution)
+	second := c.Set(cacheURI, 1, validCacheSolution)
+
+	assert.Same(t, first, second, "an identical (version, text) snapshot reuses the cached entry")
+
+	got, ok := c.Get(cacheURI)
+	require.True(t, ok)
+	assert.Same(t, first, got)
+}
+
+// TestDocumentCache_SetSameVersionNewTextRebuilds verifies the short-circuit is
+// gated on text equality, not version alone: identical version but changed text
+// must rebuild so the cache never serves stale parsed state.
+func TestDocumentCache_SetSameVersionNewTextRebuilds(t *testing.T) {
+	c := NewDocumentCache()
+	first := c.Set(cacheURI, 1, validCacheSolution)
+	second := c.Set(cacheURI, 1, validCacheSolution+"\n# trailing edit\n")
+
+	assert.NotSame(t, first, second, "different text under the same version rebuilds the snapshot")
+
+	got, ok := c.Get(cacheURI)
+	require.True(t, ok)
+	assert.Same(t, second, got)
+}
+
 func TestDocumentCache_Delete(t *testing.T) {
 	c := NewDocumentCache()
 	c.Set(cacheURI, 1, validCacheSolution)
