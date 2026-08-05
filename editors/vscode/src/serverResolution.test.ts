@@ -24,6 +24,18 @@ test('binaryNameFromCommand extracts the binary name from a path', () => {
   assert.equal(binaryNameFromCommand('  /opt/mycli  '), 'mycli');
 });
 
+test('binaryNameFromCommand strips non-.exe extensions (Windows launchers)', () => {
+  assert.equal(binaryNameFromCommand('mycli.cmd'), 'mycli');
+  assert.equal(binaryNameFromCommand('mycli.bat'), 'mycli');
+  assert.equal(binaryNameFromCommand('/opt/mycli.ps1'), 'mycli');
+});
+
+test('binaryNameFromCommand replaces unsafe characters', () => {
+  // Mirrors Go settings.SanitizeBinaryName (safeNameRe [^A-Za-z0-9._-]).
+  assert.equal(binaryNameFromCommand('my cli'), 'my_cli');
+  assert.equal(binaryNameFromCommand('my@cli'), 'my_cli');
+});
+
 test('binaryNameFromCommand falls back to the default for empty input', () => {
   assert.equal(binaryNameFromCommand(''), DefaultServerCommand);
   assert.equal(binaryNameFromCommand('   '), DefaultServerCommand);

@@ -28,10 +28,20 @@ const selectorConfigKeys = [
 
 /**
  * enqueueRestart serializes client lifecycle transitions. `task` runs after any
- * prior transition settles (success or failure), so restarts never interleave.
+ * prior transition settles; its errors are logged and swallowed so a background
+ * restart (triggered via `void` from a config-change event) can never surface as
+ * an unhandled promise rejection or break the queue for later transitions.
  */
 function enqueueRestart(task: () => Promise<void>): Promise<void> {
-  restartQueue = restartQueue.then(task, task);
+  const run = async (): Promise<void> => {
+    try {
+      await task();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      output?.appendLine(`scafctl: client restart failed: ${message}`);
+    }
+  };
+  restartQueue = restartQueue.then(run);
   return restartQueue;
 }
 
