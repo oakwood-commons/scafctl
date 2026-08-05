@@ -44,6 +44,25 @@ hierarchy -- a `spec` root whose children are the `resolvers`, `actions`,
 Outline pane and breadcrumbs populate and **Go to Symbol in File**
 (Cmd/Ctrl+Shift+O) fuzzy-jumps to any resolver, action, call, or function.
 
+## Hover
+
+Hovering the cursor over a symbol shows contextual markdown pulled from the same
+sources the CLI already knows about -- no separate documentation to maintain:
+
+- **Resolver / action / call / function reference** -> its kind, name, and
+  `description` from the solution.
+- **Provider name** (a `provider:` value) -> the provider's description and a
+  summary of its input schema (each input's name, type, whether it is required,
+  and its doc), straight from the provider descriptor.
+- **CEL / template function** -> the function's signature (CEL), description, and
+  a usage example, from the built-in function registries (the same set the
+  `list_cel_functions` / `list_go_template_functions` MCP tools report).
+- **Mapping key** -> the schema documentation for that field, plus a related
+  concept summary when one matches.
+
+Hover degrades gracefully: on an unknown target, a parse error, or whitespace it
+simply returns nothing, so it never interrupts editing.
+
 ## Trying it by hand
 
 You normally never run the server directly, but you can confirm it starts:
@@ -92,9 +111,9 @@ needed to keep editor and CLI diagnostics consistent.
 
 ## What's next
 
-Navigation and rename currently cover resolvers. Planned additions extend the
-same reference index to actions, functions, and calls, and add hover and
-completion.
+Navigation, rename, and hover cover resolvers, actions, functions, and calls.
+Planned additions extend the same cursor-context resolver to completion and
+signature help.
 
 ## See also
 
