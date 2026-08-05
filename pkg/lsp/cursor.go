@@ -154,6 +154,16 @@ func ResolveCursor(doc *DocEntry, pos protocol.Position) CursorContext {
 	key, keyStart, keyEnd, valueStart, hasValue := parseKeyLine(runes)
 
 	// 2. Cursor within the key token -> schema key context.
+	//
+	// Flow mappings that pack multiple keys on one line (e.g.
+	// "{provider: parameter, onError: fail}") are only partially supported here:
+	// the text key scanner (parseKeyLine) recognizes the first key, and value-node
+	// path selection resolves by column proximity to the nearest value span, so a
+	// cursor on a *later* key of a flow entry can fall back to a sibling's path.
+	// This is an accepted limitation of the text/column heuristic -- flow
+	// multi-key lines are rare in solutions, and block mappings (the common form,
+	// one key per line) resolve exactly. Proper per-key flow resolution would need
+	// full flow-structure parsing and is deferred until a feature requires it.
 	if key != "" && cursor >= keyStart && cursor <= keyEnd {
 		path, node := scalarLeafOnLine(doc, int(pos.Line)+1, cursor)
 		if path == "" {
@@ -202,7 +212,7 @@ func ResolveCursor(doc *DocEntry, pos protocol.Position) CursorContext {
 
 	switch {
 	case keyName == "provider":
-		return CursorContext{Kind: CursorProviderName, Path: leafPath, Node: leafNode, PartialToken: backwardIdent(line, cursor)}
+		return CursorContext{Kind: CursorProviderName, Path: leafPath, Node: leafNode, PartialToken: backwardProviderIdent(line, cursor)}
 	case isKey(enumValueKeys, keyName):
 		return CursorContext{Kind: CursorEnumValue, Path: leafPath, Node: leafNode, PartialToken: backwardIdent(line, cursor)}
 	case isKey(celValueKeys, keyName):
@@ -346,13 +356,61 @@ func blockScalarCovering(doc *DocEntry, line int) (string, *yaml.Node) {
 		if n.Style != yaml.LiteralStyle && n.Style != yaml.FoldedStyle {
 			continue
 		}
-		bodyEnd := n.Line + strings.Count(n.Value, "\n")
+		// yaml.v3 folds a ">"/">-" body's line breaks into spaces in n.Value, so
+		// strings.Count(n.Value, "\n") undercounts a folded span (often to 0) and
+		// a cursor on a folded body line would not be recognized as inside the
+		// scalar. Derive the body extent from the raw source geometry instead --
+		// this is correct for both literal (|) and folded (>) styles.
+		bodyEnd := blockBodyEnd(doc.Raw, n.Line)
 		if line > n.Line && line <= bodyEnd && len(path) > len(best) {
 			best = path
 			bestNode = n
 		}
 	}
 	return best, bestNode
+}
+
+// blockBodyEnd returns the 1-based line number of the last source line belonging
+// to a block scalar whose key/indicator is on keyLine (1-based). The body is the
+// maximal run of following lines that are blank or indented deeper than the key
+// line; the result is the last NON-blank such line, so trailing blank lines and
+// the following dedented sibling are excluded. It returns keyLine when the scalar
+// has no body lines. Deriving the span from raw geometry (rather than the scalar
+// value) makes it style-agnostic: folded scalars, whose newlines yaml.v3 collapses
+// into spaces, span correctly.
+func blockBodyEnd(raw []byte, keyLine int) int {
+	keyText, ok := lineAt(raw, keyLine-1)
+	if !ok {
+		return keyLine
+	}
+	keyIndent := leadingSpaces(keyText)
+	bodyEnd := keyLine
+	for l := keyLine + 1; ; l++ {
+		text, ok := lineAt(raw, l-1)
+		if !ok {
+			break
+		}
+		if strings.TrimSpace(text) == "" {
+			continue // blank line may be interior to the body; don't extend or stop
+		}
+		if leadingSpaces(text) <= keyIndent {
+			break // dedent to the key's level or shallower: the body has ended
+		}
+		bodyEnd = l
+	}
+	return bodyEnd
+}
+
+// leadingSpaces counts the leading space/tab runes of a line.
+func leadingSpaces(s string) int {
+	n := 0
+	for _, r := range s {
+		if r != ' ' && r != '\t' {
+			break
+		}
+		n++
+	}
+	return n
 }
 
 // firstNonSpace returns the 0-based rune index of the first non-space/tab rune,
@@ -418,6 +476,26 @@ func backwardIdent(s string, i int) string {
 	}
 	start := i
 	for start > 0 && isIdentRune(runes[start-1]) {
+		start--
+	}
+	return string(runes[start:i])
+}
+
+// backwardProviderIdent captures the partial provider token ending at rune index
+// i, treating '-' as part of the token so hyphenated provider names (e.g.
+// "go-template", "go-template-extensions") are not truncated to the suffix after
+// the last '-'. CEL/template identifiers deliberately exclude '-' (it is an
+// operator/minus there), so only provider-name completion uses this variant.
+func backwardProviderIdent(s string, i int) string {
+	runes := []rune(s)
+	if i > len(runes) {
+		i = len(runes)
+	}
+	if i < 0 {
+		i = 0
+	}
+	start := i
+	for start > 0 && (isIdentRune(runes[start-1]) || runes[start-1] == '-') {
 		start--
 	}
 	return string(runes[start:i])

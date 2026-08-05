@@ -330,6 +330,82 @@ spec:
 	assert.True(t, strings.HasSuffix(ctx.Path, ".tmpl"))
 }
 
+func TestResolveCursor_FoldedBlockScalarCELBody(t *testing.T) {
+	// A folded (>-) multi-line CEL body. yaml.v3 folds the body's line breaks
+	// into spaces in the scalar value (often yielding 0 newlines), so the block
+	// span must be derived from source geometry, not the value's newline count.
+	// A cursor on any body line must still classify as CEL.
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: c
+spec:
+  resolvers:
+    a:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value:
+                expr: >-
+                  size(_.foo) &&
+                  bigFunc(_.bar)
+`
+	pos := posAt(t, content, "bigFunc(_.bar)", "bigFunc", 3)
+	ctx := resolveFixture(t, content, pos)
+	assert.Equal(t, CursorCEL, ctx.Kind, "path=%q partial=%q", ctx.Path, ctx.PartialToken)
+	assert.Equal(t, "big", ctx.PartialToken)
+	assert.True(t, strings.HasSuffix(ctx.Path, ".expr"))
+}
+
+func TestResolveCursor_FoldedBlockScalarTemplateBody(t *testing.T) {
+	// A folded (>-) multi-line template body: the second body line must still be
+	// recognized as inside the enclosing block scalar despite yaml.v3 folding.
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: c
+spec:
+  resolvers:
+    a:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              value:
+                tmpl: >-
+                  Hello world
+                  {{ upperCase .name }}
+`
+	pos := posAt(t, content, "{{ upperCase .name }}", "upperCase", 5)
+	ctx := resolveFixture(t, content, pos)
+	assert.Equal(t, CursorTemplate, ctx.Kind, "path=%q partial=%q prefix=%q", ctx.Path, ctx.PartialToken, ctx.ExprPrefix)
+	assert.Equal(t, "upper", ctx.PartialToken)
+	assert.Equal(t, "", ctx.ExprPrefix)
+	assert.True(t, strings.HasSuffix(ctx.Path, ".tmpl"))
+}
+
+func TestResolveCursor_ProviderNameHyphenPartial(t *testing.T) {
+	// Provider names commonly contain hyphens (e.g. go-template); the partial
+	// token for provider-name completion must keep the hyphen, not truncate to
+	// the suffix after the last '-'.
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: c
+spec:
+  resolvers:
+    a:
+      resolve:
+        with:
+          - provider: go-templ
+`
+	pos := posAt(t, content, "provider: go-templ", "go-templ", len("go-templ"))
+	ctx := resolveFixture(t, content, pos)
+	assert.Equal(t, CursorProviderName, ctx.Kind, "path=%q", ctx.Path)
+	assert.Equal(t, "go-templ", ctx.PartialToken)
+}
+
 func TestResolveCursor_FlowMappingSelectsByColumn(t *testing.T) {
 	// Two scalars share a line in a flow mapping; the cursor column must select
 	// the right one (onError, not provider) despite provider's longer path.
