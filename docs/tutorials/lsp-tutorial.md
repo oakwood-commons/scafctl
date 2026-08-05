@@ -44,6 +44,33 @@ hierarchy -- a `spec` root whose children are the `resolvers`, `actions`,
 Outline pane and breadcrumbs populate and **Go to Symbol in File**
 (Cmd/Ctrl+Shift+O) fuzzy-jumps to any resolver, action, call, or function.
 
+Finally, it offers **quick fixes**. `textDocument/codeAction` turns certain lint
+diagnostics into one-click fixes (the editor's lightbulb), reusing the same fix
+logic (`lint.QuickFixFor`) so the applied edit always matches what the linter
+would recommend:
+
+- **deprecated field** -- replaces the deprecated `onError` field with its
+  successor `continueOnError`, translating the value (`onError: continue` becomes
+  `continueOnError: true`, and `onError: fail` becomes `continueOnError: false`).
+- **redundant dependsOn** -- removes the redundant `dependsOn` entry (or the
+  whole `dependsOn:` block when every listed dependency is already inferred from
+  value references).
+- **unused resolver** -- removes the entire unreferenced resolver block.
+
+For example, given a resolve source with the deprecated field:
+
+~~~yaml
+resolve:
+  with:
+    - provider: parameter
+      onError: continue   # deprecated-field diagnostic here
+      inputs:
+        value: dev
+~~~
+
+invoking the quick fix rewrites just that line to `continueOnError: true`,
+leaving surrounding formatting and comments untouched.
+
 ## Trying it by hand
 
 You normally never run the server directly, but you can confirm it starts:

@@ -39,6 +39,7 @@ type feature struct {
 // Handler() or the Initialize closure.
 func defaultFeatures() []feature {
 	return []feature{
+		codeActionFeature(),
 		documentSyncFeature(),
 		navigationFeature(),
 		renameFeature(),

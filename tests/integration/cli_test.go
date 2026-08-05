@@ -13909,6 +13909,45 @@ func TestIntegration_LspRename(t *testing.T) {
 	assert.Contains(t, out, lspSessionURI, "edits target the document")
 }
 
+// TestIntegration_LspCodeAction opens a document with a deprecated onError field
+// and sends textDocument/codeAction over the diagnostic range. The server must
+// advertise the QuickFix kind and return a quick-fix action whose edit replaces
+// onError with the continueOnError boolean equivalent.
+func TestIntegration_LspCodeAction(t *testing.T) {
+	t.Parallel()
+
+	// onError is on line 10 (0-based); "b" references "a" so "a" is not unused.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: dep\nspec:\n  resolvers:\n    a:\n      resolve:\n        with:\n          - provider: parameter\n            onError: continue\n            inputs:\n              value: dev\n    b:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.a\n"
+
+	out := runLSPSession(t, sol, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "textDocument/codeAction", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+			"range": map[string]any{
+				"start": map[string]any{"line": 10, "character": 0},
+				"end":   map[string]any{"line": 10, "character": 30},
+			},
+			"context": map[string]any{
+				"diagnostics": []any{map[string]any{
+					"range": map[string]any{
+						"start": map[string]any{"line": 10, "character": 0},
+						"end":   map[string]any{"line": 10, "character": 30},
+					},
+					"code":    "deprecated-field",
+					"message": "field 'onError' is deprecated",
+				}},
+			},
+		},
+	})
+
+	// The provider (with the QuickFix kind) is advertised in initialize.
+	assert.Contains(t, out, "codeActionProvider", "codeAction capability advertised")
+	assert.Contains(t, out, "quickfix", "quickfix kind advertised and/or returned")
+	// The returned action carries the replacement edit.
+	assert.Contains(t, out, "Replace deprecated 'onError' with 'continueOnError'", "quick-fix title")
+	assert.Contains(t, out, "continueOnError: true", "the replacement edit")
+	assert.Contains(t, out, lspSessionURI, "edit targets the document")
+}
+
 // TestIntegration_LspStdioFlag verifies that `lsp --stdio` starts the server and
 // serves the LSP protocol. Many LSP clients (and vscode-languageclient for
 // TransportKind.stdio) append `--stdio`; the server must accept it rather than
