@@ -12,6 +12,12 @@ import { buildDocumentSelector, fetchRecognizedFiles } from './documentSelectors
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 
+// restartQueue serializes stop/start cycles. The restart command, config-change
+// events, and initial activation can otherwise interleave their stop/start
+// calls, leaving multiple clients or a stopped client. Chaining every cycle
+// onto a single in-flight promise makes them run strictly in order.
+let restartQueue: Promise<void> = Promise.resolve();
+
 /** Config keys that require the language client to be recreated when changed. */
 const selectorConfigKeys = [
   'scafctl.serverPath',
@@ -20,33 +26,44 @@ const selectorConfigKeys = [
   'scafctl.language.enable',
 ];
 
+/**
+ * enqueueRestart serializes client lifecycle transitions. `task` runs after any
+ * prior transition settles (success or failure), so restarts never interleave.
+ */
+function enqueueRestart(task: () => Promise<void>): Promise<void> {
+  restartQueue = restartQueue.then(task, task);
+  return restartQueue;
+}
+
+/** restartClient stops any running client and starts a fresh one. */
+async function restartClient(): Promise<void> {
+  await stopClient();
+  await startClient();
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   output = vscode.window.createOutputChannel('scafctl');
   context.subscriptions.push(output);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('scafctl.restartServer', async () => {
-      await stopClient();
-      await startClient();
-    }),
+    vscode.commands.registerCommand('scafctl.restartServer', () => enqueueRestart(restartClient)),
   );
 
   // Recreate the client when a selector-affecting setting changes so new file
   // patterns / language mode / server path take effect without a reload.
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration(async (event) => {
+    vscode.workspace.onDidChangeConfiguration((event) => {
       if (selectorConfigKeys.some((key) => event.affectsConfiguration(key))) {
-        await stopClient();
-        await startClient();
+        void enqueueRestart(restartClient);
       }
     }),
   );
 
-  await startClient();
+  await enqueueRestart(startClient);
 }
 
 export async function deactivate(): Promise<void> {
-  await stopClient();
+  await enqueueRestart(stopClient);
 }
 
 async function startClient(): Promise<void> {
@@ -107,6 +124,14 @@ async function startClient(): Promise<void> {
   try {
     await client.start();
   } catch (err) {
+    // Attempt to stop the partially-started client so a spawned-but-unhandshaked
+    // server process is not leaked. stop() may itself reject for a client that
+    // never fully started, so guard it before clearing the reference.
+    try {
+      await client.stop();
+    } catch {
+      // Best-effort cleanup; the start error below is what matters.
+    }
     client = undefined;
     const message = err instanceof Error ? err.message : String(err);
     output?.appendLine(`scafctl: language server failed to start: ${message}`);

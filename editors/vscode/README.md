@@ -80,9 +80,10 @@ language turns off the YAML/JSON extensions' schema features for that file, so
 leave this off unless you specifically want it.
 
 > Non-standard file names only receive features once the extension is active. It
-> activates when a workspace contains a standard solution file; if your workspace
-> has only custom-named files, run **scafctl: Restart Language Server** once to
-> activate it.
+> activates when a workspace contains a standard solution file, or when any file
+> is set to the `scafctl` language. If your workspace has only custom-named files
+> on the built-in `yaml`/`json` language, run **scafctl: Restart Language Server**
+> once to activate it.
 
 ## Commands
 

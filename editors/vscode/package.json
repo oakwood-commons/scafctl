@@ -31,6 +31,7 @@
   "activationEvents": [
     "workspaceContains:**/{solution,scafctl,taskfile,actions}.{yaml,yml}",
     "workspaceContains:**/{solution,scafctl}.json",
+    "onLanguage:scafctl",
     "onCommand:scafctl.restartServer"
   ],
   "contributes": {
