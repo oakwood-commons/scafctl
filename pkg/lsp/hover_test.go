@@ -4,7 +4,6 @@
 package lsp
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/refindex"
@@ -72,7 +71,8 @@ func TestHover_SymbolRef(t *testing.T) {
 func TestHover_ProviderName(t *testing.T) {
 	md := hoverAt(t, "provider: parameter", "parameter", 2)
 	assert.Contains(t, md, "provider")
-	assert.Contains(t, strings.ToLower(md), "parameter")
+	assert.Contains(t, md, "`parameter`", "leads with the canonical name the user typed")
+	assert.Contains(t, md, "CLI Parameters", "folds in the friendly display name")
 	assert.Contains(t, md, "**Inputs:**", "provider hover lists inputs")
 }
 

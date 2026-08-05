@@ -140,11 +140,12 @@ func (s *Server) providerHover(cc CursorContext) string {
 	}
 	d := p.Descriptor()
 	var b strings.Builder
-	title := d.Name
-	if d.DisplayName != "" {
-		title = d.DisplayName
+	// Lead with the canonical registry name -- the identifier the user typed in
+	// YAML -- and fold in the friendly display name when it differs.
+	fmt.Fprintf(&b, "**provider** `%s`", d.Name)
+	if d.DisplayName != "" && d.DisplayName != d.Name {
+		fmt.Fprintf(&b, " -- %s", d.DisplayName)
 	}
-	fmt.Fprintf(&b, "**provider** `%s`", title)
 	if d.Description != "" {
 		b.WriteString("\n\n")
 		b.WriteString(d.Description)
