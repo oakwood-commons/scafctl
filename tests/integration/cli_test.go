@@ -301,6 +301,22 @@ func TestIntegration_Options(t *testing.T) {
 	assert.Contains(t, stdout, "--cwd")
 }
 
+func TestIntegration_ExploreHelp(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "explore", "--help")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "explore")
+}
+
+func TestIntegration_ExploreListThemes(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t, "explore", "--list-themes")
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout, "dark")
+}
+
 func TestIntegration_RunHelp(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "run", "--help")

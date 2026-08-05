@@ -25,6 +25,7 @@ import (
 	diffcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/diff"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/eval"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explain"
+	explorecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/explore"
 	extractcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/extract"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/get"
 	inspectcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/inspect"
@@ -958,6 +959,9 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 	// Other Commands (no group — shown under "Additional Commands:")
 	cCmd.AddCommand(version.CommandVersion(cliParams, ioStreams, binaryName, opts.VersionExtra))
 	cCmd.AddCommand(options.CommandOptions(cliParams, ioStreams, binaryName))
+	// explore introspects the fully-assembled command tree at run time, so it is
+	// registered last with the root pointer.
+	cCmd.AddCommand(explorecmd.CommandExplore(cCmd, binaryName))
 
 	// cleanup releases auth handler plugins and telemetry. It is safe to call
 	// multiple times (idempotent via sync.Once). PersistentPostRun calls it on
