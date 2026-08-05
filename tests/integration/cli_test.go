@@ -13971,10 +13971,20 @@ func TestIntegration_LspStdioFlag(t *testing.T) {
 	require.NoError(t, cmd.Start())
 
 	for _, m := range msgs {
-		_, _ = stdin.Write(m)
-		time.Sleep(150 * time.Millisecond)
+		_, werr := stdin.Write(m)
+		require.NoError(t, werr, "write LSP frame to server stdin")
 	}
-	time.Sleep(700 * time.Millisecond)
+
+	// Poll until diagnostics for the bad solution appear instead of sleeping a
+	// fixed amount, so the test is not flaky under load (mirrors
+	// TestIntegration_LspInitializeAndDiagnostics).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(out.String(), "publishDiagnostics") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	_ = stdin.Close()
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
