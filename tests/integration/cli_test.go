@@ -13848,44 +13848,11 @@ func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
 
 	badSolution := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: bad\nspec:\n  resolvers:\n    appName:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.doesNotExist\n"
 
-	msgs := [][]byte{
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
-			"textDocument": map[string]any{"uri": "file:///tmp/bad.yaml", "languageId": "yaml", "version": 1, "text": badSolution},
-		}}),
-	}
+	// Migrated to the runLSPSession harness: this test sends no requests beyond
+	// the handshake + didOpen, so it exercises the harness's "diagnostics only"
+	// path (the server publishes diagnostics for the opened document on its own).
+	out := runLSPSession(t, badSolution)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
-	cmd.Dir = findProjectRoot()
-	stdin, err := cmd.StdinPipe()
-	require.NoError(t, err)
-	var outBuf lockedBuffer
-	cmd.Stdout = &outBuf
-	require.NoError(t, cmd.Start())
-
-	for _, m := range msgs {
-		_, werr := stdin.Write(m)
-		require.NoError(t, werr, "write LSP frame to server stdin")
-	}
-
-	// Wait until the diagnostics notification for the bad solution appears
-	// instead of sleeping a fixed amount, so the test is not flaky under load.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(outBuf.String(), "publishDiagnostics") &&
-			strings.Contains(outBuf.String(), "doesNotExist") {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	_ = stdin.Close()
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-
-	out := outBuf.String()
 	assert.Contains(t, out, `"capabilities"`, "initialize response")
 	assert.Contains(t, out, "scafctl lsp", "server info")
 	assert.Contains(t, out, "publishDiagnostics", "diagnostics notification")
@@ -13896,6 +13863,29 @@ func TestIntegration_LspInitializeAndDiagnostics(t *testing.T) {
 	assert.Contains(t, out, "renameProvider", "rename capability")
 }
 
+func TestIntegration_LspDocumentSymbol(t *testing.T) {
+	t.Parallel()
+
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: symbols\nspec:\n  calls:\n    fetch:\n      provider: message\n      inputs:\n        message: fetching\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n"
+
+	out := runLSPSession(t, sol, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "textDocument/documentSymbol", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+		},
+	})
+
+	// The provider is advertised in the initialize response.
+	assert.Contains(t, out, "documentSymbolProvider", "documentSymbol capability advertised")
+	// The response lists the spec root, both groups, and their symbols.
+	assert.Contains(t, out, `"name":"spec"`, "spec root symbol")
+	assert.Contains(t, out, `"name":"resolvers"`, "resolvers group")
+	assert.Contains(t, out, `"name":"environment"`, "resolver symbol")
+	assert.Contains(t, out, `"name":"calls"`, "calls group")
+	assert.Contains(t, out, `"name":"fetch"`, "call symbol")
+	// Hierarchy is expressed via children.
+	assert.Contains(t, out, `"children"`, "symbols nested as children")
+}
+
 func TestIntegration_LspRename(t *testing.T) {
 	t.Parallel()
 
@@ -13903,42 +13893,20 @@ func TestIntegration_LspRename(t *testing.T) {
 	// sits inside that identifier.
 	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      dependsOn:\n        - environment\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.environment\n"
 
-	msgs := [][]byte{
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
-			"textDocument": map[string]any{"uri": "file:///nav.yaml", "languageId": "yaml", "version": 1, "text": sol},
-		}}),
-		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/rename", "params": map[string]any{
-			"textDocument": map[string]any{"uri": "file:///nav.yaml"},
+	// Migrated to the reusable runLSPSession harness: initialize + didOpen + the
+	// rename request + teardown are all handled by the helper. The request
+	// targets lspSessionURI (the URI the harness opens the document under).
+	out := runLSPSession(t, sol, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
 			"position":     map[string]any{"line": 6, "character": 6},
 			"newName":      "env",
-		}}),
-	}
+		},
+	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
-	cmd.Dir = findProjectRoot()
-	stdin, err := cmd.StdinPipe()
-	require.NoError(t, err)
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	require.NoError(t, cmd.Start())
-
-	for _, m := range msgs {
-		_, _ = stdin.Write(m)
-		time.Sleep(150 * time.Millisecond)
-	}
-	time.Sleep(700 * time.Millisecond)
-	_ = stdin.Close()
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-
-	out := outBuf.String()
 	assert.Contains(t, out, `"changes"`, "rename returns a workspace edit")
 	assert.Contains(t, out, `"newText":"env"`, "edits rename to env")
-	assert.Contains(t, out, "file:///nav.yaml", "edits target the document")
+	assert.Contains(t, out, lspSessionURI, "edits target the document")
 }
 
 func TestIntegration_LspHover(t *testing.T) {

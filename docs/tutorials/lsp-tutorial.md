@@ -38,6 +38,12 @@ reusing the same reference index and rename engine as `scafctl refactor rename`:
   If any reference cannot be located, the rename is refused (the editor shows the
   error) rather than applying a partial, solution-breaking change.
 
+It also provides a **document outline**. `textDocument/documentSymbol` returns a
+hierarchy -- a `spec` root whose children are the `resolvers`, `actions`,
+`calls`, and `functions` groups, each listing its symbols -- so the editor's
+Outline pane and breadcrumbs populate and **Go to Symbol in File**
+(Cmd/Ctrl+Shift+O) fuzzy-jumps to any resolver, action, call, or function.
+
 ## Hover
 
 Hovering the cursor over a symbol shows contextual markdown pulled from the same

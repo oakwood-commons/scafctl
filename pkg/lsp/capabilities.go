@@ -43,6 +43,7 @@ func defaultFeatures() []feature {
 		hoverFeature(),
 		navigationFeature(),
 		renameFeature(),
+		symbolsFeature(),
 	}
 }
 
