@@ -362,3 +362,44 @@ func BenchmarkTemplateCacheMissEviction(b *testing.B) {
 		cache.Put(key, tmpl, "bench")
 	}
 }
+
+// BenchmarkServiceExecuteContextFuncs measures Execute on the cache-hit path
+// when a context func binder factory is installed (as it is in production, where
+// it supplies author-defined functions and the context cel binding). This
+// exercises the per-call getContextFuncBinder + funcMap/cache-key work added so
+// context functions are registered at parse time.
+func BenchmarkServiceExecuteContextFuncs(b *testing.B) {
+	contextFuncBinderMu.Lock()
+	orig := contextFuncBinderFactory
+	contextFuncBinderMu.Unlock()
+	defer func() {
+		contextFuncBinderMu.Lock()
+		contextFuncBinderFactory = orig
+		contextFuncBinderMu.Unlock()
+	}()
+
+	SetContextFuncBinderFactory(func(ctx context.Context) template.FuncMap {
+		return template.FuncMap{
+			"greet": func(who string) string { return "hi " + who },
+			"loud":  func(s string) string { return s + "!" },
+		}
+	})
+
+	cache := NewTemplateCache(100)
+	svc := NewServiceWithCache(nil, cache)
+	ctx := context.Background()
+	content := `{{ loud (greet .name) }}`
+	data := map[string]any{"name": "world"}
+
+	if _, err := svc.Execute(ctx, TemplateOptions{Content: content, Name: "ctxfuncs", Data: data}); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.Execute(ctx, TemplateOptions{Content: content, Name: "ctxfuncs", Data: data}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -1,0 +1,56 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: author-functions-tmpl-test
+  version: 1.0.0
+  description: >-
+    Regression test: solution-author-defined functions (spec.functions) must be
+    available inside a `tmpl:` ValueRef, not only when a template is a direct
+    go-template provider input. This path previously failed to parse with
+    "function greet not defined" because context-bound functions were registered
+    only at template execution, not at parse time.
+
+spec:
+  functions:
+    greet:
+      description: Greet a name
+      params:
+        - name: who
+      template: "Hello, {{ .args.who }}!"
+
+  resolvers:
+    subject:
+      description: The name to greet
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: World
+
+    # Invokes the author function from inside a tmpl: ValueRef -- the path the
+    # fix restores.
+    greeting:
+      description: Greeting rendered via an author function in a tmpl ValueRef
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                tmpl: "{{ greet ._.subject }}"
+
+  testing:
+    cases:
+      render-author-function-in-tmpl:
+        description: The author function resolves inside the tmpl ValueRef
+        command: [run, resolver]
+        args: ["-o", "json"]
+        assertions:
+          - expression: __exitCode == 0
+          - contains: "Hello, World!"
+
+      expect-lint-clean:
+        description: The solution passes lint
+        command: [lint]
+        assertions:
+          - expression: __exitCode == 0
