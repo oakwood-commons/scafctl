@@ -32,7 +32,12 @@ export function binaryNameFromCommand(command: string): string {
   // Replace unsafe characters with underscores and trim them (mirrors safeNameRe
   // [^A-Za-z0-9._-] plus a leading/trailing underscore trim).
   name = name.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^_+|_+$/g, '');
-  return name.length > 0 ? name : DefaultServerCommand;
+  // Fall back to the default for empty or dot-only names, matching Go's
+  // SanitizeBinaryName (which returns the default for "", ".", and "..").
+  if (name.length === 0 || name === '.' || name === '..') {
+    return DefaultServerCommand;
+  }
+  return name;
 }
 
 /**

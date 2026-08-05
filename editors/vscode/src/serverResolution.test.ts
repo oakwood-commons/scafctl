@@ -41,6 +41,13 @@ test('binaryNameFromCommand falls back to the default for empty input', () => {
   assert.equal(binaryNameFromCommand('   '), DefaultServerCommand);
 });
 
+test('binaryNameFromCommand falls back to the default for dot-only names', () => {
+  // Parity with Go settings.SanitizeBinaryName, which returns the default for
+  // '.' and '..'.
+  assert.equal(binaryNameFromCommand('.'), DefaultServerCommand);
+  assert.equal(binaryNameFromCommand('..'), DefaultServerCommand);
+});
+
 test('checkBinary reports a missing executable', async () => {
   const problem = await checkBinary('scafctl-definitely-not-real-xyz');
   assert.ok(problem, 'expected an error message');
