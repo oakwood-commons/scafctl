@@ -42,6 +42,7 @@ func defaultFeatures() []feature {
 		documentSyncFeature(),
 		navigationFeature(),
 		renameFeature(),
+		symbolsFeature(),
 	}
 }
 
