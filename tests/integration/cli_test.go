@@ -13939,9 +13939,11 @@ func TestIntegration_LspHover(t *testing.T) {
 	require.NoError(t, cmd.Start())
 
 	for _, m := range msgs {
-		_, _ = stdin.Write(m)
-		time.Sleep(150 * time.Millisecond)
+		_, werr := stdin.Write(m)
+		require.NoError(t, werr, "write LSP frame to server stdin")
 	}
+	// Poll until hover contents appear instead of sleeping a fixed amount, so the
+	// test is not flaky under load (mirrors TestIntegration_LspStdioFlag).
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(out.String(), `"contents"`) {
