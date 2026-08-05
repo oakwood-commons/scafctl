@@ -4,12 +4,17 @@
 package cache
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
+	cachelib "github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
+	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestCommandCache(t *testing.T) {
@@ -105,4 +110,150 @@ func TestCommandCache_UnknownSubcommandErrors(t *testing.T) {
 	cmd2.SilenceErrors = true
 	cmd2.SilenceUsage = true
 	assert.NoError(t, cmd2.Execute())
+}
+
+// ── cache info output format tests ───────────────────────────────────────────
+
+func TestCommandInfo_JSON(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+	cmd.SetArgs([]string{"-o", "json"})
+
+	require.NoError(t, cmd.Execute())
+
+	var output cachelib.InfoOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &output), "output must be valid JSON InfoOutput")
+	assert.Len(t, output.Caches, 3, "should have 3 cache entries")
+	for _, item := range output.Caches {
+		assert.NotEmpty(t, item.Name, "each cache must have a name")
+		assert.NotEmpty(t, item.Path, "each cache must have a path")
+		assert.NotEmpty(t, item.Description, "each cache must have a description")
+	}
+	assert.NotEmpty(t, output.TotalHuman, "totalHuman should be set")
+}
+
+func TestCommandInfo_YAML(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+	cmd.SetArgs([]string{"-o", "yaml"})
+
+	require.NoError(t, cmd.Execute())
+
+	var output cachelib.InfoOutput
+	require.NoError(t, yaml.Unmarshal(out.Bytes(), &output), "output must be valid YAML InfoOutput")
+	assert.Len(t, output.Caches, 3, "should have 3 cache entries")
+	assert.NotEmpty(t, output.TotalHuman, "totalHuman should be set")
+}
+
+func TestCommandInfo_Quiet(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+	cmd.SetArgs([]string{"-o", "quiet"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Empty(t, out.String(), "quiet mode should produce no stdout output")
+}
+
+func TestCommandInfo_DefaultFormat(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+	// No -o flag: default auto format (non-TTY falls back to text)
+	cmd.SetArgs([]string{})
+
+	require.NoError(t, cmd.Execute())
+	output := out.String()
+	assert.Contains(t, output, "HTTP Cache", "default output should contain cache names")
+	assert.Contains(t, output, "Build Cache")
+	assert.Contains(t, output, "Artifact Cache")
+}
+
+func TestCommandInfo_TotalsSummaryOnStderr(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	ioStreams, _, errBuf := terminal.NewTestIOStreams()
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(t.Context(), w)
+
+	cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{})
+
+	require.NoError(t, cmd.Execute())
+	stderr := errBuf.String()
+	assert.Contains(t, stderr, "Total:", "stderr should contain totals summary")
+	assert.Contains(t, stderr, "files)", "stderr should contain file count")
+}
+
+func TestCommandInfo_NoTotalsForStructuredFormats(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{"json", "yaml", "csv"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			cliParams := settings.NewCliParams()
+			ioStreams, _, errBuf := terminal.NewTestIOStreams()
+			w := writer.New(ioStreams, cliParams)
+			ctx := writer.WithWriter(t.Context(), w)
+
+			cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+			cmd.SetContext(ctx)
+			cmd.SetArgs([]string{"-o", format})
+
+			require.NoError(t, cmd.Execute())
+			assert.NotContains(t, errBuf.String(), "Total:", "structured format %q should not print totals on stderr", format)
+		})
+	}
+}
+
+func TestCommandInfo_CSV(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := CommandInfo(cliParams, ioStreams, "scafctl/cache")
+	cmd.SetArgs([]string{"-o", "csv"})
+
+	require.NoError(t, cmd.Execute())
+	output := out.String()
+	assert.NotEmpty(t, output, "CSV output should not be empty")
+	assert.Contains(t, output, "HTTP Cache", "CSV output should contain cache data")
+	assert.Contains(t, output, "Build Cache", "CSV output should contain all cache entries")
+	assert.Contains(t, output, "Artifact Cache", "CSV output should contain all cache entries")
+}
+
+func TestCommandInfo_EmbedderBinaryName(t *testing.T) {
+	t.Parallel()
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+	ioStreams, out, _ := terminal.NewTestIOStreams()
+	cmd := CommandInfo(cliParams, ioStreams, "mycli/cache")
+	cmd.SetArgs([]string{"-o", "json"})
+
+	require.NoError(t, cmd.Execute())
+
+	var output cachelib.InfoOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &output))
+	assert.Len(t, output.Caches, 3)
+}
+
+// ── Display schema tests ─────────────────────────────────────────────────────
+
+func TestCacheInfoDisplaySchema_IsValidJSON(t *testing.T) {
+	t.Parallel()
+	assert.True(t, json.Valid(cacheInfoSchemaJSON), "cache_info_schema.json must be valid JSON")
+}
+
+func TestCacheInfoDisplaySchema_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+	hints, ds, err := tui.ParseSchemaWithDisplay(cacheInfoSchemaJSON)
+	require.NoError(t, err, "cache_info_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
+	assert.Equal(t, "name", ds.List.TitleField, "list titleField should be name")
 }

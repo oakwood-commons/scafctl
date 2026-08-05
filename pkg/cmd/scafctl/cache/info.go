@@ -5,10 +5,12 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	_ "embed"
+
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	cachelib "github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -19,6 +21,9 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed cache_info_schema.json
+var cacheInfoSchemaJSON []byte
 
 // InfoOptions holds options for the info command.
 type InfoOptions struct {
@@ -51,11 +56,16 @@ func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 
 			  # Show cache info as JSON
 			  scafctl cache info -o json
+
+			  # Show cache info as a table
+			  scafctl cache info -o table
+
+			  # Browse caches interactively
+			  scafctl cache info -i
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
-			return runInfo(cmd.Context(), options, kvxOpts)
+			return runInfo(cmd.Context(), options)
 		},
 	}
 
@@ -64,12 +74,7 @@ func CommandInfo(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 	return cmd
 }
 
-func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions) error {
-	w := writer.FromContext(ctx)
-	if w == nil {
-		return fmt.Errorf("writer not initialized in context")
-	}
-
+func runInfo(ctx context.Context, opts *InfoOptions) error {
 	// Collect cache info
 	caches := []cachelib.Info{
 		cachelib.GetCacheInfo("HTTP Cache", paths.HTTPCacheDir(), "HTTP response cache"),
@@ -80,42 +85,55 @@ func runInfo(ctx context.Context, _ *InfoOptions, outputOpts *kvx.OutputOptions)
 	// Calculate totals
 	var totalSize int64
 	var totalFiles int64
-	for _, cache := range caches {
-		totalSize += cache.Size
-		totalFiles += cache.FileCount
-	}
-
-	output := cachelib.InfoOutput{
-		Caches:     caches,
-		TotalSize:  totalSize,
-		TotalHuman: format.Bytes(totalSize),
-		TotalFiles: totalFiles,
-	}
-
-	// For structured output, use kvx
-	if outputOpts.Format == kvx.OutputFormatJSON || outputOpts.Format == kvx.OutputFormatYAML {
-		return outputOpts.Write(output)
-	}
-
-	// For table/default output, print human-readable message
-	w.Infof("Cache Information")
-	w.Plain("")
-
-	// Find max name length for alignment
-	maxNameLen := 0
 	for _, c := range caches {
-		if len(c.Name) > maxNameLen {
-			maxNameLen = len(c.Name)
+		totalSize += c.Size
+		totalFiles += c.FileCount
+	}
+
+	kvxOpts := flags.ToKvxOutputOptions(&opts.KvxOutputFlags,
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(opts.CliParams.NoColor),
+		kvx.WithOutputAppName(opts.CliParams.BinaryName+" cache info"),
+		kvx.WithOutputDisplaySchemaJSON(cacheInfoSchemaJSON),
+		kvx.WithIOStreams(opts.IOStreams),
+		kvx.WithOutputColumnOrder([]string{"name", "sizeHuman", "fileCount", "description"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"name":        {MaxWidth: 20, Priority: 10, DisplayName: "Name"},
+			"sizeHuman":   {MaxWidth: 12, Priority: 9, DisplayName: "Size"},
+			"fileCount":   {MaxWidth: 10, Priority: 8, DisplayName: "Files", Align: "right"},
+			"description": {MaxWidth: 40, Priority: 5, Flex: true, DisplayName: "Description"},
+			"path":        {Hidden: true},
+			"size":        {Hidden: true},
+		}),
+	)
+
+	// Structured formats (JSON/YAML/TOML) use the InfoOutput wrapper with totals.
+	// Visual formats (table/list/interactive) and CSV use the flat []Info array.
+	// Mermaid is routed through writeKvx by kvx.Write() regardless of this branch.
+	if kvxOpts.Format == kvx.OutputFormatJSON || kvxOpts.Format == kvx.OutputFormatYAML || kvxOpts.Format == kvx.OutputFormatTOML {
+		output := cachelib.InfoOutput{
+			Caches:     caches,
+			TotalSize:  totalSize,
+			TotalHuman: format.Bytes(totalSize),
+			TotalFiles: totalFiles,
+		}
+		return kvxOpts.Write(output)
+	}
+
+	// Capture original format before Write() potentially mutates it (non-TTY fallback).
+	originalFormat := kvxOpts.Format
+
+	if err := kvxOpts.Write(caches); err != nil {
+		return err
+	}
+
+	// Print totals summary on stderr for human-readable formats
+	if kvx.IsKvxFormat(originalFormat) || originalFormat == kvx.OutputFormatText {
+		w := writer.FromContext(ctx)
+		if w != nil {
+			w.PlainStderrf("Total: %s (%d files)\n", format.Bytes(totalSize), totalFiles)
 		}
 	}
-
-	for _, cache := range caches {
-		w.Plainf("%-*s  %s (%d files)\n", maxNameLen, cache.Name+":", cache.SizeHuman, cache.FileCount)
-		w.Plainf("%-*s  %s\n", maxNameLen, "", cache.Path)
-		w.Plain("")
-	}
-
-	w.Plainf("Total: %s (%d files)\n", output.TotalHuman, output.TotalFiles)
 
 	return nil
 }

@@ -65,13 +65,43 @@ scafctl cache info
 
 Output:
 ```
- 💡 Cache Information
-HTTP Cache:  2.4 MB (156 files)
-             ~/.cache/scafctl/http-cache
-Build Cache:  324 B (1 files)
-             ~/.cache/scafctl/build-cache
+NAME             SIZE      FILES  DESCRIPTION
+HTTP Cache       2.4 MB      156  HTTP response cache
+Build Cache      324 B         1  Incremental build fingerprints
+Artifact Cache   0 B           0  Downloaded catalog artifacts (TTL-based)
 Total: 2.4 MB (157 files)
 ```
+
+### Table, CSV, and Interactive Output
+
+Use standard output format flags:
+
+{{< tabs "cache-tutorial-cmd-2b" >}}
+{{% tab "Bash" %}}
+```bash
+# Table format (default)
+scafctl cache info -o table
+
+# CSV for spreadsheets/scripting
+scafctl cache info -o csv
+
+# Interactive TUI for browsing
+scafctl cache info -i
+```
+{{% /tab %}}
+{{% tab "PowerShell" %}}
+```powershell
+# Table format (default)
+scafctl cache info -o table
+
+# CSV for spreadsheets/scripting
+scafctl cache info -o csv
+
+# Interactive TUI for browsing
+scafctl cache info -i
+```
+{{% /tab %}}
+{{< /tabs >}}
 
 ### JSON Output
 
@@ -109,6 +139,14 @@ Output:
       "sizeHuman": "324 B",
       "fileCount": 1,
       "description": "Incremental build fingerprints"
+    },
+    {
+      "name": "Artifact Cache",
+      "path": "/Users/me/.cache/scafctl/artifact-cache",
+      "size": 0,
+      "sizeHuman": "0 B",
+      "fileCount": 0,
+      "description": "Downloaded catalog artifacts (TTL-based)"
     }
   ],
   "totalSize": 2516906,
