@@ -1178,7 +1178,7 @@ reusing the reference index and rename engine of `refactor rename`:
   input schema, CEL/template function signatures, and schema field docs.
 - **Completion** (`textDocument/completion`) -- schema-driven keys and enum
   values, CEL/template function names (with call snippets), and symbol names
-  after `_.` / `._.` / `call:` / `rslvr:` / `dependsOn`.
+   after `_.` / `._.` / `call:` / `rslvr:` / `dependsOn:`.
 - **Signature help** (`textDocument/signatureHelp`) -- declared parameters for CEL
   functions, author/built-in template functions, and a call's `args:`, with the
   active parameter tracking the cursor.

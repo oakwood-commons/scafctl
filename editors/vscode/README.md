@@ -18,8 +18,8 @@ For scafctl solution and action files:
 - **Hover** -- symbol descriptions, provider inputs, CEL/template function
   signatures, and schema field docs.
 - **Completion** -- schema-driven keys and enum values, CEL/template functions
-  (with call snippets), and symbol names after `_.` / `._.` / `call:` / `rslvr:` /
-  `dependsOn`.
+   (with call snippets), and symbol names after `_.` / `._.` / `call:` / `rslvr:` /
+   `dependsOn:`.
 - **Signature Help** -- declared parameters for CEL functions, template functions,
   and a call's `args:`, with the active parameter tracking the cursor.
 - **Quick Fixes** -- one-click fixes (the lightbulb) for auto-fixable lint
