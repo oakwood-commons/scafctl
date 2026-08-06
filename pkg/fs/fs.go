@@ -6,6 +6,7 @@ package fs
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // StatFunc defines a function type that takes a file path as input and returns
@@ -55,11 +56,19 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // path resolved from user-provided reference
-		// Windows does not allow rename-over-existing. Remove the destination
-		// and retry so the write is still atomic-enough on those platforms.
-		// Return the final failure (remove/retry error) rather than the original
-		// rename error, so a genuine remove/retry problem is not masked by the
-		// expected rename-over-existing failure.
+		// On POSIX, rename-over-existing is atomic and expected to succeed, so a
+		// failure here is a genuine error (permissions, cross-device link, ...).
+		// Removing the destination and retrying would destroy the existing file for
+		// no benefit, so only fall back on Windows, where rename-over-existing is
+		// not permitted.
+		if runtime.GOOS != "windows" {
+			return err
+		}
+		// Windows does not allow rename-over-existing. Remove the destination and
+		// retry so the write is still atomic-enough on that platform. Return the
+		// final failure (remove/retry error) rather than the original rename error,
+		// so a genuine remove/retry problem is not masked by the expected
+		// rename-over-existing failure.
 		if _, statErr := os.Stat(path); statErr == nil {
 			if rmErr := os.Remove(path); rmErr != nil {
 				return rmErr
