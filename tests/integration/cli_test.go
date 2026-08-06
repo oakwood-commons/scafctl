@@ -14131,6 +14131,34 @@ func TestIntegration_LspCompletionFunctions(t *testing.T) {
 	assert.Contains(t, out, `arrays.groupBy($0)`, "function completion inserts a call snippet")
 }
 
+func TestIntegration_LspCodeLens(t *testing.T) {
+	t.Parallel()
+
+	// Two resolvers (environment, appName) where appName references environment.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: _.environment\n"
+
+	out := runLSPSession(t, sol,
+		// Request the lenses.
+		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/codeLens", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+		}},
+		// Resolve the environment reference-count lens (its definition is line 6).
+		map[string]any{"jsonrpc": "2.0", "id": 3, "method": "codeLens/resolve", "params": map[string]any{
+			"range": map[string]any{
+				"start": map[string]any{"line": 6, "character": 4},
+				"end":   map[string]any{"line": 6, "character": 15},
+			},
+			"data": map[string]any{"uri": lspSessionURI, "kind": "resolver", "name": "environment"},
+		}},
+	)
+
+	assert.Contains(t, out, `"title":"Run"`, "emits a Run lens")
+	assert.Contains(t, out, `"title":"Preview output"`, "emits a Preview lens")
+	assert.Contains(t, out, "scafctl.run", "Run lens targets the extension command")
+	assert.Contains(t, out, `"title":"1 reference"`, "resolve fills the reference count for environment")
+	assert.Contains(t, out, "editor.action.showReferences", "reference lens uses show-references")
+}
+
 func TestIntegration_LspSignatureHelp(t *testing.T) {
 	t.Parallel()
 

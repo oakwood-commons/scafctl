@@ -2,7 +2,8 @@
 
 Language support for [scafctl](https://github.com/oakwood-commons/scafctl)
 solution files -- diagnostics, navigation, rename, outline, hover, completion,
-signature help, and quick fixes -- powered by the `scafctl lsp` language server.
+signature help, quick fixes, and code lens -- powered by the `scafctl lsp`
+language server.
 
 ## Features
 
@@ -24,6 +25,8 @@ For scafctl solution and action files:
   and a call's `args:`, with the active parameter tracking the cursor.
 - **Quick Fixes** -- one-click fixes (the lightbulb) for auto-fixable lint
   diagnostics, matching `scafctl lint --fix`.
+- **Code Lens** -- above each resolver and action: a reference count (click to
+  peek), **Run**, and **Preview output** -- Run/Preview spawn the CLI in a terminal.
 
 The extension is a thin client, so the feature set grows automatically as the
 language server gains capabilities. Formatting, folding, semantic tokens, and

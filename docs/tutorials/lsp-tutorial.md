@@ -173,6 +173,30 @@ surrounding formatting and comments untouched.
 _Try:_ place the cursor on a line with a fixable diagnostic and trigger Quick Fix
 (Cmd/Ctrl+.); accept the suggested edit.
 
+## Code lens
+
+Above each resolver and action definition the server shows inline, clickable
+**code lenses** (`textDocument/codeLens`):
+
+- **N references** -- the count of references to the symbol, computed from the
+  reference index; clicking peeks the references. The count and locations are
+  filled lazily via `codeLens/resolve`, so listing lenses stays cheap.
+- **Run** -- runs the resolver/action; the extension spawns
+  `scafctl run resolver <name>` / `run action <name>` against the file in a
+  terminal.
+- **Preview output** -- shows what the symbol produces without committing to side
+  effects; for a resolver this runs it (resolvers are side-effect-free), and for
+  an action it adds `--dry-run` so the action is validated and its plan shown
+  without executing.
+
+The server emits the lenses and the exact CLI arguments; the extension executes
+Run/Preview by spawning the CLI, so the behavior matches running the command
+yourself. Unsaved edits are flushed to disk first, so the run reflects what you
+see in the editor.
+
+_Try:_ click **Run** above a resolver -- a terminal opens and runs it; click **N
+references** to jump through its uses.
+
 ## Non-goals
 
 Some editor capabilities are deliberately **not** provided by `scafctl lsp`,
@@ -287,10 +311,10 @@ separate configuration is needed to keep the editor and CLI consistent.
 
 The server covers resolvers, actions, functions, and calls across diagnostics,
 navigation, rename, outline, hover, completion (keys, enum values, functions, and
-symbols), signature help, and quick fixes. Candidate future additions -- e.g. code
-lens (run/preview affordances) and generative code actions -- would build on the
-same reference index and cursor resolver; the deliberate exclusions are recorded
-in [Non-goals](#non-goals).
+symbols), signature help, quick fixes, and code lens. A candidate future addition
+-- generative code actions (e.g. "extract to call") -- would build on the same
+reference index and cursor resolver; the deliberate exclusions are recorded in
+[Non-goals](#non-goals).
 
 ## See also
 

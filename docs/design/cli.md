@@ -1185,6 +1185,10 @@ reusing the reference index and rename engine of `refactor rename`:
 - **Quick fixes** (`textDocument/codeAction`) -- one-click fixes for auto-fixable
   lint diagnostics (deprecated field, redundant `dependsOn`, unused resolver),
   reusing the same fix logic as `scafctl lint --fix`.
+- **Code lens** (`textDocument/codeLens`, with `codeLens/resolve`) -- above each
+  resolver and action: a reference count (server-computed from `refindex`), plus
+  Run and Preview-output lenses whose CLI arguments the server supplies and the
+  extension executes by spawning the CLI.
 
 Formatting, folding ranges, semantic tokens, and inlay hints are intentional
 **non-goals** -- a solution file is YAML, so those are left to the editor's YAML
