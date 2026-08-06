@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
@@ -65,6 +66,9 @@ type Options struct {
 	BinaryName     string
 	File           string
 	Severity       string
+	Fix            bool
+	FixDryRun      bool
+	Diff           bool
 	KvxOutputFlags flags.KvxOutputFlags
 	CliParams      *settings.Run
 	IOStreams      *terminal.IOStreams
@@ -107,6 +111,12 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			# Output as JSON for CI integration
 			scafctl lint -f ./solution.yaml -o json
+
+			# Auto-fix fixable findings (rename hyphenated resolvers to camelCase)
+			scafctl lint -f ./solution.yaml --fix
+
+			# Preview the fixes as a unified diff without writing
+			scafctl lint -f ./solution.yaml --fix-dry-run --diff
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(_ *cobra.Command, args []string) error {
@@ -126,6 +136,9 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			options.BinaryName = cliParams.BinaryName
 
+			if options.Fix || options.FixDryRun || options.Diff {
+				return runLintFix(ctx, options)
+			}
 			return runLint(ctx, options)
 		},
 		SilenceUsage: true,
@@ -133,6 +146,9 @@ func CommandLint(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 	cmd.Flags().StringVarP(&options.File, "file", "f", "", "Solution file path (auto-discovered if not provided, use '-' for stdin)")
 	cmd.Flags().StringVar(&options.Severity, "severity", "info", "Minimum severity to report: error, warning, info")
+	cmd.Flags().BoolVar(&options.Fix, "fix", false, "Automatically fix fixable findings (e.g. rename hyphenated resolvers to camelCase) and write the result")
+	cmd.Flags().BoolVar(&options.FixDryRun, "fix-dry-run", false, "Report which findings would be fixed without writing any changes")
+	cmd.Flags().BoolVar(&options.Diff, "diff", false, "With --fix or --fix-dry-run, print a unified diff of the fixes instead of writing (implies no write)")
 	flags.AddKvxOutputFlagsToStruct(cmd, &options.KvxOutputFlags)
 
 	lintPath := fmt.Sprintf("%s/%s", path, cmd.Use)
@@ -160,17 +176,12 @@ func findingsColumnHints() map[string]tui.ColumnHint {
 	}
 }
 
-func runLint(ctx context.Context, opts *Options) error {
-	if opts.BinaryName == "" {
-		opts.BinaryName = settings.CliBinaryName
-	}
-
-	lgr := logger.FromContext(ctx)
-
-	// Set up getter with catalog resolver for bare name resolution.
-	// Lint loads leniently: a structural problem such as an undefined dependsOn
-	// target must surface as a finding rather than aborting the load and hiding
-	// every other issue behind the first one ("onion peeling").
+// newLintGetter builds the solution getter used by both the lint and the
+// lint --fix paths. Lint loads leniently: a structural problem such as an
+// undefined dependsOn target must surface as a finding rather than aborting the
+// load and hiding every other issue behind the first one ("onion peeling"). The
+// catalog resolver is attached when available so bare name references resolve.
+func newLintGetter(ctx context.Context, lgr *logr.Logger) *get.Getter {
 	getterOpts := []get.Option{get.WithLenientValidation()}
 	localCatalog, err := catalog.NewLocalCatalog(*lgr)
 	if err == nil {
@@ -181,8 +192,17 @@ func runLint(ctx context.Context, opts *Options) error {
 	} else {
 		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
 	}
+	return get.NewGetterFromContext(ctx, getterOpts...)
+}
 
-	getter := get.NewGetterFromContext(ctx, getterOpts...)
+func runLint(ctx context.Context, opts *Options) error {
+	if opts.BinaryName == "" {
+		opts.BinaryName = settings.CliBinaryName
+	}
+
+	lgr := logger.FromContext(ctx)
+
+	getter := newLintGetter(ctx, lgr)
 
 	// Unified resolution chain: -f > positional arg > auto-discover
 	resolvedPath, resolveErr := get.Resolve(ctx, getter, opts.File, "", get.ResolveOptions{

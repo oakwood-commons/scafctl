@@ -32,6 +32,14 @@ type RuleMeta struct {
 	// Fix gives concrete instructions for resolving a finding.
 	Fix string `json:"fix" yaml:"fix"`
 
+	// Fixable reports whether findings for this rule can be resolved
+	// automatically via 'lint --fix'. It is derived from the fixer registry
+	// (see fix.go) rather than stored statically, so it never drifts from the
+	// set of rules that actually have a registered auto-fixer. It is always
+	// serialized (no omitempty) so the output schema is stable (fixable:
+	// true|false) for CLI/MCP consumers.
+	Fixable bool `json:"fixable" yaml:"fixable"`
+
 	// Examples optionally provide sample YAML or commands.
 	Examples []string `json:"examples,omitempty" yaml:"examples,omitempty"`
 }
@@ -87,7 +95,7 @@ var KnownRules = map[string]RuleMeta{
 		Category:    "naming",
 		Description: "A resolver name contains hyphens, which require bracket notation in CEL expressions.",
 		Why:         "Hyphens in resolver names require quoting in CEL: _[\"my-resolver\"] instead of _.myResolver. This is more verbose and error-prone for both humans and AI agents.",
-		Fix:         "Use camelCase for CEL-friendly access: myResolver instead of my-resolver.",
+		Fix:         "Use camelCase for CEL-friendly access: myResolver instead of my-resolver. The 'lint --fix' command renames hyphenated resolvers automatically (updating every reference); 'refactor rename resolver <old> <new>' renames a single resolver.",
 		Examples: []string{
 			"# Hyphenated (requires quoting in CEL):\nresolvers:\n  my-service:\n    ...\n# Access: _[\"my-service\"]\n\n# camelCase (direct CEL access):\nresolvers:\n  myService:\n    ...\n# Access: _.myService",
 		},
@@ -683,6 +691,7 @@ var KnownRules = map[string]RuleMeta{
 func ListRules() []RuleMeta {
 	rules := make([]RuleMeta, 0, len(KnownRules))
 	for _, r := range KnownRules {
+		r.Fixable = Fixable(r.Rule)
 		rules = append(rules, r)
 	}
 
@@ -705,6 +714,9 @@ func ListRules() []RuleMeta {
 // GetRule looks up a rule by name. Returns the RuleMeta and true if found.
 func GetRule(name string) (RuleMeta, bool) {
 	r, ok := KnownRules[name]
+	if ok {
+		r.Fixable = Fixable(r.Rule)
+	}
 	return r, ok
 }
 

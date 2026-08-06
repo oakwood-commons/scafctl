@@ -1187,6 +1187,51 @@ than a hardcoded, drift-prone glob.
 
 ---
 
+## Auto-fixing Lint Findings
+
+Some lint rules are **auto-fixable**: `scafctl lint` can rewrite the solution to
+resolve them. Fixable rules are marked in `scafctl lint rules` / `scafctl lint
+rule <id>` output (a `fixable` field), and the same flag surfaces through the
+MCP `list_lint_rules` / `explain_lint_rule` tools.
+
+Three flags drive the fix workflow (modeled on `ruff`'s `--fix` / `--diff`):
+
+~~~bash
+# Preview the changes as a unified diff (no write).
+scafctl lint --fix-dry-run --diff -f ./solution.yaml
+
+# Report what would change as a summary (no write).
+scafctl lint --fix-dry-run -f ./solution.yaml
+
+# Apply the fixes in place.
+scafctl lint --fix -f ./solution.yaml
+~~~
+
+Semantics:
+
+- A file is written **only** for `--fix` **without** `--diff`. `--fix-dry-run`
+  and any `--diff` run are previews and never write.
+- `--diff` requires `--fix` or `--fix-dry-run`; `--fix` and `--fix-dry-run` are
+  mutually exclusive.
+- The diff is emitted to **stdout** (so it can be piped to `patch`); the fix
+  summary goes to **stderr** to keep structured stdout clean.
+- Fixes reuse the same reference-rewriting engine as `scafctl refactor rename`,
+  so comments and formatting are preserved. A fix that would be ambiguous or
+  collide with an existing name is **skipped** (reported, not applied) rather
+  than producing a broken solution.
+- Ambiguous auto-discovery of the solution file is an error (as with `refactor
+  rename`); pass `-f`. Reading from stdin (`-`) is not supported for `--fix`.
+- **Exit codes** follow `ruff`: `--fix` exits non-zero only when residual errors
+  remain after fixing, while the preview modes (`--fix-dry-run`, `--diff`) exit
+  non-zero (validation-failed) when there are pending fixes -- so a CI job can
+  run `scafctl lint --fix-dry-run` and fail the build when a solution needs
+  fixing. A preview exits `0` only when nothing would change.
+
+The `hyphenated-name` rule is currently auto-fixable (it renames a hyphenated
+resolver to its camelCase form and rewrites every reference).
+
+---
+
 ## Exploring Lint Rules
 
 ### List Rules

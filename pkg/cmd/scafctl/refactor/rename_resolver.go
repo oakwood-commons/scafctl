@@ -13,6 +13,7 @@ import (
 
 	"github.com/MakeNowJust/heredoc/v2"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
+	"github.com/oakwood-commons/scafctl/pkg/fs"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	pkgrefactor "github.com/oakwood-commons/scafctl/pkg/refactor"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
@@ -151,43 +152,12 @@ func runRename(ctx context.Context, opts *renameOptions, kind string, rename ren
 	if fi, statErr := os.Stat(resolvedPath); statErr == nil {
 		mode = fi.Mode().Perm()
 	}
-	if err := writeFileAtomic(resolvedPath, newContent, mode); err != nil {
+	if err := fs.WriteFileAtomic(resolvedPath, newContent, mode); err != nil {
 		return fail(w, exitcode.GeneralError, fmt.Errorf("failed to write %s: %w", resolvedPath, err))
 	}
 
 	if w != nil {
 		w.Successf("Renamed %s %q to %q (%d occurrence(s)) in %s", kind, oldName, newName, len(result.Edits), resolvedPath)
-	}
-	return nil
-}
-
-// writeFileAtomic writes data to path atomically by writing to a temporary file
-// in the same directory and renaming it over path. os.Rename is atomic on the
-// same filesystem, so a crash mid-write cannot leave the solution file
-// truncated or partially written.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*") //nolint:gosec // temp file created in the target's own directory
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	// Best-effort cleanup if we return before a successful rename; a no-op once
-	// the temp file has been renamed away.
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil { //nolint:gosec // path resolved from user-provided solution reference
-		return err
 	}
 	return nil
 }

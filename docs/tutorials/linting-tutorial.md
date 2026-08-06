@@ -708,6 +708,52 @@ spec:
 
 This is a **warning**-level finding (not an error) because hyphenated names are valid -- they just require bracket notation in CEL expressions.
 
+### Auto-fixing hyphenated names
+
+The `hyphenated-name` rule is **auto-fixable**. Instead of renaming by hand,
+let scafctl rewrite the definition and every reference (dependsOn entries,
+`rslvr:` values, and CEL `_["name"]` uses) in one pass, preserving comments and
+formatting:
+
+{{< tabs >}}
+{{% tab "Preview (diff)" %}}
+
+```bash
+# Show a unified diff of what would change, without writing.
+scafctl lint --fix-dry-run --diff -f ./solution.yaml
+```
+
+{{% /tab %}}
+{{% tab "Preview (summary)" %}}
+
+```bash
+# Report what would be fixed, without writing.
+scafctl lint --fix-dry-run -f ./solution.yaml
+```
+
+{{% /tab %}}
+{{% tab "Apply" %}}
+
+```bash
+# Rewrite the file in place.
+scafctl lint --fix -f ./solution.yaml
+```
+
+{{% /tab %}}
+{{< /tabs >}}
+
+The `--diff` output is a standard unified diff, so it can be piped to `patch`
+or reviewed in a code review. A rename is applied only when it is unambiguous:
+if the camelCase target would collide with an existing resolver, that finding is
+**skipped** (reported, but the file is left untouched) rather than producing a
+broken solution. For finer-grained control -- renaming to a name other than the
+camelCase default, or renaming actions, calls, and functions -- use
+[`scafctl refactor rename`](refactor-tutorial.md).
+
+A runnable demo lives at `examples/lint/lint-fix-demo.yaml`: two hyphenated
+resolvers, each referenced via `dependsOn`, a CEL `expr:` value, and a `rslvr:`
+reference, so `--fix` rewrites the definition and every reference in one pass.
+
 ## 7. Redundant dependsOn
 
 The `redundant-depends-on` rule detects when a resolver's `dependsOn` entries are already auto-inferred from value references. scafctl automatically infers dependencies from `expr:`, `rslvr:`, and `tmpl:` references -- explicit `dependsOn` is only needed for pure ordering dependencies (where a resolver must wait for another without referencing its value).

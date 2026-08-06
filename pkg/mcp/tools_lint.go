@@ -56,6 +56,7 @@ type lintRuleSummary struct {
 	Severity    string `json:"severity"`
 	Category    string `json:"category"`
 	Description string `json:"description"`
+	Fixable     bool   `json:"fixable"`
 }
 
 // handleListLintRules returns all known lint rules with optional filtering.
@@ -78,6 +79,7 @@ func (s *Server) handleListLintRules(_ context.Context, request mcp.CallToolRequ
 			Severity:    r.Severity,
 			Category:    r.Category,
 			Description: r.Description,
+			Fixable:     r.Fixable,
 		})
 	}
 
