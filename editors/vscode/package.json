@@ -40,6 +40,14 @@
       {
         "command": "scafctl.restartServer",
         "title": "scafctl: Restart Language Server"
+      },
+      {
+        "command": "scafctl.extractToCall",
+        "title": "scafctl: Extract to call..."
+      },
+      {
+        "command": "scafctl.addResolver",
+        "title": "scafctl: Add resolver..."
       }
     ],
     "languages": [
