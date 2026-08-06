@@ -14104,6 +14104,24 @@ func TestIntegration_LspCompletionFunctions(t *testing.T) {
 	assert.Contains(t, out, `arrays.groupBy($0)`, "function completion inserts a call snippet")
 }
 
+func TestIntegration_LspCompletionSymbols(t *testing.T) {
+	t.Parallel()
+
+	// Two resolvers (environment, appName); a CEL expr "_." is on line 18
+	// (0-based). Completion at its end offers the resolver names.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      resolve:\n        with:\n          - provider: static\n            inputs:\n              value:\n                expr: _.\n"
+
+	out := runLSPSession(t, sol,
+		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+			"position":     map[string]any{"line": 18, "character": 24},
+		}},
+	)
+
+	assert.Contains(t, out, `"label":"environment"`, "_. offers resolver names")
+	assert.Contains(t, out, `"label":"appName"`, "_. offers all resolver names")
+}
+
 func TestIntegration_LspHover(t *testing.T) {
 	t.Parallel()
 
