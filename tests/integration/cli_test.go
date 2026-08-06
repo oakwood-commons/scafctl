@@ -13986,8 +13986,8 @@ func TestIntegration_LspCompletionFunctions(t *testing.T) {
 func TestIntegration_LspSignatureHelp(t *testing.T) {
 	t.Parallel()
 
-	// A CEL call "arrays.groupBy(_.items, )" is on line 12 (0-based); the cursor
-	// at character 47 sits before the second argument.
+	// A CEL call "arrays.groupBy(_.items, x)" is on line 12 (0-based); the cursor
+	// at character 47 sits on the second argument.
 	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    a:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: arrays.groupBy(_.items, x)\n"
 
 	out := runLSPSession(t, sol,

@@ -278,6 +278,13 @@ func TestEnclosingCallParen(t *testing.T) {
 	r = []rune(`foo("(") `)
 	_, ok = enclosingCallParen(r, len(r))
 	assert.False(t, ok)
+
+	// An escaped quote inside a string does not end the string, so a "(" after
+	// it is still treated as string content, not a call opener.
+	r = []rune(`foo("a\"(", `)
+	open, ok = enclosingCallParen(r, len(r))
+	require.True(t, ok)
+	assert.Equal(t, 3, open) // still inside foo(, not a spurious inner "("
 }
 
 func TestIdentifierBefore(t *testing.T) {
@@ -299,6 +306,10 @@ func TestTopLevelCommas(t *testing.T) {
 	// Commas inside a string literal are not counted.
 	r = []rune(`"a,b", c`)
 	assert.Equal(t, uint32(1), topLevelCommas(r, 0, len(r)))
+	// An escaped quote does not end the string, so a comma after it inside the
+	// string is still not counted.
+	r = []rune(`"a\",b", c`)
+	assert.Equal(t, uint32(1), topLevelCommas(r, 0, len(r)))
 }
 
 func TestSignatureParams(t *testing.T) {
@@ -318,4 +329,57 @@ func TestEnclosingCallName(t *testing.T) {
 	// Not inside an args block.
 	_, ok = enclosingCallName(raw, 5)
 	assert.False(t, ok)
+}
+
+func TestEnclosingCallNameIndentation(t *testing.T) {
+	// A call with args followed by a sibling provider list item. Editing the
+	// provider's expr (below the call's args) must NOT borrow the call's args.
+	raw := []byte(
+		"spec:\n" + // 0
+			"  resolvers:\n" + // 1
+			"    a:\n" + // 2
+			"      resolve:\n" + // 3
+			"        with:\n" + // 4
+			"          - call: myCall\n" + // 5
+			"            args:\n" + // 6
+			"              foo: 1\n" + // 7
+			"          - provider: parameter\n" + // 8
+			"            inputs:\n" + // 9
+			"              value:\n" + // 10
+			"                expr: something\n") // 11
+
+	// Genuinely inside myCall's args.
+	name, ok := enclosingCallName(raw, 7)
+	require.True(t, ok)
+	assert.Equal(t, "myCall", name)
+
+	// In the sibling provider item below the args block: no enclosing call.
+	_, ok = enclosingCallName(raw, 11)
+	assert.False(t, ok, "cursor in a sibling provider must not resolve the earlier call's args")
+	_, ok = enclosingCallName(raw, 10) // the "value:" line
+	assert.False(t, ok)
+
+	// A nested arg value: the cursor is deeper than "foo:" but still inside args.
+	nested := []byte(
+		"spec:\n" +
+			"  resolvers:\n" +
+			"    a:\n" +
+			"      resolve:\n" +
+			"        with:\n" +
+			"          - call: myCall\n" + // 5
+			"            args:\n" + // 6
+			"              foo:\n" + // 7
+			"                bar: 1\n") // 8
+	name, ok = enclosingCallName(nested, 8) // the "bar: 1" line, nested under foo
+	require.True(t, ok)
+	assert.Equal(t, "myCall", name)
+}
+
+func TestContentIndent(t *testing.T) {
+	assert.Equal(t, 12, contentIndent([]rune("          - call: myCall")))
+	assert.Equal(t, 12, contentIndent([]rune("            args:")))
+	assert.Equal(t, 0, contentIndent([]rune("spec:")))
+	assert.True(t, isBlankOrComment([]rune("   ")))
+	assert.True(t, isBlankOrComment([]rune("  # a comment")))
+	assert.False(t, isBlankOrComment([]rune("  key: value")))
 }

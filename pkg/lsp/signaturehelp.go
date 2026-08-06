@@ -301,11 +301,17 @@ func setActiveParameter(info *protocol.SignatureInformation, idx uint32) {
 func enclosingCallParen(runes []rune, cursor int) (int, bool) {
 	var stack []int
 	inStr := rune(0)
+	escaped := false
 	for i := 0; i < cursor && i < len(runes); i++ {
 		r := runes[i]
 		switch {
 		case inStr != 0:
-			if r == inStr {
+			switch {
+			case escaped:
+				escaped = false // this char is escaped; consume it literally
+			case r == '\\':
+				escaped = true // backslash escapes the next char (e.g. \" inside a string)
+			case r == inStr:
 				inStr = 0
 			}
 		case r == '"' || r == '\'':
@@ -352,11 +358,17 @@ func topLevelCommas(runes []rune, from, to int) uint32 {
 	}
 	var count, depth uint32
 	inStr := rune(0)
+	escaped := false
 	for i := from; i < to; i++ {
 		r := runes[i]
 		switch {
 		case inStr != 0:
-			if r == inStr {
+			switch {
+			case escaped:
+				escaped = false // this char is escaped; consume it literally
+			case r == '\\':
+				escaped = true // backslash escapes the next char (e.g. \" inside a string)
+			case r == inStr:
 				inStr = 0
 			}
 		case r == '"' || r == '\'':
@@ -429,34 +441,100 @@ func appendParam(params []string, s string) []string {
 }
 
 // enclosingCallName scans upward from the given 0-based line to find the call
-// name of an enclosing "args:" block: the nearest "call:" mapping (seen after an
-// "args:" key on the way up) whose value names the invoked call. ok is false when
-// the cursor is not inside an args block. Callers should first exclude the case
-// where the cursor is on the "call:"/"args:" key line itself.
+// name of an enclosing "args:" block: the nearest "call:" mapping whose value
+// names the invoked call. ok is false when the cursor is not inside an args
+// block. The search is indentation-aware -- it only climbs through true ancestor
+// lines (strictly shallower content indent), so a cursor in a sibling list item
+// below an unrelated call's args (e.g. a provider's inputs) does not borrow that
+// call's arguments. Callers should first exclude the case where the cursor is on
+// the "call:"/"args:" key line itself.
 func enclosingCallName(raw []byte, line int) (string, bool) {
-	// Require an enclosing "args:" ancestor before the "call:" sibling.
-	sawArgs := false
+	cursorText, ok := lineAt(raw, line)
+	if !ok {
+		return "", false
+	}
+	// minIndent tracks the shallowest ancestor seen so far; only lines strictly
+	// shallower than it are genuine ancestors of the cursor.
+	minIndent := contentIndent([]rune(cursorText))
 	for l := line - 1; l >= 0; l-- {
 		text, ok := lineAt(raw, l)
 		if !ok {
 			continue
 		}
 		lr := []rune(text)
+		if isBlankOrComment(lr) {
+			continue
+		}
+		ind := contentIndent(lr)
+		if ind >= minIndent {
+			continue // sibling or descendant of an already-passed line, not an ancestor
+		}
+		minIndent = ind
+		key, _, _, _, _ := parseKeyLine(lr)
+		if key != "args" {
+			continue // an ancestor, but not the enclosing args block -- keep climbing
+		}
+		// Found the enclosing "args:" block. Its "call:" sibling shares the same
+		// content indent; scan up from here to read the invoked call name.
+		return callSiblingName(raw, l, ind)
+	}
+	return "", false
+}
+
+// callSiblingName scans upward from the "args:" line at argsLine (content indent
+// argsIndent) for the sibling "call:" mapping and returns its value. ok is false
+// when no such sibling is found before leaving the mapping.
+func callSiblingName(raw []byte, argsLine, argsIndent int) (string, bool) {
+	for m := argsLine - 1; m >= 0; m-- {
+		text, ok := lineAt(raw, m)
+		if !ok {
+			continue
+		}
+		lr := []rune(text)
+		if isBlankOrComment(lr) {
+			continue
+		}
+		ind := contentIndent(lr)
+		if ind < argsIndent {
+			break // left the enclosing mapping without finding a call: sibling
+		}
+		if ind > argsIndent {
+			continue // deeper than the sibling level, skip
+		}
 		key, _, _, valStart, hasVal := parseKeyLine(lr)
-		if key == "" {
-			continue
-		}
-		if key == "args" {
-			sawArgs = true
-			continue
-		}
-		if key == "call" && sawArgs && hasVal {
-			name := strings.TrimSpace(string(lr[valStart:]))
-			name = strings.Trim(name, `"'`)
+		if key == "call" && hasVal {
+			name := strings.Trim(strings.TrimSpace(string(lr[valStart:])), `"'`)
 			if name != "" {
 				return name, true
 			}
 		}
 	}
 	return "", false
+}
+
+// contentIndent returns the rune column of the first non-space content on the
+// line, skipping leading whitespace and block-sequence "- " markers. It matches
+// parseKeyLine's key column, so "- call:" and its sibling "args:" report the same
+// indent and ancestor/sibling comparisons line up.
+func contentIndent(runes []rune) int {
+	i := 0
+	for i < len(runes) {
+		if runes[i] == ' ' || runes[i] == '\t' {
+			i++
+			continue
+		}
+		if runes[i] == '-' && i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
+			i += 2
+			continue
+		}
+		break
+	}
+	return i
+}
+
+// isBlankOrComment reports whether the line has no YAML content (blank or a
+// comment) so ancestor scanning can skip it.
+func isBlankOrComment(runes []rune) bool {
+	i := contentIndent(runes)
+	return i >= len(runes) || runes[i] == '#'
 }
