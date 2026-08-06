@@ -73,6 +73,23 @@ func TestHandleExplainLintRule(t *testing.T) {
 			assert.NotEmpty(t, rule.Severity, "rule %q missing Severity", name)
 		}
 	})
+
+	t.Run("fixable rule surfaces fixable flag", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "explain_lint_rule"
+		request.Params.Arguments = map[string]any{
+			"rule": "hyphenated-name",
+		}
+
+		result, err := srv.handleExplainLintRule(context.Background(), request)
+		require.NoError(t, err)
+		assert.False(t, result.IsError)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+		assert.Equal(t, true, output["fixable"], "hyphenated-name is auto-fixable")
+	})
 }
 
 func TestHandleListLintRules(t *testing.T) {
@@ -129,6 +146,29 @@ func TestHandleListLintRules(t *testing.T) {
 			rule := r.(map[string]any)
 			assert.Equal(t, "error", rule["severity"])
 		}
+	})
+
+	t.Run("fixable flag surfaced in listing", func(t *testing.T) {
+		request := mcp.CallToolRequest{}
+		request.Params.Name = "list_lint_rules"
+		request.Params.Arguments = map[string]any{}
+
+		result, err := srv.handleListLintRules(context.Background(), request)
+		require.NoError(t, err)
+
+		text := result.Content[0].(mcp.TextContent).Text
+		var output map[string]any
+		require.NoError(t, json.Unmarshal([]byte(text), &output))
+
+		var foundFixable bool
+		for _, r := range output["rules"].([]any) {
+			rule := r.(map[string]any)
+			if rule["rule"] == "hyphenated-name" {
+				assert.Equal(t, true, rule["fixable"], "hyphenated-name must be reported as fixable")
+				foundFixable = true
+			}
+		}
+		assert.True(t, foundFixable, "hyphenated-name rule should be present in listing")
 	})
 
 	t.Run("filter by category", func(t *testing.T) {

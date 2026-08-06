@@ -208,6 +208,16 @@ Source-preserving edits to a solution with `scafctl refactor`.
 
 ---
 
+## Lint Examples
+
+Auto-fixing lint findings with `scafctl lint --fix`.
+
+| Example | Description | Run |
+|---------|-------------|-----|
+| [lint/lint-fix-demo.yaml](lint/lint-fix-demo.yaml) | Two hyphenated resolvers (`app-name`, `db-host`), each referenced via dependsOn, a CEL `expr:` value, and a rslvr reference, for the auto-fixable `hyphenated-name` rule | `scafctl lint --fix-dry-run --diff -f examples/lint/lint-fix-demo.yaml` |
+
+---
+
 ## Catalog Examples
 
 Catalog build and distribution examples.

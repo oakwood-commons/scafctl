@@ -49,6 +49,12 @@ func (s *Server) completion(_ *glsp.Context, params *protocol.CompletionParams) 
 	cc := ResolveCursor(entry, params.Position)
 	items := completionItems(entry, cc)
 	if len(items) == 0 {
+		// SymbolRef branch (#774): scafctl symbol-name completion (resolver/call/
+		// action names after _./._./call:/rslvr:/dependsOn). Runs only when the
+		// structural/enum/function sources produced nothing, so it never competes.
+		items = symbolCompletions(entry, params.Position, cc)
+	}
+	if len(items) == 0 {
 		return nil, nil
 	}
 	return items, nil

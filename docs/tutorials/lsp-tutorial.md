@@ -80,12 +80,20 @@ As you type, the server offers **schema-driven structural completions**:
   as a call snippet with the cursor at the first argument, using the syntax valid
   for that context: a parenthesized call in CEL (`name($0)`) and a space-separated
   call in templates (`name $0`, since `name()` is not valid template syntax).
+- **Symbols** -- scafctl-specific name completion no generic YAML tool can offer,
+  drawn from the document's reference index and filtered by what you have typed:
+  after `_.` (CEL) or `._.` (template) it offers **resolver** names (and
+  `__actions.` / `.__actions.` offers **action** names); a `call:` value offers
+  **call** names; a `rslvr:` value offers **resolver** names; and a `dependsOn:`
+  list item offers **resolver** names (in a resolver) or **action** names (in an
+  action). Only defined symbols are suggested.
 
-Completion is triggered on `.`, `:`, and space, and works mid-edit even while the
-document does not yet parse (the container is inferred from indentation).
-Structural key, enum-value, and CEL/template function completion are available
-today; symbol completion (after `_.` / `call:` / `dependsOn`) extends the same
-dispatch.
+Completion is triggered on `.`, `:`, and space. Structural key, enum-value, and
+CEL/template function completion work mid-edit even while the document does not
+yet parse (the container is inferred from indentation). Symbol completion is
+sourced from the reference index, so it becomes available once the solution
+model builds successfully -- while the document does not yet parse it simply
+offers nothing rather than erroring.
 
 ## Signature help
 

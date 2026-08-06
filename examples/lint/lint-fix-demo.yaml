@@ -1,0 +1,59 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lint-fix-demo
+  displayName: Lint Auto-fix Demo
+  category: solutions
+  tags:
+    - lint
+    - fix
+    - naming
+  description: >-
+    Demonstrates `scafctl lint --fix`. Two resolvers use hyphenated names
+    (`app-name`, `db-host`), which triggers the auto-fixable `hyphenated-name`
+    warning. Each is referenced several ways -- a dependsOn entry, a CEL `expr:`
+    value, and a rslvr reference -- so a single `--fix` renames the definition
+    and every reference to camelCase (`appName`, `dbHost`) while preserving
+    comments and formatting.
+spec:
+  resolvers:
+    # hyphenated-name (auto-fixable): renamed to `appName` by `lint --fix`.
+    app-name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: billing
+
+    # hyphenated-name (auto-fixable): renamed to `dbHost` by `lint --fix`.
+    db-host:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: db.internal
+
+    connectionInfo:
+      # Reference #1: an explicit dependsOn entry (updated by the fix).
+      dependsOn:
+        - app-name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              # Reference #2: a CEL `expr:` value. A hyphenated name forces
+              # bracket notation (`_["db-host"]`); the fix updates the name
+              # inside it to `_["dbHost"]`.
+              value:
+                expr: '"host=" + _["db-host"]'
+
+    hostAlias:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              # Reference #3: a direct rslvr reference (updated by the fix).
+              value:
+                rslvr: db-host

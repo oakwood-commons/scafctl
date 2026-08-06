@@ -229,6 +229,43 @@ func TestRulesRun_SeverityFilter(t *testing.T) {
 	}
 }
 
+// TestRulesRun_FixableFieldSurfaces pins that the auto-fixable flag flows all
+// the way through the CLI 'lint rules' JSON surface (not just the MCP tools),
+// so the docs claim that fixable rules are marked in 'lint rules' output stays
+// honest. hyphenated-name has a registered fixer; empty-solution does not.
+func TestRulesRun_FixableFieldSurfaces(t *testing.T) {
+	t.Parallel()
+	ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+	cliParams := settings.NewCliParams()
+	ctx := testContext(ioStreams)
+
+	opts := &RulesOptions{
+		IOStreams:      ioStreams,
+		CliParams:      cliParams,
+		KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+	}
+
+	err := opts.Run(ctx)
+	require.NoError(t, err)
+
+	var rules []pkglint.RuleMeta
+	err = json.Unmarshal(outBuf.Bytes(), &rules)
+	require.NoError(t, err, "output should be valid JSON")
+
+	byName := make(map[string]pkglint.RuleMeta, len(rules))
+	for _, r := range rules {
+		byName[r.Rule] = r
+	}
+
+	fixable, ok := byName["hyphenated-name"]
+	require.True(t, ok, "hyphenated-name rule should be listed")
+	assert.True(t, fixable.Fixable, "hyphenated-name is auto-fixable")
+
+	notFixable, ok := byName["empty-solution"]
+	require.True(t, ok, "empty-solution rule should be listed")
+	assert.False(t, notFixable.Fixable, "empty-solution is not auto-fixable")
+}
+
 func TestCommandRule(t *testing.T) {
 	cliParams := settings.NewCliParams()
 	cliParams.BinaryName = "mycli"
@@ -336,6 +373,33 @@ func TestExplainRun_JSONOutput(t *testing.T) {
 	assert.NotEmpty(t, rule.Why)
 	assert.NotEmpty(t, rule.Fix)
 	assert.NotEmpty(t, rule.Examples)
+}
+
+// TestExplainRun_FixableFieldSurfaces pins that 'lint rule <id>' JSON output
+// carries the auto-fixable flag, matching the docs claim and the MCP
+// explain_lint_rule tool. hyphenated-name is fixable; empty-solution is not.
+func TestExplainRun_FixableFieldSurfaces(t *testing.T) {
+	t.Parallel()
+
+	explainJSON := func(t *testing.T, ruleName string) pkglint.RuleMeta {
+		t.Helper()
+		ioStreams, outBuf, _ := terminal.NewTestIOStreams()
+		ctx := testContext(ioStreams)
+		opts := &RuleOptions{
+			BinaryName:     "scafctl",
+			IOStreams:      ioStreams,
+			CliParams:      testCliParams(),
+			KvxOutputFlags: flags.KvxOutputFlags{Output: "json"},
+		}
+		require.NoError(t, opts.Run(ctx, ruleName))
+
+		var rule pkglint.RuleMeta
+		require.NoError(t, json.Unmarshal(outBuf.Bytes(), &rule), "output should be valid JSON")
+		return rule
+	}
+
+	assert.True(t, explainJSON(t, "hyphenated-name").Fixable, "hyphenated-name is auto-fixable")
+	assert.False(t, explainJSON(t, "empty-solution").Fixable, "empty-solution is not auto-fixable")
 }
 
 func TestExplainRun_YAMLOutput(t *testing.T) {

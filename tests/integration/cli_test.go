@@ -4557,6 +4557,127 @@ func TestIntegration_Lint_InvalidFile(t *testing.T) {
 	assert.Contains(t, stderr, "failed to load solution")
 }
 
+// lintFixHyphenatedSolution has a hyphenated resolver referenced via dependsOn,
+// a rslvr value ref, and a CEL bracket expression -- exercising every reference
+// form the hyphenated-name auto-fix must rewrite.
+const lintFixHyphenatedSolution = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: fix-integration
+  version: 1.0.0
+spec:
+  resolvers:
+    # a hyphenated resolver
+    my-service-name:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+    consumer:
+      dependsOn:
+        - my-service-name
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: my-service-name
+    celuser:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                expr: '_["my-service-name"] + "!"'
+`
+
+func TestIntegration_Lint_Fix_WritesFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(lintFixHyphenatedSolution), 0o644))
+
+	_, _, exitCode := runScafctl(t, "lint", "-f", solPath, "--fix")
+	assert.Equal(t, 0, exitCode)
+
+	got, err := os.ReadFile(solPath) //nolint:gosec // test-controlled temp path
+	require.NoError(t, err)
+	content := string(got)
+	assert.NotContains(t, content, "my-service-name")
+	assert.Contains(t, content, "myServiceName:")
+	assert.Contains(t, content, "- myServiceName")
+	assert.Contains(t, content, "rslvr: myServiceName")
+	assert.Contains(t, content, `_["myServiceName"]`)
+	// Comments are preserved (byte-exact edits, no YAML round-trip).
+	assert.Contains(t, content, "# a hyphenated resolver")
+}
+
+func TestIntegration_Lint_FixDryRun_DoesNotWrite(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(lintFixHyphenatedSolution), 0o644))
+
+	_, stderr, exitCode := runScafctl(t, "lint", "-f", solPath, "--fix-dry-run")
+	// Preview with pending fixes gates CI: validation-failed exit (ruff parity).
+	assert.Equal(t, 2, exitCode)
+	assert.Contains(t, stderr, "would fix")
+
+	got, err := os.ReadFile(solPath) //nolint:gosec // test-controlled temp path
+	require.NoError(t, err)
+	assert.Equal(t, lintFixHyphenatedSolution, string(got), "--fix-dry-run must not modify the file")
+}
+
+// TestIntegration_Lint_Fix_DiffRoundTrips proves the --diff output is a valid
+// unified diff by piping it through patch(1) and confirming the patched file
+// matches what --fix would have written.
+func TestIntegration_Lint_Fix_DiffRoundTrips(t *testing.T) {
+	t.Parallel()
+	patchBin, err := exec.LookPath("patch")
+	if err != nil {
+		t.Skip("patch(1) not available")
+	}
+
+	dir := t.TempDir()
+	solPath := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solPath, []byte(lintFixHyphenatedSolution), 0o644))
+
+	// Capture the diff (preview; file is not modified). Pending fixes gate CI,
+	// so the preview exits validation-failed (2) rather than 0.
+	diff, _, exitCode := runScafctl(t, "lint", "-f", solPath, "--fix-dry-run", "--diff")
+	require.Equal(t, 2, exitCode)
+	require.Contains(t, diff, "@@")
+
+	unchanged, err := os.ReadFile(solPath) //nolint:gosec // test-controlled temp path
+	require.NoError(t, err)
+	require.Equal(t, lintFixHyphenatedSolution, string(unchanged), "--diff must not modify the file")
+
+	// Produce the reference output by actually fixing a copy.
+	fixDir := t.TempDir()
+	fixPath := filepath.Join(fixDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(fixPath, []byte(lintFixHyphenatedSolution), 0o644))
+	_, _, exitCode = runScafctl(t, "lint", "-f", fixPath, "--fix")
+	require.Equal(t, 0, exitCode)
+	want, err := os.ReadFile(fixPath) //nolint:gosec // test-controlled temp path
+	require.NoError(t, err)
+
+	// Apply the diff to the original with patch -p0 and compare.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, patchBin, "-p0", solPath)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(diff)
+	out, perr := cmd.CombinedOutput()
+	require.NoErrorf(t, perr, "patch failed: %s", string(out))
+
+	patched, err := os.ReadFile(solPath) //nolint:gosec // test-controlled temp path
+	require.NoError(t, err)
+	assert.Equal(t, string(want), string(patched),
+		"applying the --diff output must yield the same result as --fix")
+}
+
 func TestIntegration_Lint_YAMLOutput(t *testing.T) {
 	t.Parallel()
 	stdout, _, _ := runScafctl(t, "lint", "-f", "examples/resolver-demo.yaml", "-o", "yaml")
@@ -14000,6 +14121,24 @@ func TestIntegration_LspSignatureHelp(t *testing.T) {
 	assert.Contains(t, out, `"signatures"`, "signature help returns signatures")
 	assert.Contains(t, out, "arrays.groupBy", "describes the CEL function under the cursor")
 	assert.Contains(t, out, `"activeParameter":1`, "active parameter tracks the cursor onto the second arg")
+}
+
+func TestIntegration_LspCompletionSymbols(t *testing.T) {
+	t.Parallel()
+
+	// Two resolvers (environment, appName); a CEL expr "_." is on line 18
+	// (0-based). Completion at its end offers the resolver names.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      resolve:\n        with:\n          - provider: static\n            inputs:\n              value:\n                expr: _.\n"
+
+	out := runLSPSession(t, sol,
+		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+			"position":     map[string]any{"line": 18, "character": 24},
+		}},
+	)
+
+	assert.Contains(t, out, `"label":"environment"`, "_. offers resolver names")
+	assert.Contains(t, out, `"label":"appName"`, "_. offers all resolver names")
 }
 
 func TestIntegration_LspHover(t *testing.T) {
