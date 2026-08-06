@@ -191,7 +191,8 @@ Above each resolver and action definition the server shows inline, clickable
 
 The server emits the lenses and the exact CLI arguments; the extension executes
 Run/Preview by spawning the CLI, so the behavior matches running the command
-yourself.
+yourself. Unsaved edits are flushed to disk first, so the run reflects what you
+see in the editor.
 
 _Try:_ click **Run** above a resolver -- a terminal opens and runs it; click **N
 references** to jump through its uses.

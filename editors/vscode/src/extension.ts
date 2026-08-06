@@ -7,7 +7,7 @@ import {
 } from 'vscode-languageclient/node';
 import { binaryNameFromCommand, checkBinary, resolveCommand } from './serverResolution';
 import { buildDocumentSelector, fetchRecognizedFiles } from './documentSelectors';
-import { buildLensArgv, toShellCommand } from './codeLensCommands';
+import { buildLensArgv, shouldSaveBeforeRun, toShellCommand } from './codeLensCommands';
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -68,18 +68,27 @@ function lensTerminalFor(): vscode.Terminal {
  * commands. The server supplies the document URI and the CLI arguments (e.g.
  * `run resolver env`, or with `--dry-run` for an action preview); the extension
  * resolves the configured binary and spawns it against the document's file in a
- * terminal. Malformed arguments are ignored rather than throwing.
+ * terminal. The CLI reads the file from disk, so a dirty on-disk document is
+ * saved first (untitled/virtual documents are skipped). Malformed arguments are
+ * ignored rather than throwing.
  */
-function runLensCommand(uriStr: unknown, cliArgs: unknown): void {
+async function runLensCommand(uriStr: unknown, cliArgs: unknown): Promise<void> {
   if (typeof uriStr !== 'string' || !Array.isArray(cliArgs)) {
     return;
   }
   const args = cliArgs.map((a) => String(a));
+  const uri = vscode.Uri.parse(uriStr);
+
+  // Flush unsaved edits so the CLI runs the content the user sees.
+  const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  if (doc && shouldSaveBeforeRun(uri.scheme, doc.isDirty)) {
+    await doc.save();
+  }
+
   const binary = resolveCommand(
     vscode.workspace.getConfiguration().get<string>('scafctl.serverPath'),
   );
-  const fsPath = vscode.Uri.parse(uriStr).fsPath;
-  const argv = buildLensArgv(binary, args, fsPath);
+  const argv = buildLensArgv(binary, args, uri.fsPath);
   const terminal = lensTerminalFor();
   terminal.show();
   terminal.sendText(toShellCommand(argv));
@@ -97,7 +106,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // arguments; the extension spawns the CLI in a terminal against the lens's
   // document. Both ids share one handler (Preview differs only in the args the
   // server provided, e.g. --dry-run for actions).
-  const lensHandler = (uriStr: unknown, cliArgs: unknown): void => runLensCommand(uriStr, cliArgs);
+  const lensHandler = (uriStr: unknown, cliArgs: unknown): Promise<void> =>
+    runLensCommand(uriStr, cliArgs);
   context.subscriptions.push(
     vscode.commands.registerCommand('scafctl.run', lensHandler),
     vscode.commands.registerCommand('scafctl.preview', lensHandler),

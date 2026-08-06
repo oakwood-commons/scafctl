@@ -41,3 +41,13 @@ export function quoteArg(arg: string): string {
 export function toShellCommand(argv: string[]): string {
   return argv.map(quoteArg).join(' ');
 }
+
+/**
+ * shouldSaveBeforeRun reports whether an open document should be saved before a
+ * code-lens Run/Preview spawns the CLI. The CLI reads the solution from disk, so
+ * a dirty on-disk (`file://`) document must be flushed first; untitled or virtual
+ * documents (non-`file` schemes) have no path to run against and are never saved.
+ */
+export function shouldSaveBeforeRun(scheme: string, isDirty: boolean): boolean {
+  return isDirty && scheme === 'file';
+}

@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { buildLensArgv, quoteArg, toShellCommand } from './codeLensCommands';
+import { buildLensArgv, quoteArg, shouldSaveBeforeRun, toShellCommand } from './codeLensCommands';
 
 test('buildLensArgv appends the CLI args and the -f file flag', () => {
   assert.deepEqual(buildLensArgv('scafctl', ['run', 'resolver', 'env'], '/tmp/solution.yaml'), [
@@ -47,4 +47,11 @@ test('quoteArg quotes and escapes shell metacharacters (no injection)', () => {
 test('toShellCommand renders a quoted command line', () => {
   const argv = buildLensArgv('scafctl', ['run', 'resolver', 'env'], '/tmp/my dir/s.yaml');
   assert.equal(toShellCommand(argv), 'scafctl run resolver env -f "/tmp/my dir/s.yaml"');
+});
+
+test('shouldSaveBeforeRun only saves dirty on-disk documents', () => {
+  assert.equal(shouldSaveBeforeRun('file', true), true);
+  assert.equal(shouldSaveBeforeRun('file', false), false); // clean: nothing to save
+  assert.equal(shouldSaveBeforeRun('untitled', true), false); // no path to run against
+  assert.equal(shouldSaveBeforeRun('vscode-vfs', true), false); // virtual document
 });
