@@ -293,3 +293,74 @@ func TestIntrospectType_NilPointer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "SimpleStruct", info.Name)
 }
+
+// fapContainer exercises FieldsAtPath navigation through struct, slice-element,
+// and map-value types.
+type fapContainer struct {
+	Simple SimpleStruct            `json:"simple" doc:"nested struct"`
+	Items  []SimpleStruct          `json:"items" doc:"slice of structs"`
+	ByName map[string]SimpleStruct `json:"byName" doc:"map of structs"`
+}
+
+func TestFieldsAtPath(t *testing.T) {
+	// Root: top-level fields of the type.
+	fields, ok := FieldsAtPath((*fapContainer)(nil), "")
+	require.True(t, ok)
+	names := fieldNames(fields)
+	assert.Equal(t, []string{"simple", "items", "byName"}, names)
+
+	// Nested struct.
+	fields, ok = FieldsAtPath((*fapContainer)(nil), "simple")
+	require.True(t, ok)
+	assert.Equal(t, []string{"name", "description", "count"}, fieldNames(fields))
+
+	// Slice element type.
+	fields, ok = FieldsAtPath((*fapContainer)(nil), "items")
+	require.True(t, ok)
+	assert.Equal(t, []string{"name", "description", "count"}, fieldNames(fields))
+
+	// Map value type.
+	fields, ok = FieldsAtPath((*fapContainer)(nil), "byName")
+	require.True(t, ok)
+	assert.Equal(t, []string{"name", "description", "count"}, fieldNames(fields))
+}
+
+func TestFieldsAtPath_NoChildren(t *testing.T) {
+	// A scalar leaf has no child fields.
+	_, ok := FieldsAtPath((*fapContainer)(nil), "simple.name")
+	assert.False(t, ok)
+
+	// An unknown path resolves to nothing.
+	_, ok = FieldsAtPath((*fapContainer)(nil), "nope")
+	assert.False(t, ok)
+}
+
+func fieldNames(fields []FieldInfo) []string {
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, f.Name)
+	}
+	return out
+}
+
+// InlineEmbedOuter exercises inline-embedded struct flattening: an anonymous
+// embed with yaml:",inline" (and no json name) must have its fields promoted
+// into the parent, not surface as a phantom field named after the Go type.
+type InlineEmbedInner struct {
+	Call string `json:"call,omitempty" doc:"call ref"`
+	Args string `json:"args,omitempty" doc:"call args"`
+}
+
+type InlineEmbedOuter struct {
+	InlineEmbedInner `yaml:",inline"`
+	Provider         string `json:"provider,omitempty" doc:"provider name"`
+}
+
+func TestFieldsAtPath_FlattensInlineEmbed(t *testing.T) {
+	fields, ok := FieldsAtPath((*InlineEmbedOuter)(nil), "")
+	require.True(t, ok)
+	names := fieldNames(fields)
+	assert.Equal(t, []string{"call", "args", "provider"}, names,
+		"inline embed fields are promoted; no phantom type-named field")
+	assert.NotContains(t, names, "InlineEmbedInner")
+}
