@@ -353,6 +353,8 @@ Here are the available solution providers:
 | http        | builtin  | data        | from, action       |
 | message     | builtin  | utility     | action             |
 | parameter   | builtin  | data        | from               |
+| solution    | builtin  | data        | from               |
+| state       | builtin  | data        | from               |
 | static      | builtin  | data        | from, action       |
 | validation  | builtin  | validation  | validation         |
 | directory   | official |             |                    |
@@ -362,11 +364,12 @@ Here are the available solution providers:
 | github      | official |             |                    |
 | hcl         | official |             |                    |
 | identity    | official |             |                    |
+| kubeconfig  | official |             |                    |
 | metadata    | official |             |                    |
 | secret      | official |             |                    |
 | sleep       | official |             |                    |
 
-19 providers available (9 built-in, 10 official). Use `get_provider_schema`
+22 providers available (11 built-in, 11 official). Use `get_provider_schema`
 with a specific provider name to see its full input schema and examples.
 Official providers are auto-fetched from the OCI catalog on first use.
 ```
