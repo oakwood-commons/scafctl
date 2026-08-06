@@ -108,7 +108,7 @@ func RemoveSequenceElement(raw []byte, path string) (TextEdit, error) {
 	lineEnd := ec.li.Offset(sourcepos.Position{Line: node.Line, Column: maxColumn})
 	lineBytes := raw[lineStart:lineEnd]
 	indent := leadingSpaces(lineBytes)
-	if indent >= len(lineBytes) || lineBytes[indent] != '-' {
+	if !isSequenceMarker(lineBytes, indent) {
 		return TextEdit{}, fmt.Errorf("remove sequence element: line %d does not begin with a %q sequence marker", node.Line, "- ")
 	}
 
@@ -116,6 +116,28 @@ func RemoveSequenceElement(raw []byte, path string) (TextEdit, error) {
 	endByte := ec.li.Offset(sourcepos.Position{Line: endLine + 1, Column: 1})
 
 	return TextEdit{Range: ec.li.Range(lineStart, endByte), NewText: ""}, nil
+}
+
+// isSequenceMarker reports whether line begins a block-style YAML sequence entry
+// at the given indent: a "-" followed by whitespace (a "- value" entry) or by
+// the end of the line (a bare "-" whose value is nested on the following lines).
+// It rejects a "-" fused to a non-space byte (e.g. "--foo"), which YAML parses
+// as a plain scalar rather than a sequence marker, so the guard matches the
+// documented "- " marker instead of accepting any leading hyphen.
+func isSequenceMarker(line []byte, indent int) bool {
+	if indent >= len(line) || line[indent] != '-' {
+		return false
+	}
+	next := indent + 1
+	if next >= len(line) {
+		return true // a bare "-" at end of line (value nested below)
+	}
+	switch line[next] {
+	case ' ', '\t', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 // ReplaceMappingKeyAndValue computes the TextEdit that rewrites the `key: value`

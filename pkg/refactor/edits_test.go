@@ -223,3 +223,26 @@ spec:
 		})
 	}
 }
+
+func TestIsSequenceMarker(t *testing.T) {
+	tests := []struct {
+		name   string
+		line   string
+		indent int
+		want   bool
+	}{
+		{"dash space value", "  - value", 2, true},
+		{"dash tab value", "  -\tvalue", 2, true},
+		{"bare dash at eol", "  -", 2, true},
+		{"dash CR (crlf)", "  -\r", 2, true},
+		{"double dash is scalar", "  --foo", 2, false},
+		{"dash fused to letter", "  -foo", 2, false},
+		{"not a dash", "  foo", 2, false},
+		{"indent past end", "  ", 2, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isSequenceMarker([]byte(tt.line), tt.indent))
+		})
+	}
+}
