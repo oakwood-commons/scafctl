@@ -40,8 +40,28 @@
       {
         "command": "scafctl.restartServer",
         "title": "scafctl: Restart Language Server"
+      },
+      {
+        "command": "scafctl.run",
+        "title": "scafctl: Run resolver/action (code lens)"
+      },
+      {
+        "command": "scafctl.preview",
+        "title": "scafctl: Preview resolver/action output (code lens)"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "scafctl.run",
+          "when": "false"
+        },
+        {
+          "command": "scafctl.preview",
+          "when": "false"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "scafctl",
@@ -114,7 +134,7 @@
     "watch": "node esbuild.js --watch",
     "check": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "node --import tsx --test src/serverResolution.test.ts src/documentSelectors.test.ts",
+    "test": "node --import tsx --test src/serverResolution.test.ts src/documentSelectors.test.ts src/codeLensCommands.test.ts",
     "package": "vsce package --no-dependencies -o scafctl.vsix",
     "publish:vsce": "vsce publish --no-dependencies --packagePath scafctl.vsix",
     "publish:ovsx": "ovsx publish scafctl.vsix"

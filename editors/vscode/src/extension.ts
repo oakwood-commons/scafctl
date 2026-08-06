@@ -7,9 +7,11 @@ import {
 } from 'vscode-languageclient/node';
 import { binaryNameFromCommand, checkBinary, resolveCommand } from './serverResolution';
 import { buildDocumentSelector, fetchRecognizedFiles } from './documentSelectors';
+import { buildLensArgv, toShellCommand } from './codeLensCommands';
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
+let lensTerminal: vscode.Terminal | undefined;
 
 // restartQueue serializes stop/start cycles. The restart command, config-change
 // events, and initial activation can otherwise interleave their stop/start
@@ -50,12 +52,57 @@ async function restartClient(): Promise<void> {
   await startClient();
 }
 
+/**
+ * lensTerminalFor returns a reusable "scafctl" terminal, recreating it if the
+ * user closed the previous one.
+ */
+function lensTerminalFor(): vscode.Terminal {
+  if (!lensTerminal || lensTerminal.exitStatus !== undefined) {
+    lensTerminal = vscode.window.createTerminal('scafctl');
+  }
+  return lensTerminal;
+}
+
+/**
+ * runLensCommand handles the `scafctl.run` / `scafctl.preview` code-lens
+ * commands. The server supplies the document URI and the CLI arguments (e.g.
+ * `run resolver env`, or with `--dry-run` for an action preview); the extension
+ * resolves the configured binary and spawns it against the document's file in a
+ * terminal. Malformed arguments are ignored rather than throwing.
+ */
+function runLensCommand(uriStr: unknown, cliArgs: unknown): void {
+  if (typeof uriStr !== 'string' || !Array.isArray(cliArgs)) {
+    return;
+  }
+  const args = cliArgs.map((a) => String(a));
+  const binary = resolveCommand(
+    vscode.workspace.getConfiguration().get<string>('scafctl.serverPath'),
+  );
+  const fsPath = vscode.Uri.parse(uriStr).fsPath;
+  const argv = buildLensArgv(binary, args, fsPath);
+  const terminal = lensTerminalFor();
+  terminal.show();
+  terminal.sendText(toShellCommand(argv));
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   output = vscode.window.createOutputChannel('scafctl');
   context.subscriptions.push(output);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('scafctl.restartServer', () => enqueueRestart(restartClient)),
+  );
+
+  // Code-lens Run / Preview commands: the server emits a lens carrying the CLI
+  // arguments; the extension spawns the CLI in a terminal against the lens's
+  // document. Both ids share one handler (Preview differs only in the args the
+  // server provided, e.g. --dry-run for actions).
+  const lensHandler = (uriStr: unknown, cliArgs: unknown): void => runLensCommand(uriStr, cliArgs);
+  context.subscriptions.push(
+    vscode.commands.registerCommand('scafctl.run', lensHandler),
+    vscode.commands.registerCommand('scafctl.preview', lensHandler),
+    // Dispose the shared lens terminal on shutdown (it is created lazily).
+    { dispose: () => lensTerminal?.dispose() },
   );
 
   // Recreate the client when a selector-affecting setting changes so new file
