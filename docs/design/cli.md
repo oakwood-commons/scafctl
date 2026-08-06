@@ -1147,25 +1147,49 @@ scafctl lsp
 scafctl lsp --stdio
 ~~~
 
-Currently the server publishes **lint diagnostics** for solution files as you
-edit them: on open/change/save it lints the in-memory document and sends
-`textDocument/publishDiagnostics`, mapping each finding's severity, message, and
-rule name to an LSP diagnostic anchored at the finding's location. It advertises
-full-document sync and reuses the same `lint` engine as `scafctl lint`, so
-editor diagnostics match the CLI.
+The server gives editors a full authoring experience for solution files, all
+consistent with the CLI because it reuses the same `lint` engine, positioned
+reference index (`refindex`), rename engine (`refactor`), generated schema, and
+built-in function registries.
 
-It also provides resolver, action, call, and function navigation and refactoring,
-reusing the same positioned reference index (`refindex`) and rename engine
-(`refactor`) as `refactor rename`:
+**Diagnostics** (`textDocument/publishDiagnostics`) -- on open/change/save it
+lints the in-memory document and maps each finding's severity, message, and rule
+name to an LSP diagnostic anchored at the finding's location. It advertises
+full-document sync and reuses the same `lint` engine as `scafctl lint`, so editor
+diagnostics match the CLI.
 
-- **Go-to-definition** (`textDocument/definition`) -- jump from any resolver,
-  action, call, or function reference to its definition.
-- **Find references** (`textDocument/references`) -- list every use of a resolver,
-  action, call, or function.
-- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename any of them
-  and every reference to it as a single `WorkspaceEdit`. The same fail-safe
-  applies: if a reference cannot be located, the rename is refused and the error
-  is surfaced to the editor rather than a partial rewrite being applied.
+**Navigation and refactoring** over resolver, action, call, and function symbols,
+reusing the reference index and rename engine of `refactor rename`:
+
+- **Go-to-definition** (`textDocument/definition`) -- jump from any reference to
+  its definition.
+- **Find references** (`textDocument/references`) -- list every use of a symbol.
+- **Rename** (`textDocument/rename`, with `prepareRename`) -- rename a symbol and
+  every reference as a single `WorkspaceEdit`. The same fail-safe applies: if a
+  reference cannot be located, the rename is refused and the error is surfaced to
+  the editor rather than a partial rewrite being applied.
+- **Document outline** (`textDocument/documentSymbol`) -- a `spec` root with
+  `resolvers` / `actions` / `calls` / `functions` groups for the Outline pane,
+  breadcrumbs, and Go-to-Symbol.
+
+**Authoring assistance** driven by a shared cursor-context resolver:
+
+- **Hover** (`textDocument/hover`) -- symbol descriptions, provider descriptors +
+  input schema, CEL/template function signatures, and schema field docs.
+- **Completion** (`textDocument/completion`) -- schema-driven keys and enum
+  values, CEL/template function names (with call snippets), and symbol names
+   after `_.` / `._.` / `call:` / `rslvr:` / `dependsOn:`.
+- **Signature help** (`textDocument/signatureHelp`) -- declared parameters for CEL
+  functions, author/built-in template functions, and a call's `args:`, with the
+  active parameter tracking the cursor.
+- **Quick fixes** (`textDocument/codeAction`) -- one-click fixes for auto-fixable
+  lint diagnostics (deprecated field, redundant `dependsOn`, unused resolver),
+  reusing the same fix logic as `scafctl lint --fix`.
+
+Formatting, folding ranges, semantic tokens, and inlay hints are intentional
+**non-goals** -- a solution file is YAML, so those are left to the editor's YAML
+support (Red Hat YAML / Prettier), keeping the server focused on what only scafctl
+can know and preserving other extensions' features on the same file.
 
 An editor client configures the server by pointing at the `scafctl lsp` command
 and attaching it to solution files. To keep editor targeting in lockstep with

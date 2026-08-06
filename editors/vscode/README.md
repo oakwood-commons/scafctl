@@ -1,22 +1,34 @@
 # scafctl for VS Code
 
 Language support for [scafctl](https://github.com/oakwood-commons/scafctl)
-solution files: diagnostics, go-to-definition, find references, and rename --
-powered by the `scafctl lsp` language server.
+solution files -- diagnostics, navigation, rename, outline, hover, completion,
+signature help, and quick fixes -- powered by the `scafctl lsp` language server.
 
 ## Features
 
 For scafctl solution and action files:
 
 - **Diagnostics** -- lint findings appear inline as you edit, matching `scafctl lint`.
-- **Go to Definition** -- jump from a resolver reference to its definition.
-- **Find All References** -- list every use of a resolver.
-- **Rename Symbol** -- rename a resolver and every reference to it in one edit. If
-  a reference cannot be located, the rename is refused rather than applied
-  partially.
+- **Go to Definition / Find All References** -- jump to, or list every use of, a
+  resolver, action, call, or function.
+- **Rename Symbol** -- rename a symbol and every reference to it in one edit. If a
+  reference cannot be located, the rename is refused rather than applied partially.
+- **Outline & Go to Symbol** -- the Outline pane, breadcrumbs, and
+  Cmd/Ctrl+Shift+O list resolvers, actions, calls, and functions.
+- **Hover** -- symbol descriptions, provider inputs, CEL/template function
+  signatures, and schema field docs.
+- **Completion** -- schema-driven keys and enum values, CEL/template functions
+   (with call snippets), and symbol names after `_.` / `._.` / `call:` / `rslvr:` /
+   `dependsOn:`.
+- **Signature Help** -- declared parameters for CEL functions, template functions,
+  and a call's `args:`, with the active parameter tracking the cursor.
+- **Quick Fixes** -- one-click fixes (the lightbulb) for auto-fixable lint
+  diagnostics, matching `scafctl lint --fix`.
 
-The feature set grows automatically as the language server gains capabilities --
-the extension is a thin client.
+The extension is a thin client, so the feature set grows automatically as the
+language server gains capabilities. Formatting, folding, semantic tokens, and
+inlay hints are intentionally left to the built-in YAML support (see the language
+server tutorial's non-goals).
 
 ### Which files get language features
 
@@ -69,8 +81,9 @@ the server reports an error.
 By default, solution files keep their built-in `yaml` / `json` language. This is
 deliberate: it preserves other extensions' features on those files -- most
 notably the Red Hat YAML extension's schema validation, autocompletion, and
-formatting -- while the scafctl language server adds its diagnostics and
-navigation on top. This matches how tools like GitHub Actions layer over YAML.
+formatting -- while the scafctl language server adds its diagnostics, navigation,
+and the other language features on top. This matches how tools like GitHub Actions
+layer over YAML.
 
 Enabling `scafctl.language.enable` contributes a dedicated `scafctl` language
 (YAML syntax highlighting, scafctl diagnostics). It does **not** re-associate
