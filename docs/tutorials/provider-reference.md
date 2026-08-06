@@ -53,7 +53,7 @@ Official providers are automatically fetched from the catalog when a solution re
 | [hcl](#hcl) | official | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | built-in | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | official | ✅ | ❌ | ❌ | ❌ |
-| [kubeconfig](#kubeconfig) | official | ❌ | ❌ | ❌ | ✅\* |
+| [kubeconfig](#kubeconfig) | official | ❌ | ❌ | ❌ | ❌\* |
 | [message](#message) | built-in | ❌ | ✅ | ❌ | ✅ |
 | [metadata](#metadata) | official | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | built-in | ✅ | ❌ | ❌ | ❌ |
@@ -64,7 +64,7 @@ Official providers are automatically fetched from the catalog when a solution re
 | [static](#static) | built-in | ✅ | ✅ | ❌ | ❌ |
 | [validation](#validation) | built-in | ❌ | ✅ | ✅ | ❌ |
 
-\* `kubeconfig` declares a dedicated `kubeconfig` capability rather than the generic `action` capability; it is listed under `action` here for readability.
+\* `kubeconfig` declares its own dedicated `kubeconfig` capability, not one of the four generic capabilities in this matrix. It cannot be called from `resolve.with` or `workflow.actions`; see the [kubeconfig](#kubeconfig) section for how it's actually invoked.
 
 ---
 
@@ -2078,9 +2078,25 @@ for a cluster (so `kubectl`/`helm` shell out to `scafctl` for auth), probe
 cluster reachability, detect the cluster's auth type, or check current-user
 identity (`whoami`).
 
+> [!NOTE]
+> **Not a general-purpose solution provider.** Unlike the other official
+> providers on this page, `kubeconfig` cannot be referenced from a solution's
+> `resolve.with` (requires `from`) or `workflow.actions` (requires `action`) --
+> it declares a dedicated `kubeconfig` capability instead, and is only
+> dispatched by the host-side `pkg/kubeconfig.Manager`. In practice you use it
+> via:
+>
+> - **`scafctl kube login` / `logout` / `list` / `status`** -- the day-to-day
+>   CLI commands that drive this provider internally to write/remove/inspect
+>   kubeconfig entries. See the CLI help (`scafctl kube --help`) for the
+>   supported auth flows.
+> - **`scafctl run provider kubeconfig ...`** -- for direct testing/debugging
+>   of a single operation outside a `kube login` flow (shown below).
+
 ### Capabilities
 
-`action`
+`kubeconfig` (dedicated capability; not `from`, `transform`, `validation`, or
+`action`)
 
 ### Inputs
 
@@ -2090,6 +2106,7 @@ identity (`whoami`).
 | `kubeconfig_path` | string | ❌ | Path to kubeconfig (empty resolves `KUBECONFIG` or `~/.kube/config`) |
 | `cluster_name` | string | ❌ | Kubeconfig cluster name |
 | `context_name` | string | ❌ | Kubeconfig context name |
+| `namespace` | string | ❌ | Default namespace set on the written context (`kubeconfig_write` only); empty omits the namespace so the context has no default |
 | `user_name` | string | ❌ | Kubeconfig user name |
 | `server` | string | ❌ | Cluster API server URL |
 | `ca_data` | string | ❌ | PEM-encoded cluster CA bundle; preferred over `insecure_skip_tls` |
@@ -2135,48 +2152,35 @@ identity (`whoami`).
 
 ### Examples
 
-```yaml
+These call the provider directly via `run provider` (its `kubeconfig`
+capability), which is how you'd test or debug a single operation. Day-to-day
+kubeconfig setup goes through `scafctl kube login` / `logout`, which drive
+these same operations internally.
+
+```bash
 # Write a kubeconfig entry that shells out to `scafctl` for credentials
-workflow:
-  actions:
-    write-kubeconfig:
-      provider: kubeconfig
-      inputs:
-        operation: kubeconfig_write
-        cluster_name: my-cluster
-        context_name: my-cluster-ctx
-        user_name: my-cluster-user
-        server: https://my-cluster.example.com:6443
-        exec_command: scafctl
-        exec_args: ["kube", "exec-credential", "--cluster", "my-cluster"]
-        set_current_context: true
+scafctl run provider kubeconfig \
+  operation=kubeconfig_write \
+  cluster_name=my-cluster \
+  context_name=my-cluster-ctx \
+  user_name=my-cluster-user \
+  namespace=my-team \
+  server=https://my-cluster.example.com:6443 \
+  exec_command=scafctl \
+  set_current_context=true
 
 # Check whether the cluster is reachable before running kubectl
-resolve:
-  with:
-    - provider: kubeconfig
-      inputs:
-        operation: reachable
-        context_name: my-cluster-ctx
+scafctl run provider kubeconfig operation=reachable context_name=my-cluster-ctx
 
 # Detect the cluster's auth type
-resolve:
-  with:
-    - provider: kubeconfig
-      inputs:
-        operation: detect_auth_type
-        server: https://my-cluster.example.com:6443
+scafctl run provider kubeconfig operation=detect_auth_type server=https://my-cluster.example.com:6443
 
 # Remove a previously written kubeconfig entry
-workflow:
-  actions:
-    remove-kubeconfig:
-      provider: kubeconfig
-      inputs:
-        operation: kubeconfig_remove
-        cluster_name: my-cluster
-        context_name: my-cluster-ctx
-        user_name: my-cluster-user
+scafctl run provider kubeconfig \
+  operation=kubeconfig_remove \
+  cluster_name=my-cluster \
+  context_name=my-cluster-ctx \
+  user_name=my-cluster-user
 ```
 
 ---

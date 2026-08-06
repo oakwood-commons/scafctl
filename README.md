@@ -21,7 +21,7 @@ scafctl is a CLI tool that lets you declaratively gather data from any source (A
 - **Solution** — A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
 - **Resolver** — A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
 - **Action** — A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
-- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 11 built-in providers and 11 official plugin providers that auto-resolve from OCI catalogs.
+- **Provider** -- A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 11 built-in providers and 11 official plugin providers that auto-resolve from OCI catalogs.
 
 ## Installation
 
@@ -162,9 +162,9 @@ spec:
 
 Run: `scafctl run solution -f deploy.yaml`
 
-## Built-in Providers
+## Providers
 
-scafctl ships with 22 providers. Use `scafctl explain provider <name>` to see full schema and examples.
+scafctl ships with 22 providers: 11 compiled in (built-in) and 11 distributed as auto-fetched plugins (official). Use `scafctl explain provider <name>` to see full schema and examples.
 
 | Provider | Description |
 | ---------- | ------------- |
@@ -182,6 +182,7 @@ scafctl ships with 22 providers. Use `scafctl explain provider <name>` to see fu
 | `identity` | Retrieve authenticated identity claims and token metadata |
 | `kubeconfig` | Write and manage kubeconfig exec-credential entries |
 | `message` | Output styled terminal messages or structured data |
+| `metadata` | Access runtime metadata such as OS, architecture, and build info |
 | `parameter` | Access CLI-provided parameters |
 | `secret` | Read encrypted secrets |
 | `sleep` | Pause execution for a duration |
@@ -212,10 +213,10 @@ See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider
 - [Auth Handler Development](docs/tutorials/auth-handler-development.md) — Building auth handlers (builtin and plugin)
 - [Extension Concepts](docs/tutorials/extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
 - [Plugin Development](docs/tutorials/plugin-development.md) — Plugin overview and discovery
-- [Language Server (LSP)](docs/tutorials/lsp-tutorial.md) — Editor integration: diagnostics, hover, completion, code actions
-- [Refactoring](docs/tutorials/refactor-tutorial.md) — Source-preserving renames of resolvers, actions, calls, and functions
-- [MCP Server](docs/tutorials/mcp-server-tutorial.md) — Exposing scafctl to AI agents (Copilot, Claude, Cursor)
-- [Template Directory Rendering](docs/tutorials/template-directory-rendering.md) — Rendering a directory tree of templates in one action
+- [Language Server (LSP)](docs/tutorials/lsp-tutorial.md) -- Editor integration: diagnostics, hover, completion, code actions
+- [Refactoring](docs/tutorials/refactor-tutorial.md) -- Source-preserving renames of resolvers, actions, calls, and functions
+- [MCP Server](docs/tutorials/mcp-server-tutorial.md) -- Exposing scafctl to AI agents (Copilot, Claude, Cursor)
+- [Template Directory Rendering](docs/tutorials/template-directory-rendering.md) -- Rendering a directory tree of templates in one action
 
 This is a curated set of the most-used tutorials -- see [docs/tutorials/_index.md](docs/tutorials/_index.md) for the full list (auth profiles, bundling, dry-run, functional testing, scaffolding, and more).
 
