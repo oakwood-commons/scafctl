@@ -40,6 +40,14 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		_ = tmp.Close()
 		return err
 	}
+	// Flush the file's contents to stable storage before the rename so a crash
+	// or power loss right after WriteFileAtomic returns cannot leave the renamed
+	// destination pointing at unwritten data (matches the atomic-write pattern in
+	// pkg/cache/diskcache and pkg/catalog).
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
