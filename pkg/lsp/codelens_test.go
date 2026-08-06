@@ -35,8 +35,6 @@ spec:
     actions:
       deploy:
         provider: debug
-        dependsOn:
-          - appName
 `
 
 const codeLensURI = protocol.DocumentUri("file:///cl.yaml")
