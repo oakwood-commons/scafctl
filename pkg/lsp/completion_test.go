@@ -177,16 +177,15 @@ func TestCompletion_ParseErrorNoPanic(t *testing.T) {
 	})
 }
 
-func TestCompletion_DispatchSkeletonReturnsNilForOtherClasses(t *testing.T) {
-	// The branches #774/#775 will fill are intentionally empty here.
+func TestCompletion_DispatchSkeletonReturnsNilForUnhandledClasses(t *testing.T) {
+	// The branches #774 will fill (SymbolRef) plus classes with no source remain
+	// empty. CEL/Template are now handled by funcCompletions (see completion_funcs_test.go).
 	for _, cc := range []CursorContext{
 		{Kind: CursorSymbolRef},
-		{Kind: CursorCEL, PartialToken: "siz"},
-		{Kind: CursorTemplate, PartialToken: "up"},
 		{Kind: CursorProviderName},
 		{Kind: CursorNone},
 	} {
-		assert.Nil(t, completionItems(cc), "kind %s has no source yet", cc.Kind)
+		assert.Nil(t, completionItems(nil, cc), "kind %s has no source", cc.Kind)
 	}
 }
 

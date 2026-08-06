@@ -256,6 +256,14 @@ func ResolveCursor(doc *DocEntry, pos protocol.Position) CursorContext {
 		ctx.PartialToken, ctx.ExprPrefix = celTokenAt(line, cursor)
 		return ctx
 	case isKey(templateValueKeys, keyName):
+		// Only a cursor inside a {{ ... }} action is an expression position; in
+		// the surrounding literal text there is nothing to complete/hover, so
+		// classify it as None (otherwise completion would offer every template
+		// function while the user types prose). An empty but open action still
+		// counts as inside.
+		if _, inAction := enclosingAction(line, cursor); !inAction {
+			return CursorContext{Kind: CursorNone, Path: leafPath, Node: leafNode}
+		}
 		ctx := CursorContext{Kind: CursorTemplate, Path: leafPath, Node: leafNode}
 		ctx.PartialToken, ctx.ExprPrefix = templateTokenAt(line, cursor)
 		return ctx
