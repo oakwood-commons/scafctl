@@ -13986,7 +13986,7 @@ func TestIntegration_LspCompletionFunctions(t *testing.T) {
 func TestIntegration_LspCompletionSymbols(t *testing.T) {
 	t.Parallel()
 
-	// Two resolvers (environment, appName); a CEL expr "_." is on line 13
+	// Two resolvers (environment, appName); a CEL expr "_." is on line 18
 	// (0-based). Completion at its end offers the resolver names.
 	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n    appName:\n      resolve:\n        with:\n          - provider: static\n            inputs:\n              value:\n                expr: _.\n"
 

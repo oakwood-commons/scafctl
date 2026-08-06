@@ -65,10 +65,23 @@ func symbolCompletionTarget(entry *DocEntry, pos protocol.Position, cc CursorCon
 			return refindex.SymbolAction, cc.PartialToken, true
 		}
 	case CursorSymbolRef:
-		// The cursor sits on an already-located reference (the typed text matches
-		// an existing symbol). Offer same-kind names so it can be swapped.
+		// The cursor sits on a located reference. The refindex records the token
+		// under the cursor as a reference whether it is a complete symbol name or
+		// a partial still being typed, so distinguish the two:
+		//   - a complete, DEFINED name -> the user is parked on an existing
+		//     reference; offer ALL same-kind names (empty partial) so it can be
+		//     swapped to another symbol.
+		//   - a partial/dangling token -> keep it as the filter prefix so the
+		//     suggestion list narrows as the user types (matches the CEL/value
+		//     branches' server-side filtering).
+		// entry.Index is non-nil here: ResolveCursor only classifies a cursor as
+		// CursorSymbolRef when the index is present.
 		if cc.Ref != nil {
-			return cc.Ref.Symbol.Kind, cc.Ref.Symbol.Name, true
+			kind, name := cc.Ref.Symbol.Kind, cc.Ref.Symbol.Name
+			if _, defined := entry.Index.Definition(kind, name); defined {
+				return kind, "", true
+			}
+			return kind, name, true
 		}
 	}
 

@@ -174,6 +174,39 @@ func TestSymbolCompletion_ActionDependsOn(t *testing.T) {
 	assert.Equal(t, []string{"build"}, labels, "action dependsOn offers action names: %v", labels)
 }
 
+// symbolSwapFixture references an existing resolver by its full name, so the
+// cursor lands on a located reference (CursorSymbolRef) rather than a partial
+// token being typed.
+const symbolSwapFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sym
+spec:
+  resolvers:
+    environment:
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              value: dev
+    appName:
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value:
+                rslvr: environment
+`
+
+func TestSymbolCompletion_SwapExistingRef(t *testing.T) {
+	// Cursor on a complete, valid reference (CursorSymbolRef) offers ALL
+	// same-kind names so the reference can be swapped -- not just the one
+	// already typed.
+	labels := completeAt(t, symbolSwapFixture, "rslvr: environment", "environment", 3)
+	assert.True(t, contains(labels, "environment"), "offers the current symbol: %v", labels)
+	assert.True(t, contains(labels, "appName"), "offers other same-kind symbols to swap to: %v", labels)
+}
+
 func TestSymbolCompletion_UnknownScopeOffersNothing(t *testing.T) {
 	// A plain scalar value that is not a symbol position -> no symbol completion.
 	labels := completeAt(t, symbolCELFixture, "value: dev", "dev", 1)

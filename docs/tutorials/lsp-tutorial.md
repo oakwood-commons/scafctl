@@ -88,10 +88,12 @@ As you type, the server offers **schema-driven structural completions**:
   list item offers **resolver** names (in a resolver) or **action** names (in an
   action). Only defined symbols are suggested.
 
-Completion is triggered on `.`, `:`, and space, and works mid-edit even while the
-document does not yet parse (the container is inferred from indentation).
-Structural key, enum-value, CEL/template function, and scafctl symbol completion
-are all available.
+Completion is triggered on `.`, `:`, and space. Structural key, enum-value, and
+CEL/template function completion work mid-edit even while the document does not
+yet parse (the container is inferred from indentation). Symbol completion is
+sourced from the reference index, so it becomes available once the solution
+model builds successfully -- while the document does not yet parse it simply
+offers nothing rather than erroring.
 
 ## Quick fixes
 
