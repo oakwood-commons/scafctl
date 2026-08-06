@@ -97,10 +97,20 @@ func TestCodeAction_DeprecatedField_ReturnsQuickFix(t *testing.T) {
 
 	actions, ok := res.([]protocol.CodeAction)
 	require.True(t, ok)
-	require.Len(t, actions, 1)
 
-	a := actions[0]
-	assert.Equal(t, "Replace deprecated 'onError' with 'continueOnError'", a.Title)
+	// The quick fix is present among the actions (the request line is also inside
+	// an extractable step, so generative actions accompany it).
+	var a protocol.CodeAction
+	found := false
+	for _, act := range actions {
+		if act.Title == "Replace deprecated 'onError' with 'continueOnError'" {
+			a = act
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "the deprecated-field quick fix must be offered")
+
 	require.NotNil(t, a.Kind)
 	assert.Equal(t, protocol.CodeActionKindQuickFix, *a.Kind)
 	require.NotNil(t, a.IsPreferred)
@@ -191,7 +201,7 @@ func TestCodeAction_AttachesOnlyItsOwnDiagnostic(t *testing.T) {
 	assert.Equal(t, 2, deprecatedActions, "one quick fix per deprecated-field finding")
 }
 
-func TestCodeAction_CleanDoc_ReturnsNil(t *testing.T) {
+func TestCodeAction_CleanDoc_ReturnsNoQuickFix(t *testing.T) {
 	s := newTestServer(t)
 	const uri = "file:///clean.yaml"
 	openDoc(t, s, uri, cleanDoc)
@@ -199,7 +209,25 @@ func TestCodeAction_CleanDoc_ReturnsNil(t *testing.T) {
 	params := quickFixParams(uri, 0, nil)
 	res, err := s.codeAction(&glsp.Context{}, params)
 	require.NoError(t, err)
-	assert.Nil(t, res, "a clean document offers no quick fixes")
+	// A clean document has no lint quick fixes, but a parsed document always
+	// offers the generative "Add resolver..." source action.
+	require.NotNil(t, res)
+	actions, ok := res.([]protocol.CodeAction)
+	require.True(t, ok)
+	for _, a := range actions {
+		require.NotNil(t, a.Kind)
+		assert.NotEqual(t, protocol.CodeActionKindQuickFix, *a.Kind, "no quick fixes on a clean document")
+	}
+	assert.Contains(t, actionTitles(actions), "Add resolver...")
+}
+
+// actionTitles returns the titles of a code-action slice for assertions.
+func actionTitles(actions []protocol.CodeAction) []string {
+	titles := make([]string, 0, len(actions))
+	for _, a := range actions {
+		titles = append(titles, a.Title)
+	}
+	return titles
 }
 
 func TestCodeAction_UnknownDocument_ReturnsNil(t *testing.T) {
@@ -214,17 +242,38 @@ func TestCodeAction_RespectsOnlyFilter(t *testing.T) {
 	const uri = "file:///dep.yaml"
 	openDoc(t, s, uri, deprecatedDoc)
 
-	// Only refactor kinds requested -> the server contributes nothing.
-	params := quickFixParams(uri, 10, []protocol.CodeActionKind{protocol.CodeActionKindRefactor})
+	// A kind the server provides none of (refactor.inline) -> nothing contributed.
+	params := quickFixParams(uri, 10, []protocol.CodeActionKind{protocol.CodeActionKindRefactorInline})
 	res, err := s.codeAction(&glsp.Context{}, params)
 	require.NoError(t, err)
 	assert.Nil(t, res)
 
-	// Explicitly requesting quickfix -> the action is returned.
+	// Explicitly requesting quickfix -> the quick fix is returned, and the
+	// refactor/source generative actions are filtered out.
 	params = quickFixParams(uri, 10, []protocol.CodeActionKind{protocol.CodeActionKindQuickFix})
 	res, err = s.codeAction(&glsp.Context{}, params)
 	require.NoError(t, err)
-	assert.NotNil(t, res)
+	require.NotNil(t, res)
+	actions, ok := res.([]protocol.CodeAction)
+	require.True(t, ok)
+	for _, a := range actions {
+		require.NotNil(t, a.Kind)
+		assert.Equal(t, protocol.CodeActionKindQuickFix, *a.Kind, "only quickfix actions pass a quickfix-only filter")
+	}
+
+	// A broad "refactor" filter surfaces the refactor.extract extract-to-call
+	// action (LSP prefix matching), but not the quickfix.
+	params = quickFixParams(uri, 10, []protocol.CodeActionKind{protocol.CodeActionKindRefactor})
+	res, err = s.codeAction(&glsp.Context{}, params)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	actions, ok = res.([]protocol.CodeAction)
+	require.True(t, ok)
+	assert.Contains(t, actionTitles(actions), "Extract to call...")
+	for _, a := range actions {
+		require.NotNil(t, a.Kind)
+		assert.NotEqual(t, protocol.CodeActionKindQuickFix, *a.Kind)
+	}
 }
 
 func TestCodeAction_MatchesByDiagnosticCodeOutsideRange(t *testing.T) {
@@ -255,7 +304,7 @@ func TestCodeAction_MatchesByDiagnosticCodeOutsideRange(t *testing.T) {
 	assert.NotNil(t, res)
 }
 
-func TestCodeActionFeature_AdvertisesQuickFixKind(t *testing.T) {
+func TestCodeActionFeature_AdvertisesKinds(t *testing.T) {
 	f := codeActionFeature()
 	require.NotNil(t, f.advertise)
 
@@ -264,8 +313,11 @@ func TestCodeActionFeature_AdvertisesQuickFixKind(t *testing.T) {
 
 	opts, ok := caps.CodeActionProvider.(*protocol.CodeActionOptions)
 	require.True(t, ok, "CodeActionProvider must be CodeActionOptions")
-	require.Len(t, opts.CodeActionKinds, 1)
-	assert.Equal(t, protocol.CodeActionKindQuickFix, opts.CodeActionKinds[0])
+	assert.Equal(t, []protocol.CodeActionKind{
+		protocol.CodeActionKindQuickFix,
+		protocol.CodeActionKindRefactorExtract,
+		protocol.CodeActionKindSource,
+	}, opts.CodeActionKinds)
 }
 
 func TestCodeActionFeature_Registered(t *testing.T) {

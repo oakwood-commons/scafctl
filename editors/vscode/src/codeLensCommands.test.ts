@@ -3,11 +3,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { buildLensArgv, quoteArg, shouldSaveBeforeRun, toShellCommand } from './codeLensCommands';
+import { buildLensArgs, shouldSaveBeforeRun } from './codeLensCommands';
 
-test('buildLensArgv appends the CLI args and the -f file flag', () => {
-  assert.deepEqual(buildLensArgv('scafctl', ['run', 'resolver', 'env'], '/tmp/solution.yaml'), [
-    'scafctl',
+test('buildLensArgs appends the CLI args and the -f file flag', () => {
+  assert.deepEqual(buildLensArgs(['run', 'resolver', 'env'], '/tmp/solution.yaml'), [
     'run',
     'resolver',
     'env',
@@ -16,9 +15,8 @@ test('buildLensArgv appends the CLI args and the -f file flag', () => {
   ]);
 });
 
-test('buildLensArgv preserves action preview flags', () => {
-  assert.deepEqual(buildLensArgv('/opt/mycli', ['run', 'action', 'deploy', '--dry-run'], '/w/s.yaml'), [
-    '/opt/mycli',
+test('buildLensArgs preserves action preview flags and does not include the binary', () => {
+  assert.deepEqual(buildLensArgs(['run', 'action', 'deploy', '--dry-run'], '/w/s.yaml'), [
     'run',
     'action',
     'deploy',
@@ -28,25 +26,16 @@ test('buildLensArgv preserves action preview flags', () => {
   ]);
 });
 
-test('quoteArg double-quotes arguments containing whitespace', () => {
-  assert.equal(quoteArg('resolver'), 'resolver');
-  assert.equal(quoteArg('/tmp/my dir/solution.yaml'), '"/tmp/my dir/solution.yaml"');
-  assert.equal(quoteArg(''), '""');
-});
-
-test('quoteArg quotes and escapes shell metacharacters (no injection)', () => {
-  // Metacharacters without whitespace must still be neutralized.
-  assert.equal(quoteArg('a&&calc'), '"a&&calc"');
-  assert.equal(quoteArg('s$(id).yaml'), '"s\\$(id).yaml"');
-  assert.equal(quoteArg('a;b'), '"a;b"');
-  // Plain Windows/Unix paths without metacharacters pass through.
-  assert.equal(quoteArg('C:\\tmp\\s.yaml'), 'C:\\tmp\\s.yaml');
-  assert.equal(quoteArg('/tmp/s.yaml'), '/tmp/s.yaml');
-});
-
-test('toShellCommand renders a quoted command line', () => {
-  const argv = buildLensArgv('scafctl', ['run', 'resolver', 'env'], '/tmp/my dir/s.yaml');
-  assert.equal(toShellCommand(argv), 'scafctl run resolver env -f "/tmp/my dir/s.yaml"');
+test('buildLensArgs keeps a path with spaces intact (argv, no shell quoting)', () => {
+  // The arg vector is passed to the process directly, so spaces/metacharacters
+  // are literal -- no quoting or escaping is needed or applied.
+  assert.deepEqual(buildLensArgs(['run', 'resolver', 'env'], '/tmp/my dir/s.yaml'), [
+    'run',
+    'resolver',
+    'env',
+    '-f',
+    '/tmp/my dir/s.yaml',
+  ]);
 });
 
 test('shouldSaveBeforeRun only saves dirty on-disk documents', () => {

@@ -41,6 +41,7 @@ func defaultFeatures() []feature {
 	return []feature{
 		codeActionFeature(),
 		codeLensFeature(),
+		commandFeature(),
 		completionFeature(),
 		documentSyncFeature(),
 		hoverFeature(),

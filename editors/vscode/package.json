@@ -48,6 +48,14 @@
       {
         "command": "scafctl.preview",
         "title": "scafctl: Preview resolver/action output (code lens)"
+      },
+      {
+        "command": "scafctl.extractToCall",
+        "title": "scafctl: Extract to call..."
+      },
+      {
+        "command": "scafctl.addResolver",
+        "title": "scafctl: Add resolver..."
       }
     ],
     "menus": {

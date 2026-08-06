@@ -3,43 +3,18 @@
 
 // Pure helpers for the code-lens Run / Preview commands. Kept free of any
 // `vscode` import so they are unit-testable under `node --test`; the extension
-// wires these into terminal invocations.
+// runs the resulting argv WITHOUT a shell (a terminal created with
+// shellPath/shellArgs), so there is no shell quoting or injection surface.
 
 /**
- * buildLensArgv assembles the argv for a lens-invoked CLI run: the resolved
- * scafctl binary, the server-provided CLI arguments (e.g. `run resolver env`),
- * and the `-f <file>` flag pointing at the document the lens came from.
+ * buildLensArgs assembles the argument vector passed to the scafctl binary for a
+ * lens-invoked run: the server-provided CLI arguments (e.g. `run resolver env`,
+ * or with `--dry-run` for an action preview) followed by `-f <file>` pointing at
+ * the document the lens came from. The binary itself is not included -- it is the
+ * process being executed, not an argument.
  */
-export function buildLensArgv(binary: string, cliArgs: string[], fsPath: string): string[] {
-  return [binary, ...cliArgs, '-f', fsPath];
-}
-
-/**
- * quoteArg makes an argument safe to embed in a shell command line sent to a
- * terminal. An argument consisting only of safe path/identifier characters is
- * passed through; anything else (whitespace or a shell metacharacter such as
- * `$`, `&`, `;`, `(`, backtick) is double-quoted, and the characters that still
- * expand inside POSIX double quotes (`"`, `$`, backtick) are backslash-escaped.
- *
- * Inputs here are the user's OWN workspace file path and their OWN resolver/action
- * name, run in their OWN terminal -- so this is defense against an awkward path or
- * name mangling the command, not a trust boundary. Perfect cross-shell quoting is
- * not achievable through `sendText` (PowerShell/cmd escape differently); this
- * hardens the common POSIX case and leaves the command legible.
- */
-export function quoteArg(arg: string): string {
-  if (arg.length === 0) {
-    return '""';
-  }
-  if (/^[A-Za-z0-9._\-/:\\]+$/.test(arg)) {
-    return arg;
-  }
-  return `"${arg.replace(/(["$`])/g, '\\$1')}"`;
-}
-
-/** toShellCommand renders an argv as a single shell command line. */
-export function toShellCommand(argv: string[]): string {
-  return argv.map(quoteArg).join(' ');
+export function buildLensArgs(cliArgs: string[], fsPath: string): string[] {
+  return [...cliArgs, '-f', fsPath];
 }
 
 /**

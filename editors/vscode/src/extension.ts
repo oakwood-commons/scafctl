@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import {
+  ExecuteCommandRequest,
   LanguageClient,
   LanguageClientOptions,
   RevealOutputChannelOn,
@@ -7,11 +8,26 @@ import {
 } from 'vscode-languageclient/node';
 import { binaryNameFromCommand, checkBinary, resolveCommand } from './serverResolution';
 import { buildDocumentSelector, fetchRecognizedFiles } from './documentSelectors';
-import { buildLensArgv, shouldSaveBeforeRun, toShellCommand } from './codeLensCommands';
+import { buildLensArgs, shouldSaveBeforeRun } from './codeLensCommands';
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
 let lensTerminal: vscode.Terminal | undefined;
+
+/** Resolver / call names must be a leading letter/underscore then word chars. */
+const namePattern = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
+/** Providers offered when adding a resolver via the "Add resolver..." action. */
+const resolverProviders = [
+  'static',
+  'parameter',
+  'http',
+  'cel',
+  'go-template',
+  'message',
+  'exec',
+  'shell',
+];
 
 // restartQueue serializes stop/start cycles. The restart command, config-change
 // events, and initial activation can otherwise interleave their stop/start
@@ -53,13 +69,20 @@ async function restartClient(): Promise<void> {
 }
 
 /**
- * lensTerminalFor returns a reusable "scafctl" terminal, recreating it if the
- * user closed the previous one.
+ * lensTerminalFor returns the "scafctl" code-lens terminal running the given
+ * binary directly with argv (no shell). Because a terminal's shellPath/shellArgs
+ * are fixed at creation, each run gets a fresh terminal; the previous one is
+ * disposed so they do not accumulate. Passing argv as shellArgs means the
+ * arguments reach the process verbatim -- there is no shell to interpret
+ * metacharacters, so a resolver/action name or file path cannot inject commands.
  */
-function lensTerminalFor(): vscode.Terminal {
-  if (!lensTerminal || lensTerminal.exitStatus !== undefined) {
-    lensTerminal = vscode.window.createTerminal('scafctl');
-  }
+function lensTerminalFor(binary: string, argv: string[]): vscode.Terminal {
+  lensTerminal?.dispose();
+  lensTerminal = vscode.window.createTerminal({
+    name: 'scafctl',
+    shellPath: binary,
+    shellArgs: argv,
+  });
   return lensTerminal;
 }
 
@@ -67,10 +90,11 @@ function lensTerminalFor(): vscode.Terminal {
  * runLensCommand handles the `scafctl.run` / `scafctl.preview` code-lens
  * commands. The server supplies the document URI and the CLI arguments (e.g.
  * `run resolver env`, or with `--dry-run` for an action preview); the extension
- * resolves the configured binary and spawns it against the document's file in a
- * terminal. The CLI reads the file from disk, so a dirty on-disk document is
- * saved first (untitled/virtual documents are skipped). Malformed arguments are
- * ignored rather than throwing.
+ * resolves the configured binary and runs it against the document's file in a
+ * terminal, executing the binary directly with an argv array (no shell). The CLI
+ * reads the file from disk, so a dirty on-disk document is saved first
+ * (untitled/virtual documents are skipped). Malformed arguments are ignored
+ * rather than throwing.
  */
 async function runLensCommand(uriStr: unknown, cliArgs: unknown): Promise<void> {
   if (typeof uriStr !== 'string' || !Array.isArray(cliArgs)) {
@@ -88,10 +112,8 @@ async function runLensCommand(uriStr: unknown, cliArgs: unknown): Promise<void> 
   const binary = resolveCommand(
     vscode.workspace.getConfiguration().get<string>('scafctl.serverPath'),
   );
-  const argv = buildLensArgv(binary, args, uri.fsPath);
-  const terminal = lensTerminalFor();
-  terminal.show();
-  terminal.sendText(toShellCommand(argv));
+  const argv = buildLensArgs(args, uri.fsPath);
+  lensTerminalFor(binary, argv).show();
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -115,6 +137,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => lensTerminal?.dispose() },
   );
 
+  // Prompt commands referenced by the server's generative code actions. Each
+  // collects user input then invokes the matching server executeCommand, which
+  // computes and applies the workspace edit.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('scafctl.extractToCall', (uri?: string, blockPath?: string) =>
+      extractToCall(uri, blockPath),
+    ),
+    vscode.commands.registerCommand('scafctl.addResolver', (uri?: string) => addResolver(uri)),
+  );
+
   // Recreate the client when a selector-affecting setting changes so new file
   // patterns / language mode / server path take effect without a reload.
   context.subscriptions.push(
@@ -130,6 +162,91 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export async function deactivate(): Promise<void> {
   await enqueueRestart(stopClient);
+}
+
+/**
+ * runningClient returns the language client only when it is started and ready to
+ * accept requests. It warns and returns undefined otherwise, so command handlers
+ * fail gracefully rather than throwing when the server is not running.
+ */
+function runningClient(): LanguageClient | undefined {
+  if (!client) {
+    void vscode.window.showWarningMessage('scafctl language server is not running.');
+    return undefined;
+  }
+  return client;
+}
+
+/**
+ * sendServerCommand invokes a server-side workspace/executeCommand, surfacing any
+ * failure via an error message. Returns true on success.
+ */
+async function sendServerCommand(
+  active: LanguageClient,
+  command: string,
+  args: unknown[],
+): Promise<boolean> {
+  try {
+    await active.sendRequest(ExecuteCommandRequest.type, { command, arguments: args });
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await vscode.window.showErrorMessage(`scafctl: ${command} failed: ${message}`);
+    return false;
+  }
+}
+
+/**
+ * extractToCall prompts for a new call name then asks the server to extract the
+ * step at blockPath into a reusable spec.calls definition. Arguments arrive from
+ * the server's RefactorExtract code action.
+ */
+async function extractToCall(uri?: string, blockPath?: string): Promise<void> {
+  if (!uri || !blockPath) {
+    return;
+  }
+  const active = runningClient();
+  if (!active) {
+    return;
+  }
+  const name = await vscode.window.showInputBox({
+    prompt: 'New call name',
+    validateInput: (value) =>
+      namePattern.test(value) ? undefined : 'Name must match ^[a-zA-Z_][a-zA-Z0-9_-]*$',
+  });
+  if (!name) {
+    return;
+  }
+  await sendServerCommand(active, 'scafctl.applyExtractCall', [uri, blockPath, name]);
+}
+
+/**
+ * addResolver prompts for a resolver name and provider, then asks the server to
+ * insert a stub resolver. Arguments arrive from the server's Source code action.
+ */
+async function addResolver(uri?: string): Promise<void> {
+  if (!uri) {
+    return;
+  }
+  const active = runningClient();
+  if (!active) {
+    return;
+  }
+  const name = await vscode.window.showInputBox({
+    prompt: 'New resolver name',
+    validateInput: (value) =>
+      namePattern.test(value) ? undefined : 'Name must match ^[a-zA-Z_][a-zA-Z0-9_-]*$',
+  });
+  if (!name) {
+    return;
+  }
+  const provider = await vscode.window.showQuickPick(resolverProviders, {
+    placeHolder: 'Select a provider for the resolver',
+  });
+  if (!provider) {
+    return;
+  }
+  await sendServerCommand(active, 'scafctl.applyAddResolver', [uri, name, provider]);
 }
 
 async function startClient(): Promise<void> {
