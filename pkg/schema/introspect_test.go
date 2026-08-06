@@ -364,3 +364,21 @@ func TestFieldsAtPath_FlattensInlineEmbed(t *testing.T) {
 		"inline embed fields are promoted; no phantom type-named field")
 	assert.NotContains(t, names, "InlineEmbedInner")
 }
+
+// NamedEmbedOuter exercises the inline-detection guard: an anonymous embed whose
+// yaml name merely *contains* the substring "inline" is a NAMED nested field and
+// must NOT be flattened (regression for substring-based detection).
+type NamedEmbedOuter struct {
+	InlineEmbedInner `yaml:"inlineData"`
+	Provider         string `json:"provider,omitempty" doc:"provider name"`
+}
+
+func TestFieldsAtPath_NamedEmbedNotFlattened(t *testing.T) {
+	fields, ok := FieldsAtPath((*NamedEmbedOuter)(nil), "")
+	require.True(t, ok)
+	names := fieldNames(fields)
+	assert.NotContains(t, names, "call",
+		"a named embed (yaml name containing 'inline') must not be flattened")
+	assert.NotContains(t, names, "args")
+	assert.Contains(t, names, "provider")
+}

@@ -296,7 +296,7 @@ func introspectFieldsWithSeen(t reflect.Type, depth int, seen map[reflect.Type]b
 		// named after its Go type and its real keys are hidden a level down.
 		if embeddedType, ok := inlineEmbeddedStruct(f); ok {
 			if depth < 10 && !seen[embeddedType] {
-				fields = append(fields, introspectFieldsWithSeen(embeddedType, depth, seen)...)
+				fields = append(fields, introspectFieldsWithSeen(embeddedType, depth+1, seen)...)
 			}
 			continue
 		}
@@ -327,10 +327,31 @@ func inlineEmbeddedStruct(f reflect.StructField) (reflect.Type, bool) {
 		return nil, false
 	}
 	yamlTag := f.Tag.Get("yaml")
-	if name := tagName(yamlTag); name != "" && !strings.Contains(yamlTag, "inline") {
+	// A renamed embed (e.g. `yaml:"base"`) is a normal named nested field, not
+	// inline -- even if the name happens to contain the substring "inline".
+	if tagName(yamlTag) != "" {
+		return nil, false
+	}
+	// With no yaml tag, a Go embed serializes inline by default. When a yaml
+	// tag is present (but unnamed), require an explicit ",inline" option rather
+	// than substring-matching the raw tag.
+	if yamlTag != "" && !hasTagOption(yamlTag, "inline") {
 		return nil, false
 	}
 	return ft, true
+}
+
+// hasTagOption reports whether a struct tag value carries the given comma-
+// separated option (e.g. "inline" in ",inline" or "foo,omitempty,inline").
+// The name portion (before the first comma) is not treated as an option.
+func hasTagOption(tag, opt string) bool {
+	parts := strings.Split(tag, ",")
+	for _, p := range parts[1:] {
+		if p == opt {
+			return true
+		}
+	}
+	return false
 }
 
 // tagName returns the name portion of a struct tag value (the text before the
