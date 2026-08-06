@@ -70,7 +70,9 @@ func matchesPrefix(name, lowerPrefix string) bool {
 
 // funcCompletionItem builds a completion item for a built-in CEL/template
 // function, rendering its signature as detail and inserting a call snippet that
-// places the cursor between the parentheses.
+// places the cursor at the first argument. CEL uses a parenthesized call --
+// "name($0)"; Go templates use space-separated args -- "name $0" (parenthesized
+// "name()" is invalid template syntax).
 func funcCompletionItem(fn FuncInfo) protocol.CompletionItem {
 	kind := protocol.CompletionItemKindFunction
 	item := protocol.CompletionItem{Label: fn.Name, Kind: &kind}
@@ -89,8 +91,15 @@ func funcCompletionItem(fn FuncInfo) protocol.CompletionItem {
 		item.Documentation = protocol.MarkupContent{Kind: protocol.MarkupKindMarkdown, Value: doc}
 	}
 
-	// Insert "name($0)" as a snippet so the cursor lands between the parens.
-	snippet := fmt.Sprintf("%s($0)", fn.Name)
+	// Insert a call snippet placing the cursor at the first argument. CEL calls
+	// are parenthesized -- "name($0)"; Go-template calls are space-separated --
+	// "name $0" ("name()" is invalid template syntax).
+	var snippet string
+	if fn.CEL {
+		snippet = fmt.Sprintf("%s($0)", fn.Name)
+	} else {
+		snippet = fmt.Sprintf("%s $0", fn.Name)
+	}
 	format := protocol.InsertTextFormatSnippet
 	item.InsertText = &snippet
 	item.InsertTextFormat = &format

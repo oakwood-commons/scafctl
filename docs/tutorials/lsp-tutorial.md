@@ -77,7 +77,9 @@ As you type, the server offers **schema-driven structural completions**:
 - **Functions** -- inside a CEL expression the server offers CEL functions (with
   their signatures); inside a `{{ }}` template it offers Go-template functions and
   the solution's own author-defined helpers (`spec.functions`). Each is inserted
-  as a call snippet with the cursor placed inside the parentheses.
+  as a call snippet with the cursor at the first argument, using the syntax valid
+  for that context: a parenthesized call in CEL (`name($0)`) and a space-separated
+  call in templates (`name $0`, since `name()` is not valid template syntax).
 
 Completion is triggered on `.`, `:`, and space, and works mid-edit even while the
 document does not yet parse (the container is inferred from indentation).

@@ -99,13 +99,24 @@ func TestFuncCompletion_TemplateContextListsTemplateFunctions(t *testing.T) {
 	items := funcCompleteAt(t, `                tmpl: "{{ up`, "up", 2)
 	assert.Contains(t, labelsOf(items), "upper")
 	// Template builtins have no CEL signature, so their detail is the generic
-	// "template function" label.
+	// "template function" label. Their insert snippet must be space-separated
+	// ("upper $0"), not parenthesized ("upper($0)") -- Go templates invoke
+	// functions with space-separated args, and "upper()" is invalid template
+	// syntax.
+	found := false
 	for _, it := range items {
 		if it.Label == "upper" {
+			found = true
 			require.NotNil(t, it.Detail)
 			assert.Equal(t, "template function", *it.Detail)
+			require.NotNil(t, it.InsertText)
+			assert.Equal(t, "upper $0", *it.InsertText)
+			assert.NotContains(t, *it.InsertText, "(")
+			require.NotNil(t, it.InsertTextFormat)
+			assert.Equal(t, protocol.InsertTextFormatSnippet, *it.InsertTextFormat)
 		}
 	}
+	assert.True(t, found, "expected an 'upper' template function completion")
 }
 
 func TestFuncCompletion_LiteralTemplateTextOffersNothing(t *testing.T) {
