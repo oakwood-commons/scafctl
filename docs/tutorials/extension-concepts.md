@@ -24,7 +24,7 @@ This page defines the core terminology and links to the detailed development gui
 
 | | **Builtin** | **Plugin** |
 |---|---|---|
-| **Provider** | Compiled into scafctl; 11 built-in providers (http, cel, static, parameter...) | Standalone gRPC binary; auto-fetched from OCI catalogs (10 official: exec, git, env...) |
+| **Provider** | Compiled into scafctl; 11 built-in providers (http, cel, static, parameter...) | Standalone gRPC binary; auto-fetched from OCI catalogs (11 official: exec, git, github, hcl, kubeconfig, env...) |
 | **Auth Handler** | Only the generic OAuth2 handler, which backs user-defined `customOAuth2` configs (no first-party handlers are compiled in) | Standalone gRPC binary; auto-fetched from OCI catalogs (4 official: entra, gcp, github, openshift) |
 
 ## When to Choose Builtin vs Plugin

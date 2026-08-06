@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 Features
 
+- *(lsp)* Add `scafctl lsp` language server (stdio) with live lint diagnostics, hover, completion, go-to-definition/references, and document symbols for solution YAML files (#753)
+- *(lsp)* Add quick-fix code actions for lint diagnostics surfaced by the language server (#792)
+- *(refactor)* Add `scafctl refactor rename resolver` (and rename for actions, calls, and author functions) -- source-preserving, comment/formatting-safe renames across a solution file, backed by a positioned reference index (#752)
+- *(solution)* Add solution-author-defined Go template functions (`spec.functions`) so authors can define and invoke their own reusable template helpers (#732)
+- *(editors)* Add a VS Code extension for scafctl solution files: syntax highlighting, snippets, and language-server integration (#756)
 - *(cli)* `plugins list` now dedupes to the latest cached version per plugin (name+platform) by default, matching `catalog list`'s existing behavior; pass `--all-versions` (or its alias `--all`) to show every cached version (#532)
 - *(provider)* [**breaking**] Give the `parameter` provider an explicit `type` enum (`auto`, `string`, `raw`, `int`, `float`, `bool`, `json`, `csv`) for per-type coercion, replacing the previous all-or-nothing `type: string` escape hatch. Automatic inference (`auto`, the default) no longer splits comma-separated values into lists -- set `type: csv` to opt in. Numeric-looking values continue to infer to numbers under `auto`; use `type: string` to keep them strings (e.g. for CEL `matches()`) or `type: raw` to disable inference entirely. Typed values that fail to parse now error clearly instead of silently returning the wrong type (#624)
 - *(lint)* Add `parameter-numeric-matches` rule (warning) to flag resolvers that read a numeric `parameter` default without an explicit `type` yet call `matches()` on the value, where automatic inference would coerce the value to an integer and fail at runtime

@@ -21,7 +21,7 @@ scafctl is a CLI tool that lets you declaratively gather data from any source (A
 - **Solution** — A YAML file that declares what data to gather and what work to do. Solutions are versionable, composable, and shareable via OCI registries.
 - **Resolver** — A named unit that gathers or computes a value using one or more providers. Resolvers can depend on each other and execute in parallel when possible.
 - **Action** — A side-effect operation (run a command, call an API, write a file) organized into a dependency graph with support for parallelism, retries, conditions, and forEach loops.
-- **Provider** — A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 10 built-in providers and 10 official plugin providers that auto-resolve from OCI catalogs.
+- **Provider** -- A pluggable backend that does the actual work (e.g. `http`, `exec`, `file`, `cel`). scafctl ships with 11 built-in providers and 11 official plugin providers that auto-resolve from OCI catalogs.
 
 ## Installation
 
@@ -89,13 +89,16 @@ Zsh users must have `compinit` loaded before the completion file is sourced.
 - **Resolvers**: Gather and transform configuration data from multiple sources
 - **Actions**: Execute side-effect operations as a declarative action graph
 - **CEL Integration**: Use Common Expression Language for dynamic evaluation
-- **Providers**: 10 built-in + 10 official plugin providers (HTTP, exec, file, directory, git, CEL, and more)
+- **Providers**: 11 built-in + 11 official plugin providers (HTTP, exec, file, directory, git, github, hcl, kubeconfig, CEL, and more)
 - **Catalog**: Publish, version, and share reusable solutions via OCI registries
 - **Secrets**: Encrypted secrets management with OS keyring integration
 - **Plugins**: Extend scafctl with custom providers via a plugin system
 - **Snapshots**: Capture and diff resolver output over time
 - **Linting**: Validate solution files for correctness before execution
 - **Logging**: Quiet by default with user-controlled verbosity, format, and file output
+- **Language Server**: `scafctl lsp` provides live lint diagnostics, hover, completion, go-to-definition, and document symbols for editors (VS Code extension included)
+- **Refactoring**: `scafctl refactor rename` performs source-preserving renames of resolvers, actions, calls, and author functions across a solution file
+- **Author Functions**: Define reusable Go template helpers in `spec.functions` for use across a solution
 
 ## Quick Start
 
@@ -159,9 +162,9 @@ spec:
 
 Run: `scafctl run solution -f deploy.yaml`
 
-## Built-in Providers
+## Providers
 
-scafctl ships with 16 providers. Use `scafctl explain provider <name>` to see full schema and examples.
+scafctl ships with 22 providers: 11 compiled in (built-in) and 11 distributed as auto-fetched plugins (official). Use `scafctl explain provider <name>` to see full schema and examples.
 
 | Provider | Description |
 | ---------- | ------------- |
@@ -172,13 +175,19 @@ scafctl ships with 16 providers. Use `scafctl explain provider <name>` to see fu
 | `exec` | Execute shell commands |
 | `file` | Read and write files |
 | `git` | Query Git repository metadata |
+| `github` | Interact with the GitHub API (repos, issues, PRs, releases, commits) |
 | `go-template` | Render Go templates |
+| `hcl` | Parse and evaluate HCL/Terraform configuration files |
 | `http` | Make HTTP requests |
-| `identity` | Pass input through unchanged |
+| `identity` | Retrieve authenticated identity claims and token metadata |
+| `kubeconfig` | Write and manage kubeconfig exec-credential entries |
+| `message` | Output styled terminal messages or structured data |
+| `metadata` | Access runtime metadata such as OS, architecture, and build info |
 | `parameter` | Access CLI-provided parameters |
 | `secret` | Read encrypted secrets |
 | `sleep` | Pause execution for a duration |
 | `solution` | Compose sub-solutions recursively |
+| `state` | Read a previously persisted resolver value |
 | `static` | Return static values |
 | `validation` | Validate values against rules |
 
@@ -204,6 +213,12 @@ See the [Provider Reference](docs/tutorials/provider-reference.md) and [Provider
 - [Auth Handler Development](docs/tutorials/auth-handler-development.md) — Building auth handlers (builtin and plugin)
 - [Extension Concepts](docs/tutorials/extension-concepts.md) — Provider vs Auth Handler vs Plugin terminology
 - [Plugin Development](docs/tutorials/plugin-development.md) — Plugin overview and discovery
+- [Language Server (LSP)](docs/tutorials/lsp-tutorial.md) -- Editor integration: diagnostics, hover, completion, code actions
+- [Refactoring](docs/tutorials/refactor-tutorial.md) -- Source-preserving renames of resolvers, actions, calls, and functions
+- [MCP Server](docs/tutorials/mcp-server-tutorial.md) -- Exposing scafctl to AI agents (Copilot, Claude, Cursor)
+- [Template Directory Rendering](docs/tutorials/template-directory-rendering.md) -- Rendering a directory tree of templates in one action
+
+This is a curated set of the most-used tutorials -- see [docs/tutorials/_index.md](docs/tutorials/_index.md) for the full list (auth profiles, bundling, dry-run, functional testing, scaffolding, and more).
 
 ### Design Documents
 

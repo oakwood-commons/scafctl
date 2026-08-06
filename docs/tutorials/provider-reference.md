@@ -33,7 +33,7 @@ scafctl providers are split into two categories:
 
 **Built-in providers** (11): `cel`, `debug`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `state`, `static`, `validation`
 
-**Official plugin providers** (10): `directory`, `env`, `exec`, `git`, `github`, `hcl`, `identity`, `metadata`, `secret`, `sleep`
+**Official plugin providers** (11): `directory`, `env`, `exec`, `git`, `github`, `hcl`, `identity`, `kubeconfig`, `metadata`, `secret`, `sleep`
 
 Official providers are automatically fetched from the catalog when a solution references them -- no `bundle.plugins` declaration is required for local development. The `run provider` command also auto-resolves official providers (e.g., `scafctl run provider exec command='ls'`). For CI/CD and reproducible builds, declare them explicitly in `bundle.plugins` or use the `--strict` flag. See [Plugin Auto-Fetching](plugin-auto-fetch-tutorial.md) for details.
 
@@ -53,6 +53,7 @@ Official providers are automatically fetched from the catalog when a solution re
 | [hcl](#hcl) | official | ✅ | ✅ | ❌ | ❌ |
 | [http](#http) | built-in | ✅ | ✅ | ❌ | ✅ |
 | [identity](#identity) | official | ✅ | ❌ | ❌ | ❌ |
+| [kubeconfig](#kubeconfig) | official | ❌ | ❌ | ❌ | ❌\* |
 | [message](#message) | built-in | ❌ | ✅ | ❌ | ✅ |
 | [metadata](#metadata) | official | ✅ | ❌ | ❌ | ❌ |
 | [parameter](#parameter) | built-in | ✅ | ❌ | ❌ | ❌ |
@@ -62,6 +63,8 @@ Official providers are automatically fetched from the catalog when a solution re
 | [state](#state) | built-in | ✅ | ❌ | ❌ | ❌ |
 | [static](#static) | built-in | ✅ | ✅ | ❌ | ❌ |
 | [validation](#validation) | built-in | ❌ | ✅ | ✅ | ❌ |
+
+\* `kubeconfig` declares its own dedicated `kubeconfig` capability, not one of the four generic capabilities in this matrix. It cannot be called from `resolve.with` or `workflow.actions`; see the [kubeconfig](#kubeconfig) section for how it's actually invoked.
 
 ---
 
@@ -2064,6 +2067,120 @@ resolve:
       inputs:
         operation: groups
         handler: entra
+```
+
+---
+
+## kubeconfig
+
+Kubeconfig and cluster operations: write or remove an exec-credential entry
+for a cluster (so `kubectl`/`helm` shell out to `scafctl` for auth), probe
+cluster reachability, detect the cluster's auth type, or check current-user
+identity (`whoami`).
+
+> [!NOTE]
+> **Not a general-purpose solution provider.** Unlike the other official
+> providers on this page, `kubeconfig` cannot be referenced from a solution's
+> `resolve.with` (requires `from`) or `workflow.actions` (requires `action`) --
+> it declares a dedicated `kubeconfig` capability instead, and is only
+> dispatched by the host-side `pkg/kubeconfig.Manager`. In practice you use it
+> via:
+>
+> - **`scafctl kube login` / `logout` / `list` / `status`** -- the day-to-day
+>   CLI commands that drive this provider internally to write/remove/inspect
+>   kubeconfig entries. See the CLI help (`scafctl kube --help`) for the
+>   supported auth flows.
+> - **`scafctl run provider kubeconfig ...`** -- for direct testing/debugging
+>   of a single operation outside a `kube login` flow (shown below).
+
+### Capabilities
+
+`kubeconfig` (dedicated capability; not `from`, `transform`, `validation`, or
+`action`)
+
+### Inputs
+
+| Field | Type | Required | Description |
+|-------|------|:--------:|-------------|
+| `operation` | string | ✅ | Operation: `kubeconfig_write`, `kubeconfig_remove`, `current_server`, `detect_auth_type`, `reachable`, `whoami` |
+| `kubeconfig_path` | string | ❌ | Path to kubeconfig (empty resolves `KUBECONFIG` or `~/.kube/config`) |
+| `cluster_name` | string | ❌ | Kubeconfig cluster name |
+| `context_name` | string | ❌ | Kubeconfig context name |
+| `namespace` | string | ❌ | Default namespace set on the written context (`kubeconfig_write` only); empty omits the namespace so the context has no default |
+| `user_name` | string | ❌ | Kubeconfig user name |
+| `server` | string | ❌ | Cluster API server URL |
+| `ca_data` | string | ❌ | PEM-encoded cluster CA bundle; preferred over `insecure_skip_tls` |
+| `insecure_skip_tls` | bool | ❌ | Skip TLS verification (development only) |
+| `exec_command` | string | ❌ | Exec-credential command baked into the user entry |
+| `exec_args` | array | ❌ | Exec-credential command arguments |
+| `interactive_mode` | string | ❌ | Exec plugin interactive mode: `Never`, `IfAvailable`, `Always` |
+| `provide_cluster_info` | bool | ❌ | Pass cluster details to the exec plugin via `KUBERNETES_EXEC_INFO` |
+| `install_hint` | string | ❌ | Message kubectl shows when the exec command is missing from `PATH` |
+| `set_current_context` | bool | ❌ | Set the written context as `current-context` |
+| `token` | string | ❌ | Bearer token (`whoami` only; never cached) |
+| `audience` | string | ❌ | Token audience (accepted for contract parity; not used by this provider) |
+
+### Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `kubeconfig_write` | Writes (or updates) a cluster/context/user entry in the kubeconfig, wiring the user entry to an `exec`-based credential plugin |
+| `kubeconfig_remove` | Removes a cluster/context/user entry from the kubeconfig |
+| `current_server` | Returns the API server URL for the current (or a named) context |
+| `detect_auth_type` | Probes the cluster and reports its authentication type (e.g., OIDC issuer/endpoint if configured) |
+| `reachable` | Checks whether the cluster's API server is reachable |
+| `whoami` | Returns the identity (username, UID, groups) the current credentials resolve to |
+
+### Output
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | Whether the operation succeeded |
+| `kubeconfig_path` | string | Path to the kubeconfig that was read or written |
+| `context_name` | string | The context name involved in the operation |
+| `server` | string | Cluster API server URL |
+| `reachable` | bool | Whether the cluster was reachable (`reachable` operation) |
+| `removed` | bool | Whether an entry was removed (`kubeconfig_remove` operation) |
+| `auth_type` | string | Detected auth type (`detect_auth_type` operation) |
+| `oidc_issuer` | string | OIDC issuer URL, if detected |
+| `oauth_endpoint` | string | OAuth endpoint, if detected |
+| `username` | string | Resolved username (`whoami` operation) |
+| `uid` | string | Resolved user UID (`whoami` operation) |
+| `groups` | array | Resolved group memberships (`whoami` operation) |
+| `status` | int | HTTP-style status code, where applicable |
+| `error` | string | Error detail, if the operation failed |
+
+### Examples
+
+These call the provider directly via `run provider` (its `kubeconfig`
+capability), which is how you'd test or debug a single operation. Day-to-day
+kubeconfig setup goes through `scafctl kube login` / `logout`, which drive
+these same operations internally.
+
+```bash
+# Write a kubeconfig entry that shells out to `scafctl` for credentials
+scafctl run provider kubeconfig \
+  operation=kubeconfig_write \
+  cluster_name=my-cluster \
+  context_name=my-cluster-ctx \
+  user_name=my-cluster-user \
+  namespace=my-team \
+  server=https://my-cluster.example.com:6443 \
+  exec_command=scafctl \
+  set_current_context=true
+
+# Check whether the cluster is reachable before running kubectl
+scafctl run provider kubeconfig operation=reachable context_name=my-cluster-ctx
+
+# Detect the cluster's auth type
+scafctl run provider kubeconfig operation=detect_auth_type server=https://my-cluster.example.com:6443
+
+# Remove a previously written kubeconfig entry
+scafctl run provider kubeconfig \
+  operation=kubeconfig_remove \
+  cluster_name=my-cluster \
+  context_name=my-cluster-ctx \
+  user_name=my-cluster-user
 ```
 
 ---
