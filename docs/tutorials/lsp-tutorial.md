@@ -74,12 +74,18 @@ As you type, the server offers **schema-driven structural completions**:
   documentation.
 - **Enum values** -- an enum-valued field (`onError`, `backoff`,
   `resultSchemaMode`, `scope`) offers its allowed values.
+- **Functions** -- inside a CEL expression the server offers CEL functions (with
+  their signatures); inside a `{{ }}` template it offers Go-template functions and
+  the solution's own author-defined helpers (`spec.functions`). Each is inserted
+  as a call snippet with the cursor at the first argument, using the syntax valid
+  for that context: a parenthesized call in CEL (`name($0)`) and a space-separated
+  call in templates (`name $0`, since `name()` is not valid template syntax).
 
 Completion is triggered on `.`, `:`, and space, and works mid-edit even while the
 document does not yet parse (the container is inferred from indentation).
-Structural key and enum-value completion are available today; symbol completion
-(after `_.` / `call:` / `dependsOn`) and CEL/template function completion extend
-the same dispatch.
+Structural key, enum-value, and CEL/template function completion are available
+today; symbol completion (after `_.` / `call:` / `dependsOn`) extends the same
+dispatch.
 
 ## Quick fixes
 
@@ -158,10 +164,10 @@ needed to keep editor and CLI diagnostics consistent.
 
 ## What's next
 
-Navigation, rename, hover, and structural completion cover resolvers, actions,
-functions, and calls. Planned additions extend the same completion dispatch to
-symbol references (after `_.` / `call:` / `dependsOn`) and CEL/template function
-names.
+Navigation, rename, hover, and completion (structural keys, enum values, and
+CEL/template functions) cover resolvers, actions, functions, and calls. Planned
+additions extend the same completion dispatch to symbol references (after `_.` /
+`call:` / `dependsOn`).
 
 ## See also
 

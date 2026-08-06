@@ -47,24 +47,27 @@ func (s *Server) completion(_ *glsp.Context, params *protocol.CompletionParams) 
 		return nil, nil
 	}
 	cc := ResolveCursor(entry, params.Position)
-	items := completionItems(cc)
+	items := completionItems(entry, cc)
 	if len(items) == 0 {
 		return nil, nil
 	}
 	return items, nil
 }
 
-// completionItems dispatches a resolved cursor to its completion source. This PR
-// implements the structural (schema key) and enum-value branches; the SymbolRef
-// prefix branch (#774) and the CEL/template function branch (#775) are added by
-// those PRs as additional cases, each in its own file.
-func completionItems(cc CursorContext) []protocol.CompletionItem {
+// completionItems dispatches a resolved cursor to its completion source. The
+// structural (schema key) and enum-value branches live in this file; the CEL and
+// Go-template function branch lives in completion_funcs.go, and the SymbolRef
+// prefix branch (#774) is added by that PR -- each a single case, so the
+// completion PRs never edit each other's sources beyond this switch.
+func completionItems(entry *DocEntry, cc CursorContext) []protocol.CompletionItem {
 	switch cc.Kind {
 	case CursorYAMLKey:
 		return keyCompletions(cc)
 	case CursorEnumValue:
 		return enumCompletions(cc)
-	case CursorNone, CursorSymbolRef, CursorCEL, CursorTemplate, CursorProviderName:
+	case CursorCEL, CursorTemplate:
+		return funcCompletions(entry, cc)
+	case CursorNone, CursorSymbolRef, CursorProviderName:
 		return nil
 	default:
 		return nil

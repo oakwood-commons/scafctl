@@ -426,6 +426,28 @@ spec:
 	assert.True(t, strings.HasSuffix(ctx.Path, ".onError"), "path %q", ctx.Path)
 }
 
+func TestResolveCursor_TemplateLiteralTextIsNone(t *testing.T) {
+	// A cursor in a tmpl value but outside any {{ }} action is not an expression
+	// position; it classifies as None so completion/hover offer nothing there.
+	content := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: c
+spec:
+  resolvers:
+    a:
+      resolve:
+        with:
+          - provider: go-template
+            inputs:
+              value:
+                tmpl: "hello world"
+`
+	pos := posAt(t, content, `tmpl: "hello world`, "world", 2)
+	ctx := resolveFixture(t, content, pos)
+	assert.Equal(t, CursorNone, ctx.Kind)
+}
+
 func TestResolveCursor_Whitespace(t *testing.T) {
 	// Cursor in leading indentation is unclassifiable.
 	pos := posAt(t, cursorFixture, "provider: parameter", "provider", -4)

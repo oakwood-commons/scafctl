@@ -13965,6 +13965,24 @@ func TestIntegration_LspCompletion(t *testing.T) {
 	assert.Contains(t, out, `"label":"description"`, "completion offers the description field for partial 'desc'")
 }
 
+func TestIntegration_LspCompletionFunctions(t *testing.T) {
+	t.Parallel()
+
+	// A partial CEL expression "arr" is on line 12 (0-based); completion at its
+	// end offers CEL functions from the registry.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    appName:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: arr\n"
+
+	out := runLSPSession(t, sol,
+		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+			"position":     map[string]any{"line": 12, "character": 25},
+		}},
+	)
+
+	assert.Contains(t, out, `"label":"arrays.groupBy"`, "CEL context offers CEL functions")
+	assert.Contains(t, out, `arrays.groupBy($0)`, "function completion inserts a call snippet")
+}
+
 func TestIntegration_LspHover(t *testing.T) {
 	t.Parallel()
 
