@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/refactor"
@@ -119,12 +120,28 @@ func (p *FixPlan) UnifiedDiff(path string, original []byte) (string, error) {
 		return "", nil
 	}
 	return difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-		A:        difflib.SplitLines(string(original)),
-		B:        difflib.SplitLines(string(p.NewContent)),
+		A:        splitDiffLines(string(original)),
+		B:        splitDiffLines(string(p.NewContent)),
 		FromFile: "a/" + path,
 		ToFile:   "b/" + path,
 		Context:  3,
 	})
+}
+
+// splitDiffLines splits s into newline-terminated lines for difflib. Unlike
+// difflib.SplitLines it does NOT append a trailing "\n" to the last element:
+// that helper turns a file ending in "\n" into a spurious empty final line,
+// which makes the emitted hunk claim one more line than the file actually has.
+// GNU patch(1) rejects that phantom trailing context line ("Hunk #N FAILED"),
+// even though BSD patch tolerates it -- so the extra line breaks the
+// --diff -> patch round-trip on Linux CI. Dropping the trailing empty element
+// keeps hunk line counts exact and the diff cleanly appliable.
+func splitDiffLines(s string) []string {
+	lines := strings.SplitAfter(s, "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	return lines
 }
 
 // ComputeFixPlan lints the solution parsed from raw and applies every registered

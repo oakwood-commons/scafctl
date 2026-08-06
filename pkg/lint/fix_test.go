@@ -4,6 +4,9 @@
 package lint
 
 import (
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/provider"
@@ -196,6 +199,63 @@ func TestFixPlan_UnifiedDiff_NoChange(t *testing.T) {
 	diff, err := plan.UnifiedDiff("test.yaml", []byte(noFixableSolution))
 	require.NoError(t, err)
 	assert.Empty(t, diff)
+}
+
+// TestFixPlan_UnifiedDiff_HunkCountsMatch guards against the go-difflib
+// SplitLines quirk that appends a trailing "\n" to the last line: for content
+// ending in a newline that produces a phantom empty final line, making the last
+// hunk claim one more line than the file has. BSD patch tolerates the extra EOF
+// context line but GNU patch (Linux CI) rejects it, so the --diff -> patch
+// round-trip breaks. Assert every hunk's declared line counts match its body so
+// the emitted diff applies cleanly on both.
+func TestFixPlan_UnifiedDiff_HunkCountsMatch(t *testing.T) {
+	require.True(t, strings.HasSuffix(multiRefHyphenSolution, "\n"),
+		"this test is meaningful only for newline-terminated content")
+
+	plan, err := ComputeFixPlan([]byte(multiRefHyphenSolution), "test.yaml", provider.NewRegistry())
+	require.NoError(t, err)
+	require.True(t, plan.Changed)
+
+	diff, err := plan.UnifiedDiff("test.yaml", []byte(multiRefHyphenSolution))
+	require.NoError(t, err)
+	require.NotEmpty(t, diff)
+
+	hunkRe := regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@`)
+	var wantA, wantB, gotA, gotB int
+	inHunk := false
+	flush := func() {
+		if inHunk {
+			assert.Equal(t, wantA, gotA, "hunk 'from' line count must match body:\n%s", diff)
+			assert.Equal(t, wantB, gotB, "hunk 'to' line count must match body:\n%s", diff)
+		}
+	}
+	for _, line := range strings.Split(diff, "\n") {
+		if m := hunkRe.FindStringSubmatch(line); m != nil {
+			flush()
+			inHunk = true
+			wantA, wantB, gotA, gotB = 1, 1, 0, 0
+			if m[1] != "" {
+				wantA, _ = strconv.Atoi(m[1])
+			}
+			if m[2] != "" {
+				wantB, _ = strconv.Atoi(m[2])
+			}
+			continue
+		}
+		if !inHunk || line == "" {
+			continue
+		}
+		switch line[0] {
+		case ' ':
+			gotA++
+			gotB++
+		case '-':
+			gotA++
+		case '+':
+			gotB++
+		}
+	}
+	flush()
 }
 
 func TestFixableRegistry(t *testing.T) {
