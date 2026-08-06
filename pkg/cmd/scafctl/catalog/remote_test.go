@@ -6,10 +6,12 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -545,4 +547,187 @@ catalogs:
 	output := stdout.String()
 	assert.Contains(t, output, "embedder-catalog", "embedder catalog must appear in listing")
 	assert.Contains(t, output, "oci://ghcr.io/embedder/catalog")
+}
+
+func TestRemoteListSchema_ValidJSON(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	err := json.Unmarshal(remoteListSchemaJSON, &schema)
+	require.NoError(t, err, "remote_list_schema.json must be valid JSON")
+
+	items, ok := schema["items"].(map[string]any)
+	require.True(t, ok, "schema must have items object")
+
+	props, ok := items["properties"].(map[string]any)
+	require.True(t, ok, "items must have properties")
+
+	// Verify all RemoteListItem fields are in the schema.
+	expectedFields := []string{"name", "type", "url", "path", "authProvider", "authScope", "default"}
+	for _, field := range expectedFields {
+		_, exists := props[field]
+		assert.True(t, exists, "schema missing field %q", field)
+	}
+}
+
+func TestRemoteListSchema_RequiredFields(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	err := json.Unmarshal(remoteListSchemaJSON, &schema)
+	require.NoError(t, err)
+
+	items, ok := schema["items"].(map[string]any)
+	require.True(t, ok, "schema must have items object")
+	required, ok := items["required"].([]any)
+	require.True(t, ok, "schema must have required array")
+
+	requiredNames := make([]string, 0, len(required))
+	for _, v := range required {
+		s, ok := v.(string)
+		require.True(t, ok, "required entry must be a string, got %T", v)
+		requiredNames = append(requiredNames, s)
+	}
+
+	assert.Contains(t, requiredNames, "name")
+	assert.Contains(t, requiredNames, "type")
+
+	// Deprecated fields should not be required.
+	assert.NotContains(t, requiredNames, "path")
+	assert.NotContains(t, requiredNames, "authScope")
+}
+
+func TestRemoteListSchemaJSON_ParsesWithDisplay(t *testing.T) {
+	t.Parallel()
+
+	hints, ds, err := tui.ParseSchemaWithDisplay(remoteListSchemaJSON)
+	require.NoError(t, err, "remote_list_schema.json must parse without error")
+	assert.NotNil(t, hints, "should produce column hints")
+	assert.NotNil(t, ds, "should produce display schema")
+}
+
+func TestRemoteListSchema_DeprecatedFieldsHidden(t *testing.T) {
+	t.Parallel()
+
+	var schema map[string]any
+	err := json.Unmarshal(remoteListSchemaJSON, &schema)
+	require.NoError(t, err)
+
+	items, ok := schema["items"].(map[string]any)
+	require.True(t, ok, "schema must have items object")
+	props, ok := items["properties"].(map[string]any)
+	require.True(t, ok, "items must have properties")
+
+	for _, field := range []string{"path", "authScope"} {
+		propRaw, exists := props[field]
+		require.True(t, exists, "schema missing field %q", field)
+		prop, ok := propRaw.(map[string]any)
+		require.True(t, ok, "%s property must be an object", field)
+		deprecated, ok := prop["deprecated"]
+		assert.True(t, ok, "%s should have deprecated flag", field)
+		assert.Equal(t, true, deprecated, "%s should be deprecated", field)
+	}
+
+	// Column hints also mark them hidden.
+	assert.True(t, remoteListColumnHints["path"].Hidden, "path column hint should be Hidden")
+	assert.True(t, remoteListColumnHints["authScope"].Hidden, "authScope column hint should be Hidden")
+}
+
+// TestCommandRemoteList_RunE_JSONOutput exercises the full RunE path through
+// cobra, verifying that structured JSON output contains the expected items.
+func TestCommandRemoteList_RunE_JSONOutput(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+catalogs:
+  - name: prod
+    type: oci
+    url: oci://ghcr.io/myorg/catalog
+    authProvider: gh-token
+  - name: local
+    type: filesystem
+    path: ./catalogs
+settings:
+  defaultCatalog: prod
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0o600)
+	require.NoError(t, err)
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	cmd := commandRemoteList(cliParams, ioStreams, "")
+	// Attach a root command with --config so RunE can read it.
+	root := &cobra.Command{Use: "scafctl"}
+	root.PersistentFlags().String("config", configPath, "")
+	root.AddCommand(cmd)
+
+	root.SetArgs([]string{"list", "-o", "json"})
+	root.SetContext(ctx)
+	err = root.Execute()
+	require.NoError(t, err)
+
+	var items []RemoteListItem
+	err = json.Unmarshal(stdout.Bytes(), &items)
+	require.NoError(t, err, "output must be valid JSON array of RemoteListItem")
+	require.GreaterOrEqual(t, len(items), 2, "must include at least the two configured catalogs")
+
+	// Find our configured catalogs by name.
+	byName := make(map[string]RemoteListItem, len(items))
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+
+	prod, ok := byName["prod"]
+	require.True(t, ok, "prod catalog must appear in output")
+	assert.Equal(t, "oci", prod.Type)
+	assert.Equal(t, "oci://ghcr.io/myorg/catalog", prod.URL)
+	assert.Equal(t, "gh-token", prod.AuthProvider)
+	assert.True(t, prod.Default, "prod should be the default catalog")
+
+	local, ok := byName["local"]
+	require.True(t, ok, "local catalog must appear in output")
+	assert.Equal(t, "filesystem", local.Type)
+	assert.False(t, local.Default)
+}
+
+func TestCommandRemoteList_TUISnapshot(t *testing.T) {
+	t.Parallel()
+
+	items := []RemoteListItem{
+		{
+			Name:         "prod",
+			Type:         "oci",
+			URL:          "oci://ghcr.io/myorg/catalog",
+			AuthProvider: "gh-token",
+			Default:      true,
+		},
+		{
+			Name: "local",
+			Type: "filesystem",
+			Path: "./catalogs",
+		},
+	}
+
+	out, err := kvx.Snapshot(items,
+		kvx.WithDisplaySchemaJSON(remoteListSchemaJSON),
+		kvx.WithColumnHints(remoteListColumnHints),
+		kvx.WithDimensions(120, 30),
+		kvx.WithNoColor(true),
+		kvx.WithAppName("scafctl catalog remote list"),
+	)
+	require.NoError(t, err)
+
+	// Card list should render both items with name as title and url/path as subtitle.
+	assert.Contains(t, out, "prod", "snapshot must contain the OCI catalog name")
+	assert.Contains(t, out, "local", "snapshot must contain the filesystem catalog name")
+	assert.Contains(t, out, "oci", "snapshot must show the OCI type badge")
+	assert.Contains(t, out, "filesystem", "snapshot must show the filesystem type badge")
 }
