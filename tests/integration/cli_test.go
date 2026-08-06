@@ -13983,6 +13983,25 @@ func TestIntegration_LspCompletionFunctions(t *testing.T) {
 	assert.Contains(t, out, `arrays.groupBy($0)`, "function completion inserts a call snippet")
 }
 
+func TestIntegration_LspSignatureHelp(t *testing.T) {
+	t.Parallel()
+
+	// A CEL call "arrays.groupBy(_.items, )" is on line 12 (0-based); the cursor
+	// at character 47 sits before the second argument.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    a:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value:\n                expr: arrays.groupBy(_.items, x)\n"
+
+	out := runLSPSession(t, sol,
+		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/signatureHelp", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+			"position":     map[string]any{"line": 12, "character": 47},
+		}},
+	)
+
+	assert.Contains(t, out, `"signatures"`, "signature help returns signatures")
+	assert.Contains(t, out, "arrays.groupBy", "describes the CEL function under the cursor")
+	assert.Contains(t, out, `"activeParameter":1`, "active parameter tracks the cursor onto the second arg")
+}
+
 func TestIntegration_LspHover(t *testing.T) {
 	t.Parallel()
 
