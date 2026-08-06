@@ -179,3 +179,47 @@ spec:
 	assert.NotContains(t, s, `"fail"`)
 	reparseYAML(t, out)
 }
+
+// TestReplaceMappingKeyAndValue_EscapedQuotedValue exercises the span
+// computation for quoted scalars whose raw token length differs from the decoded
+// value length because of escapes. Computing the span from the decoded length
+// would stop short and leave an orphaned quote; the source-scanning end must
+// consume the whole token.
+func TestReplaceMappingKeyAndValue_EscapedQuotedValue(t *testing.T) {
+	cases := map[string]string{
+		// double-quoted with an escaped quote: decoded a"b (3) != raw "a\"b" (6).
+		"double-quoted escape": `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: q
+  description: "a\"b"
+spec:
+  resolvers: {}
+`,
+		// single-quoted with a doubled '' escape: decoded a'b (3) != raw 'a''b' (6).
+		"single-quoted escape": `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: q
+  description: 'a''b'
+spec:
+  resolvers: {}
+`,
+	}
+	for name, y := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := []byte(y)
+			edit, err := ReplaceMappingKeyAndValue(raw, "metadata.description", "displayName", "renamed")
+			require.NoError(t, err)
+			out, err := Apply(raw, []TextEdit{edit})
+			require.NoError(t, err)
+			s := string(out)
+			assert.Contains(t, s, "displayName: renamed")
+			// No fragment of the original quoted token survives.
+			assert.NotContains(t, s, "description:")
+			assert.NotContains(t, s, `b"`)
+			assert.NotContains(t, s, `b'`)
+			reparseYAML(t, out)
+		})
+	}
+}

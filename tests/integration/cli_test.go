@@ -13948,6 +13948,23 @@ func TestIntegration_LspCodeAction(t *testing.T) {
 	assert.Contains(t, out, lspSessionURI, "edit targets the document")
 }
 
+func TestIntegration_LspCompletion(t *testing.T) {
+	t.Parallel()
+
+	// A partial key "desc" is on line 7 (0-based), under the appName resolver;
+	// completion at its end offers the schema's child keys.
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    appName:\n      desc\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n"
+
+	out := runLSPSession(t, sol,
+		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/completion", "params": map[string]any{
+			"textDocument": map[string]any{"uri": lspSessionURI},
+			"position":     map[string]any{"line": 7, "character": 10},
+		}},
+	)
+
+	assert.Contains(t, out, `"label":"description"`, "completion offers the description field for partial 'desc'")
+}
+
 func TestIntegration_LspHover(t *testing.T) {
 	t.Parallel()
 

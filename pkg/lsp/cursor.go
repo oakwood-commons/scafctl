@@ -106,17 +106,21 @@ var templateValueKeys = map[string]struct{}{
 	"template": {},
 }
 
-// enumValueKeys are the leaf mapping keys whose scalar value is a fixed enum in
-// the current solution schema. The classifier only needs to know a field is an
-// enum; downstream completion sources the concrete values. Keep in sync with the
-// typed string enums in pkg/spec and pkg/action (OnErrorBehavior, BackoffType,
-// ResultSchemaMode, FingerprintScope). Note onError is deprecated in favor of
-// the boolean continueOnError, but remains a functional enum field.
-var enumValueKeys = map[string]struct{}{
-	"onError":          {},
-	"backoff":          {},
-	"resultSchemaMode": {},
-	"scope":            {},
+// enumValueKeys maps each leaf mapping key whose scalar value is a fixed enum in
+// the current solution schema to that enum's allowed values. It is the single
+// source of truth for both cursor classification (a key's presence marks an
+// EnumValue) and completion (the values it offers). It intentionally lists only
+// keys that are unambiguous enum fields; broad/generic keys that also appear as
+// free-form user input names (notably "type") are deliberately excluded to avoid
+// misclassifying arbitrary values. Keep in sync with the typed string enums in
+// pkg/spec and pkg/action (OnErrorBehavior, BackoffType, ResultSchemaMode,
+// FingerprintScope). Note onError is deprecated in favor of the boolean
+// continueOnError, but remains a functional enum field.
+var enumValueKeys = map[string][]string{
+	"onError":          {"fail", "continue"},
+	"backoff":          {"fixed", "linear", "exponential"},
+	"resultSchemaMode": {"error", "warn", "ignore"},
+	"scope":            {"all", "files"},
 }
 
 // ResolveCursor classifies pos against a cached document snapshot. It never
@@ -169,7 +173,33 @@ func ResolveCursor(doc *DocEntry, pos protocol.Position) CursorContext {
 		if path == "" {
 			path = blockKeyPath(doc, int(pos.Line)+1, key)
 		}
+		if path == "" {
+			// No node info (mid-edit/unparsed doc): derive the full key path by
+			// indentation so completion can still find the container.
+			if container := containerPathByIndent(doc.Raw, int(pos.Line), keyStart); container != "" {
+				path = container + "." + key
+			} else {
+				path = key
+			}
+		}
 		return CursorContext{Kind: CursorYAMLKey, Path: path, Node: node, PartialToken: string(runes[keyStart:cursor])}
+	}
+
+	// 2b. Bare partial key (no colon yet) -> completion-time key context. While a
+	// user types a new key the line has no ":", so parseKeyLine finds nothing; the
+	// document usually does not parse either. Detect a leading identifier under
+	// the cursor and derive its container path by indentation from the raw text,
+	// which works without a valid parse. The container is joined with the partial
+	// so parentPath(Path) yields the container for schema lookup.
+	if key == "" {
+		if bare, okBare := barePartialKey(runes, cursor); okBare {
+			partial := string(runes[bare:cursor])
+			path := partial
+			if container := containerPathByIndent(doc.Raw, int(pos.Line), bare); container != "" {
+				path = container + "." + partial
+			}
+			return CursorContext{Kind: CursorYAMLKey, Path: path, PartialToken: partial}
+		}
 	}
 
 	// 3. Value context: classify by the leaf key. Determine the key/path/value
@@ -199,6 +229,12 @@ func ResolveCursor(doc *DocEntry, pos protocol.Position) CursorContext {
 			valueStart2 = firstNonSpace(runes)
 		} else if key != "" && hasValue {
 			keyName = key
+			// No parsed node (mid-edit/unparsed doc): fall back to the bare key
+			// as the path so downstream consumers that key off the leaf segment
+			// (enum values, provider name) still work.
+			if leafPath == "" {
+				leafPath = key
+			}
 			valueStart2 = valueStart
 		} else {
 			return CursorContext{Kind: CursorNone}
@@ -213,7 +249,7 @@ func ResolveCursor(doc *DocEntry, pos protocol.Position) CursorContext {
 	switch {
 	case keyName == "provider":
 		return CursorContext{Kind: CursorProviderName, Path: leafPath, Node: leafNode, PartialToken: backwardProviderIdent(line, cursor)}
-	case isKey(enumValueKeys, keyName):
+	case isEnumKey(keyName):
 		return CursorContext{Kind: CursorEnumValue, Path: leafPath, Node: leafNode, PartialToken: backwardIdent(line, cursor)}
 	case isKey(celValueKeys, keyName):
 		ctx := CursorContext{Kind: CursorCEL, Path: leafPath, Node: leafNode}
@@ -301,6 +337,83 @@ func parseKeyLine(runes []rune) (key string, keyStart, keyEnd, valueStart int, h
 	valueStart = v
 	hasValue = v < len(runes) && runes[v] != '#'
 	return key, keyStart, keyEnd, valueStart, hasValue
+}
+
+// barePartialKey reports whether the cursor sits on a leading identifier token
+// that is a partial mapping key being typed: content that starts (after indent
+// and any block-sequence dashes) with an identifier, has no key/value colon yet,
+// and is otherwise blank after the token. It returns the 0-based rune index where
+// the identifier starts.
+func barePartialKey(runes []rune, cursor int) (int, bool) {
+	i := 0
+	for i < len(runes) {
+		if runes[i] == ' ' || runes[i] == '\t' {
+			i++
+			continue
+		}
+		if runes[i] == '-' && i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
+			i += 2
+			continue
+		}
+		break
+	}
+	start := i
+	end := i
+	for end < len(runes) && isIdentRune(runes[end]) {
+		end++
+	}
+	if end == start {
+		return 0, false // no identifier at content start
+	}
+	// The remainder of the line must be blank (a real "key: ..." is handled by
+	// parseKeyLine; anything else is not a bare partial key).
+	for j := end; j < len(runes); j++ {
+		if runes[j] != ' ' && runes[j] != '\t' {
+			return 0, false
+		}
+	}
+	if cursor < start || cursor > end {
+		return 0, false
+	}
+	return start, true
+}
+
+// containerPathByIndent reconstructs the logical path of the mapping that
+// contains a key at the given 0-based key column on line (0-based), using only
+// indentation of the raw text. It walks upward, adding each ancestor mapping key
+// whose key column is strictly less than the running target column. This is
+// robust to a mid-edit document that does not parse (the common completion case),
+// where the cached node map is unavailable. Sequence dashes are transparent: a
+// list element's fields share their key column, so a "- key:" sibling is skipped
+// and the enclosing list key (at a smaller column) becomes the parent -- which
+// FieldsAtPath resolves into the element type.
+func containerPathByIndent(raw []byte, line, keyCol int) string {
+	var segs []string
+	target := keyCol
+	for l := line - 1; l >= 0 && target > 0; l-- {
+		text, ok := lineAt(raw, l)
+		if !ok {
+			continue
+		}
+		lr := []rune(text)
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		k, ks, _, _, _ := parseKeyLine(lr)
+		if k == "" {
+			continue // not a mapping key line
+		}
+		if ks < target {
+			segs = append(segs, k)
+			target = ks
+		}
+	}
+	// Reverse into top-down order.
+	for i, j := 0, len(segs)-1; i < j; i, j = i+1, j-1 {
+		segs[i], segs[j] = segs[j], segs[i]
+	}
+	return strings.Join(segs, ".")
 }
 
 // scalarLeafOnLine returns the scalar value node whose start is on the 1-based
@@ -460,6 +573,12 @@ func lastSegment(path string) string {
 
 func isKey(set map[string]struct{}, k string) bool {
 	_, ok := set[k]
+	return ok
+}
+
+// isEnumKey reports whether k is a leaf mapping key with a fixed enum value.
+func isEnumKey(k string) bool {
+	_, ok := enumValueKeys[k]
 	return ok
 }
 

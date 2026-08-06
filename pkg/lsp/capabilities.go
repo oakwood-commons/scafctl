@@ -40,6 +40,7 @@ type feature struct {
 func defaultFeatures() []feature {
 	return []feature{
 		codeActionFeature(),
+		completionFeature(),
 		documentSyncFeature(),
 		hoverFeature(),
 		navigationFeature(),

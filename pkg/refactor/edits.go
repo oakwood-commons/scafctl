@@ -148,7 +148,10 @@ func ReplaceMappingKeyAndValue(raw []byte, path, newKey, newValue string) (TextE
 
 	keyStart := ec.li.Offset(sourcepos.Position{Line: keyPos.Line, Column: keyPos.Column})
 	valStart := ec.li.Offset(sourcepos.Position{Line: valNode.Line, Column: valNode.Column})
-	valEnd := valStart + scalarRawLen(valNode)
+	valEnd, ok := scalarTokenEnd(raw, valStart, valNode)
+	if !ok {
+		return TextEdit{}, fmt.Errorf("replace mapping key and value: path %q has an unsupported or unterminated scalar", path)
+	}
 	if keyStart < 0 || valEnd > len(raw) || keyStart >= valEnd {
 		return TextEdit{}, fmt.Errorf("replace mapping key and value: path %q resolves to an out-of-bounds span", path)
 	}
@@ -156,15 +159,73 @@ func ReplaceMappingKeyAndValue(raw []byte, path, newKey, newValue string) (TextE
 	return TextEdit{Range: ec.li.Range(keyStart, valEnd), NewText: newKey + ": " + newValue}, nil
 }
 
-// scalarRawLen returns the byte length the scalar occupies in the source,
-// accounting for surrounding quotes on quoted styles. It is exact for plain and
-// simple single/double-quoted scalars without escapes (the onError values
-// "continue"/"fail" are always in this class); block/folded scalars are not a
-// target of the replace helper and fall back to the decoded length.
-func scalarRawLen(n *yaml.Node) int {
-	l := len(n.Value)
-	if n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0 {
-		l += 2 // opening and closing quote
+// scalarTokenEnd returns the exclusive end byte offset of the scalar token that
+// begins at start in raw, computed from the SOURCE bytes (not the decoded
+// yaml.Node.Value, whose length can differ from the raw token when quotes or
+// escapes are present). It returns ok=false for an unterminated quoted scalar,
+// a block/folded scalar, a plain scalar that spans lines, or an out-of-range
+// start -- cases the single-line key/value replace helper does not support --
+// so the caller declines rather than emitting a corrupt span.
+func scalarTokenEnd(raw []byte, start int, n *yaml.Node) (int, bool) {
+	if start < 0 || start >= len(raw) {
+		return 0, false
 	}
-	return l
+	switch n.Style { //nolint:exhaustive // only plain and single/double-quoted scalars are supported; the default declines the rest
+	case yaml.DoubleQuotedStyle:
+		if raw[start] != '"' {
+			return 0, false
+		}
+		for i := start + 1; i < len(raw); i++ {
+			switch raw[i] {
+			case '\\': // skip the escaped byte
+				i++
+			case '"':
+				return i + 1, true
+			case '\n':
+				return 0, false // unterminated on this line
+			}
+		}
+		return 0, false
+	case yaml.SingleQuotedStyle:
+		if raw[start] != '\'' {
+			return 0, false
+		}
+		for i := start + 1; i < len(raw); i++ {
+			switch raw[i] {
+			case '\'':
+				if i+1 < len(raw) && raw[i+1] == '\'' { // '' is an escaped quote
+					i++
+					continue
+				}
+				return i + 1, true
+			case '\n':
+				return 0, false
+			}
+		}
+		return 0, false
+	case 0: // plain (unquoted) scalar: no quotes or escapes, so the decoded
+		// value's byte length equals its raw length. Guard against a multi-line
+		// (folded) plain value, which this single-line helper must not rewrite.
+		end := start + len(n.Value)
+		if end > len(raw) {
+			return 0, false
+		}
+		if bytesContainsNewline(raw[start:end]) {
+			return 0, false
+		}
+		return end, true
+	default:
+		// Literal/folded block scalars are not a target of this helper.
+		return 0, false
+	}
+}
+
+// bytesContainsNewline reports whether b contains a newline byte.
+func bytesContainsNewline(b []byte) bool {
+	for _, c := range b {
+		if c == '\n' {
+			return true
+		}
+	}
+	return false
 }

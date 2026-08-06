@@ -149,6 +149,29 @@ func IntrospectType(v any) (*TypeInfo, error) {
 	return info, nil
 }
 
+// FieldsAtPath returns the child fields valid at a logical field path, for
+// schema-driven key completion. An empty path returns the top-level fields of v;
+// a non-empty path returns the nested fields of the struct/map/slice-element type
+// at that path. ok is false when the path does not resolve to a type with named
+// child fields (e.g. a scalar leaf or an unknown path). Path navigation follows
+// IntrospectField's rules: dot-separated JSON/Go field names, diving through
+// pointers, slice/array elements, and map values (indices and dynamic map keys
+// are not part of the path -- normalize before calling).
+func FieldsAtPath(v any, path string) ([]FieldInfo, bool) {
+	if path == "" {
+		ti, err := IntrospectType(v)
+		if err != nil || ti == nil {
+			return nil, false
+		}
+		return ti.Fields, len(ti.Fields) > 0
+	}
+	fi, err := IntrospectField(v, path)
+	if err != nil || fi == nil || len(fi.NestedFields) == 0 {
+		return nil, false
+	}
+	return fi.NestedFields, true
+}
+
 // IntrospectField returns field information for a specific field path.
 // The path uses dot notation: "schema.properties" or "metadata.version"
 func IntrospectField(v any, path string) (*FieldInfo, error) {
@@ -266,10 +289,78 @@ func introspectFieldsWithSeen(t reflect.Type, depth int, seen map[reflect.Type]b
 			continue
 		}
 
+		// Promote the fields of an anonymous embedded struct that serializes
+		// inline (no explicit key name; e.g. spec.CallRef with yaml:",inline").
+		// json/yaml both flatten such embeds into the parent object, so the
+		// schema must too -- otherwise the embed surfaces as a phantom field
+		// named after its Go type and its real keys are hidden a level down.
+		if embeddedType, ok := inlineEmbeddedStruct(f); ok {
+			if depth < 10 && !seen[embeddedType] {
+				fields = append(fields, introspectFieldsWithSeen(embeddedType, depth+1, seen)...)
+			}
+			continue
+		}
+
 		fields = append(fields, introspectFieldWithSeen(f, depth, seen))
 	}
 
 	return fields
+}
+
+// inlineEmbeddedStruct reports whether f is an anonymous embedded struct that
+// serializes inline (its fields promoted into the parent), returning the
+// embedded struct type. An embed is inline when it has no explicit serialized
+// key name -- no json name and either no yaml tag or an explicit ",inline". A
+// renamed embed (e.g. `json:"base"`) is a normal named nested field, not inline.
+func inlineEmbeddedStruct(f reflect.StructField) (reflect.Type, bool) {
+	if !f.Anonymous {
+		return nil, false
+	}
+	ft := f.Type
+	for ft.Kind() == reflect.Pointer {
+		ft = ft.Elem()
+	}
+	if ft.Kind() != reflect.Struct {
+		return nil, false
+	}
+	if tagName(f.Tag.Get("json")) != "" {
+		return nil, false
+	}
+	yamlTag := f.Tag.Get("yaml")
+	// A renamed embed (e.g. `yaml:"base"`) is a normal named nested field, not
+	// inline -- even if the name happens to contain the substring "inline".
+	if tagName(yamlTag) != "" {
+		return nil, false
+	}
+	// With no yaml tag, a Go embed serializes inline by default. When a yaml
+	// tag is present (but unnamed), require an explicit ",inline" option rather
+	// than substring-matching the raw tag.
+	if yamlTag != "" && !hasTagOption(yamlTag, "inline") {
+		return nil, false
+	}
+	return ft, true
+}
+
+// hasTagOption reports whether a struct tag value carries the given comma-
+// separated option (e.g. "inline" in ",inline" or "foo,omitempty,inline").
+// The name portion (before the first comma) is not treated as an option.
+func hasTagOption(tag, opt string) bool {
+	parts := strings.Split(tag, ",")
+	for _, p := range parts[1:] {
+		if p == opt {
+			return true
+		}
+	}
+	return false
+}
+
+// tagName returns the name portion of a struct tag value (the text before the
+// first comma), e.g. "foo,omitempty" -> "foo", ",inline" -> "".
+func tagName(tag string) string {
+	if i := strings.IndexByte(tag, ','); i >= 0 {
+		return tag[:i]
+	}
+	return tag
 }
 
 // introspectFieldWithSeen extracts all tag information from a struct field,
