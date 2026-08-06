@@ -14069,6 +14069,33 @@ func TestIntegration_LspCodeAction(t *testing.T) {
 	assert.Contains(t, out, lspSessionURI, "edit targets the document")
 }
 
+// TestIntegration_LspExecuteCommandAddResolver opens a document and drives
+// workspace/executeCommand for scafctl.applyAddResolver. The server builds the
+// insertion edit and issues a server->client workspace/applyEdit REQUEST; the
+// harness never answers that request (so the server's ctx.Call blocks), but the
+// applyEdit frame is written to stdout before it blocks, and the harness kills
+// the process at teardown. We assert the emitted applyEdit request carries the
+// new resolver name.
+func TestIntegration_LspExecuteCommandAddResolver(t *testing.T) {
+	t.Parallel()
+
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: cmd\nspec:\n  resolvers:\n    seed:\n      resolve:\n        with:\n          - provider: static\n            inputs:\n              value: x\n"
+
+	out := runLSPSession(t, sol, map[string]any{
+		"jsonrpc": "2.0", "id": 7, "method": "workspace/executeCommand", "params": map[string]any{
+			"command":   "scafctl.applyAddResolver",
+			"arguments": []any{lspSessionURI, "generatedResolver", "static"},
+		},
+	})
+
+	// The server advertised the executeCommand provider on initialize.
+	assert.Contains(t, out, "executeCommandProvider", "executeCommand capability advertised")
+	// It emitted a server->client applyEdit request carrying the new resolver.
+	assert.Contains(t, out, "applyEdit", "server issues a workspace/applyEdit request")
+	assert.Contains(t, out, "generatedResolver", "the inserted resolver name")
+	assert.Contains(t, out, lspSessionURI, "edit targets the opened document")
+}
+
 func TestIntegration_LspCompletion(t *testing.T) {
 	t.Parallel()
 

@@ -141,6 +141,49 @@ resolve:
 invoking the quick fix rewrites just that line to `continueOnError: true`,
 leaving surrounding formatting and comments untouched.
 
+## Generative actions & commands
+
+Beyond quick fixes, `textDocument/codeAction` also offers **generative and
+refactor actions**. Two of them are backed by the server's
+`workspace/executeCommand` infrastructure: the code action carries a *command*
+(not an inline edit); the editor collects a little input, then invokes the
+server command, which computes the source-preserving edit and applies it via a
+`workspace/applyEdit` request.
+
+- **Create missing resolver** (quick fix) -- offered on an
+  `unknown-resolver-reference` diagnostic (e.g. a `_.doesNotExist` reference with
+  no matching resolver). It inserts a minimal stub resolver of that name under
+  `spec.resolvers` as a direct edit (no prompt):
+
+  ~~~yaml
+  doesNotExist:
+    resolve:
+      with:
+        - provider: static
+          inputs:
+            value: ""
+  ~~~
+
+- **Extract to call...** (refactor.extract) -- offered when the cursor is inside a
+  direct provider step (a `resolve`/`transform`/`validate` `with[i]` step that is
+  not already a `call:`). The editor prompts for a new call name, then runs the
+  `scafctl.applyExtractCall` server command, which delegates to the
+  `refactor.ExtractCall` engine to hoist the step into a reusable `spec.calls`
+  definition and rewrite the step to `call: <name>`.
+
+- **Add resolver...** (source) -- always available on a parsed document. The
+  editor prompts for a resolver name and a provider (quick-pick), then runs the
+  `scafctl.applyAddResolver` server command, which inserts a stub resolver under
+  `spec.resolvers`.
+
+The server advertises the two server-side commands
+(`scafctl.applyExtractCall`, `scafctl.applyAddResolver`) in its
+`executeCommandProvider` capability. The editor extension registers the two
+client-side prompt commands (`scafctl.extractToCall`, `scafctl.addResolver`)
+that the refactor/source code actions reference. The split keeps user
+interaction (prompts, quick-picks) in the editor while all edit computation
+stays in the server.
+
 ## Trying it by hand
 
 You normally never run the server directly, but you can confirm it starts:

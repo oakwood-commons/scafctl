@@ -26,7 +26,11 @@ func codeActionFeature() feature {
 		},
 		advertise: func(c *protocol.ServerCapabilities) {
 			c.CodeActionProvider = &protocol.CodeActionOptions{
-				CodeActionKinds: []protocol.CodeActionKind{protocol.CodeActionKindQuickFix},
+				CodeActionKinds: []protocol.CodeActionKind{
+					protocol.CodeActionKindQuickFix,
+					protocol.CodeActionKindRefactorExtract,
+					protocol.CodeActionKindSource,
+				},
 			}
 		},
 	}
@@ -36,10 +40,12 @@ func codeActionFeature() feature {
 // re-lints the cached solution (the same path diagnostics take) to obtain
 // findings with positions, keeps only those that are both fixable and relevant
 // to the request range/diagnostics, and returns each as a QuickFix code action
-// carrying the source edits from lint.QuickFixFor.
+// carrying the source edits from lint.QuickFixFor. It then appends the
+// generative/refactor actions (create missing resolver, extract to call, add
+// resolver) from codeaction_generate.go, each gated by the client's kind filter.
 //
 // It returns (nil, nil) -- never an error -- when the document is unknown, not
-// parsed, or has no applicable fixes, so an editor that requests actions on
+// parsed, or has no applicable actions, so an editor that requests actions on
 // every cursor move gets an empty result rather than a failure.
 func (s *Server) codeAction(_ *glsp.Context, params *protocol.CodeActionParams) (any, error) {
 	entry, ok := s.getDoc(params.TextDocument.URI)
@@ -47,24 +53,30 @@ func (s *Server) codeAction(_ *glsp.Context, params *protocol.CodeActionParams) 
 		return nil, nil
 	}
 
-	// Respect the client's kind filter: if it asked for kinds and none of them
-	// is quickfix, there is nothing for this server to contribute.
-	if !onlyAllowsQuickFix(params.Context.Only) {
-		return nil, nil
+	actions := make([]protocol.CodeAction, 0)
+
+	// Quick fixes for lint diagnostics (deprecated onError, redundant dependsOn,
+	// unused resolver), gated by the quickfix kind filter.
+	if onlyAllows(params.Context.Only, protocol.CodeActionKindQuickFix) {
+		result := lint.Solution(entry.Sol, uriToPath(params.TextDocument.URI), s.registry)
+		for _, f := range result.Findings {
+			edits, fixable := lint.QuickFixFor(entry.Sol, f, s.registry)
+			if !fixable || len(edits) == 0 {
+				continue
+			}
+			if !findingMatchesRequest(f, params) {
+				continue
+			}
+			actions = append(actions, buildCodeAction(f, edits, params))
+		}
 	}
 
-	result := lint.Solution(entry.Sol, uriToPath(params.TextDocument.URI), s.registry)
-
-	actions := make([]protocol.CodeAction, 0)
-	for _, f := range result.Findings {
-		edits, fixable := lint.QuickFixFor(entry.Sol, f, s.registry)
-		if !fixable || len(edits) == 0 {
+	// Generative/refactor actions, each filtered by its own kind below.
+	for _, a := range s.generativeCodeActions(entry, params) {
+		if a.Kind != nil && !onlyAllows(params.Context.Only, *a.Kind) {
 			continue
 		}
-		if !findingMatchesRequest(f, params) {
-			continue
-		}
-		actions = append(actions, buildCodeAction(f, edits, params))
+		actions = append(actions, a)
 	}
 
 	if len(actions) == 0 {
@@ -73,16 +85,21 @@ func (s *Server) codeAction(_ *glsp.Context, params *protocol.CodeActionParams) 
 	return actions, nil
 }
 
-// onlyAllowsQuickFix reports whether the request's Context.Only permits a
-// quickfix action. An empty/absent Only list means "no filter" (allow). A
-// non-empty list allows only when it contains the quickfix kind.
-func onlyAllowsQuickFix(only []protocol.CodeActionKind) bool {
+// onlyAllows reports whether the request's Context.Only permits any of kinds. An
+// empty/absent Only list means "no filter" (allow). A non-empty list allows when
+// it contains any requested kind. A client's Only entry is also treated as a
+// prefix match against a more specific kind (per LSP: "refactor" enables
+// "refactor.extract"), so a broad request still surfaces the server's specific
+// actions.
+func onlyAllows(only []protocol.CodeActionKind, kinds ...protocol.CodeActionKind) bool {
 	if len(only) == 0 {
 		return true
 	}
-	for _, k := range only {
-		if k == protocol.CodeActionKindQuickFix {
-			return true
+	for _, want := range kinds {
+		for _, o := range only {
+			if o == want || strings.HasPrefix(string(want), string(o)+".") {
+				return true
+			}
 		}
 	}
 	return false
