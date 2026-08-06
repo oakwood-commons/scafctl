@@ -23,7 +23,7 @@ func TestDefaultFeatures_DeterministicOrder(t *testing.T) {
 		got = append(got, f.name)
 		require.NotNil(t, f.wire, "every feature must wire a handler")
 	}
-	assert.Equal(t, []string{"codeAction", "documentSync", "navigation", "rename", "symbols"}, got)
+	assert.Equal(t, []string{"codeAction", "documentSync", "hover", "navigation", "rename", "symbols"}, got)
 	assert.True(t, sort.StringsAreSorted(got), "features must be registered in alphabetical order")
 }
 

@@ -13948,6 +13948,58 @@ func TestIntegration_LspCodeAction(t *testing.T) {
 	assert.Contains(t, out, lspSessionURI, "edit targets the document")
 }
 
+func TestIntegration_LspHover(t *testing.T) {
+	t.Parallel()
+
+	// "provider: parameter" is on line 9 (0-based); character 24 sits inside the
+	// value "parameter".
+	sol := "apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: nav\nspec:\n  resolvers:\n    environment:\n      resolve:\n        with:\n          - provider: parameter\n            inputs:\n              value: dev\n"
+
+	msgs := [][]byte{
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"capabilities": map[string]any{}}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "initialized", "params": map[string]any{}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///nav.yaml", "languageId": "yaml", "version": 1, "text": sol},
+		}}),
+		lspFrame(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "textDocument/hover", "params": map[string]any{
+			"textDocument": map[string]any{"uri": "file:///nav.yaml"},
+			"position":     map[string]any{"line": 9, "character": 24},
+		}}),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binaryPath, "lsp")
+	cmd.Dir = findProjectRoot()
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	out := &lockedBuffer{}
+	cmd.Stdout = out
+	require.NoError(t, cmd.Start())
+
+	for _, m := range msgs {
+		_, werr := stdin.Write(m)
+		require.NoError(t, werr, "write LSP frame to server stdin")
+	}
+	// Poll until hover contents appear instead of sleeping a fixed amount, so the
+	// test is not flaky under load (mirrors TestIntegration_LspStdioFlag).
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(out.String(), `"contents"`) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	got := out.String()
+	assert.Contains(t, got, `"contents"`, "hover returns markup contents")
+	assert.Contains(t, got, "provider", "hover describes the provider under the cursor")
+	assert.Contains(t, got, "Inputs", "provider hover lists inputs")
+}
+
 // TestIntegration_LspStdioFlag verifies that `lsp --stdio` starts the server and
 // serves the LSP protocol. Many LSP clients (and vscode-languageclient for
 // TransportKind.stdio) append `--stdio`; the server must accept it rather than
