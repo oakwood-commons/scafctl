@@ -109,6 +109,21 @@ func TestRoot_HasOptionsSubcommand(t *testing.T) {
 	}
 }
 
+func TestRoot_HasExploreSubcommand(t *testing.T) {
+	t.Parallel()
+	cmd, _ := Root(nil)
+	found := false
+	for _, sub := range cmd.Commands() {
+		if sub.Name() == "explore" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected 'explore' subcommand to be added")
+	}
+}
+
 func TestRoot_CommandGroups(t *testing.T) {
 	t.Parallel()
 	cmd, _ := Root(nil)

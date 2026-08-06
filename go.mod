@@ -31,6 +31,7 @@ require (
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/mark3labs/mcp-go v0.57.0
+	github.com/oakwood-commons/cobra-explorer v0.2.0
 	github.com/oakwood-commons/httpc v0.2.0
 	github.com/oakwood-commons/kvx v0.16.0
 	github.com/oakwood-commons/oauth-helpers v0.2.0
@@ -79,8 +80,8 @@ require (
 
 require (
 	cel.dev/expr v0.25.2 // indirect
-	charm.land/bubbles/v2 v2.1.0 // indirect
-	charm.land/lipgloss/v2 v2.0.3 // indirect
+	charm.land/bubbles/v2 v2.1.1 // indirect
+	charm.land/lipgloss/v2 v2.0.5 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/AliyunContainerService/ack-ram-tool/pkg/credentials/provider v0.14.0 // indirect
