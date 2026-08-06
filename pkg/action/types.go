@@ -32,6 +32,35 @@ type Workflow struct {
 	ResultSchemaMode ResultSchemaMode `json:"resultSchemaMode,omitempty" yaml:"resultSchemaMode,omitempty" doc:"Default result schema validation mode" maxLength:"16" example:"error" default:"error"`
 }
 
+// Workflow section identifiers. A dependsOn entry may only reference actions in
+// its OWN section (Rules 5 & 6 in validateDependsOn); these name the two.
+const (
+	// SectionActions is the regular workflow.actions section.
+	SectionActions = "actions"
+	// SectionFinally is the workflow.finally section (cleanup actions).
+	SectionFinally = "finally"
+)
+
+// SectionActions returns the actions in the named workflow section -- the exact
+// set a dependsOn entry declared in that section may reference. It is the single
+// source of truth for the same-section dependsOn constraint, shared by
+// validation (validateDependsOn) and editor tooling (dependsOn completion) so
+// the set of *suggested* targets can never drift from the set of *valid* ones.
+// An unknown section yields nil.
+func (w *Workflow) SectionActions(section string) map[string]*Action {
+	if w == nil {
+		return nil
+	}
+	switch section {
+	case SectionActions:
+		return w.Actions
+	case SectionFinally:
+		return w.Finally
+	default:
+		return nil
+	}
+}
+
 // Action represents a single action definition.
 // Actions perform side-effect operations using providers and can depend on
 // other actions for sequencing and data flow.

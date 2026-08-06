@@ -433,15 +433,10 @@ func validateExclusive(action *Action, section string, workflow *Workflow, errs 
 // validateDependsOn validates action dependencies.
 func validateDependsOn(action *Action, section string, workflow *Workflow, errs *AggregatedValidationError) {
 	for _, dep := range action.DependsOn {
-		var validActions map[string]*Action
-
-		// Rule 5 & 6: dependsOn must reference actions in the same section
-		switch section {
-		case "actions":
-			validActions = workflow.Actions
-		case "finally":
-			validActions = workflow.Finally
-		}
+		// Rule 5 & 6: dependsOn must reference actions in the same section. The
+		// valid-target set is derived from the shared source of truth so it stays
+		// in lockstep with dependsOn completion.
+		validActions := workflow.SectionActions(section)
 
 		if _, exists := validActions[dep]; !exists {
 			msg := fmt.Sprintf("dependency %q not found in %s section", dep, section)

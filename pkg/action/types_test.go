@@ -323,3 +323,25 @@ func TestFingerprintScope_OrDefault(t *testing.T) {
 	assert.Equal(t, FingerprintScopeAll, FingerprintScopeAll.OrDefault())
 	assert.Equal(t, FingerprintScopeFiles, FingerprintScopeFiles.OrDefault())
 }
+
+func TestWorkflow_SectionActions(t *testing.T) {
+	build := &Action{Name: "build"}
+	cleanup := &Action{Name: "cleanup"}
+	w := &Workflow{
+		Actions: map[string]*Action{"build": build},
+		Finally: map[string]*Action{"cleanup": cleanup},
+	}
+
+	assert.Equal(t, w.Actions, w.SectionActions(SectionActions), "actions section returns the actions map")
+	assert.Equal(t, w.Finally, w.SectionActions(SectionFinally), "finally section returns the finally map")
+	assert.Nil(t, w.SectionActions("bogus"), "unknown section yields nil")
+
+	// A dependsOn entry is valid only within its own section.
+	_, mainHasCleanup := w.SectionActions(SectionActions)["cleanup"]
+	assert.False(t, mainHasCleanup, "a finally action is not a valid main-section dependsOn target")
+	_, finallyHasBuild := w.SectionActions(SectionFinally)["build"]
+	assert.False(t, finallyHasBuild, "a main action is not a valid finally-section dependsOn target")
+
+	var nilWorkflow *Workflow
+	assert.Nil(t, nilWorkflow.SectionActions(SectionActions), "nil workflow is safe")
+}

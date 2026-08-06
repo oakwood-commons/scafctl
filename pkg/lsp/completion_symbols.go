@@ -6,7 +6,9 @@ package lsp
 import (
 	"strings"
 
+	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/refindex"
+	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 	"gopkg.in/yaml.v3"
 )
@@ -36,11 +38,125 @@ func symbolCompletions(entry *DocEntry, pos protocol.Position, cc CursorContext)
 	if entry == nil || entry.Index == nil {
 		return nil
 	}
+	// An action's dependsOn is SECTION-SCOPED: a dependsOn entry may only
+	// reference actions in its own workflow section (actions vs finally), the same
+	// rule validateDependsOn enforces. Offering the unified action index here would
+	// suggest cross-section names the validator immediately rejects, so scope the
+	// candidates to the owning section (single source of truth: Workflow.SectionActions).
+	// This runs before the generic index path, which handles every other symbol.
+	if names, partial, ok := actionDependsOnCandidates(entry, cc); ok {
+		return completionItemsFromNames(names, refindex.SymbolAction, partial)
+	}
 	kind, partial, ok := symbolCompletionTarget(entry, pos, cc)
 	if !ok {
 		return nil
 	}
 	return symbolNameItems(entry.Index, kind, partial)
+}
+
+// actionDependsOnCandidates reports whether the cursor is on an action's
+// dependsOn entry and, if so, returns the same-section action names it may
+// reference (from the shared Workflow.SectionActions source of truth) plus the
+// partial token typed so far. It handles both the typing case (a CursorNone
+// dependsOn item, classified from cc.Path) and the swap case (a CursorSymbolRef
+// on a complete action name, classified from the reference's position). Resolver
+// dependsOn and non-dependsOn action references are left to the generic path.
+func actionDependsOnCandidates(entry *DocEntry, cc CursorContext) ([]string, string, bool) {
+	base, partial, ok := actionDependsOnBase(entry, cc)
+	if !ok {
+		return nil, "", false
+	}
+	section, ok := workflowSectionFromPath(base)
+	if !ok {
+		return nil, "", false
+	}
+	if entry.Sol == nil {
+		return nil, "", false
+	}
+	names := make([]string, 0, len(entry.Sol.Spec.Workflow.SectionActions(section)))
+	for name := range entry.Sol.Spec.Workflow.SectionActions(section) {
+		names = append(names, name)
+	}
+	return names, partial, true
+}
+
+// actionDependsOnBase returns the owning dependsOn path (e.g.
+// "spec.workflow.finally.notify.dependsOn") and the partial token when the cursor
+// is on an ACTION dependsOn entry. It reports ok=false for a resolver dependsOn,
+// a non-dependsOn position, or when the path cannot be determined.
+func actionDependsOnBase(entry *DocEntry, cc CursorContext) (string, string, bool) {
+	// Typing case: a partial dependsOn item is CursorNone with the item path.
+	if base := stripIndex(cc.Path); base != "" && lastSegment(base) == "dependsOn" && isActionDependsOnPath(base) {
+		return base, nodeValue(cc.Node), true
+	}
+	// Swap case: parked on a complete action name that the index located as a
+	// reference. Derive the owning dependsOn path from the reference position.
+	if cc.Kind == CursorSymbolRef && cc.Ref != nil && cc.Ref.Symbol.Kind == refindex.SymbolAction {
+		if base, ok := dependsOnPathAt(entry, cc.Ref.Range.Start); ok {
+			// Empty partial for a defined name (offer all in-section to swap);
+			// otherwise keep it as the filter prefix.
+			if _, defined := entry.Index.Definition(refindex.SymbolAction, cc.Ref.Symbol.Name); defined {
+				return base, "", true
+			}
+			return base, cc.Ref.Symbol.Name, true
+		}
+	}
+	return "", "", false
+}
+
+// isActionDependsOnPath reports whether a dependsOn path belongs to a workflow
+// action (either section) rather than a resolver.
+func isActionDependsOnPath(path string) bool {
+	return strings.Contains(path, ".workflow.actions.") || strings.Contains(path, ".workflow.finally.")
+}
+
+// workflowSectionFromPath returns the workflow section ("actions" or "finally")
+// a path lies within, or ok=false when it is in neither.
+func workflowSectionFromPath(path string) (string, bool) {
+	switch {
+	case strings.Contains(path, ".workflow.finally."):
+		return action.SectionFinally, true
+	case strings.Contains(path, ".workflow.actions."):
+		return action.SectionActions, true
+	default:
+		return "", false
+	}
+}
+
+// refContentColumn returns the column at which the refindex records a
+// whole-scalar reference for value node n -- the scalar's CONTENT start, which
+// for a quoted scalar is one column past the opening quote (mirroring
+// refindex's contentStart). It is why dependsOnPathAt must not compare against
+// n.Column directly: a quoted dependsOn entry like `- "alphaMain"` has its
+// reference at n.Column+1, so an exact-column match on n.Column would miss it
+// and the swap case would fall back to the cross-section index. dependsOn values
+// are always plain or quoted flow scalars, so only the quote shift applies;
+// block (literal/folded) styles do not occur for an action-name reference.
+func refContentColumn(n *yaml.Node) int {
+	if n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0 {
+		return n.Column + 1
+	}
+	return n.Column
+}
+
+// dependsOnPathAt returns the logical path of the action dependsOn item whose
+// value node starts at pos, or ok=false when no such item is there. It maps a
+// located reference's position back to its dependsOn path so the swap case can be
+// section-scoped like the typing case.
+func dependsOnPathAt(entry *DocEntry, pos sourcepos.Position) (string, bool) {
+	if entry.Nodes == nil {
+		return "", false
+	}
+	for path, n := range entry.Nodes {
+		if n == nil || n.Line != pos.Line || refContentColumn(n) != pos.Column {
+			continue
+		}
+		base := stripIndex(path)
+		if lastSegment(base) == "dependsOn" && isActionDependsOnPath(base) {
+			return base, true
+		}
+	}
+	return "", false
 }
 
 // symbolCompletionTarget classifies the cursor into the symbol kind to complete
@@ -106,7 +222,10 @@ func valueRefCompletionTarget(entry *DocEntry, pos protocol.Position, cc CursorC
 		case "rslvr":
 			return refindex.SymbolResolver, partial, true
 		case "dependsOn":
-			return dependsOnKind(base), partial, true
+			// Action dependsOn is section-scoped and handled by
+			// actionDependsOnCandidates before this generic path runs, so a
+			// dependsOn reaching here is a resolver's (single resolver namespace).
+			return refindex.SymbolResolver, partial, true
 		}
 	}
 
@@ -133,16 +252,6 @@ func valueRefCompletionTarget(entry *DocEntry, pos protocol.Position, cc CursorC
 	return 0, "", false
 }
 
-// dependsOnKind returns the symbol kind a dependsOn entry references, from the
-// owning path: an action's dependsOn lists action names; a resolver's lists
-// resolver names.
-func dependsOnKind(path string) refindex.SymbolKind {
-	if strings.Contains(path, ".workflow.actions.") || strings.Contains(path, ".workflow.finally.") {
-		return refindex.SymbolAction
-	}
-	return refindex.SymbolResolver
-}
-
 // symbolNameItems builds completion items for every DEFINED name of kind in idx
 // whose name starts with partial (case-insensitive; an empty partial offers
 // all). Only definitions are offered -- idx.Names also includes reference names
@@ -150,15 +259,26 @@ func dependsOnKind(path string) refindex.SymbolKind {
 // filtering to names that resolve to a definition keeps the suggestions to
 // symbols that actually exist.
 func symbolNameItems(idx *refindex.Index, kind refindex.SymbolKind, partial string) []protocol.CompletionItem {
-	names := idx.Names(kind)
+	names := make([]string, 0)
+	for _, name := range idx.Names(kind) {
+		if _, defined := idx.Definition(kind, name); defined {
+			names = append(names, name)
+		}
+	}
+	return completionItemsFromNames(names, kind, partial)
+}
+
+// completionItemsFromNames builds and sorts completion items for the given
+// symbol names, filtered by the (case-insensitive) partial prefix -- an empty
+// partial offers all. The names are assumed to already be the valid candidate
+// set (e.g. defined symbols, or a section's actions), so no further existence
+// filtering is applied here.
+func completionItemsFromNames(names []string, kind refindex.SymbolKind, partial string) []protocol.CompletionItem {
 	lower := strings.ToLower(strings.TrimSpace(partial))
 	items := make([]protocol.CompletionItem, 0, len(names))
 	itemKind := symbolItemKind(kind)
 	detail := kind.String()
 	for _, name := range names {
-		if _, defined := idx.Definition(kind, name); !defined {
-			continue
-		}
 		if lower != "" && !strings.HasPrefix(strings.ToLower(name), lower) {
 			continue
 		}

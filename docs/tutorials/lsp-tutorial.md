@@ -110,7 +110,11 @@ index:
   it offers **resolver** names (and `__actions.` / `.__actions.` offers **action**
   names); a `call:` value offers **call** names; a `rslvr:` value offers
   **resolver** names; and a `dependsOn:` list item offers **resolver** names (in a
-  resolver) or **action** names (in an action). Only defined symbols are suggested.
+  resolver) or **action** names (in an action). An action `dependsOn` is scoped to
+  the action's own workflow section -- an `actions` entry offers only `actions`
+  names and a `finally` entry only `finally` names -- matching what validation
+  allows, so a suggestion never produces a cross-section error. Only defined
+  symbols are suggested.
 
 Completion is triggered on `.`, `:`, and space. Structural key, enum-value, and
 CEL/template function completion work mid-edit even while the document does not
@@ -221,7 +225,7 @@ on the same file and keeps the server focused on what only scafctl can know.
 
 Beyond quick fixes, `textDocument/codeAction` also offers **generative and
 refactor actions**. Two of them are backed by the server's
-`workspace/executeCommand` infrastructure: the code action carries a *command*
+`workspace/executeCommand` infrastructure: the code action carries a _command_
 (not an inline edit); the editor collects a little input, then invokes the
 server command, which computes the source-preserving edit and applies it via a
 `workspace/applyEdit` request.
