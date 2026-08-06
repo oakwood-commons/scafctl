@@ -17,3 +17,7 @@ applyTo: "{docs,examples,pkg/docs,pkg/examples}/**"
   `list_lint_rules` / `explain_lint_rule`, `explain_concepts`,
   `list_context_variables`) to **verify or
   generate** that reference rather than as the sole reader-facing source.
+- This repo is public: before committing docs or examples, check them against
+  `.github/skills/publish-hygiene/SKILL.md` -- examples and screenshots are a
+  common place for an employer-specific hostname, tool name, or identifier to
+  leak in.

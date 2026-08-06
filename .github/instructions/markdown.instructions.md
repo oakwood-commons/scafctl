@@ -20,3 +20,10 @@ Use only ASCII characters in markdown files:
 - Use straight quotes (`"`, `'`) instead of curly/smart quotes
 - Use `...` instead of ellipsis characters
 - Use standard hyphens (`-`) instead of en dashes
+
+## Publish Hygiene
+
+This repo is public. Before committing any markdown file, check it against
+`.github/skills/publish-hygiene/SKILL.md` for employer- or organization-specific
+references (internal tool names, hostnames/domains, codenames, employee
+identifiers, credentials).
