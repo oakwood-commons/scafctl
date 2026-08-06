@@ -174,6 +174,78 @@ func TestSymbolCompletion_ActionDependsOn(t *testing.T) {
 	assert.Equal(t, []string{"build"}, labels, "action dependsOn offers action names: %v", labels)
 }
 
+// sectionScopedFixture has both a main (actions) and a finally section so a
+// dependsOn in one section must not offer actions from the other. Actions:
+// alpha, alphaMain (main); alphaFinally, cleanup (finally).
+const sectionScopedFixture = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: sym
+spec:
+  workflow:
+    actions:
+      alpha:
+        provider: message
+        inputs:
+          message: a
+      alphaMain:
+        provider: message
+        inputs:
+          message: am
+      build:
+        dependsOn:
+          - PARTIAL
+        provider: message
+        inputs:
+          message: b
+    finally:
+      alphaFinally:
+        provider: message
+        inputs:
+          message: af
+      cleanup:
+        dependsOn:
+          - FINPART
+        provider: message
+        inputs:
+          message: c
+`
+
+func TestSymbolCompletion_ActionDependsOn_MainSectionScoped(t *testing.T) {
+	// A main-section action's dependsOn typing "al" must offer only main actions
+	// (alpha, alphaMain) -- never the finally action "alphaFinally", which
+	// validateDependsOn would reject as cross-section.
+	content := replaceOnce(sectionScopedFixture, "- PARTIAL", "- al")
+	labels := completeAt(t, content, "- al", "al", 2)
+	assert.Equal(t, []string{"alpha", "alphaMain"}, labels,
+		"main dependsOn must be scoped to the actions section: %v", labels)
+	assert.NotContains(t, labels, "alphaFinally", "must not offer a finally action")
+}
+
+func TestSymbolCompletion_ActionDependsOn_FinallySectionScoped(t *testing.T) {
+	// A finally action's dependsOn typing "al" must offer only finally actions
+	// (alphaFinally) -- never the main-section "alpha"/"alphaMain". This is the
+	// #798 over-suggestion the fix closes.
+	content := replaceOnce(sectionScopedFixture, "- FINPART", "- al")
+	labels := completeAt(t, content, "- al", "al", 2)
+	assert.Equal(t, []string{"alphaFinally"}, labels,
+		"finally dependsOn must be scoped to the finally section: %v", labels)
+	assert.NotContains(t, labels, "alpha", "must not offer a main-section action")
+	assert.NotContains(t, labels, "alphaMain", "must not offer a main-section action")
+}
+
+func TestSymbolCompletion_ActionDependsOn_SwapCrossSectionRefStaysInSection(t *testing.T) {
+	// The cursor is parked on a COMPLETE main-section action name ("alphaMain")
+	// inside a FINALLY action's dependsOn -- an already-invalid cross-section
+	// reference the index still locates. The swap suggestions must be the finally
+	// section's actions (to correct it), never main-section names.
+	content := replaceOnce(sectionScopedFixture, "- FINPART", "- alphaMain")
+	labels := completeAt(t, content, "- alphaMain", "alphaMain", 9)
+	assert.Contains(t, labels, "alphaFinally", "offers a same-(finally-)section action to swap to: %v", labels)
+	assert.NotContains(t, labels, "alphaMain", "must not offer the main-section action it is parked on")
+	assert.NotContains(t, labels, "alpha", "must not offer a main-section action")
+}
+
 // symbolSwapFixture references an existing resolver by its full name, so the
 // cursor lands on a located reference (CursorSymbolRef) rather than a partial
 // token being typed.
