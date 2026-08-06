@@ -168,13 +168,26 @@ func buildCodeAction(f *lint.Finding, edits []refactor.TextEdit, params *protoco
 	}
 }
 
-// matchingDiagnostics returns the subset of the request's incoming diagnostics
-// whose Code equals the finding's rule name, so the action is attached to the
-// diagnostic(s) it resolves.
+// matchingDiagnostics returns the incoming diagnostics that THIS action actually
+// resolves: those whose Code equals the finding's rule name AND whose range
+// covers the finding's own line. Matching on rule name alone would wrongly
+// attach every same-rule diagnostic in the document (e.g. two deprecated-field
+// findings on different lines) to each action, so each action would claim to
+// resolve findings its single edit does not touch. When the finding has no
+// resolved position (Line 0), the request range is used as the fallback filter.
 func matchingDiagnostics(f *lint.Finding, params *protocol.CodeActionParams) []protocol.Diagnostic {
 	var out []protocol.Diagnostic
 	for _, d := range params.Context.Diagnostics {
-		if diagnosticCode(d) == f.RuleName {
+		if diagnosticCode(d) != f.RuleName {
+			continue
+		}
+		if f.Line > 0 {
+			if lineInRange(lspLine(f.Line), d.Range) {
+				out = append(out, d)
+			}
+			continue
+		}
+		if rangesOverlapLines(d.Range, params.Range) {
 			out = append(out, d)
 		}
 	}

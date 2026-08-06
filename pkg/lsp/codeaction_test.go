@@ -113,6 +113,84 @@ func TestCodeAction_DeprecatedField_ReturnsQuickFix(t *testing.T) {
 	require.Len(t, a.Diagnostics, 1)
 }
 
+// twoDeprecatedDoc has two deprecated onError fields on different lines (line 10
+// in resolver a, line 17 in resolver b), producing two deprecated-field findings.
+// A workflow references both resolvers so neither is flagged unused.
+const twoDeprecatedDoc = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: twodep
+spec:
+  resolvers:
+    a:
+      resolve:
+        with:
+          - provider: parameter
+            onError: continue
+            inputs:
+              value: dev
+    b:
+      resolve:
+        with:
+          - provider: parameter
+            onError: fail
+            inputs:
+              value:
+                expr: _.a
+  workflow:
+    actions:
+      show:
+        provider: message
+        inputs:
+          message:
+            expr: _.a + _.b
+`
+
+func TestCodeAction_AttachesOnlyItsOwnDiagnostic(t *testing.T) {
+	s := newTestServer(t)
+	const uri = "file:///twodep.yaml"
+	openDoc(t, s, uri, twoDeprecatedDoc)
+
+	code := protocol.IntegerOrString{Value: "deprecated-field"}
+	diagA := protocol.Diagnostic{
+		Range: protocol.Range{Start: protocol.Position{Line: 10}, End: protocol.Position{Line: 10, Character: 30}},
+		Code:  &code,
+	}
+	diagB := protocol.Diagnostic{
+		Range: protocol.Range{Start: protocol.Position{Line: 17}, End: protocol.Position{Line: 17, Character: 30}},
+		Code:  &code,
+	}
+	// A request spanning both findings, carrying both same-rule diagnostics.
+	params := &protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range:        protocol.Range{Start: protocol.Position{Line: 0}, End: protocol.Position{Line: 30}},
+		Context:      protocol.CodeActionContext{Diagnostics: []protocol.Diagnostic{diagA, diagB}},
+	}
+
+	res, err := s.codeAction(&glsp.Context{}, params)
+	require.NoError(t, err)
+	actions, ok := res.([]protocol.CodeAction)
+	require.True(t, ok)
+
+	// Both deprecated-field quick fixes are returned, and each attaches exactly
+	// ONE diagnostic -- the one on its own line -- not every same-rule diagnostic
+	// in the document.
+	deprecatedActions := 0
+	for _, a := range actions {
+		if a.Title != "Replace deprecated 'onError' with 'continueOnError'" {
+			continue
+		}
+		deprecatedActions++
+		require.Len(t, a.Diagnostics, 1,
+			"action must resolve only its own diagnostic")
+		attachedLine := a.Diagnostics[0].Range.Start.Line
+		editLine := a.Edit.Changes[uri][0].Range.Start.Line
+		assert.Equal(t, editLine, attachedLine,
+			"attached diagnostic line must match the action's edit line")
+	}
+	assert.Equal(t, 2, deprecatedActions, "one quick fix per deprecated-field finding")
+}
+
 func TestCodeAction_CleanDoc_ReturnsNil(t *testing.T) {
 	s := newTestServer(t)
 	const uri = "file:///clean.yaml"
