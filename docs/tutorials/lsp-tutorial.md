@@ -101,7 +101,8 @@ highlights the one at the cursor:
   declared arguments (`spec.calls[name].args`), highlighting the argument on the
   current line.
 
-Signature help is triggered on `(` and space.
+Signature help is triggered on `(` and space, and re-triggered on `,` so the
+highlighted parameter follows the cursor as you move between CEL arguments.
 
 ## Quick fixes
 

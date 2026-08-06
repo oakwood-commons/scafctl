@@ -13,12 +13,19 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-// signatureHelpTriggerCharacters (re)trigger signature help: "(" opens a CEL
-// call's argument list, " " separates template function arguments.
+// signatureHelpTriggerCharacters open signature help automatically: "(" opens a
+// CEL call's argument list, " " separates template function arguments.
 var signatureHelpTriggerCharacters = []string{"(", " "}
 
+// signatureHelpRetriggerCharacters update already-showing signature help so the
+// active parameter follows the cursor to the next argument. "," advances to the
+// next CEL argument; clients that only re-request on advertised characters would
+// otherwise leave the highlighted parameter stale. Per the LSP spec, all trigger
+// characters are also retrigger characters, so only "," needs listing here.
+var signatureHelpRetriggerCharacters = []string{","}
+
 // signatureHelpFeature registers textDocument/signatureHelp and advertises the
-// provider with its trigger characters.
+// provider with its trigger and retrigger characters.
 func signatureHelpFeature() feature {
 	return feature{
 		name: "signatureHelp",
@@ -27,7 +34,8 @@ func signatureHelpFeature() feature {
 		},
 		advertise: func(c *protocol.ServerCapabilities) {
 			c.SignatureHelpProvider = &protocol.SignatureHelpOptions{
-				TriggerCharacters: signatureHelpTriggerCharacters,
+				TriggerCharacters:   signatureHelpTriggerCharacters,
+				RetriggerCharacters: signatureHelpRetriggerCharacters,
 			}
 		},
 	}

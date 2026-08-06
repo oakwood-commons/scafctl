@@ -258,6 +258,7 @@ func TestSignatureHelp_FeatureRegisteredAndAdvertised(t *testing.T) {
 	init := res.(protocol.InitializeResult)
 	require.NotNil(t, init.Capabilities.SignatureHelpProvider)
 	assert.Equal(t, signatureHelpTriggerCharacters, init.Capabilities.SignatureHelpProvider.TriggerCharacters)
+	assert.Equal(t, signatureHelpRetriggerCharacters, init.Capabilities.SignatureHelpProvider.RetriggerCharacters)
 }
 
 // --- helper unit tests ---
