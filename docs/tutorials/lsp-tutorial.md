@@ -63,6 +63,24 @@ sources the CLI already knows about -- no separate documentation to maintain:
 Hover degrades gracefully: on an unknown target, a parse error, or whitespace it
 simply returns nothing, so it never interrupts editing.
 
+## Completion
+
+As you type, the server offers **schema-driven structural completions**:
+
+- **Keys** -- typing a key under a known path offers the valid child keys from the
+  generated solution schema (e.g. under a resolver: `description`, `resolve`,
+  `dependsOn`, ...; under a provider entry: `provider`, `inputs`, `onError`, ...),
+  filtered by what you have typed. Each suggestion carries its type and field
+  documentation.
+- **Enum values** -- an enum-valued field (`onError`, `backoff`,
+  `resultSchemaMode`, `scope`) offers its allowed values.
+
+Completion is triggered on `.`, `:`, and space, and works mid-edit even while the
+document does not yet parse (the container is inferred from indentation).
+Structural key and enum-value completion are available today; symbol completion
+(after `_.` / `call:` / `dependsOn`) and CEL/template function completion extend
+the same dispatch.
+
 ## Trying it by hand
 
 You normally never run the server directly, but you can confirm it starts:
@@ -111,9 +129,10 @@ needed to keep editor and CLI diagnostics consistent.
 
 ## What's next
 
-Navigation, rename, and hover cover resolvers, actions, functions, and calls.
-Planned additions extend the same cursor-context resolver to completion and
-signature help.
+Navigation, rename, hover, and structural completion cover resolvers, actions,
+functions, and calls. Planned additions extend the same completion dispatch to
+symbol references (after `_.` / `call:` / `dependsOn`) and CEL/template function
+names.
 
 ## See also
 
