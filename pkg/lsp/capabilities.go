@@ -45,6 +45,7 @@ func defaultFeatures() []feature {
 		hoverFeature(),
 		navigationFeature(),
 		renameFeature(),
+		signatureHelpFeature(),
 		symbolsFeature(),
 	}
 }

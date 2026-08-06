@@ -95,6 +95,23 @@ sourced from the reference index, so it becomes available once the solution
 model builds successfully -- while the document does not yet parse it simply
 offers nothing rather than erroring.
 
+## Signature help
+
+While typing a call's arguments the server shows the declared parameters and
+highlights the one at the cursor:
+
+- **CEL function** (`arrays.groupBy(...)`) -- the function's signature, with the
+  active parameter tracking the comma-separated position.
+- **Go-template function** (`{{ greet ... }}`) -- an author-defined helper's
+  declared parameters (`spec.functions[name].params`), tracked by space-separated
+  position; a built-in template function shows its name and description.
+- **Call args** -- inside a call invocation's `args:` block, the invoked call's
+  declared arguments (`spec.calls[name].args`), highlighting the argument on the
+  current line.
+
+Signature help is triggered on `(` and space, and re-triggered on `,` so the
+highlighted parameter follows the cursor as you move between CEL arguments.
+
 ## Quick fixes
 
 It also offers **quick fixes**. `textDocument/codeAction` turns certain lint
@@ -172,10 +189,10 @@ needed to keep editor and CLI diagnostics consistent.
 
 ## What's next
 
-Navigation, rename, hover, and completion (structural keys, enum values, and
-CEL/template functions) cover resolvers, actions, functions, and calls. Planned
-additions extend the same completion dispatch to symbol references (after `_.` /
-`call:` / `dependsOn`).
+Navigation, rename, hover, completion (structural keys, enum values, and
+CEL/template functions), signature help, and quick fixes cover resolvers,
+actions, functions, and calls. Planned additions extend the same completion
+dispatch to symbol references (after `_.` / `call:` / `dependsOn`).
 
 ## See also
 
