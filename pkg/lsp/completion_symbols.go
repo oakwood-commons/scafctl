@@ -123,6 +123,22 @@ func workflowSectionFromPath(path string) (string, bool) {
 	}
 }
 
+// refContentColumn returns the column at which the refindex records a
+// whole-scalar reference for value node n -- the scalar's CONTENT start, which
+// for a quoted scalar is one column past the opening quote (mirroring
+// refindex's contentStart). It is why dependsOnPathAt must not compare against
+// n.Column directly: a quoted dependsOn entry like `- "alphaMain"` has its
+// reference at n.Column+1, so an exact-column match on n.Column would miss it
+// and the swap case would fall back to the cross-section index. dependsOn values
+// are always plain or quoted flow scalars, so only the quote shift applies;
+// block (literal/folded) styles do not occur for an action-name reference.
+func refContentColumn(n *yaml.Node) int {
+	if n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0 {
+		return n.Column + 1
+	}
+	return n.Column
+}
+
 // dependsOnPathAt returns the logical path of the action dependsOn item whose
 // value node starts at pos, or ok=false when no such item is there. It maps a
 // located reference's position back to its dependsOn path so the swap case can be
@@ -132,7 +148,7 @@ func dependsOnPathAt(entry *DocEntry, pos sourcepos.Position) (string, bool) {
 		return "", false
 	}
 	for path, n := range entry.Nodes {
-		if n == nil || n.Line != pos.Line || n.Column != pos.Column {
+		if n == nil || n.Line != pos.Line || refContentColumn(n) != pos.Column {
 			continue
 		}
 		base := stripIndex(path)

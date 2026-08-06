@@ -246,6 +246,21 @@ func TestSymbolCompletion_ActionDependsOn_SwapCrossSectionRefStaysInSection(t *t
 	assert.NotContains(t, labels, "alpha", "must not offer a main-section action")
 }
 
+func TestSymbolCompletion_ActionDependsOn_SwapQuotedRefStaysInSection(t *testing.T) {
+	// Same swap case as above, but the cross-section reference is QUOTED
+	// (`- "alphaMain"`). refindex positions a quoted scalar's reference at its
+	// CONTENT start -- one column past the opening quote -- so dependsOnPathAt
+	// must account for that shift (via refContentColumn). If it compared the raw
+	// node column instead, the lookup would miss, the swap case would fall back
+	// to the generic action index, and cross-section names would leak back in
+	// (the #798 over-suggestion). Guard that quoted entries stay section-scoped.
+	content := replaceOnce(sectionScopedFixture, "- FINPART", `- "alphaMain"`)
+	labels := completeAt(t, content, `- "alphaMain"`, "alphaMain", 3)
+	assert.Contains(t, labels, "alphaFinally", "offers a same-(finally-)section action to swap to: %v", labels)
+	assert.NotContains(t, labels, "alphaMain", "must not offer the main-section action it is parked on")
+	assert.NotContains(t, labels, "alpha", "must not offer a main-section action even when quoted")
+}
+
 // symbolSwapFixture references an existing resolver by its full name, so the
 // cursor lands on a located reference (CursorSymbolRef) rather than a partial
 // token being typed.
