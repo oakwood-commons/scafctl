@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This package defines only function types (StatFunc, ReadFileFunc).
-// These tests verify the types compile and can be assigned real functions.
+// These tests cover the fs helpers: the function type aliases (StatFunc,
+// ReadFileFunc) compile and accept real functions, and WriteFileAtomic writes
+// content atomically.
 
 func TestStatFunc_AssignableFromOsStat(t *testing.T) {
 	var fn StatFunc = os.Stat

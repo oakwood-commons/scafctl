@@ -56,7 +56,7 @@ type lintRuleSummary struct {
 	Severity    string `json:"severity"`
 	Category    string `json:"category"`
 	Description string `json:"description"`
-	Fixable     bool   `json:"fixable,omitempty"`
+	Fixable     bool   `json:"fixable"`
 }
 
 // handleListLintRules returns all known lint rules with optional filtering.
