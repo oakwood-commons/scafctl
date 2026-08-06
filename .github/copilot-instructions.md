@@ -75,6 +75,7 @@ The project uses `task` (go-task/task) for builds and linting. **Always use `tas
 - **Test coverage**: Every new or changed file must have tests. Target 70%+ patch coverage. Never submit a new file with 0% test coverage
 - **No magic values**: Always define constants or use settings for configuration values
 - **Git safety**: The AI may commit, push, and open/merge PRs, but must **ask for approval first**; a **single approval covers the whole commit -> push -> PR sequence** (never publish any step without having asked). `git commit --amend` is **denied** and run manually by the user. Before committing, verify a signing key is loaded (`ssh-add -l`); if none is loaded, prompt the user to load their signing key into the ssh-agent per their local setup rather than attempting a doomed commit. All commits must be signed (`-S`) and DCO signed-off (`-s`). **Do not `sleep` to wait for CI**; ask the user whether to wait, and if so loop-poll (`gh pr checks`). See `AGENTS.md` for details.
+- **Publish hygiene**: This repo is public. Before creating/editing an issue, PR, or comment, or committing any file, check for and scrub employer- or organization-specific references (internal tool names, internal hostnames/domains, internal codenames, employee identifiers, credentials) -- see `.github/skills/publish-hygiene/SKILL.md` for the full checklist. This applies to human contributors, AI agents, and reviewers alike.
 
 ## Issue Definition of Done (automatic quality gate)
 
