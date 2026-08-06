@@ -288,8 +288,12 @@ func TestIdentifierBefore(t *testing.T) {
 func TestTopLevelCommas(t *testing.T) {
 	r := []rune("a, b, c")
 	assert.Equal(t, uint32(2), topLevelCommas(r, 0, len(r)))
-	// Commas inside generics/brackets are not counted.
-	r = []rune("map<string,dyn>, x")
+	// '<' and '>' are CEL comparison operators, not nesting: the top-level comma
+	// after a comparison is still counted.
+	r = []rune("a < b, c")
+	assert.Equal(t, uint32(1), topLevelCommas(r, 0, len(r)))
+	// Commas inside brackets/braces/parens are not counted.
+	r = []rune("[1, 2], x")
 	assert.Equal(t, uint32(1), topLevelCommas(r, 0, len(r)))
 	// Commas inside a string literal are not counted.
 	r = []rune(`"a,b", c`)

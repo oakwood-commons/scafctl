@@ -333,7 +333,11 @@ func identifierBefore(runes []rune, i int) string {
 }
 
 // topLevelCommas counts commas between [from, to) that are not nested inside
-// parentheses, brackets, braces, or angle brackets, and not inside strings.
+// parentheses, brackets, or braces, and not inside strings. It operates on real
+// CEL expression text, where '<' and '>' are comparison operators (not nesting
+// delimiters), so an expression like fn(a < b, c) still counts its top-level
+// comma. Generic angle brackets only appear in function signatures, which are
+// parsed separately by signatureParams.
 func topLevelCommas(runes []rune, from, to int) uint32 {
 	if to > len(runes) {
 		to = len(runes)
@@ -349,9 +353,9 @@ func topLevelCommas(runes []rune, from, to int) uint32 {
 			}
 		case r == '"' || r == '\'':
 			inStr = r
-		case r == '(' || r == '[' || r == '{' || r == '<':
+		case r == '(' || r == '[' || r == '{':
 			depth++
-		case r == ')' || r == ']' || r == '}' || r == '>':
+		case r == ')' || r == ']' || r == '}':
 			if depth > 0 {
 				depth--
 			}
