@@ -12,6 +12,13 @@
     "opencode-vibeguard",
     "@tarquinen/opencode-dcp@3.1.14"
   ],
+  "mcp": {
+    "scafctl": {
+      "type": "local",
+      "command": ["./dist/scafctl", "mcp", "serve"],
+      "enabled": true
+    }
+  },
   "formatter": {},
   "lsp": {
     "gopls": {
