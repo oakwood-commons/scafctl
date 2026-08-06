@@ -65,11 +65,14 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 			return err
 		}
 		// Windows does not allow rename-over-existing. Remove the destination and
-		// retry so the write is still atomic-enough on that platform. Return the
-		// final failure (remove/retry error) rather than the original rename error,
-		// so a genuine remove/retry problem is not masked by the expected
-		// rename-over-existing failure.
-		if _, statErr := os.Stat(path); statErr == nil {
+		// retry so the write is still atomic-enough on that platform. Only do this
+		// for a regular-file destination: if path is a directory, os.Remove would
+		// delete it and drop a file in its place -- surprising data loss -- so
+		// surface the original rename error instead. Return the final failure
+		// (remove/retry error) rather than the original rename error, so a genuine
+		// remove/retry problem is not masked by the expected rename-over-existing
+		// failure.
+		if fi, statErr := os.Stat(path); statErr == nil && !fi.IsDir() {
 			if rmErr := os.Remove(path); rmErr != nil {
 				return rmErr
 			}

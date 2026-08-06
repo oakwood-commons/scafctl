@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -119,11 +120,15 @@ func (p *FixPlan) UnifiedDiff(path string, original []byte) (string, error) {
 	if !p.Changed {
 		return "", nil
 	}
+	// Normalize separators to "/" so the a/ and b/ header paths are valid unified
+	// diff headers on every platform (on Windows path can contain backslashes,
+	// which produce non-standard headers that common patch tooling rejects).
+	headerPath := filepath.ToSlash(path)
 	return difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
 		A:        splitDiffLines(string(original)),
 		B:        splitDiffLines(string(p.NewContent)),
-		FromFile: "a/" + path,
-		ToFile:   "b/" + path,
+		FromFile: "a/" + headerPath,
+		ToFile:   "b/" + headerPath,
 		Context:  3,
 	})
 }
