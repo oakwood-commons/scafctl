@@ -321,18 +321,22 @@ func renderTable(root any, options *ViewerOptions) error {
 	if options.ColumnarMode == tui.ColumnarModeAlways {
 		root = normalizeSliceKeys(root)
 	}
-	output := tui.RenderTable(root, tui.TableOptions{
-		AppName:       options.AppName,
-		Path:          "_",
-		Bordered:      true,
-		Width:         options.Width,
-		NoColor:       options.NoColor,
-		ColumnOrder:   options.ColumnOrder,
-		ColumnHints:   hints,
-		ColumnarMode:  options.ColumnarMode,
-		HiddenColumns: hiddenColumnsFromHints(hints),
-		Schema:        resolveDisplaySchema(options.DisplaySchemaJSON),
-	})
+	output := func() string {
+		renderMu.Lock()
+		defer renderMu.Unlock()
+		return tui.RenderTable(root, tui.TableOptions{
+			AppName:       options.AppName,
+			Path:          "_",
+			Bordered:      true,
+			Width:         options.Width,
+			NoColor:       options.NoColor,
+			ColumnOrder:   options.ColumnOrder,
+			ColumnHints:   hints,
+			ColumnarMode:  options.ColumnarMode,
+			HiddenColumns: hiddenColumnsFromHints(hints),
+			Schema:        resolveDisplaySchema(options.DisplaySchemaJSON),
+		})
+	}()
 	fmt.Fprint(options.Out, output)
 	return nil
 }
@@ -368,12 +372,16 @@ func resolveColumnHints(schemaJSON []byte, programmatic map[string]tui.ColumnHin
 // renderList outputs data as a key-value list (non-interactive).
 func renderList(root any, options *ViewerOptions) error {
 	hints := resolveColumnHints(options.SchemaJSON, options.ColumnHints)
-	output := tui.RenderList(root, tui.ListOptions{
-		NoColor:       options.NoColor,
-		ArrayStyle:    options.ArrayStyle,
-		HiddenColumns: hiddenColumnsFromHints(hints),
-		ColumnOrder:   options.ColumnOrder,
-	})
+	output := func() string {
+		renderMu.Lock()
+		defer renderMu.Unlock()
+		return tui.RenderList(root, tui.ListOptions{
+			NoColor:       options.NoColor,
+			ArrayStyle:    options.ArrayStyle,
+			HiddenColumns: hiddenColumnsFromHints(hints),
+			ColumnOrder:   options.ColumnOrder,
+		})
+	}()
 	fmt.Fprint(options.Out, output)
 	return nil
 }
@@ -409,18 +417,26 @@ func resolveDisplaySchema(displaySchemaJSON []byte) *tui.DisplaySchema {
 
 // renderTree outputs data as an ASCII tree structure.
 func renderTree(root any, options *ViewerOptions) error {
-	output := tui.Render(root, tui.FormatTree, tui.TableOptions{
-		NoColor: options.NoColor,
-	})
+	output := func() string {
+		renderMu.Lock()
+		defer renderMu.Unlock()
+		return tui.Render(root, tui.FormatTree, tui.TableOptions{
+			NoColor: options.NoColor,
+		})
+	}()
 	fmt.Fprint(options.Out, output)
 	return nil
 }
 
 // renderMermaid outputs data as a Mermaid flowchart diagram.
 func renderMermaid(root any, options *ViewerOptions) error {
-	output := tui.Render(root, tui.FormatMermaid, tui.TableOptions{
-		NoColor: options.NoColor,
-	})
+	output := func() string {
+		renderMu.Lock()
+		defer renderMu.Unlock()
+		return tui.Render(root, tui.FormatMermaid, tui.TableOptions{
+			NoColor: options.NoColor,
+		})
+	}()
 	fmt.Fprint(options.Out, output)
 	return nil
 }
@@ -442,6 +458,8 @@ func runInteractive(root any, options *ViewerOptions) error {
 		teaOpts = append(teaOpts, tui.WithIO(options.In, options.Out)...)
 	}
 
+	renderMu.Lock()
+	defer renderMu.Unlock()
 	return tui.Run(root, cfg, teaOpts...)
 }
 
@@ -470,6 +488,8 @@ func RenderTable(data any, opts tui.TableOptions) (string, error) {
 		root = normalizeSliceKeys(root)
 	}
 
+	renderMu.Lock()
+	defer renderMu.Unlock()
 	return tui.RenderTable(root, opts), nil
 }
 
@@ -481,6 +501,8 @@ func RenderList(data any, opts tui.ListOptions) (string, error) {
 		return "", fmt.Errorf("failed to load data: %w", err)
 	}
 
+	renderMu.Lock()
+	defer renderMu.Unlock()
 	return tui.RenderList(root, opts), nil
 }
 
@@ -521,6 +543,8 @@ func Snapshot(data any, opts ...Option) (string, error) {
 		return "", fmt.Errorf("failed to build TUI config: %w", cfgErr)
 	}
 	cfg.HideFooter = true
+	renderMu.Lock()
+	defer renderMu.Unlock()
 	return tui.RenderSnapshot(root, cfg), nil
 }
 

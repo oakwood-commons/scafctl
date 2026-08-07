@@ -218,7 +218,7 @@ func runStatusTUI(
 	cfg.Done = done
 
 	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
-	if runErr := tui.Run(data, cfg, teaOpts...); runErr != nil {
+	if runErr := skvx.WithRenderLock(func() error { return tui.Run(data, cfg, teaOpts...) }); runErr != nil {
 		if ctx.Err() != nil {
 			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 		}
@@ -314,7 +314,7 @@ func runBrowserTUI(
 	cfg.Done = done
 
 	teaOpts := tui.WithIO(ioStreams.In, ioStreams.Out)
-	if runErr := tui.Run(data, cfg, teaOpts...); runErr != nil {
+	if runErr := skvx.WithRenderLock(func() error { return tui.Run(data, cfg, teaOpts...) }); runErr != nil {
 		if ctx.Err() != nil {
 			return nil, exitcode.WithCode(auth.ErrUserCancelled, exitcode.GeneralError)
 		}
