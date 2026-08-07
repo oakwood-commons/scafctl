@@ -4,7 +4,11 @@
 package kvx
 
 import (
+	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -12,13 +16,42 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// kvxThemeRaceSubprocessEnv marks the re-exec'd child process spawned by
+// TestRenderMu_ConcurrentRenders, so it runs the actual stress workload
+// instead of re-spawning itself again.
+const kvxThemeRaceSubprocessEnv = "KVX_THEME_RACE_SUBPROCESS=1"
+
 // TestRenderMu_ConcurrentRenders stress-tests concurrent calls into the
 // exported render entry points that all share renderMu (RenderTable,
 // RenderList, View). Run with -race: without the mutex serializing calls
 // into the upstream kvx tui package, this reliably trips the data race on
 // tui.CurrentTheme()'s unsynchronized package-level theme global. It passing
 // under -race is the regression guard for the fix in this file.
+//
+// This only exercises the upstream race while tui's package-level theme is
+// still unset (see theme_guard.go). To avoid being order-dependent on
+// whichever other test in this package happens to run first and lazily
+// initializes the theme, this re-execs itself as a fresh subprocess (via
+// os.Args[0], the compiled test binary) so the race check always starts
+// from a guaranteed-unset theme global, regardless of test execution order.
 func TestRenderMu_ConcurrentRenders(t *testing.T) {
+	if os.Getenv("KVX_THEME_RACE_SUBPROCESS") == "1" {
+		renderMuConcurrentRendersWorkload(t)
+		return
+	}
+
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestRenderMu_ConcurrentRenders$", "-test.v")
+	cmd.Env = append(os.Environ(), kvxThemeRaceSubprocessEnv)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("subprocess race check failed: %v\n%s", err, out)
+	}
+}
+
+// renderMuConcurrentRendersWorkload is the actual concurrent-render stress
+// workload, run inside the re-exec'd subprocess so it starts from a fresh,
+// unset theme global every time.
+func renderMuConcurrentRendersWorkload(t *testing.T) {
 	data := []map[string]any{
 		{"name": "a", "value": 1},
 		{"name": "b", "value": 2},
@@ -68,8 +101,17 @@ func TestWithRenderLock_RunsFnAndPropagatesError(t *testing.T) {
 // itself: concurrent callers must never execute fn simultaneously. This
 // guards the external-caller entry point the same way
 // TestRenderMu_ConcurrentRenders guards the in-package render call sites.
+//
+// The critical section does a small, non-optimizable amount of work (a busy
+// loop over an atomic counter) between the increment and decrement, rather
+// than just incrementing/decrementing back-to-back. An empty critical
+// section can pass even if the mutex is accidentally removed, because two
+// goroutines are unlikely to race into two bare instructions at the exact
+// same instant; widening the window makes an actual concurrency violation
+// far more likely to be observed, independent of running with -race.
 func TestWithRenderLock_SerializesConcurrentCallers(t *testing.T) {
 	const goroutines = 16
+	const busyWorkIterations = 10_000
 	var active, maxActive int
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -85,6 +127,12 @@ func TestWithRenderLock_SerializesConcurrentCallers(t *testing.T) {
 					maxActive = active
 				}
 				mu.Unlock()
+
+				var busy uint64
+				for j := 0; j < busyWorkIterations; j++ {
+					busy += uint64(j)
+				}
+				runtime.KeepAlive(busy)
 
 				mu.Lock()
 				active--
