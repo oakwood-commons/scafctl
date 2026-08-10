@@ -692,7 +692,18 @@ func TestDeduplicateAndFormatSolutions(t *testing.T) {
 }
 
 func TestCommandSolution_NoArgsCallsListSolutions(t *testing.T) {
-	t.Parallel()
+	// Cannot be parallel: temporarily redirects xdg.DataHome to an empty
+	// catalog so this test is not polluted by solutions already present in
+	// the machine's real local catalog (e.g. from prior `scafctl build`/`run`
+	// invocations).
+	xdgMu.Lock()
+	tmpDir := t.TempDir()
+	origDataHome := xdg.DataHome
+	xdg.DataHome = tmpDir
+	t.Cleanup(func() {
+		xdg.DataHome = origDataHome
+		xdgMu.Unlock()
+	})
 
 	outBuf := &bytes.Buffer{}
 	errBuf := &bytes.Buffer{}
@@ -706,7 +717,8 @@ func TestCommandSolution_NoArgsCallsListSolutions(t *testing.T) {
 	cmd.SetContext(ctx)
 
 	// No args, no --file, no --local: should call ListSolutions.
-	// Without a real catalog this produces "No solutions found" info message.
+	// With an isolated, empty local catalog this produces "No solutions
+	// found" info message.
 	err := cmd.Execute()
 	require.NoError(t, err)
 
