@@ -32,7 +32,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/mark3labs/mcp-go v0.57.0
 	github.com/oakwood-commons/httpc v0.2.0
-	github.com/oakwood-commons/kvx v0.16.0
+	github.com/oakwood-commons/kvx v0.16.1
 	github.com/oakwood-commons/oauth-helpers v0.2.0
 	github.com/oakwood-commons/scafctl-plugin-sdk v0.17.0
 	github.com/opencontainers/go-digest v1.0.0
