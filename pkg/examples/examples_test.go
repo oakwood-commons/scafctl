@@ -556,21 +556,51 @@ func TestEmbeddedExamplesAreWorkingDirectoryIndependent(t *testing.T) {
 
 // TestExamplesFSFromRejectsEmptyEmbed asserts the build-defect guard fires when
 // the embedded tree is empty. A zero-value embed.FS reads as an empty directory
-// with a nil error, so without the len(entries)==0 check the empty-examples
-// condition (the #819 failure mode) would collapse to a silent empty list
-// rather than a diagnosable error. This keeps Categories()/Scan()'s error path
-// reachable and meaningful.
+// with a nil error, so without the guard the empty-examples condition (the #819
+// failure mode) would collapse to a silent empty list rather than a diagnosable
+// error. This keeps Categories()/Scan()'s error path reachable and meaningful.
 func TestExamplesFSFromRejectsEmptyEmbed(t *testing.T) {
 	t.Parallel()
 
 	var empty embed.FS // zero value: reads as an empty directory, no error
 	_, _, err := examplesFSFrom(empty)
 	require.Error(t, err, "an empty embed must be reported as a build defect")
-	assert.Contains(t, err.Error(), "empty")
+	assert.Contains(t, err.Error(), "no example files")
+}
+
+// TestExamplesFSFromRejectsNonExampleRootFilesOnly guards the hole Copilot
+// flagged: the embedding package lives at the root of the tree and //go:embed *
+// captures its own Go source, so a broken embed that matched only that inert
+// file (or any non-example root file) would be non-empty yet contain no
+// examples. The guard must reject it rather than silently degrading to an empty
+// example list -- the same #819 failure mode as a fully empty embed.
+func TestExamplesFSFromRejectsNonExampleRootFilesOnly(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := examplesFSFrom(fstest.MapFS{
+		"embed.go":   {Data: []byte("package examplefiles\n")},
+		"README.txt": {Data: []byte("not an example\n")},
+	})
+	require.Error(t, err, "an embed of only non-example root files must be reported as a build defect")
+	assert.Contains(t, err.Error(), "no example files")
+}
+
+// TestExamplesFSFromAcceptsTopLevelYAML asserts a top-level .yaml/.yml file
+// counts as a real example source even when no category subdirectory is present.
+func TestExamplesFSFromAcceptsTopLevelYAML(t *testing.T) {
+	t.Parallel()
+
+	fsys, root, err := examplesFSFrom(fstest.MapFS{
+		"embed.go":     {Data: []byte("package examplefiles\n")},
+		"solution.yml": {Data: []byte("kind: Solution\n")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ".", root)
+	assert.NotNil(t, fsys)
 }
 
 // TestExamplesFSFromAcceptsPopulatedFS is the positive counterpart: a non-empty
-// FS is accepted and returned rooted at ".".
+// FS with a category subdirectory is accepted and returned rooted at ".".
 func TestExamplesFSFromAcceptsPopulatedFS(t *testing.T) {
 	t.Parallel()
 

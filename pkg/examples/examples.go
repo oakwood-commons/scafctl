@@ -422,11 +422,33 @@ func examplesFSFrom(fsys fs.FS) (fs.FS, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("examples not available: embedded example tree is unreadable: %w", err)
 	}
-	if len(entries) == 0 {
-		// A zero-value or mis-wired embed.FS reads as an empty directory with no
-		// error, so emptiness -- not a read error -- is the detectable symptom
-		// of a broken embed.
-		return nil, "", errors.New("examples not available: embedded example tree is empty (build defect: the go:embed directive matched no files)")
+	// A zero-value or mis-wired embed.FS reads as an empty directory with no
+	// error, so a missing example source -- not a read error -- is the
+	// detectable symptom of a broken embed. Emptiness is not enough on its own:
+	// the embedding package sits at the root of the tree (examples/embed.go) and
+	// //go:embed * captures that package's own Go source too, so a broken embed
+	// that matched only the Go file(s) would still be non-empty. Require at least
+	// one real example source -- a subdirectory (example category) or a top-level
+	// YAML file -- so the guard cannot be satisfied by the inert Go source alone.
+	if !hasExampleSource(entries) {
+		return nil, "", errors.New("examples not available: embedded example tree contains no example files (build defect: the go:embed directive matched no example YAML files or category directories)")
 	}
 	return fsys, ".", nil
+}
+
+// hasExampleSource reports whether the root directory entries include at least
+// one genuine example source: a subdirectory (an example category) or a
+// top-level .yaml/.yml file. Non-example root files (e.g. the embedding
+// package's own Go source captured by //go:embed *) do not count, so this
+// distinguishes a healthy embed from a broken one that matched only inert files.
+func hasExampleSource(entries []fs.DirEntry) bool {
+	for _, e := range entries {
+		if e.IsDir() {
+			return true
+		}
+		if ext := strings.ToLower(filepath.Ext(e.Name())); ext == ".yaml" || ext == ".yml" {
+			return true
+		}
+	}
+	return false
 }
