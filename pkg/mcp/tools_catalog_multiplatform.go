@@ -29,7 +29,7 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 		mcp.WithString("kind",
 			mcp.Required(),
 			mcp.Description("Artifact kind: provider, auth-handler"),
-			mcp.Enum("provider", "auth-handler"),
+			enumOpt("provider", "auth-handler"),
 		),
 	)
 	s.addTool(listPlatformsTool, s.handleCatalogListPlatforms)
@@ -50,7 +50,7 @@ func (s *Server) registerCatalogMultiPlatformTools() {
 		mcp.WithString("kind",
 			mcp.Required(),
 			mcp.Description("Plugin kind: provider or auth-handler"),
-			mcp.Enum("provider", "auth-handler"),
+			enumOpt("provider", "auth-handler"),
 		),
 		mcp.WithString("version",
 			mcp.Required(),

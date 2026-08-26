@@ -4,9 +4,13 @@
 package examples
 
 import (
+	"embed"
 	"errors"
+	"io/fs"
+	"path"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,7 +163,8 @@ func TestRead_PathTraversalVariants(t *testing.T) {
 
 func TestCategories(t *testing.T) {
 	t.Parallel()
-	cats := Categories()
+	cats, err := Categories()
+	require.NoError(t, err)
 	assert.NotEmpty(t, cats, "should return at least one category")
 
 	for i := 1; i < len(cats); i++ {
@@ -169,7 +174,8 @@ func TestCategories(t *testing.T) {
 
 func TestCategories_ContainsExpectedCategories(t *testing.T) {
 	t.Parallel()
-	cats := Categories()
+	cats, err := Categories()
+	require.NoError(t, err)
 	expected := []string{"providers", "resolvers", "solutions"}
 
 	for _, exp := range expected {
@@ -473,6 +479,135 @@ func BenchmarkCategories(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		Categories()
+		_, _ = Categories()
 	}
+}
+
+// TestEmbeddedExamplesAreWorkingDirectoryIndependent is the core regression
+// guard for issue #819. Before the in-place embed, examples were copied into a
+// gitignored directory at build time and, failing that, located by walking up
+// from the current working directory -- so a library consumer (or the release
+// binary) whose CWD contained no examples/ tree got zero examples and an
+// invalid "enum": null MCP schema. With the embed rooted at the examples/
+// directory itself, the source of truth is the compiled-in embed.FS, never the
+// filesystem.
+//
+// Discriminating power matters here: simply t.Chdir-ing into an empty directory
+// is NOT enough to catch the old bug, because the deleted findExamplesDir()
+// located the tree via runtime.Caller (a compile-time source path) that no
+// working-directory change could defeat during `go test`. So this test asserts
+// the two invariants that actually distinguish the fix from the bug:
+//
+//  1. getExamplesFS() returns the embedded FS (an embed.FS), NOT an os.DirFS
+//     read from the source tree.
+//  2. The embed contains real example content (a floor of .yaml files), not the
+//     lone .gitkeep the old gitignored directory shipped to consumers.
+//
+// It also exercises Scan/Categories/Read from a foreign CWD as a belt-and-braces
+// end-to-end check.
+func TestEmbeddedExamplesAreWorkingDirectoryIndependent(t *testing.T) {
+	// Not parallel: t.Chdir changes process-wide state and disallows parallel.
+	// Move to a throwaway directory that has no examples/ subtree, mimicking a
+	// downstream module consumer running from an arbitrary location.
+	t.Chdir(t.TempDir())
+
+	// Invariant 1: the FS backing the examples must be the compiled-in embed,
+	// not a filesystem directory. This is what fails on the old code, whose
+	// getExamplesFS() returned an os.DirFS located via the source path.
+	fsys, root, err := getExamplesFS()
+	require.NoError(t, err)
+	assert.Equal(t, ".", root)
+	_, isEmbed := fsys.(embed.FS)
+	assert.True(t, isEmbed, "examples must be served from the embedded FS, not the filesystem")
+
+	// Invariant 2: the embed must actually contain examples -- not just a
+	// placeholder. The old gitignored pkg/examples/files/ shipped only a
+	// .gitkeep to consumers, so a content floor fails there and passes here.
+	const minYAMLFiles = 50
+	yamlCount := 0
+	require.NoError(t, fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !d.IsDir() {
+			if ext := path.Ext(p); ext == ".yaml" || ext == ".yml" {
+				yamlCount++
+			}
+		}
+		return nil
+	}))
+	assert.GreaterOrEqual(t, yamlCount, minYAMLFiles,
+		"embedded tree must contain the real example content, got %d YAML files", yamlCount)
+
+	// Belt-and-braces: the public API works from a foreign CWD.
+	items, err := Scan("")
+	require.NoError(t, err, "Scan must succeed from a directory with no examples/ tree")
+	require.NotEmpty(t, items, "embedded examples must be present regardless of CWD")
+
+	cats, err := Categories()
+	require.NoError(t, err)
+	assert.NotEmpty(t, cats, "categories must be derivable regardless of CWD")
+
+	// A known example must be readable by its embedded path.
+	content, err := Read(items[0].Path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, content)
+}
+
+// TestExamplesFSFromRejectsEmptyEmbed asserts the build-defect guard fires when
+// the embedded tree is empty. A zero-value embed.FS reads as an empty directory
+// with a nil error, so without the guard the empty-examples condition (the #819
+// failure mode) would collapse to a silent empty list rather than a diagnosable
+// error. This keeps Categories()/Scan()'s error path reachable and meaningful.
+func TestExamplesFSFromRejectsEmptyEmbed(t *testing.T) {
+	t.Parallel()
+
+	var empty embed.FS // zero value: reads as an empty directory, no error
+	_, _, err := examplesFSFrom(empty)
+	require.Error(t, err, "an empty embed must be reported as a build defect")
+	assert.Contains(t, err.Error(), "no example files")
+}
+
+// TestExamplesFSFromRejectsNonExampleRootFilesOnly guards the hole Copilot
+// flagged: the embedding package lives at the root of the tree and //go:embed *
+// captures its own Go source, so a broken embed that matched only that inert
+// file (or any non-example root file) would be non-empty yet contain no
+// examples. The guard must reject it rather than silently degrading to an empty
+// example list -- the same #819 failure mode as a fully empty embed.
+func TestExamplesFSFromRejectsNonExampleRootFilesOnly(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := examplesFSFrom(fstest.MapFS{
+		"embed.go":   {Data: []byte("package examplefiles\n")},
+		"README.txt": {Data: []byte("not an example\n")},
+	})
+	require.Error(t, err, "an embed of only non-example root files must be reported as a build defect")
+	assert.Contains(t, err.Error(), "no example files")
+}
+
+// TestExamplesFSFromAcceptsTopLevelYAML asserts a top-level .yaml/.yml file
+// counts as a real example source even when no category subdirectory is present.
+func TestExamplesFSFromAcceptsTopLevelYAML(t *testing.T) {
+	t.Parallel()
+
+	fsys, root, err := examplesFSFrom(fstest.MapFS{
+		"embed.go":     {Data: []byte("package examplefiles\n")},
+		"solution.yml": {Data: []byte("kind: Solution\n")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ".", root)
+	assert.NotNil(t, fsys)
+}
+
+// TestExamplesFSFromAcceptsPopulatedFS is the positive counterpart: a non-empty
+// FS with a category subdirectory is accepted and returned rooted at ".".
+func TestExamplesFSFromAcceptsPopulatedFS(t *testing.T) {
+	t.Parallel()
+
+	fsys, root, err := examplesFSFrom(fstest.MapFS{
+		"actions/x.yaml": {Data: []byte("kind: Solution\n")},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ".", root)
+	assert.NotNil(t, fsys)
 }

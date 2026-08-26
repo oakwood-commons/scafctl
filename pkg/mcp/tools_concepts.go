@@ -44,7 +44,7 @@ func (s *Server) registerConceptTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("phase",
 			mcp.Description("Filter to variables available in a specific evaluation phase."),
-			mcp.Enum(
+			enumOpt(
 				contextvars.PhaseResolve,
 				contextvars.PhaseTransform,
 				contextvars.PhaseValidate,

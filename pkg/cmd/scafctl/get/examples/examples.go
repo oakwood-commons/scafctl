@@ -124,7 +124,7 @@ func (o *Options) runList(ctx context.Context) error {
 		if !structured && !quiet {
 			if o.Category != "" {
 				w.WarnStderrf("No examples found in category %q.", o.Category)
-				if cats := exampleslib.Categories(); len(cats) > 0 {
+				if cats, catErr := exampleslib.Categories(); catErr == nil && len(cats) > 0 {
 					w.PlainStderrf("Available categories: %s", strings.Join(cats, ", "))
 				}
 			} else {
