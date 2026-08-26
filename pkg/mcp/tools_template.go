@@ -45,7 +45,7 @@ func (s *Server) registerTemplateTools() {
 		),
 		mcp.WithString("missing_key",
 			mcp.Description("Behavior when a map key is missing: 'default' (prints '<no value>'), 'zero' (uses zero value), 'error' (returns error). Default: 'default'"),
-			mcp.Enum("default", "zero", "error"),
+			enumOpt("default", "zero", "error"),
 		),
 	)
 	s.addTool(evaluateGoTemplateTool, s.handleEvaluateGoTemplate)
@@ -66,7 +66,7 @@ func (s *Server) registerTemplateTools() {
 		mcp.WithString("type",
 			mcp.Required(),
 			mcp.Description("Expression type: 'cel' for CEL expressions, 'go-template' for Go templates"),
-			mcp.Enum("cel", "go-template"),
+			enumOpt("cel", "go-template"),
 		),
 		mcp.WithString("left_delim",
 			mcp.Description("Left delimiter for Go templates (default: '{{')"),

@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/oakwood-commons/scafctl/pkg/examples"
@@ -13,6 +14,17 @@ import (
 
 // registerExampleTools registers example-related MCP tools.
 func (s *Server) registerExampleTools() {
+	// Best-effort enum of known categories. If the scan fails, categories is
+	// empty and enumOpt omits the enum key entirely (any string allowed) rather
+	// than emitting an invalid "enum": null -- registration must never fail on
+	// this, and an omitted enum is the correct "unknown constraint" schema. The
+	// error is logged (not returned) so a genuine build defect is diagnosable at
+	// startup instead of surfacing only as a silently-unconstrained enum.
+	categories, err := examples.Categories()
+	if err != nil {
+		s.logger.V(1).Info("failed to load example categories for list_examples enum", "error", err)
+	}
+
 	// list_examples — list available example files
 	listExamplesTool := mcp.NewTool("list_examples",
 		mcp.WithDescription("List available scafctl example files. Examples demonstrate best practices for solutions, resolvers, actions, providers, and more. Filter by category or get all (grouped by category)."),
@@ -24,7 +36,7 @@ func (s *Server) registerExampleTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("category",
 			mcp.Description("Filter by category (from each example's metadata.category). Omit to list all examples grouped by category."),
-			mcp.Enum(examples.Categories()...),
+			enumOpt(categories...),
 		),
 	)
 	s.addTool(listExamplesTool, s.handleListExamples)
@@ -86,8 +98,18 @@ func (s *Server) handleListExamples(_ context.Context, request mcp.CallToolReque
 			Examples []examples.Example `json:"examples"`
 		}
 
-		cats := examples.Categories()
-		summaries := make([]categorySummary, 0, len(cats))
+		// Derive the sorted category list from the already-scanned items rather
+		// than re-scanning via examples.Categories() (which would re-read and
+		// re-parse the whole embedded tree). "(uncategorized)" is handled
+		// separately below so it always sorts last.
+		cats := make([]string, 0, len(grouped))
+		for cat := range grouped {
+			if cat != "(uncategorized)" {
+				cats = append(cats, cat)
+			}
+		}
+		sort.Strings(cats)
+		summaries := make([]categorySummary, 0, len(grouped))
 		for _, cat := range cats {
 			if g, ok := grouped[cat]; ok {
 				summaries = append(summaries, categorySummary{

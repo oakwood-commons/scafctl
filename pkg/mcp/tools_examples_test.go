@@ -246,7 +246,8 @@ func TestExamplesMetadataDriven(t *testing.T) {
 		// The list_examples MCP enum is generated from Categories(); every
 		// metadata-derived category must therefore return results when used as
 		// a filter (regression guard against the old hardcoded directory enum).
-		cats := examples.Categories()
+		cats, err := examples.Categories()
+		require.NoError(t, err)
 		require.NotEmpty(t, cats)
 		for _, c := range cats {
 			items, err := examples.Scan(c)
@@ -257,7 +258,8 @@ func TestExamplesMetadataDriven(t *testing.T) {
 }
 
 func TestExamplesCategories(t *testing.T) {
-	cats := examples.Categories()
+	cats, err := examples.Categories()
+	require.NoError(t, err)
 	assert.NotEmpty(t, cats)
 	assert.Contains(t, cats, "actions")
 	assert.Contains(t, cats, "solutions")

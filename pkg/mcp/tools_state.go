@@ -116,7 +116,7 @@ func (s *Server) registerStateTools() {
 		),
 		mcp.WithString("type",
 			mcp.Description("Value type for coercion: string (default), int, float, bool"),
-			mcp.Enum("string", "int", "float", "bool"),
+			enumOpt("string", "int", "float", "bool"),
 		),
 		mcp.WithString("cwd",
 			mcp.Description(cwdDescDefault),

@@ -23,7 +23,7 @@ func (s *Server) registerCatalogTools() {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("kind",
 			mcp.Description("Filter by artifact kind: solution, provider, auth-handler"),
-			mcp.Enum("solution", "provider", "auth-handler"),
+			enumOpt("solution", "provider", "auth-handler"),
 		),
 		mcp.WithString("name",
 			mcp.Description("Filter by name (exact match)"),
@@ -46,7 +46,7 @@ func (s *Server) registerCatalogTools() {
 		mcp.WithString("kind",
 			mcp.Required(),
 			mcp.Description("Artifact kind: solution, provider, auth-handler"),
-			mcp.Enum("solution", "provider", "auth-handler"),
+			enumOpt("solution", "provider", "auth-handler"),
 		),
 	)
 	s.addTool(catalogInspectTool, s.handleCatalogInspect)

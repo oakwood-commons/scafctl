@@ -43,7 +43,7 @@ func (s *Server) registerDryRunTools() {
 		),
 		mcp.WithString("on_conflict",
 			mcp.Description("Default conflict strategy for file write actions. Controls what happens when a target file already exists. Valid values: error (fail if exists), overwrite (always replace), skip (never write if exists), skip-unchanged (overwrite only when content differs, default), append (add to end of file)."),
-			mcp.Enum(onConflictEnumValues...),
+			enumOpt(onConflictEnumValues...),
 		),
 		mcp.WithBoolean("backup",
 			mcp.Description("Create .bak backup files before overwriting existing files. Only applies to file provider write/write-tree actions that modify existing files."),

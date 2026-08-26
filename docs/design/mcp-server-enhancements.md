@@ -304,27 +304,30 @@ The current MCP implementation in `pkg/mcp/tools_examples.go` uses `runtime.Call
 
 **Implementation:**
 
-Since `go:embed` can only access files in the embedding package's directory or subdirectories, the example YAML files need to be accessible from `pkg/examples/`. Two options:
+Since `go:embed` can only access files in the embedding package's directory or subdirectories, the embedding package is placed **at the root of the example tree**: `examples/embed.go` (package `examplefiles`) embeds its own directory with `//go:embed *` and exposes an `embed.FS`. `pkg/examples` consumes that FS.
 
-1. **Copy at build time** (recommended): Add a build step to `taskfile.yaml` that copies `examples/` → `pkg/examples/files/` before `go build`. Add `pkg/examples/files/` to `.gitignore`.
-2. **Symlink**: Create `pkg/examples/files` as a symlink to `../../examples`. NOTE: `go:embed` does **not** follow symlinks, so this only works if the build tool resolves symlinks first.
+This ships the examples inside both the compiled binary and the published Go module with **no build-time copy step, no gitignored generated directory, and no working-directory-dependent filesystem fallback**. (An earlier iteration copied `examples/` into a gitignored `pkg/examples/files/` at build time; that step never ran for `go get` library consumers or for the goreleaser release build, so the shipped binary embedded no examples and advertised an invalid `"enum": null` MCP schema -- see issue #819. Embedding in place removes the whole class of problem.)
 
-Create `pkg/examples/examples.go`:
+Create `examples/embed.go` (package `examplefiles`, at the root of the tree):
+
+```go
+package examplefiles
+
+import "embed"
+
+//go:embed *
+var FS embed.FS
+```
+
+And have `pkg/examples/examples.go` consume it:
 
 ```go
 package examples
 
-import "embed"
+import examplefiles "github.com/oakwood-commons/scafctl/examples"
 
-//go:embed files/*
-var EmbeddedExamples embed.FS
-
-type Example struct {
-    Path        string `json:"path"`
-    Category    string `json:"category"`
-    Description string `json:"description"`
-    Size        int64  `json:"size"`
-}
+// EmbeddedExamples is the in-place embedded example tree.
+var EmbeddedExamples = examplefiles.FS
 
 // Scan walks the embedded examples filesystem and returns matching examples.
 // If category is empty, returns all examples.
@@ -333,8 +336,9 @@ func Scan(category string) ([]Example, error) { ... }
 // Read returns the contents of an embedded example file.
 func Read(path string) (string, error) { ... }
 
-// Categories returns the list of available example categories.
-func Categories() []string { ... }
+// Categories returns the available example categories, or an error if the
+// embedded tree cannot be scanned.
+func Categories() ([]string, error) { ... }
 ```
 
 Key changes from the current MCP implementation:
@@ -345,25 +349,11 @@ Key changes from the current MCP implementation:
 
 Move `scanExamples()` logic and description mapping from `pkg/mcp/tools_examples.go` into this package, adapted to use `fs.WalkDir` on `embed.FS`. Update both MCP handler and CLI command to use it.
 
-**Build integration (`taskfile.yaml`):**
-
-```yaml
-tasks:
-  embed:examples:
-    desc: Copy examples into pkg/examples/files for go:embed
-    cmds:
-      - rm -rf pkg/examples/files
-      - cp -r examples pkg/examples/files
-    sources:
-      - examples/**/*
-    generates:
-      - pkg/examples/files/**/*
-
-  build:
-    deps: [embed:examples]
-    cmds:
-      - go build -ldflags "..." -o dist/scafctl ./cmd/scafctl/scafctl.go
-```
+**Build integration:** none required. Because the embedding package sits at the
+root of the `examples/` tree, `go build` embeds the files directly -- there is no
+`embed:examples` copy task and no build-step dependency. (An earlier iteration
+did add such a task; it was removed by #819 because it never ran for `go get`
+consumers or the release build.)
 
 ---
 
@@ -994,7 +984,7 @@ Each extraction should:
 4. Verify MCP tests still pass
 5. Then build the CLI wrapper on top
 
-**Special note for `pkg/examples/`:** This extraction also replaces the fragile `findExamplesDir()` filesystem-walking approach with `go:embed`. The `examples/` directory (520KB, 87 files) is copied into `pkg/examples/files/` at build time and embedded into the binary via `//go:embed files/*`. This follows the existing pattern in `pkg/cmd/scafctl/config/init.go` which embeds config templates. See [Phase 1E](#phase-1e-scafctl-examples-command-group) for full details.
+**Special note for `pkg/examples/`:** This extraction also replaces the fragile `findExamplesDir()` filesystem-walking approach with `go:embed`. The `examples/` directory is embedded in place by a small `examplefiles` package at `examples/embed.go` (`//go:embed *`), so it ships in both the binary and the published Go module with no build-time copy step. See [Phase 1E](#phase-1e-scafctl-examples-command-group) for full details.
 
 ---
 

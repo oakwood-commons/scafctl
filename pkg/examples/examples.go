@@ -3,26 +3,24 @@
 
 // Package examples provides access to embedded scafctl example files.
 //
-// Examples are embedded at build time via go:embed, making them available
-// in distributed binaries without filesystem access to the source repo.
-//
-// For development, examples are also looked up from the filesystem as a
-// fallback when the embedded filesystem is empty or when the examples
-// weren't copied at build time.
+// Examples are embedded at compile time via go:embed (see the examplefiles
+// package, which sits at the root of the examples/ tree so its directive can
+// reach the files). This makes them available in distributed binaries and in
+// the published Go module with no build-time copy step and no filesystem
+// fallback -- the same content ships to a `go get` library consumer as to the
+// released CLI, independent of the working directory.
 package examples
 
 import (
-	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
+	examplefiles "github.com/oakwood-commons/scafctl/examples"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,8 +38,10 @@ var ErrAmbiguousExample = errors.New("ambiguous example query")
 // ErrExampleNotFound is returned when a lookup query matches no example.
 var ErrExampleNotFound = errors.New("example not found")
 
-//go:embed files/*
-var EmbeddedExamples embed.FS
+// EmbeddedExamples is the in-place embedded example tree (see the examplefiles
+// package). Its files are rooted at the examples/ directory, so paths are of
+// the form "actions/action-alias.yaml".
+var EmbeddedExamples = examplefiles.FS
 
 // solutionKind is the only artifact kind surfaced as a runnable example. Config
 // files, auth-handler configs, compose partials, and rendered templates that
@@ -375,15 +375,21 @@ func Read(exPath string) (string, error) {
 	return string(content), nil
 }
 
-// Categories returns the list of available example categories.
-func Categories() []string {
+// Categories returns the sorted, de-duplicated list of example categories.
+//
+// It returns an error when the underlying example scan fails, so an
+// empty-examples condition is diagnosable rather than silently collapsing to an
+// empty list (which previously produced downstream defects such as an invalid
+// "enum": null MCP schema -- see issue #819). A successful scan that finds no
+// categories returns an empty (non-nil) slice and a nil error.
+func Categories() ([]string, error) {
 	items, err := Scan("")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to scan examples for categories: %w", err)
 	}
 
 	seen := make(map[string]bool)
-	var cats []string
+	cats := make([]string, 0)
 	for _, item := range items {
 		if item.Category != "" && !seen[item.Category] {
 			seen[item.Category] = true
@@ -391,73 +397,36 @@ func Categories() []string {
 		}
 	}
 	sort.Strings(cats)
-	return cats
+	return cats, nil
 }
 
-// getExamplesFS returns either the embedded FS or a fallback OS FS.
+// getExamplesFS returns the in-place embedded example tree, rooted at ".".
+//
+// The examples are embedded directly from the examples/ directory (see the
+// examplefiles package), so they are always present in the compiled binary and
+// in the published Go module -- there is no build-time copy step and no
+// working-directory-dependent filesystem fallback. An error is returned if the
+// embedded tree is unreadable OR empty, which can only happen as a build defect
+// (e.g. a future refactor that breaks the go:embed directive); surfacing it lets
+// Categories()/Scan() report the condition instead of silently returning an
+// empty list -- the failure mode behind issue #819.
 func getExamplesFS() (fs.FS, string, error) {
-	// Try embedded examples first — check for actual content (not just .gitkeep)
-	entries, err := fs.ReadDir(EmbeddedExamples, "files")
-	if err == nil {
-		hasContent := false
-		for _, e := range entries {
-			if e.IsDir() || (e.Name() != ".gitkeep" && e.Name() != ".keep") {
-				hasContent = true
-				break
-			}
-		}
-		if hasContent {
-			return EmbeddedExamples, "files", nil
-		}
-	}
-
-	// Fallback: find examples directory on the filesystem (development mode)
-	dir, err := findExamplesDir()
-	if err != nil {
-		return nil, "", fmt.Errorf("examples not available: embedded examples not found and filesystem fallback failed: %w", err)
-	}
-	return os.DirFS(dir), ".", nil
+	return examplesFSFrom(EmbeddedExamples)
 }
 
-// findExamplesDir locates the examples directory relative to the package source.
-func findExamplesDir() (string, error) {
-	// Strategy 1: Find relative to this source file (works in development/testing)
-	_, thisFile, _, ok := runtime.Caller(0)
-	if ok {
-		// This file is at pkg/examples/examples.go
-		// Project root is ../../ from here
-		pkgDir := filepath.Dir(thisFile)
-		projectRoot := filepath.Join(pkgDir, "..", "..")
-		examplesDir := filepath.Join(projectRoot, "examples")
-		if info, err := os.Stat(examplesDir); err == nil && info.IsDir() {
-			return examplesDir, nil
-		}
+// examplesFSFrom validates fsys as the example source and returns it rooted at
+// ".". It is separated from getExamplesFS so the empty/unreadable build-defect
+// paths can be exercised with an injected FS in tests.
+func examplesFSFrom(fsys fs.FS) (fs.FS, string, error) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return nil, "", fmt.Errorf("examples not available: embedded example tree is unreadable: %w", err)
 	}
-
-	// Strategy 2: Check current working directory
-	cwd, err := os.Getwd()
-	if err == nil {
-		examplesDir := filepath.Join(cwd, "examples")
-		if info, err := os.Stat(examplesDir); err == nil && info.IsDir() {
-			return examplesDir, nil
-		}
+	if len(entries) == 0 {
+		// A zero-value or mis-wired embed.FS reads as an empty directory with no
+		// error, so emptiness -- not a read error -- is the detectable symptom
+		// of a broken embed.
+		return nil, "", errors.New("examples not available: embedded example tree is empty (build defect: the go:embed directive matched no files)")
 	}
-
-	// Strategy 3: Walk up from cwd looking for examples/
-	if err == nil {
-		dir := cwd
-		for i := 0; i < 10; i++ {
-			examplesDir := filepath.Join(dir, "examples")
-			if info, err := os.Stat(examplesDir); err == nil && info.IsDir() {
-				return examplesDir, nil
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-
-	return "", fmt.Errorf("could not locate examples directory")
+	return fsys, ".", nil
 }
