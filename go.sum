@@ -810,8 +810,8 @@ github.com/tliron/commonlog v0.2.8 h1:vpKrEsZX4nlneC9673pXpeKqv3cFLxwpzNEZF1qiaQ
 github.com/tliron/commonlog v0.2.8/go.mod h1:HgQZrJEuiKLLRvUixtPWGcmTmWWtKkCtywF6x9X5Spw=
 github.com/tliron/glsp v0.2.2 h1:IKPfwpE8Lu8yB6Dayta+IyRMAbTVunudeauEgjXBt+c=
 github.com/tliron/glsp v0.2.2/go.mod h1:GMVWDNeODxHzmDPvYbYTCs7yHVaEATfYtXiYJ9w1nBg=
-github.com/tliron/kutil v0.3.11 h1:kongR0dhrrn9FR/3QRFoUfQe27t78/xQvrU9aXIy5bk=
-github.com/tliron/kutil v0.3.11/go.mod h1:4IqOAAdpJuDxYbJxMv4nL8LSH0mPofSrdwIv8u99PDc=
+github.com/tliron/kutil v0.3.13 h1:hB2k7zWYhuuQ8pqJ6Gu/LxDw8UUnjBlhBbwUt5rUiSs=
+github.com/tliron/kutil v0.3.13/go.mod h1:sazY84VhpRez9rFf6ajtZBdpThJ/OIVL7Mue6GC/rds=
 github.com/transparency-dev/formats v0.0.0-20251017110053-404c0d5b696c h1:5a2XDQ2LiAUV+/RjckMyq9sXudfrPSuCY4FuPC1NyAw=
 github.com/transparency-dev/formats v0.0.0-20251017110053-404c0d5b696c/go.mod h1:g85IafeFJZLxlzZCDRu4JLpfS7HKzR+Hw9qRh3bVzDI=
 github.com/transparency-dev/merkle v0.0.2 h1:Q9nBoQcZcgPamMkGn7ghV8XiTZ/kRxn1yCG81+twTK4=

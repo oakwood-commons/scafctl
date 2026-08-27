@@ -63,7 +63,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # TODO: Re-enable macos-latest and windows-latest when cross-platform issues are resolved
+        # Test execution runs on Ubuntu only. Windows/macOS *build* breakage is
+        # guarded by the `cross-compile` job below (see issue #822); running the
+        # full `go test`/integration suite natively on those OSes is a separate,
+        # still-open effort tracked by the commented-out matrix entries.
+        # TODO: Re-enable macos-latest and windows-latest test runs when the
+        # cross-platform test-execution issues are resolved.
         os: [ubuntu-latest]
     env:
       SCAFCTL_SECRET_KEY: ${{ secrets.SCAFCTL_SECRET_KEY || 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' }}
@@ -115,6 +120,57 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.txt
           fail_ci_if_error: false
+
+  cross-compile:
+    name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows-only code paths (e.g. the LSP stack's terminal deps) cannot be
+        # caught by the Linux/macOS test matrix, so smoke-check every goreleaser
+        # target compiles. `go build ./...` is deliberately broader than the
+        # release build (goreleaser only builds ./cmd/scafctl) so it also
+        # exercises packages like pkg/lsp -- which is exactly what regressed in
+        # issue #822. Do not narrow it to ./cmd/scafctl.
+        include:
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: linux
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Task
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: '3.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download dependencies
+        run: task mod
+
+      - name: Cross-compile
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # Match the release build (goreleaser sets CGO_ENABLED=0) explicitly
+          # rather than relying on Go's implicit cross-compile default.
+          CGO_ENABLED: 0
+        run: go build ./...
 
   plugin-sdk-compat:
     name: Plugin SDK Compatibility
