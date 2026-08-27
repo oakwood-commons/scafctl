@@ -48,6 +48,21 @@ jobs:
       - name: Download dependencies
         run: task mod
 
+      - name: Cross-compile all release targets
+        # Belt-and-suspenders guard so a GOOS-specific compile break (see issue
+        # #822) fails the release verify job before goreleaser runs the real
+        # multi-OS build. `go build ./...` is deliberately broader than the
+        # release build (which only builds ./cmd/scafctl) so it also exercises
+        # packages like pkg/lsp. CGO_ENABLED=0 matches the goreleaser build.
+        env:
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            echo "==> building ${target}"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+          done
+
       - name: Run tests
         run: task test
 

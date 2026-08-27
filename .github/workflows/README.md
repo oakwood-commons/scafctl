@@ -20,22 +20,29 @@ This directory contains GitHub Actions workflows for automated CI/CD pipelines.
 
 - **Triggers**: On pull requests and pushes to `main`
 - **Jobs**:
-  - Runs tests on multiple OS: Ubuntu, macOS, and Windows
-  - Runs `task test` on all platforms
-  - Runs `task test-cover` on Ubuntu and uploads coverage
+  - `test`: Runs `task test` and `task test-cover` on Ubuntu and uploads coverage
+  - `cross-compile`: `go build ./...` for every goreleaser target
+    (windows/amd64, windows/arm64, darwin/amd64, darwin/arm64) plus
+    linux/arm64, to catch `GOOS`-specific compile breaks the Ubuntu-only test
+    run cannot (see issue #822)
+  - `plugin-sdk-compat`: verifies the echo plugin builds with SDK-only deps
 - **Features**:
-  - Matrix strategy for cross-platform testing
+  - Cross-compile matrix guards Windows/macOS build breakage; full `go test`
+    execution currently runs on Ubuntu only
   - Optional Codecov integration (requires `CODECOV_TOKEN` secret)
 
 ### 3. **`release.yml`** - Release
 
 - **Triggers**: On version tags (e.g., `v1.2.3`)
 - **Jobs**:
-  - Runs `task release` to create releases
-  - Optional GPG signing support
+  - `test` (Verify): cross-compiles all release targets, then runs `task test`
+    and `task integration`
+  - `release`: runs `task release` (goreleaser) to create releases, with
+    optional cosign signing
+  - `benchmark`: compares benchmarks against the previous release
 - **Features**:
   - Uses goreleaser for multi-platform builds
-  - Supports GPG signing if secrets are configured
+  - Cross-compile smoke check fails fast before the real release build
 
 ## Next Steps
 
