@@ -38,8 +38,11 @@ type Call struct {
 	// argument name.
 	Args map[string]*ArgDef `json:"args,omitempty" yaml:"args,omitempty" doc:"Named, typed argument declarations keyed by argument name"`
 
-	// Provider is the provider name executed when the call is invoked.
-	Provider string `json:"provider" yaml:"provider" doc:"Provider name to execute" maxLength:"100" example:"http" pattern:"^[a-zA-Z][a-zA-Z0-9_-]*$" patternDescription:"Must start with a letter, followed by letters, numbers, underscores, or hyphens"`
+	// Provider is the provider handle executed when the call is invoked. It is a
+	// short local name (http) resolved via the builtins or a bundle.plugins
+	// declaration. Remote source and version constraints are declared in
+	// bundle.plugins (via each plugin's source and version), not inline here.
+	Provider string `json:"provider" yaml:"provider" doc:"Provider handle: short local name resolved via builtins or a bundle.plugins declaration (http). Declare remote source and version in bundle.plugins." maxLength:"256" example:"http"`
 
 	// Inputs are the provider inputs. They reference arguments via the args
 	// namespace and are resolved after arguments are bound.

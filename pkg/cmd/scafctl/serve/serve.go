@@ -6,25 +6,30 @@ package serve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/api"
 	"github.com/oakwood-commons/scafctl/pkg/api/endpoints"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	pluginidentity "github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/builder"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/spf13/cobra"
@@ -139,16 +144,12 @@ func runServe(ctx context.Context, opts *Options) error {
 	}
 
 	// Parse plugin allowlist at startup boundary (validates "catalog/plugin" format).
-	var (
-		bareNames  []string
-		perCatalog map[string]catalog.PluginPolicy
-	)
+	var perCatalog map[string]catalog.PluginPolicy
 	if len(cfg.APIServer.Plugins.AllowedPlugins) > 0 {
 		parsed, parseErr := plugin.ParseAllowedPlugins(cfg.APIServer.Plugins.AllowedPlugins)
 		if parseErr != nil {
 			return fmt.Errorf("invalid plugin allowlist: %w", parseErr)
 		}
-		bareNames = plugin.BareNames(parsed)
 		perCatalog = plugin.GroupByCatalog(parsed)
 	}
 
@@ -194,33 +195,30 @@ func runServe(ctx context.Context, opts *Options) error {
 		NoCache:              cfg.APIServer.Plugins.DisableDiskCache,
 	}); fetchErr == nil {
 		pluginFetcher = fetcher
+	} else if errors.As(fetchErr, new(*catalog.CatalogBuildError)) {
+		return fmt.Errorf("building plugin fetcher: %w", fetchErr)
 	} else {
 		lgr.V(1).Info("plugin fetcher not available; official providers will not be pre-loaded", "error", fetchErr)
 	}
-
+	compositeReg := provider.NewCompositeRegistryFromBase(reg)
+	pluginPool := createVersionedPluginPool(ctx, officialReg, pluginFetcher, perCatalog, compositeReg, lgr, cfg)
 	// Pre-load official providers (filtered by per-catalog allowlist).
-	var pluginClients []*plugin.Client
-	if officialReg != nil && pluginFetcher != nil {
-		var preloadOpts []PreLoadOption
-		preloadOpts = configurePreloadOptions(perCatalog, preloadOpts, official.CatalogName)
-		clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, pluginFetcher, preloadOpts...)
-		if preloadErr != nil {
-			lgr.V(0).Info("warning: some official providers could not be pre-loaded", "error", preloadErr)
-		}
-		pluginClients = clients
-	}
+	// pluginPool := createPluginPool(ctx, officialReg, pluginFetcher, perCatalog, reg, lgr, cfg, bareNames)
 
-	// Create plugin pool (bare-name fast-reject for external plugins).
-	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients, bareNames)
+	// Build the catalog index once at server start so handlers can bind a
+	// fully-qualified provider reference's registry to a configured catalog.
+	catalogIndex := catalogindex.FromConfig(cfg)
 
 	// Build server options
 	serverOpts := []api.ServerOption{
 		api.WithServerLogger(*lgr),
 		api.WithServerConfig(cfg),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(compositeReg),
 		api.WithServerContext(ctx),
 		api.WithServerVersion(settings.VersionInformation.BuildVersion),
 		api.WithServerPluginPool(pluginPool),
+		api.WithServerCatalogIndex(catalogIndex),
 	}
 	if authReg != nil {
 		serverOpts = append(serverOpts, api.WithServerAuthRegistry(authReg))
@@ -257,6 +255,46 @@ func runServe(ctx context.Context, opts *Options) error {
 
 	// Start server (blocks until SIGINT/SIGTERM)
 	return srv.Start()
+}
+
+func createPluginPool(ctx context.Context, officialReg *official.Registry, pluginFetcher *plugin.Fetcher, perCatalog map[string]catalog.PluginPolicy, reg *provider.Registry, lgr *logr.Logger, cfg *config.Config, bareNames []string) *plugin.Pool { //nolint:unused //will remove when versioned pool is fully integrated
+	var pluginClients []*plugin.Client
+	if officialReg != nil && pluginFetcher != nil {
+		var preloadOpts []PreLoadOption
+		preloadOpts = configurePreloadOptions(perCatalog, preloadOpts, official.CatalogName)
+		clients, preloadErr := preloadOfficialProviders(ctx, reg, officialReg, pluginFetcher, preloadOpts...)
+		if preloadErr != nil {
+			lgr.V(0).Info("warning: some official providers could not be pre-loaded", "error", preloadErr)
+		}
+		pluginClients = clients
+	}
+
+	// Create plugin pool (bare-name fast-reject for external plugins).
+	pluginPool := buildPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients, bareNames)
+	return pluginPool
+}
+
+// createVersionedPluginPool pre-loads official providers into the composite registry
+// and builds a VersionPool, the version-aware analogue of createPluginPool.
+// Official providers are registered into the composite's external (versioned)
+// tier via preloadVersionedOfficialProviders and adopted into the returned
+// *plugin.VersionPool keyed by {catalog, name, version}. Pre-load failures are
+// logged and do not abort server startup.
+func createVersionedPluginPool(ctx context.Context, officialReg *official.Registry, pluginFetcher *plugin.Fetcher, perCatalog map[string]catalog.PluginPolicy, reg *provider.CompositeRegistry, lgr *logr.Logger, cfg *config.Config) *plugin.VersionPool {
+	var pluginClients []*plugin.VersionedClient
+	if officialReg != nil && pluginFetcher != nil {
+		var preloadOpts []PreLoadOption
+		preloadOpts = configurePreloadOptions(perCatalog, preloadOpts, official.CatalogName)
+		clients, preloadErr := preloadVersionedOfficialProviders(ctx, reg, officialReg, pluginFetcher.FetchPlugins, buildVersionedPreloadDeps, preloadOpts...)
+		if preloadErr != nil {
+			lgr.V(0).Info("warning: some official providers could not be pre-loaded", "error", preloadErr)
+		}
+		pluginClients = clients
+	}
+
+	// Create versioned plugin pool (catalog-aware per-catalog allowlist fast-reject).
+	pluginPool := buildVersionedPluginPool(ctx, cfg, pluginFetcher, reg, lgr, pluginClients, perCatalog)
+	return pluginPool
 }
 
 func populateCatalogPolicies(catalogNames []string, perCatalog map[string]catalog.PluginPolicy) map[string]catalog.PluginPolicy {
@@ -362,7 +400,7 @@ func preloadOfficialProviders(
 	if lgr != nil {
 		names := make([]string, len(deps))
 		for i, d := range deps {
-			names[i] = d.Name
+			names[i] = d.DisplayName()
 		}
 		lgr.V(0).Info("pre-loading official providers for API server", "providers", names)
 	}
@@ -430,6 +468,129 @@ func buildPreloadDeps(
 	return deps
 }
 
+// fetchPluginsFunc fetches plugin binaries for the given dependencies. Its
+// signature matches (*plugin.Fetcher).FetchPlugins, so a fetcher's method value
+// can be passed directly; tests can inject a fake without a real fetcher.
+type fetchPluginsFunc func(ctx context.Context, plugins []solution.PluginDependency, lockPlugins []bundler.LockPlugin) ([]plugin.FetchResult, error)
+
+// buildPreloadDepsFunc determines which official providers need to be fetched.
+// It is injected into preloadVersionedOfficialProviders so callers can supply
+// buildVersionedPreloadDeps (or a test double).
+type buildPreloadDepsFunc func(officialReg *official.Registry, options *preLoadOptions, lgr *logr.Logger) []solution.PluginDependency
+
+// preloadVersionedOfficialProviders fetches all official providers and registers them
+// into the composite provider registry via RegisterFetchedPluginsV2. Unlike
+// preloadOfficialProviders it does not take a *plugin.Fetcher; instead it takes
+// a fetchPlugins function value and a buildDeps function, keeping it decoupled
+// from concrete fetcher and dedup implementations for testability.
+//
+// Returns the versioned plugin clients that must be killed on server shutdown.
+// Logs warnings for providers that fail to load but does not fail startup.
+func preloadVersionedOfficialProviders(
+	ctx context.Context,
+	reg *provider.CompositeRegistry,
+	officialReg *official.Registry,
+	fetchPlugins fetchPluginsFunc,
+	buildDeps buildPreloadDepsFunc,
+	opts ...PreLoadOption,
+) ([]*plugin.VersionedClient, error) {
+	options := &preLoadOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	lgr := logger.FromContext(ctx)
+
+	deps := buildDeps(officialReg, options, lgr)
+	for i := range deps {
+		deps[i].Catalog = official.CatalogName
+	}
+	if len(deps) == 0 {
+		return nil, nil
+	}
+
+	if fetchPlugins == nil {
+		if lgr != nil {
+			lgr.V(1).Info("plugin fetcher not available; cannot pre-load official providers")
+		}
+		return nil, nil
+	}
+
+	if lgr != nil {
+		names := make([]string, len(deps))
+		for i, d := range deps {
+			names[i] = d.DisplayName()
+		}
+		lgr.V(0).Info("pre-loading official providers for API server", "providers", names)
+	}
+	start := time.Now()
+	fetchResults, fetchErr := fetchPlugins(ctx, deps, nil)
+	lgr.V(1).Info("official provider fetch complete", "duration", time.Since(start).String(), "success", fetchErr == nil)
+	// Release cache pins — once RegisterFetchedPluginsV2 execs each binary,
+	// the OS has it mapped in memory and the on-disk file can be evicted.
+	// Placed before the error check so partial results are released on failure.
+	defer func() {
+		for i := range fetchResults {
+			if fetchResults[i].Release != nil {
+				fetchResults[i].Release()
+			}
+		}
+	}()
+	if fetchErr != nil {
+		return nil, fmt.Errorf("fetching official providers: %w", fetchErr)
+	}
+
+	clientOpts := plugin.AuthClientOptsFromContext(ctx)
+
+	clients, regErr := plugin.RegisterFetchedVersionedPlugins(ctx, reg, fetchResults, nil, nil, nil, clientOpts...)
+	if regErr != nil {
+		return nil, fmt.Errorf("registering official providers: %w", regErr)
+	}
+
+	if lgr != nil {
+		lgr.V(0).Info("pre-loaded official providers", "count", len(clients))
+	}
+
+	return clients, nil
+}
+
+// buildVersionedPreloadDeps determines which official providers need to be fetched
+// based on the allowlist. Unlike buildPreloadDeps it does not consult a
+// provider registry to skip already-registered providers; instead it skips
+// duplicate consecutive names by comparing each name against the previously
+// accepted one. This works because official.Registry.Names() returns a sorted
+// list, so any duplicates are adjacent.
+func buildVersionedPreloadDeps(
+	officialReg *official.Registry,
+	options *preLoadOptions,
+	lgr *logr.Logger,
+) []solution.PluginDependency {
+	providers := officialReg.Names()
+	deps := make([]solution.PluginDependency, 0, len(providers))
+	prev := ""
+	for _, name := range providers {
+		if options.allowedPlugins != nil && !options.allowedPlugins[name] {
+			if lgr != nil {
+				lgr.V(1).Info("official provider not allowed, skipping pre-load", "provider", name)
+			}
+			continue
+		}
+		// Skip duplicate consecutive names (Names() is sorted).
+		if name == prev {
+			if lgr != nil {
+				lgr.V(1).Info("official provider already seen, skipping pre-load", "provider", name)
+			}
+			continue
+		}
+		p, ok := officialReg.Get(name)
+		if !ok {
+			continue
+		}
+		deps = append(deps, p.ToPluginDependency())
+		prev = name
+	}
+	return deps
+}
+
 // buildPluginPool creates a Pool configured from the API server settings and
 // adopts any pre-loaded official plugin clients into it.
 func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fetcher, reg *provider.Registry, lgr *logr.Logger, preloaded []*plugin.Client, allowedPluginNames []string) *plugin.Pool {
@@ -467,6 +628,65 @@ func buildPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fe
 		pool.Adopt(c.Name(), c, solution.PluginDependency{
 			Name: c.Name(),
 			Kind: solution.PluginKindProvider,
+		}, providers)
+	}
+	return pool
+}
+
+// buildVersionedPluginPool creates a VersionPool configured from the API server
+// settings and adopts any pre-loaded official plugin clients into it. Each
+// client is adopted under its full external identity: the catalog and resolved
+// version recorded on the VersionedClient, so the pool keys it by
+// {catalog, name, version} exactly as a spawned plugin would be. A client whose
+// recorded version is not a concrete semver is skipped (it cannot be keyed in
+// the version index) and logged.
+func buildVersionedPluginPool(ctx context.Context, cfg *config.Config, fetcher *plugin.Fetcher, reg *provider.CompositeRegistry, lgr *logr.Logger, preloaded []*plugin.VersionedClient, perCatalog map[string]catalog.PluginPolicy) *plugin.VersionPool {
+	poolOpts := []plugin.Option{
+		plugin.WithVersionPoolIdleTimeout(5 * time.Minute),
+		plugin.WithVersionPoolMaxPlugins(50),
+		plugin.WithVersionPoolDisableExternal(!cfg.APIServer.Plugins.AllowExternal),
+		plugin.WithLogger(*lgr),
+		// Deliver host-static runtime metadata (build info, entrypoint,
+		// command, args) to pooled plugins so the metadata provider and any
+		// other Settings-driven plugin behave the same under this long-lived
+		// API host as under one-shot per-call hosts.
+		plugin.WithVersionPoolBaseProviderConfig(
+			prepare.HostStaticProviderConfig(settings.BinaryNameFromContext(ctx), prepare.EntrypointAPI),
+		),
+	}
+	if len(perCatalog) > 0 {
+		poolOpts = append(poolOpts, plugin.WithVersionPoolAllowedPlugins(perCatalog))
+	}
+	// Wire auth host dependencies so plugins can use host auth
+	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
+		poolOpts = append(poolOpts, plugin.WithVersionPoolClientOptions(authOpts...))
+	}
+	// Wire gRPC max message size from config
+	if cfg.Plugins.GRPCMaxMessageSize > 0 {
+		poolOpts = append(poolOpts, plugin.WithVersionPoolClientOptions(plugin.WithGRPCMaxMessageSize(cfg.Plugins.GRPCMaxMessageSize)))
+	}
+	pool := plugin.NewVersionPool(ctx, fetcher, reg, poolOpts...)
+	for _, vc := range preloaded {
+		if vc == nil {
+			continue
+		}
+		version, err := semver.NewVersion(vc.Version)
+		if err != nil {
+			lgr.V(1).Info("skipping adopt of preloaded plugin with unparseable version",
+				"plugin", vc.Name(), "version", vc.Version, "error", err)
+			continue
+		}
+		// Query the client for provider names it registered so the pool can
+		// unregister them on eviction/death.
+		var providers []string
+		if names, gErr := vc.GetProviders(ctx); gErr == nil {
+			providers = names
+		}
+		id := pluginidentity.NewPluginIdentity(vc.Name(), vc.Catalog)
+		pool.Adopt(id, version, vc.Client, solution.PluginDependency{
+			Name:    vc.Name(),
+			Kind:    solution.PluginKindProvider,
+			Catalog: vc.Catalog,
 		}, providers)
 	}
 	return pool

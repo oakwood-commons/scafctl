@@ -1419,7 +1419,7 @@ Check that all resolvers succeed without running actions:
 scafctl run resolver -f demo.yaml -o quiet
 echo "Exit code: $?"
 
-# Strict mode: fail if any provider is auto-resolved (enforces explicit bundle.plugins)
+# Strict mode: also require official auth handlers to be declared in bundle.plugins
 scafctl run resolver -f demo.yaml -o quiet --strict
 ```
 {{% /tab %}}
@@ -1429,7 +1429,7 @@ scafctl run resolver -f demo.yaml -o quiet --strict
 scafctl run resolver -f demo.yaml -o quiet
 Write-Output "Exit code: $LASTEXITCODE"
 
-# Strict mode: fail if any provider is auto-resolved (enforces explicit bundle.plugins)
+# Strict mode: also require official auth handlers to be declared in bundle.plugins
 scafctl run resolver -f demo.yaml -o quiet --strict
 ```
 {{% /tab %}}
@@ -1573,7 +1573,7 @@ scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
 # Snapshot with sensitive value redaction
 scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
 
-# Strict mode (fail if any provider requires auto-resolution)
+# Strict mode (also require official auth handlers to be declared)
 scafctl run resolver -f solution.yaml --strict
 
 # With parameters
@@ -1617,7 +1617,7 @@ scafctl run resolver --snapshot --snapshot-file=out.json -f solution.yaml
 # Snapshot with sensitive value redaction
 scafctl run resolver --snapshot --snapshot-file=out.json --redact -f solution.yaml
 
-# Strict mode (fail if any provider requires auto-resolution)
+# Strict mode (also require official auth handlers to be declared)
 scafctl run resolver -f solution.yaml --strict
 
 # With parameters

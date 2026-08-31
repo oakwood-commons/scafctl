@@ -8,6 +8,12 @@ metadata:
     Security tests for the HTTP provider.
     Validates response body size limits and SSRF protection.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # Response body that exceeds the configured limit (10 bytes)

@@ -242,7 +242,7 @@ func newBundleReport(discovery *bundler.DiscoveryResult, sol *solution.Solution)
 	if sol != nil {
 		for _, p := range sol.Bundle.Plugins {
 			br.Plugins = append(br.Plugins, BundlePluginRef{
-				Name:    p.Name,
+				Name:    p.LocalName(),
 				Kind:    string(p.Kind),
 				Version: p.Version,
 			})

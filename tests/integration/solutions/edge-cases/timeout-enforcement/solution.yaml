@@ -9,6 +9,12 @@ metadata:
     Verifies that resolver-level timeouts are enforced
     when a provider exceeds the allowed duration.
 
+bundle:
+  plugins:
+    - name: sleep
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # This resolver should timeout because sleep > timeout

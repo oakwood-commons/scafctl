@@ -8,7 +8,14 @@ metadata:
   tags:
     - solution
   description: A solution with invalid YAML syntax to demonstrate error handling
-
+bundle:
+  plugins:
+    - name: api
+      kind: provider
+      version: latest
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     bad:

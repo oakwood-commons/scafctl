@@ -9,6 +9,12 @@ metadata:
     Verifies that individual test cases can start their own HTTP mock services
     independent of suite-level services.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     apiData:

@@ -15,22 +15,26 @@ import (
 // Returns an error if any plugin has invalid name, kind, or version constraint.
 func ValidatePlugins(sol *solution.Solution) error {
 	for i, p := range sol.Bundle.Plugins {
-		if p.Name == "" {
+		if p.LocalName() == "" {
 			return fmt.Errorf("bundle.plugins[%d]: name is required", i)
 		}
 
 		if !p.Kind.IsValid() {
 			return fmt.Errorf("bundle.plugins[%d] (%s): invalid kind %q, must be %q or %q",
-				i, p.Name, p.Kind, solution.PluginKindProvider, solution.PluginKindAuthHandler)
+				i, p.LocalName(), p.Kind, solution.PluginKindProvider, solution.PluginKindAuthHandler)
 		}
 
 		if p.Version == "" {
-			return fmt.Errorf("bundle.plugins[%d] (%s): version constraint is required", i, p.Name)
+			return fmt.Errorf("bundle.plugins[%d] (%s): version constraint is required", i, p.LocalName())
 		}
 
 		if _, err := parseVersionConstraint(p.Version); err != nil {
 			return fmt.Errorf("bundle.plugins[%d] (%s): invalid version constraint %q: %w",
-				i, p.Name, p.Version, err)
+				i, p.LocalName(), p.Version, err)
+		}
+
+		if err := p.ValidateSource(); err != nil {
+			return fmt.Errorf("bundle.plugins[%d] (%s): %w", i, p.LocalName(), err)
 		}
 	}
 
@@ -42,9 +46,10 @@ func PluginsToBundleEntries(plugins []solution.PluginDependency) []BundlePluginE
 	entries := make([]BundlePluginEntry, 0, len(plugins))
 	for _, p := range plugins {
 		entries = append(entries, BundlePluginEntry{
-			Name:    p.Name,
-			Kind:    string(p.Kind),
-			Version: p.Version,
+			Name:     p.ArtifactName(),
+			Kind:     string(p.Kind),
+			Version:  p.Version,
+			Registry: p.Registry(),
 		})
 	}
 	return entries

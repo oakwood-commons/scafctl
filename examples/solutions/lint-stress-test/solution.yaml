@@ -17,7 +17,14 @@ metadata:
     - lint
     - testing
   description: Triggers many lint rules for testing table output
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+    - name: nonexistent-provider
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # missing-provider

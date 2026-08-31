@@ -12,6 +12,21 @@ import (
 	"github.com/go-logr/logr"
 )
 
+type ChainMode int
+
+const (
+	// ChainModeStrict stops at the first indeterminate result: a success is
+	// only returned when every higher-priority catalog DEFINITIVELY reported
+	// not-found. Any unreachable/auth/malformed error halts the chain. This
+	// guarantees deterministic provenance (the earlier dependency-confusion fix).
+	ChainModeStrict ChainMode = iota
+
+	// ChainModeBestEffort continues past every error and returns the first
+	// success (today's behavior). Maximizes availability, sacrifices
+	// deterministic source selection.
+	ChainModeBestEffort
+)
+
 // ChainCatalog tries each catalog in order, returning the first successful
 // result. It implements the Catalog interface for read operations (Fetch,
 // Resolve, List, Exists). Write operations (Store, Delete) are forwarded
@@ -23,6 +38,7 @@ import (
 type ChainCatalog struct {
 	catalogs []Catalog
 	logger   logr.Logger
+	mode     ChainMode
 }
 
 // Compile-time interface assertions.
@@ -40,6 +56,18 @@ func NewChainCatalog(logger logr.Logger, catalogs ...Catalog) (*ChainCatalog, er
 	return &ChainCatalog{
 		catalogs: catalogs,
 		logger:   logger.WithName("chain-catalog"),
+		mode:     ChainModeBestEffort,
+	}, nil
+}
+
+func NewChainCatalogWithMode(logger logr.Logger, mode ChainMode, catalogs ...Catalog) (*ChainCatalog, error) {
+	if len(catalogs) == 0 {
+		return nil, fmt.Errorf("at least one catalog is required")
+	}
+	return &ChainCatalog{
+		catalogs: catalogs,
+		logger:   logger.WithName("chain-catalog"),
+		mode:     mode,
 	}, nil
 }
 
@@ -54,8 +82,8 @@ func (c *ChainCatalog) Catalogs() []Catalog {
 }
 
 // Store delegates to the first catalog.
-func (c *ChainCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
-	return c.catalogs[0].Store(ctx, ref, content, bundleData, annotations, force)
+func (c *ChainCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
+	return c.catalogs[0].Store(ctx, ref, content, bundleData, annotations, force, extraLayers...)
 }
 
 // catalogOutcome records the result of trying one catalog in a chain, used
@@ -137,52 +165,88 @@ func aggregateChainError(subject string, outcomes []catalogOutcome) error {
 
 // Fetch tries each catalog in order, returning the first successful result.
 func (c *ChainCatalog) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error) {
-	var outcomes []catalogOutcome
-	for _, cat := range c.catalogs {
-		content, info, err := cat.Fetch(ctx, ref)
-		if err == nil {
-			c.logger.V(1).Info("fetched artifact", "catalog", cat.Name(), "ref", ref.String())
-			return content, info, nil
-		}
-		if !errors.Is(err, ErrArtifactNotFound) {
-			c.logger.V(1).Info("catalog fetch error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "error", err)
-		}
-		outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
+	type fetchResult struct {
+		content []byte
+		info    ArtifactInfo
 	}
-	return nil, ArtifactInfo{}, aggregateChainError(ref.String(), outcomes)
+	r, err := loopAndExecute(c, ref.String(), func(cat Catalog) (fetchResult, error) {
+		content, info, err := cat.Fetch(ctx, ref)
+		return fetchResult{content: content, info: info}, err
+	})
+	return r.content, r.info, err
 }
 
 // FetchWithBundle tries each catalog in order.
 func (c *ChainCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+	type bundleResult struct {
+		content []byte
+		bundle  []byte
+		info    ArtifactInfo
+	}
+	r, err := loopAndExecute(c, ref.String(), func(cat Catalog) (bundleResult, error) {
+		content, bundle, info, err := cat.FetchWithBundle(ctx, ref)
+		return bundleResult{content: content, bundle: bundle, info: info}, err
+	})
+	return r.content, r.bundle, r.info, err
+}
+
+// FetchWithLayer tries each catalog in order.
+func (c *ChainCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	type layerResult struct {
+		content []byte
+		layers  map[string][]byte
+		info    ArtifactInfo
+	}
+	r, err := loopAndExecute(c, ref.String(), func(cat Catalog) (layerResult, error) {
+		content, layers, info, err := cat.FetchWithLayer(ctx, ref, mediaTypes...)
+		return layerResult{content: content, layers: layers, info: info}, err
+	})
+	return r.content, r.layers, r.info, err
+}
+
+// loopAndExecute runs action against each catalog in priority order, returning
+// the first success. On a per-catalog error it records the outcome and consults
+// haltOn: in strict mode any indeterminate error (anything but a definitive
+// not-found) stops the chain so a lower-priority catalog is never silently
+// substituted; in best-effort mode it continues. When the loop ends without a
+// success, the aggregated error classifies the outcomes (unreachable vs
+// not-found vs other).
+func loopAndExecute[T any](c *ChainCatalog, subject string, action func(Catalog) (T, error)) (T, error) {
+	var zero T
 	var outcomes []catalogOutcome
 	for _, cat := range c.catalogs {
-		content, bundle, info, err := cat.FetchWithBundle(ctx, ref)
+		result, err := action(cat)
 		if err == nil {
-			return content, bundle, info, nil
+			c.logger.V(1).Info("chain resolved artifact", "catalog", cat.Name(), "subject", subject)
+			return result, nil
 		}
 		if !errors.Is(err, ErrArtifactNotFound) {
-			c.logger.V(1).Info("catalog fetch error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "error", err)
+			c.logger.V(1).Info("catalog error (non-404)", "catalog", cat.Name(), "subject", subject, "error", err)
 		}
 		outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
+		if c.haltOn(err) {
+			return zero, aggregateChainError(subject, outcomes)
+		}
 	}
-	return nil, nil, ArtifactInfo{}, aggregateChainError(ref.String(), outcomes)
+	return zero, aggregateChainError(subject, outcomes)
+}
+
+// haltOn reports whether an indeterminate per-catalog error must stop the
+// chain. Only a definitive not-found is ever safe to skip past; in strict mode
+// everything else (unreachable, auth, malformed) halts. In best-effort mode
+// nothing halts and the chain falls through to the next catalog.
+func (c *ChainCatalog) haltOn(err error) bool {
+	if c.mode == ChainModeBestEffort {
+		return false
+	}
+	return !errors.Is(err, ErrArtifactNotFound)
 }
 
 // Resolve tries each catalog in order, returning the first successful result.
 func (c *ChainCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {
-	var outcomes []catalogOutcome
-	for _, cat := range c.catalogs {
-		info, err := cat.Resolve(ctx, ref)
-		if err == nil {
-			c.logger.V(1).Info("resolved artifact", "catalog", cat.Name(), "ref", ref.String())
-			return info, nil
-		}
-		if !errors.Is(err, ErrArtifactNotFound) {
-			c.logger.V(1).Info("catalog resolve error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "error", err)
-		}
-		outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
-	}
-	return ArtifactInfo{}, aggregateChainError(ref.String(), outcomes)
+	return loopAndExecute(c, ref.String(), func(cat Catalog) (ArtifactInfo, error) {
+		return cat.Resolve(ctx, ref)
+	})
 }
 
 // List returns artifacts from all catalogs (deduplicated by name+version).
@@ -249,6 +313,7 @@ func (c *ChainCatalog) Delete(ctx context.Context, ref Reference) error {
 // because the artifact is known to be multi-platform and the platform is
 // genuinely unavailable.
 func (c *ChainCatalog) FetchByPlatform(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error) {
+	subject := fmt.Sprintf("%s (%s)", ref.String(), platform)
 	var outcomes []catalogOutcome
 	supported := false
 	for _, cat := range c.catalogs {
@@ -262,6 +327,9 @@ func (c *ChainCatalog) FetchByPlatform(ctx context.Context, ref Reference, platf
 			c.logger.V(1).Info("fetched platform artifact", "catalog", cat.Name(), "ref", ref.String(), "platform", platform)
 			return data, info, nil
 		}
+		// Definitive negative about the platform: halt in BOTH modes and return
+		// the typed error, because the artifact is known multi-platform and the
+		// requested platform is genuinely unavailable.
 		if IsPlatformNotFound(err) {
 			return nil, ArtifactInfo{}, err
 		}
@@ -269,11 +337,51 @@ func (c *ChainCatalog) FetchByPlatform(ctx context.Context, ref Reference, platf
 			c.logger.V(1).Info("catalog platform fetch error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "platform", platform, "error", err)
 		}
 		outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
+		// Strict mode: an indeterminate result stops the chain rather than
+		// silently falling through to a lower-priority catalog.
+		if c.haltOn(err) {
+			return nil, ArtifactInfo{}, aggregateChainError(subject, outcomes)
+		}
 	}
 	if !supported {
 		return nil, ArtifactInfo{}, fmt.Errorf("no catalog supports platform-aware fetch for %q", ref.String())
 	}
-	return nil, ArtifactInfo{}, aggregateChainError(fmt.Sprintf("%s (%s)", ref.String(), platform), outcomes)
+	return nil, ArtifactInfo{}, aggregateChainError(subject, outcomes)
+}
+
+// ResolveContentDigest tries each catalog that implements PlatformAwareCatalog
+// in order, returning the first successful result. Catalogs that do not
+// implement PlatformAwareCatalog are skipped.
+func (c *ChainCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	subject := fmt.Sprintf("%s (%s)", ref.String(), platform)
+	var outcomes []catalogOutcome
+	supported := false
+	for _, cat := range c.catalogs {
+		pac, ok := cat.(PlatformAwareCatalog)
+		if !ok {
+			continue
+		}
+		supported = true
+		info, err := pac.ResolveContentDigest(ctx, ref, platform, mediaType)
+		if err == nil {
+			c.logger.V(1).Info("chain resolved content digest", "catalog", cat.Name(), "ref", ref.String(), "platform", platform)
+			return info, nil
+		}
+		if IsPlatformNotFound(err) {
+			return ContentDigestInfo{}, err
+		}
+		if !errors.Is(err, ErrArtifactNotFound) {
+			c.logger.V(1).Info("catalog content digest error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "platform", platform, "error", err)
+		}
+		outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
+		if c.haltOn(err) {
+			return ContentDigestInfo{}, aggregateChainError(subject, outcomes)
+		}
+	}
+	if !supported {
+		return ContentDigestInfo{}, fmt.Errorf("no catalog supports content digest resolution for %q", ref.String())
+	}
+	return ContentDigestInfo{}, aggregateChainError(subject, outcomes)
 }
 
 // ListPlatforms tries each catalog that implements PlatformAwareCatalog in
@@ -295,6 +403,11 @@ func (c *ChainCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]stri
 			c.logger.V(1).Info("catalog list platforms error (non-404)", "catalog", cat.Name(), "ref", ref.String(), "error", err)
 		}
 		outcomes = append(outcomes, catalogOutcome{catalog: cat.Name(), err: err})
+		// Strict mode: an indeterminate result stops the chain rather than
+		// silently falling through to a lower-priority catalog.
+		if c.haltOn(err) {
+			return nil, aggregateChainError(ref.String(), outcomes)
+		}
 	}
 	if !supported {
 		return nil, fmt.Errorf("no catalog supports platform listing for %q", ref.String())

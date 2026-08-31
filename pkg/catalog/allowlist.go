@@ -50,8 +50,8 @@ func (c *AllowlistCatalog) Name() string {
 
 // Store delegates to the underlying catalog without restriction.
 // Allowlists govern reads (Resolve/Fetch), not writes.
-func (c *AllowlistCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
-	return c.inner.Store(ctx, ref, content, bundleData, annotations, force)
+func (c *AllowlistCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
+	return c.inner.Store(ctx, ref, content, bundleData, annotations, force, extraLayers...)
 }
 
 // Fetch retrieves an artifact, rejecting names not in the allowlist.
@@ -68,6 +68,14 @@ func (c *AllowlistCatalog) FetchWithBundle(ctx context.Context, ref Reference) (
 		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.inner.Name()}
 	}
 	return c.inner.FetchWithBundle(ctx, ref)
+}
+
+// FetchWithLayer retrieves an artifact and auxiliary layers, rejecting names not in the allowlist.
+func (c *AllowlistCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	if !c.isAllowed(ref.Name) {
+		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.inner.Name()}
+	}
+	return c.inner.FetchWithLayer(ctx, ref, mediaTypes...)
 }
 
 // Resolve finds the best matching version, rejecting names not in the allowlist.
@@ -124,6 +132,20 @@ func (c *AllowlistCatalog) ListPlatforms(ctx context.Context, ref Reference) ([]
 		return nil, &ArtifactNotFoundError{Reference: ref, Catalog: c.inner.Name()}
 	}
 	return pac.ListPlatforms(ctx, ref)
+}
+
+// ResolveContentDigest resolves the content-layer digest, rejecting names not
+// in the allowlist. If the inner catalog does not implement
+// PlatformAwareCatalog, returns an ArtifactNotFoundError.
+func (c *AllowlistCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	if !c.isAllowed(ref.Name) {
+		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.inner.Name()}
+	}
+	pac, ok := c.inner.(PlatformAwareCatalog)
+	if !ok {
+		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.inner.Name()}
+	}
+	return pac.ResolveContentDigest(ctx, ref, platform, mediaType)
 }
 
 // Inner returns the wrapped catalog. Useful for type assertions on the

@@ -9,7 +9,11 @@ metadata:
     Verifies that __actions references in CEL expressions and
     Go templates automatically create dependency edges without
     requiring explicit dependsOn declarations.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   workflow:
     actions:

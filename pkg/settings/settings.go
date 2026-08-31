@@ -284,6 +284,8 @@ const (
 
 	// DefaultFetchConcurrency is the max concurrency for plugin fetches in FetchPlugins (errgroup limit).
 	DefaultFetchConcurrency = 4
+	// DefaultResolveConcurrency is the max concurrency for plugin resolves in ResolvePlugins (errgroup limit).
+	DefaultResolveConcurrency = 8
 )
 
 // API server defaults

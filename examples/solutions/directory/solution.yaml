@@ -15,7 +15,11 @@ metadata:
     - Recursive traversal with glob patterns
     - Reading file contents with checksums
     - Creating, removing, and copying directories
-
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # -------------------------------------------------------------------------

@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
-	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
@@ -184,6 +183,13 @@ func (m *mockGetter) GetWithBundle(_ context.Context, _ string) (*solution.Solut
 	return m.sol, nil, nil
 }
 
+func (m *mockGetter) GetWithLayers(_ context.Context, _ string, _ ...string) (*solution.Solution, map[string][]byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return m.sol, nil, nil
+}
+
 func (m *mockGetter) FindSolution() string {
 	return ""
 }
@@ -283,25 +289,6 @@ spec: {}
 			}
 		})
 	}
-}
-
-func TestSolutionOptions_getRegistry(t *testing.T) {
-	t.Run("returns_injected_registry_when_set", func(t *testing.T) {
-		injectedReg := provider.NewRegistry()
-		options := &SolutionOptions{
-			registry: injectedReg,
-		}
-
-		result := options.getRegistry(context.Background())
-		assert.Same(t, injectedReg, result)
-	})
-
-	t.Run("returns_registry_when_not_set", func(t *testing.T) {
-		options := &SolutionOptions{}
-
-		result := options.getRegistry(context.Background())
-		assert.NotNil(t, result)
-	})
 }
 
 func TestSolutionOptions_writeOutput(t *testing.T) {
@@ -413,55 +400,6 @@ func TestExitCodes(t *testing.T) {
 	assert.Equal(t, 3, exitcode.InvalidInput)
 	assert.Equal(t, 4, exitcode.FileNotFound)
 	assert.Equal(t, 5, exitcode.RenderFailed)
-}
-
-func TestSolutionRegistryAdapter(t *testing.T) {
-	t.Run("Get_returns_provider_when_exists", func(t *testing.T) {
-		reg := provider.NewRegistry(provider.WithAllowOverwrite(true))
-		adapter := &solutionRegistryAdapter{Registry: reg}
-
-		// Try to get a non-existent provider
-		p, ok := adapter.Get("nonexistent")
-		assert.Nil(t, p)
-		assert.False(t, ok)
-	})
-
-	t.Run("Has_returns_false_for_nonexistent", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		adapter := &solutionRegistryAdapter{Registry: reg}
-
-		assert.False(t, adapter.Has("nonexistent"))
-	})
-
-	t.Run("List_returns_all_providers", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		adapter := &solutionRegistryAdapter{Registry: reg}
-
-		providers := adapter.List()
-		assert.NotNil(t, providers)
-	})
-
-	t.Run("DescriptorLookup_returns_lookup", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		adapter := &solutionRegistryAdapter{Registry: reg}
-
-		lookup := adapter.DescriptorLookup()
-		assert.NotNil(t, lookup)
-	})
-}
-
-func TestSolutionResolverRegistryAdapter(t *testing.T) {
-	t.Run("Get_returns_error_for_nonexistent", func(t *testing.T) {
-		reg := provider.NewRegistry()
-		adapter := &solutionResolverRegistryAdapter{
-			RegistryAdapter: &solutionRegistryAdapter{Registry: reg},
-		}
-
-		p, err := adapter.Get("nonexistent")
-		assert.Nil(t, p)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
-	})
 }
 
 func TestSolutionOptions_TimeoutDefaults(t *testing.T) {

@@ -209,7 +209,42 @@ type ArtifactInfo struct {
 	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty" doc:"OCI annotations"`
 
 	// Catalog is the name of the catalog this artifact came from.
+	// This is the user-facing config alias, which can be renamed and is not
+	// stable across machines or configs.
 	Catalog string `json:"catalog" yaml:"catalog" doc:"Source catalog name"`
+
+	// Canonical is the stable, machine-independent identity of the source
+	// catalog (e.g. "ghcr.io/org/plugins" for remote catalogs). Unlike
+	// Catalog, it is derived from the actual registry location rather than the
+	// config alias, so it survives renames and is portable across machines.
+	// Populated only by remote catalogs; empty for local catalogs (whose
+	// filesystem path is machine-specific and not portable).
+	Canonical string `json:"canonical,omitempty" yaml:"canonical,omitempty" doc:"Stable machine-independent source catalog identity"`
+}
+
+// ContentDigestInfo extends ArtifactInfo with the content-layer digest for a
+// specific platform. It is returned by ResolveContentDigest, which reads only
+// the manifest JSON (never the binary blob) to populate both the artifact
+// metadata and the layer digest.
+type ContentDigestInfo struct {
+	ArtifactInfo
+
+	// ContentDigest is the digest of the content layer selected by media type,
+	// e.g. "sha256:abc123...". This is the value recorded in lock files for
+	// integrity verification without downloading the binary.
+	ContentDigest string `json:"contentDigest" yaml:"contentDigest"`
+}
+
+// Layer is an optional, media-type-addressed OCI layer appended after an
+// artifact's content and bundle layers (for example, the solution lock).
+// Entries with empty Data are skipped, and consumers locate these layers by
+// MediaType rather than by a fixed index, so they can be appended without
+// disturbing existing positional layer contracts.
+type Layer struct {
+	// MediaType is the OCI media type identifying the layer's purpose.
+	MediaType string
+	// Data is the raw layer content. Layers with empty Data are skipped.
+	Data []byte
 }
 
 // Catalog defines the interface for artifact storage.
@@ -221,8 +256,10 @@ type Catalog interface {
 	// Store saves an artifact to the catalog.
 	// For solutions with bundled files, bundleData contains the tar archive.
 	// If bundleData is nil, only the primary content layer is stored.
+	// Optional extraLayers are appended last and located by media type (never
+	// by index) on read; empty layers are skipped.
 	// Returns ErrArtifactExists if the version already exists (use force to overwrite).
-	Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
+	Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error)
 
 	// Fetch retrieves an artifact's primary content from the catalog.
 	// Returns ErrArtifactNotFound if the artifact doesn't exist.
@@ -233,6 +270,20 @@ type Catalog interface {
 	// If the artifact has no bundle layer, bundleData is nil.
 	// Returns ErrArtifactNotFound if the artifact doesn't exist.
 	FetchWithBundle(ctx context.Context, ref Reference) (content, bundleData []byte, info ArtifactInfo, err error)
+
+	// FetchWithLayer retrieves an artifact's primary content together with one
+	// or more auxiliary layers, each identified by media type, in one manifest
+	// round-trip (a single Resolve plus a single manifest fetch). Prefer this
+	// over Fetch followed by a separate layer read when both are needed.
+	//
+	// The auxiliary layers are located by media type, never by a fixed index,
+	// so the call is safe with deduplicated (v2) bundles. A media type that is
+	// present in the manifest is included in the returned map; absent types are
+	// omitted (not an error). All requested types must be auxiliary layer media
+	// types (e.g. MediaTypeSolutionLock, MediaTypeSolutionBundle); unknown
+	// types are rejected with an error.
+	// Returns ErrArtifactNotFound if the artifact doesn't exist.
+	FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) (content []byte, layers map[string][]byte, info ArtifactInfo, err error)
 
 	// Resolve finds the best matching version for a reference.
 	// If no version is specified, returns the highest semver version.

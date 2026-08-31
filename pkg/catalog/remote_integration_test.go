@@ -1338,6 +1338,11 @@ func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "pulled from test-catalog")
 	assert.Contains(t, resolved.Annotations[AnnotationOrigin], "myorg/artifacts")
+
+	// Verify the machine-readable canonical source annotation was persisted.
+	wantCanonical := remoteCat.canonicalID()
+	assert.Equal(t, wantCanonical, resolved.Annotations[AnnotationSourceCanonical])
+	assert.Equal(t, wantCanonical, resolved.Canonical)
 	_ = info // ensure CopyTo returned successfully
 }
 

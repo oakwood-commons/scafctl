@@ -156,6 +156,45 @@ func TestRemoteCatalog_Repository(t *testing.T) {
 	assert.Equal(t, "org/repo", cat.Repository())
 }
 
+func TestRemoteCatalog_canonicalID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		registry   string
+		repository string
+		expected   string
+	}{
+		{
+			name:       "registry with repository",
+			registry:   "ghcr.io",
+			repository: "org/plugins",
+			expected:   "ghcr.io/org/plugins",
+		},
+		{
+			name:       "registry without repository",
+			registry:   "ghcr.io",
+			repository: "",
+			expected:   "ghcr.io",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cat, err := NewRemoteCatalog(RemoteCatalogConfig{
+				Name:       "alias-can-change",
+				Registry:   tt.registry,
+				Repository: tt.repository,
+				Logger:     logr.Discard(),
+			})
+			require.NoError(t, err)
+			// canonicalID is independent of the (mutable) config alias.
+			assert.Equal(t, tt.expected, cat.canonicalID())
+		})
+	}
+}
+
 func TestRemoteCatalog_RepositoryPath(t *testing.T) {
 	t.Parallel()
 

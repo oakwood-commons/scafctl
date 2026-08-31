@@ -12,6 +12,12 @@ metadata:
     final output contract. Uses a mock HTTP server started via
     testConfig.services.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     mockBaseUrl:

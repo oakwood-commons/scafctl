@@ -11,10 +11,32 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/oakwood-commons/scafctl/pkg/auth"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+)
+
+// PluginPool is the minimal surface the API server needs from a plugin pool:
+// acquiring the external plugins a request depends on (holding a reference for
+// the duration of the work) and shutting the pool down on server stop. Both
+// *plugin.Pool and *plugin.VersionPool satisfy it, so the server can be wired
+// with either implementation.
+type PluginPool interface {
+	// EnsureAndAcquire loads every provider dependency and takes a reference on
+	// each ready entry, returning a release function that drops all acquired
+	// references and must be called when the caller is done (typically via
+	// defer).
+	EnsureAndAcquire(ctx context.Context, deps []solution.PluginDependency) (release func(), err error)
+	// Shutdown kills all managed plugin processes.
+	Shutdown()
+}
+
+var (
+	_ PluginPool = (*plugin.Pool)(nil)
+	_ PluginPool = (*plugin.VersionPool)(nil)
 )
 
 // HandlerContext provides shared dependencies to all API handlers.
@@ -45,7 +67,21 @@ type HandlerContext struct {
 	// PluginPool manages shared, long-lived plugin processes with lazy
 	// initialization and idle eviction. Used by solution endpoints to
 	// ensure external plugins from bundle.plugins are available.
-	PluginPool *plugin.Pool
+	PluginPool PluginPool
+
+	// CompositeRegistry is the shared builtin+external provider registry used
+	// by solution endpoints to build a request-scoped registry via
+	// prepare.ScopeSolutionProviders. Nil when only the legacy
+	// ProviderRegistry surface is wired.
+	CompositeRegistry *provider.CompositeRegistry
+
+	// CatalogIndex is the config-derived catalog topology. It maps a normalized
+	// OCI origin ("registry" or "registry/repository") to the configured
+	// catalog's alias so handlers can bind a fully-qualified provider
+	// reference's raw registry to a concrete configured catalog. It is built
+	// once at server start from the configured catalogs; its lookups miss for
+	// every origin when no remote catalogs are configured.
+	CatalogIndex *catalogindex.Index
 }
 
 // NewHandlerContext creates a new HandlerContext with the given dependencies.

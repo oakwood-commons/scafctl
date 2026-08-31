@@ -146,7 +146,7 @@ func (r *Registry) Fetch(ctx context.Context, ref Reference) ([]byte, ArtifactIn
 
 			// Auto-cache remote fetches into local catalog
 			if cacheEnabled && r.isRemoteCatalog(catalog) {
-				r.cacheArtifact(ctx, info.Reference, content, nil, catalog.Name())
+				r.cacheArtifact(ctx, info.Reference, content, nil, catalog.Name(), info.Canonical)
 			}
 
 			return content, info, nil
@@ -189,7 +189,7 @@ func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, 
 
 			// Auto-cache remote fetches into local catalog
 			if cacheEnabled && r.isRemoteCatalog(cat) {
-				r.cacheArtifact(ctx, info.Reference, content, bundleData, cat.Name())
+				r.cacheArtifact(ctx, info.Reference, content, bundleData, cat.Name(), info.Canonical)
 			}
 
 			return content, bundleData, info, nil
@@ -211,13 +211,44 @@ func (r *Registry) FetchWithBundle(ctx context.Context, ref Reference) ([]byte, 
 	return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: "registry"}
 }
 
+// FetchWithLayer retrieves an artifact's content and auxiliary layers
+// from the first catalog that has it, in one manifest round-trip per catalog.
+func (r *Registry) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	r.mu.RLock()
+	catalogs := r.catalogs
+	r.mu.RUnlock()
+
+	var lastErr error
+	for _, cat := range catalogs {
+		content, layers, info, err := cat.FetchWithLayer(ctx, ref, mediaTypes...)
+		if err == nil {
+			return content, layers, info, nil
+		}
+		if IsArtifactNotFoundError(err) {
+			lastErr = err
+			continue
+		}
+		// Non-not-found error - return immediately
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	if lastErr != nil {
+		return nil, nil, ArtifactInfo{}, lastErr
+	}
+
+	return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: "registry"}
+}
+
 // cacheArtifact stores a remotely-fetched artifact into the local catalog.
 // Errors are logged but do not fail the fetch — caching is best-effort.
-func (r *Registry) cacheArtifact(ctx context.Context, ref Reference, content, bundleData []byte, sourceCatalog string) {
-	annotations := NewAnnotationBuilder().
+func (r *Registry) cacheArtifact(ctx context.Context, ref Reference, content, bundleData []byte, sourceCatalog, sourceCanonical string) {
+	builder := NewAnnotationBuilder().
 		Set(AnnotationSource, "auto-cached").
-		Set(AnnotationOrigin, fmt.Sprintf("auto-cached from %s", sourceCatalog)).
-		Build()
+		Set(AnnotationOrigin, fmt.Sprintf("auto-cached from %s", sourceCatalog))
+	if sourceCanonical != "" {
+		builder.Set(AnnotationSourceCanonical, sourceCanonical)
+	}
+	annotations := builder.Build()
 
 	// Use force=true to update if a stale version already exists locally
 	_, err := r.local.Store(ctx, ref, content, bundleData, annotations, true)

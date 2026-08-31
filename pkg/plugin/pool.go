@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
@@ -56,12 +57,21 @@ const (
 // poolEntry tracks a single managed plugin process.
 type poolEntry struct {
 	mu       sync.Mutex
-	client   *Client
+	client   pluginClient
 	state    entryState
 	lastUsed time.Time
 	refCount int32 // atomic; tracks in-flight requests using this plugin
 	dep      solution.PluginDependency
-	result   FetchResult
+	// id is the plugin's derived identity (leaf artifact name + catalog),
+	// built via identity.DependencyToPluginIdentity(dep). Unlike dep.Name --
+	// which is the raw reference and may be a full OCI reference
+	// (registry/namespace/artifact) -- id.Name() is the leaf artifact name that
+	// keys the VersionPool's index and store. Read identity from here (not
+	// dep.Name) so logs, errors, and registry keys agree with the pool key.
+	// Populated by the VersionPool paths; the classic Pool keys by dep.Name and
+	// leaves this zero.
+	id     pluginIdentity
+	result FetchResult
 	// registeredProviders holds the provider names this entry successfully
 	// registered in the shared registry. Only these names are unregistered
 	// on eviction/death — avoids removing providers owned by other plugins.
@@ -77,6 +87,7 @@ type poolEntry struct {
 	// but the process Kill is deferred until the final Release drains the last
 	// reference. This prevents tearing down a plugin mid-request.
 	pendingKill bool
+	version     *semver.Version
 }
 
 // poolOptions holds Pool configuration.
@@ -352,7 +363,7 @@ func (p *Pool) EnsureAndAcquire(ctx context.Context, deps []solution.PluginDepen
 			return nil, eErr
 		}
 		if ok {
-			acquired = append(acquired, dep.Name)
+			acquired = append(acquired, dep.LocalName())
 		}
 	}
 
@@ -376,13 +387,13 @@ func (p *Pool) ensureOne(ctx context.Context, dep solution.PluginDependency, acq
 	}
 
 	// Already in pool (pre-loaded or previously loaded)?
-	if entry, ok := p.entries[dep.Name]; ok {
+	if entry, ok := p.entries[dep.LocalName()]; ok {
 		p.mu.Unlock()
-		return p.waitForEntry(ctx, dep.Name, entry, acquire)
+		return p.waitForEntry(ctx, dep.LocalName(), entry, acquire)
 	}
 
 	// Check if already registered (builtin or pre-loaded without Adopt)
-	if p.registry.Has(dep.Name) {
+	if p.registry.Has(dep.LocalName()) {
 		p.mu.Unlock()
 		return false, nil
 	}
@@ -390,19 +401,19 @@ func (p *Pool) ensureOne(ctx context.Context, dep solution.PluginDependency, acq
 	// Security: reject if external plugins are disabled entirely.
 	if p.opts.disableExternal {
 		p.mu.Unlock()
-		return false, fmt.Errorf("plugin %q: %w", dep.Name, ErrExternalDisabled)
+		return false, fmt.Errorf("plugin %q: %w", dep.DisplayName(), ErrExternalDisabled)
 	}
 
 	// Security: reject if allowlist is configured and plugin is not on it.
-	if p.opts.allowedPlugins != nil && !p.opts.allowedPlugins[dep.Name] {
+	if p.opts.allowedPlugins != nil && !p.opts.allowedPlugins[dep.LocalName()] {
 		p.mu.Unlock()
-		return false, fmt.Errorf("plugin %q: %w", dep.Name, ErrPluginNotAllowed)
+		return false, fmt.Errorf("plugin %q: %w", dep.DisplayName(), ErrPluginNotAllowed)
 	}
 
 	// Capacity check
 	if p.opts.maxPlugins > 0 && len(p.entries) >= p.opts.maxPlugins {
 		p.mu.Unlock()
-		return false, fmt.Errorf("plugin %q: %w", dep.Name, ErrPoolFull)
+		return false, fmt.Errorf("plugin %q: %w", dep.DisplayName(), ErrPoolFull)
 	}
 
 	// Create a placeholder entry; the spawn runs in the background under the
@@ -413,13 +424,13 @@ func (p *Pool) ensureOne(ctx context.Context, dep solution.PluginDependency, acq
 		dep:   dep,
 		ready: make(chan struct{}),
 	}
-	p.entries[dep.Name] = entry
+	p.entries[dep.LocalName()] = entry
 	p.mu.Unlock()
 
 	spawnCtx, cancel := p.newSpawnContext()
 	go p.spawn(spawnCtx, entry, cancel)
 
-	return p.waitForEntry(ctx, dep.Name, entry, acquire)
+	return p.waitForEntry(ctx, dep.LocalName(), entry, acquire)
 }
 
 // waitForEntry waits for an entry to become ready (bounded by the caller's
@@ -476,7 +487,7 @@ func (p *Pool) waitAndValidate(ctx context.Context, entry *poolEntry, acquire bo
 
 	if entry.state == entryDead {
 		// Dead entries will be re-spawned on next Ensure after eviction.
-		return false, fmt.Errorf("plugin %q is dead: %w", entry.dep.Name, entry.err)
+		return false, fmt.Errorf("plugin %q is dead: %w", entry.dep.DisplayName(), entry.err)
 	}
 
 	// Touch last-used time
@@ -562,12 +573,12 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry, cancel context.Cance
 		wrapper, wErr := NewProviderWrapper(client, provName, WithContext(ctx))
 		if wErr != nil {
 			p.logger.V(1).Info("failed to create provider wrapper",
-				"plugin", entry.dep.Name, "provider", provName, "error", wErr)
+				"plugin", entry.dep.DisplayName(), "provider", provName, "error", wErr)
 			continue
 		}
 		if rErr := p.registry.Register(wrapper); rErr != nil {
 			p.logger.V(1).Info("provider not registered (name taken)",
-				"plugin", entry.dep.Name, "provider", provName, "error", rErr)
+				"plugin", entry.dep.DisplayName(), "provider", provName, "error", rErr)
 			continue
 		}
 		// Configure the provider so the plugin receives the host service ID.
@@ -583,7 +594,7 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry, cancel context.Cance
 		// under p.mu before this spawn goroutine ran.
 		if cErr := wrapper.Configure(ctx, p.opts.baseConfig); cErr != nil {
 			p.logger.V(1).Info("failed to configure plugin provider",
-				"plugin", entry.dep.Name, "provider", provName, "error", cErr)
+				"plugin", entry.dep.DisplayName(), "provider", provName, "error", cErr)
 		}
 		registered = append(registered, provName)
 	}
@@ -597,7 +608,7 @@ func (p *Pool) spawn(ctx context.Context, entry *poolEntry, cancel context.Cance
 	entry.mu.Unlock()
 
 	p.logger.V(0).Info("plugin loaded into pool",
-		"plugin", entry.dep.Name, "version", result.Version, "providers", providers)
+		"plugin", entry.dep.DisplayName(), "version", result.Version, "providers", providers)
 }
 
 // failWith marks the entry as dead with the given error.
@@ -639,7 +650,7 @@ func (p *Pool) Release(name string) {
 	}
 	entry.mu.Lock()
 	newCount := atomic.AddInt32(&entry.refCount, -1)
-	var client *Client
+	var client pluginClient
 	if newCount <= 0 && entry.pendingKill {
 		client = entry.client
 		entry.client = nil

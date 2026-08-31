@@ -46,10 +46,11 @@ func isTransitiveDep(resolvers map[string]*Resolver, targetResolver, candidateNa
 	return false
 }
 
-// DescriptorLookup is a function that retrieves a provider descriptor by name.
-// Used during dependency extraction to allow providers to participate in
-// extracting dependencies from their inputs.
-type DescriptorLookup func(providerName string) *provider.Descriptor
+// DescriptorLookup is an alias for provider.DescriptorLookup. It is kept here
+// for backward compatibility so existing callers that reference
+// resolver.DescriptorLookup continue to compile. New code should prefer
+// provider.DescriptorLookup directly.
+type DescriptorLookup = provider.DescriptorLookup
 
 // ExtractDependencies extracts all resolver references from a resolver definition.
 // If lookup is provided, it will use provider-specific ExtractDependencies functions

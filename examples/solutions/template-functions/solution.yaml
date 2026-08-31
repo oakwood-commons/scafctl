@@ -13,7 +13,11 @@ metadata:
     - templates
     - functions
     - demo
-
+bundle:
+  plugins:
+    - name: metadata
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # Source data

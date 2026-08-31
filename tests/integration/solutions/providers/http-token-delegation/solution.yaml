@@ -9,6 +9,12 @@ metadata:
     Verifies authProvider error handling, pass-through delegation behavior,
     and the interaction between authProvider/authScope fields.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # This resolver uses authProvider with a nonexistent handler.

@@ -15,8 +15,9 @@ import (
 // mockPlatformAwareCatalog extends mockCatalog with PlatformAwareCatalog support.
 type mockPlatformAwareCatalog struct {
 	mockCatalog
-	fetchByPlatformFunc func(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error)
-	listPlatformsFunc   func(ctx context.Context, ref Reference) ([]string, error)
+	fetchByPlatformFunc      func(ctx context.Context, ref Reference, platform string) ([]byte, ArtifactInfo, error)
+	listPlatformsFunc        func(ctx context.Context, ref Reference) ([]string, error)
+	resolveContentDigestFunc func(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error)
 }
 
 func newMockPlatformAwareCatalog(name string) *mockPlatformAwareCatalog {
@@ -37,6 +38,13 @@ func (m *mockPlatformAwareCatalog) ListPlatforms(ctx context.Context, ref Refere
 		return m.listPlatformsFunc(ctx, ref)
 	}
 	return nil, nil
+}
+
+func (m *mockPlatformAwareCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	if m.resolveContentDigestFunc != nil {
+		return m.resolveContentDigestFunc(ctx, ref, platform, mediaType)
+	}
+	return ContentDigestInfo{}, ErrArtifactNotFound
 }
 
 func TestPluginFetcher_FetchPlugin_ImageIndex(t *testing.T) {

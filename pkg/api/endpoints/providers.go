@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
+// TODO: provider endpoint functions still use the old provider registry. need to review and update if needed.
 // ensureAPIProvider attempts to auto-resolve an official plugin provider via
 // the plugin pool. On success, returns the resolved provider and a non-nil
 // release function that the caller must defer. Returns an error if the

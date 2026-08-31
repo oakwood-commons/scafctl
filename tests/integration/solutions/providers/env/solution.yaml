@@ -6,6 +6,12 @@ metadata:
   version: 1.0.0
   description: Tests for the env provider
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     homeDir:

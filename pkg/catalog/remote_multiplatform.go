@@ -132,6 +132,7 @@ func (c *RemoteCatalog) extractLayerContent(
 		Size:        int64(len(contentData)),
 		Annotations: annotations,
 		Catalog:     c.name,
+		Canonical:   c.canonicalID(),
 	}
 
 	return contentData, info, nil
@@ -190,4 +191,112 @@ func (c *RemoteCatalog) listPlatformsInternal(ctx context.Context, ref Reference
 	}
 
 	return IndexPlatforms(&index), nil
+}
+
+// ResolveContentDigest returns the content-layer digest and artifact metadata
+// for a specific platform WITHOUT downloading the layer blob. It fetches only
+// the index and manifest JSON documents, making it a cheap, resolve-like
+// operation suitable for pinning digests in a lock file.
+//
+// The mediaType parameter selects which layer to read the digest from (e.g.
+// MediaTypeProviderBinary). For a multi-platform image index it selects the
+// platform-specific manifest; for a single-platform manifest the platform
+// argument is ignored.
+func (c *RemoteCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	info, err := c.resolveContentDigestInternal(ctx, ref, platform, mediaType)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("resolve content digest rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "platform", platform, "error", err.Error())
+		c.switchToAnonymous()
+		info, retryErr := c.resolveContentDigestInternal(ctx, ref, platform, mediaType)
+		if retryErr != nil {
+			return ContentDigestInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
+		}
+		return info, nil
+	}
+	return info, err
+}
+
+func (c *RemoteCatalog) resolveContentDigestInternal(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	// When no version is specified, resolve to the latest version first.
+	if !ref.HasVersion() && !ref.HasDigest() {
+		resolved, err := c.resolveWithKind(ctx, ref)
+		if err != nil {
+			return ContentDigestInfo{}, err
+		}
+		ref = resolved.Reference
+	}
+
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return ContentDigestInfo{}, err
+	}
+
+	tag := c.tagForRef(ref)
+	topDesc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		if isNetworkError(err) {
+			return ContentDigestInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
+		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	topData, err := content.FetchAll(ctx, repo, topDesc)
+	if err != nil {
+		return ContentDigestInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+
+	// For a multi-platform image index, select the platform-specific manifest
+	// and fetch its (small) manifest JSON.
+	manifestDigest := topDesc.Digest.String()
+	manifestData := topData
+	if IsImageIndex(topDesc) {
+		var index ocispec.Index
+		if err := json.Unmarshal(topData, &index); err != nil {
+			return ContentDigestInfo{}, fmt.Errorf("failed to unmarshal image index: %w", err)
+		}
+
+		platDesc, err := MatchPlatform(&index, platform)
+		if err != nil {
+			return ContentDigestInfo{}, err
+		}
+
+		manifestDigest = platDesc.Digest.String()
+		manifestData, err = content.FetchAll(ctx, repo, *platDesc)
+		if err != nil {
+			return ContentDigestInfo{}, fmt.Errorf("failed to fetch platform manifest: %w", err)
+		}
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return ContentDigestInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	}
+
+	layer, ok := findLayerByMediaType(manifest, mediaType)
+	if !ok {
+		return ContentDigestInfo{}, fmt.Errorf("manifest has no layer with media type %s", mediaType)
+	}
+
+	createdAt := time.Now()
+	if created, ok := manifest.Annotations[AnnotationCreated]; ok {
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			createdAt = t
+		}
+	}
+
+	return ContentDigestInfo{
+		ArtifactInfo: ArtifactInfo{
+			Reference:   ref,
+			Tag:         tag,
+			Digest:      topDesc.Digest.String(),
+			ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDigest,
+			CreatedAt:   createdAt,
+			Size:        layer.Size,
+			Annotations: manifest.Annotations,
+			Catalog:     c.name,
+			Canonical:   c.canonicalID(),
+		},
+		ContentDigest: layer.Digest.String(),
+	}, nil
 }

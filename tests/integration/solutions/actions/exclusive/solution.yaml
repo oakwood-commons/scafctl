@@ -9,7 +9,11 @@ metadata:
     Verifies that mutually exclusive actions are split into separate
     execution phases by the DAG executor and that the solution runs
     successfully with all actions completing.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     dbHost:

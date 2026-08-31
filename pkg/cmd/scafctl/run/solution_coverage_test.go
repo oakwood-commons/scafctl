@@ -56,31 +56,6 @@ func TestSolutionOptions_getActionIOStreams(t *testing.T) {
 	}
 }
 
-func TestActionRegistryAdapter_Has(t *testing.T) {
-	t.Parallel()
-
-	reg := testRegistry()
-	adapter := &actionRegistryAdapter{registry: reg}
-
-	assert.True(t, adapter.Has("static"))
-	assert.False(t, adapter.Has("nonexistent"))
-}
-
-func TestActionRegistryAdapter_Get(t *testing.T) {
-	t.Parallel()
-
-	reg := testRegistry()
-	adapter := &actionRegistryAdapter{registry: reg}
-
-	provider, ok := adapter.Get("static")
-	assert.True(t, ok)
-	assert.NotNil(t, provider)
-
-	provider, ok = adapter.Get("nonexistent")
-	assert.False(t, ok)
-	assert.Nil(t, provider)
-}
-
 func TestNewActionProgressCallback(t *testing.T) {
 	t.Parallel()
 

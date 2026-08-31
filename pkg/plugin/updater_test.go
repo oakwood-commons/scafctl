@@ -129,7 +129,7 @@ func (m *mockCatalogForUpdater) Resolve(ctx context.Context, ref catalog.Referen
 	return catalog.ArtifactInfo{}, fmt.Errorf("not found")
 }
 
-func (m *mockCatalogForUpdater) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool) (catalog.ArtifactInfo, error) {
+func (m *mockCatalogForUpdater) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool, ...catalog.Layer) (catalog.ArtifactInfo, error) {
 	return catalog.ArtifactInfo{}, nil
 }
 
@@ -138,6 +138,10 @@ func (m *mockCatalogForUpdater) Fetch(context.Context, catalog.Reference) ([]byt
 }
 
 func (m *mockCatalogForUpdater) FetchWithBundle(context.Context, catalog.Reference) ([]byte, []byte, catalog.ArtifactInfo, error) {
+	return nil, nil, catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalogForUpdater) FetchWithLayer(context.Context, catalog.Reference, ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
 	return nil, nil, catalog.ArtifactInfo{}, nil
 }
 

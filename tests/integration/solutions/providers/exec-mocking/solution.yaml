@@ -9,6 +9,12 @@ metadata:
     Verifies that exec provider calls can be intercepted by mock rules
     defined in testing.config.services with type: exec.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     kubectlPods:

@@ -9,6 +9,12 @@ metadata:
     Verifies command execution, stdout/stderr capture, exit codes,
     environment variable passthrough, and piped commands.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     echoSimple:

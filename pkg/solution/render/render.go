@@ -53,12 +53,12 @@ type ResolverRegistryAdapter struct {
 }
 
 // Get implements resolver.RegistryInterface with error return.
-func (r *ResolverRegistryAdapter) Get(name string) (provider.Provider, error) {
+func (r *ResolverRegistryAdapter) Get(name string) (provider.Provider, bool) {
 	p, ok := r.Registry.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("provider %s not found", name)
+		return nil, false
 	}
-	return p, nil
+	return p, true
 }
 
 // ResolverConfig holds resolver execution configuration.
@@ -102,10 +102,7 @@ func GetEffectiveResolverConfig(ctx context.Context, timeout, phaseTimeout time.
 }
 
 // NewResolverExecutor creates a resolver.Executor from a provider.Registry and ResolverConfig.
-func NewResolverExecutor(registry *provider.Registry, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) *resolver.Executor {
-	adapter := &RegistryAdapter{Registry: registry}
-	resolverAdapter := &ResolverRegistryAdapter{RegistryAdapter: adapter}
-
+func NewResolverExecutor(registry ProviderLookUp, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) *resolver.Executor {
 	opts := []resolver.ExecutorOption{
 		resolver.WithDefaultTimeout(cfg.Timeout),
 		resolver.WithPhaseTimeout(cfg.PhaseTimeout),
@@ -114,14 +111,14 @@ func NewResolverExecutor(registry *provider.Registry, cfg ResolverConfig, extraO
 		opts = append(opts, resolver.WithMaxConcurrency(cfg.MaxConcurrency))
 	}
 	opts = append(opts, extraOpts...)
-	return resolver.NewExecutor(resolverAdapter, opts...)
+	return resolver.NewExecutor(registry, opts...)
 }
 
 // ExecuteResolvers runs resolver execution against a solution's resolvers
 // with the given params and config, returning the resolved data map. Optional
 // extraOpts are appended to the executor (e.g. resolver.WithSeededResults to
 // reuse results computed during a state two-phase pre-load).
-func ExecuteResolvers(ctx context.Context, sol *solution.Solution, params map[string]any, registry *provider.Registry, cfg ResolverConfig, lgr logr.Logger, extraOpts ...resolver.ExecutorOption) (map[string]any, error) {
+func ExecuteResolvers(ctx context.Context, sol *solution.Solution, params map[string]any, registry ProviderLookUp, cfg ResolverConfig, lgr logr.Logger, extraOpts ...resolver.ExecutorOption) (map[string]any, error) {
 	resolvers := sol.Spec.ResolversToSlice()
 	resolverCtx, err := runResolvers(ctx, sol, resolvers, params, registry, cfg, extraOpts...)
 	if err != nil {
@@ -145,13 +142,18 @@ func ExecuteResolvers(ctx context.Context, sol *solution.Solution, params map[st
 // pre-load runner (state.TwoPhaseInput.RunResolvers), where only the minimal
 // set of resolvers that a load-time state field depends on must run before
 // state is loaded.
-func ExecuteResolverSubset(ctx context.Context, sol *solution.Solution, subset []*resolver.Resolver, params map[string]any, registry *provider.Registry, cfg ResolverConfig) (*resolver.Context, error) {
+func ExecuteResolverSubset(ctx context.Context, sol *solution.Solution, subset []*resolver.Resolver, params map[string]any, registry ProviderLookUp, cfg ResolverConfig) (*resolver.Context, error) {
 	return runResolvers(ctx, sol, subset, params, registry, cfg)
+}
+
+type ProviderLookUp interface {
+	Get(name string) (provider.Provider, bool)
+	DescriptorLookup() provider.DescriptorLookup
 }
 
 // runResolvers executes the given resolvers and returns the populated resolver
 // context. Calls are wired from the solution when present.
-func runResolvers(ctx context.Context, sol *solution.Solution, resolvers []*resolver.Resolver, params map[string]any, registry *provider.Registry, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) (*resolver.Context, error) {
+func runResolvers(ctx context.Context, sol *solution.Solution, resolvers []*resolver.Resolver, params map[string]any, registry ProviderLookUp, cfg ResolverConfig, extraOpts ...resolver.ExecutorOption) (*resolver.Context, error) {
 	var opts []resolver.ExecutorOption
 	if sol.Spec.HasCalls() {
 		opts = append(opts, resolver.WithCalls(sol.Spec.Calls))

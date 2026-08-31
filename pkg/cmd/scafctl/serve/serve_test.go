@@ -19,6 +19,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +37,126 @@ func TestCommandServe(t *testing.T) {
 	assert.NotEmpty(t, cmd.Short)
 	assert.NotEmpty(t, cmd.Long)
 	assert.True(t, cmd.SilenceUsage)
+}
+
+// fakeBuildDeps returns a buildPreloadDepsFunc that always yields the given deps.
+func fakeBuildDeps(deps []solution.PluginDependency) buildPreloadDepsFunc {
+	return func(_ *official.Registry, _ *preLoadOptions, _ *logr.Logger) []solution.PluginDependency {
+		return deps
+	}
+}
+
+func TestPreloadVersionedOfficialProviders_EmptyDepsReturnsNil(t *testing.T) {
+	fetchCalled := false
+	fetch := func(_ context.Context, _ []solution.PluginDependency, _ []bundler.LockPlugin) ([]plugin.FetchResult, error) {
+		fetchCalled = true
+		return nil, nil
+	}
+
+	clients, err := preloadVersionedOfficialProviders(
+		context.Background(),
+		provider.NewCompositeRegistry(),
+		official.NewRegistry(),
+		fetch,
+		fakeBuildDeps(nil),
+	)
+
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+	assert.False(t, fetchCalled, "fetchPlugins must not be called when there are no deps")
+}
+
+func TestPreloadVersionedOfficialProviders_SetsCatalogOnDeps(t *testing.T) {
+	var captured []solution.PluginDependency
+	// Return an error to short-circuit before registration (which needs real binaries).
+	fetch := func(_ context.Context, plugins []solution.PluginDependency, _ []bundler.LockPlugin) ([]plugin.FetchResult, error) {
+		captured = plugins
+		return nil, errors.New("stop")
+	}
+	deps := []solution.PluginDependency{
+		{Name: "exec", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+		{Name: "git", Kind: solution.PluginKindProvider, Version: "2.0.0"},
+	}
+
+	_, err := preloadVersionedOfficialProviders(
+		context.Background(),
+		provider.NewCompositeRegistry(),
+		official.NewRegistry(),
+		fetch,
+		fakeBuildDeps(deps),
+	)
+
+	require.Error(t, err)
+	require.Len(t, captured, 2)
+	for _, d := range captured {
+		assert.Equal(t, official.CatalogName, d.Catalog)
+	}
+}
+
+func TestPreloadVersionedOfficialProviders_NilFetchReturnsNil(t *testing.T) {
+	deps := []solution.PluginDependency{
+		{Name: "exec", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	clients, err := preloadVersionedOfficialProviders(
+		context.Background(),
+		provider.NewCompositeRegistry(),
+		official.NewRegistry(),
+		nil,
+		fakeBuildDeps(deps),
+	)
+
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+}
+
+func TestPreloadVersionedOfficialProviders_FetchErrorWrapped(t *testing.T) {
+	sentinel := errors.New("boom")
+	fetch := func(_ context.Context, _ []solution.PluginDependency, _ []bundler.LockPlugin) ([]plugin.FetchResult, error) {
+		return nil, sentinel
+	}
+	deps := []solution.PluginDependency{
+		{Name: "exec", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	clients, err := preloadVersionedOfficialProviders(
+		context.Background(),
+		provider.NewCompositeRegistry(),
+		official.NewRegistry(),
+		fetch,
+		fakeBuildDeps(deps),
+	)
+
+	require.Error(t, err)
+	assert.Nil(t, clients)
+	assert.ErrorIs(t, err, sentinel)
+	assert.Contains(t, err.Error(), "fetching official providers")
+}
+
+func TestPreloadVersionedOfficialProviders_ReleasesPinsOnFetchError(t *testing.T) {
+	released := 0
+	results := []plugin.FetchResult{
+		{Name: "exec", Release: func() { released++ }},
+		{Name: "git", Release: func() { released++ }},
+		{Name: "nopin"}, // nil Release must be skipped without panicking
+	}
+	fetch := func(_ context.Context, _ []solution.PluginDependency, _ []bundler.LockPlugin) ([]plugin.FetchResult, error) {
+		return results, errors.New("boom")
+	}
+	deps := []solution.PluginDependency{
+		{Name: "exec", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	_, err := preloadVersionedOfficialProviders(
+		context.Background(),
+		provider.NewCompositeRegistry(),
+		official.NewRegistry(),
+		fetch,
+		fakeBuildDeps(deps),
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, 2, released, "Release must run for each pinned result even on fetch error")
 }
 
 func TestCommandServe_HasOpenAPISubcommand(t *testing.T) {
@@ -252,6 +373,142 @@ func TestBuildPluginPool_GRPCMaxMessageSizeZeroIsNoop(t *testing.T) {
 	}
 
 	pool := buildPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
+	defer pool.Shutdown()
+
+	assert.Equal(t, 0, pool.ClientOptsLen(), "zero GRPCMaxMessageSize should not add a client opt")
+}
+
+func TestBuildVersionedPluginPool_AuthWiring(t *testing.T) {
+	// When an auth registry is in context, buildVersionedPluginPool should wire
+	// auth client options into the version pool.
+	authReg := auth.NewRegistry()
+	ctx := auth.WithRegistry(context.Background(), authReg)
+	reg := provider.NewCompositeRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal: true,
+			},
+		},
+	}
+
+	pool := buildVersionedPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
+	defer pool.Shutdown()
+
+	// Pool should have been created (non-nil) with auth options forwarded.
+	assert.NotNil(t, pool)
+}
+
+func TestBuildVersionedPluginPool_SanitizesEnv(t *testing.T) {
+	// API server pools should sanitize env by default (the default is true).
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal: false,
+			},
+		},
+	}
+
+	pool := buildVersionedPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
+	defer pool.Shutdown()
+
+	// API server pools sanitize env by default
+	assert.True(t, pool.SanitizeEnv())
+}
+
+func TestBuildVersionedPluginPool_HostStaticMetadata(t *testing.T) {
+	// The API server pool should carry a host-static base config reporting the
+	// "api" entrypoint so pooled plugins receive host runtime metadata.
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal: false,
+			},
+		},
+	}
+
+	pool := buildVersionedPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
+	defer pool.Shutdown()
+
+	base := pool.BaseProviderConfig()
+	raw, ok := base.Settings["metadata"]
+	require.True(t, ok, "base config should carry host metadata settings")
+
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	assert.Equal(t, prepare.EntrypointAPI, meta["entrypoint"])
+	assert.Contains(t, meta, "buildVersion")
+}
+
+func TestBuildVersionedPluginPool_AllowedPlugins(t *testing.T) {
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{
+				AllowExternal:  true,
+				AllowedPlugins: []string{"foo", "bar"},
+			},
+		},
+	}
+
+	pool := buildVersionedPluginPool(ctx, cfg, nil, reg, &lgr, nil, map[string]catalog.PluginPolicy{
+		"official": {Plugins: []string{"foo", "bar"}},
+	})
+	defer pool.Shutdown()
+
+	// Verify that a non-allowed plugin is rejected. The dependency is
+	// catalog-qualified so it clears the unresolved-catalog guard and reaches
+	// the per-catalog allowlist gate.
+	_, err := pool.EnsureAndAcquire(ctx, []solution.PluginDependency{
+		{Name: "not-allowed", Catalog: "official", Kind: solution.PluginKindProvider},
+	})
+	assert.ErrorIs(t, err, plugin.ErrPluginNotAllowed)
+}
+
+func TestBuildVersionedPluginPool_GRPCMaxMessageSize(t *testing.T) {
+	// When cfg.Plugins.GRPCMaxMessageSize is non-zero, buildVersionedPluginPool should
+	// wire it as a client option so plugin processes use the configured limit.
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{AllowExternal: true},
+		},
+		Plugins: config.PluginsConfig{
+			GRPCMaxMessageSize: 128 * 1024 * 1024, // 128 MB
+		},
+	}
+
+	pool := buildVersionedPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
+	defer pool.Shutdown()
+
+	// Exactly one client option should have been added (the gRPC max message size).
+	assert.Equal(t, 1, pool.ClientOptsLen(), "pool should have exactly one client opt for gRPC max message size")
+}
+
+func TestBuildVersionedPluginPool_GRPCMaxMessageSizeZeroIsNoop(t *testing.T) {
+	// When cfg.Plugins.GRPCMaxMessageSize is zero (default), no extra client
+	// option should be added -- connectPlugin will use the default internally.
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+	lgr := logr.Discard()
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			Plugins: config.APIPluginConfig{AllowExternal: true},
+		},
+	}
+
+	pool := buildVersionedPluginPool(ctx, cfg, nil, reg, &lgr, nil, nil)
 	defer pool.Shutdown()
 
 	assert.Equal(t, 0, pool.ClientOptsLen(), "zero GRPCMaxMessageSize should not add a client opt")

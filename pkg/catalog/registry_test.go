@@ -232,10 +232,38 @@ func TestRegistry_CacheArtifact_SetsOrigin(t *testing.T) {
 
 	// Directly call cacheArtifact and verify origin annotation.
 	ref := Reference{Kind: ArtifactKindSolution, Name: "cached-origin", Version: semver.MustParse("1.0.0")}
-	reg.cacheArtifact(ctx, ref, []byte("name: cached-origin"), nil, "my-remote-catalog")
+	reg.cacheArtifact(ctx, ref, []byte("name: cached-origin"), nil, "my-remote-catalog", "")
 
 	info, err := local.Resolve(ctx, ref)
 	require.NoError(t, err)
 	assert.Equal(t, "auto-cached from my-remote-catalog", info.Annotations[AnnotationOrigin])
 	assert.Equal(t, "auto-cached", info.Annotations[AnnotationSource])
+}
+
+func TestRegistry_CacheArtifact_SetsSourceCanonical(t *testing.T) {
+	ctx := context.Background()
+	reg, local := newTestRegistry(t)
+	reg.SetCacheRemoteArtifacts(true)
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "cached-canonical", Version: semver.MustParse("1.0.0")}
+	reg.cacheArtifact(ctx, ref, []byte("name: cached-canonical"), nil, "my-remote", "ghcr.io/org/plugins")
+
+	info, err := local.Resolve(ctx, ref)
+	require.NoError(t, err)
+	assert.Equal(t, "ghcr.io/org/plugins", info.Annotations[AnnotationSourceCanonical])
+	assert.Equal(t, "auto-cached from my-remote", info.Annotations[AnnotationOrigin])
+}
+
+func TestRegistry_CacheArtifact_OmitsEmptyCanonical(t *testing.T) {
+	ctx := context.Background()
+	reg, local := newTestRegistry(t)
+	reg.SetCacheRemoteArtifacts(true)
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "cached-no-canonical", Version: semver.MustParse("1.0.0")}
+	reg.cacheArtifact(ctx, ref, []byte("name: cached-no-canonical"), nil, "my-remote", "")
+
+	info, err := local.Resolve(ctx, ref)
+	require.NoError(t, err)
+	_, hasCanonical := info.Annotations[AnnotationSourceCanonical]
+	assert.False(t, hasCanonical, "empty canonical should not be written as an annotation")
 }

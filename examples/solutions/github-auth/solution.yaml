@@ -14,7 +14,11 @@ metadata:
     - github
     - solution
   description: GitHub authentication examples - identity, API calls, and status checks
-
+bundle:
+  plugins:
+    - name: identity
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # Check GitHub authentication status

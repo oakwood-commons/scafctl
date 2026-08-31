@@ -16,6 +16,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/auth/handlerdep"
 	customoauth2 "github.com/oakwood-commons/scafctl/pkg/auth/oauth2"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/celexp"
 	authcmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/auth"
 	cachecmd "github.com/oakwood-commons/scafctl/pkg/cmd/scafctl/cache"
@@ -475,6 +476,7 @@ func Root(opts *RootOptions) (*cobra.Command, func()) {
 			ctx = writer.WithWriter(ctx, w)
 			ctx = input.WithInput(ctx, in)
 			ctx = config.WithConfig(ctx, cfg)
+			ctx = catalogindex.WithIndex(ctx, catalogindex.FromConfig(cfg))
 			ctx = config.WithManagerOptions(ctx, configOpts)
 			if len(opts.ConfigDefaults) > 0 {
 				ctx = config.WithBaseDefaults(ctx, opts.ConfigDefaults)

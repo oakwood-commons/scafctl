@@ -22,6 +22,10 @@ metadata:
 bundle:
   include:
     - "templates/**"
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 
 spec:
   resolvers:

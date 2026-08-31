@@ -17,6 +17,12 @@ metadata:
     render per array item, forEach iteration in actions, and writing unique
     files per iteration with dynamic path construction.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # 10 Kubernetes cluster definitions spanning regions, environments, and tiers

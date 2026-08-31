@@ -151,29 +151,36 @@ cat .scafctl.lock.yaml
 2. **Commit lock files** to version control
 3. **Review digest changes** in lock file diffs during code review
 4. **Use trusted catalogs** -- verify catalog registry URLs in config
-5. **Use `--strict` in CI** -- enforce explicit `bundle.plugins` declarations
-6. **Declare all plugin providers** -- avoid relying on auto-resolution in production
+5. **Declare all plugin providers** -- solution execution requires every official/external provider to be listed in `bundle.plugins`
+6. **Use `--strict` in CI** -- also require official auth handlers to be declared explicitly
 
 ### Strict Mode for CI/CD
 
-The `--strict` flag disables official provider auto-resolution. In CI/CD, this ensures that all provider dependencies are explicitly declared and version-controlled:
+During solution execution (`run solution`, `run resolver`, `render`), **official
+providers must already be declared in `bundle.plugins`** -- there is no implicit
+provider auto-resolution to guard against. The `--strict` flag extends the same
+requirement to official **auth handlers** (fetched via the `identity` provider),
+which would otherwise be auto-resolved at runtime:
 
 {{< tabs "security-hardening-cmd-strict" >}}
 {{% tab "Bash" %}}
 ```bash
-# CI pipeline: fail if any provider is implicitly resolved
-scafctl run solution -f solution.yaml --strict
+# CI pipeline: also require official auth handlers to be declared
+scafctl run solution -f ./solution.yaml --strict
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# CI pipeline: fail if any provider is implicitly resolved
-scafctl run solution -f solution.yaml --strict
+# CI pipeline: also require official auth handlers to be declared
+scafctl run solution -f ./solution.yaml --strict
 ```
 {{% /tab %}}
 {{< /tabs >}}
 
-Without `--strict`, official providers (e.g., `exec`, `git`, `env`) are auto-fetched at runtime. While convenient for development, this introduces network dependencies and potential non-determinism in CI.
+Without `--strict`, official auth handlers are auto-fetched at runtime. While
+convenient for development, this introduces network dependencies and potential
+non-determinism in CI. Combine `--strict` with a lock file and
+[strict lock mode](lock-modes-tutorial.md) for fully reproducible runs.
 
 ## Authentication Security
 

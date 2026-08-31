@@ -33,9 +33,9 @@ const (
 )
 
 type RegistryInterface interface {
-	Register(p provider.Provider) error
-	Get(name string) (provider.Provider, error)
-	List() []provider.Provider
+	// Register(p provider.Provider) error
+	Get(name string) (provider.Provider, bool)
+	// List() []provider.Provider
 	// DescriptorLookup returns a function that looks up provider descriptors by name.
 	// Returns nil if the registry does not support descriptor lookup.
 	DescriptorLookup() DescriptorLookup
@@ -1734,9 +1734,9 @@ func (e *Executor) evaluateConditionWithIterationContext(ctx context.Context, co
 func (e *Executor) executeProviderWithIterationContext(ctx context.Context, providerName string, inputRefs map[string]*ValueRef, self any, iterCtx *IterationContext) (any, error) {
 	resolverCtx, _ := FromContext(ctx)
 
-	prov, err := e.registry.Get(providerName)
-	if err != nil {
-		return nil, fmt.Errorf("provider %q not found: %w", providerName, err)
+	prov, ok := e.registry.Get(providerName)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerName)
 	}
 
 	// Resolve all inputs with iteration context
@@ -1943,9 +1943,9 @@ func (e *Executor) executeProviderWithSelf(ctx context.Context, providerName str
 	resolverCtx, _ := FromContext(ctx)
 
 	// Get provider from registry
-	prov, err := e.registry.Get(providerName)
-	if err != nil {
-		return nil, fmt.Errorf("provider %q not found: %w", providerName, err)
+	prov, ok := e.registry.Get(providerName)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerName)
 	}
 
 	// Resolve all inputs with __self if provided

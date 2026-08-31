@@ -17,6 +17,12 @@ metadata:
     and finally actions. Resolvers execute normally to provide real data for
     materializing template expressions in inputs.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     enabled:

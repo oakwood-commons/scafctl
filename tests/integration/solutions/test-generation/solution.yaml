@@ -10,7 +10,11 @@ metadata:
     all produce valid functional test YAML when -o test is used, and
     that commands which do not implement the output format emit a
     helpful error message.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     greeting:

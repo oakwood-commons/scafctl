@@ -36,6 +36,14 @@ func (f *fetchBundleCatalog) FetchWithBundle(_ context.Context, ref catalog.Refe
 	return f.content, f.bundleData, catalog.ArtifactInfo{Reference: ref}, nil
 }
 
+func (f *fetchBundleCatalog) FetchWithLayer(_ context.Context, ref catalog.Reference, _ ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
+	f.gotRef = ref
+	if f.fetchErr != nil {
+		return nil, nil, catalog.ArtifactInfo{}, f.fetchErr
+	}
+	return f.content, nil, catalog.ArtifactInfo{Reference: ref}, nil
+}
+
 // solutionReferencingLocalFile is a minimal solution that references a local
 // file, so a no-bundle verify surfaces a completeness warning.
 const solutionReferencingLocalFile = `apiVersion: scafctl.io/v1

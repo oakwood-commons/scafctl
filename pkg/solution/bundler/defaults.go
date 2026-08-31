@@ -20,7 +20,7 @@ func MergePluginDefaults(sol *solution.Solution) {
 	defaultsMap := make(map[string]map[string]*spec.ValueRef)
 	for _, p := range sol.Bundle.Plugins {
 		if p.Kind == solution.PluginKindProvider && len(p.Defaults) > 0 {
-			defaultsMap[p.Name] = p.Defaults
+			defaultsMap[p.LocalName()] = p.Defaults
 		}
 	}
 

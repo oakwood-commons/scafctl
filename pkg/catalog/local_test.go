@@ -1117,3 +1117,33 @@ func TestLocalCatalog_List_IncludesOrigin(t *testing.T) {
 	require.Len(t, artifacts, 1)
 	assert.Equal(t, "built", artifacts[0].Annotations[AnnotationOrigin])
 }
+
+func TestStore_ExcludesSourceCanonicalFromManifestBlob(t *testing.T) {
+	ctx := context.Background()
+	cat := newTestCatalog(t)
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "canonical-test", Version: semver.MustParse("1.0.0")}
+	annotations := map[string]string{
+		AnnotationSourceCanonical: "ghcr.io/org/plugins",
+	}
+
+	info, err := cat.Store(ctx, ref, []byte("name: canonical-test"), nil, annotations, false)
+	require.NoError(t, err)
+
+	// The annotation should be accessible via the descriptor (index-level).
+	assert.Equal(t, "ghcr.io/org/plugins", info.Annotations[AnnotationSourceCanonical])
+
+	// Fetch the manifest blob directly and verify AnnotationSourceCanonical is NOT inside it.
+	d, err := digest.Parse(info.Digest)
+	require.NoError(t, err)
+
+	desc := ocispec.Descriptor{Digest: d, MediaType: ocispec.MediaTypeImageManifest}
+	blob, err := cat.fetchBlob(ctx, desc)
+	require.NoError(t, err)
+
+	var manifest ocispec.Manifest
+	require.NoError(t, json.Unmarshal(blob, &manifest))
+
+	_, found := manifest.Annotations[AnnotationSourceCanonical]
+	assert.False(t, found, "AnnotationSourceCanonical must not appear in the manifest blob")
+}

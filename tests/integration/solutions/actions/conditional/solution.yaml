@@ -8,7 +8,11 @@ metadata:
     Functional tests for conditional action execution.
     Verifies when conditions, skip reasons, and that
     downstream dependents of skipped actions are also skipped.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     environment:

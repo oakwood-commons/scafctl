@@ -102,6 +102,53 @@ func TestChainCatalog_Fetch_NotFound(t *testing.T) {
 	assert.True(t, IsNotFound(err))
 }
 
+func TestChainCatalog_FetchWithLayer_FirstCatalog(t *testing.T) {
+	c1 := newMockCatalog("local")
+	ref := testRef("my-plugin", "1.0.0")
+	c1.addArtifact(ref, []byte("binary-local"), nil)
+
+	c2 := newMockCatalog("remote")
+	c2.addArtifact(ref, []byte("binary-remote"), nil)
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	content, _, info, err := chain.FetchWithLayer(context.Background(), ref, MediaTypeSolutionLock)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("binary-local"), content)
+	assert.Equal(t, "local", info.Catalog)
+}
+
+func TestChainCatalog_FetchWithLayer_Fallback(t *testing.T) {
+	c1 := newMockCatalog("local")
+	// c1 has no artifact
+
+	c2 := newMockCatalog("remote")
+	ref := testRef("my-plugin", "1.0.0")
+	c2.addArtifact(ref, []byte("binary-remote"), nil)
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	content, _, info, err := chain.FetchWithLayer(context.Background(), ref, MediaTypeSolutionLock)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("binary-remote"), content)
+	assert.Equal(t, "remote", info.Catalog)
+}
+
+func TestChainCatalog_FetchWithLayer_NotFound(t *testing.T) {
+	c1 := newMockCatalog("local")
+	c2 := newMockCatalog("remote")
+
+	chain, err := NewChainCatalog(logr.Discard(), c1, c2)
+	require.NoError(t, err)
+
+	ref := testRef("missing", "1.0.0")
+	_, _, _, err = chain.FetchWithLayer(context.Background(), ref, MediaTypeSolutionLock) //nolint:dogsled // testing error path only
+	require.Error(t, err)
+	assert.True(t, IsNotFound(err))
+}
+
 func TestChainCatalog_Fetch_SingleCatalogUnreachable(t *testing.T) {
 	cause := fmt.Errorf("dial tcp: lookup ghcr.io: no such host")
 	c1 := NewMockCatalog("official", WithFetchFunc(func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
@@ -418,7 +465,7 @@ func TestChainCatalog_Exists_NoneFalse(t *testing.T) {
 func TestChainCatalog_Store_DelegatesToFirst(t *testing.T) {
 	storeCalled := false
 	c1 := newMockCatalog("local")
-	c1.storeFunc = func(_ context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+	c1.storeFunc = func(_ context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
 		storeCalled = true
 		return ArtifactInfo{Reference: ref, Catalog: "local"}, nil
 	}
@@ -603,6 +650,168 @@ func TestChainCatalog_ImplementsPlatformAwareCatalog(t *testing.T) {
 	var cat interface{} = chain
 	_, ok := cat.(PlatformAwareCatalog)
 	assert.True(t, ok, "ChainCatalog must implement PlatformAwareCatalog")
+}
+
+// unreachableFetch returns a mock catalog whose Fetch/Resolve report an
+// unreachable (transport) error, i.e. an indeterminate result rather than a
+// definitive not-found.
+func unreachableFetch(name string) Catalog { //nolint:unparam // test helper always called with "A" but keeping parameter for clarity
+	cause := fmt.Errorf("dial tcp: lookup %s: no such host", name)
+	return NewMockCatalog(name,
+		WithFetchFunc(func(_ context.Context, _ Reference) ([]byte, ArtifactInfo, error) {
+			return nil, ArtifactInfo{}, &UnreachableError{Catalog: name, Cause: cause}
+		}),
+		WithResolveFunc(func(_ context.Context, _ Reference) (ArtifactInfo, error) {
+			return ArtifactInfo{}, &UnreachableError{Catalog: name, Cause: cause}
+		}),
+	)
+}
+
+func TestChainCatalog_Fetch_StrictHaltsOnIndeterminate(t *testing.T) {
+	// A (higher priority) is unreachable; B has the artifact. Strict mode must
+	// NOT silently substitute B -- it returns the indeterminate error instead,
+	// guaranteeing deterministic provenance.
+	a := unreachableFetch("A")
+	b := newMockCatalog("B")
+	ref := testRef("plugin", "1.0.0")
+	b.addArtifact(ref, []byte("B-binary"), nil)
+
+	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, a, b)
+	require.NoError(t, err)
+
+	_, _, err = chain.Fetch(context.Background(), ref)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+	assert.Contains(t, err.Error(), "A")
+}
+
+func TestChainCatalog_Fetch_BestEffortFallsThroughIndeterminate(t *testing.T) {
+	// Same fixture, best-effort mode: A's unreachability is tolerated and B is
+	// served. This is the availability escape hatch.
+	a := unreachableFetch("A")
+	b := newMockCatalog("B")
+	ref := testRef("plugin", "1.0.0")
+	b.addArtifact(ref, []byte("B-binary"), nil)
+
+	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeBestEffort, a, b)
+	require.NoError(t, err)
+
+	data, info, err := chain.Fetch(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("B-binary"), data)
+	assert.Equal(t, "B", info.Catalog)
+}
+
+func TestChainCatalog_Fetch_StrictFallsThroughDefinitiveNotFound(t *testing.T) {
+	// A reports a DEFINITIVE not-found (reachable, artifact absent). Even in
+	// strict mode this is safe to skip past -- B is served. This is the pure
+	// short-name search path that must keep working.
+	a := newMockCatalog("A") // no artifact -> ErrArtifactNotFound
+	b := newMockCatalog("B")
+	ref := testRef("plugin", "1.0.0")
+	b.addArtifact(ref, []byte("B-binary"), nil)
+
+	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, a, b)
+	require.NoError(t, err)
+
+	data, info, err := chain.Fetch(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("B-binary"), data)
+	assert.Equal(t, "B", info.Catalog)
+}
+
+func TestChainCatalog_Resolve_StrictHaltsOnIndeterminate(t *testing.T) {
+	a := unreachableFetch("A")
+	b := newMockCatalog("B")
+	ref := testRef("plugin", "1.0.0")
+	b.addArtifact(ref, nil, nil)
+
+	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, a, b)
+	require.NoError(t, err)
+
+	_, err = chain.Resolve(context.Background(), ref)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+}
+
+func TestChainCatalog_FetchByPlatform_StrictHaltsOnIndeterminate(t *testing.T) {
+	cause := fmt.Errorf("connection refused")
+	pacA := newMockPlatformAwareCatalog("A")
+	pacA.fetchByPlatformFunc = func(_ context.Context, _ Reference, _ string) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &UnreachableError{Catalog: "A", Cause: cause}
+	}
+	pacB := newMockPlatformAwareCatalog("B")
+	pacB.fetchByPlatformFunc = func(_ context.Context, r Reference, _ string) ([]byte, ArtifactInfo, error) {
+		t.Fatal("strict mode must not fall through an unreachable higher-priority catalog")
+		return nil, ArtifactInfo{Reference: r}, nil
+	}
+
+	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeStrict, pacA, pacB)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	_, _, err = chain.FetchByPlatform(context.Background(), ref, "linux/amd64")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrCatalogUnreachable))
+}
+
+func TestChainCatalog_FetchByPlatform_BestEffortFallsThroughIndeterminate(t *testing.T) {
+	cause := fmt.Errorf("connection refused")
+	pacA := newMockPlatformAwareCatalog("A")
+	pacA.fetchByPlatformFunc = func(_ context.Context, _ Reference, _ string) ([]byte, ArtifactInfo, error) {
+		return nil, ArtifactInfo{}, &UnreachableError{Catalog: "A", Cause: cause}
+	}
+	pacB := newMockPlatformAwareCatalog("B")
+	pacB.fetchByPlatformFunc = func(_ context.Context, r Reference, _ string) ([]byte, ArtifactInfo, error) {
+		return []byte("B-binary"), ArtifactInfo{Reference: r, Catalog: "B"}, nil
+	}
+
+	chain, err := NewChainCatalogWithMode(logr.Discard(), ChainModeBestEffort, pacA, pacB)
+	require.NoError(t, err)
+
+	ref := testRef("plugin", "1.0.0")
+	data, info, err := chain.FetchByPlatform(context.Background(), ref, "linux/amd64")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("B-binary"), data)
+	assert.Equal(t, "B", info.Catalog)
+}
+
+func TestChainCatalog_FetchByPlatform_PlatformNotFoundHaltsInBothModes(t *testing.T) {
+	for _, mode := range []ChainMode{ChainModeStrict, ChainModeBestEffort} {
+		pacA := newMockPlatformAwareCatalog("A")
+		pacA.fetchByPlatformFunc = func(_ context.Context, _ Reference, _ string) ([]byte, ArtifactInfo, error) {
+			return nil, ArtifactInfo{}, &PlatformNotFoundError{Platform: "windows/arm64"}
+		}
+		pacB := newMockPlatformAwareCatalog("B")
+		pacB.fetchByPlatformFunc = func(_ context.Context, r Reference, _ string) ([]byte, ArtifactInfo, error) {
+			t.Fatal("platform-not-found must halt the chain in both modes")
+			return nil, ArtifactInfo{Reference: r}, nil
+		}
+
+		chain, err := NewChainCatalogWithMode(logr.Discard(), mode, pacA, pacB)
+		require.NoError(t, err)
+
+		ref := testRef("plugin", "1.0.0")
+		_, _, err = chain.FetchByPlatform(context.Background(), ref, "windows/arm64")
+		require.Error(t, err)
+		assert.True(t, IsPlatformNotFound(err))
+	}
+}
+
+func TestNewChainCatalog_DefaultsToBestEffort(t *testing.T) {
+	// The plain constructor must preserve today's availability-first behavior:
+	// an unreachable higher-priority catalog falls through to a lower one.
+	a := unreachableFetch("A")
+	b := newMockCatalog("B")
+	ref := testRef("plugin", "1.0.0")
+	b.addArtifact(ref, []byte("B-binary"), nil)
+
+	chain, err := NewChainCatalog(logr.Discard(), a, b)
+	require.NoError(t, err)
+
+	data, _, err := chain.Fetch(context.Background(), ref)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("B-binary"), data)
 }
 
 func TestBuildCatalogChain_NilConfig(t *testing.T) {

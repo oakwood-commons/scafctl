@@ -10,6 +10,12 @@ metadata:
     self-referencing exclusive declarations and references to
     non-existent actions.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   workflow:
     actions:

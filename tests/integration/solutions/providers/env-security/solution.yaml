@@ -8,6 +8,12 @@ metadata:
     Security tests for the env provider.
     Validates that list operation requires a prefix to prevent secret leakage.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # list without prefix — should fail

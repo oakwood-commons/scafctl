@@ -9,6 +9,12 @@ metadata:
     Verifies multi-step transformation pipelines using
     different providers and __self access.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # Multi-step string transform

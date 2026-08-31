@@ -600,7 +600,7 @@ func (s *Server) handleRenderSolution(_ context.Context, request mcp.CallToolReq
 }
 
 // renderResolverGraph builds and returns the resolver dependency graph.
-func (s *Server) renderResolverGraph(sol *solution.Solution, reg *provider.Registry) (*mcp.CallToolResult, error) {
+func (s *Server) renderResolverGraph(sol *solution.Solution, reg providerLookup) (*mcp.CallToolResult, error) {
 	if !sol.Spec.HasResolvers() {
 		return newStructuredError(ErrCodeValidationError, "solution does not define any resolvers",
 			WithSuggestion("Add resolvers to the solution spec.resolvers section"),
@@ -754,7 +754,7 @@ func (s *Server) renderActionDepsGraph(resolverCtx, actionCtx context.Context, s
 
 // executeResolversForRender runs resolver execution for render operations.
 func (s *Server) executeResolversForRender(ctx context.Context, sol *solution.Solution, params map[string]any) (map[string]any, error) {
-	return execute.ResolversForPreview(ctx, sol, params, s.registry)
+	return execute.ResolversForPreview(ctx, sol, params, s.providerLookup())
 }
 
 // handlePreviewResolvers executes a solution's resolver chain and returns each resolver's value.

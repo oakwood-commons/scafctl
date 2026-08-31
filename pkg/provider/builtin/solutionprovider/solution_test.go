@@ -410,36 +410,6 @@ func TestResolverRegistryAdapter(t *testing.T) {
 	adapter := &resolverRegistryAdapter{registry: reg}
 
 	t.Run("Get existing provider", func(t *testing.T) {
-		p, err := adapter.Get("test-provider")
-		require.NoError(t, err)
-		assert.Equal(t, "test-provider", p.Descriptor().Name)
-	})
-
-	t.Run("Get missing provider", func(t *testing.T) {
-		_, err := adapter.Get("nonexistent")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
-	})
-
-	t.Run("List providers", func(t *testing.T) {
-		providers := adapter.List()
-		assert.Len(t, providers, 1)
-	})
-
-	t.Run("DescriptorLookup", func(t *testing.T) {
-		lookup := adapter.DescriptorLookup()
-		assert.NotNil(t, lookup)
-	})
-}
-
-func TestActionRegistryAdapter(t *testing.T) {
-	reg := provider.NewRegistry()
-	mp := &mockProvider{name: "test-provider"}
-	require.NoError(t, reg.Register(mp))
-
-	adapter := &actionRegistryAdapter{registry: reg}
-
-	t.Run("Get existing provider", func(t *testing.T) {
 		p, ok := adapter.Get("test-provider")
 		assert.True(t, ok)
 		assert.Equal(t, "test-provider", p.Descriptor().Name)
@@ -450,12 +420,14 @@ func TestActionRegistryAdapter(t *testing.T) {
 		assert.False(t, ok)
 	})
 
-	t.Run("Has existing provider", func(t *testing.T) {
-		assert.True(t, adapter.Has("test-provider"))
+	t.Run("List providers", func(t *testing.T) {
+		providers := adapter.List()
+		assert.Len(t, providers, 1)
 	})
 
-	t.Run("Has missing provider", func(t *testing.T) {
-		assert.False(t, adapter.Has("nonexistent"))
+	t.Run("DescriptorLookup", func(t *testing.T) {
+		lookup := adapter.DescriptorLookup()
+		assert.NotNil(t, lookup)
 	})
 }
 

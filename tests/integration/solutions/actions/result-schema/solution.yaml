@@ -9,6 +9,12 @@ metadata:
     Verifies that resultSchema validates action output
     and that valid output passes schema checks.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     userId:

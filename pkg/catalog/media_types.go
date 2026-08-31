@@ -3,6 +3,8 @@
 
 package catalog
 
+import "github.com/oakwood-commons/scafctl/pkg/catalog/mediatypes"
+
 // OCI media types for scafctl artifacts.
 const (
 	// MediaTypeSolutionManifest is the manifest media type for solution artifacts.
@@ -15,7 +17,7 @@ const (
 	MediaTypeSolutionConfig = "application/vnd.scafctl.solution.config.v1+json"
 
 	// MediaTypeSolutionBundle is the content layer media type for solution bundle tar archives.
-	MediaTypeSolutionBundle = "application/vnd.scafctl.solution.bundle.v1+tar"
+	MediaTypeSolutionBundle = mediatypes.SolutionBundle
 
 	// MediaTypeSolutionBundleManifest is the media type for deduplicated bundle manifests (v2).
 	MediaTypeSolutionBundleManifest = "application/vnd.scafctl.solution.bundle-manifest.v2+json"
@@ -25,6 +27,12 @@ const (
 
 	// MediaTypeSolutionBundleSmallTar is the media type for grouped small files in deduplicated bundles (v2).
 	MediaTypeSolutionBundleSmallTar = "application/vnd.scafctl.solution.bundle-small.v2+tar"
+
+	// MediaTypeSolutionLock is the layer media type for a solution lock file
+	// (JSON-encoded LockFile) stored as a dedicated layer on the solution
+	// manifest. The lock layer is always appended last and must be located by
+	// this media type, never by a fixed layer index.
+	MediaTypeSolutionLock = mediatypes.SolutionLock
 
 	// MediaTypeProviderManifest is the manifest media type for provider artifacts.
 	MediaTypeProviderManifest = "application/vnd.oci.image.manifest.v1+json"
@@ -70,5 +78,21 @@ func ConfigMediaTypeForKind(kind ArtifactKind) string {
 		return MediaTypeAuthHandlerConfig
 	default:
 		return "application/vnd.oci.image.config.v1+json"
+	}
+}
+
+// isAuxLayerMediaType reports whether mt identifies an auxiliary layer that
+// FetchWithLayer may return (e.g. the solution lock). This is an allowlist:
+// unknown media types are rejected so a stale list fails LOUDLY -- a clear
+// error the first time a new aux layer is requested -- rather than silently
+// returning content or bundle bytes. Content and bundle layers are deliberately
+// excluded here; callers obtain those via Fetch / FetchWithBundle. Add a case
+// when introducing a new auxiliary layer (SBOM, signature, provenance, ...).
+func isAuxLayerMediaType(mt string) bool {
+	switch mt {
+	case MediaTypeSolutionLock, MediaTypeSolutionBundle:
+		return true
+	default:
+		return false
 	}
 }

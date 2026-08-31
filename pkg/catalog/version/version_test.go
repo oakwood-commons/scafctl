@@ -220,7 +220,7 @@ func (m *mockCatalog) List(_ context.Context, _ catalog.ArtifactKind, _ string) 
 	return m.artifacts, m.err
 }
 
-func (m *mockCatalog) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool) (catalog.ArtifactInfo, error) {
+func (m *mockCatalog) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool, ...catalog.Layer) (catalog.ArtifactInfo, error) {
 	return catalog.ArtifactInfo{}, nil
 }
 
@@ -229,6 +229,10 @@ func (m *mockCatalog) Fetch(context.Context, catalog.Reference) ([]byte, catalog
 }
 
 func (m *mockCatalog) FetchWithBundle(context.Context, catalog.Reference) ([]byte, []byte, catalog.ArtifactInfo, error) {
+	return nil, nil, catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalog) FetchWithLayer(context.Context, catalog.Reference, ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
 	return nil, nil, catalog.ArtifactInfo{}, nil
 }
 

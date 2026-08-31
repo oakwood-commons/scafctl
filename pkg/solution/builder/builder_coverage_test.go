@@ -82,7 +82,7 @@ func TestBuildBundle_InvalidMaxSize(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid bundle max size")
 }
 
-func TestBuildBundle_NoFilesReturnsNil(t *testing.T) {
+func TestBuildBundle_NoFilesReturnsResult(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 	sol := &solution.Solution{
@@ -96,9 +96,14 @@ func TestBuildBundle_NoFilesReturnsNil(t *testing.T) {
 		NoCache:       true,
 		Logger:        logr.Discard(),
 	})
-	// When no files, BuildBundle returns nil, nil
+	// When no files, BuildBundle returns a non-nil result (carrying LockData
+	// and Discovery) with no tar/dedup payload.
 	require.NoError(t, err)
-	assert.Nil(t, result)
+	require.NotNil(t, result)
+	assert.Nil(t, result.TarData)
+	assert.Nil(t, result.Dedup)
+	assert.Equal(t, 0, result.InputFileCount)
+	assert.NotNil(t, result.Discovery)
 }
 
 // ── BuildBundleOptions tests ──────────────────────────────────────────────────
@@ -117,7 +122,6 @@ func TestBuildBundleOptions_Defaults(t *testing.T) {
 // ── BuildResult tests ─────────────────────────────────────────────────────────
 
 func TestBuildResult_ZeroValue(t *testing.T) {
-	t.Parallel()
 	r := &BuildResult{}
 	assert.False(t, r.CacheHit)
 	assert.Nil(t, r.TarData)
@@ -126,6 +130,56 @@ func TestBuildResult_ZeroValue(t *testing.T) {
 	assert.Empty(t, r.BuildFingerprint)
 	assert.Empty(t, r.Messages)
 	assert.Empty(t, r.ResolvedPlugins)
+}
+
+// ── buildSourcedCatalogs tests ────────────────────────────────────────────────
+
+func TestBuildSourcedCatalogs_NilConfig(t *testing.T) {
+	t.Parallel()
+	got := buildSourcedCatalogs(context.Background(), logr.Discard())
+	assert.Nil(t, got)
+}
+
+func TestBuildSourcedCatalogs_NoRemoteCatalogs(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "local", Type: config.CatalogTypeFilesystem, Path: "./local"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+	got := buildSourcedCatalogs(ctx, logr.Discard())
+	assert.Nil(t, got, "filesystem catalogs have no registry origin and must be skipped")
+}
+
+func TestBuildSourcedCatalogs_BuildsKeyedByLowercasedAlias(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "MyOrg", Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/myorg"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+	got := buildSourcedCatalogs(ctx, logr.Discard())
+	require.Len(t, got, 1)
+	cat, ok := got["myorg"]
+	require.True(t, ok, "catalog must be keyed by the lowercased alias")
+	assert.NotNil(t, cat)
+}
+
+func TestBuildSourcedCatalogs_FirstAliasWins(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Catalogs: []config.CatalogConfig{
+			{Name: "dup", Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/first"},
+			{Name: "DUP", Type: config.CatalogTypeOCI, URL: "oci://ghcr.io/second"},
+		},
+	}
+	ctx := config.WithConfig(context.Background(), cfg)
+	got := buildSourcedCatalogs(ctx, logr.Discard())
+	require.Len(t, got, 1, "duplicate lowercased aliases collapse to one entry")
+	_, ok := got["dup"]
+	assert.True(t, ok)
 }
 
 // ── ParseByteSize additional edge cases ───────────────────────────────────────
@@ -187,41 +241,11 @@ func BenchmarkBuildBundle_DryRun(b *testing.B) {
 	}
 }
 
-// ── autoInjectOfficialPlugins tests ──────────────────────────────────────────
+// ── validateProviderCoverage tests ───────────────────────────────────────────
 
-func TestAutoInjectOfficialPlugins_InjectsMissingProviders(t *testing.T) {
+func TestValidateProviderCoverage_AllDeclared(t *testing.T) {
 	t.Parallel()
 
-	officialReg := official.NewRegistry()
-	sol := &solution.Solution{
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"myenv": {
-					Resolve: &resolver.ResolvePhase{
-						With: []resolver.ProviderSource{{Provider: "env"}},
-					},
-				},
-				"mydir": {
-					Resolve: &resolver.ResolvePhase{
-						With: []resolver.ProviderSource{{Provider: "directory"}},
-					},
-				},
-			},
-		},
-	}
-
-	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
-
-	assert.Len(t, injected, 2)
-	assert.Contains(t, injected, "env")
-	assert.Contains(t, injected, "directory")
-	assert.Len(t, sol.Bundle.Plugins, 2)
-}
-
-func TestAutoInjectOfficialPlugins_SkipsAlreadyDeclared(t *testing.T) {
-	t.Parallel()
-
-	officialReg := official.NewRegistry()
 	sol := &solution.Solution{
 		Bundle: solution.Bundle{
 			Plugins: []solution.PluginDependency{
@@ -239,16 +263,32 @@ func TestAutoInjectOfficialPlugins_SkipsAlreadyDeclared(t *testing.T) {
 		},
 	}
 
-	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
-
-	assert.Empty(t, injected)
-	assert.Len(t, sol.Bundle.Plugins, 1, "existing declaration should be untouched")
+	err := validateProviderCoverage(sol, nil, nil)
+	assert.NoError(t, err)
 }
 
-func TestAutoInjectOfficialPlugins_SkipsNonOfficialProviders(t *testing.T) {
+func TestValidateProviderCoverage_BuiltinExempt(t *testing.T) {
 	t.Parallel()
 
-	officialReg := official.NewRegistry()
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"myhttp": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "http"}},
+					},
+				},
+			},
+		},
+	}
+
+	err := validateProviderCoverage(sol, []string{"http", "file", "cel"}, nil)
+	assert.NoError(t, err)
+}
+
+func TestValidateProviderCoverage_MissingProviderErrors(t *testing.T) {
+	t.Parallel()
+
 	sol := &solution.Solution{
 		Spec: solution.Spec{
 			Resolvers: map[string]*resolver.Resolver{
@@ -261,13 +301,13 @@ func TestAutoInjectOfficialPlugins_SkipsNonOfficialProviders(t *testing.T) {
 		},
 	}
 
-	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
-
-	assert.Empty(t, injected)
-	assert.Empty(t, sol.Bundle.Plugins)
+	err := validateProviderCoverage(sol, []string{"http"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "my-custom-provider")
+	assert.Contains(t, err.Error(), "bundle.plugins")
 }
 
-func TestAutoInjectOfficialPlugins_StrictMode(t *testing.T) {
+func TestValidateProviderCoverage_OfficialProviderSuggestion(t *testing.T) {
 	t.Parallel()
 
 	officialReg := official.NewRegistry()
@@ -283,23 +323,62 @@ func TestAutoInjectOfficialPlugins_StrictMode(t *testing.T) {
 		},
 	}
 
-	injected := autoInjectOfficialPlugins(sol, officialReg, true, logr.Discard())
-
-	assert.Len(t, injected, 1)
-	assert.Contains(t, injected, "env")
-	assert.Empty(t, sol.Bundle.Plugins, "strict mode should not mutate solution")
+	err := validateProviderCoverage(sol, []string{"http"}, officialReg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "env")
+	assert.Contains(t, err.Error(), "latest")
+	assert.Contains(t, err.Error(), "bundle:\n  plugins:")
 }
 
-func TestAutoInjectOfficialPlugins_TransformPhase(t *testing.T) {
+func TestValidateProviderCoverage_MixedOfficialAndCustom(t *testing.T) {
 	t.Parallel()
 
 	officialReg := official.NewRegistry()
 	sol := &solution.Solution{
 		Spec: solution.Spec{
 			Resolvers: map[string]*resolver.Resolver{
-				"transformed": {
+				"myenv": {
 					Resolve: &resolver.ResolvePhase{
 						With: []resolver.ProviderSource{{Provider: "env"}},
+					},
+				},
+				"custom": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "my-custom"}},
+					},
+				},
+			},
+		},
+	}
+
+	err := validateProviderCoverage(sol, []string{"http"}, officialReg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "env")
+	assert.Contains(t, err.Error(), "my-custom")
+}
+
+func TestValidateProviderCoverage_NoReferences(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{},
+		},
+	}
+
+	err := validateProviderCoverage(sol, nil, nil)
+	assert.NoError(t, err)
+}
+
+func TestValidateProviderCoverage_TransformPhase(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"transformed": {
+					Resolve: &resolver.ResolvePhase{
+						With: []resolver.ProviderSource{{Provider: "http"}},
 					},
 					Transform: &resolver.TransformPhase{
 						With: []resolver.ProviderTransform{{Provider: "exec"}},
@@ -307,40 +386,15 @@ func TestAutoInjectOfficialPlugins_TransformPhase(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
-
-	assert.Len(t, injected, 2)
-	assert.Contains(t, injected, "env")
-	assert.Contains(t, injected, "exec")
-}
-
-func TestAutoInjectOfficialPlugins_DeduplicatesProviders(t *testing.T) {
-	t.Parallel()
-
-	officialReg := official.NewRegistry()
-	sol := &solution.Solution{
-		Spec: solution.Spec{
-			Resolvers: map[string]*resolver.Resolver{
-				"first": {
-					Resolve: &resolver.ResolvePhase{
-						With: []resolver.ProviderSource{{Provider: "env"}},
-					},
-				},
-				"second": {
-					Resolve: &resolver.ResolvePhase{
-						With: []resolver.ProviderSource{{Provider: "env"}},
-					},
-				},
+		Bundle: solution.Bundle{
+			Plugins: []solution.PluginDependency{
+				{Name: "exec", Kind: solution.PluginKindProvider},
 			},
 		},
 	}
 
-	injected := autoInjectOfficialPlugins(sol, officialReg, false, logr.Discard())
-
-	assert.Len(t, injected, 1, "same provider used twice should only be injected once")
-	assert.Len(t, sol.Bundle.Plugins, 1)
+	err := validateProviderCoverage(sol, []string{"http"}, nil)
+	assert.NoError(t, err)
 }
 
 func TestBuildLockSignatureVerifier_NilPolicy(t *testing.T) {

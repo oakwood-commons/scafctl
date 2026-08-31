@@ -454,9 +454,8 @@ func (p *SolutionProvider) executeWithWorkflow(ctx context.Context, sol *solutio
 	// Phase 2: Execute workflow.
 	lgr.V(1).Info("executing sub-solution workflow")
 
-	actionAdapter := &actionRegistryAdapter{registry: reg}
 	actionExec := action.NewExecutor(
-		action.WithRegistry(actionAdapter),
+		action.WithRegistry(reg),
 		action.WithResolverData(resolverData),
 		action.WithCalls(sol.Spec.Calls),
 	)
@@ -956,12 +955,12 @@ func (r *resolverRegistryAdapter) Register(p provider.Provider) error {
 	return r.registry.Register(p)
 }
 
-func (r *resolverRegistryAdapter) Get(name string) (provider.Provider, error) {
+func (r *resolverRegistryAdapter) Get(name string) (provider.Provider, bool) {
 	p, ok := r.registry.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("provider %q not found", name)
+		return nil, false
 	}
-	return p, nil
+	return p, true
 }
 
 func (r *resolverRegistryAdapter) List() []provider.Provider {
@@ -970,19 +969,6 @@ func (r *resolverRegistryAdapter) List() []provider.Provider {
 
 func (r *resolverRegistryAdapter) DescriptorLookup() resolver.DescriptorLookup {
 	return r.registry.DescriptorLookup()
-}
-
-// actionRegistryAdapter adapts provider.Registry to action.RegistryInterface.
-type actionRegistryAdapter struct {
-	registry *provider.Registry
-}
-
-func (r *actionRegistryAdapter) Get(name string) (provider.Provider, bool) {
-	return r.registry.Get(name)
-}
-
-func (r *actionRegistryAdapter) Has(name string) bool {
-	return r.registry.Has(name)
 }
 
 // autoResolveChildProviders fetches official providers needed by a child

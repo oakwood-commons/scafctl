@@ -1942,7 +1942,100 @@ spec:
 	assert.NoFileExists(t, statePath, "state file must still not exist after a second --no-state run")
 }
 
-// TestIntegration_RunSolution_DynamicStatePath verifies that
+// TestIntegration_RunResolver_LockModeFlag exercises the CLI --lock-mode flag
+// wiring end to end. For a local, builtin-only solution there is no lock layer
+// and no external plugin to pin, so every accepted mode (strict, constrained,
+// bestEffort) resolves successfully, while an unrecognized value is rejected
+// before execution with a helpful message. The empty/unset case is covered by
+// the other resolver tests above, which never pass --lock-mode and rely on the
+// source-dependent default.
+func TestIntegration_RunResolver_LockModeFlag(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	solutionContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lock-mode-cli
+  version: 1.0.0
+spec:
+  resolvers:
+    region:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: region
+              default: us-east1
+`
+	solutionPath := filepath.Join(tmpDir, "solution.yaml")
+	require.NoError(t, os.WriteFile(solutionPath, []byte(solutionContent), 0o600))
+
+	t.Run("accepted modes resolve", func(t *testing.T) {
+		t.Parallel()
+		for _, mode := range []string{"strict", "constrained", "bestEffort"} {
+			t.Run(mode, func(t *testing.T) {
+				t.Parallel()
+				stdout, stderr, exitCode := runScafctlInDir(t, tmpDir,
+					"run", "resolver", "-f", solutionPath, "--no-state", "--lock-mode", mode)
+				assert.Equal(t, 0, exitCode, "mode %q should resolve a builtin-only local solution (stderr: %s)", mode, stderr)
+				assert.Contains(t, stdout, "us-east1", "resolver output expected for mode %q", mode)
+			})
+		}
+	})
+
+	t.Run("invalid mode is rejected", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, exitCode := runScafctlInDir(t, tmpDir,
+			"run", "resolver", "-f", solutionPath, "--no-state", "--lock-mode", "bogus")
+		assert.NotEqual(t, 0, exitCode, "an unknown --lock-mode value must fail")
+		assert.Contains(t, stderr, "invalid --lock-mode")
+		assert.Contains(t, stderr, "must be one of: strict, constrained, bestEffort")
+	})
+
+	// A solution referencing an external (non-builtin) provider has no lock
+	// layer to pin, so the modes that require one must reject it up front. This
+	// guard is pure dependency-resolution logic and fires before any plugin
+	// fetch, so the assertion stays offline and deterministic (bestEffort, by
+	// contrast, skips the guard and would reach out to a registry, so it is
+	// covered by the API tests where external fetching can be disabled).
+	t.Run("external plugin requires a lock file", func(t *testing.T) {
+		t.Parallel()
+		extContent := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lock-mode-ext-cli
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: external-plugin
+            inputs:
+              message: hello
+bundle:
+  plugins:
+    - name: external-plugin
+      kind: provider
+`
+		extPath := filepath.Join(tmpDir, "external.yaml")
+		require.NoError(t, os.WriteFile(extPath, []byte(extContent), 0o600))
+
+		for _, mode := range []string{"strict", "constrained"} {
+			t.Run(mode, func(t *testing.T) {
+				t.Parallel()
+				_, stderr, exitCode := runScafctlInDir(t, tmpDir,
+					"run", "resolver", "-f", extPath, "--no-state", "--lock-mode", mode)
+				assert.NotEqual(t, 0, exitCode, "%q must reject an external plugin with no lock file", mode)
+				assert.Contains(t, stderr, mode+" mode requires a lock file but none was provided")
+			})
+		}
+	})
+}
+
 // state.backend.inputs can reference a resolver output: the state file path is
 // computed from the resolved app_name, so state is written to the per-app path.
 func TestIntegration_RunSolution_DynamicStatePath(t *testing.T) {
@@ -2113,6 +2206,10 @@ state:
     provider: file
     inputs:
       path: state.json
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
 spec:
   resolvers:
     side_effect:
@@ -3186,6 +3283,10 @@ kind: Solution
 metadata:
   name: retry-if-cmd-not-found-test
   version: 1.0.0
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
 spec:
   resolvers: {}
   workflow:
@@ -3251,6 +3352,10 @@ kind: Solution
 metadata:
   name: retry-if-enabled-test
   version: 1.0.0
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
 spec:
   resolvers: {}
   workflow:
@@ -8113,6 +8218,10 @@ spec:
               operation: list
               path: "` + filepath.ToSlash(tmpDir) + `"
               recursive: true
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
 `
 	require.NoError(t, os.WriteFile(solutionFile, []byte(solutionContent), 0o644))
 

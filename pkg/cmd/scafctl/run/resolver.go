@@ -442,6 +442,12 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	// Validate --lock-mode early so an invalid value fails with InvalidInput
+	// instead of a misleading FileNotFound from prepareSolutionForExecution.
+	if err := o.validateLockMode(); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Global --verbose implies --show-execution for resolvers
@@ -790,7 +796,7 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 // (cmdlint.RenderResult) so the finding format is identical to 'scafctl lint'
 // and 'validate solution'; the only difference is the stream (stderr, to keep
 // stdout clean for resolver JSON).
-func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solution, reg *provider.Registry) error {
+func (o *ResolverOptions) runLintGate(ctx context.Context, sol *solution.Solution, reg providerLookup) error {
 	result := pkglint.Solution(sol, sol.GetPath(), reg)
 
 	// Honor -o quiet: exit-code-only, no lint block (header or findings). The
@@ -929,7 +935,7 @@ func (o *sharedResolverOptions) renderResolverDiagnostics(ctx context.Context, e
 }
 
 // showResolverGraph renders the resolver dependency graph without executing providers
-func (o *ResolverOptions) showResolverGraph(ctx context.Context, resolvers []*resolver.Resolver, reg *provider.Registry) error {
+func (o *ResolverOptions) showResolverGraph(ctx context.Context, resolvers []*resolver.Resolver, reg providerLookup) error {
 	var lookup resolver.DescriptorLookup
 	if reg != nil {
 		lookup = reg.DescriptorLookup()
@@ -953,7 +959,7 @@ func (o *ResolverOptions) showResolverSnapshot(
 	sol *solution.Solution,
 	resolvers []*resolver.Resolver,
 	params map[string]any,
-	reg *provider.Registry,
+	reg providerLookup,
 ) error {
 	lgr := logger.FromContext(ctx)
 

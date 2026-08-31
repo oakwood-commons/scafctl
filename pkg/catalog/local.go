@@ -82,7 +82,9 @@ func (c *LocalCatalog) Path() string {
 // Store saves an artifact to the catalog.
 // For solutions with bundled files, bundleData contains the tar archive.
 // If bundleData is nil, only the primary content layer is stored.
-func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+// Optional extraLayers are pushed and appended last (empty layers skipped);
+// they are located on read by media type, not index.
+func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -148,7 +150,16 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 		layers = append(layers, bundleDesc)
 	}
 
-	// Create manifest
+	// Append optional extra layers (e.g. solution lock) last so they never
+	// disturb the bundle layer's positional contract; located by media type.
+	layers, err = c.appendExtraLayers(ctx, layers, extraLayers)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	// Create manifest — exclude descriptor-only annotations (e.g.
+	// AnnotationSourceCanonical) from the blob so they don't affect the
+	// content digest. They are attached to the descriptor (index-level) below.
 	manifest := ocispec.Manifest{
 		Versioned: specs.Versioned{
 			SchemaVersion: 2,
@@ -156,7 +167,7 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 		MediaType:   ocispec.MediaTypeImageManifest,
 		Config:      configDesc,
 		Layers:      layers,
-		Annotations: annotations,
+		Annotations: manifestAnnotations(annotations),
 	}
 
 	manifestData, err := json.Marshal(manifest)
@@ -169,7 +180,7 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 		return ArtifactInfo{}, fmt.Errorf("failed to push manifest: %w", err)
 	}
 
-	// Tag the manifest
+	// Tag the manifest — full annotations on the descriptor (index-level only)
 	tag := c.tagForRef(ref)
 	manifestDesc.Annotations = annotations
 	if err := c.store.Tag(ctx, manifestDesc, tag); err != nil {
@@ -274,6 +285,70 @@ func (c *LocalCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]by
 	}
 
 	return content, bundleData, info, nil
+}
+
+// FetchWithLayer retrieves an artifact's primary content together with one or
+// more auxiliary layers (each located by media type) in one manifest lookup.
+// The returned map is keyed by the requested media type; absent layers are
+// omitted from the map (not an error).
+func (c *LocalCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	for _, mt := range mediaTypes {
+		if !isAuxLayerMediaType(mt) {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("FetchWithLayer: %q is not a fetchable auxiliary layer", mt)
+		}
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Resolve to get the manifest descriptor
+	info, err := c.resolveLocked(ctx, ref)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	// Fetch the manifest by digest (see Fetch for rationale).
+	manifest, err := c.fetchManifestByDigest(ctx, info.Digest)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	if len(manifest.Layers) == 0 {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
+	}
+
+	// Fetch content from first layer
+	contentData, err := c.fetchBlob(ctx, manifest.Layers[0])
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
+	}
+
+	// Fetch each requested auxiliary layer (located by media type, never index).
+	layers := make(map[string][]byte, len(mediaTypes))
+	for _, mt := range mediaTypes {
+		var layerData []byte
+		switch mt {
+		case MediaTypeSolutionBundle:
+			// Probe v1 (plain tar) first, then v2 deduplicated.
+			if desc, ok := findLayerByMediaType(manifest, MediaTypeSolutionBundle); ok {
+				layerData, err = c.fetchBlob(ctx, desc)
+			} else if _, ok := findLayerByMediaType(manifest, MediaTypeSolutionBundleManifest); ok {
+				layerData, err = c.reassembleDedup(ctx, manifest)
+			}
+		default:
+			if desc, ok := findLayerByMediaType(manifest, mt); ok {
+				layerData, err = c.fetchBlob(ctx, desc)
+			}
+		}
+		if err != nil {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch %s layer: %w", mt, err)
+		}
+		if len(layerData) > 0 {
+			layers[mt] = layerData
+		}
+	}
+
+	return contentData, layers, info, nil
 }
 
 // reassembleDedup fetches all layers of a v2 deduplicated bundle and
@@ -553,6 +628,21 @@ func (c *LocalCatalog) tagForRef(ref Reference) string {
 	return fmt.Sprintf("%s/%s", ref.Kind, ref.Name)
 }
 
+// manifestAnnotations returns a copy of annotations with descriptor-only
+// keys removed, suitable for embedding in the manifest JSON blob.
+// Descriptor-only annotations carry local provenance metadata that must not
+// affect the manifest content digest.
+func manifestAnnotations(annotations map[string]string) map[string]string {
+	m := make(map[string]string, len(annotations))
+	for k, v := range annotations {
+		if k == AnnotationSourceCanonical {
+			continue
+		}
+		m[k] = v
+	}
+	return m
+}
+
 func (c *LocalCatalog) pushBlob(ctx context.Context, mediaType string, content []byte) (ocispec.Descriptor, error) {
 	desc := ocispec.Descriptor{
 		MediaType: mediaType,
@@ -568,6 +658,99 @@ func (c *LocalCatalog) pushBlob(ctx context.Context, mediaType string, content [
 	}
 
 	return desc, nil
+}
+
+// appendExtraLayers pushes each non-empty extra layer and appends its
+// descriptor to layers, preserving order. Empty layers are skipped so callers
+// can pass optional layers (e.g. a solution lock) unconditionally.
+func (c *LocalCatalog) appendExtraLayers(ctx context.Context, layers []ocispec.Descriptor, extra []Layer) ([]ocispec.Descriptor, error) {
+	for _, l := range extra {
+		if len(l.Data) == 0 {
+			continue
+		}
+		desc, err := c.pushBlob(ctx, l.MediaType, l.Data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to push %s layer: %w", l.MediaType, err)
+		}
+		layers = append(layers, desc)
+	}
+	return layers, nil
+}
+
+// findLayerByMediaType returns the first layer descriptor matching mediaType,
+// and whether one was found. Extra layers (e.g. the solution lock) are located
+// this way rather than by a fixed index.
+func findLayerByMediaType(m ocispec.Manifest, mediaType string) (ocispec.Descriptor, bool) {
+	for _, l := range m.Layers {
+		if l.MediaType == mediaType {
+			return l, true
+		}
+	}
+	return ocispec.Descriptor{}, false
+}
+
+// ResolveContentDigest returns the content-layer digest and artifact metadata
+// for the local catalog. Unlike Fetch/FetchByPlatform, this reads only the
+// manifest JSON — it never loads the (potentially large) binary blob.
+//
+// For a multi-platform image index it selects the platform-specific manifest;
+// for a single-platform manifest the platform argument is ignored. The
+// mediaType selects which layer to read the digest from.
+func (c *LocalCatalog) ResolveContentDigest(ctx context.Context, ref Reference, platform, mediaType string) (ContentDigestInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	info, err := c.resolveLocked(ctx, ref)
+	if err != nil {
+		return ContentDigestInfo{}, err
+	}
+
+	tag := c.tagForRef(info.Reference)
+	desc, err := c.store.Resolve(ctx, tag)
+	if err != nil {
+		return ContentDigestInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// For a multi-platform image index, select the platform-specific manifest.
+	manifestDesc := desc
+	if IsImageIndex(desc) {
+		indexData, err := c.fetchBlob(ctx, desc)
+		if err != nil {
+			return ContentDigestInfo{}, fmt.Errorf("fetching image index: %w", err)
+		}
+
+		var index ocispec.Index
+		if err := json.Unmarshal(indexData, &index); err != nil {
+			return ContentDigestInfo{}, fmt.Errorf("unmarshalling image index: %w", err)
+		}
+
+		platDesc, err := MatchPlatform(&index, platform)
+		if err != nil {
+			return ContentDigestInfo{}, err
+		}
+		manifestDesc = *platDesc
+	}
+
+	manifestData, err := c.fetchBlob(ctx, manifestDesc)
+	if err != nil {
+		return ContentDigestInfo{}, fmt.Errorf("fetching manifest: %w", err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return ContentDigestInfo{}, fmt.Errorf("unmarshalling manifest: %w", err)
+	}
+
+	layer, ok := findLayerByMediaType(manifest, mediaType)
+	if !ok {
+		return ContentDigestInfo{}, fmt.Errorf("manifest has no layer with media type %s", mediaType)
+	}
+
+	info.Size = layer.Size
+	return ContentDigestInfo{
+		ArtifactInfo:  info,
+		ContentDigest: layer.Digest.String(),
+	}, nil
 }
 
 func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) ([]byte, error) {
@@ -736,6 +919,7 @@ func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descripto
 		Size:        desc.Size,
 		Annotations: merged,
 		Catalog:     LocalCatalogName,
+		Canonical:   merged[AnnotationSourceCanonical],
 	}
 }
 
@@ -1237,7 +1421,9 @@ var _ Catalog = (*LocalCatalog)(nil)
 // StoreDedup saves a solution with content-addressable deduplicated layers.
 // manifestJSON is the bundle manifest (v2), smallTar is grouped small files,
 // and blobLayers are individual large file blobs with their media types.
-func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYAML, manifestJSON, smallTar []byte, blobLayers [][]byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+// Optional extraLayers (e.g. the solution lock) are appended AFTER the file
+// blobs so the deduplicated layers' positional indices remain valid.
+func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYAML, manifestJSON, smallTar []byte, blobLayers [][]byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1308,7 +1494,14 @@ func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYA
 		layers = append(layers, blobDesc)
 	}
 
-	// Create OCI manifest
+	// Append optional extra layers (e.g. solution lock) AFTER the file blobs
+	// so the dedup manifest's f.Layer indices stay valid; located by media type.
+	layers, err = c.appendExtraLayers(ctx, layers, extraLayers)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+
+	// Create OCI manifest — exclude descriptor-only annotations from the blob.
 	ociManifest := ocispec.Manifest{
 		Versioned: specs.Versioned{
 			SchemaVersion: 2,
@@ -1316,7 +1509,7 @@ func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYA
 		MediaType:   ocispec.MediaTypeImageManifest,
 		Config:      configDesc,
 		Layers:      layers,
-		Annotations: annotations,
+		Annotations: manifestAnnotations(annotations),
 	}
 
 	ociManifestData, err := json.Marshal(ociManifest)

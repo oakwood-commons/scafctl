@@ -10,7 +10,11 @@ metadata:
     that actions can gate on resolver status, phase, and summary fields.
     Uses expr: ValueRefs in action inputs (the correct access pattern
     for __execution -- the cel provider only has resolver data scope).
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     static_value:

@@ -16,7 +16,11 @@ metadata:
     Render a single shared template once per collection item, each with its own
     variables and output path, in a single render-tree resolver. Per-entry
     `data` is shallow-merged over the shared `data` and wins on key conflicts.
-
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # -------------------------------------------------------------------------

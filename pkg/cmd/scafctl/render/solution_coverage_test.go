@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -450,42 +451,6 @@ func TestSolutionOptions_writeTestOutput_InvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to parse rendered output")
 }
 
-// ── autoResolveOfficialProviders tests ───────────────────────────────────────
-
-func TestSolutionOptions_autoResolveOfficialProviders_NilSolution(t *testing.T) {
-	t.Parallel()
-
-	ctx := setupWriterContext()
-
-	var buf bytes.Buffer
-	opts := &SolutionOptions{
-		IOStreams: &terminal.IOStreams{Out: &buf, ErrOut: &buf},
-		CliParams: &settings.Run{},
-	}
-
-	// nil solution should not panic and should return nil
-	clients := opts.autoResolveOfficialProviders(ctx, nil, nil)
-	assert.Nil(t, clients)
-}
-
-func TestSolutionOptions_autoResolveOfficialProviders_EmptySolution(t *testing.T) {
-	t.Parallel()
-
-	ctx := setupWriterContext()
-
-	var buf bytes.Buffer
-	opts := &SolutionOptions{
-		IOStreams: &terminal.IOStreams{Out: &buf, ErrOut: &buf},
-		CliParams: &settings.Run{},
-	}
-
-	sol := &solution.Solution{}
-	reg := provider.NewRegistry()
-
-	clients := opts.autoResolveOfficialProviders(ctx, sol, reg)
-	assert.Nil(t, clients)
-}
-
 // ── loadStateIntoContext tests ───────────────────────────────────────────────
 
 func TestSolutionOptions_loadStateIntoContext_NilState(t *testing.T) {
@@ -596,6 +561,81 @@ func TestFormatParams(t *testing.T) {
 			assert.Equal(t, tc.want, result)
 		})
 	}
+}
+
+// ── lock-mode flag / execution-registry wiring tests ─────────────────────────
+
+func TestCommandSolution_LockModeFlag(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	cmd := CommandSolution(settings.NewCliParams(), ioStreams, "render")
+
+	f := cmd.Flags().Lookup("lock-mode")
+	require.NotNil(t, f, "--lock-mode flag should be registered")
+	assert.Empty(t, f.DefValue, "--lock-mode defaults to empty (source-based mode)")
+}
+
+func TestSolutionOptions_Run_InvalidLockMode(t *testing.T) {
+	t.Parallel()
+
+	ioStreams, _, _ := terminal.NewTestIOStreams()
+	opts := &SolutionOptions{
+		File:      "solution.yaml",
+		LockMode:  "bogus",
+		IOStreams: ioStreams,
+		CliParams: &settings.Run{},
+	}
+
+	err := opts.Run(setupWriterContext())
+	require.Error(t, err)
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
+	assert.Contains(t, err.Error(), "invalid --lock-mode")
+}
+
+func TestSolutionOptions_absolutizeOutputPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolves relative output and snapshot paths", func(t *testing.T) {
+		t.Parallel()
+		opts := &SolutionOptions{
+			OutputFile:   "out.json",
+			SnapshotFile: "snap.json",
+		}
+		require.NoError(t, opts.absolutizeOutputPaths())
+		assert.True(t, filepath.IsAbs(opts.OutputFile))
+		assert.True(t, filepath.IsAbs(opts.SnapshotFile))
+	})
+
+	t.Run("leaves empty paths untouched", func(t *testing.T) {
+		t.Parallel()
+		opts := &SolutionOptions{}
+		require.NoError(t, opts.absolutizeOutputPaths())
+		assert.Empty(t, opts.OutputFile)
+		assert.Empty(t, opts.SnapshotFile)
+	})
+}
+
+func TestSolutionOptions_pluginConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil when no CLI params", func(t *testing.T) {
+		t.Parallel()
+		opts := &SolutionOptions{}
+		assert.Nil(t, opts.pluginConfig())
+	})
+
+	t.Run("maps CLI params", func(t *testing.T) {
+		t.Parallel()
+		opts := &SolutionOptions{
+			CliParams: &settings.Run{IsQuiet: true, NoColor: true, BinaryName: "mycli"},
+		}
+		pc := opts.pluginConfig()
+		require.NotNil(t, pc)
+		assert.True(t, pc.Quiet)
+		assert.True(t, pc.NoColor)
+		assert.Equal(t, "mycli", pc.BinaryName)
+	})
 }
 
 // ── helper ───────────────────────────────────────────────────────────────────

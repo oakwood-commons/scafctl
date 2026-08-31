@@ -1291,7 +1291,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("cel")),
 		},
 		SkipTransform: true,
 		ShowExecution: true,
@@ -2431,7 +2431,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"tag"},
 	}
@@ -2500,7 +2500,7 @@ spec:
 			File:            solutionPath,
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"nonexistent"},
 	}
@@ -2609,7 +2609,7 @@ spec:
 			File:            solutionPath,
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"tag"},
 		Names:   []string{"repoUrl"},
@@ -2683,7 +2683,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"deploy"},
 	}
@@ -2749,7 +2749,7 @@ spec:
 			File:            solutionPath,
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"echo"},
 	}
@@ -2819,7 +2819,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"notify"},
 	}
@@ -2904,7 +2904,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"deploy"},
 	}
@@ -2995,7 +2995,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"tag", "notify"},
 	}
@@ -3076,7 +3076,7 @@ spec:
 			KvxOutputFlags:  flags.KvxOutputFlags{Output: "json"},
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"deploy"},
 	}
@@ -3146,7 +3146,7 @@ spec:
 			File:            solutionPath,
 			ResolverTimeout: 30 * time.Second,
 			PhaseTimeout:    5 * time.Minute,
-			registry:        testRegistry(),
+			registry:        testRegistry(newMockProvider("shell")),
 		},
 		Actions: []string{"deploy"},
 	}

@@ -5,6 +5,8 @@ package inspect
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Masterminds/semver/v3"
@@ -364,4 +366,53 @@ func TestSortedKeys(t *testing.T) {
 		result := sortedKeys(map[string]int{"c": 3, "a": 1, "b": 2})
 		assert.Equal(t, []string{"a", "b", "c"}, result)
 	})
+}
+
+func TestLoadSolution_LocalFile(t *testing.T) {
+	const solYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: load-inspect
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
+
+	sol, err := LoadSolution(context.Background(), path)
+	require.NoError(t, err)
+	require.NotNil(t, sol)
+	assert.Equal(t, "load-inspect", sol.Metadata.Name)
+}
+
+func TestLoadSolution_NotFound(t *testing.T) {
+	_, err := LoadSolution(context.Background(), filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+}
+
+func TestLoadSolutionWithLock_LocalFileNoLock(t *testing.T) {
+	const solYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lock-inspect
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "solution.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(solYAML), 0o600))
+
+	sol, lock, err := LoadSolutionWithLock(context.Background(), path)
+	require.NoError(t, err)
+	require.NotNil(t, sol)
+	assert.Equal(t, "lock-inspect", sol.Metadata.Name)
+	assert.Nil(t, lock) // local files carry no lock layer
+}
+
+func TestLoadSolutionWithLock_NotFound(t *testing.T) {
+	_, _, err := LoadSolutionWithLock(context.Background(), filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
 }

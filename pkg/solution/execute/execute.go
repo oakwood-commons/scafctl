@@ -45,7 +45,7 @@ type SolutionValidationResult struct {
 // ValidateSolution validates a loaded solution and its workflow against the
 // given provider registry. This standalone function can be called from both
 // the CLI and the MCP server without requiring CLI-specific types.
-func ValidateSolution(_ context.Context, sol *solution.Solution, reg *provider.Registry) *SolutionValidationResult {
+func ValidateSolution(_ context.Context, sol *solution.Solution, reg ProviderLookup) *SolutionValidationResult {
 	result := &SolutionValidationResult{
 		Valid:        true,
 		HasResolvers: sol.Spec.HasResolvers(),
@@ -54,8 +54,7 @@ func ValidateSolution(_ context.Context, sol *solution.Solution, reg *provider.R
 
 	// Validate workflow if present
 	if sol.Spec.HasWorkflow() {
-		adapter := &actionRegistryAdapter{registry: reg}
-		if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
+		if err := action.ValidateWorkflow(sol.Spec.Workflow, reg); err != nil {
 			result.Valid = false
 			result.Errors = append(result.Errors, fmt.Sprintf("workflow validation: %s", err))
 		}
@@ -317,6 +316,28 @@ func IsValidationOnlyFailure(err error) bool {
 	return isValidationFailure(err)
 }
 
+// ProviderGetter looks up providers by name.
+type ProviderGetter interface {
+	// Get returns a provider by name.
+	Get(name string) (provider.Provider, bool)
+	// Has reports whether a provider with the given name exists.
+	Has(name string) bool
+}
+
+// DescriptorLookuper exposes provider descriptor lookup.
+type DescriptorLookuper interface {
+	// DescriptorLookup returns a function that looks up provider descriptors by name.
+	DescriptorLookup() provider.DescriptorLookup
+}
+
+// ProviderLookup is the minimal provider registry surface required to execute
+// resolvers. It matches resolver.RegistryInterface so a registry can be passed
+// directly to the resolver executor without wrapping it in an adapter.
+type ProviderLookup interface {
+	ProviderGetter
+	DescriptorLookuper
+}
+
 // Resolvers runs the resolver execution pipeline on the given solution.
 // This standalone function decouples resolver execution from CLI-specific types
 // (IOStreams, progress bars, output formatting). The MCP server uses this to
@@ -325,7 +346,7 @@ func Resolvers(
 	ctx context.Context,
 	sol *solution.Solution,
 	params map[string]any,
-	reg *provider.Registry,
+	registry ProviderLookup,
 	cfg ResolverExecutionConfig,
 ) (*ResolverExecutionResult, error) {
 	lgr := logger.FromContext(ctx)
@@ -345,8 +366,6 @@ func Resolvers(
 			Context: resolver.NewContext(),
 		}, nil
 	}
-
-	adapter := NewResolverRegistryAdapter(reg)
 
 	// Build executor options from config
 	executorOpts := []resolver.ExecutorOption{
@@ -385,7 +404,7 @@ func Resolvers(
 	} else if binder != nil {
 		executorOpts = append(executorOpts, resolver.WithTemplateFuncBinder(binder))
 	}
-	executor := resolver.NewExecutor(adapter, executorOpts...)
+	executor := resolver.NewExecutor(registry, executorOpts...)
 
 	// Apply solution-level CEL cost limit if configured
 	ctx = ApplySolutionCELCostLimit(ctx, sol)
@@ -450,31 +469,31 @@ func Resolvers(
 	}, nil
 }
 
-// ResolversForPreview is a convenience wrapper over Resolvers that accepts
-// a provider.Registry directly and returns only the resolved data map.
-// It initialises a default registry when reg is nil and reads the execution
-// config from context. This is the shared entry point for preview/render
-// operations in both the MCP server and the CLI.
+// ResolversForPreview is a convenience wrapper over Resolvers that returns
+// only the resolved data map. It initialises a default builtin registry when
+// registry is nil and reads the execution config from context. This is the
+// shared entry point for preview/render operations in both the MCP server
+// and the CLI.
 func ResolversForPreview(
 	ctx context.Context,
 	sol *solution.Solution,
 	params map[string]any,
-	reg *provider.Registry,
+	registry ProviderLookup,
 ) (map[string]any, error) {
 	if !sol.Spec.HasResolvers() {
 		return make(map[string]any), nil
 	}
 
-	if reg == nil {
-		var err error
-		reg, err = builtin.DefaultRegistry(ctx)
+	if registry == nil {
+		reg, err := builtin.DefaultRegistry(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create provider registry: %w", err)
 		}
+		registry = reg
 	}
 
 	cfg := ResolverExecutionConfigFromContext(ctx)
-	result, err := Resolvers(ctx, sol, params, reg, cfg)
+	result, err := Resolvers(ctx, sol, params, registry, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +578,7 @@ func Actions(
 	ctx context.Context,
 	sol *solution.Solution,
 	resolverData map[string]any,
-	reg *provider.Registry,
+	registry ProviderGetter,
 	cfg ActionExecutionConfig,
 ) (*ActionExecutionResult, error) {
 	lgr := logger.FromContext(ctx)
@@ -569,8 +588,7 @@ func Actions(
 	}
 
 	// Validate the workflow
-	adapter := &actionRegistryAdapter{registry: reg}
-	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, registry); err != nil {
 		return nil, fmt.Errorf("workflow validation failed: %w", err)
 	}
 
@@ -595,7 +613,7 @@ func Actions(
 
 	// Build executor options from config
 	executorOpts := []action.ExecutorOption{
-		action.WithRegistry(adapter),
+		action.WithRegistry(registry),
 		action.WithResolverData(resolverData),
 		action.WithDefaultTimeout(cfg.DefaultTimeout),
 		action.WithGracePeriod(cfg.GracePeriod),
@@ -660,57 +678,6 @@ func ActionExecutionConfigFromContext(ctx context.Context) ActionExecutionConfig
 // ---------------------------------------------------------------------------
 // Adapter: action.RegistryInterface
 // ---------------------------------------------------------------------------
-
-// actionRegistryAdapter adapts provider.Registry to action.RegistryInterface
-type actionRegistryAdapter struct {
-	registry *provider.Registry
-}
-
-// Get returns a provider by name (for action.RegistryInterface - returns bool)
-func (r *actionRegistryAdapter) Get(name string) (provider.Provider, bool) {
-	return r.registry.Get(name)
-}
-
-// Has checks if a provider exists (for action.RegistryInterface)
-func (r *actionRegistryAdapter) Has(name string) bool {
-	_, ok := r.registry.Get(name)
-	return ok
-}
-
-// ---------------------------------------------------------------------------
-// Adapter: resolver.RegistryInterface
-// ---------------------------------------------------------------------------
-
-// ResolverRegistryAdapter adapts provider.Registry to resolver.RegistryInterface.
-type ResolverRegistryAdapter struct {
-	registry *provider.Registry
-}
-
-// NewResolverRegistryAdapter creates a new ResolverRegistryAdapter wrapping
-// the given provider.Registry.
-func NewResolverRegistryAdapter(registry *provider.Registry) *ResolverRegistryAdapter {
-	return &ResolverRegistryAdapter{registry: registry}
-}
-
-func (r *ResolverRegistryAdapter) Register(p provider.Provider) error {
-	return r.registry.Register(p)
-}
-
-func (r *ResolverRegistryAdapter) Get(name string) (provider.Provider, error) {
-	p, ok := r.registry.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("provider %s not found", name)
-	}
-	return p, nil
-}
-
-func (r *ResolverRegistryAdapter) List() []provider.Provider {
-	return r.registry.ListProviders()
-}
-
-func (r *ResolverRegistryAdapter) DescriptorLookup() resolver.DescriptorLookup {
-	return r.registry.DescriptorLookup()
-}
 
 // toSolutionMeta converts a solution's metadata into the provider-package SolutionMeta type.
 func toSolutionMeta(sol *solution.Solution) *provider.SolutionMeta {

@@ -12,6 +12,12 @@ metadata:
     guards the empty case before coercing the bare scalar to an int. Uses a mock
     HTTP server started via testConfig.services.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     mockBaseUrl:

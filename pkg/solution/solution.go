@@ -192,10 +192,31 @@ func (b Bundle) IsEmpty() bool {
 	return len(b.Include) == 0 && len(b.Plugins) == 0
 }
 
+// PartitionPlugins splits the bundle's plugins into local and sourced sets.
+// Local plugins (a short Name with no Source) are resolved from the local
+// catalog; sourced plugins (those declaring a Source with a registry) are
+// resolved from remote registries. Order within each set is preserved. Both
+// return values are nil when the bundle declares no matching plugins.
+func (b Bundle) PartitionPlugins() (unsourced, sourced []PluginDependency) {
+	for _, p := range b.Plugins {
+		if p.HasRegistry() {
+			sourced = append(sourced, p)
+		} else {
+			unsourced = append(unsourced, p)
+		}
+	}
+	return unsourced, sourced
+}
+
 // PluginDependency declares an external plugin required by a solution.
 type PluginDependency struct {
-	// Name is the plugin's catalog reference (e.g., "aws-provider").
-	Name string `json:"name" yaml:"name" doc:"Plugin catalog reference" example:"aws-provider" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]+[a-z0-9])?$" patternDescription:"lowercase alphanumeric with hyphens"`
+	// Name is the solution-local identity (alias) for the plugin. It is a short
+	// lowercase name (e.g. "exec"), never an inlined OCI reference. For a local
+	// plugin it is also the catalog artifact name; for a sourced plugin the real
+	// OCI coordinates live in Source (Source.Registry and Source.Artifact) and
+	// Name is a free-form alias. LocalName() returns this value; ArtifactName()
+	// and Registry() prefer Source; HasRegistry() reports whether a Source is set.
+	Name string `json:"name" yaml:"name" doc:"Solution-local plugin alias (short lowercase name; OCI coordinates live in source)" example:"exec" maxLength:"100" pattern:"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" patternDescription:"lowercase alphanumeric with hyphens"`
 
 	// Kind is the plugin type.
 	Kind PluginKind `json:"kind" yaml:"kind" doc:"Plugin type" example:"provider"`
@@ -203,10 +224,86 @@ type PluginDependency struct {
 	// Version is a semver constraint (e.g., "^1.5.0", ">=2.0.0", "3.1.2") or "latest".
 	Version string `json:"version" yaml:"version" doc:"Semver version constraint or 'latest'" example:"^1.5.0" maxLength:"50" pattern:"^([~^>=<]*[0-9]|latest$)" patternDescription:"semver constraint or 'latest'"`
 
+	Catalog string `json:"-" yaml:"-"`
 	// Defaults provides default values for plugin inputs.
 	// These are shallow-merged beneath inline provider inputs (inline always wins).
 	Defaults map[string]*spec.ValueRef `json:"defaults,omitempty" yaml:"defaults,omitempty" doc:"Default input values for this plugin (supports ValueRef)"`
+
+	// Source records the resolved OCI origin (registry/artifact) for this plugin.
+	Source *PluginSource `json:"source,omitempty" yaml:"source,omitempty" doc:"Resolved OCI source (registry and artifact) for this plugin" required:"false"`
 }
+
+// PluginSource records the resolved OCI origin of a sourced plugin dependency.
+// Its presence marks the dependency as sourced (resolved from a remote
+// registry) rather than local (resolved from the local catalog by Name).
+type PluginSource struct {
+	// Registry is the OCI registry and namespace the plugin is fetched from.
+	Registry string `json:"registry" yaml:"registry" doc:"OCI registry (and namespace) for the plugin source" example:"ghcr.io/oakwood-commons" maxLength:"255"`
+
+	// Artifact is the OCI artifact (leaf) name within the registry.
+	Artifact string `json:"artifact" yaml:"artifact" doc:"OCI artifact name for the plugin source" example:"scafctl-exec-provider" maxLength:"100"`
+}
+
+// HasRegistry reports whether the dependency declares a remote OCI Source. When
+// true the plugin is resolved from that remote registry; otherwise it is
+// resolved from the local catalog by its Name.
+func (p PluginDependency) HasRegistry() bool { return p.Source != nil && p.Source.Registry != "" }
+
+// LocalName returns the solution-local identity (alias) for the plugin. Use it
+// for cache keys, allowlist checks, registration, and metrics.
+func (p PluginDependency) LocalName() string { return p.Name }
+
+// ArtifactName returns the OCI artifact leaf used to fetch the plugin from its
+// registry. For a sourced plugin that is Source.Artifact; for a local plugin it
+// falls back to Name.
+func (p PluginDependency) ArtifactName() string {
+	if p.Source != nil && p.Source.Artifact != "" {
+		return p.Source.Artifact
+	}
+	return p.Name
+}
+
+// Registry returns the OCI registry/namespace from Source, or "" when the plugin
+// is a local (short-name) dependency with no Source.
+func (p PluginDependency) Registry() string {
+	if p.Source != nil {
+		return p.Source.Registry
+	}
+	return ""
+}
+
+func (p PluginDependency) ValidateSource() error {
+	if p.Source == nil {
+		return nil
+	}
+	if p.Source.Registry == "" {
+		return fmt.Errorf("plugin %q: source.registry is required when source is set", p.Name)
+	}
+	return nil
+}
+
+// IsAliased reports whether the solution-local name (alias) differs from the
+// OCI artifact leaf it resolves to. When true, callers that display or record
+// the plugin should surface both LocalName() and ArtifactName().
+func (p PluginDependency) IsAliased() bool {
+	return p.Name != p.ArtifactName()
+}
+
+// DisplayName renders the plugin's identity for human-facing output. It returns
+// the local name, annotated with the OCI artifact leaf as "local (artifact)"
+// when the two differ (i.e. the dependency is aliased).
+func (p PluginDependency) DisplayName() string {
+	if p.IsAliased() {
+		return fmt.Sprintf("%s (%s)", p.LocalName(), p.ArtifactName())
+	}
+	return p.LocalName()
+}
+
+func (p PluginDependency) CatalogName() string { return p.Catalog }
+
+func (p PluginDependency) VersionConstraint() string { return p.Version }
+
+func (p PluginDependency) PluginKind() PluginKind { return p.Kind }
 
 // PluginKind is the type of plugin (provider, auth-handler).
 type PluginKind string

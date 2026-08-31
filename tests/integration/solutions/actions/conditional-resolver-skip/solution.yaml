@@ -10,7 +10,11 @@ metadata:
     the skipped resolver's data in their inputs must also be skipped if their own
     when condition depends on the same resolver and evaluates to false.
     Previously this caused a "no such key" error during input materialization.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     environment:

@@ -1,0 +1,70 @@
+apiVersion: scafctl.io/v1
+kind: Solution
+
+metadata:
+  name: lint-undeclared-external-providers
+  version: 1.0.0
+  description: |
+    External providers (not built-in, not in bundle.plugins) must be declared
+    in the solution to avoid lint failures. This solution has a resolver that
+    uses an undeclared external provider, which should trigger the
+    external-provider-validation lint finding.
+
+spec:
+  resolvers:
+    greeting:
+      description: Simple resolver to make the solution valid
+      resolve:
+        with:
+          - provider: external-provider
+            inputs:
+              value: hello
+
+  workflow:
+    actions:
+      greet:
+        description: Simple action to make the solution valid
+        provider: cel
+        inputs:
+          expression: '_.greeting'
+
+  testing:
+    config:
+      # lint: the solution intentionally uses an undeclared external provider
+      # resolve-defaults: the provider cannot be resolved, so defaults fail
+      skipBuiltins: [lint, resolve-defaults]
+
+    cases:
+      undeclared-external-provider-is-error:
+        description: An undeclared external provider is reported as an error
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, external-provider-validation]
+        assertions:
+          - expression: __exitCode == 2
+            message: "An error finding makes lint exit 2"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "external-provider-validation"
+                && f.severity == "error")
+            message: "An undeclared external provider must be an error"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "external-provider-validation"
+                && f.message.contains("external-provider"))
+            message: "The finding must name the undeclared provider"
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "external-provider-validation"
+                && f.message.contains("bundle.plugins"))
+            message: "The finding must point at bundle.plugins as the fix"
+
+      unregistered-provider-is-error:
+        description: The unregistered provider is also flagged by missing-provider
+        command: [lint]
+        args: ["-o", "json"]
+        tags: [lint, missing-provider]
+        assertions:
+          - expression: >
+              __output.findings.exists(f, f.ruleName == "missing-provider"
+                && f.severity == "error"
+                && f.message.contains("external-provider"))
+            message: "The unregistered provider must be reported by missing-provider"
+

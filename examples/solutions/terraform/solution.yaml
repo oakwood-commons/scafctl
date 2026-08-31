@@ -9,7 +9,11 @@ metadata:
     - solution
     - terraform
   description: Scaffold Terraform environments using resolvers, templates, and filesystem actions
-
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   resolvers:
     app:

@@ -4,17 +4,35 @@
 package endpoints
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/oakwood-commons/scafctl/pkg/api"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
+	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
+
+// fakeEnsureAndAcquire satisfies the ensureAndAcquire interface for exercising
+// the nil-guard paths of ensureProviderDependencies without a real plugin pool.
+type fakeEnsureAndAcquire struct{}
+
+func (fakeEnsureAndAcquire) EnsureAndAcquire(context.Context, []solution.PluginDependency) (func(), error) {
+	return func() {}, nil
+}
 
 func newTestHandlerContext(t *testing.T) *api.HandlerContext {
 	t.Helper()
@@ -338,4 +356,100 @@ func TestRequireRemotePath_CatalogNameViaRunEndpoint(t *testing.T) {
 		assert.NotContains(t, resp.Body.String(), "not a local file path",
 			"catalog name should not be rejected as a local file path")
 	}
+}
+
+// ── ensureProviderDependencies nil-guard tests ──
+
+func TestEnsureProviderDependencies_NilArgs(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{}
+	reg := provider.NewCompositeRegistry()
+	fetcher := &plugin.Fetcher{}
+	var ensure ensureAndAcquire = fakeEnsureAndAcquire{}
+
+	tests := []struct {
+		name    string
+		sol     *solution.Solution
+		reg     *provider.CompositeRegistry
+		fetcher *plugin.Fetcher
+		ensure  ensureAndAcquire
+		wantErr error
+	}{
+		{
+			name:    "nil solution",
+			sol:     nil,
+			reg:     reg,
+			fetcher: fetcher,
+			ensure:  ensure,
+			wantErr: errEnsureNilSolution,
+		},
+		{
+			name:    "nil composite registry",
+			sol:     sol,
+			reg:     nil,
+			fetcher: fetcher,
+			ensure:  ensure,
+			wantErr: errEnsureNilCompositeReg,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			scoped, release, err := ensureProviderDependencies(
+				context.Background(), tt.sol, tt.reg, nil, tt.fetcher, tt.ensure, nil, prepare.LockModeStrict)
+			assert.ErrorIs(t, err, tt.wantErr)
+			assert.Nil(t, scoped)
+			assert.Nil(t, release)
+		})
+	}
+}
+
+// TestEnsureProviderDependencies_NilAliasAllowed verifies a nil-pointer
+// *catalogindex.Index alias resolver is accepted: ScopeSolutionProviders
+// consults the resolver only for fully-qualified refs and a nil-pointer index
+// is safe to read.
+func TestEnsureProviderDependencies_NilAliasAllowed(t *testing.T) {
+	t.Parallel()
+
+	sol := &solution.Solution{}
+	reg := provider.NewCompositeRegistry()
+	fetcher := &plugin.Fetcher{}
+
+	scoped, release, err := ensureProviderDependencies(
+		context.Background(), sol, reg, (*catalogindex.Index)(nil), fetcher, fakeEnsureAndAcquire{}, nil, prepare.LockModeStrict)
+	assert.NoError(t, err)
+	assert.NotNil(t, scoped)
+	assert.NotNil(t, release)
+	if release != nil {
+		release()
+	}
+}
+
+func TestHandleEnsureError_MissingLockFileMapsTo400(t *testing.T) {
+	t.Parallel()
+
+	// A missing lock file surfaces from BuildExecutionRegistryAPI as
+	// prepare.ErrMissingLockFile; handleEnsureError must classify it as a
+	// client error (400), ahead of the pool-error mapping whose default is 502.
+	wrapped := fmt.Errorf("provider %q: strict mode requires a lock file: %w", "my-plugin", prepare.ErrMissingLockFile)
+
+	err := handleEnsureError(context.Background(), wrapped, "solution-render")
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+}
+
+func TestHandleEnsureError_GenericFallsThroughToPoolMapping(t *testing.T) {
+	t.Parallel()
+
+	// A non-lock, non-pool error falls through to PoolErrorHTTPStatus, whose
+	// default classification is 502. This guards the ordering: a generic error
+	// must NOT be misclassified as the 400 missing-lock case.
+	err := handleEnsureError(context.Background(), errors.New("boom"), "solution-render")
+
+	var statusErr huma.StatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadGateway, statusErr.GetStatus())
 }

@@ -220,14 +220,14 @@ spec:
 	assert.Equal(t, content, got)
 }
 
-func TestSolutionResolver_FetchSolutionWithBundle(t *testing.T) {
+func TestSolutionResolver_FetchSolutionWithLayers(t *testing.T) {
 	t.Run("returns error for invalid reference", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
 		require.NoError(t, err)
 
 		resolver := NewSolutionResolver(cat, logr.Discard())
-		_, _, err = resolver.FetchSolutionWithBundle(context.Background(), "Invalid-Name@1.0.0")
+		_, _, err = resolver.FetchSolutionWithLayers(context.Background(), "Invalid-Name@1.0.0", MediaTypeSolutionBundle)
 		assert.Error(t, err)
 	})
 
@@ -237,7 +237,7 @@ func TestSolutionResolver_FetchSolutionWithBundle(t *testing.T) {
 		require.NoError(t, err)
 
 		resolver := NewSolutionResolver(cat, logr.Discard())
-		_, _, err = resolver.FetchSolutionWithBundle(context.Background(), "nonexistent@1.0.0")
+		_, _, err = resolver.FetchSolutionWithLayers(context.Background(), "nonexistent@1.0.0", MediaTypeSolutionBundle)
 		assert.Error(t, err)
 	})
 
@@ -260,10 +260,10 @@ spec:
 		require.NoError(t, err)
 
 		resolver := NewSolutionResolver(cat, logr.Discard())
-		got, bundle, err := resolver.FetchSolutionWithBundle(context.Background(), "bundle-sol@1.0.0")
+		got, layers, err := resolver.FetchSolutionWithLayers(context.Background(), "bundle-sol@1.0.0", MediaTypeSolutionBundle)
 		require.NoError(t, err)
 		assert.Equal(t, content, got)
-		assert.Nil(t, bundle)
+		assert.Nil(t, layers[MediaTypeSolutionBundle])
 	})
 
 	t.Run("cache hit returns stored content", func(t *testing.T) {
@@ -276,10 +276,10 @@ spec:
 		mock := &mockCacher{content: cachedContent, bundle: cachedBundle, hit: true}
 
 		resolver := NewSolutionResolver(cat, logr.Discard(), WithResolverArtifactCache(mock))
-		got, gotBundle, err := resolver.FetchSolutionWithBundle(context.Background(), "any-sol@1.0.0")
+		got, layers, err := resolver.FetchSolutionWithLayers(context.Background(), "any-sol@1.0.0", MediaTypeSolutionBundle)
 		require.NoError(t, err)
 		assert.Equal(t, cachedContent, got)
-		assert.Equal(t, cachedBundle, gotBundle)
+		assert.Equal(t, cachedBundle, layers[MediaTypeSolutionBundle])
 	})
 
 	t.Run("noCache skips cache", func(t *testing.T) {
@@ -293,7 +293,7 @@ spec:
 			WithResolverNoCache(true),
 		)
 		// Should not use cache, so will fail with not-found
-		_, _, err = resolver.FetchSolutionWithBundle(context.Background(), "any-sol@1.0.0")
+		_, _, err = resolver.FetchSolutionWithLayers(context.Background(), "any-sol@1.0.0", MediaTypeSolutionBundle)
 		assert.Error(t, err)
 	})
 }
@@ -306,11 +306,15 @@ type mockCacher struct {
 	putErr  error
 }
 
-func (m *mockCacher) Get(_, _, _ string) ([]byte, []byte, bool, error) {
-	return m.content, m.bundle, m.hit, nil
+func (m *mockCacher) Get(_, _, _ string) ([]byte, map[string][]byte, bool, error) {
+	var layers map[string][]byte
+	if len(m.bundle) > 0 {
+		layers = map[string][]byte{MediaTypeSolutionBundle: m.bundle}
+	}
+	return m.content, layers, m.hit, nil
 }
 
-func (m *mockCacher) Put(_, _, _, _ string, _, _ []byte) error {
+func (m *mockCacher) Put(_, _, _, _ string, _ []byte, _ map[string][]byte) error {
 	return m.putErr
 }
 
@@ -356,11 +360,11 @@ spec:
 		assert.Equal(t, content, got)
 	})
 
-	t.Run("FetchSolutionWithBundle resolves", func(t *testing.T) {
-		got, bundle, err := resolver.FetchSolutionWithBundle(ctx, "starter-kit@0.0.1")
+	t.Run("FetchSolutionWithLayers resolves", func(t *testing.T) {
+		got, layers, err := resolver.FetchSolutionWithLayers(ctx, "starter-kit@0.0.1", MediaTypeSolutionBundle)
 		require.NoError(t, err)
 		assert.Equal(t, content, got)
-		assert.Nil(t, bundle)
+		assert.Nil(t, layers[MediaTypeSolutionBundle])
 	})
 }
 
@@ -413,11 +417,11 @@ spec:
 		assert.Equal(t, content, got)
 	})
 
-	t.Run("FetchSolutionWithBundle resolves despite mismatched tag", func(t *testing.T) {
-		got, bundle, err := resolver.FetchSolutionWithBundle(ctx, "starter-kit@0.0.1")
+	t.Run("FetchSolutionWithLayers resolves despite mismatched tag", func(t *testing.T) {
+		got, layers, err := resolver.FetchSolutionWithLayers(ctx, "starter-kit@0.0.1", MediaTypeSolutionBundle)
 		require.NoError(t, err)
 		assert.Equal(t, content, got)
-		assert.Nil(t, bundle)
+		assert.Nil(t, layers[MediaTypeSolutionBundle])
 	})
 }
 
@@ -451,7 +455,7 @@ func TestSolutionResolver_RemoteFallback_SetsOriginAnnotation(t *testing.T) {
 
 	var storedAnnotations map[string]string
 	local := newMockCatalog("local")
-	local.storeFunc = func(_ context.Context, _ Reference, _, _ []byte, annotations map[string]string, _ bool) (ArtifactInfo, error) {
+	local.storeFunc = func(_ context.Context, _ Reference, _, _ []byte, annotations map[string]string, _ bool, _ ...Layer) (ArtifactInfo, error) {
 		storedAnnotations = annotations
 		return ArtifactInfo{}, nil
 	}
@@ -470,7 +474,67 @@ func TestSolutionResolver_RemoteFallback_SetsOriginAnnotation(t *testing.T) {
 	assert.Equal(t, "auto-cached from remote-reg", storedAnnotations[AnnotationOrigin])
 }
 
-func TestSolutionResolver_RemoteFallback_FetchSolutionWithBundle(t *testing.T) {
+func TestSolutionResolver_RemoteFallback_SetsSourceCanonicalAnnotation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var storedAnnotations map[string]string
+	local := newMockCatalog("local")
+	local.storeFunc = func(_ context.Context, _ Reference, _, _ []byte, annotations map[string]string, _ bool, _ ...Layer) (ArtifactInfo, error) {
+		storedAnnotations = annotations
+		return ArtifactInfo{}, nil
+	}
+	remote := newMockCatalog("remote-reg")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "canonical-sol", Version: semver.MustParse("1.0.0")}
+	remote.artifacts[ref.String()] = mockArtifact{
+		content: []byte("remote-data"),
+		info: ArtifactInfo{
+			Reference: ref,
+			Digest:    "sha256:mock-canonical",
+			Catalog:   "remote-reg",
+			Canonical: "ghcr.io/org/solutions",
+		},
+	}
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	_, err := resolver.FetchSolution(ctx, "canonical-sol@1.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, storedAnnotations)
+	assert.Equal(t, "ghcr.io/org/solutions", storedAnnotations[AnnotationSourceCanonical])
+	assert.Equal(t, "auto-cached from remote-reg", storedAnnotations[AnnotationOrigin])
+}
+
+func TestSolutionResolver_RemoteFallback_OmitsEmptyCanonicalAnnotation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var storedAnnotations map[string]string
+	local := newMockCatalog("local")
+	local.storeFunc = func(_ context.Context, _ Reference, _, _ []byte, annotations map[string]string, _ bool, _ ...Layer) (ArtifactInfo, error) {
+		storedAnnotations = annotations
+		return ArtifactInfo{}, nil
+	}
+	remote := newMockCatalog("remote-reg")
+
+	ref := Reference{Kind: ArtifactKindSolution, Name: "no-canonical-sol", Version: semver.MustParse("1.0.0")}
+	remote.addArtifact(ref, []byte("remote-data"), nil) // no Canonical set
+
+	resolver := NewSolutionResolver(local, logr.Discard(),
+		WithResolverRemoteCatalogs([]Catalog{remote}),
+	)
+
+	_, err := resolver.FetchSolution(ctx, "no-canonical-sol@1.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, storedAnnotations)
+	_, hasCanonical := storedAnnotations[AnnotationSourceCanonical]
+	assert.False(t, hasCanonical, "empty canonical should not be written as an annotation")
+}
+
+func TestSolutionResolver_RemoteFallback_FetchSolutionWithLayers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
@@ -488,10 +552,10 @@ func TestSolutionResolver_RemoteFallback_FetchSolutionWithBundle(t *testing.T) {
 		WithResolverRemoteCatalogs([]Catalog{remote}),
 	)
 
-	content, bundle, err := resolver.FetchSolutionWithBundle(ctx, "bundled-sol@2.0.0")
+	content, layers, err := resolver.FetchSolutionWithLayers(ctx, "bundled-sol@2.0.0", MediaTypeSolutionBundle)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("sol-content"), content)
-	assert.Equal(t, []byte("bundle-tar"), bundle)
+	assert.Equal(t, []byte("bundle-tar"), layers[MediaTypeSolutionBundle])
 }
 
 func TestSolutionResolver_RemoteFallback_LocalHitSkipsRemote(t *testing.T) {
@@ -587,7 +651,7 @@ func TestSolutionResolver_RemoteFallback_AuthErrorContinuesToNext_WithBundle(t *
 
 	local := newMockCatalog("local")
 	remote1 := newMockCatalog("broken-auth")
-	remote1.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+	remote1.fetchWithLayerFunc = func(_ context.Context, _ Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("403 forbidden")
 	}
 	remote2 := newMockCatalog("good-reg")
@@ -598,7 +662,7 @@ func TestSolutionResolver_RemoteFallback_AuthErrorContinuesToNext_WithBundle(t *
 		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
 	)
 
-	content, _, err := resolver.FetchSolutionWithBundle(ctx, "my-sol@1.0.0")
+	content, _, err := resolver.FetchSolutionWithLayers(ctx, "my-sol@1.0.0", MediaTypeSolutionBundle)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("from-good-reg"), content)
 }
@@ -609,11 +673,11 @@ func TestSolutionResolver_RemoteFallback_AuthErrorReportedWhenAllFail_WithBundle
 
 	local := newMockCatalog("local")
 	remote1 := newMockCatalog("broken-auth")
-	remote1.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+	remote1.fetchWithLayerFunc = func(_ context.Context, _ Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("401 unauthorized")
 	}
 	remote2 := newMockCatalog("also-broken")
-	remote2.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+	remote2.fetchWithLayerFunc = func(_ context.Context, _ Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("403 forbidden")
 	}
 
@@ -621,7 +685,7 @@ func TestSolutionResolver_RemoteFallback_AuthErrorReportedWhenAllFail_WithBundle
 		WithResolverRemoteCatalogs([]Catalog{remote1, remote2}),
 	)
 
-	_, _, err := resolver.FetchSolutionWithBundle(ctx, "my-sol@1.0.0")
+	_, _, err := resolver.FetchSolutionWithLayers(ctx, "my-sol@1.0.0", MediaTypeSolutionBundle)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unauthorized")
 	assert.False(t, IsNotFound(err), "auth errors should not be masked as not-found")
@@ -675,7 +739,7 @@ func TestSolutionResolver_LocalNonNotFoundError_NoFallback_WithBundle(t *testing
 	ctx := context.Background()
 
 	local := newMockCatalog("local")
-	local.fetchWithBundleFunc = func(_ context.Context, _ Reference) ([]byte, []byte, ArtifactInfo, error) {
+	local.fetchWithLayerFunc = func(_ context.Context, _ Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
 		return nil, nil, ArtifactInfo{}, fmt.Errorf("corrupted OCI layout")
 	}
 
@@ -687,7 +751,7 @@ func TestSolutionResolver_LocalNonNotFoundError_NoFallback_WithBundle(t *testing
 		WithResolverRemoteCatalogs([]Catalog{remote}),
 	)
 
-	_, _, err := resolver.FetchSolutionWithBundle(ctx, "my-sol@1.0.0")
+	_, _, err := resolver.FetchSolutionWithLayers(ctx, "my-sol@1.0.0", MediaTypeSolutionBundle)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "corrupted OCI layout")
 	assert.False(t, IsNotFound(err), "non-not-found errors should not be masked")
@@ -845,4 +909,146 @@ func TestFetchSolution_LatestNoUpgradeWhenSameVersion(t *testing.T) {
 	content, err := resolver.FetchSolution(ctx, "my-app")
 	require.NoError(t, err)
 	assert.Equal(t, "v1-content", string(content))
+}
+
+func TestSolutionResolver_FetchSolutionWithLock_Layers(t *testing.T) {
+	t.Run("returns content and lock layer from local catalog", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		ref, err := ParseReference(ArtifactKindSolution, "locked-solution@1.0.0")
+		require.NoError(t, err)
+
+		content := []byte("apiVersion: scafctl.io/v1\nkind: Solution\n")
+		lockData := []byte(`{"version":1,"plugins":[{"name":"exec","kind":"provider"}]}`)
+		_, err = cat.Store(context.Background(), ref, content, nil, nil, false,
+			Layer{MediaType: MediaTypeSolutionLock, Data: lockData})
+		require.NoError(t, err)
+
+		resolver := NewSolutionResolver(cat, logr.Discard())
+		gotContent, layers, err := resolver.FetchSolutionWithLayers(context.Background(), "locked-solution@1.0.0", MediaTypeSolutionLock)
+		require.NoError(t, err)
+		assert.Equal(t, content, gotContent)
+		assert.Equal(t, lockData, layers[MediaTypeSolutionLock])
+	})
+
+	t.Run("returns nil lock when artifact has no lock layer", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		ref, err := ParseReference(ArtifactKindSolution, "no-lock@1.0.0")
+		require.NoError(t, err)
+
+		content := []byte("apiVersion: scafctl.io/v1\nkind: Solution\n")
+		_, err = cat.Store(context.Background(), ref, content, nil, nil, false)
+		require.NoError(t, err)
+
+		resolver := NewSolutionResolver(cat, logr.Discard())
+		gotContent, layers, err := resolver.FetchSolutionWithLayers(context.Background(), "no-lock@1.0.0", MediaTypeSolutionLock)
+		require.NoError(t, err)
+		assert.Equal(t, content, gotContent)
+		assert.Nil(t, layers[MediaTypeSolutionLock])
+	})
+
+	t.Run("returns error for invalid reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cat, err := NewLocalCatalogAt(tmpDir, logr.Discard())
+		require.NoError(t, err)
+
+		resolver := NewSolutionResolver(cat, logr.Discard())
+		_, _, err = resolver.FetchSolutionWithLayers(context.Background(), "bad@@ref", MediaTypeSolutionLock)
+		require.Error(t, err)
+	})
+
+	t.Run("propagates not-found when no remotes configured", func(t *testing.T) {
+		local := newMockCatalog("local")
+
+		resolver := NewSolutionResolver(local, logr.Discard())
+		_, _, err := resolver.FetchSolutionWithLayers(context.Background(), "missing@1.0.0", MediaTypeSolutionLock)
+		require.Error(t, err)
+		assert.True(t, IsNotFound(err))
+	})
+
+	t.Run("falls back to remote catalog on local not-found", func(t *testing.T) {
+		ctx := context.Background()
+		v1 := semver.MustParse("1.0.0")
+
+		local := newMockCatalog("local")
+
+		lockData := []byte(`{"version":1}`)
+		remote := newMockCatalog("remote-reg")
+		remote.fetchWithLayerFunc = func(_ context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+			assert.Contains(t, mediaTypes, MediaTypeSolutionLock)
+			return []byte("remote-content"), map[string][]byte{MediaTypeSolutionLock: lockData}, ArtifactInfo{
+				Reference: Reference{Kind: ArtifactKindSolution, Name: ref.Name, Version: v1},
+				Catalog:   "remote-reg",
+			}, nil
+		}
+
+		resolver := NewSolutionResolver(local, logr.Discard(),
+			WithResolverRemoteCatalogs([]Catalog{remote}),
+		)
+
+		content, layers, err := resolver.FetchSolutionWithLayers(ctx, "my-app@1.0.0", MediaTypeSolutionLock)
+		require.NoError(t, err)
+		assert.Equal(t, "remote-content", string(content))
+		assert.Equal(t, lockData, layers[MediaTypeSolutionLock])
+		assert.Equal(t, "remote-reg", resolver.LastResolvedCatalog())
+	})
+
+	t.Run("persists fetched lock layer locally on remote fallback", func(t *testing.T) {
+		ctx := context.Background()
+		v1 := semver.MustParse("1.0.0")
+		lockData := []byte(`{"version":1,"plugins":[{"name":"exec","kind":"provider"}]}`)
+
+		local := newMockCatalog("local")
+		var storedLayers []Layer
+		local.storeFunc = func(_ context.Context, ref Reference, content, _ []byte, _ map[string]string, _ bool, extraLayers ...Layer) (ArtifactInfo, error) {
+			storedLayers = extraLayers
+			return ArtifactInfo{Reference: ref, Catalog: "local"}, nil
+		}
+
+		remote := newMockCatalog("remote-reg")
+		remote.fetchWithLayerFunc = func(_ context.Context, ref Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+			return []byte("remote-content"), map[string][]byte{MediaTypeSolutionLock: lockData}, ArtifactInfo{
+				Reference: Reference{Kind: ArtifactKindSolution, Name: ref.Name, Version: v1},
+				Catalog:   "remote-reg",
+			}, nil
+		}
+
+		resolver := NewSolutionResolver(local, logr.Discard(),
+			WithResolverRemoteCatalogs([]Catalog{remote}),
+		)
+
+		_, _, err := resolver.FetchSolutionWithLayers(ctx, "my-app@1.0.0", MediaTypeSolutionLock)
+		require.NoError(t, err)
+		require.Len(t, storedLayers, 1)
+		assert.Equal(t, MediaTypeSolutionLock, storedLayers[0].MediaType)
+		assert.Equal(t, lockData, storedLayers[0].Data)
+	})
+
+	t.Run("propagates non-not-found catalog errors without remote fallback", func(t *testing.T) {
+		ctx := context.Background()
+
+		local := newMockCatalog("local")
+		local.fetchWithLayerFunc = func(_ context.Context, _ Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("corrupted layout")
+		}
+
+		remote := newMockCatalog("remote-reg")
+		remote.fetchWithLayerFunc = func(_ context.Context, _ Reference, _ ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+			t.Error("remote should not be consulted on non-not-found error")
+			return nil, nil, ArtifactInfo{}, nil
+		}
+
+		resolver := NewSolutionResolver(local, logr.Discard(),
+			WithResolverRemoteCatalogs([]Catalog{remote}),
+		)
+
+		_, _, err := resolver.FetchSolutionWithLayers(ctx, "my-app@1.0.0", MediaTypeSolutionLock)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "corrupted layout")
+	})
 }

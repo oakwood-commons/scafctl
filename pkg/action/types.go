@@ -96,8 +96,11 @@ type Action struct {
 	Explicit bool `json:"explicit,omitempty" yaml:"explicit,omitempty" doc:"If true, action only runs when explicitly named on the CLI"`
 
 	// Provider specifies which action provider to use for execution.
-	// The provider must have CapabilityAction.
-	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Action provider name (mutually exclusive with call)" maxLength:"100" example:"shell"`
+	// The provider must have CapabilityAction. It is a short local name (shell)
+	// resolved via the builtins or a bundle.plugins declaration. Remote source and
+	// version constraints are declared in bundle.plugins (via each plugin's source
+	// and version), not inline here.
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty" doc:"Action provider handle (mutually exclusive with call): short local name resolved via builtins or a bundle.plugins declaration (shell). Declare remote source and version in bundle.plugins." maxLength:"256" example:"shell"`
 
 	// Inputs is a map of input values passed to the provider.
 	// Values can be literals, resolver references, expressions, or templates.
