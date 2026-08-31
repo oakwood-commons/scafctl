@@ -99,7 +99,9 @@ has(_.config) && has(_.config.database) && has(_.config.database.host)
 
 To see which resolver references an expression produces (for dependency
 inference), use the MCP tool **`extract_resolver_refs`**. The underlying static
-analysis lives in `pkg/celexp/refs.go`:
+analysis now lives in the `github.com/oakwood-commons/celexp` library and is
+reached through methods on the `Expression` type, which scafctl re-exports via
+the type alias in `pkg/celexp/celexp.go`:
 
 - `RequiredVariables(ctx)` / `GetUnderscoreVariables(ctx)` -- extract variable
   and `_.` resolver references.
@@ -113,10 +115,16 @@ analysis lives in `pkg/celexp/refs.go`:
 
 ## Key Packages
 
+`pkg/celexp` and its subpackages are now a thin re-export **adapter** over the
+standalone `github.com/oakwood-commons/celexp` library (the implementation and
+its tests live in that library; scafctl wires in its logger/writer/paths via
+`pkg/celexp/bridge.go`). Consumers still import the same `pkg/celexp/...` paths.
+
 - `pkg/celexp/`: Expression type, Compile/Eval, EvaluateExpression convenience
+  (re-exported); static reference extraction (`RequiredVariables`,
+  `MapLiteralKeys`) via methods on the re-exported `Expression` type
 - `pkg/celexp/env/`: CEL environment setup, extension loading, caching
 - `pkg/celexp/ext/`: Custom function registration (regex, arrays, map, guid, time, sort, out)
-- `pkg/celexp/refs.go`: static reference extraction (RequiredVariables, MapLiteralKeys)
 - `pkg/provider/builtin/celprovider/`: CEL provider for transform phase
 
 ## Cost Limits
