@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -33,6 +34,17 @@ type PruneOutput struct {
 	ReclaimedBytes   int64  `json:"reclaimedBytes" yaml:"reclaimedBytes"`
 	ReclaimedHuman   string `json:"reclaimedHuman" yaml:"reclaimedHuman"`
 }
+
+// pruneColumnHints controls column display for prune output.
+var pruneColumnHints = map[string]tui.ColumnHint{
+	"removedManifests": {DisplayName: "removed manifests"},
+	"removedBlobs":     {DisplayName: "removed blobs"},
+	"reclaimedHuman":   {DisplayName: "reclaimed"},
+	"reclaimedBytes":   {DisplayName: "reclaimed bytes"},
+}
+
+// pruneColumnOrder defines the display order for prune output fields.
+var pruneColumnOrder = []string{"removedManifests", "removedBlobs", "reclaimedHuman", "reclaimedBytes"}
 
 // CommandPrune creates the prune command.
 func CommandPrune(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
@@ -62,7 +74,13 @@ func CommandPrune(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ stri
 		`),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			options.AppName = cliParams.BinaryName
-			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
+			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
+				kvx.WithIOStreams(ioStreams),
+				kvx.WithOutputContext(cmd.Context()),
+				kvx.WithOutputNoColor(cliParams.NoColor),
+				kvx.WithOutputColumnHints(pruneColumnHints),
+				kvx.WithOutputColumnOrder(pruneColumnOrder),
+			)
 			return runPrune(cmd.Context(), options, kvxOpts)
 		},
 	}
@@ -98,24 +116,23 @@ func runPrune(ctx context.Context, _ *PruneOptions, outputOpts *kvx.OutputOption
 		ReclaimedHuman:   format.Bytes(result.ReclaimedBytes),
 	}
 
-	// For structured output, use kvx
-	if outputOpts.Format == kvx.OutputFormatJSON || outputOpts.Format == kvx.OutputFormatYAML {
-		return outputOpts.Write(output)
+	// For the default (no explicit -o, -i, -e, or -w flags), show styled human-readable message.
+	// Any explicit flag routes through kvx so filtering and format selection work.
+	if !outputOpts.FormatExplicit && !outputOpts.Interactive && outputOpts.Expression == "" && outputOpts.Where == "" {
+		if result.RemovedManifests == 0 && result.RemovedBlobs == 0 {
+			w.Infof("No orphaned content found")
+		} else {
+			w.Successf("Pruned catalog")
+			if result.RemovedManifests > 0 {
+				w.Infof("  Removed manifests: %d", result.RemovedManifests)
+			}
+			if result.RemovedBlobs > 0 {
+				w.Infof("  Removed blobs: %d", result.RemovedBlobs)
+			}
+			w.Infof("  Reclaimed: %s", output.ReclaimedHuman)
+		}
+		return nil
 	}
 
-	// For table/default output, print human-readable message
-	if result.RemovedManifests == 0 && result.RemovedBlobs == 0 {
-		w.Infof("No orphaned content found")
-	} else {
-		w.Successf("Pruned catalog")
-		if result.RemovedManifests > 0 {
-			w.Infof("  Removed manifests: %d", result.RemovedManifests)
-		}
-		if result.RemovedBlobs > 0 {
-			w.Infof("  Removed blobs: %d", result.RemovedBlobs)
-		}
-		w.Infof("  Reclaimed: %s", output.ReclaimedHuman)
-	}
-
-	return nil
+	return outputOpts.Write(output)
 }
