@@ -22,7 +22,11 @@ metadata:
     `pathTemplate` computes a distinct output path per (item, template), so a
     whole template tree is cross-producted across items in one resolver -- no
     per-item duplication and no external looping.
-
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # -------------------------------------------------------------------------

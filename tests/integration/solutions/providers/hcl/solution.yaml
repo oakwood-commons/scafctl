@@ -10,6 +10,12 @@ metadata:
     variables, resources, data sources, modules, outputs, locals,
     providers, terraform blocks, moved, import, and check blocks.
 
+bundle:
+  plugins:
+    - name: hcl
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     parseVariables:

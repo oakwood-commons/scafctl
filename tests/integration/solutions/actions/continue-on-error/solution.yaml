@@ -11,7 +11,11 @@ metadata:
     action; a falsy condition stops it. The deprecated onError enum is also
     exercised to confirm it still works for back-compat, and forEach
     continueOnError is verified through the rendered EffectiveOnError value.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # Gates the non-recovering action so the default run stays green while a

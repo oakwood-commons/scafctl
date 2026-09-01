@@ -9,6 +9,12 @@ metadata:
     Verifies that per-resolver timeouts are enforced and
     that resolvers within timeout complete normally.
 
+bundle:
+  plugins:
+    - name: sleep
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     fastResolver:

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -113,18 +114,7 @@ type FileDependencyInfo struct {
 func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) {
 	lgr := logger.FromContext(ctx)
 
-	var getterOpts []get.Option
-	localCatalog, err := catalog.NewLocalCatalog(*lgr)
-	if err == nil {
-		catResolver := catalog.NewSolutionResolver(localCatalog, *lgr,
-			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
-		)
-		getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
-	} else {
-		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
-	}
-
-	getter := get.NewGetterFromContext(ctx, getterOpts...)
+	getter := newCatalogGetter(ctx, lgr)
 	sol, err := getter.Get(ctx, path)
 	if err != nil {
 		return nil, exitcode.WithCode(
@@ -136,6 +126,61 @@ func LoadSolution(ctx context.Context, path string) (*solution.Solution, error) 
 	lgr.V(1).Info("solution loaded", "name", sol.Metadata.Name, "version", sol.Metadata.Version, "path", sol.GetPath())
 
 	return sol, nil
+}
+
+// LoadSolutionWithLock loads a solution from a path together with its parsed
+// lock file, using the standard loader with catalog resolution. The returned
+// lock is nil when the solution has no lock layer (e.g. an older solution, or
+// one loaded from a local file/URL). A present-but-malformed lock is a fatal
+// error. This function is reusable by CLI, MCP, and future API.
+func LoadSolutionWithLock(ctx context.Context, path string) (*solution.Solution, *bundler.LockFile, error) {
+	lgr := logger.FromContext(ctx)
+
+	getter := newCatalogGetter(ctx, lgr)
+	sol, layers, err := getter.GetWithLayers(ctx, path, catalog.MediaTypeSolutionLock)
+	if err != nil {
+		return nil, nil, exitcode.WithCode(
+			fmt.Errorf("failed to load solution: %w", err),
+			exitcode.FileNotFound,
+		)
+	}
+
+	var lock *bundler.LockFile
+	lockData := layers[catalog.MediaTypeSolutionLock]
+	if len(lockData) > 0 {
+		lock, err = bundler.ParseLockJSON(lockData)
+		if err != nil {
+			return nil, nil, exitcode.WithCode(
+				fmt.Errorf("failed to parse solution lock: %w", err),
+				exitcode.InvalidInput,
+			)
+		}
+	}
+
+	lgr.V(1).Info("solution loaded with lock",
+		"name", sol.Metadata.Name,
+		"version", sol.Metadata.Version,
+		"path", sol.GetPath(),
+		"hasLock", lock != nil)
+
+	return sol, lock, nil
+}
+
+// newCatalogGetter builds a solution getter wired with local catalog resolution
+// (and remote fallbacks from context) when a local catalog is available.
+func newCatalogGetter(ctx context.Context, lgr *logr.Logger) *get.Getter {
+	var getterOpts []get.Option
+	localCatalog, err := catalog.NewLocalCatalog(*lgr)
+	if err == nil {
+		catResolver := catalog.NewSolutionResolver(localCatalog, *lgr,
+			catalog.WithResolverRemoteCatalogs(catalog.RemoteCatalogsFromContext(ctx, *lgr)),
+		)
+		getterOpts = append(getterOpts, get.WithCatalogResolver(catResolver))
+	} else {
+		lgr.V(1).Info("catalog not available for solution resolution", "error", err)
+	}
+
+	return get.NewGetterFromContext(ctx, getterOpts...)
 }
 
 // BuildSolutionExplanation builds a structured explanation from a loaded solution.

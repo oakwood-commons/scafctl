@@ -4,8 +4,11 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/Masterminds/semver/v3"
+	"github.com/google/jsonschema-go/jsonschema"
 	sdkprovider "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
 )
 
@@ -94,4 +97,44 @@ var builtinProviderNames = map[string]bool{
 // not be fetched from a catalog.
 func IsBuiltinProvider(name string) bool {
 	return builtinProviderNames[name]
+}
+
+type MockProvider struct {
+	ExecuteFunc    func() (*Output, error)
+	DescriptorFunc func() *Descriptor
+	Name           string
+}
+
+func (m *MockProvider) Execute(_ context.Context, _ any) (*Output, error) {
+	if m.ExecuteFunc == nil {
+		return &Output{}, nil
+	}
+	return m.ExecuteFunc()
+}
+
+func (m *MockProvider) Descriptor() *Descriptor {
+	if m.DescriptorFunc == nil {
+		return &Descriptor{
+			Name:         m.Name,
+			APIVersion:   "v1",
+			Version:      semver.MustParse("1.0.0"),
+			Description:  "A test provider",
+			Capabilities: []Capability{CapabilityFrom},
+			Schema: &jsonschema.Schema{
+				Type: "object",
+				Properties: map[string]*jsonschema.Schema{
+					"test": {Type: "string"},
+				},
+			},
+			OutputSchemas: map[Capability]*jsonschema.Schema{
+				CapabilityFrom: {
+					Type: "object",
+					Properties: map[string]*jsonschema.Schema{
+						"result": {Type: "string"},
+					},
+				},
+			},
+		}
+	}
+	return m.DescriptorFunc()
 }

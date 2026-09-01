@@ -22,6 +22,7 @@ import (
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
 	"github.com/oakwood-commons/scafctl/pkg/cache"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
@@ -56,6 +57,8 @@ type prepareConfig struct {
 	officialAuthHandlers *authofficial.Registry
 	strict               bool
 	pluginPool           *plugin.Pool
+	lockFile             *bundler.LockFile
+	lockMode             LockMode
 }
 
 // WithGetter provides a custom solution getter. If not set, one is created
@@ -177,6 +180,23 @@ func WithStrict(strict bool) Option {
 	}
 }
 
+// WithLockFile provides the parsed lock file for reproducible, version-pinned
+// plugin resolution in the versioned registry pipeline. BuildProviderDependency
+// uses this to look up pinned versions and digests by plugin name.
+func WithLockFile(lf *bundler.LockFile) Option {
+	return func(c *prepareConfig) {
+		c.lockFile = lf
+	}
+}
+
+// WithLockMode sets the lock mode that controls how BuildProviderDependency
+// handles version constraints. See LockMode constants for available modes.
+func WithLockMode(mode LockMode) Option {
+	return func(c *prepareConfig) {
+		c.lockMode = mode
+	}
+}
+
 // WithPluginPool delegates provider plugin lifecycle to a shared, long-lived
 // plugin pool instead of fetching, registering, and killing plugin processes
 // per call. This is the correct mode for long-lived servers (MCP, HTTP API):
@@ -195,13 +215,24 @@ func WithPluginPool(p *plugin.Pool) Option {
 	}
 }
 
+type providerLookup interface {
+	DescriptorLookup() provider.DescriptorLookup
+	Get(name string) (provider.Provider, bool)
+	Has(name string) bool
+}
+
 // Result holds the output of PrepareSolution.
 type Result struct {
 	// Solution is the loaded and prepared solution.
 	Solution *solution.Solution `json:"solution" yaml:"solution" doc:"The loaded solution"`
 	// Registry is the provider registry with all providers registered,
-	// including the solution provider.
-	Registry *provider.Registry `json:"-" yaml:"-"`
+	// including the solution provider. In per-call mode this is a
+	// ExecutionRegistry backed by a CompositeRegistry; in pool mode or when no
+	// plugins are involved it may be the flat builtin *provider.Registry.
+	// Callers that only need lookup (Get/Has/DescriptorLookup) should use
+	// this field. Callers that need mutation (Register) should use the flat
+	// registry from ProviderCtx instead.
+	Registry providerLookup `json:"-" yaml:"-"`
 	// SolutionDir is the directory containing the solution file, resolved to
 	// an absolute path. Empty when loaded from stdin or a catalog reference.
 	// Callers can use this to set provider.WithSolutionDirectory for relative
@@ -259,11 +290,19 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 		}
 	}
 
-	// Load the solution (with bundle if available)
-	sol, bundleDir, err := loadSolutionWithBundle(ctx, getter, path, cfg.stdin)
+	// Load the solution (with bundle and lock if available)
+	sol, bundleDir, lockData, err := loadSolutionWithBundleAndLock(ctx, getter, path, cfg.stdin)
 	if err != nil {
 		return nil, err
 	}
+
+	// Parse the OCI lock layer (when present) and apply the appropriate lock
+	// mode default based on the solution source.
+	isCatalogOrRemote := path != "" && path != "-" && get.IsCatalogReference(path)
+	if err := applyOCILockLayer(cfg, lockData); err != nil {
+		return nil, err
+	}
+	applyDefaultLockMode(cfg, path, isCatalogOrRemote, lgr)
 
 	// Determine the solution directory for relative path resolution.
 	// For file-based loading: use the file's parent directory.
@@ -371,7 +410,16 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 	// registry once and keeps them alive across requests. We merely acquire a
 	// reference for this prepared solution and release (never kill) on cleanup,
 	// which prevents registry poisoning. In per-call mode (one-shot CLI), we
-	// fetch, register, and kill the plugin processes ourselves.
+	// classify, fetch, and register the plugins declared in bundle.plugins into
+	// a versioned composite registry, and build a ExecutionRegistry that routes
+	// lookups to the correct catalog+version. Referenced providers that are
+	// neither built-in nor declared in bundle.plugins are rejected (no implicit
+	// official-provider auto-resolution on this path).
+	//
+	// resultRegistry is the registry exposed via Result.Registry for downstream
+	// lookup (Get/Has/DescriptorLookup). In pool mode it is the flat builtin
+	// registry; in per-call mode it is the ExecutionRegistry.
+	var resultRegistry providerLookup = reg
 	if cfg.pluginPool != nil {
 		deps := providerPoolDeps(sol, cfg)
 		release, ensErr := cfg.pluginPool.EnsureAndAcquire(ctx, deps)
@@ -396,79 +444,54 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 			}
 		}
 	} else {
-		// Per-call mode: auto-fetch and register plugin binaries from catalogs.
-		var pluginClients []*plugin.Client
-		if len(sol.Bundle.Plugins) > 0 && cfg.pluginFetcher != nil {
-			fetchResults, fetchErr := cfg.pluginFetcher.FetchPlugins(ctx, sol.Bundle.Plugins, cfg.lockPlugins)
-			if fetchErr != nil {
-				cleanup()
-				return nil, fmt.Errorf("auto-fetching plugins: %w", fetchErr)
-			}
+		composite := provider.NewCompositeRegistryFromBase(reg)
+		// Per-call mode: classify, fetch, and register the plugins declared in
+		// bundle.plugins into a versioned composite registry, and build a
+		// ExecutionRegistry that routes lookups to the correct catalog+version.
+		// Undeclared external providers are rejected by validateExternalProviders.
+		execReg, vCleanup, vErr := buildExecutionRegistryCLI(ctx, sol, composite, catalogindex.FromContext(ctx), cfg)
+		if vErr != nil {
+			cleanup()
+			return nil, vErr
+		}
 
-			clients, regErr := plugin.RegisterFetchedPlugins(ctx, reg, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
-			if regErr != nil {
-				cleanup()
-				return nil, fmt.Errorf("registering fetched plugins: %w", regErr)
-			}
-			pluginClients = clients
+		// Chain the execution-registry cleanup (kills the versioned clients
+		// started during registration) into the cleanup chain.
+		origCleanup := cleanup
+		cleanup = func() {
+			vCleanup()
+			origCleanup()
+		}
 
-			// Register auth handler plugins if auth registry is available
-			if cfg.authRegistry != nil {
-				authClients, authRegErr := plugin.RegisterFetchedAuthHandlerPlugins(ctx, cfg.authRegistry, fetchResults, cfg.pluginCfg, cfg.clientOpts...)
-				if authRegErr != nil {
-					cleanup()
-					return nil, fmt.Errorf("registering fetched auth handler plugins: %w", authRegErr)
-				}
-				// Add auth handler client cleanup
-				origCleanup2 := cleanup
+		// Register auth handler plugins declared in the bundle. The
+		// buildExecutionRegistryCLI path only fetches provider-kind plugins, so
+		// auth handlers must be fetched separately.
+		if bundleHasAuthHandlers(sol) {
+			if cfg.authRegistry == nil {
+				cleanup()
+				return nil, fmt.Errorf("bundle declares auth handler plugins but no auth registry is configured")
+			}
+			if cfg.pluginFetcher == nil {
+				cleanup()
+				return nil, fmt.Errorf("bundle declares auth handler plugins but no plugin fetcher is available")
+			}
+			authClients, authRegErr := registerBundleAuthHandlers(ctx, sol, cfg)
+			if authRegErr != nil {
+				cleanup()
+				return nil, authRegErr
+			}
+			if len(authClients) > 0 {
+				origCleanup := cleanup
 				cleanup = func() {
 					for _, c := range authClients {
 						c.Kill()
 					}
-					origCleanup2()
+					origCleanup()
 				}
-			}
-
-			if lgr != nil {
-				for _, r := range fetchResults {
-					src := "catalog"
-					if r.FromCache {
-						src = "cache"
-					}
-					lgr.V(1).Info("plugin loaded",
-						"name", r.Name,
-						"version", r.Version,
-						"source", src)
-				}
-			}
-
-			// Add plugin cleanup to the cleanup chain
-			origCleanup := cleanup
-			cleanup = func() {
-				for _, c := range pluginClients {
-					c.Kill()
-				}
-				origCleanup()
 			}
 		}
 
-		// Auto-resolve official providers that are referenced in the solution
-		// but not already registered. This runs after the explicit plugin fetch
-		// so that declared bundle.plugins always take precedence.
-		officialClients, officialErr := autoResolveOfficialProviders(ctx, sol, reg, cfg)
-		if officialErr != nil {
-			cleanup()
-			return nil, officialErr
-		}
-		if len(officialClients) > 0 {
-			origCleanup := cleanup
-			cleanup = func() {
-				for _, c := range officialClients {
-					c.Kill()
-				}
-				origCleanup()
-			}
-		}
+		resultRegistry = execReg
 	}
 
 	// Auto-resolve official auth handlers that are referenced in the solution
@@ -543,7 +566,7 @@ func Solution(ctx context.Context, path string, opts ...Option) (*Result, error)
 
 	return &Result{
 		Solution:       sol,
-		Registry:       reg,
+		Registry:       resultRegistry,
 		SolutionDir:    solutionDir,
 		Cleanup:        cleanup,
 		DiscoveredFrom: discoveredFrom,
@@ -719,6 +742,114 @@ func loadSolutionWithBundle(ctx context.Context, getter get.Interface, path stri
 	return sol, "", nil
 }
 
+// loadSolutionWithBundleAndLock loads a solution, its bundle, and its lock
+// layer in a single call. Returns the solution, the extracted bundle directory
+// (empty when no bundle), the raw lock layer bytes (nil when absent), and any
+// error. Delegates bundle extraction to loadSolutionWithBundle internally.
+func loadSolutionWithBundleAndLock(ctx context.Context, getter get.Interface, path string, stdin io.Reader) (*solution.Solution, string, []byte, error) {
+	lgr := logger.FromContext(ctx)
+
+	// stdin has no OCI layers — delegate to the plain bundle loader.
+	if path == "-" {
+		sol, bundleDir, err := loadSolutionWithBundle(ctx, getter, path, stdin)
+		return sol, bundleDir, nil, err
+	}
+
+	// Use GetWithLayers to fetch solution, bundle, and lock in one call.
+	sol, layers, err := getter.GetWithLayers(ctx, path, catalog.MediaTypeSolutionBundle, catalog.MediaTypeSolutionLock)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	bundleData := layers[catalog.MediaTypeSolutionBundle]
+	lockData := layers[catalog.MediaTypeSolutionLock]
+
+	// If there's bundle data, extract it to a temp directory
+	if len(bundleData) > 0 {
+		if lgr != nil {
+			lgr.V(1).Info("extracting solution bundle", "size", len(bundleData))
+		}
+		tmpDir, err := os.MkdirTemp("", paths.AppName()+"-bundle-*")
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("failed to create temp directory for bundle: %w", err)
+		}
+
+		solYAML, err := sol.ToYAML()
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", nil, fmt.Errorf("failed to serialize solution: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(tmpDir, "solution.yaml"), solYAML, 0o600); err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", nil, fmt.Errorf("failed to write solution to temp dir: %w", err)
+		}
+
+		manifest, err := bundler.ExtractBundleTar(bundleData, tmpDir)
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return nil, "", nil, fmt.Errorf("failed to extract bundle: %w", err)
+		}
+
+		if lgr != nil {
+			lgr.V(1).Info("extracted bundle",
+				"files", len(manifest.Files),
+				"dir", tmpDir)
+		}
+
+		return sol, tmpDir, lockData, nil
+	}
+
+	return sol, "", lockData, nil
+}
+
+// applyOCILockLayer parses raw OCI lock layer bytes into cfg when the caller
+// did not supply a lock file explicitly. No-op when lockData is nil or cfg
+// already has a caller-supplied lock (WithLockFile takes precedence). A
+// present-but-invalid lock layer -- unparseable JSON or an unsupported format
+// version -- is returned as an error rather than silently ignored: dropping it
+// would downgrade a packaged, locked artifact to apparently-unlocked and let
+// source defaulting select best-effort and run its plugins unpinned.
+func applyOCILockLayer(cfg *prepareConfig, lockData []byte) error {
+	if cfg.lockFile != nil || len(lockData) == 0 {
+		return nil
+	}
+	var lf bundler.LockFile
+	if err := json.Unmarshal(lockData, &lf); err != nil {
+		return fmt.Errorf("parsing embedded lock layer: %w", err)
+	}
+	if lf.Version != bundler.LockFileVersion {
+		return fmt.Errorf("embedded lock layer has unsupported version %d (expected %d)", lf.Version, bundler.LockFileVersion)
+	}
+	cfg.lockFile = &lf
+	cfg.lockPlugins = lf.Plugins
+	return nil
+}
+
+// applyDefaultLockMode sets cfg.lockMode when the caller did not supply one
+// via WithLockMode. The default depends on the solution source:
+//
+//   - Local file / stdin: BestEffort -- dev-iteration friendly, lock hints
+//     are advisory only.
+//   - Catalog/remote with lock layer: Strict -- exact pins from the embedded
+//     lock; fetches by digest so catalog yanking is not a concern.
+//   - Catalog/remote without lock layer: BestEffort + warning -- old artifact
+//     predating the lock feature; plugins resolve unpinned.
+func applyDefaultLockMode(cfg *prepareConfig, path string, isCatalogOrRemote bool, lgr *logr.Logger) {
+	if cfg.lockMode != 0 {
+		return // caller explicitly set a mode via WithLockMode
+	}
+	switch {
+	case !isCatalogOrRemote:
+		cfg.lockMode = LockModeBestEffort
+	case cfg.lockFile != nil:
+		cfg.lockMode = LockModeStrict
+	default:
+		cfg.lockMode = LockModeBestEffort
+		if lgr != nil {
+			lgr.V(0).Info("solution has no embedded lock layer; external plugin versions are unpinned; re-package to embed a lock if it uses external providers", "path", path)
+		}
+	}
+}
+
 // writeMetrics writes provider execution metrics to the given writer.
 func writeMetrics(out io.Writer) {
 	allMetrics := provider.GlobalMetrics.GetAllMetrics()
@@ -846,7 +977,7 @@ func providerPoolDeps(sol *solution.Solution, cfg *prepareConfig) []solution.Plu
 	for _, p := range sol.Bundle.Plugins {
 		if p.Kind == solution.PluginKindProvider {
 			deps = append(deps, p)
-			seen[p.Name] = true
+			seen[p.LocalName()] = true
 		}
 	}
 	if cfg.officialProviders != nil {
@@ -861,6 +992,17 @@ func providerPoolDeps(sol *solution.Solution, cfg *prepareConfig) []solution.Plu
 		}
 	}
 	return deps
+}
+
+// bundleHasAuthHandlers reports whether the solution's bundle declares at least
+// one auth-handler-kind plugin dependency.
+func bundleHasAuthHandlers(sol *solution.Solution) bool {
+	for _, p := range sol.Bundle.Plugins {
+		if p.Kind == solution.PluginKindAuthHandler {
+			return true
+		}
+	}
+	return false
 }
 
 // registerBundleAuthHandlers fetches and registers any auth-handler-kind
@@ -1079,12 +1221,13 @@ func BuildPluginFetcherWithConfig(ctx context.Context, override PluginFetcherOve
 	}
 
 	cfg := plugin.FetcherConfig{
-		Catalog:         catalogChain,
-		Cache:           override.Cache,
-		BinaryName:      settings.BinaryNameFromContext(ctx),
-		Logger:          fetcherLogger,
-		AllowedCatalogs: override.AllowedCatalogs,
-		SignaturePolicy: override.SignaturePolicy,
+		Catalog:             catalogChain,
+		Cache:               override.Cache,
+		BinaryName:          settings.BinaryNameFromContext(ctx),
+		Logger:              fetcherLogger,
+		AllowedCatalogs:     override.AllowedCatalogs,
+		PerCatalogArtifacts: override.PerCatalogArtifacts,
+		SignaturePolicy:     override.SignaturePolicy,
 	}
 	if cfg.SignaturePolicy == nil {
 		cfg.SignaturePolicy = plugin.SignaturePolicyFromContext(ctx)

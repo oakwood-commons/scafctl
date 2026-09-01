@@ -9,6 +9,15 @@ metadata:
     Uses per-test init steps to create a local bare repo and seeded
     work tree so no network access is required.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+    - name: git
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     cloneRepo:

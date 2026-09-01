@@ -9,6 +9,12 @@ metadata:
     Uses a mock HTTP server started via testConfig.services to verify
     GET, POST, custom headers, error status codes, and response parsing.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     getUsers:

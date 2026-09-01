@@ -9,6 +9,12 @@ metadata:
     Verifies iteration over arrays, expanded action naming,
     concurrency configuration, and item/index access.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     servers:

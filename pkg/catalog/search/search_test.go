@@ -332,7 +332,11 @@ func (c *fetchCountingCatalog) FetchWithBundle(context.Context, catalog.Referenc
 	return nil, nil, catalog.ArtifactInfo{}, fmt.Errorf("not implemented")
 }
 
-func (c *fetchCountingCatalog) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool) (catalog.ArtifactInfo, error) {
+func (c *fetchCountingCatalog) FetchWithLayer(context.Context, catalog.Reference, ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
+	return nil, nil, catalog.ArtifactInfo{}, fmt.Errorf("not implemented")
+}
+
+func (c *fetchCountingCatalog) Store(context.Context, catalog.Reference, []byte, []byte, map[string]string, bool, ...catalog.Layer) (catalog.ArtifactInfo, error) {
 	return catalog.ArtifactInfo{}, fmt.Errorf("not implemented")
 }
 

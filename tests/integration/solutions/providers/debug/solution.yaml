@@ -9,6 +9,12 @@ metadata:
     Uses stderr and file destinations to avoid corrupting JSON output.
     The debug provider is side-effect free and needs no mocking.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     sourceData:

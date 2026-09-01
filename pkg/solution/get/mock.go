@@ -139,6 +139,29 @@ func (m *MockGetter) GetWithBundle(ctx context.Context, path string) (*solution.
 	return sol, bundleData, args.Error(2)
 }
 
+// GetWithLayers mocks the GetWithLayers method which retrieves a solution and
+// its requested OCI layers keyed by media type.
+func (m *MockGetter) GetWithLayers(ctx context.Context, path string, mediaTypes ...string) (*solution.Solution, map[string][]byte, error) {
+	args := m.Called(ctx, path, mediaTypes)
+	var sol *solution.Solution
+	if args.Get(0) != nil {
+		var ok bool
+		sol, ok = args.Get(0).(*solution.Solution)
+		if !ok {
+			return nil, nil, args.Error(2)
+		}
+	}
+	var layers map[string][]byte
+	if args.Get(1) != nil {
+		var ok bool
+		layers, ok = args.Get(1).(map[string][]byte)
+		if !ok {
+			return nil, nil, args.Error(2)
+		}
+	}
+	return sol, layers, args.Error(2)
+}
+
 // FindSolution mocks the FindSolution method which searches for a solution file
 // in default locations. It returns the configured mock response.
 //

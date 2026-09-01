@@ -14,7 +14,6 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
-	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
@@ -229,61 +228,49 @@ func TestSharedResolverOptions_GetEffectiveResolverConfig_NoFlagsChanged(t *test
 	assert.Equal(t, 5*time.Minute, cfg.PhaseTimeout)
 }
 
-func TestSharedResolverOptions_AppendClientPluginOptions_NoCliParams(t *testing.T) {
+func TestSharedResolverOptions_CLIWiring_NoCliParams(t *testing.T) {
 	t.Parallel()
 
-	opts := (&sharedResolverOptions{}).appendClientPluginOptions(context.Background(), nil)
-	assert.Len(t, opts, 0)
+	w := (&sharedResolverOptions{}).cliWiring()
+	assert.Nil(t, w.PluginConfig)
+	assert.False(t, w.DebugLogging)
 }
 
-func TestSharedResolverOptions_AppendClientPluginOptions_NonDebug(t *testing.T) {
+func TestSharedResolverOptions_CLIWiring_NonDebug(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	cliParams.MinLogLevel = logger.LevelInfo
 
-	opts := (&sharedResolverOptions{CliParams: cliParams}).appendClientPluginOptions(context.Background(), nil)
-	assert.Len(t, opts, 1)
+	w := (&sharedResolverOptions{CliParams: cliParams}).cliWiring()
+	require.NotNil(t, w.PluginConfig)
+	assert.False(t, w.DebugLogging)
 }
 
-func TestSharedResolverOptions_AppendClientPluginOptions_Debug(t *testing.T) {
+func TestSharedResolverOptions_CLIWiring_Debug(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
 	cliParams.MinLogLevel = logger.LevelDebug
 
-	opts := (&sharedResolverOptions{CliParams: cliParams}).appendClientPluginOptions(context.Background(), nil)
-	assert.Len(t, opts, 2)
+	w := (&sharedResolverOptions{CliParams: cliParams}).cliWiring()
+	require.NotNil(t, w.PluginConfig)
+	assert.True(t, w.DebugLogging)
 }
 
-func TestSharedResolverOptions_AppendClientPluginOptions_GRPCMaxMessageSize(t *testing.T) {
+func TestSharedResolverOptions_CLIWiring_PluginConfigFields(t *testing.T) {
 	t.Parallel()
 
 	cliParams := settings.NewCliParams()
-	cliParams.MinLogLevel = logger.LevelInfo
+	cliParams.IsQuiet = true
+	cliParams.NoColor = true
+	cliParams.BinaryName = "mycli"
 
-	cfg := &config.Config{
-		Plugins: config.PluginsConfig{
-			GRPCMaxMessageSize: 128 * 1024 * 1024, // 128 MB
-		},
-	}
-	ctx := config.WithConfig(context.Background(), cfg)
-	opts := (&sharedResolverOptions{CliParams: cliParams}).appendClientPluginOptions(ctx, nil)
-	// 1 provider config opt + 1 gRPC max message size opt
-	assert.Len(t, opts, 2, "should have provider config opt and gRPC max message size opt")
-}
-
-func TestSharedResolverOptions_AppendClientPluginOptions_GRPCMaxMessageSizeZeroIsNoop(t *testing.T) {
-	t.Parallel()
-
-	cliParams := settings.NewCliParams()
-	cliParams.MinLogLevel = logger.LevelInfo
-
-	cfg := &config.Config{} // GRPCMaxMessageSize defaults to 0
-	ctx := config.WithConfig(context.Background(), cfg)
-	opts := (&sharedResolverOptions{CliParams: cliParams}).appendClientPluginOptions(ctx, nil)
-	// Only 1 provider config opt -- zero size must not add a client opt
-	assert.Len(t, opts, 1, "zero GRPCMaxMessageSize should not add a client opt")
+	w := (&sharedResolverOptions{CliParams: cliParams}).cliWiring()
+	require.NotNil(t, w.PluginConfig)
+	assert.True(t, w.PluginConfig.Quiet)
+	assert.True(t, w.PluginConfig.NoColor)
+	assert.Equal(t, "mycli", w.PluginConfig.BinaryName)
 }
 
 // ── shouldRedactSensitive tests ───────────────────────────────────────────────

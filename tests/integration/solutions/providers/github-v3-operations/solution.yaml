@@ -19,6 +19,15 @@ metadata:
     collaborators, webhooks, GitHub Actions, repo settings, custom
     properties, and the generic api_call endpoint.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+    - name: github
+      kind: provider
+      version: latest
+
 spec:
   # =====================================================================
   # RESOLVERS -- Read operations + unclassified api_call

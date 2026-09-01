@@ -17,6 +17,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/state"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
@@ -99,11 +100,6 @@ func TestAutoResolveProviderByName_FetcherFails(t *testing.T) {
 	_, err := autoResolveProviderByName(ctx, "nonexistent-fake", reg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "fetching provider")
-}
-
-func TestLoadLockPlugins_MissingFile(t *testing.T) {
-	result := loadLockPlugins("/nonexistent/path/solution.yaml")
-	assert.Nil(t, result)
 }
 
 func TestExtractParameterKeys(t *testing.T) {
@@ -592,4 +588,74 @@ func TestResolveValidationPolicy(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "valid: error, warn, ignore")
 	})
+}
+
+// TestParseCLILockMode pins the CLI --lock-mode parser. Unlike the API's
+// parseLockMode (which maps "" to strict), the CLI parser rejects the empty
+// string: an unset flag is handled by the caller (which simply appends no
+// WithLockMode option and lets applyDefaultLockMode pick a source-dependent
+// default), so prepare.ParseLockMode is only ever called with a non-empty value.
+func TestParseCLILockMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    prepare.LockMode
+		wantErr bool
+	}{
+		{name: "strict", input: "strict", want: prepare.LockModeStrict},
+		{name: "constrained", input: "constrained", want: prepare.LockModeConstrained},
+		{name: "bestEffort", input: "bestEffort", want: prepare.LockModeBestEffort},
+		{name: "empty is rejected", input: "", wantErr: true},
+		{name: "unknown is rejected", input: "bogus", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := prepare.ParseLockMode(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "must be one of: strict, constrained, bestEffort")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestValidateLockMode covers the shared early-validation helper used by the
+// run commands (run resolver, run action, run solution). An empty value is
+// valid (source-based default); an unknown value must be rejected so callers
+// can fail fast with InvalidInput instead of a misleading FileNotFound.
+func TestValidateLockMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "empty is valid (source default)", input: ""},
+		{name: "strict", input: "strict"},
+		{name: "constrained", input: "constrained"},
+		{name: "bestEffort", input: "bestEffort"},
+		{name: "unknown is rejected", input: "bogus", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			o := &sharedResolverOptions{LockMode: tt.input}
+			err := o.validateLockMode()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "must be one of: strict, constrained, bestEffort")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }

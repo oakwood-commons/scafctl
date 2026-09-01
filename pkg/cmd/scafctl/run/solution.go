@@ -352,6 +352,12 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
 	}
 
+	// Validate --lock-mode early so an invalid value fails with InvalidInput
+	// instead of a misleading FileNotFound from prepareSolutionForExecution.
+	if err := o.validateLockMode(); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir when the CLI flag wasn't explicitly set
@@ -448,8 +454,6 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 
-	actionAdapter := &actionRegistryAdapter{registry: reg}
-
 	// Require a workflow — run solution is for executing actions.
 	// Use 'scafctl run resolver' for resolver-only solutions.
 	if !sol.Spec.HasWorkflow() {
@@ -459,7 +463,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	// Validate the workflow
-	if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, reg); err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
@@ -638,7 +642,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	}
 
 	actionExecutor := action.NewExecutor(
-		action.WithRegistry(actionAdapter),
+		action.WithRegistry(reg),
 		action.WithResolverData(resolverData),
 		action.WithExecutionData(resolverExecutionData),
 		action.WithProgressCallback(actionProgressCallback),
@@ -716,7 +720,7 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 // override) so resolver paths resolve relative to the solution file.
 // actionCtx carries CLI overrides (output-dir, on-conflict, backup, working-dir)
 // so that dryrun.Generate / WhatIf sees the same context as real execution.
-func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
+func (o *SolutionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	// Execute resolvers via the shared method so that IOStreams, progress
 	// callbacks, and CLI-flag-driven config are wired identically to the
 	// live execution path. Resolver providers are side-effect-free, so we
@@ -1091,22 +1095,6 @@ func (o *SolutionOptions) writeActionTestOutput(ctx context.Context, result *act
 		}
 	}
 	return nil
-}
-
-// actionRegistryAdapter adapts provider.Registry to action.RegistryInterface
-type actionRegistryAdapter struct {
-	registry *provider.Registry
-}
-
-// Get returns a provider by name (for action.RegistryInterface - returns bool)
-func (r *actionRegistryAdapter) Get(name string) (provider.Provider, bool) {
-	return r.registry.Get(name)
-}
-
-// Has checks if a provider exists (for action.RegistryInterface)
-func (r *actionRegistryAdapter) Has(name string) bool {
-	_, ok := r.registry.Get(name)
-	return ok
 }
 
 // ActionProgressCallback implements action.ProgressCallback for CLI output.

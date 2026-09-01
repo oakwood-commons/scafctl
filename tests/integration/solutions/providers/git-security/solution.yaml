@@ -8,6 +8,15 @@ metadata:
     Security tests for the git provider.
     Validates credential isolation via netrc and input sanitization.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+    - name: git
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     sandboxDir:

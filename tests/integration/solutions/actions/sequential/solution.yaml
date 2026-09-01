@@ -9,6 +9,12 @@ metadata:
     Verifies dependsOn ordering, result propagation,
     and multi-step workflows.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     project:

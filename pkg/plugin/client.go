@@ -453,6 +453,9 @@ func (c *Client) ExtractDependencies(ctx context.Context, providerName string, i
 
 // Kill terminates the plugin process
 func (c *Client) Kill() {
+	if c == nil {
+		return
+	}
 	if c.pluginClient != nil {
 		c.pluginClient.Kill()
 	}

@@ -9,6 +9,11 @@ import (
 	"sync"
 )
 
+// DescriptorLookup is a function that retrieves a provider descriptor by name.
+// It returns nil when the provider is not found. This type is the canonical
+// definition; the resolver package re-exports it as a type alias.
+type DescriptorLookup func(name string) *Descriptor
+
 // Registry manages provider registration and discovery.
 // It ensures global name uniqueness and maintains the latest stable version of each provider.
 type Registry struct {
@@ -243,7 +248,7 @@ func (r *Registry) ListByCategory(category string) []Provider {
 // DescriptorLookup returns a function that looks up provider descriptors by name.
 // This is used for dependency extraction during resolver phase building.
 // The returned function returns nil if the provider is not found.
-func (r *Registry) DescriptorLookup() func(name string) *Descriptor {
+func (r *Registry) DescriptorLookup() DescriptorLookup {
 	return func(name string) *Descriptor {
 		r.mu.RLock()
 		defer r.mu.RUnlock()

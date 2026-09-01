@@ -8,7 +8,11 @@ metadata:
     Functional tests for dry-run functionality.
     Verifies that --dry-run resolves values without
     executing actions and returns expected output.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     greeting:

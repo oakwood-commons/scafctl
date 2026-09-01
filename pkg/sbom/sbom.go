@@ -227,10 +227,10 @@ func Generate(sol *solution.Solution, opts GenerateOptions) ([]byte, error) {
 
 	// Plugin dependencies
 	for _, plugin := range sol.Bundle.Plugins {
-		spdxID := fmt.Sprintf("SPDXRef-Plugin-%s", sanitizeSPDXID(plugin.Name))
+		spdxID := fmt.Sprintf("SPDXRef-Plugin-%s", sanitizeSPDXID(plugin.LocalName()))
 		pkg := Package{
 			SPDXID:           spdxID,
-			Name:             plugin.Name,
+			Name:             plugin.ArtifactName(),
 			Version:          plugin.Version,
 			DownloadLocation: "NOASSERTION",
 			FilesAnalyzed:    false,

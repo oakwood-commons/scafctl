@@ -498,11 +498,70 @@ func TestBundle_IsEmpty(t *testing.T) {
 	assert.False(t, b2.IsEmpty())
 }
 
+func TestBundle_PartitionPlugins(t *testing.T) {
+	t.Run("empty bundle", func(t *testing.T) {
+		unsourced, sourced := Bundle{}.PartitionPlugins()
+		assert.Nil(t, unsourced)
+		assert.Nil(t, sourced)
+	})
+
+	t.Run("splits and preserves order", func(t *testing.T) {
+		b := Bundle{Plugins: []PluginDependency{
+			{Name: "local-a"},
+			{Name: "remote-a", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "remote-a"}},
+			{Name: "local-b"},
+			{Name: "remote-b", Source: &PluginSource{Registry: "registry.example.com", Artifact: "remote-b"}},
+		}}
+
+		unsourced, sourced := b.PartitionPlugins()
+
+		assert.Equal(t, []PluginDependency{
+			{Name: "local-a"},
+			{Name: "local-b"},
+		}, unsourced)
+		assert.Equal(t, []PluginDependency{
+			{Name: "remote-a", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "remote-a"}},
+			{Name: "remote-b", Source: &PluginSource{Registry: "registry.example.com", Artifact: "remote-b"}},
+		}, sourced)
+	})
+
+	t.Run("all unsourced", func(t *testing.T) {
+		b := Bundle{Plugins: []PluginDependency{{Name: "a"}, {Name: "b"}}}
+		unsourced, sourced := b.PartitionPlugins()
+		assert.Len(t, unsourced, 2)
+		assert.Nil(t, sourced)
+	})
+
+	t.Run("all include registry", func(t *testing.T) {
+		b := Bundle{Plugins: []PluginDependency{
+			{Name: "a", Source: &PluginSource{Registry: "ghcr.io/org", Artifact: "a"}},
+			{Name: "b", Source: &PluginSource{Registry: "ghcr.io/org", Artifact: "b"}},
+		}}
+		unsourced, sourced := b.PartitionPlugins()
+		assert.Nil(t, unsourced)
+		assert.Len(t, sourced, 2)
+	})
+}
+
 func TestPluginKind_IsValid(t *testing.T) {
 	assert.True(t, PluginKindProvider.IsValid())
 	assert.True(t, PluginKindAuthHandler.IsValid())
 	assert.False(t, PluginKind("invalid").IsValid())
 	assert.False(t, PluginKind("").IsValid())
+}
+
+func TestPluginDependency_ArtifactName(t *testing.T) {
+	t.Run("local plugin falls back to name", func(t *testing.T) {
+		assert.Equal(t, "exec", PluginDependency{Name: "exec"}.ArtifactName())
+	})
+	t.Run("sourced plugin uses source artifact", func(t *testing.T) {
+		dep := PluginDependency{Name: "my-exec", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "scafctl-exec-provider"}}
+		assert.Equal(t, "scafctl-exec-provider", dep.ArtifactName())
+	})
+	t.Run("local name returns the alias", func(t *testing.T) {
+		dep := PluginDependency{Name: "my-exec", Source: &PluginSource{Registry: "ghcr.io/myorg", Artifact: "scafctl-exec-provider"}}
+		assert.Equal(t, "my-exec", dep.LocalName())
+	})
 }
 
 func TestSolution_ToJSONPretty(t *testing.T) {

@@ -318,6 +318,17 @@ During `scafctl run solution` from a catalog artifact:
 2. **Resolve** each plugin from the local plugin cache or remote catalog, respecting version constraints.
 3. **Fail fast** with a clear error if a required plugin is not available and cannot be fetched.
 
+> **Runtime requires declaration for providers.** Solution execution (`run
+> solution`, `run resolver`, `render`) loads only the providers declared in
+> `bundle.plugins` plus the compiled-in built-ins. Referencing an external or
+> official provider that is not declared fails preparation before any fetch is
+> attempted -- there is no implicit provider auto-resolution. (Official *auth
+> handlers* referenced via the `identity` provider are still auto-resolved unless
+> `--strict` is set.) How the lock file is consulted when resolving declared
+> plugins -- exact pin, constraint range, or best-effort -- is controlled by the
+> **lock mode**; see the
+> [Plugin Lock Modes tutorial](../tutorials/lock-modes-tutorial.md).
+
 #### Why Plugins Are Not Under a `dependencies` Section
 
 Alternatives considered:
@@ -1470,6 +1481,10 @@ Plugin dependencies declared in `bundle.plugins` are resolved against the catalo
 - If the locked version still satisfies the version constraint, it is replayed
 - If the constraint has changed, the plugin is re-resolved from the catalog
 - Resolved plugin versions contribute to the build fingerprint
+
+At **run time**, the recorded lock entries are applied according to the active
+**lock mode** (exact pin, constraint range, or best-effort). See
+[Plugin Lock Modes](../tutorials/lock-modes-tutorial.md).
 
 **Files:** `pkg/solution/bundler/vendor_plugins.go`
 

@@ -19,6 +19,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
@@ -36,7 +37,7 @@ func testCatalogRegistryHash() string {
 	return CatalogIdentity{Canonical: "test"}.RegistryHash()
 }
 
-// mockCatalog implements catalog.Catalog for testing.
+// mockCatalog implements catalog.PlatformAwareCatalog for testing.
 type mockCatalog struct {
 	name      string
 	artifacts map[string]mockArtifact
@@ -69,7 +70,7 @@ func (m *mockCatalog) addArtifact(ref catalog.Reference, content []byte) {
 	}
 }
 
-func (m *mockCatalog) Store(_ context.Context, ref catalog.Reference, content, _ []byte, _ map[string]string, _ bool) (catalog.ArtifactInfo, error) {
+func (m *mockCatalog) Store(_ context.Context, ref catalog.Reference, content, _ []byte, _ map[string]string, _ bool, _ ...catalog.Layer) (catalog.ArtifactInfo, error) {
 	return catalog.ArtifactInfo{Reference: ref, Catalog: m.name}, nil
 }
 
@@ -82,6 +83,14 @@ func (m *mockCatalog) Fetch(_ context.Context, ref catalog.Reference) ([]byte, c
 }
 
 func (m *mockCatalog) FetchWithBundle(_ context.Context, ref catalog.Reference) ([]byte, []byte, catalog.ArtifactInfo, error) {
+	a, ok := m.artifacts[ref.String()]
+	if !ok {
+		return nil, nil, catalog.ArtifactInfo{}, catalog.ErrArtifactNotFound
+	}
+	return a.content, nil, a.info, nil
+}
+
+func (m *mockCatalog) FetchWithLayer(_ context.Context, ref catalog.Reference, _ ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
 	a, ok := m.artifacts[ref.String()]
 	if !ok {
 		return nil, nil, catalog.ArtifactInfo{}, catalog.ErrArtifactNotFound
@@ -122,6 +131,29 @@ func (m *mockCatalog) Exists(_ context.Context, ref catalog.Reference) (bool, er
 func (m *mockCatalog) Delete(_ context.Context, ref catalog.Reference) error {
 	delete(m.artifacts, ref.String())
 	return nil
+}
+
+func (m *mockCatalog) FetchByPlatform(_ context.Context, ref catalog.Reference, _ string) ([]byte, catalog.ArtifactInfo, error) {
+	a, ok := m.artifacts[ref.String()]
+	if !ok {
+		return nil, catalog.ArtifactInfo{}, catalog.ErrArtifactNotFound
+	}
+	return a.content, a.info, nil
+}
+
+func (m *mockCatalog) ListPlatforms(_ context.Context, _ catalog.Reference) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockCatalog) ResolveContentDigest(_ context.Context, ref catalog.Reference, _, _ string) (catalog.ContentDigestInfo, error) {
+	a, ok := m.artifacts[ref.String()]
+	if !ok {
+		return catalog.ContentDigestInfo{}, catalog.ErrArtifactNotFound
+	}
+	return catalog.ContentDigestInfo{
+		ArtifactInfo:  a.info,
+		ContentDigest: a.info.Digest,
+	}, nil
 }
 
 func testRef(name, version string) catalog.Reference {
@@ -183,6 +215,84 @@ func TestFetcher_FetchPlugins_CacheMiss_FetchFromCatalog(t *testing.T) {
 	assert.Equal(t, "1.0.0", r.Version)
 	assert.False(t, r.FromCache)
 	assert.NotEmpty(t, r.Path)
+}
+
+// TestFetcher_FetchPlugins_MultiPlatformLock_CrossPlatform is the regression
+// test for cross-platform verification: a multi-platform lock built on one
+// os/arch must verify correctly when run on another. The runtime platform is
+// linux/amd64 while the primary Digest holds the (different) darwin/arm64
+// digest; verification must use Digests[linux/amd64], not the primary.
+func TestFetcher_FetchPlugins_MultiPlatformLock_CrossPlatform(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("multi-plugin", "1.0.0")
+	binary := []byte("linux-amd64-binary")
+	cat.addArtifact(ref, binary)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "multi-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	// Digests is populated (multi-platform). The primary Digest is the BUILD
+	// platform's (darwin/arm64) digest and does NOT match the linux binary; the
+	// correct linux/amd64 entry does. Before the per-platform selector this
+	// failed with a bogus "digest mismatch / supply chain attack".
+	lock := []bundler.LockPlugin{
+		{
+			Name:         "multi-plugin",
+			Kind:         "provider",
+			Version:      "1.0.0",
+			Digest:       "sha256:darwin-build-platform-digest",
+			Digests:      map[string]string{"darwin/arm64": "sha256:darwin-build-platform-digest", "linux/amd64": binaryDigest(binary)},
+			ResolvedFrom: "test",
+		},
+	}
+
+	results, err := f.FetchPlugins(context.Background(), deps, lock)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "1.0.0", results[0].Version)
+	assert.False(t, results[0].FromCache)
+}
+
+// TestFetcher_FetchPlugins_MultiPlatformLock_MissingPlatform verifies that a
+// multi-platform lock lacking the runtime platform fails cleanly (no silent
+// fallback to the primary Digest) with an actionable message.
+func TestFetcher_FetchPlugins_MultiPlatformLock_MissingPlatform(t *testing.T) {
+	cat := newMockCatalog()
+	ref := testRef("multi-plugin", "1.0.0")
+	binary := []byte("some-binary")
+	cat.addArtifact(ref, binary)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "windows/amd64", // not published by the lock
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "multi-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	lock := []bundler.LockPlugin{
+		{
+			Name:         "multi-plugin",
+			Kind:         "provider",
+			Version:      "1.0.0",
+			Digest:       binaryDigest(binary),
+			Digests:      map[string]string{"darwin/arm64": binaryDigest(binary), "linux/amd64": binaryDigest(binary)},
+			ResolvedFrom: "test",
+		},
+	}
+
+	_, err := f.FetchPlugins(context.Background(), deps, lock)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no digest for platform windows/amd64")
 }
 
 func TestFetcher_FetchPlugins_CacheHit(t *testing.T) {
@@ -328,6 +438,88 @@ func TestFindLockPlugin(t *testing.T) {
 
 	found = findLockPlugin(locks, "a", "auth-handler") // wrong kind
 	assert.Nil(t, found)
+}
+
+func TestFindLockPluginByDep(t *testing.T) {
+	locks := []bundler.LockPlugin{
+		// Unsourced (local-catalog) entry: Source is nil.
+		{Name: "echo", Kind: "provider", Version: "1.0.0"},
+		// Sourced entries sharing a leaf name across distinct registries --
+		// disambiguated by Source.Registry, not collapsed.
+		{Name: "github", Kind: "provider", Version: "1.5.0", Source: &bundler.LockPluginSource{Registry: "ghcr.io/orgA"}},
+		{Name: "github", Kind: "provider", Version: "2.3.0", Source: &bundler.LockPluginSource{Registry: "ghcr.io/orgB"}},
+		// Sourced entry recorded under its resolved remote leaf name.
+		{Name: "scafctl-exec-provider", Kind: "provider", Version: "3.0.0", Source: &bundler.LockPluginSource{Registry: "ghcr.io/orgA"}},
+	}
+
+	t.Run("unsourced dep matches the unsourced entry", func(t *testing.T) {
+		dep := solution.PluginDependency{Name: "echo", Kind: solution.PluginKindProvider}
+		got := findLockPluginByDep(locks, dep)
+		require.NotNil(t, got)
+		assert.Equal(t, "1.0.0", got.Version)
+	})
+
+	t.Run("unsourced dep does not match a sourced entry of the same name", func(t *testing.T) {
+		dep := solution.PluginDependency{Name: "github", Kind: solution.PluginKindProvider}
+		assert.Nil(t, findLockPluginByDep(locks, dep))
+	})
+
+	t.Run("empty lock slice returns no match", func(t *testing.T) {
+		dep := solution.PluginDependency{Name: "echo", Kind: solution.PluginKindProvider}
+		assert.Nil(t, findLockPluginByDep(nil, dep))
+	})
+}
+
+func TestLockDigestForPlatform(t *testing.T) {
+	t.Run("single-platform (nil Digests) uses primary on any platform", func(t *testing.T) {
+		locked := &bundler.LockPlugin{Digest: "sha256:only"}
+		// Any runtime platform resolves to the primary digest.
+		d, ok := lockDigestForPlatform(locked, "linux/amd64")
+		require.True(t, ok)
+		assert.Equal(t, "sha256:only", d)
+		d, ok = lockDigestForPlatform(locked, "windows/arm64")
+		require.True(t, ok)
+		assert.Equal(t, "sha256:only", d)
+	})
+
+	t.Run("single-platform with empty primary passes through (handled downstream)", func(t *testing.T) {
+		// A legacy/single-platform lock with no digest is not hard-failed here:
+		// it passes through as ("", true) so the existing cache-hit and
+		// "no digest available" logic downstream decides, preserving prior
+		// behavior for digest-less locks.
+		locked := &bundler.LockPlugin{}
+		d, ok := lockDigestForPlatform(locked, "linux/amd64")
+		assert.True(t, ok)
+		assert.Empty(t, d)
+	})
+
+	t.Run("multi-platform selects the per-platform digest", func(t *testing.T) {
+		locked := &bundler.LockPlugin{
+			Digest: "sha256:darwin", // primary = build platform's digest
+			Digests: map[string]string{
+				"darwin/arm64": "sha256:darwin",
+				"linux/amd64":  "sha256:linux",
+			},
+		}
+		// A different runtime platform than the build platform still verifies
+		// against the correct per-platform entry, not the primary.
+		d, ok := lockDigestForPlatform(locked, "linux/amd64")
+		require.True(t, ok)
+		assert.Equal(t, "sha256:linux", d)
+	})
+
+	t.Run("multi-platform missing platform hard-fails (no fallback)", func(t *testing.T) {
+		locked := &bundler.LockPlugin{
+			Digest: "sha256:darwin",
+			Digests: map[string]string{
+				"darwin/arm64": "sha256:darwin",
+			},
+		}
+		// windows/amd64 is genuinely not published: must NOT fall back to the
+		// primary Digest, which would be a wrong-platform match.
+		_, ok := lockDigestForPlatform(locked, "windows/amd64")
+		assert.False(t, ok)
+	})
 }
 
 func TestFetcher_FetchPlugins_VersionConstraintMismatch(t *testing.T) {
@@ -565,6 +757,142 @@ func TestRegisterFetchedPlugins_InvalidPath(t *testing.T) {
 	assert.Nil(t, clients)
 }
 
+// ── RegisterFetchedPluginsV2 tests ───────────────────────────────────────────
+
+// fakeProviderClient builds an in-memory *Client backed by a MockProviderPlugin
+// exposing the given provider names. It never spawns a subprocess, so Kill() is
+// a no-op (pluginClient is nil). Each provider name gets a minimal valid
+// descriptor so registry registration succeeds.
+func fakeProviderClient(path string, providers []string) *Client {
+	descriptors := make(map[string]*provider.Descriptor, len(providers))
+	for _, name := range providers {
+		descriptors[name] = &provider.Descriptor{
+			Name:         name,
+			Description:  "fake provider",
+			APIVersion:   "v1",
+			Version:      semver.MustParse("1.0.0"),
+			Capabilities: []provider.Capability{provider.CapabilityFrom},
+		}
+	}
+	return &Client{
+		plugin: &MockProviderPlugin{providers: providers, descriptors: descriptors},
+		path:   path,
+		name:   pluginNameFromPath(path),
+	}
+}
+
+func TestRegisterFetchedPluginsV2_SetsVersionAndCatalog(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+
+	results := []FetchResult{
+		{Name: "p1", Kind: solution.PluginKindProvider, Path: "/tmp/p1", Version: "1.2.3", Catalog: "my-catalog"},
+	}
+
+	newClient := func(path string, _ ...ClientOption) (*Client, error) {
+		return fakeProviderClient(path, []string{"test-provider"}), nil
+	}
+
+	clients, err := RegisterFetchedVersionedPlugins(ctx, reg, results, nil, newClient, nil)
+	require.NoError(t, err)
+	require.Len(t, clients, 1)
+	assert.Equal(t, "1.2.3", clients[0].Version)
+	assert.Equal(t, "my-catalog", clients[0].Catalog)
+	assert.Equal(t, "p1", clients[0].Name())
+
+	// The provider should have been registered into the external tier under the
+	// supplied catalog name.
+	_, ok := reg.GetExternal("test-provider", provider.WithCatalogName("my-catalog"))
+	assert.True(t, ok, "provider should be registered under the given catalog")
+}
+
+func TestRegisterFetchedPluginsV2_NilFactoriesFallBackToDefaults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+
+	// A provider kind with an invalid path exercises the default NewClient
+	// factory (nil newClient) and its failure path.
+	results := []FetchResult{
+		{Name: "bad", Kind: solution.PluginKindProvider, Path: "/nonexistent/binary"},
+	}
+
+	clients, err := RegisterFetchedVersionedPlugins(ctx, reg, results, nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading plugin bad")
+	assert.Nil(t, clients)
+}
+
+func TestRegisterFetchedPluginsV2_SkipsNonProviderKinds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+
+	results := []FetchResult{
+		{Name: "auth-1", Kind: solution.PluginKindAuthHandler, Path: "/tmp/auth"},
+	}
+
+	called := false
+	newClient := func(path string, _ ...ClientOption) (*Client, error) {
+		called = true
+		return fakeProviderClient(path, nil), nil
+	}
+
+	clients, err := RegisterFetchedVersionedPlugins(ctx, reg, results, nil, newClient, nil)
+	require.NoError(t, err)
+	assert.Nil(t, clients)
+	assert.False(t, called, "non-provider kinds must not construct a client")
+}
+
+func TestRegisterFetchedPluginsV2_UsesWrapperFactory(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+
+	results := []FetchResult{
+		{Name: "p1", Kind: solution.PluginKindProvider, Path: "/tmp/p1", Version: "0.1.0"},
+	}
+
+	newClient := func(path string, _ ...ClientOption) (*Client, error) {
+		return fakeProviderClient(path, []string{"test-provider"}), nil
+	}
+
+	wrapperCalls := 0
+	newWrapper := func(client *Client, providerName string, opts ...WrapperOption) (*ProviderWrapper, error) {
+		wrapperCalls++
+		return NewProviderWrapper(client, providerName, opts...)
+	}
+
+	clients, err := RegisterFetchedVersionedPlugins(ctx, reg, results, nil, newClient, newWrapper)
+	require.NoError(t, err)
+	require.Len(t, clients, 1)
+	assert.Equal(t, 1, wrapperCalls, "injected wrapper factory should be used per provider")
+}
+
+func TestRegisterFetchedPluginsV2_ClientErrorKillsStartedClients(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	reg := provider.NewCompositeRegistry()
+
+	results := []FetchResult{
+		{Name: "good", Kind: solution.PluginKindProvider, Path: "/tmp/good", Version: "1.0.0"},
+		{Name: "bad", Kind: solution.PluginKindProvider, Path: "/tmp/bad"},
+	}
+
+	newClient := func(path string, _ ...ClientOption) (*Client, error) {
+		if path == "/tmp/bad" {
+			return nil, fmt.Errorf("boom")
+		}
+		return fakeProviderClient(path, []string{"test-provider"}), nil
+	}
+
+	clients, err := RegisterFetchedVersionedPlugins(ctx, reg, results, nil, newClient, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading plugin bad")
+	assert.Nil(t, clients)
+}
+
 // ── RegisterFetchedAuthHandlerPlugins tests ──────────────────────────────────
 
 func TestRegisterFetchedAuthHandlerPlugins_EmptyResults(t *testing.T) {
@@ -610,46 +938,45 @@ func TestRegisterFetchedAuthHandlerPlugins_InvalidPath(t *testing.T) {
 
 func TestFetcher_CheckCatalogAllowed_NoRestriction(t *testing.T) {
 	t.Parallel()
-	f := &Fetcher{allowedCatalogs: nil}
-	assert.NoError(t, f.checkCatalogAllowed("any-catalog"))
+	f := &Fetcher{catalogIndex: catalogindex.FromConfig(nil)}
+	assert.NoError(t, f.catalogIndex.CheckAllowed("any-catalog"))
 }
 
 func TestFetcher_CheckCatalogAllowed_EmptyResolvedFrom(t *testing.T) {
 	t.Parallel()
-	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
-	err := f.checkCatalogAllowed("")
+	f := &Fetcher{catalogIndex: catalogindex.FromConfig(nil).WithAllowed([]string{"official"})}
+	err := f.catalogIndex.CheckAllowed("")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "origin unknown")
 }
 
 func TestFetcher_CheckCatalogAllowed_EmptyResolvedFrom_NoAllowlist(t *testing.T) {
 	t.Parallel()
-	f := &Fetcher{allowedCatalogs: nil}
-	assert.NoError(t, f.checkCatalogAllowed(""))
+	f := &Fetcher{catalogIndex: catalogindex.FromConfig(nil)}
+	assert.NoError(t, f.catalogIndex.CheckAllowed(""))
 }
 
 func TestFetcher_CheckCatalogAllowed_Permitted(t *testing.T) {
 	t.Parallel()
-	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true, "internal": true}}
-	assert.NoError(t, f.checkCatalogAllowed("official"))
+	f := &Fetcher{catalogIndex: catalogindex.FromConfig(nil).WithAllowed([]string{"official", "internal"})}
+	assert.NoError(t, f.catalogIndex.CheckAllowed("official"))
 }
 
 func TestFetcher_CheckCatalogAllowed_Rejected(t *testing.T) {
 	t.Parallel()
-	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
-	err := f.checkCatalogAllowed("untrusted-catalog")
+	f := &Fetcher{catalogIndex: catalogindex.FromConfig(nil).WithAllowed([]string{"official"})}
+	err := f.catalogIndex.CheckAllowed("untrusted-catalog")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
 }
 
 func TestFetcher_CheckCatalogAllowed_CaseInsensitive(t *testing.T) {
 	t.Parallel()
-	f := &Fetcher{allowedCatalogs: map[string]bool{"official": true}}
-	// Allowlist is built with ToLower, and checkCatalogAllowed also lowercases
-	// resolvedFrom, so matching is fully case-insensitive.
-	assert.NoError(t, f.checkCatalogAllowed("official"))
-	assert.NoError(t, f.checkCatalogAllowed("Official"))
-	assert.NoError(t, f.checkCatalogAllowed("OFFICIAL"))
+	f := &Fetcher{catalogIndex: catalogindex.FromConfig(nil).WithAllowed([]string{"official"})}
+	// The allowlist is built with ToLower and CheckAllowed also lowercases its
+	// argument, so matching is fully case-insensitive.
+	assert.NoError(t, f.catalogIndex.CheckAllowed("official"))
+	assert.NoError(t, f.catalogIndex.CheckAllowed("Official"))
+	assert.NoError(t, f.catalogIndex.CheckAllowed("OFFICIAL"))
 }
 
 func TestNewFetcher_AllowedCatalogs(t *testing.T) {
@@ -660,10 +987,13 @@ func TestNewFetcher_AllowedCatalogs(t *testing.T) {
 		Logger:          logr.Discard(),
 		AllowedCatalogs: []string{"Official", "Internal"},
 	})
-	require.NotNil(t, f.allowedCatalogs)
-	assert.True(t, f.allowedCatalogs["official"])
-	assert.True(t, f.allowedCatalogs["internal"])
-	assert.False(t, f.allowedCatalogs["untrusted"])
+	// NewFetcher wires the allowlist into the catalog index gate, matched
+	// case-insensitively.
+	assert.NoError(t, f.catalogIndex.CheckAllowed("official"))
+	assert.NoError(t, f.catalogIndex.CheckAllowed("internal"))
+	err := f.catalogIndex.CheckAllowed("untrusted")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
 }
 
 func TestFetcher_FetchPlugins_CatalogNotAllowed(t *testing.T) {
@@ -702,6 +1032,100 @@ func TestFetcher_FetchPlugins_CatalogNotAllowed(t *testing.T) {
 	_, err := f.FetchPlugins(context.Background(), deps, lockPlugins)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
+}
+
+// localMockCatalog makes a mockCatalog appear as a local (filesystem) catalog so
+// catalogindex.FromChain derives an identity (and registry hash) for it. This
+// lets the per-catalog cached-plugin path be exercised, since the plain
+// mockCatalog exposes only Name() and is therefore skipped by the index.
+type localMockCatalog struct {
+	*mockCatalog
+	path string
+}
+
+func (l *localMockCatalog) Path() string { return l.path }
+
+// TestFetcher_FetchPlugins_PluginNotAllowedFromCatalog_Locked proves the
+// per-catalog plugin allowlist is enforced on the locked path, which serves
+// entirely from lock+cache and never touches the chain's AllowlistCatalog
+// decorator. The catalog is allowed, but it may not serve this plugin.
+func TestFetcher_FetchPlugins_PluginNotAllowedFromCatalog_Locked(t *testing.T) {
+	t.Parallel()
+	cat := newMockCatalog()
+	cat.name = "trusted"
+
+	binaryData := []byte("fake-plugin-binary")
+	digest := binaryDigest(binaryData)
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
+		Logger:          logr.Discard(),
+		NoCache:         true,
+		AllowedCatalogs: []string{"trusted"}, // catalog IS allowed
+		PerCatalogArtifacts: map[string]catalog.PluginPolicy{
+			// ...but only "good-plugin" may be served from it.
+			"trusted": {Plugins: []string{"good-plugin"}},
+		},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "evil-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+	lockPlugins := []bundler.LockPlugin{
+		{Name: "evil-plugin", Kind: "provider", Version: "1.0.0", Digest: digest, ResolvedFrom: "trusted"},
+	}
+
+	_, err := f.FetchPlugins(context.Background(), deps, lockPlugins)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in catalog")
+}
+
+// TestFetcher_CachedPlugin_PluginNotAllowedFromCatalog proves the per-catalog
+// plugin allowlist is enforced on the no-lock cache-first path: a binary cached
+// under an allowed catalog's registry hash must not be served when that catalog
+// is not permitted to serve that plugin name.
+func TestFetcher_CachedPlugin_PluginNotAllowedFromCatalog(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+	platform := CurrentPlatform()
+	pluginName := "evil-plugin"
+
+	base := newMockCatalog()
+	base.name = "trusted"
+	cat := &localMockCatalog{mockCatalog: base, path: "/catalogs/trusted"}
+
+	// Derive the registry hash the fetcher will use for this catalog and
+	// pre-populate the cache under it.
+	ids := catalogindex.FromChain(cat).All()
+	require.Len(t, ids, 1)
+	regHash := ids[0].RegistryHash()
+
+	c := NewCache(cacheDir)
+	_, release, err := c.SetPin(pluginName, "2.0.0", platform, []byte("#!/bin/sh\n"), WithRegistryHash(regHash))
+	require.NoError(t, err)
+	release()
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    c,
+		Platform: platform,
+		Logger:   logr.Discard(),
+		// Catalog is allowed (no AllowedCatalogs restriction), but it may only
+		// serve "good-plugin" -- not the cached "evil-plugin".
+		PerCatalogArtifacts: map[string]catalog.PluginPolicy{
+			"trusted": {Plugins: []string{"good-plugin"}},
+		},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: pluginName, Kind: solution.PluginKindProvider},
+	}
+
+	// No lock file -> cache-first path. The cached binary must NOT be served;
+	// with no artifact to resolve, the fetch fails rather than returning it.
+	_, err = f.FetchPlugins(context.Background(), deps, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolving version")
 }
 
 func TestFetcher_CacheFallback_AllowlistRejects(t *testing.T) {
@@ -1199,4 +1623,117 @@ func TestRegisterFetchedAuthHandlerPlugins_KillsClientWhenNoNewHandlers(t *testi
 	require.NoError(t, err)
 	assert.Empty(t, clients,
 		"a plugin that registers no new handlers must have its subprocess killed and not be returned")
+}
+
+func TestFetcher_ResolvePlugins_Empty(t *testing.T) {
+	t.Parallel()
+	f := NewFetcher(FetcherConfig{
+		Catalog:  newMockCatalog(),
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	infos, err := f.ResolvePlugins(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, infos)
+}
+
+func TestFetcher_ResolvePlugins_Success(t *testing.T) {
+	t.Parallel()
+	cat := newMockCatalog()
+	cat.addArtifact(testRef("plugin-a", "1.0.0"), []byte("binary-a"))
+	cat.addArtifact(testRef("plugin-b", "2.0.0"), []byte("binary-b"))
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "plugin-a", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+		{Name: "plugin-b", Kind: solution.PluginKindProvider, Version: "2.0.0"},
+	}
+
+	infos, err := f.ResolvePlugins(context.Background(), deps)
+	require.NoError(t, err)
+	require.Len(t, infos, 2)
+
+	// Results are index-aligned with the input deps.
+	assert.Equal(t, "plugin-a", infos[0].Reference.Name)
+	require.NotNil(t, infos[0].Reference.Version)
+	assert.Equal(t, "1.0.0", infos[0].Reference.Version.String())
+	assert.Equal(t, "plugin-b", infos[1].Reference.Name)
+	require.NotNil(t, infos[1].Reference.Version)
+	assert.Equal(t, "2.0.0", infos[1].Reference.Version.String())
+}
+
+func TestFetcher_ResolvePlugins_CatalogNotAllowed(t *testing.T) {
+	t.Parallel()
+	cat := newMockCatalog()
+	cat.addArtifact(testRef("plugin-a", "1.0.0"), []byte("binary-a"))
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:         cat,
+		Cache:           NewCache(t.TempDir()),
+		Platform:        "linux/amd64",
+		Logger:          logr.Discard(),
+		AllowedCatalogs: []string{"official"},
+	})
+
+	// The dep names a catalog that is not in the allowlist, so resolvePlugin's
+	// CheckAllowed gate rejects before any resolution happens.
+	deps := []solution.PluginDependency{
+		{Name: "plugin-a", Kind: solution.PluginKindProvider, Version: "1.0.0", Catalog: "untrusted"},
+	}
+
+	_, err := f.ResolvePlugins(context.Background(), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in the allowed catalogs list")
+}
+
+func TestFetcher_ResolvePlugins_PluginNotAllowedFromCatalog(t *testing.T) {
+	t.Parallel()
+	cat := newMockCatalog()
+	cat.name = "trusted"
+	cat.addArtifact(testRef("evil-plugin", "1.0.0"), []byte("binary"))
+
+	f := NewFetcher(FetcherConfig{
+		Catalog:  cat,
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+		// The catalog is allowed, but may only serve "good-plugin".
+		PerCatalogArtifacts: map[string]catalog.PluginPolicy{
+			"trusted": {Plugins: []string{"good-plugin"}},
+		},
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "evil-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0", Catalog: "trusted"},
+	}
+
+	_, err := f.ResolvePlugins(context.Background(), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in catalog")
+}
+
+func TestFetcher_ResolvePlugins_ResolveError(t *testing.T) {
+	t.Parallel()
+	// No artifacts added, so resolution fails with not-found.
+	f := NewFetcher(FetcherConfig{
+		Catalog:  newMockCatalog(),
+		Cache:    NewCache(t.TempDir()),
+		Platform: "linux/amd64",
+		Logger:   logr.Discard(),
+	})
+
+	deps := []solution.PluginDependency{
+		{Name: "missing-plugin", Kind: solution.PluginKindProvider, Version: "1.0.0"},
+	}
+
+	_, err := f.ResolvePlugins(context.Background(), deps)
+	require.Error(t, err)
 }

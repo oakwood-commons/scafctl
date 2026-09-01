@@ -708,6 +708,7 @@ func (m *mockCatalogResolver) FetchSolution(_ context.Context, nameWithVersion s
 type mockRemoteResolver struct {
 	solutions  map[string][]byte
 	bundleData map[string][]byte
+	layers     map[string]map[string][]byte
 	err        error
 }
 
@@ -719,6 +720,23 @@ func (m *mockRemoteResolver) FetchRemoteSolution(_ context.Context, ref string) 
 		return content, m.bundleData[ref], nil
 	}
 	return nil, nil, fmt.Errorf("remote solution not found: %s", ref)
+}
+
+func (m *mockRemoteResolver) FetchRemoteSolutionWithLayers(_ context.Context, ref string, mediaTypes ...string) ([]byte, map[string][]byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	content, ok := m.solutions[ref]
+	if !ok {
+		return nil, nil, fmt.Errorf("remote solution not found: %s", ref)
+	}
+	out := map[string][]byte{}
+	for _, mt := range mediaTypes {
+		if data, ok := m.layers[ref][mt]; ok {
+			out[mt] = data
+		}
+	}
+	return content, out, nil
 }
 
 func TestWithCatalogResolver(t *testing.T) {
@@ -1040,6 +1058,398 @@ func TestGetter_GetWithBundle_EmptyPath(t *testing.T) {
 	assert.Nil(t, bundleData)
 }
 
+// mockLockAwareCatalogResolver implements LayerAwareCatalogResolver for testing.
+type mockLockAwareCatalogResolver struct {
+	solutions map[string][]byte
+	locks     map[string][]byte
+	fetchErr  error
+	lockErr   error
+}
+
+func (m *mockLockAwareCatalogResolver) FetchSolution(_ context.Context, nameWithVersion string) ([]byte, error) {
+	if m.fetchErr != nil {
+		return nil, m.fetchErr
+	}
+	if content, ok := m.solutions[nameWithVersion]; ok {
+		return content, nil
+	}
+	return nil, fmt.Errorf("solution not found: %s", nameWithVersion)
+}
+
+func (m *mockLockAwareCatalogResolver) FetchSolutionWithLayers(_ context.Context, nameWithVersion string, mediaTypes ...string) ([]byte, map[string][]byte, error) {
+	if m.lockErr != nil {
+		return nil, nil, m.lockErr
+	}
+	content, ok := m.solutions[nameWithVersion]
+	if !ok {
+		return nil, nil, fmt.Errorf("solution not found: %s", nameWithVersion)
+	}
+	return content, mockLayers(mediaTypes, nil, m.locks[nameWithVersion]), nil
+}
+
+// mockLayers builds a media-type-keyed layer map containing only the requested
+// media types that have non-empty data. It mirrors the catalog resolver's layer
+// filtering so test mocks return the same shape as the real implementation.
+func mockLayers(mediaTypes []string, bundle, lock []byte) map[string][]byte {
+	var layers map[string][]byte
+	add := func(mt string, data []byte) {
+		if len(data) == 0 {
+			return
+		}
+		for _, want := range mediaTypes {
+			if want == mt {
+				if layers == nil {
+					layers = make(map[string][]byte, len(mediaTypes))
+				}
+				layers[mt] = data
+				return
+			}
+		}
+	}
+	add(mediaTypeSolutionBundle, bundle)
+	add(mediaTypeSolutionLock, lock)
+	return layers
+}
+
+func TestMockGetter_GetWithLayers(t *testing.T) {
+	mg := &MockGetter{}
+	ctx := context.Background()
+	expectedSol := &solution.Solution{}
+	expectedLayers := map[string][]byte{mediaTypeSolutionLock: []byte("lock-data")}
+
+	mg.On("GetWithLayers", ctx, "my-solution", []string{mediaTypeSolutionLock}).
+		Return(expectedSol, expectedLayers, nil)
+
+	sol, layers, err := mg.GetWithLayers(ctx, "my-solution", mediaTypeSolutionLock)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedSol, sol)
+	assert.Equal(t, expectedLayers, layers)
+	mg.AssertExpectations(t)
+}
+
+func TestMockGetter_GetWithLayers_NilSolution(t *testing.T) {
+	mg := &MockGetter{}
+	ctx := context.Background()
+
+	mg.On("GetWithLayers", ctx, "missing", []string{mediaTypeSolutionLock}).
+		Return(nil, nil, fmt.Errorf("not found"))
+
+	sol, layers, err := mg.GetWithLayers(ctx, "missing", mediaTypeSolutionLock)
+	assert.Error(t, err)
+	assert.Nil(t, sol)
+	assert.Nil(t, layers)
+	mg.AssertExpectations(t)
+}
+
+func TestGetter_GetWithLayers_LocalFile(t *testing.T) {
+	const validSolutionYAML = `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lock-test
+  version: 1.0.0
+`
+	tmpDir := t.TempDir()
+	solPath := tmpDir + "/solution.yaml"
+	require.NoError(t, os.WriteFile(solPath, []byte(validSolutionYAML), 0o600))
+
+	getter := NewGetter()
+	sol, layers, err := getter.GetWithLayers(context.Background(), solPath, mediaTypeSolutionLock)
+	require.NoError(t, err)
+	require.NotNil(t, sol)
+	assert.Nil(t, layers) // local files have no OCI layers
+}
+
+func TestGetter_GetWithLayers_EmptyPath(t *testing.T) {
+	getter := NewGetter()
+	sol, layers, err := getter.GetWithLayers(context.Background(), "", mediaTypeSolutionLock)
+	assert.Error(t, err)
+	assert.Nil(t, sol)
+	assert.Nil(t, layers)
+}
+
+func TestGetter_GetWithLayers_CatalogResolution(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cat-lock-sol
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("resolves bare name from lock-aware catalog", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockLockAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"cat-lock-sol": []byte(validSolutionYAML),
+			},
+			locks: map[string][]byte{
+				"cat-lock-sol": []byte("lock-data"),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "cat-lock-sol", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "cat-lock-sol", sol.Metadata.Name)
+		assert.Equal(t, []byte("lock-data"), layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("nil lock when catalog has no lock layer", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockLockAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"cat-lock-sol": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "cat-lock-sol", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "cat-lock-sol", sol.Metadata.Name)
+		assert.Nil(t, layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("falls back to basic resolver without lock", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockCatalogResolver{
+			solutions: map[string][]byte{
+				"cat-lock-sol": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "cat-lock-sol", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "cat-lock-sol", sol.Metadata.Name)
+		assert.Nil(t, layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("catalog lookup failure returns error directly", func(t *testing.T) {
+		t.Parallel()
+		mock := &mockLockAwareCatalogResolver{
+			lockErr: fmt.Errorf("not found"),
+		}
+
+		getter := NewGetter(WithCatalogResolver(mock))
+		_, _, err := getter.GetWithLayers(context.Background(), "missing@1.0.0", mediaTypeSolutionLock)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("resolves URL path with nil layers", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validSolutionYAML))
+		}))
+		defer server.Close()
+
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		cfg.RetryMax = 0
+		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
+		sol, layers, err := getter.GetWithLayers(context.Background(), server.URL, mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.NotNil(t, sol)
+		assert.Nil(t, layers)
+	})
+}
+
+func TestGetter_GetWithLayers_RegistryRef_LocalFirst(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("registry ref resolves from local catalog with lock", func(t *testing.T) {
+		t.Parallel()
+		lockMock := &mockLockAwareCatalogResolver{
+			solutions: map[string][]byte{
+				"hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+			locks: map[string][]byte{
+				"hello-world@1.0.0": []byte("registry-lock"),
+			},
+		}
+		remoteMock := &mockRemoteResolver{
+			err: fmt.Errorf("remote should not be called"),
+		}
+
+		getter := NewGetter(
+			WithCatalogResolver(lockMock),
+			WithRemoteResolver(remoteMock),
+		)
+		sol, layers, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, []byte("registry-lock"), layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("registry ref falls back to remote with nil lock", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Nil(t, layers[mediaTypeSolutionLock])
+	})
+}
+
+func TestGetter_GetWithLayers_RemoteLockLayer(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("lock-aware remote resolver returns lock", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+			layers: map[string]map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": {
+					mediaTypeSolutionLock: []byte("remote-lock"),
+				},
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, "remote:ghcr.io/myorg/hello-world@1.0.0", sol.GetPath())
+		assert.Equal(t, []byte("remote-lock"), layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("lock-aware remote resolver with no lock returns nil", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Nil(t, layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("lock-aware remote resolver error propagates", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{err: fmt.Errorf("registry unavailable")}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		_, _, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionLock)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "registry unavailable")
+	})
+}
+
+func TestGetter_GetWithLayers_BundleAndLock_Remote(t *testing.T) {
+	t.Parallel()
+
+	validSolutionYAML := `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: hello-world
+  version: 1.0.0
+spec:
+  resolvers: {}
+`
+
+	t.Run("bundle+lock-aware remote resolver returns both layers", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+			layers: map[string]map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": {
+					mediaTypeSolutionBundle: []byte("remote-bundle"),
+					mediaTypeSolutionLock:   []byte("remote-lock"),
+				},
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionBundle, mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, "remote:ghcr.io/myorg/hello-world@1.0.0", sol.GetPath())
+		assert.Equal(t, []byte("remote-bundle"), layers[mediaTypeSolutionBundle])
+		assert.Equal(t, []byte("remote-lock"), layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("remote resolver with bundle but no lock returns nil lock", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{
+			solutions: map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": []byte(validSolutionYAML),
+			},
+			layers: map[string]map[string][]byte{
+				"ghcr.io/myorg/hello-world@1.0.0": {
+					mediaTypeSolutionBundle: []byte("remote-bundle"),
+				},
+			},
+		}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		sol, layers, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionBundle, mediaTypeSolutionLock)
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-world", sol.Metadata.Name)
+		assert.Equal(t, []byte("remote-bundle"), layers[mediaTypeSolutionBundle])
+		assert.Nil(t, layers[mediaTypeSolutionLock])
+	})
+
+	t.Run("bundle+lock-aware remote resolver error propagates", func(t *testing.T) {
+		t.Parallel()
+		remoteMock := &mockRemoteResolver{err: fmt.Errorf("registry unavailable")}
+
+		getter := NewGetter(WithRemoteResolver(remoteMock))
+		_, _, err := getter.GetWithLayers(context.Background(), "ghcr.io/myorg/hello-world@1.0.0", mediaTypeSolutionBundle, mediaTypeSolutionLock)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "registry unavailable")
+	})
+}
+
 func TestValidatePositionalRef(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1304,7 +1714,7 @@ spec:
 	})
 }
 
-// mockBundleAwareCatalogResolver implements BundleAwareCatalogResolver for testing.
+// mockBundleAwareCatalogResolver implements LayerAwareCatalogResolver for testing.
 type mockBundleAwareCatalogResolver struct {
 	solutions map[string][]byte
 	bundles   map[string][]byte
@@ -1323,7 +1733,7 @@ func (m *mockBundleAwareCatalogResolver) FetchSolution(_ context.Context, nameWi
 	return nil, fmt.Errorf("solution not found: %s", nameWithVersion)
 }
 
-func (m *mockBundleAwareCatalogResolver) FetchSolutionWithBundle(_ context.Context, nameWithVersion string) ([]byte, []byte, error) {
+func (m *mockBundleAwareCatalogResolver) FetchSolutionWithLayers(_ context.Context, nameWithVersion string, mediaTypes ...string) ([]byte, map[string][]byte, error) {
 	if m.err != nil {
 		return nil, nil, m.err
 	}
@@ -1334,7 +1744,7 @@ func (m *mockBundleAwareCatalogResolver) FetchSolutionWithBundle(_ context.Conte
 	if !ok {
 		return nil, nil, fmt.Errorf("solution not found: %s", nameWithVersion)
 	}
-	return content, m.bundles[nameWithVersion], nil
+	return content, mockLayers(mediaTypes, m.bundles[nameWithVersion], nil), nil
 }
 
 func TestGetter_fromCatalogWithBundle(t *testing.T) {

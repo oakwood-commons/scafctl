@@ -8,7 +8,11 @@ metadata:
     Functional tests for conditional retry (retryIf).
     Verifies that retryIf expressions are parsed and rendered
     correctly in the action graph.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     apiUrl:

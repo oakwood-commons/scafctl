@@ -9,6 +9,12 @@ metadata:
     Verifies that timeout configuration is rendered correctly
     and that actions within timeout complete successfully.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     target:

@@ -6,6 +6,12 @@ metadata:
   description: Integration test for the metadata provider
   category: test
 
+bundle:
+  plugins:
+    - name: metadata
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # Runtime metadata — no inputs needed

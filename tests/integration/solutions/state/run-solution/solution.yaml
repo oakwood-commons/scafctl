@@ -17,6 +17,12 @@ state:
     inputs:
       path: run-solution-state.json
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     deploy_target:

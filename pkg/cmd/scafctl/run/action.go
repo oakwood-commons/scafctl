@@ -263,6 +263,12 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	o.validationWarn = nil
 	o.validationWarnResolvers = nil
 
+	// Validate --lock-mode early so an invalid value fails with InvalidInput
+	// instead of a misleading FileNotFound from prepareSolutionForExecution.
+	if err := o.validateLockMode(); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	lgr := logger.FromContext(ctx)
 
 	// Apply config default for output-dir
@@ -344,15 +350,13 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 		ctx = provider.WithSolutionDirectory(ctx, solutionDir)
 	}
 
-	actionAdapter := &actionRegistryAdapter{registry: reg}
-
 	if !sol.Spec.HasWorkflow() {
 		return o.exitWithCode(ctx,
 			fmt.Errorf("solution %q has no workflow defined; use '%s run resolver' to execute resolvers without actions", sol.Metadata.Name, o.BinaryName),
 			exitcode.InvalidInput)
 	}
 
-	if err := action.ValidateWorkflow(sol.Spec.Workflow, actionAdapter); err != nil {
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, reg); err != nil {
 		return o.exitWithCode(ctx, fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
@@ -511,7 +515,7 @@ func (o *ActionOptions) Run(ctx context.Context) error {
 	}
 
 	actionExecutor := action.NewExecutor(
-		action.WithRegistry(actionAdapter),
+		action.WithRegistry(reg),
 		action.WithResolverData(resolverData),
 		action.WithExecutionData(resolverExecutionData),
 		action.WithProgressCallback(actionProgressCallback),
@@ -605,7 +609,7 @@ func (o *ActionOptions) failStructured(ctx context.Context, resolverOut map[stri
 
 // executeDryRun delegates to SolutionOptions.executeDryRun which runs
 // resolvers (side-effect-free) and produces a structured WhatIf report.
-func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
+func (o *ActionOptions) executeDryRun(resolverCtx, actionCtx context.Context, sol *solution.Solution, reg providerLookup, params map[string]any, workflow *action.Workflow, stateData *state.Data, cwd string, stateSeed map[string]*resolver.ExecutionResult) error {
 	s := &SolutionOptions{
 		sharedResolverOptions: o.sharedResolverOptions,
 		Verbose:               o.Verbose,

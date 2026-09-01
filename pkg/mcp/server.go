@@ -179,6 +179,22 @@ func WithServerRegistry(reg *provider.Registry) ServerOption {
 	}
 }
 
+type providerLookup interface {
+	Get(name string) (provider.Provider, bool)
+	Has(name string) bool
+	DescriptorLookup() provider.DescriptorLookup
+}
+
+// providerLookup returns the server's registry as a ProviderLookup interface,
+// or nil if no registry is set. This avoids the Go gotcha where a nil
+// *provider.Registry wrapped in an interface appears non-nil.
+func (s *Server) providerLookup() providerLookup {
+	if s.registry == nil {
+		return nil
+	}
+	return s.registry
+}
+
 // WithServerAuthRegistry sets the auth registry.
 func WithServerAuthRegistry(reg *auth.Registry) ServerOption {
 	return func(c *serverConfig) {

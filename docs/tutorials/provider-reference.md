@@ -29,13 +29,22 @@ scafctl providers are split into two categories:
 | Category | Description |
 |----------|-------------|
 | **Built-in** | Compiled into the scafctl binary. Always available without network access or plugins. |
-| **Official (plugin)** | Distributed as external plugin binaries via `ghcr.io/oakwood-commons/providers/<name>`. Auto-resolved at runtime when referenced in a solution. |
+| **Official (plugin)** | Distributed as external plugin binaries via `ghcr.io/oakwood-commons/providers/<name>`. Must be declared in `bundle.plugins` to be used by a solution. |
 
 **Built-in providers** (11): `cel`, `debug`, `file`, `go-template`, `http`, `message`, `parameter`, `solution`, `state`, `static`, `validation`
 
 **Official plugin providers** (11): `directory`, `env`, `exec`, `git`, `github`, `hcl`, `identity`, `kubeconfig`, `metadata`, `secret`, `sleep`
 
-Official providers are automatically fetched from the catalog when a solution references them -- no `bundle.plugins` declaration is required for local development. The `run provider` command also auto-resolves official providers (e.g., `scafctl run provider exec command='ls'`). For CI/CD and reproducible builds, declare them explicitly in `bundle.plugins` or use the `--strict` flag. See [Plugin Auto-Fetching](plugin-auto-fetch-tutorial.md) for details.
+Built-in providers are always available. Official plugin providers are external
+binaries, so **any solution that references one must declare it in
+`bundle.plugins`** -- this applies to `scafctl run solution`, `scafctl run
+resolver`, and `scafctl render solution`. Referencing an official provider without
+declaring it fails preparation before any fetch (`providers [...] are not
+builtins and are not declared in bundle.plugins`). The `scafctl run provider
+<name>` command is the exception: it fetches an official provider by name on
+demand (for example, `scafctl run provider exec command='ls'`). See
+[Plugin Auto-Fetching](plugin-auto-fetch-tutorial.md) for details and
+[Plugin Lock Modes](lock-modes-tutorial.md) for version pinning.
 
 ## Capabilities Matrix
 

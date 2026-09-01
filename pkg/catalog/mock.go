@@ -12,9 +12,10 @@ import (
 type mockCatalog struct {
 	name                string
 	artifacts           map[string]mockArtifact
-	storeFunc           func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)
+	storeFunc           func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error)
 	fetchFunc           func(ctx context.Context, ref Reference) ([]byte, ArtifactInfo, error)
 	fetchWithBundleFunc func(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error)
+	fetchWithLayerFunc  func(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error)
 	resolveFunc         func(ctx context.Context, ref Reference) (ArtifactInfo, error)
 	listFunc            func(ctx context.Context, kind ArtifactKind, name string) ([]ArtifactInfo, error)
 	existsFunc          func(ctx context.Context, ref Reference) (bool, error)
@@ -57,8 +58,13 @@ func WithFetchBundleFunc(fn func(ctx context.Context, ref Reference) ([]byte, []
 	return func(m *mockCatalog) { m.fetchWithBundleFunc = fn }
 }
 
+// WithFetchLayerFunc sets the FetchWithLayer implementation.
+func WithFetchLayerFunc(fn func(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error)) MockOption {
+	return func(m *mockCatalog) { m.fetchWithLayerFunc = fn }
+}
+
 // WithStoreFunc sets the Store implementation.
-func WithStoreFunc(fn func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error)) MockOption {
+func WithStoreFunc(fn func(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error)) MockOption {
 	return func(m *mockCatalog) { m.storeFunc = fn }
 }
 
@@ -98,9 +104,9 @@ func (m *mockCatalog) addArtifact(ref Reference, content []byte, annotations map
 
 func (m *mockCatalog) Name() string { return m.name }
 
-func (m *mockCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+func (m *mockCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
 	if m.storeFunc != nil {
-		return m.storeFunc(ctx, ref, content, bundleData, annotations, force)
+		return m.storeFunc(ctx, ref, content, bundleData, annotations, force, extraLayers...)
 	}
 	info := ArtifactInfo{Reference: ref, Catalog: m.name}
 	m.artifacts[ref.String()] = mockArtifact{content: content, bundleData: bundleData, info: info}
@@ -127,6 +133,26 @@ func (m *mockCatalog) FetchWithBundle(ctx context.Context, ref Reference) ([]byt
 		return nil, nil, ArtifactInfo{}, ErrArtifactNotFound
 	}
 	return a.content, a.bundleData, a.info, nil
+}
+
+func (m *mockCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	if m.fetchWithLayerFunc != nil {
+		return m.fetchWithLayerFunc(ctx, ref, mediaTypes...)
+	}
+	a, ok := m.artifacts[ref.String()]
+	if !ok {
+		return nil, nil, ArtifactInfo{}, ErrArtifactNotFound
+	}
+	var layers map[string][]byte
+	for _, mt := range mediaTypes {
+		if mt == MediaTypeSolutionBundle && len(a.bundleData) > 0 {
+			if layers == nil {
+				layers = make(map[string][]byte, 1)
+			}
+			layers[MediaTypeSolutionBundle] = a.bundleData
+		}
+	}
+	return a.content, layers, a.info, nil
 }
 
 func (m *mockCatalog) Resolve(ctx context.Context, ref Reference) (ArtifactInfo, error) {

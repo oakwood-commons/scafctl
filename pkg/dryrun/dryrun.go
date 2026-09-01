@@ -56,10 +56,17 @@ type WhatIfAction struct {
 	FingerprintReason  string            `json:"fingerprintReason,omitempty" yaml:"fingerprintReason,omitempty" doc:"Reason for fingerprint status" maxLength:"64" example:"sources changed"`
 }
 
+// ProviderGetter is the minimal registry surface dryrun needs: it looks up
+// providers by name to generate WhatIf descriptions. Both *provider.Registry
+// and the request-scoped executionregistry.ExecutionRegistry satisfy it.
+type ProviderGetter interface {
+	Get(name string) (provider.Provider, bool)
+}
+
 // Options controls the dry-run generation.
 type Options struct {
 	// Registry provides provider descriptors for WhatIf message generation.
-	Registry *provider.Registry `json:"-" yaml:"-"`
+	Registry ProviderGetter `json:"-" yaml:"-"`
 	// ResolverData is the pre-executed resolver data (from real resolver execution).
 	// Callers should execute resolvers normally (they are side-effect-free) before
 	// calling Generate and pass the results here.
@@ -205,7 +212,7 @@ func Generate(ctx context.Context, sol *solution.Solution, opts Options) (*Repor
 // describeWhatIf generates a WhatIf message for an action using the provider's
 // DescribeWhatIf method, falling back gracefully when the registry or provider
 // is unavailable.
-func describeWhatIf(ctx context.Context, reg *provider.Registry, providerName string, inputs map[string]any) string {
+func describeWhatIf(ctx context.Context, reg ProviderGetter, providerName string, inputs map[string]any) string {
 	if reg == nil || providerName == "" {
 		if providerName != "" {
 			return fmt.Sprintf("Would execute %s provider", providerName)

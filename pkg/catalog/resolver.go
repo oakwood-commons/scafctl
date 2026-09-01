@@ -14,11 +14,14 @@ import (
 // ArtifactCacher defines the interface for an artifact cache used by SolutionResolver.
 // This interface allows caching downloaded catalog artifacts to reduce repeated fetches.
 type ArtifactCacher interface {
-	// Get retrieves cached content and bundle data.
-	// Returns (nil, nil, false, nil) on cache miss. Returns an error on read failure.
-	Get(kind, name, version string) (content, bundleData []byte, ok bool, err error)
-	// Put stores artifact content and bundle data in the cache.
-	Put(kind, name, version, digest string, content, bundleData []byte) error
+	// Get retrieves cached content and any stored auxiliary layers. layers is
+	// keyed by media type (e.g. MediaTypeSolutionBundle, MediaTypeSolutionLock)
+	// and is nil when the entry has no auxiliary layers. Returns
+	// (nil, nil, false, nil) on cache miss. Returns an error on read failure.
+	Get(kind, name, version string) (content []byte, layers map[string][]byte, ok bool, err error)
+	// Put stores artifact content and optional auxiliary layers in the cache.
+	// layers maps a media type to its bytes; nil or empty entries are skipped.
+	Put(kind, name, version, digest string, content []byte, layers map[string][]byte) error
 }
 
 // SolutionResolverOption configures a SolutionResolver.
@@ -62,7 +65,7 @@ type SolutionResolver struct {
 }
 
 // LastResolvedCatalog returns the name of the catalog that satisfied the most
-// recent FetchSolution or FetchSolutionWithBundle call. Returns "" if no
+// recent FetchSolution or FetchSolutionWithLayers call. Returns "" if no
 // fetch has been performed yet.
 func (r *SolutionResolver) LastResolvedCatalog() string {
 	return r.lastResolvedCatalog
@@ -161,28 +164,41 @@ func (r *SolutionResolver) FetchSolution(ctx context.Context, nameWithVersion st
 	return content, nil
 }
 
-// FetchSolutionWithBundle retrieves a solution and its bundle from the catalog by name[@version].
-// The input format is "name" or "name@version" (e.g., "my-solution" or "my-solution@1.2.3").
-// Returns the solution content bytes, bundle tar bytes (nil if no bundle), and any error.
+// FetchSolutionWithLayers retrieves a solution together with the requested
+// auxiliary OCI layers from the catalog by name[@version]. The input format is
+// "name" or "name@version" (e.g., "my-solution" or "my-solution@1.2.3"). The
+// requested layer media types (e.g. MediaTypeSolutionBundle,
+// MediaTypeSolutionLock) are returned in a map keyed by media type; a media type
+// is absent from the map when the artifact has no such layer.
 //
-// When an artifact cache is configured and noCache is false, both content and bundle
-// are cached together for TTL-based reuse.
-func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) ([]byte, []byte, error) {
-	// Parse the name[@version] format
+// The lookup delegates to the catalog's FetchWithLayer. On a local not-found it
+// falls back to the configured remote catalogs in order, auto-pulling the hit
+// into the local catalog so subsequent runs are instant. When no version is
+// pinned it applies Docker-style "latest" semantics, checking remotes for a
+// newer version than the local catalog holds.
+//
+// When an artifact cache is configured and noCache is false, a cache hit is
+// served only when every requested layer is present in the cached entry;
+// otherwise the catalog is fetched and the content together with all fetched
+// layers is stored for future reuse.
+func (r *SolutionResolver) FetchSolutionWithLayers(ctx context.Context, nameWithVersion string, mediaTypes ...string) ([]byte, map[string][]byte, error) {
+	// Parse the name[@version] format.
 	name, version := ParseNameVersion(nameWithVersion)
 
-	// Check artifact cache (skip when --no-cache or no cache configured)
+	// Check artifact cache (skip when --no-cache or no cache configured). Only
+	// serve from cache when every requested layer is present, so a content-only
+	// or partially-populated entry does not mask a missing layer.
 	if !r.noCache && r.artifactCache != nil {
-		cachedContent, cachedBundle, ok, err := r.artifactCache.Get(string(ArtifactKindSolution), name, version)
+		cachedContent, cachedLayers, ok, err := r.artifactCache.Get(string(ArtifactKindSolution), name, version)
 		if err != nil {
 			r.logger.V(1).Info("artifact cache get error (ignoring)", "error", err)
-		} else if ok {
-			r.logger.V(1).Info("artifact cache hit (with bundle)", "name", name, "version", version, "hasBundle", len(cachedBundle) > 0)
-			return cachedContent, cachedBundle, nil
+		} else if ok && layersContainAll(cachedLayers, mediaTypes) {
+			r.logger.V(1).Info("artifact cache hit (with layers)", "name", name, "version", version, "mediaTypes", mediaTypes)
+			return cachedContent, filterLayers(cachedLayers, mediaTypes), nil
 		}
 	}
 
-	// Build the reference string for parsing
+	// Build the reference string for parsing.
 	refStr := name
 	if version != "" {
 		refStr = name + "@" + version
@@ -193,38 +209,38 @@ func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWith
 		return nil, nil, fmt.Errorf("invalid solution reference %q: %w", nameWithVersion, err)
 	}
 
-	r.logger.V(1).Info("fetching solution with bundle from catalog",
+	r.logger.V(1).Info("fetching solution with layers from catalog",
 		"name", name,
 		"version", version,
+		"mediaTypes", mediaTypes,
 		"catalog", r.catalog.Name())
 
-	content, bundleData, info, err := r.catalog.FetchWithBundle(ctx, ref)
+	content, layers, info, err := r.catalog.FetchWithLayer(ctx, ref, mediaTypes...)
 	if err != nil {
 		// Only fall back to remotes on not-found; propagate other errors
 		// (e.g. corrupted OCI layout) immediately.
 		if !IsNotFound(err) || len(r.remoteCatalogs) == 0 {
 			return nil, nil, err
 		}
-		content, bundleData, info, err = r.fetchWithBundleFromRemotes(ctx, ref)
+		content, layers, info, err = r.fetchWithLayerFromRemotes(ctx, ref, mediaTypes...)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else if version == "" && len(r.remoteCatalogs) > 0 {
 		// No version pinned → "latest" semantics. Check remotes for a newer
 		// version than what the local catalog has.
-		if upgraded, upgradedBundle, upgradedInfo, ok := r.checkRemoteForNewerWithBundle(ctx, ref, info); ok {
+		if upgraded, upgradedLayers, upgradedInfo, ok := r.checkRemoteForNewerWithLayers(ctx, ref, info, mediaTypes...); ok {
 			content = upgraded
-			bundleData = upgradedBundle
+			layers = upgradedLayers
 			info = upgradedInfo
 		}
 	}
 
 	r.lastResolvedCatalog = info.Catalog
-	r.logger.V(1).Info("fetched solution with bundle from catalog",
+	r.logger.V(1).Info("fetched solution with layers from catalog",
 		"name", info.Reference.Name,
 		"version", info.Reference.Version,
 		"digest", info.Digest,
-		"hasBundle", len(bundleData) > 0,
 		"catalog", info.Catalog)
 
 	// Store in artifact cache using the resolved version as the cache key version.
@@ -233,12 +249,38 @@ func (r *SolutionResolver) FetchSolutionWithBundle(ctx context.Context, nameWith
 		if info.Reference.Version != nil {
 			resolvedVersion = info.Reference.Version.String()
 		}
-		if err := r.artifactCache.Put(string(ArtifactKindSolution), name, resolvedVersion, info.Digest, content, bundleData); err != nil {
+		if err := r.artifactCache.Put(string(ArtifactKindSolution), name, resolvedVersion, info.Digest, content, layers); err != nil {
 			r.logger.V(1).Info("artifact cache put error (ignoring)", "error", err)
 		}
 	}
 
-	return content, bundleData, nil
+	return content, layers, nil
+}
+
+// layersContainAll reports whether layers holds a non-empty entry for every
+// requested media type. An empty mediaTypes slice is trivially satisfied.
+func layersContainAll(layers map[string][]byte, mediaTypes []string) bool {
+	for _, mt := range mediaTypes {
+		if len(layers[mt]) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// filterLayers returns a new map containing only the requested media types that
+// have a non-empty entry in layers. It returns nil when nothing matches.
+func filterLayers(layers map[string][]byte, mediaTypes []string) map[string][]byte {
+	var out map[string][]byte
+	for _, mt := range mediaTypes {
+		if data := layers[mt]; len(data) > 0 {
+			if out == nil {
+				out = make(map[string][]byte, len(mediaTypes))
+			}
+			out[mt] = data
+		}
+	}
+	return out
 }
 
 // ParseNameVersion splits "name@version" into (name, version).
@@ -294,13 +336,17 @@ func (r *SolutionResolver) fetchFromRemotes(ctx context.Context, ref Reference) 
 	return nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: r.catalog.Name()}
 }
 
-// fetchWithBundleFromRemotes is the bundle-aware variant of fetchFromRemotes.
-func (r *SolutionResolver) fetchWithBundleFromRemotes(ctx context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
+// fetchWithLayerFromRemotes is the layer-aware variant of fetchFromRemotes. It
+// tries each remote catalog in order, requesting the given auxiliary layer media
+// types. On the first hit it stores the artifact into the local catalog so
+// future runs are instant, then returns the content and layer map.
+func (r *SolutionResolver) fetchWithLayerFromRemotes(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
 	var firstErr error
 	for _, remote := range r.remoteCatalogs {
-		r.logger.V(1).Info("trying remote catalog (with bundle)", "name", ref.Name, "catalog", remote.Name())
+		r.logger.V(1).Info("trying remote catalog (with layer)",
+			"name", ref.Name, "catalog", remote.Name(), "mediaTypes", mediaTypes)
 
-		content, bundleData, info, err := remote.FetchWithBundle(ctx, ref)
+		content, layers, info, err := remote.FetchWithLayer(ctx, ref, mediaTypes...)
 		if err != nil {
 			if !IsNotFound(err) {
 				r.logger.Info("remote catalog error, trying next",
@@ -317,9 +363,23 @@ func (r *SolutionResolver) fetchWithBundleFromRemotes(ctx context.Context, ref R
 		r.logger.Info("auto-pulled from remote catalog",
 			"name", ref.Name, "version", info.Reference.Version, "catalog", remote.Name())
 
-		r.storeLocally(ctx, ref, info, content, bundleData, remote.Name())
+		// Store into local catalog for future runs (best effort). Extract
+		// MediaTypeSolutionBundle into the dedicated bundleData slot so the
+		// local store keeps the correct OCI layer structure; remaining layers
+		// (e.g. lock) are persisted as extra layers.
+		bundleData := layers[MediaTypeSolutionBundle]
+		var extraLayers []Layer
+		for mt, data := range layers {
+			if mt == MediaTypeSolutionBundle {
+				continue // handled via bundleData param above
+			}
+			if len(data) > 0 {
+				extraLayers = append(extraLayers, Layer{MediaType: mt, Data: data})
+			}
+		}
+		r.storeLocally(ctx, ref, info, content, bundleData, remote.Name(), extraLayers...)
 
-		return content, bundleData, info, nil
+		return content, layers, info, nil
 	}
 	if firstErr != nil {
 		return nil, nil, ArtifactInfo{}, firstErr
@@ -328,8 +388,10 @@ func (r *SolutionResolver) fetchWithBundleFromRemotes(ctx context.Context, ref R
 }
 
 // storeLocally persists a remotely-fetched artifact into the local catalog.
+// Any non-empty extraLayers (e.g. a solution lock) are stored alongside the
+// primary content so subsequent local reads via FetchWithLayer are satisfied.
 // Errors are logged but not propagated — the remote fetch already succeeded.
-func (r *SolutionResolver) storeLocally(ctx context.Context, ref Reference, info ArtifactInfo, content, bundleData []byte, sourceCatalog string) {
+func (r *SolutionResolver) storeLocally(ctx context.Context, ref Reference, info ArtifactInfo, content, bundleData []byte, sourceCatalog string, extraLayers ...Layer) {
 	storeRef := ref
 	if info.Reference.Version != nil {
 		storeRef.Version = info.Reference.Version
@@ -340,11 +402,14 @@ func (r *SolutionResolver) storeLocally(ctx context.Context, ref Reference, info
 		AnnotationArtifactType: storeRef.Kind.String(),
 		AnnotationOrigin:       fmt.Sprintf("auto-cached from %s", sourceCatalog),
 	}
+	if info.Canonical != "" {
+		annotations[AnnotationSourceCanonical] = info.Canonical
+	}
 	if storeRef.Version != nil {
 		annotations[AnnotationVersion] = storeRef.Version.String()
 	}
 
-	if _, err := r.catalog.Store(ctx, storeRef, content, bundleData, annotations, false); err != nil {
+	if _, err := r.catalog.Store(ctx, storeRef, content, bundleData, annotations, false, extraLayers...); err != nil {
 		r.logger.V(1).Info("failed to store auto-pulled artifact locally (ignoring)", "error", err)
 	}
 }
@@ -389,8 +454,8 @@ func (r *SolutionResolver) checkRemoteForNewer(ctx context.Context, ref Referenc
 	return nil, ArtifactInfo{}, false
 }
 
-// checkRemoteForNewerWithBundle is the bundle-aware variant of checkRemoteForNewer.
-func (r *SolutionResolver) checkRemoteForNewerWithBundle(ctx context.Context, ref Reference, localInfo ArtifactInfo) ([]byte, []byte, ArtifactInfo, bool) {
+// checkRemoteForNewerWithLayers is the layer-aware variant of checkRemoteForNewer.
+func (r *SolutionResolver) checkRemoteForNewerWithLayers(ctx context.Context, ref Reference, localInfo ArtifactInfo, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, bool) {
 	for _, remote := range r.remoteCatalogs {
 		remoteInfo, err := remote.Resolve(ctx, ref)
 		if err != nil {
@@ -409,14 +474,27 @@ func (r *SolutionResolver) checkRemoteForNewerWithBundle(ctx context.Context, re
 			"remoteVersion", remoteInfo.Reference.Version,
 			"catalog", remote.Name())
 
-		content, bundleData, info, err := remote.FetchWithBundle(ctx, ref)
+		content, layers, info, err := remote.FetchWithLayer(ctx, ref, mediaTypes...)
 		if err != nil {
 			r.logger.V(1).Info("remote fetch failed after version check, trying next remote", "catalog", remote.Name(), "error", err)
 			continue
 		}
 
-		r.storeLocally(ctx, ref, info, content, bundleData, remote.Name())
-		return content, bundleData, info, true
+		// Extract MediaTypeSolutionBundle into the dedicated bundleData slot so
+		// the local store keeps the correct OCI layer structure; remaining
+		// layers (e.g. lock) are persisted as extra layers.
+		bundleData := layers[MediaTypeSolutionBundle]
+		var extraLayers []Layer
+		for mt, data := range layers {
+			if mt == MediaTypeSolutionBundle {
+				continue
+			}
+			if len(data) > 0 {
+				extraLayers = append(extraLayers, Layer{MediaType: mt, Data: data})
+			}
+		}
+		r.storeLocally(ctx, ref, info, content, bundleData, remote.Name(), extraLayers...)
+		return content, layers, info, true
 	}
 	return nil, nil, ArtifactInfo{}, false
 }

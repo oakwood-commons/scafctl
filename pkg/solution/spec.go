@@ -122,15 +122,18 @@ func (s *Spec) HasTestConfig() bool {
 }
 
 // ReferencedProviderNames returns the unique, sorted set of provider names
-// referenced across all resolver phases (resolve, transform, validate) and
-// workflow actions (actions, finally). Used to determine which providers must
-// be registered before execution.
+// referenced across all resolver phases (resolve, transform, validate), reusable
+// call definitions, and workflow actions (actions, finally). Used to determine
+// which providers must be registered before execution.
 func (s *Spec) ReferencedProviderNames() []string {
 	if s == nil {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	for _, r := range s.Resolvers {
+		if r == nil {
+			continue
+		}
 		if r.Resolve != nil {
 			for _, src := range r.Resolve.With {
 				if src.Provider != "" {
@@ -151,6 +154,11 @@ func (s *Spec) ReferencedProviderNames() []string {
 					seen[v.Provider] = struct{}{}
 				}
 			}
+		}
+	}
+	for _, c := range s.Calls {
+		if c != nil && c.Provider != "" {
+			seen[c.Provider] = struct{}{}
 		}
 	}
 	if s.Workflow != nil {

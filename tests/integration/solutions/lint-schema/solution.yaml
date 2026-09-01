@@ -7,7 +7,11 @@ metadata:
   description: |
     Functional tests verifying that valid solutions pass scafctl lint
     without schema-violation findings.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     greeting:
@@ -42,3 +46,4 @@ spec:
           - expression: >
               !__output.findings.exists(f, f.ruleName == "schema-violation")
             message: "Valid solution should have no schema-violation findings"
+

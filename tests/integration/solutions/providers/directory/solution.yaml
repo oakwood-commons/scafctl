@@ -6,6 +6,12 @@ metadata:
   version: 1.0.0
   description: Tests for the directory provider
 
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     listCurrentDir:

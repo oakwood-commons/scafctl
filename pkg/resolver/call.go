@@ -98,9 +98,9 @@ func (e *Executor) runCallProvider(ctx context.Context, def *spec.Call, bound ma
 // against an explicitly enriched data map (carrying the args namespace) instead
 // of the resolver context's map.
 func (e *Executor) executeProviderWithData(ctx context.Context, providerName string, inputRefs map[string]*ValueRef, self any, enrichedData map[string]any) (any, error) {
-	prov, err := e.registry.Get(providerName)
-	if err != nil {
-		return nil, fmt.Errorf("provider %q not found: %w", providerName, err)
+	prov, ok := e.registry.Get(providerName)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerName)
 	}
 
 	inputs := make(map[string]any)
@@ -138,9 +138,9 @@ func (e *Executor) executeProviderWithData(ctx context.Context, providerName str
 // but resolves inputs against an explicitly enriched data map (carrying the args
 // namespace).
 func (e *Executor) executeProviderWithDataAndIteration(ctx context.Context, providerName string, inputRefs map[string]*ValueRef, self any, iterCtx *IterationContext, enrichedData map[string]any) (any, error) {
-	prov, err := e.registry.Get(providerName)
-	if err != nil {
-		return nil, fmt.Errorf("provider %q not found: %w", providerName, err)
+	prov, ok := e.registry.Get(providerName)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerName)
 	}
 
 	inputs := make(map[string]any)

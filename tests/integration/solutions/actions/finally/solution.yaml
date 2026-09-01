@@ -8,7 +8,11 @@ metadata:
     Functional tests for the finally section.
     Verifies that finally actions always run, even when
     main actions fail.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     dbName:

@@ -14,7 +14,11 @@ metadata:
   description: |
     Render a directory tree of Go templates into final files, preserving
     directory structure and stripping the .tpl extension from output paths.
-
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # -------------------------------------------------------------------------

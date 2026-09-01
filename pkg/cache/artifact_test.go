@@ -5,12 +5,20 @@ package cache_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/cache"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/mediatypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+// Realistic media-type layer keys exercise sanitization of '/', '.', and '+'.
+const (
+	mtBundle = mediatypes.SolutionBundle
+	mtLock   = mediatypes.SolutionLock
 )
 
 func TestArtifactCache_PutAndGet(t *testing.T) {
@@ -20,25 +28,110 @@ func TestArtifactCache_PutAndGet(t *testing.T) {
 	content := []byte("solution: {}")
 	bundle := []byte("bundle data")
 
-	err := c.Put("solution", "my-solution", "1.0.0", "sha256:abc123", content, bundle)
+	err := c.Put("solution", "my-solution", "1.0.0", "sha256:abc123", content, map[string][]byte{
+		mtBundle: bundle,
+	})
 	require.NoError(t, err)
 
-	got, gotBundle, ok, err := c.Get("solution", "my-solution", "1.0.0")
+	got, layers, ok, err := c.Get("solution", "my-solution", "1.0.0")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, content, got)
-	assert.Equal(t, bundle, gotBundle)
+	assert.Equal(t, bundle, layers[mtBundle])
+}
+
+func TestArtifactCache_PutAndGet_LockLayer(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	content := []byte("solution: {}")
+	lock := []byte(`{"version":1}`)
+
+	err := c.Put("solution", "locked-solution", "1.0.0", "sha256:lock", content, map[string][]byte{
+		mtLock: lock,
+	})
+	require.NoError(t, err)
+
+	got, layers, ok, err := c.Get("solution", "locked-solution", "1.0.0")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, content, got)
+	assert.Equal(t, lock, layers[mtLock])
+	assert.NotContains(t, layers, mtBundle)
+}
+
+func TestArtifactCache_PutAndGet_BundleAndLock(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	content := []byte("solution: {}")
+	bundle := []byte("bundle data")
+	lock := []byte(`{"version":1}`)
+
+	err := c.Put("solution", "full-solution", "1.0.0", "sha256:full", content, map[string][]byte{
+		mtBundle: bundle,
+		mtLock:   lock,
+	})
+	require.NoError(t, err)
+
+	got, layers, ok, err := c.Get("solution", "full-solution", "1.0.0")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, content, got)
+	assert.Len(t, layers, 2)
+	assert.Equal(t, bundle, layers[mtBundle])
+	assert.Equal(t, lock, layers[mtLock])
+}
+
+func TestArtifactCache_Put_EmptyLayerSkipped(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	content := []byte("solution: {}")
+	// A present key with empty bytes must not create a layer file.
+	err := c.Put("solution", "empty-layer", "1.0.0", "sha256:e", content, map[string][]byte{
+		mtBundle: {},
+		mtLock:   []byte("lock"),
+	})
+	require.NoError(t, err)
+
+	_, layers, ok, err := c.Get("solution", "empty-layer", "1.0.0")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.NotContains(t, layers, mtBundle)
+	assert.Equal(t, []byte("lock"), layers[mtLock])
+}
+
+func TestArtifactCache_Put_RemovesStaleLayers(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	content := []byte("solution: {}")
+
+	// First put with both bundle and lock.
+	require.NoError(t, c.Put("solution", "shrinking", "1.0.0", "sha256:1", content, map[string][]byte{
+		mtBundle: []byte("bundle"),
+		mtLock:   []byte("lock"),
+	}))
+
+	// Re-put with only content (no layers) must clear the previously stored layers.
+	require.NoError(t, c.Put("solution", "shrinking", "1.0.0", "sha256:2", content, nil))
+
+	_, layers, ok, err := c.Get("solution", "shrinking", "1.0.0")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, layers)
 }
 
 func TestArtifactCache_GetMiss(t *testing.T) {
 	dir := t.TempDir()
 	c := cache.NewArtifactCache(dir, time.Hour)
 
-	got, gotBundle, ok, err := c.Get("solution", "missing", "1.0.0")
+	got, layers, ok, err := c.Get("solution", "missing", "1.0.0")
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, got)
-	assert.Nil(t, gotBundle)
+	assert.Nil(t, layers)
 }
 
 func TestArtifactCache_TTLExpiry(t *testing.T) {
@@ -73,7 +166,7 @@ func TestArtifactCache_ZeroTTL_NeverExpires(t *testing.T) {
 	assert.Equal(t, content, got)
 }
 
-func TestArtifactCache_NoBundle(t *testing.T) {
+func TestArtifactCache_NoLayers(t *testing.T) {
 	dir := t.TempDir()
 	c := cache.NewArtifactCache(dir, time.Hour)
 
@@ -81,11 +174,11 @@ func TestArtifactCache_NoBundle(t *testing.T) {
 	err := c.Put("solution", "my-solution", "1.0.0", "sha256:abc123", content, nil)
 	require.NoError(t, err)
 
-	got, gotBundle, ok, err := c.Get("solution", "my-solution", "1.0.0")
+	got, layers, ok, err := c.Get("solution", "my-solution", "1.0.0")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, content, got)
-	assert.Nil(t, gotBundle)
+	assert.Empty(t, layers)
 }
 
 func TestArtifactCache_Invalidate(t *testing.T) {
@@ -140,6 +233,25 @@ func TestArtifactCache_CorruptMeta(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestArtifactCache_MissingLayerFile_TreatedAsMiss(t *testing.T) {
+	dir := t.TempDir()
+	c := cache.NewArtifactCache(dir, time.Hour)
+
+	content := []byte("solution: {}")
+	require.NoError(t, c.Put("solution", "torn", "1.0.0", "sha256:t", content, map[string][]byte{
+		mtLock: []byte("lock"),
+	}))
+
+	// Delete the layers directory out from under the entry, leaving meta listing
+	// a layer that no longer exists on disk.
+	require.NoError(t, os.RemoveAll(dir+"/solution/torn@1.0.0/layers"))
+
+	_, layers, ok, err := c.Get("solution", "torn", "1.0.0")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, layers)
+}
+
 func TestArtifactCache_SpecialCharsInName(t *testing.T) {
 	dir := t.TempDir()
 	c := cache.NewArtifactCache(dir, time.Hour)
@@ -169,10 +281,11 @@ func BenchmarkArtifactCache_PutGet(b *testing.B) {
 	c := cache.NewArtifactCache(dir, time.Hour)
 
 	content := []byte("solution: {name: bench}")
+	layers := map[string][]byte{mtBundle: []byte("bundle")}
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_ = c.Put("solution", "bench-solution", "1.0.0", "sha256:bench", content, nil)
+		_ = c.Put("solution", "bench-solution", "1.0.0", "sha256:bench", content, layers)
 		_, _, _, _ = c.Get("solution", "bench-solution", "1.0.0")
 	}
 }
@@ -237,14 +350,22 @@ func TestArtifactCache_Put_WithBundle(t *testing.T) {
 	content := []byte("solution content")
 	bundleData := []byte("bundle data")
 
-	err := c.Put("solution", "with-bundle", "1.0.0", "sha256:xyz", content, bundleData)
+	err := c.Put("solution", "with-bundle", "1.0.0", "sha256:xyz", content, map[string][]byte{
+		mtBundle: bundleData,
+	})
 	require.NoError(t, err)
 
-	gotContent, gotBundle, ok, err := c.Get("solution", "with-bundle", "1.0.0")
+	gotContent, layers, ok, err := c.Get("solution", "with-bundle", "1.0.0")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, content, gotContent)
-	assert.Equal(t, bundleData, gotBundle)
+	assert.Equal(t, bundleData, layers[mtBundle])
+
+	// The bundle layer must be persisted at the legacy top-level bundle.tar.gz
+	// path (not under layers/) for on-disk compatibility with prior versions.
+	bundleOnDisk, readErr := os.ReadFile(filepath.Join(dir, "solution", "with-bundle@1.0.0", "bundle.tar.gz"))
+	require.NoError(t, readErr)
+	assert.Equal(t, bundleData, bundleOnDisk)
 }
 
 func TestArtifactCache_Invalidate_OsRemoveAllError(t *testing.T) {

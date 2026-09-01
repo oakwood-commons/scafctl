@@ -8,7 +8,11 @@ metadata:
   tags:
     - solution
   description: Send notification emails using provider-backed actions. Designed for local execution and pipeline rendering.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     isDryRun:

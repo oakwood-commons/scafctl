@@ -8,6 +8,10 @@ metadata:
 bundle:
   include:
     - "**/*"
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 
 spec:
   resolvers:

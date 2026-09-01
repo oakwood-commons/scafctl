@@ -148,7 +148,7 @@ func (s *Server) handleSolutionGraphResource(_ context.Context, request mcp.Read
 		return nil, fmt.Errorf("loading solution %q: %w", name, err)
 	}
 
-	result, err := s.renderResolverGraph(sol, s.registry)
+	result, err := s.renderResolverGraph(sol, s.providerLookup())
 	if err != nil {
 		return nil, fmt.Errorf("rendering resolver graph: %w", err)
 	}

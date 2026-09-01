@@ -21,7 +21,11 @@ metadata:
     `${{ ... }}` expressions that collide with Go template delimiters. Instead
     of splitting into a second copy pipeline or wrapping the whole file in
     ignore markers, the render-tree `rawGlobs` input marks it as verbatim.
-
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # -------------------------------------------------------------------------

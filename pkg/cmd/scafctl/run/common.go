@@ -30,7 +30,6 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
-	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/get"
 	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
@@ -244,6 +243,13 @@ type sharedResolverOptions struct {
 
 	// Track which flags were explicitly set by user
 	flagsChanged map[string]bool
+
+	// LockMode is the raw --lock-mode flag value controlling how
+	// BuildProviderDependency resolves plugin versions against the lock
+	// file: strict (pin exact), constrained (use constraint range), or
+	// bestEffort (use lock when available, fall back when absent).
+	// Empty defaults to bestEffort.
+	LockMode string
 
 	// For dependency injection in tests
 	getter   get.Interface
@@ -513,6 +519,12 @@ func withSeededResults(seed map[string]*resolver.ExecutionResult) execResolverOp
 	return func(c *execResolverConfig) { c.seed = seed }
 }
 
+type providerLookup interface {
+	Get(name string) (provider.Provider, bool)
+	Has(name string) bool
+	DescriptorLookup() provider.DescriptorLookup
+}
+
 // executeResolvers runs the resolver execution pipeline on the given resolvers.
 // Returns the resolver data map (name -> value), the resolver context with full
 // execution metadata, and any error.
@@ -521,7 +533,7 @@ func (o *sharedResolverOptions) executeResolvers(
 	sol *solution.Solution,
 	resolvers []*resolver.Resolver,
 	params map[string]any,
-	reg *provider.Registry,
+	reg providerLookup,
 	opts ...execResolverOption,
 ) (map[string]any, *resolver.Context, error) {
 	var execCfg execResolverConfig
@@ -536,8 +548,6 @@ func (o *sharedResolverOptions) executeResolvers(
 		lgr.V(0).Info("no resolvers to execute")
 		return resolverData, resolver.NewContext(), nil
 	}
-
-	resolverAdapter := execute.NewResolverRegistryAdapter(reg)
 
 	// Set up progress reporter if enabled
 	var progress *ProgressReporter
@@ -619,7 +629,7 @@ func (o *sharedResolverOptions) executeResolvers(
 		executorOpts = append(executorOpts, resolver.WithSeededResults(execCfg.seed))
 	}
 
-	executor := resolver.NewExecutor(resolverAdapter, executorOpts...)
+	executor := resolver.NewExecutor(reg, executorOpts...)
 
 	// Apply solution-level CEL cost limit if configured
 	ctx = execute.ApplySolutionCELCostLimit(ctx, sol)
@@ -707,7 +717,7 @@ func (o *sharedResolverOptions) executeResolvers(
 func (o *sharedResolverOptions) buildStateTwoPhaseInput(
 	sol *solution.Solution,
 	params map[string]any,
-	reg *provider.Registry,
+	reg providerLookup,
 ) state.TwoPhaseInput {
 	var lookup resolver.DescriptorLookup
 	if reg != nil {
@@ -752,65 +762,14 @@ func deferredValidationFailures(resolverCtx *resolver.Context) map[string]bool {
 //
 // This method delegates to the standalone prepare.PrepareSolution function,
 // passing CLI-specific options (getter, registry, stdin, metrics).
-func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, *provider.Registry, string, func(), func(context.Context) context.Context, error) {
+func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context) (*solution.Solution, providerLookup, string, func(), func(context.Context) context.Context, error) {
 	w := writer.FromContext(ctx)
 
-	var opts []prepare.Option
-
-	if o.getter != nil {
-		opts = append(opts, prepare.WithGetter(o.getter))
-	}
-	if o.NoCache {
-		opts = append(opts, prepare.WithNoCache())
-	}
-	if o.registry != nil {
-		opts = append(opts, prepare.WithRegistry(o.registry))
-	}
-	if o.IOStreams != nil && o.IOStreams.In != nil {
-		opts = append(opts, prepare.WithStdin(o.IOStreams.In))
-	}
-	if o.ShowMetrics && o.IOStreams != nil {
-		opts = append(opts, prepare.WithMetrics(o.IOStreams.ErrOut))
-	}
-	opts = o.appendClientPluginOptions(ctx, opts)
-
-	// Wire auth host deps so that plugin providers can request auth tokens
-	// from the host process via gRPC HostService.
-	if authOpts := plugin.AuthClientOptsFromContext(ctx); len(authOpts) > 0 {
-		opts = append(opts, prepare.WithClientOptions(authOpts...))
-	}
-
-	if o.discoveryMode != settings.DiscoveryModeDefault {
-		opts = append(opts, prepare.WithDiscoveryMode(o.discoveryMode))
-	}
-
-	// Wire plugin auto-fetch so that bundle.plugins declarations trigger
-	// automatic download from configured catalogs. Without this, solutions
-	// that declare plugins would silently skip plugin loading.
-	if fetcher, err := buildPluginFetcher(ctx); err == nil {
-		opts = append(opts, prepare.WithPluginFetcher(fetcher))
-	}
-
-	// Load lock file for reproducible plugin resolution. The lock file
-	// lives alongside the solution file (e.g., bundle.lock.yaml).
-	if o.File != "" && o.File != "-" {
-		lockPlugins := loadLockPlugins(o.File)
-		if len(lockPlugins) > 0 {
-			opts = append(opts, prepare.WithLockPlugins(lockPlugins))
-		}
-	}
-
-	// Pass auth registry so auth handler plugins can be registered
-	if authReg := auth.RegistryFromContext(ctx); authReg != nil {
-		opts = append(opts, prepare.WithAuthRegistry(authReg))
-	}
-
-	// Wire official provider auto-resolution from context.
-	if officialReg := official.RegistryFromContext(ctx); officialReg != nil {
-		opts = append(opts, prepare.WithOfficialProviders(officialReg))
-	}
-	if o.Strict {
-		opts = append(opts, prepare.WithStrict(true))
+	// Assemble prepare options via the shared CLI wiring builder so run and
+	// render prepare solutions identically.
+	opts, err := prepare.OptionsFromContext(ctx, o.cliWiring())
+	if err != nil {
+		return nil, nil, "", func() {}, nil, err
 	}
 
 	// Resolve binary name once for verbose output and user-facing messages.
@@ -892,24 +851,47 @@ func (o *sharedResolverOptions) prepareSolutionForExecution(ctx context.Context)
 	return result.Solution, result.Registry, result.SolutionDir, result.Cleanup, result.ProviderCtx, nil
 }
 
-func (o *sharedResolverOptions) appendClientPluginOptions(ctx context.Context, opts []prepare.Option) []prepare.Option {
-	if o.CliParams == nil {
-		return opts
+// cliWiring maps the run command's options onto the neutral prepare.CLIWiring
+// consumed by prepare.OptionsFromContext, deriving the plugin config, metrics
+// sink, stdin, and debug-logging flag from CLI settings.
+func (o *sharedResolverOptions) cliWiring() prepare.CLIWiring {
+	w := prepare.CLIWiring{
+		File:          o.File,
+		Getter:        o.getter,
+		Registry:      o.registry,
+		NoCache:       o.NoCache,
+		Strict:        o.Strict,
+		DiscoveryMode: o.discoveryMode,
+		LockMode:      o.LockMode,
 	}
+	if o.IOStreams != nil && o.IOStreams.In != nil {
+		w.Stdin = o.IOStreams.In
+	}
+	if o.ShowMetrics && o.IOStreams != nil {
+		w.MetricsOut = o.IOStreams.ErrOut
+	}
+	if o.CliParams != nil {
+		w.PluginConfig = &plugin.ProviderConfig{
+			Quiet:      o.CliParams.IsQuiet,
+			NoColor:    o.CliParams.NoColor,
+			BinaryName: o.CliParams.BinaryName,
+		}
+		w.DebugLogging = logger.IsDebugLevel(o.CliParams.MinLogLevel)
+	}
+	return w
+}
 
-	opts = append(opts, prepare.WithPluginConfig(&plugin.ProviderConfig{
-		Quiet:      o.CliParams.IsQuiet,
-		NoColor:    o.CliParams.NoColor,
-		BinaryName: o.CliParams.BinaryName,
-	}))
-	if logger.IsDebugLevel(o.CliParams.MinLogLevel) {
-		opts = append(opts, prepare.WithClientOptions(plugin.WithDebugLogging()))
+// validateLockMode checks the raw --lock-mode flag value early so an invalid
+// value fails fast with a clear InvalidInput error instead of surfacing deep
+// inside prepareSolutionForExecution (where it would be mislabeled as a
+// FileNotFound). An empty value is valid and selects the source-based default.
+// Mirrors the early validation done by 'render solution'.
+func (o *sharedResolverOptions) validateLockMode() error {
+	if o.LockMode == "" {
+		return nil
 	}
-	if cfg := config.FromContext(ctx); cfg != nil && cfg.Plugins.GRPCMaxMessageSize > 0 {
-		opts = append(opts, prepare.WithClientOptions(plugin.WithGRPCMaxMessageSize(cfg.Plugins.GRPCMaxMessageSize)))
-	}
-
-	return opts
+	_, err := prepare.ParseLockMode(o.LockMode)
+	return err
 }
 
 // resolveVersionConstraintForFile resolves a --version constraint against the
@@ -1003,6 +985,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
 	cCmd.Flags().BoolVar(&o.NoState, "no-state", false, "Skip the entire state lifecycle: do not load, verify immutables, or save state (for CI/offline runs)")
 	cCmd.Flags().StringVar(&o.OnUnknownResolver, "on-unknown-resolver", string(settings.DefaultUnknownResolverPolicy), "Policy for -r keys not consumed by any declared parameter: error (reject), warn (proceed with warning), or ignore (accept silently)")
+	cCmd.Flags().StringVar(&o.LockMode, "lock-mode", "", "Lock file resolution mode: strict (pin exact version), constrained (use constraint range), or bestEffort (use lock when available, fall back when absent). Default is source-dependent: strict for catalog/remote solutions carrying an embedded lock layer, bestEffort for local files, stdin, and lock-less artifacts")
 }
 
 // writeMetrics outputs provider execution metrics to stderr
@@ -1347,17 +1330,6 @@ func loadMockedResolvers(ctx context.Context) (map[string]any, error) {
 // auth registry. Delegates to prepare.BuildPluginFetcher.
 func buildPluginFetcher(ctx context.Context) (*plugin.Fetcher, error) {
 	return prepare.BuildPluginFetcher(ctx)
-}
-
-// loadLockPlugins loads plugin entries from a lock file adjacent to the
-// solution file. Returns nil if no lock file exists or it cannot be parsed.
-func loadLockPlugins(solutionPath string) []bundler.LockPlugin {
-	lockPath := filepath.Join(filepath.Dir(solutionPath), bundler.DefaultLockFileName)
-	lockFile, err := bundler.LoadLockFile(lockPath)
-	if err != nil || lockFile == nil {
-		return nil
-	}
-	return lockFile.Plugins
 }
 
 // autoResolveProviderByName checks the official provider registry for a

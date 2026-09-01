@@ -17,7 +17,7 @@ type allowlistMock struct {
 }
 
 func (m *allowlistMock) Name() string { return m.name }
-func (m *allowlistMock) Store(_ context.Context, _ Reference, _, _ []byte, _ map[string]string, _ bool) (ArtifactInfo, error) {
+func (m *allowlistMock) Store(_ context.Context, _ Reference, _, _ []byte, _ map[string]string, _ bool, _ ...Layer) (ArtifactInfo, error) {
 	return ArtifactInfo{}, nil
 }
 
@@ -27,6 +27,14 @@ func (m *allowlistMock) Fetch(_ context.Context, ref Reference) ([]byte, Artifac
 
 func (m *allowlistMock) FetchWithBundle(_ context.Context, ref Reference) ([]byte, []byte, ArtifactInfo, error) {
 	return []byte("data"), []byte("bundle"), ArtifactInfo{Reference: ref}, nil
+}
+
+func (m *allowlistMock) FetchWithLayer(_ context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	layers := make(map[string][]byte, len(mediaTypes))
+	for _, mt := range mediaTypes {
+		layers[mt] = []byte("layer")
+	}
+	return []byte("data"), layers, ArtifactInfo{Reference: ref}, nil
 }
 
 func (m *allowlistMock) Resolve(_ context.Context, ref Reference) (ArtifactInfo, error) {
@@ -100,6 +108,12 @@ func TestAllowlistCatalog_AllowedArtifactPassesThrough(t *testing.T) {
 	assert.Equal(t, []byte("data"), content)
 	assert.Equal(t, []byte("bundle"), bundle)
 
+	// FetchWithLayer allowed
+	layerContent, layers, _, err := cat.FetchWithLayer(ctx, Reference{Name: "exec", Kind: ArtifactKindProvider}, MediaTypeSolutionLock)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("data"), layerContent)
+	assert.Equal(t, []byte("layer"), layers[MediaTypeSolutionLock])
+
 	// Exists allowed
 	exists, err := cat.Exists(ctx, Reference{Name: "exec", Kind: ArtifactKindProvider})
 	require.NoError(t, err)
@@ -126,6 +140,11 @@ func TestAllowlistCatalog_RejectedArtifactReturnsNotFound(t *testing.T) {
 
 	// FetchWithBundle rejected
 	_, _, _, err = cat.FetchWithBundle(ctx, ref) //nolint:dogsled // testing error path only
+	require.Error(t, err)
+	assert.True(t, IsNotFound(err))
+
+	// FetchWithLayer rejected
+	_, _, _, err = cat.FetchWithLayer(ctx, ref, MediaTypeSolutionLock) //nolint:dogsled // testing error path only
 	require.Error(t, err)
 	assert.True(t, IsNotFound(err))
 

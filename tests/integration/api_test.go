@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/gavv/httpexpect/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-logr/logr"
@@ -25,6 +26,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/plugin/identity"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/celprovider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/builtin/fileprovider"
@@ -54,6 +56,7 @@ func setupTestServer(t testing.TB) *httptest.Server {
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
 	)
 	require.NoError(t, err)
 
@@ -1678,6 +1681,15 @@ func TestAPI_SolutionRender_InvalidPath(t *testing.T) {
 		Status(http.StatusBadRequest)
 }
 
+type mockPluginPool struct{}
+
+func (m *mockPluginPool) EnsureAndAcquire(_ context.Context, deps []solution.PluginDependency) (func(), error) {
+	return func() {}, nil
+}
+
+func (m *mockPluginPool) Shutdown() {
+}
+
 // TestAPI_SolutionRender_Calls exercises the spec.calls (parameterized calls)
 // feature end-to-end through the render endpoint. It confirms that call
 // definitions invoked from resolve steps bind their arguments -- defaults,
@@ -1698,6 +1710,8 @@ func TestAPI_SolutionRender_Calls(t *testing.T) {
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+		api.WithServerPluginPool(&mockPluginPool{}),
 	)
 	require.NoError(t, err)
 
@@ -1771,7 +1785,7 @@ spec:
 	defer solServer.Close()
 
 	obj := e.POST("/v1/solutions/render").
-		WithJSON(map[string]any{"path": solServer.URL + "/solution.yaml"}).
+		WithJSON(map[string]any{"path": solServer.URL + "/solution.yaml", "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusOK).
 		JSON().Object()
@@ -1806,6 +1820,8 @@ func TestAPI_DeferredValidation(t *testing.T) {
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+		api.WithServerPluginPool(&mockPluginPool{}),
 	)
 	require.NoError(t, err)
 
@@ -1867,7 +1883,7 @@ spec:
 	// Render: mutual cross-resolver validation loads without a cycle error and
 	// deferred rules pass because the regions differ.
 	renderObj := e.POST("/v1/solutions/render").
-		WithJSON(map[string]any{"path": solURL}).
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusOK).
 		JSON().Object()
@@ -2201,8 +2217,8 @@ func TestAPI_OpenAPISpec_ErrorCodesPresent(t *testing.T) {
 	}
 }
 
-// setupTestServerWithPool creates a test server with a plugin pool configured.
-func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.PoolOption) *httptest.Server {
+// setupTestServerWithPool creates a test server with a versioned plugin pool configured.
+func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.Server {
 	t.Helper()
 
 	cfg := &config.Config{
@@ -2215,14 +2231,34 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.PoolOption) *httpt
 	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
 
-	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), poolOpts...)
+	compositeReg := provider.NewCompositeRegistryFromBase(reg)
+
+	mockCat := catalog.NewMockCatalog("test-catalog",
+		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
+			ref.Version = semver.MustParse("1.0.0")
+			return catalog.ArtifactInfo{
+				Reference: ref,
+				Catalog:   "test-catalog",
+			}, nil
+		}),
+	)
+	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
+		Catalog:  mockCat,
+		Cache:    plugin.NewCache(t.TempDir()),
+		Platform: plugin.CurrentPlatform(),
+		Logger:   logr.Discard(),
+	})
+
+	pool := plugin.NewVersionPool(context.Background(), fetcher, compositeReg, poolOpts...)
 	t.Cleanup(pool.Shutdown)
 
 	srv, err := api.NewServer(
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(compositeReg),
 		api.WithServerPluginPool(pool),
+		api.WithServerPluginFetcher(fetcher),
 	)
 	require.NoError(t, err)
 
@@ -2253,7 +2289,7 @@ spec:
       type: string
       resolve:
         with:
-          - provider: message
+          - provider: external-plugin
             inputs:
               message: hello
 bundle:
@@ -2272,14 +2308,14 @@ bundle:
 // TestAPI_SolutionDryRun_PluginExternalDisabled verifies that the dryrun
 // endpoint returns 403 when external plugins are disabled.
 func TestAPI_SolutionDryRun_PluginExternalDisabled(t *testing.T) {
-	ts := setupTestServerWithPool(t, plugin.WithIdleTimeout(0), plugin.WithDisableExternal(true))
+	ts := setupTestServerWithPool(t, plugin.WithVersionPoolIdleTimeout(0), plugin.WithVersionPoolDisableExternal(true))
 	defer ts.Close()
 	e := httpexpect.Default(t, ts.URL)
 
 	solURL := serveSolutionWithPlugins(t)
 
 	e.POST("/v1/solutions/dryrun").
-		WithJSON(map[string]any{"path": solURL}).
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusForbidden).
 		HasContentType("application/problem+json").
@@ -2290,8 +2326,10 @@ func TestAPI_SolutionDryRun_PluginExternalDisabled(t *testing.T) {
 // returns 403 when a plugin is not on the allowlist.
 func TestAPI_SolutionRun_PluginNotAllowed(t *testing.T) {
 	ts := setupTestServerWithPool(t,
-		plugin.WithIdleTimeout(0),
-		plugin.WithAllowedPlugins([]string{"only-this-one"}),
+		plugin.WithVersionPoolIdleTimeout(0),
+		plugin.WithVersionPoolAllowedPlugins(map[string]catalog.PluginPolicy{
+			"test-catalog": {Plugins: []string{"only-this-one"}},
+		}),
 	)
 	defer ts.Close()
 	e := httpexpect.Default(t, ts.URL)
@@ -2299,7 +2337,7 @@ func TestAPI_SolutionRun_PluginNotAllowed(t *testing.T) {
 	solURL := serveSolutionWithPlugins(t)
 
 	e.POST("/v1/solutions/run").
-		WithJSON(map[string]any{"path": solURL}).
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusForbidden).
 		HasContentType("application/problem+json").
@@ -2317,20 +2355,51 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 	reg := provider.NewRegistry()
 	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 
-	pool := plugin.NewPool(context.Background(), nil, reg, logr.Discard(), plugin.WithIdleTimeout(0), plugin.WithMaxPlugins(1))
+	compositeReg := provider.NewCompositeRegistryFromBase(reg)
+
+	mockCat := catalog.NewMockCatalog("test-catalog",
+		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
+			ref.Version = semver.MustParse("1.0.0")
+			return catalog.ArtifactInfo{
+				Reference: ref,
+				Catalog:   "test-catalog",
+			}, nil
+		}),
+	)
+	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
+		Catalog:  mockCat,
+		Cache:    plugin.NewCache(t.TempDir()),
+		Platform: plugin.CurrentPlatform(),
+		Logger:   logr.Discard(),
+	})
+
+	pool := plugin.NewVersionPool(context.Background(), fetcher, compositeReg,
+		plugin.WithVersionPoolIdleTimeout(0),
+		plugin.WithVersionPoolMaxPlugins(1),
+	)
 	t.Cleanup(pool.Shutdown)
 
-	// Adopt a nil client to fill the single slot
-	pool.Adopt("filler-plugin", nil, solution.PluginDependency{
-		Name: "filler-plugin",
-		Kind: solution.PluginKindProvider,
-	}, nil)
+	// Adopt a filler entry to fill the single slot
+	fillerDep := solution.PluginDependency{
+		Name:    "filler-plugin",
+		Kind:    solution.PluginKindProvider,
+		Catalog: "test-catalog",
+	}
+	pool.Adopt(
+		identity.NewPluginIdentity("filler-plugin", "test-catalog"),
+		semver.MustParse("1.0.0"),
+		nil,
+		fillerDep,
+		nil,
+	)
 
 	srv, err := api.NewServer(
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(compositeReg),
 		api.WithServerPluginPool(pool),
+		api.WithServerPluginFetcher(fetcher),
 	)
 	require.NoError(t, err)
 
@@ -2347,7 +2416,7 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 	solURL := serveSolutionWithPlugins(t)
 
 	e.POST("/v1/solutions/render").
-		WithJSON(map[string]any{"path": solURL}).
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusServiceUnavailable)
 }
@@ -2368,6 +2437,7 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
 		Catalog: catalog.NewMockCatalog("untrusted-registry",
 			catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
+				ref.Version = semver.MustParse("1.0.0")
 				return catalog.ArtifactInfo{
 					Reference: ref,
 					Catalog:   "untrusted-registry",
@@ -2388,14 +2458,18 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	reg := provider.NewRegistry()
 	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
 
-	pool := plugin.NewPool(context.Background(), fetcher, reg, logr.Discard(), plugin.WithIdleTimeout(0))
+	compositeReg := provider.NewCompositeRegistryFromBase(reg)
+
+	pool := plugin.NewVersionPool(context.Background(), fetcher, compositeReg, plugin.WithVersionPoolIdleTimeout(0))
 	t.Cleanup(pool.Shutdown)
 
 	srv, err := api.NewServer(
 		api.WithServerConfig(cfg),
 		api.WithServerVersion("test-dev"),
 		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(compositeReg),
 		api.WithServerPluginPool(pool),
+		api.WithServerPluginFetcher(fetcher),
 	)
 	require.NoError(t, err)
 
@@ -2412,9 +2486,277 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	solURL := serveSolutionWithPlugins(t)
 
 	e.POST("/v1/solutions/run").
-		WithJSON(map[string]any{"path": solURL}).
+		WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
 		Expect().
 		Status(http.StatusBadGateway).
 		HasContentType("application/problem+json").
-		Body().Contains("failed to load required plugins")
+		Body().Contains("is not in the allowed catalogs list")
+}
+
+// ─── LockMode ───────────────────────────────────────────────────────────────
+
+// serveBuiltinSolutionYAML serves an arbitrary solution YAML body over HTTP and
+// returns the URL. The API server only accepts remote paths, so tests that need
+// to exercise solution loading serve the document this way.
+func serveBuiltinSolutionYAML(t *testing.T, content string) string {
+	t.Helper()
+	solServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-yaml")
+		_, _ = w.Write([]byte(content))
+	}))
+	t.Cleanup(solServer.Close)
+	return solServer.URL + "/solution.yaml"
+}
+
+// lockModeEndpoint describes one solution endpoint that accepts the lockMode
+// field. run, render, and dryrun all share the same
+// parseLockMode -> LoadSolutionWithLock -> ensureProviderDependencies ->
+// handleEnsureError pipeline, so the lock-mode policy tests exercise every
+// endpoint from a single table instead of duplicating per-endpoint cases.
+// assertGreetingOK validates the endpoint-specific 200 body for the builtin
+// "greeting" solution used by the success cases (run/render expose resolverData
+// directly; dryrun returns a WhatIf report).
+type lockModeEndpoint struct {
+	name             string
+	path             string
+	assertGreetingOK func(*httpexpect.Object)
+}
+
+func lockModeEndpoints() []lockModeEndpoint {
+	assertResolverData := func(o *httpexpect.Object) {
+		o.Value("resolverData").Object().HasValue("greeting", "hello")
+	}
+	return []lockModeEndpoint{
+		{name: "run", path: "/v1/solutions/run", assertGreetingOK: assertResolverData},
+		{name: "render", path: "/v1/solutions/render", assertGreetingOK: assertResolverData},
+		{
+			name: "dryrun",
+			path: "/v1/solutions/dryrun",
+			assertGreetingOK: func(o *httpexpect.Object) {
+				o.HasValue("dryRun", true)
+				o.Value("solution").String().NotEmpty()
+			},
+		},
+	}
+}
+
+// TestAPI_SolutionLockMode_InvalidValue verifies that an unrecognised lockMode
+// is rejected by every endpoint that accepts the field (run, render, dryrun).
+// The field carries an `enum` schema constraint, so Huma rejects the value at
+// request validation with 422 before the handler runs.
+func TestAPI_SolutionLockMode_InvalidValue(t *testing.T) {
+	e, ts := setupExpect(t)
+	defer ts.Close()
+
+	// Any valid remote path passes requireRemotePath; enum validation fails first.
+	solURL := serveBuiltinSolutionYAML(t, `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lockmode-invalid
+  version: 1.0.0
+`)
+
+	for _, ep := range lockModeEndpoints() {
+		t.Run(ep.name, func(t *testing.T) {
+			e.POST(ep.path).
+				WithJSON(map[string]any{"path": solURL, "lockMode": "bogus"}).
+				Expect().
+				Status(http.StatusUnprocessableEntity).
+				HasContentType("application/problem+json")
+		})
+	}
+}
+
+// TestAPI_SolutionLockMode_RequiresLockFile verifies that a solution referencing
+// an external provider with no lock file is rejected by strict, the default
+// (empty), and constrained modes. The empty case proves the default is strict
+// rather than bestEffort. The missing-lock condition surfaces from dependency
+// resolution as prepare.ErrMissingLockFile and is mapped to 400 at the API
+// boundary, before any plugin is fetched.
+func TestAPI_SolutionLockMode_RequiresLockFile(t *testing.T) {
+	ts := setupTestServerWithPool(t, plugin.WithVersionPoolIdleTimeout(0))
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveSolutionWithPlugins(t)
+
+	modes := []struct {
+		name        string
+		lockMode    string
+		wantModeMsg string
+	}{
+		{name: "strict", lockMode: "strict", wantModeMsg: "strict mode requires a lock file"},
+		{name: "default", lockMode: "", wantModeMsg: "strict mode requires a lock file"},
+		{name: "constrained", lockMode: "constrained", wantModeMsg: "constrained mode requires a lock file"},
+	}
+
+	for _, ep := range lockModeEndpoints() {
+		for _, tt := range modes {
+			t.Run(ep.name+"/"+tt.name, func(t *testing.T) {
+				body := map[string]any{"path": solURL}
+				if tt.lockMode != "" {
+					body["lockMode"] = tt.lockMode
+				}
+
+				resp := e.POST(ep.path).
+					WithJSON(body).
+					Expect().
+					Status(http.StatusBadRequest).
+					HasContentType("application/problem+json").
+					Body()
+
+				resp.Contains("requires a lock file but none was provided")
+				resp.Contains(tt.wantModeMsg)
+			})
+		}
+	}
+}
+
+// TestAPI_SolutionLockMode_BestEffortSkipsLockGuard verifies that bestEffort
+// does NOT require a lock file: the same external-provider solution that strict
+// rejects with 400 is accepted past lock resolution under bestEffort, failing
+// later at plugin resolution (here, 403 because external plugins are disabled).
+// The differing status codes prove the requirement is mode-dependent.
+func TestAPI_SolutionLockMode_BestEffortSkipsLockGuard(t *testing.T) {
+	ts := setupTestServerWithPool(t, plugin.WithVersionPoolIdleTimeout(0), plugin.WithVersionPoolDisableExternal(true))
+	defer ts.Close()
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveSolutionWithPlugins(t)
+
+	for _, ep := range lockModeEndpoints() {
+		t.Run(ep.name, func(t *testing.T) {
+			// strict: rejected because no lock file is present.
+			e.POST(ep.path).
+				WithJSON(map[string]any{"path": solURL, "lockMode": "strict"}).
+				Expect().
+				Status(http.StatusBadRequest).
+				HasContentType("application/problem+json").
+				Body().Contains("requires a lock file but none was provided")
+
+			// bestEffort: passes lock resolution, then fails downstream at plugin resolution.
+			e.POST(ep.path).
+				WithJSON(map[string]any{"path": solURL, "lockMode": "bestEffort"}).
+				Expect().
+				Status(http.StatusForbidden).
+				HasContentType("application/problem+json").
+				Body().Contains("external plugins disabled")
+		})
+	}
+}
+
+// setupStaticProviderServer starts an API test server whose only builtin
+// provider is `static`, with a composite registry wired so solution execution
+// endpoints can resolve dependencies. Returns the running server.
+func setupStaticProviderServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	cfg := &config.Config{
+		APIServer: config.APIServerConfig{
+			APIVersion: settings.DefaultAPIVersion,
+		},
+	}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(staticprovider.New()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// TestAPI_SolutionLockMode_BuiltinOnlyStrictSucceeds verifies that a
+// plugin-free (builtin-only) solution renders successfully under strict/default
+// mode: the missing-lock requirement only applies when a referenced external
+// provider actually needs a lock entry.
+func TestAPI_SolutionLockMode_BuiltinOnlyStrictSucceeds(t *testing.T) {
+	ts := setupStaticProviderServer(t)
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveBuiltinSolutionYAML(t, `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lockmode-builtin-only
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+`)
+
+	// Default lockMode (strict) must not require a lock for a plugin-free
+	// solution.
+	for _, ep := range lockModeEndpoints() {
+		t.Run(ep.name, func(t *testing.T) {
+			obj := e.POST(ep.path).
+				WithJSON(map[string]any{"path": solURL}).
+				Expect().
+				Status(http.StatusOK).
+				JSON().Object()
+
+			ep.assertGreetingOK(obj)
+		})
+	}
+}
+
+// TestAPI_SolutionLockMode_DeclaredButUnusedPluginStrictSucceeds verifies that
+// merely declaring a plugin in bundle.plugins does NOT require a lock file under
+// strict mode when that plugin is not actually referenced by any resolver. The
+// requirement is keyed on used external providers, not declarations, so a
+// solution that only exercises a builtin provider renders successfully even
+// though it declares an unused external plugin.
+func TestAPI_SolutionLockMode_DeclaredButUnusedPluginStrictSucceeds(t *testing.T) {
+	ts := setupStaticProviderServer(t)
+	e := httpexpect.Default(t, ts.URL)
+
+	solURL := serveBuiltinSolutionYAML(t, `apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: lockmode-unused-plugin
+  version: 1.0.0
+spec:
+  resolvers:
+    greeting:
+      type: string
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: hello
+bundle:
+  plugins:
+    - name: external-plugin
+      kind: provider
+`)
+
+	for _, ep := range lockModeEndpoints() {
+		t.Run(ep.name, func(t *testing.T) {
+			obj := e.POST(ep.path).
+				WithJSON(map[string]any{"path": solURL, "lockMode": "strict"}).
+				Expect().
+				Status(http.StatusOK).
+				JSON().Object()
+
+			ep.assertGreetingOK(obj)
+		})
+	}
 }

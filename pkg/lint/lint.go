@@ -25,11 +25,11 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
 	"github.com/oakwood-commons/scafctl/pkg/paths"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
-	"github.com/oakwood-commons/scafctl/pkg/provider/official"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	resolverRefs "github.com/oakwood-commons/scafctl/pkg/resolver/refs"
 	"github.com/oakwood-commons/scafctl/pkg/schema"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 	"github.com/oakwood-commons/scafctl/pkg/solution/soltesting"
 	"github.com/oakwood-commons/scafctl/pkg/solution/walk"
 	"github.com/oakwood-commons/scafctl/pkg/sourcepos"
@@ -73,15 +73,21 @@ type Result struct {
 	sourceMap *sourcepos.SourceMap `json:"-" yaml:"-"`
 }
 
+type providerLookup interface {
+	Get(name string) (provider.Provider, bool)
+	DescriptorLookup() provider.DescriptorLookup
+	Has(name string) bool
+}
+
 // Solution validates a solution and returns structured lint findings.
 // This function is reusable by both CLI and MCP.
-func Solution(sol *solution.Solution, filePath string, registry *provider.Registry) *Result {
+func Solution(sol *solution.Solution, filePath string, registry providerLookup) *Result {
 	if registry == nil {
 		registry = provider.NewRegistry()
 	}
-	// Clone the registry to avoid mutating the shared singleton when
-	// marking bundle.plugins and official providers as known.
-	registry = registryWithBundlePlugins(registry, sol)
+	// Wrap the registry to suppress missing-provider warnings for providers
+	// that will be fetched at runtime (bundle.plugins).
+	registry = registryWithKnownProviders(registry, sol)
 
 	result := &Result{
 		File:     filePath,
@@ -112,7 +118,7 @@ func Solution(sol *solution.Solution, filePath string, registry *provider.Regist
 	for ref := range templateFileRefs {
 		referencedResolvers[ref] = true
 	}
-
+	lintValidateExternalProviders(sol, result, registry)
 	lintResolvers(sol, result, registry, referencedResolvers)
 	lintTemplateFileDependencies(sol, solutionDir, result, registry)
 	lintResolverDependencies(sol, result)
@@ -431,7 +437,7 @@ func unusedResolverSeverity(sol *solution.Solution) SeverityLevel {
 	return SeverityWarning
 }
 
-func lintResolvers(sol *solution.Solution, result *Result, registry *provider.Registry, referencedResolvers map[string]bool) {
+func lintResolvers(sol *solution.Solution, result *Result, registry providerLookup, referencedResolvers map[string]bool) {
 	if sol.Spec.Resolvers == nil {
 		return
 	}
@@ -692,7 +698,7 @@ func lintResolverSelfReferences(name string, res *resolver.Resolver, location st
 
 // lintRedundantDependsOn checks if a resolver's explicit dependsOn entries are
 // already covered by auto-inferred dependencies from value references.
-func lintRedundantDependsOn(res *resolver.Resolver, location string, result *Result, registry *provider.Registry) {
+func lintRedundantDependsOn(res *resolver.Resolver, location string, result *Result, registry providerLookup) {
 	if len(res.DependsOn) == 0 {
 		return
 	}
@@ -735,7 +741,7 @@ func lintRedundantDependsOn(res *resolver.Resolver, location string, result *Res
 // lintTransformShapeMismatch detects resolvers where the transform phase accesses
 // provider-specific fields (like __self.body) but the resolve chain includes a
 // fallback with a different output shape (e.g., static returning a scalar/array).
-func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location string, result *Result, registry *provider.Registry) {
+func lintTransformShapeMismatch(_ string, res *resolver.Resolver, location string, result *Result, registry providerLookup) {
 	if res.Resolve == nil || res.Transform == nil {
 		return
 	}
@@ -934,7 +940,7 @@ func lintResolverDependencies(sol *solution.Solution, result *Result) {
 // Only resolution-phase references (resolve/transform/when) form edges; deferred
 // cross-resolver validation references are excluded by ExtractDependencies and
 // therefore never reported here as cycles.
-func lintResolverCycles(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintResolverCycles(sol *solution.Solution, result *Result, registry providerLookup) {
 	if sol.Spec.Resolvers == nil {
 		return
 	}
@@ -972,7 +978,7 @@ func lintResolverCycles(sol *solution.Solution, result *Result, registry *provid
 // resolvers resolve and therefore cannot fail fast, so authors are guided to
 // keep cheap self-only checks (required/regex) as separate inline rules to
 // preserve early feedback.
-func lintDeferredValidation(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintDeferredValidation(sol *solution.Solution, result *Result, registry providerLookup) {
 	if sol.Spec.Resolvers == nil {
 		return
 	}
@@ -1111,7 +1117,7 @@ func canonicalCycleKey(cycle []string) string {
 	return strings.Join(rotated, "\x00")
 }
 
-func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintWorkflow(sol *solution.Solution, result *Result, registry providerLookup) {
 	if sol.Spec.Workflow == nil {
 		return
 	}
@@ -1184,23 +1190,45 @@ func lintWorkflow(sol *solution.Solution, result *Result, registry *provider.Reg
 	}
 }
 
-// registryWithBundlePlugins creates a shallow clone of the registry and marks
-// provider names declared in sol.Bundle.Plugins as known so the
-// missing-provider lint rule does not fire for plugin-managed providers.
-// The clone ensures the shared singleton registry is not mutated.
-func registryWithBundlePlugins(registry *provider.Registry, sol *solution.Solution) *provider.Registry {
-	clone := registry.ShallowClone()
+// knownNamesRegistry wraps a ProviderLookup and adds a set of known provider
+// names. Has() returns true for names in the known set even if the underlying
+// registry does not have them; Get() and DescriptorLookup() delegate unchanged.
+type knownNamesRegistry struct {
+	inner providerLookup
+	known map[string]bool
+}
+
+func (r *knownNamesRegistry) Get(name string) (provider.Provider, bool) {
+	return r.inner.Get(name)
+}
+
+func (r *knownNamesRegistry) Has(name string) bool {
+	if r.inner.Has(name) {
+		return true
+	}
+	return r.known[name]
+}
+
+func (r *knownNamesRegistry) DescriptorLookup() provider.DescriptorLookup {
+	return r.inner.DescriptorLookup()
+}
+
+// registryWithKnownProviders wraps the registry so that Has() returns true
+// for provider names declared in sol.Bundle.Plugins
+// This suppresses missing-provider lint warnings for providers that will be
+// fetched at runtime without mutating the underlying registry.
+func registryWithKnownProviders(registry providerLookup, sol *solution.Solution) providerLookup {
+	known := make(map[string]bool)
 	for _, p := range sol.Bundle.Plugins {
-		if p.Kind == solution.PluginKindProvider && p.Name != "" {
-			clone.MarkKnown(p.Name)
+		if p.Kind == solution.PluginKindProvider && p.LocalName() != "" {
+			known[p.LocalName()] = true
 		}
 	}
-	// Also mark all official providers as known - auto-resolution fetches
-	// them at runtime without requiring explicit bundle.plugins declarations.
-	for _, entry := range official.DefaultProviders() {
-		clone.MarkKnown(entry.Name)
+
+	if len(known) == 0 {
+		return registry
 	}
-	return clone
+	return &knownNamesRegistry{inner: registry, known: known}
 }
 
 // lintBundlePlugins warns when bundle.plugins entries reference built-in
@@ -1208,12 +1236,12 @@ func registryWithBundlePlugins(registry *provider.Registry, sol *solution.Soluti
 // runtime, so declaring them in bundle.plugins is unnecessary.
 func lintBundlePlugins(sol *solution.Solution, result *Result) {
 	for i, p := range sol.Bundle.Plugins {
-		if p.Kind == solution.PluginKindProvider && provider.IsBuiltinProvider(p.Name) {
+		if p.Kind == solution.PluginKindProvider && provider.IsBuiltinProvider(p.LocalName()) {
 			result.addFinding(
 				SeverityWarning,
 				"bundle",
 				fmt.Sprintf("bundle.plugins[%d]", i),
-				fmt.Sprintf("bundle.plugins entry %q is a builtin provider and will be ignored at runtime", p.Name),
+				fmt.Sprintf("bundle.plugins entry %q is a builtin provider and will be ignored at runtime", p.LocalName()),
 				"Remove this entry; builtin providers are always available without an explicit plugin declaration",
 				"builtin-in-bundle-plugins",
 			)
@@ -1221,9 +1249,9 @@ func lintBundlePlugins(sol *solution.Solution, result *Result) {
 	}
 }
 
-// registryAdapter adapts provider.Registry to action.RegistryInterface
+// registryAdapter adapts providerLookup to action.RegistryInterface
 type registryAdapter struct {
-	registry *provider.Registry
+	registry providerLookup
 }
 
 func (r *registryAdapter) Get(name string) (provider.Provider, bool) {
@@ -1243,7 +1271,7 @@ func (r *registryAdapter) Has(name string) bool {
 	return r.registry.Has(name)
 }
 
-func lintAction(act *action.Action, location string, validDeps map[string]bool, result *Result, registry *provider.Registry, declaredFuncs []string) {
+func lintAction(act *action.Action, location string, validDeps map[string]bool, result *Result, registry providerLookup, declaredFuncs []string) {
 	if act.Description == "" {
 		result.addFinding(SeverityInfo, "documentation", location,
 			"action lacks description",
@@ -2029,7 +2057,7 @@ func walkDirectoryProviderTemplates(step resolver.ProviderSource, absPath string
 // lintTemplateFileDependencies checks that resolvers using the go-template
 // provider with render-tree operation have all resolver names referenced in
 // their source template files listed in dependsOn (or reachable via the DAG).
-func lintTemplateFileDependencies(sol *solution.Solution, solutionDir string, result *Result, registry *provider.Registry) {
+func lintTemplateFileDependencies(sol *solution.Solution, solutionDir string, result *Result, registry providerLookup) {
 	if sol.Spec.Resolvers == nil || solutionDir == "" {
 		return
 	}
@@ -2557,7 +2585,7 @@ func lintSchema(rawContent []byte, filePath string, result *Result) {
 //
 // Expression, template, and resolver-reference values are silently skipped
 // because they can only be validated at runtime.
-func lintProviderInputs(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintProviderInputs(sol *solution.Solution, result *Result, registry providerLookup) {
 	_ = walk.Walk(sol, &walk.Visitor{
 		ProviderSource: func(path string, ps *resolver.ProviderSource) error {
 			lintProviderInputsForStep(ps.Provider, ps.Inputs, strings.TrimPrefix(path, "spec."), result, registry)
@@ -2579,7 +2607,7 @@ func lintProviderInputs(sol *solution.Solution, result *Result, registry *provid
 }
 
 // lintProviderInputsForStep validates inputs for a single provider step.
-func lintProviderInputsForStep(providerName string, inputs map[string]*spec.ValueRef, location string, result *Result, registry *provider.Registry) {
+func lintProviderInputsForStep(providerName string, inputs map[string]*spec.ValueRef, location string, result *Result, registry providerLookup) {
 	if providerName == "" || inputs == nil {
 		return
 	}
@@ -2691,7 +2719,7 @@ func FilterBySeverity(result *Result, minSeverity string) *Result {
 }
 
 // lintState validates the solution's state configuration.
-func lintState(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintState(sol *solution.Solution, result *Result, registry providerLookup) {
 	if sol.State == nil {
 		return
 	}
@@ -2706,7 +2734,7 @@ func lintState(sol *solution.Solution, result *Result, registry *provider.Regist
 
 // lintStateBackend validates the backend provider configuration.
 // Returns false if further state linting should be skipped (e.g., backend is missing).
-func lintStateBackend(sol *solution.Solution, result *Result, registry *provider.Registry) bool {
+func lintStateBackend(sol *solution.Solution, result *Result, registry providerLookup) bool {
 	location := "state"
 
 	backendName := sol.State.Backend.Provider
@@ -2762,7 +2790,7 @@ func lintStateBackend(sol *solution.Solution, result *Result, registry *provider
 //
 // saveOverrides are excluded here because they resolve at SAVE time (after all
 // resolvers have run); lintStateSaveOverrides covers them.
-func lintStateRefs(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintStateRefs(sol *solution.Solution, result *Result, registry providerLookup) {
 	var lookup resolver.DescriptorLookup
 	if registry != nil {
 		lookup = registry.DescriptorLookup()
@@ -2880,5 +2908,20 @@ func lintImmutableResolvers(sol *solution.Solution, result *Result) {
 				"Add a state block with a backend provider to the solution so that the resolver value can be persisted.",
 				"immutable-requires-state")
 		}
+	}
+}
+
+func lintValidateExternalProviders(sol *solution.Solution, result *Result, registry providerLookup) {
+	builtin := func(s string) bool {
+		return registry.Has(s)
+	}
+	err := prepare.ValidateExternalProviders(sol, builtin, func(sol *solution.Solution) []string {
+		return sol.Spec.ReferencedProviderNames()
+	})
+	if err != nil {
+		result.addFinding(SeverityError, "provider", "spec",
+			fmt.Sprintf("external provider validation failed: %v", err),
+			"Ensure all external providers are correctly declared and available",
+			"external-provider-validation")
 	}
 }

@@ -112,13 +112,13 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 		for _, blob := range br.Dedup.LargeBlobs {
 			blobLayers = append(blobLayers, blob.Content)
 		}
-		info, err = localCatalog.StoreDedup(ctx, ref, content, br.Dedup.ManifestJSON, br.Dedup.SmallBlobsTar, blobLayers, annotations, opts.Force)
+		info, err = localCatalog.StoreDedup(ctx, ref, content, br.Dedup.ManifestJSON, br.Dedup.SmallBlobsTar, blobLayers, annotations, opts.Force, lockLayers(br)...)
 	} else {
 		var bundleData []byte
 		if br != nil {
 			bundleData = br.TarData
 		}
-		info, err = localCatalog.Store(ctx, ref, content, bundleData, annotations, opts.Force)
+		info, err = localCatalog.Store(ctx, ref, content, bundleData, annotations, opts.Force, lockLayers(br)...)
 	}
 
 	if err != nil {
@@ -158,6 +158,18 @@ func StoreSolutionArtifact(ctx context.Context, localCatalog *catalog.LocalCatal
 	}
 
 	return result, nil
+}
+
+// lockLayers returns the optional lock layer(s) to attach to a stored solution
+// artifact. It yields a single MediaTypeSolutionLock layer when the build
+// produced lock data, and nothing otherwise, so an empty lock never adds a
+// layer. The catalog store skips empty layers, but returning none here also
+// avoids allocating a descriptor for the common no-lock case.
+func lockLayers(br *BuildResult) []catalog.Layer {
+	if br == nil || len(br.LockData) == 0 {
+		return nil
+	}
+	return []catalog.Layer{{MediaType: catalog.MediaTypeSolutionLock, Data: br.LockData}}
 }
 
 // WriteBuildCacheEntry writes the build-cache entry for a stored artifact. It is

@@ -13,6 +13,10 @@ metadata:
     references inside them even though the extension is not .tpl/.tmpl/.gotmpl.
 
 bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
   include:
     - "templates/**"
 

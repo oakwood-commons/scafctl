@@ -18,7 +18,14 @@ metadata:
   maintainers:
     - name: Platform Team
       email: platform@example.com
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+    - name: directory
+      kind: provider
+      version: latest
 spec:
   # ============================================================================
   # RESOLVERS: Data gathering, transformation, and validation

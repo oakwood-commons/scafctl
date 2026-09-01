@@ -15,6 +15,12 @@ metadata:
     - workflow
   description: When conditions for conditional action execution
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     environment:

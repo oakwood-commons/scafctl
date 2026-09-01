@@ -16,6 +16,12 @@ metadata:
     message, type (http/exec/timeout/validation/unknown), statusCode, exitCode,
     attempt (1-based), and maxAttempts.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers: {}
 

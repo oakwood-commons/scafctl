@@ -10,6 +10,15 @@ metadata:
     Tests repository info, file content, releases, pull requests, issues, and branches
     via GraphQL, and release writes via REST.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+    - name: github
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     mockBaseUrl:

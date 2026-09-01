@@ -276,3 +276,99 @@ func TestRemoteCatalog_FetchByPlatform_SinglePlatform(t *testing.T) {
 	assert.Equal(t, []byte("single-binary"), data)
 	assert.NotEmpty(t, info.Digest)
 }
+
+func TestRemoteCatalog_ResolveContentDigest_MultiPlatform(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+	ref := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "multi-digest",
+		Version: semver.MustParse("2.0.0"),
+	}
+
+	binaries := []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux-amd64-binary")},
+		{Platform: "darwin/arm64", Data: []byte("darwin-arm64-binary")},
+	}
+	storeMultiPlatformInFake(t, cat, ref, binaries)
+
+	for _, pb := range binaries {
+		// ResolveContentDigest returns the content-layer digest and artifact
+		// metadata without downloading the blob.
+		got, err := cat.ResolveContentDigest(ctx, ref, pb.Platform, MediaTypeProviderBinary)
+		require.NoError(t, err)
+
+		want := digest.FromBytes(pb.Data).String()
+		assert.Equal(t, want, got.ContentDigest, "platform %s", pb.Platform)
+
+		// It must agree with the digest FetchByPlatform reports (which is
+		// derived after actually transferring the blob).
+		_, info, err := cat.FetchByPlatform(ctx, ref, pb.Platform)
+		require.NoError(t, err)
+		assert.Equal(t, info.Digest, got.ContentDigest, "platform %s: ResolveContentDigest must match FetchByPlatform", pb.Platform)
+	}
+}
+
+func TestRemoteCatalog_ResolveContentDigest_SinglePlatform(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ctx := t.Context()
+	ref := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "single-digest",
+		Version: semver.MustParse("1.0.0"),
+	}
+
+	// Store as a normal single-platform manifest; the platform argument is
+	// ignored for single-platform manifests.
+	_, err := cat.Store(ctx, ref, []byte("single-binary"), nil, nil, false)
+	require.NoError(t, err)
+
+	got, err := cat.ResolveContentDigest(ctx, ref, "linux/amd64", MediaTypeProviderBinary)
+	require.NoError(t, err)
+	assert.Equal(t, digest.FromBytes([]byte("single-binary")).String(), got.ContentDigest)
+
+	// Cross-check against FetchByPlatform's reported digest.
+	_, info, err := cat.FetchByPlatform(ctx, ref, "linux/amd64")
+	require.NoError(t, err)
+	assert.Equal(t, info.Digest, got.ContentDigest)
+}
+
+func TestRemoteCatalog_ResolveContentDigest_PlatformNotFound(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ref := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "linux-only-digest",
+		Version: semver.MustParse("1.0.0"),
+	}
+
+	storeMultiPlatformInFake(t, cat, ref, []PlatformBinary{
+		{Platform: "linux/amd64", Data: []byte("linux-binary")},
+	})
+
+	_, err := cat.ResolveContentDigest(t.Context(), ref, "darwin/arm64", MediaTypeProviderBinary)
+	require.Error(t, err)
+	assert.True(t, IsPlatformNotFound(err), "expected PlatformNotFoundError, got %T: %v", err, err)
+}
+
+func TestRemoteCatalog_ResolveContentDigest_NotFound(t *testing.T) {
+	t.Parallel()
+	cat, ts := newTestRemoteCatalog(t)
+	defer ts.Close()
+
+	ref := Reference{
+		Kind:    ArtifactKindProvider,
+		Name:    "nonexistent",
+		Version: semver.MustParse("1.0.0"),
+	}
+	_, err := cat.ResolveContentDigest(t.Context(), ref, "linux/amd64", MediaTypeProviderBinary)
+	require.Error(t, err)
+}

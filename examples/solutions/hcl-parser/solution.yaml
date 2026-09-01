@@ -12,7 +12,11 @@ metadata:
     Demonstrates the HCL provider to parse Terraform configuration
     and extract structured information about variables, resources,
     modules, and other block types.
-
+bundle:
+  plugins:
+    - name: hcl
+      kind: provider
+      version: latest
 spec:
   resolvers:
     tfConfig:

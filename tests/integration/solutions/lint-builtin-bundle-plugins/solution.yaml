@@ -13,7 +13,7 @@ bundle:
   plugins:
     - name: cel
       kind: provider
-      version: "1.0.0"
+      version: latest
 
 spec:
   resolvers:

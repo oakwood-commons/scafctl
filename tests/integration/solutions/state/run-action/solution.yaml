@@ -18,6 +18,12 @@ state:
     inputs:
       path: run-action-state.json
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     environment:

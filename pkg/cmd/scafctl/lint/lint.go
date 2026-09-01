@@ -51,8 +51,14 @@ const (
 	SeverityInfo    = pkglint.SeverityInfo
 )
 
+type providerLookup interface {
+	DescriptorLookup() provider.DescriptorLookup
+	Get(name string) (provider.Provider, bool)
+	Has(name string) bool
+}
+
 // Solution delegates to pkg/lint.Solution.
-func Solution(sol *solution.Solution, filePath string, registry *provider.Registry) *Result {
+func Solution(sol *solution.Solution, filePath string, registry providerLookup) *Result {
 	return pkglint.Solution(sol, filePath, registry)
 }
 

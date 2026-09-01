@@ -69,6 +69,12 @@ type SolutionOptions struct {
 	// provider fall back to their defaults.
 	NoState bool
 
+	// LockMode is the raw --lock-mode flag value controlling how plugin
+	// versions are resolved against the lock file (strict, constrained,
+	// bestEffort). Empty leaves the source-based default applied by prepare,
+	// matching `run`.
+	LockMode string
+
 	// Mode flags (mutually exclusive)
 	ActionGraph  bool   // --action-graph: Show action dependency graph
 	GraphFormat  string // --graph-format: Graph format (ascii, dot, mermaid, json)
@@ -267,6 +273,7 @@ Examples:
 	cCmd.Flags().DurationVar(&options.PhaseTimeout, "phase-timeout", settings.DefaultPhaseTimeout, "Timeout per phase")
 	cCmd.Flags().BoolVar(&options.NoCache, "no-cache", false, "Bypass the artifact cache and fetch directly from the catalog")
 	cCmd.Flags().BoolVar(&options.NoState, "no-state", false, "Skip loading persisted state (for CI/offline runs)")
+	cCmd.Flags().StringVar(&options.LockMode, "lock-mode", "", "Plugin version lock mode: strict, constrained, bestEffort (defaults to the same source-based mode as 'run')")
 
 	// Graph mode flags
 	cCmd.Flags().BoolVar(&options.ActionGraph, "action-graph", false, "Show action dependency graph (ASCII, DOT, Mermaid, JSON)")
@@ -303,6 +310,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			fmt.Errorf("cannot use both -f - and @-: stdin can only be read once"),
 			exitcode.InvalidInput,
 		)
+	}
+
+	// Validate --lock-mode early so an invalid value fails with InvalidInput
+	// before any solution loading. Empty is valid (source-based default).
+	if o.LockMode != "" {
+		if _, err := prepare.ParseLockMode(o.LockMode); err != nil {
+			return o.exitWithCode(err, exitcode.InvalidInput)
+		}
 	}
 
 	// Route to appropriate mode
@@ -363,11 +378,13 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 		"outputFile", o.OutputFile,
 		"compact", o.Compact)
 
-	// Load the solution
-	sol, err := o.loadSolution(ctx)
+	// Build the execution registry the same way `run` does so render previews
+	// run faithfully (lock-file honoring, official/third-party plugins resolved).
+	ctx, sol, reg, cleanup, err := o.prepareForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(err, exitcode.FileNotFound)
 	}
+	defer cleanup()
 
 	lgr.V(1).Info("loaded solution",
 		"name", sol.Metadata.Name,
@@ -380,20 +397,7 @@ func (o *SolutionOptions) runActionGraph(ctx context.Context, lgr logr.Logger) e
 	}
 
 	// Validate the workflow
-	reg := o.getRegistry(ctx)
-
-	// Auto-resolve official providers so render can execute solutions
-	// that reference extracted providers (e.g., static, exec).
-	if clients := o.autoResolveOfficialProviders(ctx, sol, reg); len(clients) > 0 {
-		defer func() {
-			for _, c := range clients {
-				c.Kill()
-			}
-		}()
-	}
-
-	adapter := &solutionRegistryAdapter{Registry: reg}
-	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, reg); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
@@ -465,30 +469,19 @@ func (o *SolutionOptions) runActionGraphVisualization(ctx context.Context, lgr l
 		"file", o.File,
 		"format", o.GraphFormat)
 
-	// Load the solution
-	sol, err := o.loadSolution(ctx)
+	// Build the execution registry the same way `run` does.
+	ctx, sol, reg, cleanup, err := o.prepareForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(err, exitcode.FileNotFound)
 	}
+	defer cleanup()
 
 	if !sol.Spec.HasWorkflow() {
 		return o.exitWithCode(fmt.Errorf("solution does not define a workflow"), exitcode.ValidationFailed)
 	}
 
 	// Validate the workflow
-	reg := o.getRegistry(ctx)
-
-	// Auto-resolve official providers for the action graph visualization.
-	if clients := o.autoResolveOfficialProviders(ctx, sol, reg); len(clients) > 0 {
-		defer func() {
-			for _, c := range clients {
-				c.Kill()
-			}
-		}()
-	}
-
-	adapter := &solutionRegistryAdapter{Registry: reg}
-	if err := action.ValidateWorkflow(sol.Spec.Workflow, adapter); err != nil {
+	if err := action.ValidateWorkflow(sol.Spec.Workflow, reg); err != nil {
 		return o.exitWithCode(fmt.Errorf("workflow validation failed: %w", err), exitcode.ValidationFailed)
 	}
 
@@ -544,11 +537,12 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 		"snapshotFile", o.SnapshotFile,
 		"redact", o.Redact)
 
-	// Load the solution
-	sol, err := o.loadSolution(ctx)
+	// Build the execution registry the same way `run` does.
+	ctx, sol, reg, cleanup, err := o.prepareForExecution(ctx)
 	if err != nil {
 		return o.exitWithCode(err, exitcode.FileNotFound)
 	}
+	defer cleanup()
 
 	if !sol.Spec.HasResolvers() {
 		return o.exitWithCode(fmt.Errorf("solution does not define any resolvers"), exitcode.ValidationFailed)
@@ -567,7 +561,7 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 	// State lifecycle: load persisted state before resolver execution so
 	// the state provider can serve previously saved values (read-only).
 	var stateSeed map[string]*resolver.ExecutionResult
-	ctx, params, stateSeed, err = o.loadStateIntoContext(ctx, sol, o.getRegistry(ctx), params)
+	ctx, params, stateSeed, err = o.loadStateIntoContext(ctx, sol, reg, params)
 	if err != nil {
 		return o.exitWithCode(err, exitcode.GeneralError)
 	}
@@ -578,7 +572,6 @@ func (o *SolutionOptions) runSnapshot(ctx context.Context, lgr logr.Logger) erro
 		"parameters", len(params))
 
 	// Execute resolvers
-	reg := o.getRegistry(ctx)
 	resolverCfg := o.getEffectiveResolverConfig(ctx)
 	var extraOpts []resolver.ExecutorOption
 	if sol.Spec.HasCalls() {
@@ -738,28 +731,115 @@ func (o *SolutionOptions) loadSolution(ctx context.Context) (*solution.Solution,
 	return sol, nil
 }
 
-// getRegistry returns the provider registry
-func (o *SolutionOptions) getRegistry(ctx context.Context) *provider.Registry {
-	if o.registry != nil {
-		return o.registry
-	}
-	return solrender.GetDefaultRegistry(ctx)
+// executionRegistry is the consumer-side view of the provider registry that
+// the render command needs: provider lookup (Get/DescriptorLookup) plus
+// existence checks (Has) for workflow validation. The registry returned by
+// prepare.Solution satisfies it structurally, so no adapter is required.
+type executionRegistry interface {
+	Get(name string) (provider.Provider, bool)
+	Has(name string) bool
+	DescriptorLookup() provider.DescriptorLookup
 }
 
-// autoResolveOfficialProviders fetches any official providers referenced by
-// the solution that are missing from the registry. Returns plugin clients
-// that should be closed when done.
-func (o *SolutionOptions) autoResolveOfficialProviders(ctx context.Context, sol *solution.Solution, reg *provider.Registry) []*plugin.Client {
-	clientOpts := plugin.AuthClientOptsFromContext(ctx)
-	clients, err := prepare.ResolveOfficialProviders(ctx, sol, reg, clientOpts...)
-	if err != nil {
-		lgr := logger.FromContext(ctx)
-		if lgr != nil {
-			lgr.V(1).Info("auto-resolution failed for render", "error", err)
+// prepareForExecution builds the same lock-file-honoring execution registry
+// that `run` builds (via prepare.Solution), so the executing render modes are a
+// faithful preview of `run`. Callers MUST defer the returned cleanup func; the
+// returned context carries per-execution provider settings and must be used for
+// subsequent resolver/action execution.
+//
+// o.File is resolved first (unless a getter is injected or stdin is used) so an
+// adjacent lock file is discovered, and output/snapshot paths are absolutized
+// before prepare.Solution runs (which may chdir into an extracted bundle).
+func (o *SolutionOptions) prepareForExecution(ctx context.Context) (context.Context, *solution.Solution, executionRegistry, func(), error) {
+	noop := func() {}
+
+	// Resolve o.File first (mirrors loadSolution) so prepare can find a lock
+	// file adjacent to the resolved path. Skipped when a getter is injected
+	// (tests) or when reading from stdin.
+	if o.getter == nil && o.File != "-" {
+		getter := get.NewGetterFromContext(ctx)
+		resolvedPath, resolveErr := get.Resolve(ctx, getter, o.File, "", get.ResolveOptions{
+			Risk: get.DiscoveryRiskLow,
+		})
+		if resolveErr != nil {
+			return ctx, nil, nil, noop, resolveErr
 		}
+		o.File = resolvedPath
+	}
+
+	// prepare.Solution may chdir into an extracted bundle directory (restored by
+	// Cleanup). Absolutize output/snapshot paths now so writes land at the
+	// caller's CWD, not inside the temporary bundle dir.
+	if err := o.absolutizeOutputPaths(); err != nil {
+		return ctx, nil, nil, noop, err
+	}
+
+	var stdin io.Reader
+	if o.IOStreams != nil {
+		stdin = o.IOStreams.In
+	}
+
+	opts, err := prepare.OptionsFromContext(ctx, prepare.CLIWiring{
+		File:         o.File,
+		Getter:       o.getter,
+		Registry:     o.registry,
+		Stdin:        stdin,
+		NoCache:      o.NoCache,
+		LockMode:     o.LockMode,
+		PluginConfig: o.pluginConfig(),
+		DebugLogging: o.debugLogging(),
+	})
+	if err != nil {
+		return ctx, nil, nil, noop, err
+	}
+
+	result, err := prepare.Solution(ctx, o.File, opts...)
+	if err != nil {
+		return ctx, nil, nil, noop, err
+	}
+
+	ctx = result.ProviderCtx(ctx)
+	return ctx, result.Solution, result.Registry, result.Cleanup, nil
+}
+
+// absolutizeOutputPaths resolves relative --output-file and --snapshot-file
+// paths against the current working directory before prepare.Solution may
+// change it.
+func (o *SolutionOptions) absolutizeOutputPaths() error {
+	if o.OutputFile != "" {
+		abs, err := filepath.Abs(o.OutputFile)
+		if err != nil {
+			return fmt.Errorf("resolving --output-file path: %w", err)
+		}
+		o.OutputFile = abs
+	}
+	if o.SnapshotFile != "" {
+		abs, err := filepath.Abs(o.SnapshotFile)
+		if err != nil {
+			return fmt.Errorf("resolving --snapshot-file path: %w", err)
+		}
+		o.SnapshotFile = abs
+	}
+	return nil
+}
+
+// pluginConfig derives the plugin provider config from CLI settings, mirroring
+// the run command's wiring. Returns nil when no CLI params are available.
+func (o *SolutionOptions) pluginConfig() *plugin.ProviderConfig {
+	if o.CliParams == nil {
 		return nil
 	}
-	return clients
+	return &plugin.ProviderConfig{
+		Quiet:      o.CliParams.IsQuiet,
+		NoColor:    o.CliParams.NoColor,
+		BinaryName: o.CliParams.BinaryName,
+	}
+}
+
+// debugLogging reports whether plugin client debug logging should be enabled,
+// derived from the configured log level.
+func (o *SolutionOptions) debugLogging() bool {
+	return o.CliParams != nil && logger.IsDebugLevel(o.CliParams.MinLogLevel)
 }
 
 // writeOutput writes the rendered output to stdout or file
@@ -872,17 +952,14 @@ func writeSolutionError(o *SolutionOptions, msg string) {
 	).WriteMessage(msg)
 }
 
-// solutionRegistryAdapter is a type alias for the domain RegistryAdapter.
-type solutionRegistryAdapter = solrender.RegistryAdapter
-
-// solutionResolverRegistryAdapter is a type alias for the domain ResolverRegistryAdapter.
-type solutionResolverRegistryAdapter = solrender.ResolverRegistryAdapter
-
 // loadStateIntoContext loads persisted state into the context for read-only
 // access by the state provider during resolver execution. State is never saved
 // in render mode. Returns the updated context and merged parameters (saved + CLI)
 // so the parameter provider can replay previously saved values.
-func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solution.Solution, reg *provider.Registry, params map[string]any) (context.Context, map[string]any, map[string]*resolver.ExecutionResult, error) {
+//
+// reg is typed as the consumer-side executionRegistry: state.NewManager needs
+// Get and the two-phase pre-load needs DescriptorLookup.
+func (o *SolutionOptions) loadStateIntoContext(ctx context.Context, sol *solution.Solution, reg executionRegistry, params map[string]any) (context.Context, map[string]any, map[string]*resolver.ExecutionResult, error) {
 	if sol.State == nil {
 		return ctx, params, nil, nil
 	}

@@ -74,4 +74,5 @@ Step-by-step guides for learning scafctl features.
 - [Plugin Development Guide](plugin-development.md) — Plugin overview and discovery
 - [Plugin Auto-Fetching Tutorial](plugin-auto-fetch-tutorial.md) — Automatically fetch plugins from catalogs at runtime
 - [Bundle Plugins & Built-in Providers](bundle-plugins-tutorial.md) -- Declare plugin versions in `bundle.plugins` for reproducible builds
+- [Plugin Lock Modes Tutorial](lock-modes-tutorial.md) — Control plugin version pinning with strict, constrained, and bestEffort modes
 - [Multi-Platform Plugin Build Tutorial](multi-platform-plugin-build.md) — Build plugins for multiple platforms

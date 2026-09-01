@@ -8,6 +8,12 @@ metadata:
     Tests that scafctl lint detects unknown nested fields inside spec
     as schema violations.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     env:

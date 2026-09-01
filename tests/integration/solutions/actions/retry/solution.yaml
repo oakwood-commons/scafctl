@@ -10,6 +10,12 @@ metadata:
     Uses a command that always succeeds so the action passes
     on the first attempt, confirming retry config doesn't break execution.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     endpoint:

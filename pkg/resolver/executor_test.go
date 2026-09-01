@@ -61,12 +61,12 @@ func (r *mockRegistry) Register(p provider.Provider) error {
 	return nil
 }
 
-func (r *mockRegistry) Get(name string) (provider.Provider, error) {
+func (r *mockRegistry) Get(name string) (provider.Provider, bool) {
 	p, ok := r.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("provider %q not found", name)
+		return nil, false
 	}
-	return p, nil
+	return p, true
 }
 
 func (r *mockRegistry) List() []provider.Provider {

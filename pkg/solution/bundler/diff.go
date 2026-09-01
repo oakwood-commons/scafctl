@@ -300,27 +300,27 @@ func DiffPlugins(a, b *BundleManifest) *PluginsDiff {
 
 	pluginsA := make(map[string]BundlePluginEntry)
 	for _, p := range a.Plugins {
-		pluginsA[p.Name] = p
+		pluginsA[pluginEntryKey(p)] = p
 	}
 	pluginsB := make(map[string]BundlePluginEntry)
 	for _, p := range b.Plugins {
-		pluginsB[p.Name] = p
+		pluginsB[pluginEntryKey(p)] = p
 	}
 
 	for _, pb := range b.Plugins {
-		if _, exists := pluginsA[pb.Name]; !exists {
+		if _, exists := pluginsA[pluginEntryKey(pb)]; !exists {
 			diff.Added = append(diff.Added, PluginDiffEntry{Name: pb.Name, VersionTo: pb.Version})
 		}
 	}
 
 	for _, pa := range a.Plugins {
-		if _, exists := pluginsB[pa.Name]; !exists {
+		if _, exists := pluginsB[pluginEntryKey(pa)]; !exists {
 			diff.Removed = append(diff.Removed, PluginDiffEntry{Name: pa.Name, VersionFrom: pa.Version})
 		}
 	}
 
 	for _, pb := range b.Plugins {
-		pa, exists := pluginsA[pb.Name]
+		pa, exists := pluginsA[pluginEntryKey(pb)]
 		if exists && (pa.Version != pb.Version || pa.Kind != pb.Kind) {
 			diff.Modified = append(diff.Modified, PluginDiffEntry{
 				Name:        pb.Name,
@@ -334,6 +334,13 @@ func DiffPlugins(a, b *BundleManifest) *PluginsDiff {
 		return nil
 	}
 	return diff
+}
+
+// pluginEntryKey identifies a plugin entry by its registry-qualified artifact
+// name so the same artifact leaf fetched from different registries does not
+// collide.
+func pluginEntryKey(p BundlePluginEntry) string {
+	return p.Registry + "\x00" + p.Name
 }
 
 // MapKeys converts a map with string keys to a map[string]bool.

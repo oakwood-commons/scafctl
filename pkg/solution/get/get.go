@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/oakwood-commons/scafctl/pkg/catalog/mediatypes"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/fs"
@@ -34,6 +35,14 @@ import (
 // auto-discovery did not find a solution file in any default location.
 var ErrNoSolutionFound = errors.New("no solution path provided and no solution file found in default locations")
 
+// OCI artifact layer media types. These alias the canonical values in the
+// import-free mediatypes leaf package (the single source of truth), keeping this
+// package decoupled from catalog while ensuring the values cannot drift.
+const (
+	mediaTypeSolutionBundle = mediatypes.SolutionBundle
+	mediaTypeSolutionLock   = mediatypes.SolutionLock
+)
+
 // CatalogResolver is an interface for fetching solutions from a catalog.
 // This avoids a circular dependency with the catalog package.
 type CatalogResolver interface {
@@ -42,12 +51,15 @@ type CatalogResolver interface {
 	FetchSolution(ctx context.Context, nameWithVersion string) ([]byte, error)
 }
 
-// BundleAwareCatalogResolver extends CatalogResolver with bundle fetching.
-type BundleAwareCatalogResolver interface {
+// LayerAwareCatalogResolver extends CatalogResolver with layer-aware fetching,
+// retrieving the solution together with the requested auxiliary OCI layers
+// (e.g. bundle and/or lock) keyed by media type in a single round-trip.
+type LayerAwareCatalogResolver interface {
 	CatalogResolver
-	// FetchSolutionWithBundle retrieves a solution and its bundle from the catalog.
-	// Returns the solution content bytes, bundle tar bytes (nil if no bundle), and any error.
-	FetchSolutionWithBundle(ctx context.Context, nameWithVersion string) (content, bundleData []byte, err error)
+	// FetchSolutionWithLayers retrieves a solution together with the requested
+	// layers from the catalog. The returned map is keyed by media type; a media
+	// type is absent when the artifact has no such layer.
+	FetchSolutionWithLayers(ctx context.Context, nameWithVersion string, mediaTypes ...string) (content []byte, layers map[string][]byte, err error)
 }
 
 // CatalogSourcer is optionally implemented by CatalogResolver to report which
@@ -64,6 +76,13 @@ type RemoteResolver interface {
 	// FetchRemoteSolution fetches a solution from a remote OCI reference.
 	// The ref is the full remote reference string (e.g., "ghcr.io/myorg/starter-kit@1.0.0").
 	FetchRemoteSolution(ctx context.Context, ref string) (content, bundleData []byte, err error)
+
+	// FetchRemoteSolutionWithLayers fetches a solution together with the
+	// requested auxiliary layers (e.g. bundle and/or lock) in a single
+	// round-trip. Callers request layers by media type; the returned map is
+	// keyed by the requested media types that were present on the artifact
+	// (absent layers are omitted).
+	FetchRemoteSolutionWithLayers(ctx context.Context, ref string, mediaTypes ...string) (content []byte, layers map[string][]byte, err error)
 }
 
 // DiscoveryResult holds metadata from the last FindSolution call.
@@ -260,6 +279,11 @@ type Interface interface {
 	// GetWithBundle retrieves a Solution and its bundle tar data (if any).
 	// bundleData is nil when the solution has no bundle or comes from a local file.
 	GetWithBundle(ctx context.Context, path string) (sol *solution.Solution, bundleData []byte, err error)
+	// GetWithLayers retrieves a Solution together with the requested OCI layer
+	// data (bundle and/or lock), keyed by media type. The returned map only
+	// contains entries for requested media types that are actually present, and
+	// is nil when the solution comes from a local file/URL (no OCI layers).
+	GetWithLayers(ctx context.Context, path string, mediaTypes ...string) (sol *solution.Solution, layers map[string][]byte, err error)
 	FindSolution() string
 }
 
@@ -410,37 +434,134 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 	return sol, nil, err
 }
 
-// fromCatalogWithBundle retrieves a solution and its bundle from the catalog.
-func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion string) (*solution.Solution, []byte, error) {
-	// Try bundle-aware resolver first
-	if bundleResolver, ok := o.catalogResolver.(BundleAwareCatalogResolver); ok {
-		content, bundleData, err := bundleResolver.FetchSolutionWithBundle(ctx, nameWithVersion)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		sol := solution.Solution{}
-		if err := o.loadBytes(&sol, content); err != nil {
-			return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
-		}
-
-		sol.SetPath(o.catalogPath(nameWithVersion))
-		return &sol, bundleData, nil
+// GetWithLayers retrieves a Solution together with the requested OCI layer data
+// (bundle and/or lock) from the specified path. The returned map is keyed by
+// media type and only contains entries for requested media types that are
+// actually present. Layers are nil when the solution comes from a local
+// file/URL, which have no OCI layers.
+func (o *Getter) GetWithLayers(ctx context.Context, path string, mediaTypes ...string) (*solution.Solution, map[string][]byte, error) {
+	start := time.Now()
+	if path == "" {
+		path = o.FindSolution()
 	}
 
-	// Fall back to basic resolver (no bundle)
-	content, err := o.catalogResolver.FetchSolution(ctx, nameWithVersion)
-	if err != nil {
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.GetWithLayers",
+		trace.WithAttributes(attribute.String("solution.path", path)),
+	)
+	defer span.End()
+
+	defer func() {
+		if metrics.GetSolutionTimeHistogram != nil {
+			metrics.GetSolutionTimeHistogram.Record(ctx, time.Since(start).Seconds(),
+				metric.WithAttributes(attribute.String(metrics.AttrPath, path)))
+		}
+	}()
+
+	if path == "" {
+		return nil, nil, ErrNoSolutionFound
+	}
+
+	// Bare catalog name (e.g. "my-solution" or "my-solution@1.0.0").
+	if o.catalogResolver != nil && o.isBareName(path) {
+		o.logger.V(1).Info("attempting to resolve with layers from catalog", "name", path)
+		sol, layers, err := o.fromCatalogWithLayers(ctx, path, mediaTypes...)
+		if err == nil {
+			o.logger.V(1).Info("resolved solution with layers from catalog", "name", path, "layers", len(layers))
+			return sol, layers, nil
+		}
+
+		// Bare names are catalog references -- don't fall back to file system.
 		return nil, nil, err
 	}
 
-	sol := solution.Solution{}
-	if err := o.loadBytes(&sol, content); err != nil {
-		return nil, nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
+	// Local files and URLs have no OCI layers.
+	if filepath.IsURL(path) {
+		sol, err := o.FromURL(ctx, path)
+		return sol, nil, err
 	}
 
+	// Docker-style OCI remote reference (e.g. ghcr.io/myorg/starter-kit@1.0.0).
+	if o.remoteResolver != nil && IsCatalogReference(path) && strings.Contains(path, "/") {
+		// Docker-like behavior: check local catalog first, fall back to remote.
+		if sol, layers, ok := o.tryLocalCatalogForRefWithLayers(ctx, path, mediaTypes...); ok {
+			return sol, layers, nil
+		}
+
+		o.logger.V(1).Info("attempting to resolve with layers from remote registry", "ref", path)
+		sol, layers, err := o.fromRemoteRefWithLayers(ctx, path, mediaTypes...)
+		if err == nil {
+			return sol, layers, nil
+		}
+		return nil, nil, fmt.Errorf("failed to resolve remote reference %q: %w", path, err)
+	}
+
+	sol, err := o.FromLocalFileSystem(ctx, path)
+	return sol, nil, err
+}
+
+// fromCatalogWithLayers resolves a solution from the catalog together with the
+// requested OCI layers (e.g. bundle and/or lock) keyed by media type. When the
+// resolver is not layer-aware, or no media types are requested, it falls back to
+// a plain fetch and returns nil layers.
+func (o *Getter) fromCatalogWithLayers(ctx context.Context, nameWithVersion string, mediaTypes ...string) (*solution.Solution, map[string][]byte, error) {
+	if r, ok := o.catalogResolver.(LayerAwareCatalogResolver); ok && len(mediaTypes) > 0 {
+		content, layers, err := r.FetchSolutionWithLayers(ctx, nameWithVersion, mediaTypes...)
+		if err != nil {
+			return nil, nil, err
+		}
+		sol, err := o.parseCatalogSolution(content, nameWithVersion)
+		if err != nil {
+			return nil, nil, err
+		}
+		return sol, layers, nil
+	}
+
+	// Fall back to a plain fetch (no auxiliary layers).
+	sol, err := o.fromCatalog(ctx, nameWithVersion)
+	return sol, nil, err
+}
+
+// tryLocalCatalogForRefWithLayers checks the local catalog for a remote
+// reference before fetching from the remote registry, returning the requested
+// OCI layers keyed by media type. Returns ok=true when found locally.
+func (o *Getter) tryLocalCatalogForRefWithLayers(ctx context.Context, path string, mediaTypes ...string) (*solution.Solution, map[string][]byte, bool) {
+	if o.catalogResolver == nil {
+		return nil, nil, false
+	}
+	nameVer := extractNameVersionFromRef(path)
+	if nameVer == "" {
+		return nil, nil, false
+	}
+	o.logger.V(1).Info("checking local catalog before remote fetch", "ref", path, "nameVersion", nameVer)
+	sol, layers, err := o.fromCatalogWithLayers(ctx, nameVer, mediaTypes...)
+	if err != nil {
+		o.logger.V(1).Info("local catalog lookup failed, falling back to remote", "ref", path, "error", err.Error())
+		return nil, nil, false
+	}
+	o.logger.V(1).Info("resolved from local catalog (skipping remote fetch)", "ref", path, "layers", len(layers))
+	return sol, layers, true
+}
+
+// fromCatalogWithBundle retrieves a solution and its bundle layer from the
+// catalog. It is a thin wrapper over fromCatalogWithLayers that unpacks the
+// bundle media type.
+func (o *Getter) fromCatalogWithBundle(ctx context.Context, nameWithVersion string) (*solution.Solution, []byte, error) {
+	sol, layers, err := o.fromCatalogWithLayers(ctx, nameWithVersion, mediaTypeSolutionBundle)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sol, layers[mediaTypeSolutionBundle], nil
+}
+
+// parseCatalogSolution parses solution content fetched from the catalog and tags
+// it with the catalog source path.
+func (o *Getter) parseCatalogSolution(content []byte, nameWithVersion string) (*solution.Solution, error) {
+	sol := solution.Solution{}
+	if err := o.loadBytes(&sol, content); err != nil {
+		return nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
+	}
 	sol.SetPath(o.catalogPath(nameWithVersion))
-	return &sol, nil, nil
+	return &sol, nil
 }
 
 // ValidatePositionalRef validates a positional CLI argument intended to be a
@@ -655,15 +776,7 @@ func (o *Getter) fromCatalog(ctx context.Context, nameWithVersion string) (*solu
 	if err != nil {
 		return nil, err
 	}
-
-	sol := solution.Solution{}
-	if err := o.loadBytes(&sol, content); err != nil {
-		return nil, fmt.Errorf("failed to parse solution from catalog: %w", err)
-	}
-
-	// Mark the solution as coming from catalog
-	sol.SetPath(o.catalogPath(nameWithVersion))
-	return &sol, nil
+	return o.parseCatalogSolution(content, nameWithVersion)
 }
 
 // fromRemoteRef resolves a Docker-style OCI remote reference (e.g., ghcr.io/myorg/starter-kit@1.0.0)
@@ -673,14 +786,7 @@ func (o *Getter) fromRemoteRef(ctx context.Context, ref string) (*solution.Solut
 	if err != nil {
 		return nil, err
 	}
-
-	sol := solution.Solution{}
-	if err := o.loadBytes(&sol, content); err != nil {
-		return nil, fmt.Errorf("failed to parse solution from remote: %w", err)
-	}
-
-	sol.SetPath(fmt.Sprintf("remote:%s", ref))
-	return &sol, nil
+	return o.parseRemoteSolution(content, ref)
 }
 
 // fromRemoteRefWithBundle resolves a Docker-style OCI remote reference and returns
@@ -690,14 +796,37 @@ func (o *Getter) fromRemoteRefWithBundle(ctx context.Context, ref string) (*solu
 	if err != nil {
 		return nil, nil, err
 	}
+	sol, err := o.parseRemoteSolution(content, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sol, bundleData, nil
+}
 
+// fromRemoteRefWithLayers resolves a Docker-style OCI remote reference and
+// returns the solution together with the requested auxiliary layers keyed by
+// media type. Layers absent from the artifact are omitted from the returned map.
+func (o *Getter) fromRemoteRefWithLayers(ctx context.Context, ref string, mediaTypes ...string) (*solution.Solution, map[string][]byte, error) {
+	content, layers, err := o.remoteResolver.FetchRemoteSolutionWithLayers(ctx, ref, mediaTypes...)
+	if err != nil {
+		return nil, nil, err
+	}
+	sol, err := o.parseRemoteSolution(content, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sol, layers, nil
+}
+
+// parseRemoteSolution parses solution content fetched from a remote registry and
+// tags it with a "remote:<ref>" source path.
+func (o *Getter) parseRemoteSolution(content []byte, ref string) (*solution.Solution, error) {
 	sol := solution.Solution{}
 	if err := o.loadBytes(&sol, content); err != nil {
-		return nil, nil, fmt.Errorf("failed to parse solution from remote: %w", err)
+		return nil, fmt.Errorf("failed to parse solution from remote: %w", err)
 	}
-
 	sol.SetPath(fmt.Sprintf("remote:%s", ref))
-	return &sol, bundleData, nil
+	return &sol, nil
 }
 
 // FromLocalFileSystem reads a solution from the local filesystem at the specified path.

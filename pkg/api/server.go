@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	catalogindex "github.com/oakwood-commons/scafctl/pkg/catalog/catalogindex"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-logr/logr"
@@ -42,28 +44,36 @@ type Server struct {
 	startTime         time.Time
 	logger            logr.Logger
 	providerReg       *provider.Registry
+	compositeReg      *provider.CompositeRegistry
 	authReg           *auth.Registry
 	pluginFetcher     *plugin.Fetcher
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
-	pluginPool        *plugin.Pool
+	pluginPool        PluginPool
 	version           string
 	ctx               context.Context
 	cancel            context.CancelFunc
+
+	// catalogIndex is built once at server start from the configured catalogs
+	// and shared with every HandlerContext.
+	catalogIndex *catalogindex.Index
 }
 
 // serverConfig collects all configuration options before building the server.
 type serverConfig struct {
 	logger            *logr.Logger
 	registry          *provider.Registry
+	compositeReg      *provider.CompositeRegistry
 	authReg           *auth.Registry
 	pluginFetcher     *plugin.Fetcher
 	officialProviders *official.Registry
 	pluginClients     []*plugin.Client
-	pluginPool        *plugin.Pool
+	pluginPool        PluginPool
 	config            *config.Config
 	version           string
 	ctx               context.Context
+
+	catalogIndex *catalogindex.Index
 }
 
 // ServerOption configures the API server.
@@ -80,6 +90,16 @@ func WithServerLogger(lgr logr.Logger) ServerOption {
 func WithServerRegistry(reg *provider.Registry) ServerOption {
 	return func(c *serverConfig) {
 		c.registry = reg
+	}
+}
+
+// WithServerCompositeRegistry sets the composite (builtin + external) provider
+// registry used by solution endpoints to build a request-scoped registry via
+// prepare.ScopeSolutionProviders. It is separate from WithServerRegistry, which
+// wires the legacy *provider.Registry surface still consumed by other handlers.
+func WithServerCompositeRegistry(reg *provider.CompositeRegistry) ServerOption {
+	return func(c *serverConfig) {
+		c.compositeReg = reg
 	}
 }
 
@@ -137,10 +157,20 @@ func WithServerPluginClients(clients []*plugin.Client) ServerOption {
 }
 
 // WithServerPluginPool sets the plugin pool for managing shared, long-lived
-// plugin processes with lazy initialization and idle eviction.
-func WithServerPluginPool(pool *plugin.Pool) ServerOption {
+// plugin processes with lazy initialization and idle eviction. Any type
+// satisfying PluginPool (e.g. *plugin.Pool or *plugin.VersionPool) is accepted.
+func WithServerPluginPool(pool PluginPool) ServerOption {
 	return func(c *serverConfig) {
 		c.pluginPool = pool
+	}
+}
+
+// WithServerCatalogIndex sets the config-derived catalog topology shared with
+// every HandlerContext. It is built once at server start from the configured
+// catalogs (see catalogindex.FromConfig).
+func WithServerCatalogIndex(idx *catalogindex.Index) ServerOption {
+	return func(c *serverConfig) {
+		c.catalogIndex = idx
 	}
 }
 
@@ -177,6 +207,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		router:            chi.NewRouter(),
 		logger:            lgr,
 		providerReg:       sc.registry,
+		compositeReg:      sc.compositeReg,
 		authReg:           sc.authReg,
 		pluginFetcher:     sc.pluginFetcher,
 		officialProviders: sc.officialProviders,
@@ -186,6 +217,8 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		ctx:               ctx,
 		cancel:            cancel,
 		startTime:         time.Now(),
+
+		catalogIndex: sc.catalogIndex,
 	}
 	return s, nil
 }
@@ -259,6 +292,8 @@ func (s *Server) HandlerCtx() *HandlerContext {
 	hctx.OfficialProviders = s.officialProviders
 	hctx.ServerContext = s.ctx
 	hctx.PluginPool = s.pluginPool
+	hctx.CompositeRegistry = s.compositeReg
+	hctx.CatalogIndex = s.catalogIndex
 	return hctx
 }
 

@@ -9,7 +9,11 @@ metadata:
     - file
     - solution
   description: Build and release workflow using taskfile patterns
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     repo:

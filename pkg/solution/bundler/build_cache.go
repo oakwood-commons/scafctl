@@ -77,11 +77,14 @@ func ComputeBuildFingerprint(solutionContent []byte, bundleRoot string, discover
 		if sortedPlugins[i].Name != sortedPlugins[j].Name {
 			return sortedPlugins[i].Name < sortedPlugins[j].Name
 		}
-		return sortedPlugins[i].Kind < sortedPlugins[j].Kind
+		if sortedPlugins[i].Kind != sortedPlugins[j].Kind {
+			return sortedPlugins[i].Kind < sortedPlugins[j].Kind
+		}
+		return sortedPlugins[i].Registry < sortedPlugins[j].Registry
 	})
 
 	for _, p := range sortedPlugins {
-		h.Write([]byte("plugin:" + p.Name + ":" + p.Kind + ":" + p.Version))
+		h.Write([]byte("plugin:" + p.Name + ":" + p.Kind + ":" + p.Version + ":" + p.Registry))
 		h.Write([]byte{0})
 	}
 

@@ -21,7 +21,7 @@ type mockCatalog struct {
 }
 
 func (m *mockCatalog) Name() string { return "mock" }
-func (m *mockCatalog) Store(_ context.Context, _ catalog.Reference, _, _ []byte, _ map[string]string, _ bool) (catalog.ArtifactInfo, error) {
+func (m *mockCatalog) Store(_ context.Context, _ catalog.Reference, _, _ []byte, _ map[string]string, _ bool, _ ...catalog.Layer) (catalog.ArtifactInfo, error) {
 	return catalog.ArtifactInfo{}, nil
 }
 
@@ -30,6 +30,10 @@ func (m *mockCatalog) Fetch(_ context.Context, _ catalog.Reference) ([]byte, cat
 }
 
 func (m *mockCatalog) FetchWithBundle(_ context.Context, _ catalog.Reference) ([]byte, []byte, catalog.ArtifactInfo, error) {
+	return nil, nil, catalog.ArtifactInfo{}, nil
+}
+
+func (m *mockCatalog) FetchWithLayer(_ context.Context, _ catalog.Reference, _ ...string) ([]byte, map[string][]byte, catalog.ArtifactInfo, error) {
 	return nil, nil, catalog.ArtifactInfo{}, nil
 }
 

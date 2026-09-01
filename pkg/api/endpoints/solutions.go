@@ -5,6 +5,7 @@ package endpoints
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -17,8 +18,13 @@ import (
 	scafpath "github.com/oakwood-commons/scafctl/pkg/filepath"
 	"github.com/oakwood-commons/scafctl/pkg/lint"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
+	"github.com/oakwood-commons/scafctl/pkg/provider"
+	"github.com/oakwood-commons/scafctl/pkg/provider/executionregistry"
+	"github.com/oakwood-commons/scafctl/pkg/solution"
+	"github.com/oakwood-commons/scafctl/pkg/solution/bundler"
 	"github.com/oakwood-commons/scafctl/pkg/solution/execute"
 	"github.com/oakwood-commons/scafctl/pkg/solution/inspect"
+	"github.com/oakwood-commons/scafctl/pkg/solution/prepare"
 )
 
 // ── Request / Response types ──
@@ -50,8 +56,9 @@ type SolutionInspectResponse struct {
 // SolutionDryRunRequest is the request body for dry-running a solution.
 type SolutionDryRunRequest struct {
 	Body struct {
-		Path    string `json:"path" minLength:"1" maxLength:"4096" doc:"Path or URL to the solution file" example:"./solution.yaml"`
-		Verbose bool   `json:"verbose,omitempty" doc:"Include materialised inputs in the report"`
+		Path     string `json:"path" minLength:"1" maxLength:"4096" doc:"Path or URL to the solution file" example:"./solution.yaml"`
+		Verbose  bool   `json:"verbose,omitempty" doc:"Include materialised inputs in the report"`
+		LockMode string `json:"lockMode,omitempty" enum:"strict,constrained,bestEffort" doc:"Lock file resolution mode (default: strict)" example:"strict"`
 	}
 }
 
@@ -66,6 +73,7 @@ type SolutionRunRequest struct {
 		Path      string         `json:"path" minLength:"1" maxLength:"4096" doc:"Path or URL to the solution file" example:"./solution.yaml"`
 		Params    map[string]any `json:"params,omitempty" doc:"Parameters to pass to the solution"`
 		OutputDir string         `json:"outputDir,omitempty" maxLength:"4096" doc:"Target directory for action output"`
+		LockMode  string         `json:"lockMode,omitempty" enum:"strict,constrained,bestEffort" doc:"Lock file resolution mode (default: strict)" example:"strict"`
 	}
 }
 
@@ -80,8 +88,9 @@ type SolutionRunResponse struct {
 // SolutionRenderRequest is the request body for rendering solution templates.
 type SolutionRenderRequest struct {
 	Body struct {
-		Path   string         `json:"path" minLength:"1" maxLength:"4096" doc:"Path or URL to the solution file" example:"./solution.yaml"`
-		Params map[string]any `json:"params,omitempty" doc:"Parameters to pass to the solution"`
+		Path     string         `json:"path" minLength:"1" maxLength:"4096" doc:"Path or URL to the solution file" example:"./solution.yaml"`
+		Params   map[string]any `json:"params,omitempty" doc:"Parameters to pass to the solution"`
+		LockMode string         `json:"lockMode,omitempty" enum:"strict,constrained,bestEffort" doc:"Lock file resolution mode (default: strict)" example:"strict"`
 	}
 }
 
@@ -240,23 +249,14 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			return nil, err
 		}
 
-		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
+		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-dryrun")
+		defer releaseFunc(release)
 		if err != nil {
-			return nil, api.HandleError(ctx, err, "solution-dryrun", http.StatusBadRequest, "failed to load solution")
-		}
-
-		// Ensure external plugins from bundle.plugins are available and
-		// acquire refcounts to prevent eviction during this request.
-		if hctx.PluginPool != nil && len(sol.Bundle.Plugins) > 0 {
-			release, err := hctx.PluginPool.EnsureAndAcquire(ctx, sol.Bundle.Plugins)
-			if err != nil {
-				return nil, api.HandleError(ctx, err, "solution-dryrun", plugin.PoolErrorHTTPStatus(err), "failed to load required plugins")
-			}
-			defer release()
+			return nil, err
 		}
 
 		opts := dryrun.Options{
-			Registry: hctx.ProviderRegistry,
+			Registry: executionRegistry,
 			Verbose:  input.Body.Verbose,
 		}
 		report, err := dryrun.Generate(ctx, sol, opts)
@@ -285,30 +285,20 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			}
 		}
 
-		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
+		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-run")
+		defer releaseFunc(release)
 		if err != nil {
-			return nil, api.HandleError(ctx, err, "solution-run", http.StatusBadRequest, "failed to load solution")
+			return nil, err
 		}
-
-		// Ensure external plugins from bundle.plugins are available and
-		// acquire refcounts to prevent eviction during this request.
-		if hctx.PluginPool != nil && len(sol.Bundle.Plugins) > 0 {
-			release, err := hctx.PluginPool.EnsureAndAcquire(ctx, sol.Bundle.Plugins)
-			if err != nil {
-				return nil, api.HandleError(ctx, err, "solution-run", plugin.PoolErrorHTTPStatus(err), "failed to load required plugins")
-			}
-			defer release()
-		}
-
 		// Validate solution first
-		validation := execute.ValidateSolution(ctx, sol, hctx.ProviderRegistry)
+		validation := execute.ValidateSolution(ctx, sol, executionRegistry)
 		if !validation.Valid {
 			return nil, huma.NewError(http.StatusUnprocessableEntity, fmt.Sprintf("solution validation failed: %v", validation.Errors))
 		}
 
 		// Execute resolvers
 		resolverCfg := execute.ResolverExecutionConfigFromContext(ctx)
-		resolverResult, err := execute.Resolvers(ctx, sol, input.Body.Params, hctx.ProviderRegistry, resolverCfg)
+		resolverResult, err := execute.Resolvers(ctx, sol, input.Body.Params, executionRegistry, resolverCfg)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-run", http.StatusInternalServerError, "resolver execution failed")
 		}
@@ -322,7 +312,7 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			if input.Body.OutputDir != "" {
 				actionCfg.OutputDir = input.Body.OutputDir
 			}
-			actionResult, err := execute.Actions(ctx, sol, resolverResult.Data, hctx.ProviderRegistry, actionCfg)
+			actionResult, err := execute.Actions(ctx, sol, resolverResult.Data, executionRegistry, actionCfg)
 			if err != nil {
 				return nil, api.HandleError(ctx, err, "solution-run", http.StatusInternalServerError, "action execution failed")
 			}
@@ -345,24 +335,15 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 			return nil, err
 		}
 
-		sol, err := inspect.LoadSolution(ctx, input.Body.Path)
+		sol, executionRegistry, release, err := loadAndPrepareSolution(ctx, hctx, input.Body.Path, input.Body.LockMode, "solution-render")
+		defer releaseFunc(release)
 		if err != nil {
-			return nil, api.HandleError(ctx, err, "solution-render", http.StatusBadRequest, "failed to load solution")
+			return nil, err
 		}
 
-		// Ensure external plugins from bundle.plugins are available and
-		// acquire refcounts to prevent eviction during this request.
-		if hctx.PluginPool != nil && len(sol.Bundle.Plugins) > 0 {
-			release, err := hctx.PluginPool.EnsureAndAcquire(ctx, sol.Bundle.Plugins)
-			if err != nil {
-				return nil, api.HandleError(ctx, err, "solution-render", plugin.PoolErrorHTTPStatus(err), "failed to load required plugins")
-			}
-			defer release()
-		}
+		validation := execute.ValidateSolution(ctx, sol, executionRegistry)
 
-		validation := execute.ValidateSolution(ctx, sol, hctx.ProviderRegistry)
-
-		resolverData, err := execute.ResolversForPreview(ctx, sol, input.Body.Params, hctx.ProviderRegistry)
+		resolverData, err := execute.ResolversForPreview(ctx, sol, input.Body.Params, executionRegistry)
 		if err != nil {
 			return nil, api.HandleError(ctx, err, "solution-render", http.StatusInternalServerError, "resolver execution failed")
 		}
@@ -396,4 +377,126 @@ func RegisterSolutionEndpoints(humaAPI huma.API, hctx *api.HandlerContext, prefi
 		resp.Body.Validation = validation
 		return resp, nil
 	})
+}
+
+type ensureAndAcquire interface {
+	EnsureAndAcquire(ctx context.Context, deps []solution.PluginDependency) (release func(), err error)
+}
+
+// Nil-guard errors returned by ensureProviderDependencies. They are sentinels so
+// callers (and tests) can match with errors.Is rather than string comparison.
+// Only solution and composite registry are validated here; the plugin fetcher,
+// acquire function, and lock file are validated lazily downstream by
+// BuildExecutionRegistryAPI. The missing-lock case surfaces there as
+// prepare.ErrMissingLockFile (mapped to 400 by handleEnsureError) only when a
+// referenced external provider actually needs a lock, so builtin-only and
+// pure-CEL solutions need none of them.
+var (
+	errEnsureNilSolution     = errors.New("ensure provider dependencies: solution is nil")
+	errEnsureNilCompositeReg = errors.New("ensure provider dependencies: composite registry is nil")
+)
+
+func parseLockMode(s string) (prepare.LockMode, error) {
+	switch s {
+	case "", "strict":
+		return prepare.LockModeStrict, nil
+	case "constrained":
+		return prepare.LockModeConstrained, nil
+	case "bestEffort":
+		return prepare.LockModeBestEffort, nil
+	default:
+		return 0, huma.NewError(http.StatusBadRequest,
+			fmt.Sprintf("solution-run: invalid lockMode %q; must be one of: strict, constrained, bestEffort", s))
+	}
+}
+
+// loadAndPrepareSolution runs the shared preparation pipeline for the dryrun,
+// run, and render endpoints: it parses the lock mode, loads the solution with
+// its lock file, and builds the execution registry with provider dependencies
+// resolved. On success it returns the loaded solution and its execution
+// registry; on failure it returns an already-mapped Huma error (400 for a bad
+// lock mode or a load failure, or the classification chosen by
+// handleEnsureError for a dependency-resolution failure).
+//
+// The returned release function is always safe to pass to releaseFunc and MUST
+// be deferred by the caller regardless of the returned error, since provider
+// dependencies may have been partially acquired before a later failure.
+func loadAndPrepareSolution(
+	ctx context.Context,
+	hctx *api.HandlerContext,
+	path, lockModeStr, operation string,
+) (*solution.Solution, *executionregistry.ExecutionRegistry[solution.PluginDependency], func(), error) {
+	lockMode, err := parseLockMode(lockModeStr)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	sol, lock, err := inspect.LoadSolutionWithLock(ctx, path)
+	if err != nil {
+		return nil, nil, nil, api.HandleError(ctx, err, operation, http.StatusBadRequest, "failed to load solution")
+	}
+
+	executionRegistry, release, err := ensureProviderDependencies(
+		ctx, sol, hctx.CompositeRegistry, hctx.CatalogIndex,
+		hctx.PluginFetcher, hctx.PluginPool, lock, lockMode,
+	)
+	if err != nil {
+		return nil, nil, release, handleEnsureError(ctx, err, operation)
+	}
+	return sol, executionRegistry, release, nil
+}
+
+func ensureProviderDependencies(
+	ctx context.Context,
+	sol *solution.Solution,
+	compositeRegistry *provider.CompositeRegistry,
+	resolver prepare.RegistryAliasResolver,
+	fetcher *plugin.Fetcher,
+	ensureAndAcquire ensureAndAcquire,
+	locked *bundler.LockFile,
+	mode prepare.LockMode,
+) (*executionregistry.ExecutionRegistry[solution.PluginDependency], func(), error) {
+	if sol == nil {
+		return nil, nil, errEnsureNilSolution
+	}
+	if compositeRegistry == nil {
+		return nil, nil, errEnsureNilCompositeReg
+	}
+
+	var ensureFunc prepare.EnsureAndAcquireFunc
+	if ensureAndAcquire != nil {
+		ensureFunc = ensureAndAcquire.EnsureAndAcquire
+	}
+	var resolvePlugin prepare.ResolvePluginsFunc
+	if fetcher != nil {
+		resolvePlugin = fetcher.ResolvePlugins
+	}
+	return prepare.BuildExecutionRegistryAPI(
+		ctx, sol, compositeRegistry, resolver,
+		resolvePlugin, ensureFunc,
+		mode.OrDefault(), locked,
+	)
+}
+
+func releaseFunc(releaseFunc func()) {
+	if releaseFunc != nil {
+		releaseFunc()
+	}
+}
+
+// handleEnsureError maps errors from ensureProviderDependencies to the
+// appropriate HTTP status code. Pool policy errors (disabled, not allowed,
+// full) get their dedicated status; everything else falls back to 500.
+func handleEnsureError(ctx context.Context, err error, operation string) error {
+	// A missing lock file is a client/config condition (the solution references
+	// an external provider under strict/constrained mode but carries no lock),
+	// not an upstream plugin failure. Classify it as 400 before the pool-error
+	// mapping, whose default is 502.
+	if errors.Is(err, prepare.ErrMissingLockFile) {
+		return api.HandleError(ctx, err, operation, http.StatusBadRequest, err.Error())
+	}
+	if status := plugin.PoolErrorHTTPStatus(err); status != 0 {
+		return api.HandleError(ctx, err, operation, status, err.Error())
+	}
+	return api.HandleError(ctx, err, operation, http.StatusInternalServerError, "failed to ensure provider dependencies")
 }

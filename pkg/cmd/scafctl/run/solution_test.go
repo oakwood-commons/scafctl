@@ -29,10 +29,22 @@ import (
 )
 
 // testRegistry creates a registry with built-in static provider for CLI tests
-func testRegistry() *provider.Registry {
+func testRegistry(providers ...provider.Provider) *provider.Registry {
 	reg := provider.NewRegistry()
 	_ = reg.Register(staticprovider.New())
+	for _, p := range providers {
+		err := reg.Register(p)
+		if err != nil {
+			panic(err)
+		}
+	}
 	return reg
+}
+
+func newMockProvider(name string) provider.Provider {
+	return &provider.MockProvider{
+		Name: name,
+	}
 }
 
 func TestCommandSolution(t *testing.T) {
@@ -232,6 +244,36 @@ func TestSolutionOptions_Run_InvalidOnConflict(t *testing.T) {
 	err := opts.Run(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid --on-conflict value")
+}
+
+func TestSolutionOptions_Run_InvalidLockMode(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	streams := &terminal.IOStreams{
+		In:     nil,
+		Out:    &stdout,
+		ErrOut: &stderr,
+	}
+	cliParams := settings.NewCliParams()
+	cliParams.ExitOnError = false
+
+	opts := &SolutionOptions{
+		sharedResolverOptions: sharedResolverOptions{
+			IOStreams: streams,
+			CliParams: cliParams,
+			File:      "./testdata/basic.yaml",
+			LockMode:  "bogus",
+		},
+	}
+
+	lgr := logger.Get(0)
+	ctx := logger.WithLogger(context.Background(), lgr)
+
+	err := opts.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be one of: strict, constrained, bestEffort")
+	assert.Equal(t, exitcode.InvalidInput, exitcode.GetCode(err))
 }
 
 func TestSolutionOptions_Run_NoFile(t *testing.T) {

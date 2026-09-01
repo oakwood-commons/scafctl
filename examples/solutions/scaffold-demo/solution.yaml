@@ -8,7 +8,11 @@ metadata:
   tags:
     - solution
   description: Demonstrates test scaffolding with `scafctl test init`
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     projectName:

@@ -14,7 +14,7 @@ weight: 1
 | Catalog fields | ✅ Implemented | visibility, beta, disabled |
 | Spec with resolvers | ✅ Implemented | `pkg/solution/spec.go` |
 | Workflow with actions/finally | ✅ Implemented | Uses `workflow.actions` and `workflow.finally` |
-| Dependencies (plugins) | ⏳ Planned | Declared under `bundle.plugins` — see [catalog-build-bundling.md](catalog-build-bundling.md) |
+| Dependencies (plugins) | ✅ Implemented | Declared under `bundle.plugins` — see [catalog-build-bundling.md](catalog-build-bundling.md) |
 | Validation | ✅ Implemented | `pkg/solution/spec_validation.go` |
 | Run command | ✅ Implemented | `scafctl run solution` |
 | Render command | ✅ Implemented | `scafctl render solution` |
@@ -122,9 +122,7 @@ The default `apiVersion` is scafctl.io/v1; breaking schema changes follow semver
 
 ## Dependencies
 
-> ⏳ **Planned Feature**: Plugin dependencies are not yet implemented. See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design.
-
-Solutions declare plugin dependencies under `bundle.plugins`, not as a separate top-level `dependencies` section. This keeps all packaging-and-distribution metadata together under `bundle`.
+Solutions declare plugin dependencies under `bundle.plugins`, not as a separate top-level `dependencies` section. This keeps all packaging-and-distribution metadata together under `bundle`. See [catalog-build-bundling.md](catalog-build-bundling.md) for the full design.
 
 ~~~yaml
 bundle:
@@ -145,15 +143,20 @@ Each plugin entry declares:
 - `version` — semver constraint
 - `defaults` (optional) — default input values (supports full `ValueRef`: literal, `expr:`, `tmpl:`, `rslvr:`) shallow-merged beneath inline inputs
 
-Planned behavior:
+Behavior:
 
-1. scafctl checks if required plugins exist in the local catalog
-2. Missing plugins are pulled from configured remote catalogs
-3. Version constraints are validated
+1. scafctl checks if required plugins exist in the local plugin cache
+2. Missing plugins are pulled from the configured catalog chain (local, then remote)
+3. Version constraints are validated and resolved according to the active **lock mode** (exact pin, constraint range, or best-effort — see [Plugin Lock Modes](../tutorials/lock-modes-tutorial.md))
 4. Plugins are dynamically loaded to make their providers available
 5. Plugin defaults are shallow-merged beneath inline provider inputs (inline always wins)
 
-This will enable solutions to use providers from external plugins without bundling them.
+Solution execution (`run solution`, `run resolver`, `render`) loads **only** the
+providers declared in `bundle.plugins` plus the compiled-in built-ins.
+Referencing an external or official provider that is not declared fails
+preparation before any fetch -- there is no implicit provider auto-resolution.
+(Official *auth handlers* referenced via the `identity` provider are still
+auto-resolved unless `--strict` is set.)
 
 ---
 

@@ -18,11 +18,18 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/spec"
 )
 
+// ProviderGetter looks up providers by name. This is the minimal registry
+// surface the state manager needs — it only calls Get to find the backend
+// provider. Both *provider.Registry and provider.ProviderLookup satisfy it.
+type ProviderGetter interface {
+	Get(name string) (provider.Provider, bool)
+}
+
 // Manager orchestrates the state lifecycle: pre-execution loading, parameter
 // merging, and post-execution saving. It is called by the CLI command layer
 // before and after resolver execution.
 type Manager struct {
-	registry *provider.Registry
+	registry ProviderGetter
 	config   *Config
 	runtime  settings.RuntimeProvenance // execution provenance for metadata
 }
@@ -30,7 +37,7 @@ type Manager struct {
 // NewManager creates a state manager for the given state configuration. The
 // provenance records both the engine (scafctl library) and invoking
 // CLI/frontend identities; see settings.RuntimeProvenance.
-func NewManager(config *Config, registry *provider.Registry, runtime settings.RuntimeProvenance) *Manager {
+func NewManager(config *Config, registry ProviderGetter, runtime settings.RuntimeProvenance) *Manager {
 	return &Manager{
 		config:   config,
 		registry: registry,

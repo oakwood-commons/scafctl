@@ -11,7 +11,11 @@ metadata:
     - entra
     - identity
     - groups
-
+bundle:
+  plugins:
+    - name: identity
+      kind: provider
+      version: latest
 spec:
   resolvers:
     # Get identity claims (name, email, objectId, etc.)

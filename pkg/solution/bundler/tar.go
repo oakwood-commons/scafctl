@@ -51,12 +51,15 @@ type BundleFileEntry struct {
 
 // BundlePluginEntry describes a plugin dependency in the bundle manifest.
 type BundlePluginEntry struct {
-	// Name is the plugin's catalog reference.
+	// Name is the OCI artifact leaf that is actually fetched for this plugin.
 	Name string `json:"name"`
 	// Kind is the plugin type (provider, auth-handler).
 	Kind string `json:"kind"`
 	// Version is the semver constraint.
 	Version string `json:"version"`
+	// Registry is the OCI registry/namespace the artifact is fetched from, or
+	// empty for a local (short-name) dependency resolved from the catalog.
+	Registry string `json:"registry,omitempty"`
 }
 
 // TarOption configures tar creation behavior.

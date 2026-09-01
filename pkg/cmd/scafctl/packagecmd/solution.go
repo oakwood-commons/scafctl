@@ -858,6 +858,7 @@ func buildBundle(ctx context.Context, sol *solution.Solution, solutionContent []
 		DedupeThreshold:   opts.DedupeThreshold,
 		Logger:            *lgr,
 		OfficialProviders: official.RegistryFromContext(ctx),
+		BuiltinProviders:  builtin.ProviderNames(),
 	})
 	if err != nil {
 		w.Errorf("%v", err)
@@ -961,7 +962,7 @@ func printDryRunOutput(w *writer.Writer, discovery *bundler.DiscoveryResult, sol
 				}
 				defaults = fmt.Sprintf("   defaults: %s", strings.Join(keys, ", "))
 			}
-			w.Plainf("    %s (%s)        %s%s", p.Name, p.Kind, p.Version, defaults)
+			w.Plainf("    %s (%s)        %s%s", p.DisplayName(), p.Kind, p.Version, defaults)
 		}
 		w.Plainf("")
 	}

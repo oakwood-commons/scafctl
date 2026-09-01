@@ -229,6 +229,18 @@ func (c *RemoteCatalog) Repository() string {
 	return c.repository
 }
 
+// canonicalID returns the stable, machine-independent identity of this remote
+// catalog: "registry" or "registry/repository". It mirrors the canonical form
+// used by the plugin cache identity (see plugin.IdentityFromCatalog) so that
+// locks record a rename-proof, portable origin rather than the config alias.
+func (c *RemoteCatalog) canonicalID() string {
+	canonical := c.registry
+	if c.repository != "" {
+		canonical += "/" + c.repository
+	}
+	return canonical
+}
+
 // clientUpdatable is implemented by enumerators that can update the OCI
 // auth client they use for registry operations.
 type clientUpdatable interface {
@@ -461,7 +473,7 @@ func (c *RemoteCatalog) buildRepositoryPath(ref Reference) string {
 // Store saves an artifact to the remote catalog.
 // For solutions with bundled files, bundleData contains the tar archive.
 // If bundleData is nil, only the primary content layer is stored.
-func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool) (ArtifactInfo, error) {
+func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundleData []byte, annotations map[string]string, force bool, extraLayers ...Layer) (ArtifactInfo, error) {
 	repo, err := c.getRepository(ref)
 	if err != nil {
 		return ArtifactInfo{}, err
@@ -543,6 +555,22 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 		layers = append(layers, bundleDesc)
 	}
 
+	// Append optional extra layers (e.g. solution lock) last; empty skipped.
+	for _, l := range extraLayers {
+		if len(l.Data) == 0 {
+			continue
+		}
+		extraDesc := ocispec.Descriptor{
+			MediaType: l.MediaType,
+			Digest:    digest.FromBytes(l.Data),
+			Size:      int64(len(l.Data)),
+		}
+		if err := repo.Push(ctx, extraDesc, bytes.NewReader(l.Data)); err != nil {
+			return ArtifactInfo{}, fmt.Errorf("failed to push %s layer: %w", l.MediaType, err)
+		}
+		layers = append(layers, extraDesc)
+	}
+
 	// Pack and push the OCI manifest
 	manifestDesc, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, MediaTypeForKind(ref.Kind), oras.PackManifestOptions{
 		Layers:              layers,
@@ -572,6 +600,7 @@ func (c *RemoteCatalog) Store(ctx context.Context, ref Reference, content, bundl
 		Size:        int64(len(content)),
 		Annotations: annotations,
 		Catalog:     c.name,
+		Canonical:   c.canonicalID(),
 	}, nil
 }
 
@@ -653,6 +682,7 @@ func (c *RemoteCatalog) fetchInternal(ctx context.Context, ref Reference) ([]byt
 		Size:        int64(len(contentData)),
 		Annotations: manifest.Annotations,
 		Catalog:     c.name,
+		Canonical:   c.canonicalID(),
 	}
 
 	return contentData, info, nil
@@ -758,9 +788,131 @@ func (c *RemoteCatalog) fetchWithBundleInternal(ctx context.Context, ref Referen
 		Size:        int64(len(contentData)),
 		Annotations: manifest.Annotations,
 		Catalog:     c.name,
+		Canonical:   c.canonicalID(),
 	}
 
 	return contentData, bundleData, info, nil
+}
+
+// FetchWithLayer retrieves an artifact's primary content together with one or
+// more auxiliary layers (each located by media type) in one manifest round-trip.
+// The returned map is keyed by the requested media type; absent layers are
+// omitted from the map (not an error).
+func (c *RemoteCatalog) FetchWithLayer(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	contentData, layers, info, err := c.fetchWithLayersInternal(ctx, ref, mediaTypes...)
+	if err != nil && isOCIAuthError(err) {
+		c.logger.V(1).Info("fetch rejected by registry, retrying anonymously",
+			"kind", ref.Kind, "name", ref.Name, "error", err.Error())
+		c.switchToAnonymous()
+		contentData, layers, info, retryErr := c.fetchWithLayersInternal(ctx, ref, mediaTypes...)
+		if retryErr != nil {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("anonymous retry failed (%w) after auth error: %w", retryErr, err)
+		}
+		return contentData, layers, info, nil
+	}
+	return contentData, layers, info, c.wrapWithCredentialHint(err)
+}
+
+func (c *RemoteCatalog) fetchWithLayersInternal(ctx context.Context, ref Reference, mediaTypes ...string) ([]byte, map[string][]byte, ArtifactInfo, error) {
+	for _, mt := range mediaTypes {
+		if !isAuxLayerMediaType(mt) {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("FetchWithLayer: %q is not a fetchable auxiliary layer", mt)
+		}
+	}
+
+	// When no version is specified, resolve to the latest version first.
+	if !ref.HasVersion() && !ref.HasDigest() {
+		resolved, err := c.resolveWithKind(ctx, ref)
+		if err != nil {
+			return nil, nil, ArtifactInfo{}, err
+		}
+		ref = resolved.Reference
+	}
+
+	repo, err := c.getRepository(ref)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, err
+	}
+
+	// Resolve to get the manifest descriptor
+	tag := c.tagForRef(ref)
+	manifestDesc, err := repo.Resolve(ctx, tag)
+	if err != nil {
+		if isNetworkError(err) {
+			return nil, nil, ArtifactInfo{}, &UnreachableError{Catalog: c.name, Cause: err}
+		}
+		return nil, nil, ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: c.name}
+	}
+
+	// Fetch manifest with digest verification (single round-trip for all layers)
+	manifestData, err := content.FetchAll(ctx, repo, manifestDesc)
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to unmarshal manifest: %w", err)
+	}
+
+	if len(manifest.Layers) == 0 {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("manifest has no content layers")
+	}
+
+	// Fetch content layer with digest verification
+	contentData, err := fetchLayerContent(ctx, repo, manifest.Layers[0])
+	if err != nil {
+		return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch content: %w", err)
+	}
+
+	// Fetch each requested auxiliary layer (located by media type, never index).
+	layers := make(map[string][]byte, len(mediaTypes))
+	for _, mt := range mediaTypes {
+		var layerData []byte
+		switch mt {
+		case MediaTypeSolutionBundle:
+			// Probe v1 (plain tar) first, then v2 deduplicated.
+			if desc, ok := findLayerByMediaType(manifest, MediaTypeSolutionBundle); ok {
+				layerData, err = fetchLayerContent(ctx, repo, desc)
+			} else if _, ok := findLayerByMediaType(manifest, MediaTypeSolutionBundleManifest); ok {
+				fetchBlob := func(d ocispec.Descriptor) ([]byte, error) {
+					return fetchLayerContent(ctx, repo, d)
+				}
+				layerData, err = reassembleDedupBundle(manifest, fetchBlob)
+			}
+		default:
+			if desc, ok := findLayerByMediaType(manifest, mt); ok {
+				layerData, err = fetchLayerContent(ctx, repo, desc)
+			}
+		}
+		if err != nil {
+			return nil, nil, ArtifactInfo{}, fmt.Errorf("failed to fetch %s layer: %w", mt, err)
+		}
+		if len(layerData) > 0 {
+			layers[mt] = layerData
+		}
+	}
+
+	// Parse annotations for metadata
+	createdAt := time.Now()
+	if created, ok := manifest.Annotations[AnnotationCreated]; ok {
+		if t, err := time.Parse(time.RFC3339, created); err == nil {
+			createdAt = t
+		}
+	}
+
+	info := ArtifactInfo{
+		Reference:   ref,
+		Digest:      manifestDesc.Digest.String(),
+		ImageRef:    c.buildRepositoryPath(ref) + "@" + manifestDesc.Digest.String(),
+		CreatedAt:   createdAt,
+		Size:        int64(len(contentData)),
+		Annotations: manifest.Annotations,
+		Catalog:     c.name,
+		Canonical:   c.canonicalID(),
+	}
+
+	return contentData, layers, info, nil
 }
 
 // Resolve finds the best matching version for a reference.
@@ -848,6 +1000,7 @@ func (c *RemoteCatalog) resolveWithKind(ctx context.Context, ref Reference) (Art
 			Digest:    desc.Digest.String(),
 			Size:      desc.Size,
 			Catalog:   c.name,
+			Canonical: c.canonicalID(),
 		}, nil
 	}
 
@@ -1018,6 +1171,7 @@ func (c *RemoteCatalog) List(ctx context.Context, kind ArtifactKind, name string
 			infos = append(infos, ArtifactInfo{
 				Reference: Reference{Kind: kind, Name: name, Version: v},
 				Catalog:   c.name,
+				Canonical: c.canonicalID(),
 			})
 		}
 		return infos, nil
@@ -1044,6 +1198,7 @@ func (c *RemoteCatalog) listAcrossKinds(ctx context.Context, name string) ([]Art
 			allInfos = append(allInfos, ArtifactInfo{
 				Reference: Reference{Kind: k, Name: name, Version: v},
 				Catalog:   c.name,
+				Canonical: c.canonicalID(),
 			})
 		}
 	}
@@ -1177,6 +1332,7 @@ func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind)
 			allInfos = append(allInfos, ArtifactInfo{
 				Reference:   Reference{Kind: r.artifact.Kind, Name: r.artifact.Name, Version: v},
 				Catalog:     c.name,
+				Canonical:   c.canonicalID(),
 				Annotations: annotations,
 			})
 		}
@@ -1200,6 +1356,7 @@ func (c *RemoteCatalog) listAllArtifacts(ctx context.Context, kind ArtifactKind)
 			allInfos = append(allInfos, ArtifactInfo{
 				Reference:   Reference{Kind: d.Kind, Name: d.Name, Version: v},
 				Catalog:     c.name,
+				Canonical:   c.canonicalID(),
 				Annotations: d.ToAnnotations(),
 			})
 		}
@@ -1663,6 +1820,7 @@ func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, targe
 		origin += fmt.Sprintf(" (%s/%s)", c.registry, c.repository)
 	}
 	desc.Annotations[AnnotationOrigin] = origin
+	desc.Annotations[AnnotationSourceCanonical] = c.canonicalID()
 	if err := target.store.Tag(ctx, desc, targetTag); err != nil {
 		return ArtifactInfo{}, fmt.Errorf("failed to tag artifact: %w", err)
 	}
@@ -1755,6 +1913,7 @@ func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref 
 		Digest:    desc.Digest.String(),
 		Size:      desc.Size,
 		Catalog:   c.name,
+		Canonical: c.canonicalID(),
 	}, nil
 }
 

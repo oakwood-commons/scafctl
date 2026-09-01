@@ -8,7 +8,11 @@ metadata:
     Functional tests for action error handling.
     Verifies onError continue/fail behavior, non-zero exit code capture,
     and dependency-failed skip propagation.
-
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     target:

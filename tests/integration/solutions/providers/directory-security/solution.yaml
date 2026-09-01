@@ -8,6 +8,12 @@ metadata:
     Security tests for the directory provider.
     Validates recursion depth limits and symlink skipping.
 
+bundle:
+  plugins:
+    - name: directory
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     # List with valid maxDepth at the upper bound

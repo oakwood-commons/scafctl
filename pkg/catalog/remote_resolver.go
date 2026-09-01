@@ -82,12 +82,12 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		if cacheVersion == "" {
 			cacheVersion = "latest"
 		}
-		cached, cachedBundle, ok, cacheErr := r.artifactCache.Get(string(ArtifactKindSolution), cacheKey, cacheVersion)
+		cached, cachedLayers, ok, cacheErr := r.artifactCache.Get(string(ArtifactKindSolution), cacheKey, cacheVersion)
 		if cacheErr != nil {
 			r.logger.V(1).Info("artifact cache get error (ignoring)", "error", cacheErr)
 		} else if ok {
 			r.logger.V(1).Info("artifact cache hit for remote solution", "ref", rawRef)
-			return cached, cachedBundle, nil
+			return cached, cachedLayers[MediaTypeSolutionBundle], nil
 		}
 	}
 
@@ -160,10 +160,134 @@ func (r *RemoteSolutionResolver) FetchRemoteSolution(ctx context.Context, rawRef
 		if putVersion == "" {
 			putVersion = "latest"
 		}
-		if putErr := r.artifactCache.Put(string(ArtifactKindSolution), cacheKey, putVersion, info.Digest, content, bundleData); putErr != nil {
+		if putErr := r.artifactCache.Put(string(ArtifactKindSolution), cacheKey, putVersion, info.Digest, content, map[string][]byte{MediaTypeSolutionBundle: bundleData}); putErr != nil {
 			r.logger.V(1).Info("artifact cache put error (ignoring)", "error", putErr)
 		}
 	}
 
 	return content, bundleData, nil
+}
+
+// FetchRemoteSolutionWithLayers fetches a solution's primary content together
+// with one or more auxiliary layers (each located by media type) from a remote
+// OCI reference in a single manifest round-trip. The rawRef is parsed via
+// ParseRemoteReference; when no kind is specified in the path, the kind defaults
+// to ArtifactKindSolution. The returned map is keyed by the requested media
+// type; absent layers are omitted from the map (not an error).
+//
+// The artifact cache is consulted and populated: a cache hit is only served
+// when it contains every requested layer, otherwise the registry is queried and
+// the fetched content plus layers are written back to the cache.
+func (r *RemoteSolutionResolver) FetchRemoteSolutionWithLayers(ctx context.Context, rawRef string, mediaTypes ...string) ([]byte, map[string][]byte, error) {
+	remoteRef, err := ParseRemoteReference(rawRef)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid remote reference %q: %w", rawRef, err)
+	}
+
+	cacheKey := remoteRef.Registry + "/" + remoteRef.Repository + "/" + remoteRef.Name
+	cacheVersion := remoteRef.Tag
+	if cacheVersion == "" {
+		cacheVersion = "latest"
+	}
+
+	// Check the artifact cache before hitting the registry. A hit is only usable
+	// when it contains every requested layer; otherwise fall through to fetch.
+	if !r.noCache && r.artifactCache != nil {
+		cached, cachedLayers, ok, cacheErr := r.artifactCache.Get(string(ArtifactKindSolution), cacheKey, cacheVersion)
+		if cacheErr != nil {
+			r.logger.V(1).Info("artifact cache get error (ignoring)", "error", cacheErr)
+		} else if ok && hasAllLayers(cachedLayers, mediaTypes) {
+			r.logger.V(1).Info("artifact cache hit for remote solution with layers", "ref", rawRef)
+			return cached, selectLayers(cachedLayers, mediaTypes), nil
+		}
+	}
+
+	refKind := remoteRef.Kind
+	if refKind == "" {
+		refKind = ArtifactKindSolution
+	}
+
+	var authHandler scafctlauth.Handler
+	if r.authHandlerFunc != nil {
+		authHandler = r.authHandlerFunc(remoteRef.Registry)
+	}
+	var authScope string
+	if r.authScopeFunc != nil {
+		authScope = r.authScopeFunc(remoteRef.Registry)
+	}
+
+	remoteCatalog, err := NewRemoteCatalog(RemoteCatalogConfig{
+		Name:            remoteRef.Registry,
+		Registry:        remoteRef.Registry,
+		Repository:      remoteRef.Repository,
+		CredentialStore: r.credStore,
+		AuthHandler:     authHandler,
+		AuthScope:       authScope,
+		Insecure:        r.insecure,
+		Logger:          r.logger,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create remote catalog for %q: %w", remoteRef.Registry, err)
+	}
+
+	ref, err := remoteRef.ToReference()
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid reference %q: %w", rawRef, err)
+	}
+
+	if ref.Kind == "" {
+		ref.Kind = refKind
+	}
+
+	r.logger.V(1).Info("fetching solution from remote registry",
+		"registry", remoteRef.Registry,
+		"repository", remoteRef.Repository,
+		"name", ref.Name,
+		"version", ref.Version)
+
+	content, layers, info, err := remoteCatalog.FetchWithLayer(ctx, ref, mediaTypes...)
+	if err != nil {
+		return nil, nil, err
+	}
+	r.logger.V(1).Info("fetched solution from remote registry",
+		"name", info.Reference.Name,
+		"version", info.Reference.Version,
+		"digest", info.Digest,
+		"hasLayers", len(layers) > 0)
+
+	// Store content and the fetched layers in the artifact cache for reuse.
+	if !r.noCache && r.artifactCache != nil {
+		if putErr := r.artifactCache.Put(string(ArtifactKindSolution), cacheKey, cacheVersion, info.Digest, content, layers); putErr != nil {
+			r.logger.V(1).Info("artifact cache put error (ignoring)", "error", putErr)
+		}
+	}
+
+	return content, layers, nil
+}
+
+// hasAllLayers reports whether layers contains a non-empty entry for every
+// requested media type. An empty mediaTypes slice is trivially satisfied.
+func hasAllLayers(layers map[string][]byte, mediaTypes []string) bool {
+	for _, mt := range mediaTypes {
+		if len(layers[mt]) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// selectLayers returns a new map containing only the requested media types that
+// are present in layers, mirroring FetchWithLayer's "keyed by requested media
+// type" contract. Returns nil when no media types are requested.
+func selectLayers(layers map[string][]byte, mediaTypes []string) map[string][]byte {
+	if len(mediaTypes) == 0 {
+		return nil
+	}
+	out := make(map[string][]byte, len(mediaTypes))
+	for _, mt := range mediaTypes {
+		if data, ok := layers[mt]; ok {
+			out[mt] = data
+		}
+	}
+	return out
 }

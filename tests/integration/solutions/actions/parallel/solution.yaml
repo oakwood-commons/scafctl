@@ -9,6 +9,12 @@ metadata:
     Verifies that independent actions run in the same phase and
     dependent actions wait for their prerequisites.
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     appName:

@@ -144,7 +144,7 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 	}
 
 	for _, p := range plugins {
-		w.Verbosef("  Plugin: %s (kind=%s, version=%s)", p.Name, p.Kind, p.Version)
+		w.Verbosef("  Plugin: %s (kind=%s, version=%s)", p.DisplayName(), p.Kind, p.Version)
 	}
 
 	if opts.DryRun {
@@ -154,7 +154,7 @@ func runInstall(ctx context.Context, opts *InstallOptions, args []string) error 
 			if ver == "" {
 				ver = "latest"
 			}
-			w.Infof("  %s (%s) %s", p.Name, p.Kind, ver)
+			w.Infof("  %s (%s) %s", p.DisplayName(), p.Kind, ver)
 		}
 		return nil
 	}

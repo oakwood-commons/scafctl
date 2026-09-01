@@ -11,6 +11,12 @@ metadata:
     - workflow
   description: Linear action dependency chain (A -> B -> C)
 
+bundle:
+  plugins:
+    - name: exec
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     project:

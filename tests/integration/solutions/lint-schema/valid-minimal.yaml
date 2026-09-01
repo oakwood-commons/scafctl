@@ -4,6 +4,14 @@ metadata:
   name: lint-valid-minimal
   version: 1.0.0
   description: "A valid minimal solution for lint testing"
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+    - name: exec
+      kind: provider
+      version: latest
 spec:
   resolvers:
     env:

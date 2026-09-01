@@ -8,6 +8,12 @@ metadata:
     Functional tests for the sleep provider.
     Verifies basic sleep execution and duration output.
 
+bundle:
+  plugins:
+    - name: sleep
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     shortSleep:

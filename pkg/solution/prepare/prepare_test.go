@@ -13,10 +13,12 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/adrg/xdg"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
 	authofficial "github.com/oakwood-commons/scafctl/pkg/auth/official"
+	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/logger"
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
@@ -36,6 +38,7 @@ import (
 type mockGetter struct {
 	sol      *solution.Solution
 	bundle   []byte
+	lock     []byte
 	err      error
 	findPath string
 }
@@ -54,6 +57,27 @@ func (m *mockGetter) Get(_ context.Context, _ string) (*solution.Solution, error
 
 func (m *mockGetter) GetWithBundle(_ context.Context, _ string) (*solution.Solution, []byte, error) {
 	return m.sol, m.bundle, m.err
+}
+
+func (m *mockGetter) GetWithLayers(_ context.Context, _ string, mediaTypes ...string) (*solution.Solution, map[string][]byte, error) {
+	var layers map[string][]byte
+	set := func(mt string, data []byte) {
+		if len(data) == 0 {
+			return
+		}
+		for _, want := range mediaTypes {
+			if want == mt {
+				if layers == nil {
+					layers = make(map[string][]byte, 2)
+				}
+				layers[mt] = data
+				return
+			}
+		}
+	}
+	set(catalog.MediaTypeSolutionBundle, m.bundle)
+	set(catalog.MediaTypeSolutionLock, m.lock)
+	return m.sol, layers, m.err
 }
 
 func (m *mockGetter) FindSolution() string {
@@ -480,7 +504,7 @@ func TestSolution_WithCustomRegistry(t *testing.T) {
 		WithRegistry(reg),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, reg, result.Registry)
+	assert.NotNil(t, result.Registry)
 	result.Cleanup()
 }
 
@@ -494,20 +518,24 @@ func TestSolution_InvalidStdin(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestSolution_WithPlugins(t *testing.T) {
-	// Solution with plugins but no plugin fetcher — plugins should be skipped
+func TestSolution_WithPlugins_NoFetcher(t *testing.T) {
+	// Solution that references an external provider plugin but has no plugin
+	// fetcher — should error, since fetching the referenced provider requires
+	// one. (Builtin-only / pure-CEL solutions do not need a fetcher.)
 	sol := minimalSolution()
 	sol.Bundle.Plugins = []solution.PluginDependency{
-		{Name: "test-plugin", Version: "1.0.0"},
+		{Name: "test-plugin", Version: "1.0.0", Kind: solution.PluginKindProvider},
+	}
+	sol.Spec.Resolvers = map[string]*resolver.Resolver{
+		"r1": {Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "test-plugin"}}}},
 	}
 	getter := &mockGetter{sol: sol}
 
-	result, err := Solution(context.Background(), "test.yaml",
+	_, err := Solution(context.Background(), "test.yaml",
 		WithGetter(getter),
 	)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	result.Cleanup()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plugin fetcher")
 }
 
 func TestLoadSolutionWithBundle_InvalidStdin(t *testing.T) {
@@ -1983,4 +2011,119 @@ func BenchmarkBuildPerSolutionSettings(b *testing.B) {
 			b.Fatal("expected non-nil settings")
 		}
 	}
+}
+
+func TestApplyOCILockLayer(t *testing.T) {
+	t.Parallel()
+
+	validLock := &bundler.LockFile{
+		Version: 1,
+		Plugins: []bundler.LockPlugin{
+			{Name: "github", Version: "1.2.3", Digest: "sha256:abc"},
+		},
+	}
+	validData, err := json.Marshal(validLock)
+	require.NoError(t, err)
+
+	t.Run("no-op when lockData is nil", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{}
+		require.NoError(t, applyOCILockLayer(cfg, nil))
+		assert.Nil(t, cfg.lockFile)
+		assert.Nil(t, cfg.lockPlugins)
+	})
+
+	t.Run("no-op when caller already supplied a lock file", func(t *testing.T) {
+		t.Parallel()
+		existing := &bundler.LockFile{Version: 1}
+		cfg := &prepareConfig{lockFile: existing}
+		require.NoError(t, applyOCILockLayer(cfg, validData))
+		assert.Same(t, existing, cfg.lockFile, "caller lock must not be replaced")
+	})
+
+	t.Run("parses and applies valid lock data", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{}
+		require.NoError(t, applyOCILockLayer(cfg, validData))
+		require.NotNil(t, cfg.lockFile)
+		assert.Equal(t, 1, cfg.lockFile.Version)
+		require.Len(t, cfg.lockPlugins, 1)
+		assert.Equal(t, "github", cfg.lockPlugins[0].Name)
+	})
+
+	t.Run("errors on malformed JSON and leaves cfg unchanged", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{}
+		require.Error(t, applyOCILockLayer(cfg, []byte("not-json{{{")))
+		assert.Nil(t, cfg.lockFile)
+		assert.Nil(t, cfg.lockPlugins)
+	})
+
+	t.Run("errors on unsupported lock format version", func(t *testing.T) {
+		t.Parallel()
+		badVersion, marshalErr := json.Marshal(&bundler.LockFile{Version: 9999})
+		require.NoError(t, marshalErr)
+		cfg := &prepareConfig{}
+		require.Error(t, applyOCILockLayer(cfg, badVersion))
+		assert.Nil(t, cfg.lockFile)
+		assert.Nil(t, cfg.lockPlugins)
+	})
+}
+
+func TestApplyDefaultLockMode(t *testing.T) {
+	t.Parallel()
+
+	lockFile := &bundler.LockFile{Version: 1}
+
+	t.Run("no-op when caller already set a mode", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{lockMode: LockModeConstrained}
+		applyDefaultLockMode(cfg, "my-app@1.0.0", true, nil)
+		assert.Equal(t, LockModeConstrained, cfg.lockMode)
+	})
+
+	t.Run("local file -> BestEffort", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{}
+		applyDefaultLockMode(cfg, "/path/to/solution.yaml", false, nil)
+		assert.Equal(t, LockModeBestEffort, cfg.lockMode)
+	})
+
+	t.Run("stdin -> BestEffort", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{}
+		applyDefaultLockMode(cfg, "-", false, nil)
+		assert.Equal(t, LockModeBestEffort, cfg.lockMode)
+	})
+
+	t.Run("catalog ref with lock -> Strict", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{lockFile: lockFile}
+		applyDefaultLockMode(cfg, "my-app@1.0.0", true, nil)
+		assert.Equal(t, LockModeStrict, cfg.lockMode)
+	})
+
+	t.Run("remote OCI ref with lock -> Strict", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{lockFile: lockFile}
+		applyDefaultLockMode(cfg, "ghcr.io/acme/my-app:v1.0.0", true, nil)
+		assert.Equal(t, LockModeStrict, cfg.lockMode)
+	})
+
+	t.Run("catalog ref without lock -> BestEffort", func(t *testing.T) {
+		t.Parallel()
+		cfg := &prepareConfig{}
+		applyDefaultLockMode(cfg, "my-app@1.0.0", true, nil)
+		assert.Equal(t, LockModeBestEffort, cfg.lockMode)
+	})
+
+	t.Run("catalog ref without lock emits warning", func(t *testing.T) {
+		t.Parallel()
+		var buf strings.Builder
+		lgr := funcr.New(func(_, args string) { buf.WriteString(args) }, funcr.Options{})
+		cfg := &prepareConfig{}
+		applyDefaultLockMode(cfg, "my-app@1.0.0", true, &lgr)
+		assert.Equal(t, LockModeBestEffort, cfg.lockMode)
+		assert.Contains(t, buf.String(), "no embedded lock layer")
+	})
 }

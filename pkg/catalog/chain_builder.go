@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/oakwood-commons/scafctl/pkg/auth"
@@ -15,6 +16,41 @@ import (
 type PluginPolicy struct {
 	AllowAll bool     // true = wildcard ("catalog/*"), Plugins is ignored
 	Plugins  []string // explicit plugin names (only meaningful when AllowAll is false)
+}
+
+// CheckPluginPolicy reports whether pluginName may be served by the catalog
+// named catalogName, per a per-catalog allowlist. It is the single source of
+// truth for per-catalog plugin-allowlist semantics, shared by the catalog
+// index gate (catalogindex.Index.CheckPluginAllowed) and the plugin version
+// pool.
+//
+// Semantics (parity with BuildCatalogChain): a nil/empty policies map is an
+// open gate (allows everything); when the map is set, an empty catalogName is
+// rejected (an unverifiable origin must not pass a restrictive policy), a
+// catalog ABSENT from the map is deny-all, a catalog with AllowAll is
+// unrestricted, and otherwise pluginName must appear in the catalog's explicit
+// list. Catalog keys are matched case-insensitively, so callers must store the
+// map with lowercased keys.
+func CheckPluginPolicy(policies map[string]PluginPolicy, catalogName, pluginName string) error {
+	if len(policies) == 0 {
+		return nil
+	}
+	if catalogName == "" {
+		return fmt.Errorf("plugin origin unknown; cannot verify plugin %q against per-catalog allowlist", pluginName)
+	}
+	policy, ok := policies[strings.ToLower(catalogName)]
+	if !ok {
+		return fmt.Errorf("catalog %q is not permitted to serve any plugins", catalogName)
+	}
+	if policy.AllowAll {
+		return nil
+	}
+	for _, p := range policy.Plugins {
+		if p == pluginName {
+			return nil
+		}
+	}
+	return fmt.Errorf("plugin %q is not in catalog %q's allowed plugins list", pluginName, catalogName)
 }
 
 type ChainCatalogOptions struct {
@@ -54,6 +90,20 @@ func isCatalogAllowed(name string, allowed map[string]bool) bool {
 	return allowed == nil || allowed[name]
 }
 
+// CatalogBuildError is returned when a catalog that passed the allowed-catalog
+// filter cannot be built. Callers can use errors.As to distinguish this from
+// other chain-build failures (e.g. an empty chain).
+type CatalogBuildError struct { //nolint:revive // stutters as catalog.CatalogBuildError but renaming would break consumers
+	Catalog string // catalog name that failed
+	Err     error  // underlying build error
+}
+
+func (e *CatalogBuildError) Error() string {
+	return fmt.Sprintf("building catalog %q: %s", e.Catalog, e.Err)
+}
+
+func (e *CatalogBuildError) Unwrap() error { return e.Err }
+
 // BuildCatalogChain creates a ChainCatalog from the application configuration.
 //
 // The chain order is deterministic:
@@ -75,6 +125,8 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 	// 1. Local catalog always comes first.
 	localCat, err := NewLocalCatalog(logger)
 	switch {
+	case err != nil && isCatalogAllowed(config.CatalogNameLocal, options.allowedCatalogs):
+		return nil, &CatalogBuildError{Catalog: config.CatalogNameLocal, Err: err}
 	case err != nil:
 		logger.V(1).Info("local catalog not available", "error", err)
 	case !isCatalogAllowed(localCat.Name(), options.allowedCatalogs):
@@ -110,7 +162,7 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 
 			remoteCat, remoteCatErr := buildRemoteCatalog(catCfg, credStore, authRegistry, logger)
 			if remoteCatErr != nil {
-				continue
+				return nil, &CatalogBuildError{Catalog: catCfg.Name, Err: remoteCatErr}
 			}
 			catalogs = append(catalogs, remoteCat)
 		}
@@ -121,9 +173,10 @@ func BuildCatalogChain(cfg *config.Config, authRegistry *auth.Registry, logger l
 				logger.V(1).Info("official catalog not in allowed list, skipping")
 			} else if officialCfg, ok := cfg.GetCatalog(config.CatalogNameOfficial); ok {
 				officialCat, officialErr := buildRemoteCatalog(*officialCfg, credStore, authRegistry, logger)
-				if officialErr == nil {
-					catalogs = append(catalogs, officialCat)
+				if officialErr != nil {
+					return nil, &CatalogBuildError{Catalog: config.CatalogNameOfficial, Err: officialErr}
 				}
+				catalogs = append(catalogs, officialCat)
 			}
 		}
 	}

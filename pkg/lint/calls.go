@@ -9,7 +9,6 @@ import (
 
 	"github.com/oakwood-commons/scafctl/pkg/action"
 	"github.com/oakwood-commons/scafctl/pkg/call"
-	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/resolver"
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -28,7 +27,7 @@ type callLintSite struct {
 // solution, emitting findings that mirror the structural call validation while
 // adding advisory notices (unregistered definition provider) and enforcing the
 // isolation contract (definition inputs referencing solution resolvers).
-func lintCalls(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintCalls(sol *solution.Solution, result *Result, registry providerLookup) {
 	if sol == nil || !sol.Spec.HasCalls() {
 		// Call sites can still exist without any definitions; those surface as
 		// call-not-found below, so keep walking even with no definitions.
@@ -47,7 +46,7 @@ func lintCalls(sol *solution.Solution, result *Result, registry *provider.Regist
 // lintCallDefinitions checks each definition's provider registration and flags
 // definition inputs that reference solution resolvers, which violate the strict
 // isolation contract (definitions may reference only their declared args).
-func lintCallDefinitions(sol *solution.Solution, result *Result, registry *provider.Registry) {
+func lintCallDefinitions(sol *solution.Solution, result *Result, registry providerLookup) {
 	if !sol.Spec.HasCalls() {
 		return
 	}

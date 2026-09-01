@@ -26,7 +26,11 @@ metadata:
     End-to-end validation of GitHub provider v2.1 operations.
     Resolvers gather data from oakwood-commons/scafctl-test-sandbox,
     then workflow actions create, update, and clean up test resources.
-
+bundle:
+  plugins:
+    - name: github
+      kind: provider
+      version: latest
 spec:
   # =====================================================================
   # RESOLVERS -- Read-only data gathering

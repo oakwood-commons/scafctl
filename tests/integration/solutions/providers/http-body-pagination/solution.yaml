@@ -9,6 +9,12 @@ metadata:
     Verifies that bodyTemplate generates correct request bodies per page
     and that pagination collects items across pages.
 
+bundle:
+  plugins:
+    - name: env
+      kind: provider
+      version: latest
+
 spec:
   resolvers:
     paginatedPost:
