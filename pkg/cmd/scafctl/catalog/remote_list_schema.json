@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remote Catalogs",
+  "description": "Schema for configured remote catalog registries with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "📡",
+  "x-kvx-collectionTitle": "Remote Catalogs",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "url",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["type"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "",
+        "fields": ["name", "type"],
+        "layout": "inline"
+      },
+      {
+        "title": "Default",
+        "fields": ["default"],
+        "layout": "inline"
+      },
+      {
+        "title": "URL",
+        "fields": ["url"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Authentication",
+        "fields": ["authProvider", "authScope"],
+        "layout": "table"
+      },
+      {
+        "title": "Path",
+        "fields": ["path"],
+        "layout": "inline"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "type"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Catalog identifier",
+        "maxLength": 25,
+        "x-kvx-priority": 10
+      },
+      "type": {
+        "type": "string",
+        "title": "Type",
+        "description": "Catalog type (oci, filesystem)",
+        "maxLength": 12,
+        "x-kvx-priority": 8
+      },
+      "url": {
+        "type": "string",
+        "title": "URL",
+        "description": "Remote catalog URL",
+        "x-kvx-priority": 9
+      },
+      "authProvider": {
+        "type": "string",
+        "title": "Auth",
+        "description": "Authentication provider for the catalog",
+        "maxLength": 15,
+        "x-kvx-priority": 6
+      },
+      "authScope": {
+        "type": "string",
+        "title": "Auth Scope",
+        "description": "Authentication scope",
+        "deprecated": true
+      },
+      "path": {
+        "type": "string",
+        "title": "Path",
+        "description": "Local path for filesystem catalogs",
+        "deprecated": true
+      },
+      "default": {
+        "type": "boolean",
+        "title": "Default",
+        "description": "Whether this is the default catalog",
+        "x-kvx-priority": 7
+      }
+    }
+  }
+}

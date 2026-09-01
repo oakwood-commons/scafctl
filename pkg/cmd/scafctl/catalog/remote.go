@@ -5,10 +5,12 @@ package catalog
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/cmdutil"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -416,22 +418,19 @@ type RemoteListItem struct {
 	Default      bool   `json:"default" yaml:"default"`
 }
 
-// remoteListSchema controls table display for catalog remote list.
-var remoteListSchema = []byte(`{
-	"type": "array",
-	"items": {
-		"type": "object",
-		"properties": {
-			"name":         { "type": "string", "title": "Name" },
-			"type":         { "type": "string", "title": "Type" },
-			"url":          { "type": "string", "title": "URL" },
-			"authProvider": { "type": "string", "title": "Auth" },
-			"default":      { "type": "boolean", "title": "Default" },
-			"path":         { "type": "string", "deprecated": true },
-			"authScope":    { "type": "string", "deprecated": true }
-		}
-	}
-}`)
+//go:embed remote_list_schema.json
+var remoteListSchemaJSON []byte
+
+// remoteListColumnHints controls table column display for catalog remote list.
+var remoteListColumnHints = map[string]tui.ColumnHint{
+	"name":         {MaxWidth: 25, Priority: 10, DisplayName: "Name"},
+	"type":         {MaxWidth: 12, Priority: 8, DisplayName: "Type"},
+	"url":          {MaxWidth: 50, Priority: 9, DisplayName: "URL"},
+	"authProvider": {MaxWidth: 15, Priority: 6, DisplayName: "Auth"},
+	"default":      {Priority: 7, DisplayName: "Default"},
+	"path":         {Hidden: true},
+	"authScope":    {Hidden: true},
+}
 
 func commandRemoteList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ string) *cobra.Command {
 	var kvxFlags flags.KvxOutputFlags
@@ -452,7 +451,8 @@ func commandRemoteList(cliParams *settings.Run, ioStreams *terminal.IOStreams, _
 			outputOpts := flags.ToKvxOutputOptions(&kvxFlags,
 				kvx.WithIOStreams(ioStreams),
 				kvx.WithOutputColumnOrder([]string{"name", "type", "url", "authProvider", "default"}),
-				kvx.WithOutputSchemaJSON(remoteListSchema),
+				kvx.WithOutputDisplaySchemaJSON(remoteListSchemaJSON),
+				kvx.WithOutputColumnHints(remoteListColumnHints),
 			)
 
 			configPath := ""
