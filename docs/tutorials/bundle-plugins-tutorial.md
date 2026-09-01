@@ -118,6 +118,29 @@ bundle:
       version: "^1.5.0"
 ~~~
 
+By default an external plugin is resolved by its short `name` through the
+catalog chain. To pin a plugin to an explicit OCI registry instead, add a
+`source` block (`source.registry` / `source.artifact`):
+
+~~~yaml
+bundle:
+  plugins:
+    - name: exec                        # solution-local alias used as the provider handle
+      kind: provider
+      version: "^1.5.0"                  # semver constraint or "latest"
+      source:
+        registry: ghcr.io/oakwood-commons   # OCI registry + namespace
+        artifact: scafctl-exec-provider     # artifact leaf name within the registry
+~~~
+
+Here `name` is only the solution-local handle you reference from a resolver or
+action (`provider: exec`); the real OCI coordinates are `source.registry` +
+`source.artifact`. When `artifact` differs from `name` the dependency is
+"aliased". `source.registry` must map to a **configured catalog**. See
+[Pinning a plugin to a specific registry](../plugin-auto-fetch-tutorial/#pinning-a-plugin-to-a-specific-registry)
+in the Plugin Auto-Fetching tutorial for the full field reference and how the
+origin is recorded in the lock file.
+
 If your solution only uses built-in providers, omit `bundle.plugins` entirely:
 
 ~~~yaml

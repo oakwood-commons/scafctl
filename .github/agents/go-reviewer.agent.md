@@ -29,7 +29,7 @@ When invoked directly (not via a prompt), run this procedure:
 - **Struct tags**: Must have JSON/YAML tags and Huma validation tags (`doc`, `maxLength`, `example`, etc.)
 - **Constants**: No magic strings or numbers -- use constants or settings
 - **Error wrapping**: `fmt.Errorf("context: %w", err)` with conventional commit-style context
-- **CEL expressions**: Use `celexp.EvaluateExpression()` from `pkg/celexp/context.go`
+- **CEL expressions**: Use `celexp.EvaluateExpression()` from `pkg/celexp` (a re-export adapter over the `github.com/oakwood-commons/celexp` library)
 - **Paths**: Use xdg paths via `pkg/paths`
 - **Tests**: Must include benchmarks for new features/providers
 - **Binary name**: Never hardcoded `"scafctl"` -- use `settings.CliBinaryName`

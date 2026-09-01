@@ -496,7 +496,7 @@ tasks:
         PASSED=0
         SKIPPED=0
 
-        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/|lint-stress-test/|lint-resolver-cycle/|lint-missing-template-dependency/|lint-template-nonstandard-ext/|lint-undefined-dependency/|lint-unknown-resolver-reference/|lint-resolve-foreach-missing-in/|compose-demo/workflow|compose-demo/resolvers|compose-fidelity/workflow|compose-fidelity/resolvers|compose-fidelity/golden.effective|state/github-state"
+        EXCLUDE="bad-solution-yaml/|edge-cases/invalid-|edge-cases/null-resolver/|lint-schema/unknown-field/|lint-schema/unknown-nested-field/|lint-schema/unknown-field.yaml|lint-tmpl-underscore/|lint-stress-test/|lint-resolver-cycle/|lint-missing-template-dependency/|lint-template-nonstandard-ext/|lint-undefined-dependency/|lint-unknown-resolver-reference/|lint-resolve-foreach-missing-in/|lint-undeclared-external-providers/|compose-demo/workflow|compose-demo/resolvers|compose-fidelity/workflow|compose-fidelity/resolvers|compose-fidelity/golden.effective|state/github-state"
 
         {
           find examples/solutions -name '*.yaml'

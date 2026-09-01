@@ -150,6 +150,31 @@ For catalog/remote solutions, the lock is embedded as a dedicated layer in the
 packaged artifact, so a consumer that pulls the artifact gets strict pinning
 automatically.
 
+## What a Lock Entry Records
+
+Each `bundle.plugins` entry produces one plugin entry in the lock file. Every
+entry -- whether the plugin was declared by short `name` or with an explicit
+`source` block -- records the origin it was resolved from, which is how a later
+run knows **where to fetch the plugin from**:
+
+| Field | Recorded for | Meaning |
+| ------- | -------------- | --------- |
+| `name` | all | Resolved OCI artifact leaf (not the solution-local alias). |
+| `version` | all | Exact resolved semver the constraint was pinned to. |
+| `constraint` | all | Requested constraint as written (e.g. `^1.5.0`); refreshed each build. |
+| `digest` / `digests` | all | SHA-256 content digest(s) verified on every fetch. |
+| `resolvedCanonical` | **all** | Machine-independent canonical origin (e.g. `ghcr.io/org/plugins`). Portable across machines and survives catalog **renames**. |
+| `resolvedFrom` | all | The local catalog **alias** the origin mapped to on the machine that produced the lock. Human-facing; may differ per machine. |
+| `source.registry` | sourced only | Present only when the `bundle.plugins` entry used a `source` block; marks the entry as *sourced* and binds its lock identity to that registry. |
+
+The key point for determinism: **`resolvedCanonical` is written for every
+plugin**, not just those declared with `source`. It is the stable, alias-proof
+record of where each plugin came from, so a teammate who has the same registry
+configured under a *different* catalog alias still resolves the identical
+artifact. Because the alias-facing `resolvedFrom` can vary per machine while
+`resolvedCanonical` does not, **commit the lock file** and review
+`resolvedCanonical`/`digest` changes in diffs.
+
 ## Choosing a Mode
 
 - **CI/CD and releases** -- use `strict` (explicitly, or rely on the strict

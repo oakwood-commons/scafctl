@@ -148,11 +148,17 @@ scafctl plugins list -o yaml
 
 ## Lock Files for Reproducibility
 
-When you package a solution with `scafctl package solution`, plugin versions are pinned in a lock file (`.scafctl.lock.yaml`). The lock file records:
+When you package a solution with `scafctl package solution`, plugin versions are pinned in a lock file (`.scafctl.lock.yaml`). The lock file records, **for every plugin**:
 
 - Exact resolved version
 - Content digest (sha256)
-- Source catalog
+- Source catalog alias (`resolvedFrom`) and the machine-independent canonical
+  origin (`resolvedCanonical`) it was fetched from
+
+The `resolvedCanonical` origin is what makes the pin portable across machines and
+catalog aliases; plugins declared with an explicit `source` block additionally
+record that `source` block. See
+[How the origin is recorded in the lock file](#how-the-origin-is-recorded-in-the-lock-file).
 
 When running with a lock file, scafctl uses the pinned versions exactly. **Without a lock file**, scafctl resolves from catalogs and **requires the catalog to provide a digest**. If no digest is available, the fetch fails:
 
@@ -279,6 +285,115 @@ catalogs:
 ```
 
 The chain stops at the first catalog that has the requested artifact.
+
+### Pinning a plugin to a specific registry
+
+By default a plugin is resolved by its short `name` through the catalog chain
+above -- the first catalog that has an artifact of that name wins. To bind a
+plugin dependency to an **explicit OCI registry** instead, add a `source` block:
+
+```yaml
+bundle:
+  plugins:
+    - name: exec                          # solution-local alias (the provider handle)
+      kind: provider
+      version: "^1.5.0"                    # semver constraint or "latest"
+      source:
+        registry: ghcr.io/oakwood-commons/providers   # OCI registry + namespace
+        artifact: exec                                 # artifact leaf (defaults to name)
+```
+
+Field reference:
+
+| Field | Required | Description |
+| ------- | ---------- | ------------- |
+| `source.registry` | Yes (when `source` is set) | OCI registry and namespace the plugin is fetched from. Must map to a **configured catalog** (see below). |
+| `source.artifact` | No | Artifact leaf name within the registry. Defaults to `name` when omitted. |
+
+Behavior:
+
+- **Without `source`** the dependency is *local/short-name*: resolved by `name`
+  through the catalog chain (local catalog first, then remote catalogs in order).
+- **With `source`** the dependency is *sourced*: fetched from the named
+  registry, bypassing chain order. This is useful when the same short name
+  exists in multiple catalogs, or to pin a provider to a trusted origin.
+- `name` is only the **solution-local alias** you reference from a resolver or
+  action's `provider:` field. It can differ from `source.artifact` -- when the
+  two differ the dependency is "aliased".
+- `source.registry` **must resolve to a configured catalog**. scafctl will not
+  fetch from an arbitrary registry: if the registry is not listed under
+  `catalogs`, preparation fails with:
+
+  ~~~text
+  provider registry "ghcr.io/oakwood-commons/providers" is not a configured
+  catalog; add it to the catalogs configuration or reference a configured registry
+  ~~~
+
+  Add the registry to your config to authorize it:
+
+  ```yaml
+  # ~/.config/scafctl/config.yaml
+  catalogs:
+    - name: oakwood
+      type: oci
+      url: ghcr.io/oakwood-commons/providers
+  ```
+
+For **official first-party providers**, the default registry
+(`ghcr.io/oakwood-commons/providers/<name>`) is already known, so a short `name`
+declaration is enough -- an explicit `source` is only needed to override the
+origin. Use the `list_official_providers` MCP tool to see each official
+provider's default catalog reference.
+
+### How the origin is recorded in the lock file
+
+Every plugin -- short-name **and** sourced -- records its resolved origin in the
+lock file, so later runs fetch the exact same artifact from the exact same place
+regardless of catalog chain order or local catalog aliases. The fields common to
+**all** lock entries are:
+
+| Lock field | Value | Purpose |
+| ------------ | ------- | --------- |
+| `name` | the **resolved artifact leaf** (`source.artifact`, or `name` when omitted) | the real OCI leaf, not the solution-local alias |
+| `version` | the exact resolved semver (e.g. `1.5.3`) | pins the moving constraint to one version |
+| `constraint` | the requested constraint as written (e.g. `^1.5.0`) | refreshed on every build; used to decide whether the pin still satisfies the request |
+| `digest` / `digests` | SHA-256 content digest(s) | supply-chain verification on every fetch |
+| `resolvedCanonical` | the machine-independent canonical origin it was fetched from (e.g. `ghcr.io/org/plugins`) | **recorded for every plugin**; survives catalog **renames** and is portable across machines |
+| `resolvedFrom` | the local catalog **alias** the origin mapped to | human-facing; may differ per machine |
+
+A plugin declared with an explicit `source` block additionally stores a `source`
+block in its lock entry:
+
+| Lock field | Value | Purpose |
+| ------------ | ------- | --------- |
+| `source.registry` | the canonical registry origin from `source.registry` | marks the entry as *sourced* and binds its lock identity to that origin |
+
+Do not confuse the two: `resolvedCanonical` is present on **every** entry and is
+how scafctl records where a plugin was fetched from, while the `source` block is
+present **only** on entries whose `bundle.plugins` declaration used `source`.
+
+The **solution-local alias** (`name` in `bundle.plugins`) is deliberately *not*
+stored -- the lock records the resolved `(canonical origin, artifact leaf, kind)`
+identity instead. Two aliases that point at the same origin+artifact therefore
+dedupe to a single lock entry, and renaming the alias in the solution does not
+churn the lock.
+
+A **sourced** lock entry is matched back to its dependency by the
+`(source.registry, artifact leaf, kind)` tuple; a **short-name** entry is matched
+by `(artifact leaf, kind)` against entries with no `source` block. Either way,
+because the canonical origin is stored, a teammate on a different machine who has
+the same registry configured under a *different* catalog alias still replays the
+identical pin. On the next build the pinned `version` is replayed as long as it
+still satisfies the current `constraint`; if you tighten or bump the constraint
+past the pin, that one entry is re-resolved and re-pinned while everything else
+stays frozen.
+
+This is what makes a plugin deterministic: the origin (`resolvedCanonical`, plus
+`source.registry` when sourced), the artifact (`name`), the exact `version`, and
+the content `digest` are all frozen in the lock, so `scafctl run solution` pulls
+byte-identical plugins on every machine. Always commit the lock file for
+production deployments. See [Plugin Lock Modes](lock-modes-tutorial.md) for how
+strictly those pins are enforced.
 
 ## Plugin Cache
 
