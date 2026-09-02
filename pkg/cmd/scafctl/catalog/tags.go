@@ -5,9 +5,11 @@ package catalog
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -18,6 +20,16 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/terminal/writer"
 	"github.com/spf13/cobra"
 )
+
+//go:embed tags_schema.json
+var tagsSchemaJSON []byte
+
+// tagsColumnHints controls table column display for catalog tags.
+var tagsColumnHints = map[string]tui.ColumnHint{
+	"tag":      {MaxWidth: 30, Priority: 10},
+	"version":  {MaxWidth: 20, Priority: 8},
+	"isSemver": {Priority: 4, DisplayName: "semver"},
+}
 
 // TagsOptions holds options for the tags command.
 type TagsOptions struct {
@@ -33,7 +45,7 @@ type TagsOptions struct {
 type TagsListItem struct {
 	Tag      string `json:"tag" yaml:"tag"`
 	IsSemver bool   `json:"isSemver" yaml:"isSemver"`
-	Version  string `json:"version,omitempty" yaml:"version,omitempty"`
+	Version  string `json:"version" yaml:"version"`
 }
 
 // CommandTags creates the tags command.
@@ -76,7 +88,12 @@ func CommandTags(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.Reference = args[0]
-			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags, kvx.WithIOStreams(ioStreams))
+			kvxOpts := flags.ToKvxOutputOptions(&options.KvxOutputFlags,
+				kvx.WithIOStreams(ioStreams),
+				kvx.WithOutputColumnOrder([]string{"tag", "version", "isSemver"}),
+				kvx.WithOutputDisplaySchemaJSON(tagsSchemaJSON),
+				kvx.WithOutputColumnHints(tagsColumnHints),
+			)
 			return runTags(cmd.Context(), options, kvxOpts)
 		},
 	}
@@ -151,7 +168,6 @@ func runTags(ctx context.Context, opts *TagsOptions, outputOpts *kvx.OutputOptio
 
 	// List tags
 	repoPath := remoteCatalog.RepositoryPath(ref)
-	w.Infof("Listing tags for %s...", repoPath)
 
 	tags, err := remoteCatalog.ListTags(ctx, ref)
 	if err != nil {
@@ -160,12 +176,23 @@ func runTags(ctx context.Context, opts *TagsOptions, outputOpts *kvx.OutputOptio
 		return exitcode.WithCode(err, exitcode.CatalogError)
 	}
 
+	return writeTags(w, outputOpts, repoPath, tags)
+}
+
+// writeTags renders the tag list, handling the empty case per output format:
+// structured consumers get a parseable empty document, human formats get an
+// stderr notice, and quiet stays silent.
+func writeTags(w *writer.Writer, outputOpts *kvx.OutputOptions, repoPath string, tags []catalog.TagInfo) error {
 	if len(tags) == 0 {
-		w.Infof("No tags found for %s", repoPath)
+		if kvx.IsStructuredFormat(outputOpts.Format) {
+			return outputOpts.Write([]TagsListItem{})
+		}
+		if !kvx.IsQuietFormat(outputOpts.Format) {
+			w.WarnStderrf("No tags found for %s", repoPath)
+		}
 		return nil
 	}
 
-	// Convert to output format
 	items := make([]TagsListItem, len(tags))
 	for i, t := range tags {
 		items[i] = TagsListItem{

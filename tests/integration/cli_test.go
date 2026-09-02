@@ -6631,6 +6631,43 @@ func TestIntegration_CatalogTags_RequiresArg(t *testing.T) {
 	assert.NotEqual(t, 0, exitCode)
 }
 
+// TestIntegration_CatalogTags_JSONCleanStdout verifies that `catalog tags`
+// against a local registry emits only a parseable JSON document on stdout --
+// the "Listing tags for..." progress line must be suppressed for structured
+// formats and never pollute stdout.
+func TestIntegration_CatalogTags_JSONCleanStdout(t *testing.T) {
+	t.Parallel()
+	registryAddr, reg := startOCIRegistry(t)
+	env := isolatedCatalogEnv(t)
+
+	reg.mu.Lock()
+	reg.repos["scafctl/solutions/demo-app"] = map[string]string{
+		"1.0.0": "sha256:aaaa",
+		"2.0.0": "sha256:bbbb",
+	}
+	reg.mu.Unlock()
+
+	stdout, _, exitCode := runScafctlWithEnv(t, env, "catalog", "tags",
+		registryAddr+"/scafctl/solutions/demo-app",
+		"--insecure", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	trimmed := strings.TrimSpace(stdout)
+	assert.True(t, json.Valid([]byte(trimmed)),
+		"expected valid JSON output, got: %q", stdout)
+	assert.NotContains(t, stdout, "Listing tags for",
+		"progress line must not leak into structured stdout")
+
+	var items []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(trimmed), &items))
+	tags := make([]string, len(items))
+	for i, it := range items {
+		tags[i], _ = it["tag"].(string)
+	}
+	assert.Contains(t, tags, "1.0.0")
+	assert.Contains(t, tags, "2.0.0")
+}
+
 // Catalog Attach Tests
 
 func TestIntegration_CatalogAttachHelp(t *testing.T) {
