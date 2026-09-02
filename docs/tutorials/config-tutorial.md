@@ -66,8 +66,11 @@ See the current effective configuration:
 {{< tabs "config-tutorial-cmd-2" >}}
 {{% tab "Bash" %}}
 ```bash
-# Full config (YAML format)
+# Full config (kvx auto-picks the format)
 scafctl config view
+
+# As YAML
+scafctl config view -o yaml
 
 # As JSON
 scafctl config view -o json
@@ -81,8 +84,11 @@ scafctl config view -i
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-# Full config (YAML format)
+# Full config (kvx auto-picks the format)
 scafctl config view
+
+# As YAML
+scafctl config view -o yaml
 
 # As JSON
 scafctl config view -o json
@@ -98,17 +104,32 @@ scafctl config view -i
 
 ### 3. Show Config Sources
 
-See where each value comes from (file, environment, default):
+See where each value comes from (file, dropin, environment, default) and
+filter by source:
 
 {{< tabs "config-tutorial-cmd-3" >}}
 {{% tab "Bash" %}}
 ```bash
-scafctl config show
+# Annotate every key with its source and list env-var overrides
+scafctl config view --show-origin
+
+# Only values coming from the config file
+scafctl config view --source=file
+
+# Only environment variable overrides
+scafctl config view --source=env
 ```
 {{% /tab %}}
 {{% tab "PowerShell" %}}
 ```powershell
-scafctl config show
+# Annotate every key with its source and list env-var overrides
+scafctl config view --show-origin
+
+# Only values coming from the config file
+scafctl config view --source=file
+
+# Only environment variable overrides
+scafctl config view --source=env
 ```
 {{% /tab %}}
 {{< /tabs >}}

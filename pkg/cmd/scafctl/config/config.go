@@ -45,7 +45,6 @@ func CommandConfig(cliParams *settings.Run, ioStreams *terminal.IOStreams, path 
 	cmdPath := fmt.Sprintf("%s/%s", path, cCmd.Use)
 	cCmd.AddCommand(CommandInit(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandView(cliParams, ioStreams, cmdPath))
-	cCmd.AddCommand(CommandShow(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandGet(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandSet(cliParams, ioStreams, cmdPath))
 	cCmd.AddCommand(CommandUnset(cliParams, ioStreams, cmdPath))

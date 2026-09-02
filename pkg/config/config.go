@@ -66,6 +66,10 @@ func WithEnvPrefix(prefix string) ManagerOption {
 }
 
 // Manager handles configuration loading and access.
+//
+// Manager is not safe for concurrent use by multiple goroutines. Load, Save,
+// Set, Delete, Sources, and EnvOverrides all read or write shared state
+// without synchronization; callers must ensure single-goroutine access.
 type Manager struct {
 	v          *viper.Viper
 	configPath string
