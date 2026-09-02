@@ -129,3 +129,128 @@ func TestSanitizeConfig(t *testing.T) {
 		assert.Nil(t, sanitized.MCP.Servers)
 	})
 }
+
+func TestRedactConfigMap(t *testing.T) {
+	t.Parallel()
+
+	t.Run("redacts known sensitive leaves case-insensitively", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"auth": map[string]any{
+				"entra": map[string]any{
+					"clientId":           "visible-id",
+					"clientSecret":       "should-be-hidden",
+					"federatedToken":     "raw-token",
+					"federatedTokenFile": "/etc/oidc/token",
+				},
+				"github": map[string]any{
+					"clientId":     "visible-gh-id",
+					"clientSecret": "gh-secret",
+					"privateKey":   "-----BEGIN RSA PRIVATE KEY-----...",
+				},
+				"gcp": map[string]any{
+					"clientId":     "gcp-id",
+					"clientSecret": "gcp-secret",
+				},
+			},
+		}
+
+		RedactConfigMap(m)
+
+		auth := m["auth"].(map[string]any)
+		entra := auth["entra"].(map[string]any)
+		assert.Equal(t, "visible-id", entra["clientId"], "non-sensitive fields survive")
+		assert.Equal(t, RedactedValue, entra["clientSecret"])
+		assert.Equal(t, RedactedValue, entra["federatedToken"])
+		assert.Equal(t, RedactedValue, entra["federatedTokenFile"])
+
+		gh := auth["github"].(map[string]any)
+		assert.Equal(t, RedactedValue, gh["clientSecret"])
+		assert.Equal(t, RedactedValue, gh["privateKey"])
+
+		gcp := auth["gcp"].(map[string]any)
+		assert.Equal(t, RedactedValue, gcp["clientSecret"])
+	})
+
+	t.Run("preserves auth.handlers structure", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"auth": map[string]any{
+				"handlers": map[string]any{
+					"github": map[string]any{
+						"hostname": map[string]any{
+							"aliases": map[string]any{
+								"github-saas": "https://api.github.com/",
+							},
+						},
+					},
+				},
+			},
+		}
+		RedactConfigMap(m)
+		alias := m["auth"].(map[string]any)["handlers"].(map[string]any)["github"].(map[string]any)["hostname"].(map[string]any)["aliases"].(map[string]any)
+		assert.Equal(t, "https://api.github.com/", alias["github-saas"],
+			"non-sensitive nested paths must survive")
+	})
+
+	t.Run("redacts profile-level secrets in slices", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"auth": map[string]any{
+				"customOAuth2": []any{
+					map[string]any{
+						"name":         "quay",
+						"clientId":     "visible",
+						"clientSecret": "hidden",
+					},
+				},
+			},
+		}
+		RedactConfigMap(m)
+		entry := m["auth"].(map[string]any)["customOAuth2"].([]any)[0].(map[string]any)
+		assert.Equal(t, "visible", entry["clientId"])
+		assert.Equal(t, RedactedValue, entry["clientSecret"])
+	})
+
+	t.Run("redacts MCP server URLs which may embed tokens", func(t *testing.T) {
+		t.Parallel()
+		m := map[string]any{
+			"mcp": map[string]any{
+				"servers": map[string]any{
+					"upstream": map[string]any{
+						"url":        "https://token@example.com/mcp",
+						"toolPrefix": "up_",
+					},
+				},
+			},
+		}
+		RedactConfigMap(m)
+		srv := m["mcp"].(map[string]any)["servers"].(map[string]any)["upstream"].(map[string]any)
+		assert.Equal(t, RedactedValue, srv["url"])
+		assert.Equal(t, "up_", srv["toolPrefix"], "non-sensitive MCP fields survive")
+	})
+
+	t.Run("field names like privateKeySecretName are not redacted", func(t *testing.T) {
+		t.Parallel()
+		// PrivateKeySecretName is a keyring entry name, not a credential.
+		m := map[string]any{
+			"auth": map[string]any{
+				"github": map[string]any{
+					"privateKeySecretName": "github-app-key",
+				},
+			},
+		}
+		RedactConfigMap(m)
+		gh := m["auth"].(map[string]any)["github"].(map[string]any)
+		assert.Equal(t, "github-app-key", gh["privateKeySecretName"],
+			"keyring reference names are safe to display")
+	})
+
+	t.Run("nil and empty map are no-ops", func(t *testing.T) {
+		t.Parallel()
+		require.NotPanics(t, func() { RedactConfigMap(nil) })
+		m := map[string]any{}
+		require.NotPanics(t, func() { RedactConfigMap(m) })
+		assert.Empty(t, m)
+	})
+}

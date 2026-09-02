@@ -3,8 +3,71 @@
 
 package config
 
+import "strings"
+
 // RedactedValue is the placeholder inserted for sensitive fields.
 const RedactedValue = "***REDACTED***"
+
+// sensitiveLeafNames enumerates JSON/YAML leaf field names whose values must
+// never be printed verbatim. Match is case-insensitive on the leaf key, so
+// `clientSecret` catches both `auth.entra.clientSecret` and
+// `auth.customOAuth2[0].clientSecret`. Keep the list explicit rather than
+// regex-matching "*Secret*" -- fields like `PrivateKeySecretName` are just
+// keyring entry names and are safe to display.
+var sensitiveConfigLeafNames = map[string]bool{ //nolint:gochecknoglobals // shared redaction policy
+	"clientsecret":       true,
+	"privatekey":         true,
+	"privatekeypath":     true,
+	"federatedtoken":     true,
+	"federatedtokenfile": true,
+}
+
+// RedactConfigMap walks a map representation of a *Config (typically produced
+// by kvx.StructToMap) and replaces known sensitive leaves with RedactedValue.
+// It preserves structure so callers still see every section (including
+// auth.handlers, kube, plugins, etc.) while never exposing raw secrets.
+//
+// Sensitive leaves are matched by case-insensitive field name (see
+// sensitiveConfigLeafNames) plus a special rule for mcp.servers.<name>.url,
+// which may embed bearer tokens in its query string.
+func RedactConfigMap(m map[string]any) {
+	if m == nil {
+		return
+	}
+	redactByLeafName(m)
+	if mcp, ok := m["mcp"].(map[string]any); ok {
+		if servers, ok := mcp["servers"].(map[string]any); ok {
+			for _, entry := range servers {
+				if srv, ok := entry.(map[string]any); ok {
+					if _, has := srv["url"]; has {
+						srv["url"] = RedactedValue
+					}
+				}
+			}
+		}
+	}
+}
+
+// redactByLeafName walks any nested map/slice tree and replaces string leaves
+// whose key matches sensitiveConfigLeafNames with RedactedValue.
+func redactByLeafName(node any) {
+	switch typed := node.(type) {
+	case map[string]any:
+		for k, v := range typed {
+			if sensitiveConfigLeafNames[strings.ToLower(k)] {
+				if _, isString := v.(string); isString {
+					typed[k] = RedactedValue
+					continue
+				}
+			}
+			redactByLeafName(v)
+		}
+	case []any:
+		for _, item := range typed {
+			redactByLeafName(item)
+		}
+	}
+}
 
 // SanitizedConfig mirrors Config but with sensitive fields redacted.
 type SanitizedConfig struct {

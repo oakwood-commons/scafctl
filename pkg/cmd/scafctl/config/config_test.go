@@ -43,6 +43,7 @@ func TestCommandConfig(t *testing.T) {
 	assert.Contains(t, subCmdNames, "set")
 	assert.Contains(t, subCmdNames, "unset")
 	assert.Contains(t, subCmdNames, "reset")
+	assert.NotContains(t, subCmdNames, "show", "config show was removed; use view --show-origin")
 }
 
 func TestViewOptions_Run(t *testing.T) {
@@ -84,6 +85,367 @@ settings:
 	output := stdout.String()
 	assert.Contains(t, output, "test")
 	assert.Contains(t, output, "filesystem")
+}
+
+func TestCommandView_DefaultOutputIsAuto(t *testing.T) {
+	t.Parallel()
+	// Regression guard: config view must not hardcode a specific -o default;
+	// it should use the kvx idiom (auto) like every other kvx-driven command.
+	cliParams := settings.NewCliParams()
+	ioStreams := terminal.NewIOStreams(nil, &bytes.Buffer{}, &bytes.Buffer{}, false)
+
+	cmd := CommandView(cliParams, ioStreams, "scafctl")
+
+	flag := cmd.Flag("output")
+	require.NotNil(t, flag, "config view must expose an -o/--output flag")
+	assert.Equal(t, "auto", flag.Value.String(),
+		"default -o should be 'auto' so kvx picks the format; use -o yaml explicitly if that shape is wanted")
+}
+
+func TestViewOptions_Run_ShowOrigin(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+logging:
+  format: json
+`), 0o600))
+
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+	t.Setenv("SCAFCTL_GITHUB_TOKEN", "secret-value")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		ShowOrigin: true,
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, `"sources"`, "output should include sources map")
+	assert.Contains(t, out, `"envOverrides"`, "output should include envOverrides list")
+	assert.Contains(t, out, `"SCAFCTL_LOGGING_LEVEL"`)
+	assert.Contains(t, out, `"SCAFCTL_GITHUB_TOKEN"`)
+	// Token value must be redacted; the raw value must not leak.
+	assert.NotContains(t, out, "secret-value", "sensitive env value must not appear in output")
+	assert.Contains(t, out, appconfig.RedactedValue)
+}
+
+func TestViewOptions_Run_SourceFilter_File(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+`), 0o600))
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "file",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, "from-file", "file-sourced value should be present")
+	assert.NotContains(t, out, `"level":"debug"`, "env-sourced value must be filtered out")
+}
+
+func TestViewOptions_Run_SourceFilter_Env(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+`), 0o600))
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "env",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.NotContains(t, out, "from-file", "file-sourced value must be filtered out")
+	assert.Contains(t, out, `"SCAFCTL_LOGGING_LEVEL"`, "envOverrides always accompanies --source=env")
+	// The logging.level leaf should survive the source filter under settings.
+	assert.Contains(t, out, `"debug"`)
+}
+
+func TestViewOptions_Run_SourceFilter_EnvOnSettings(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv. This test exercises the
+	// FilterMapBySource path against a real settings.* env override
+	// (SCAFCTL_SETTINGS_DEFAULTCATALOG), which the SCAFCTL_LOGGING_LEVEL test
+	// does not cover.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+settings:
+  defaultCatalog: from-file
+`), 0o600))
+	t.Setenv("SCAFCTL_SETTINGS_DEFAULTCATALOG", "from-env")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "env",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, "from-env", "settings.defaultCatalog=from-env must survive --source=env")
+	assert.NotContains(t, out, "from-file", "file-sourced value must be filtered out")
+}
+
+func TestViewOptions_Run_SourceFilter_Default(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "default",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// The default settings.defaultCatalog is "official" (built-in). With no
+	// user config or env override present, --source=default must include it.
+	assert.Contains(t, out, `"official"`, "built-in default settings must be present under --source=default")
+}
+
+func TestViewOptions_Run_SourceFilter_DropIn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, appconfig.ConfigDirName), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, appconfig.ConfigDirName, "10-x.yaml"),
+		[]byte("logging:\n  format: json\n"),
+		0o600,
+	))
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "dropin",
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// The dropin fragment only touches logging.format, so under --source=dropin
+	// the payload must include that key and exclude the built-in default
+	// settings.defaultCatalog=official.
+	assert.Contains(t, out, `"json"`, "dropin-sourced logging.format=json must appear")
+	assert.NotContains(t, out, `"official"`,
+		"only dropin-sourced values may appear under --source=dropin")
+}
+
+func TestViewOptions_Run_ShowOrigin_ExposesAllSections(t *testing.T) {
+	t.Parallel()
+	// `view` emits the full Config struct (matching the pre-fold `show`
+	// behavior), so every top-level section's keys must appear in `sources`.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		ShowOrigin: true,
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	// Spot-check keys from sections beyond settings/catalogs.
+	assert.Contains(t, out, `"logging.level"`, "logging.* must appear in sources")
+	assert.Contains(t, out, `"httpclient.timeout"`, "httpclient.* must appear in sources")
+	assert.Contains(t, out, `"resolver.timeout"`, "resolver.* must appear in sources")
+}
+
+func TestViewOptions_Run_RedactsSensitiveConfigLeaves(t *testing.T) {
+	t.Parallel()
+	// Regression: `view` emits the full Config, so client secrets configured
+	// on disk must be redacted before reaching stdout. The user-visible
+	// `auth.handlers` structure and non-sensitive fields must survive intact.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+auth:
+  entra:
+    clientId: visible-id
+    clientSecret: super-secret-do-not-leak
+  handlers:
+    github:
+      hostname:
+        aliases:
+          alias-a: https://api.github.com/
+`), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+	}
+	opts.Output = "json"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.NotContains(t, out, "super-secret-do-not-leak",
+		"client secrets from disk must never appear verbatim in view output")
+	assert.Contains(t, out, appconfig.RedactedValue,
+		"redaction placeholder must be present in place of the secret")
+	assert.Contains(t, out, "visible-id",
+		"non-sensitive auth fields must survive redaction")
+	assert.Contains(t, out, "alias-a",
+		"auth.handlers structure must survive redaction")
+}
+
+func TestViewOptions_Run_SourceFilter_Invalid(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+
+	opts := &ViewOptions{
+		IOStreams:    ioStreams,
+		CliParams:    cliParams,
+		ConfigPath:   configPath,
+		SourceFilter: "bogus",
+	}
+	opts.Output = "yaml"
+
+	w := writer.New(ioStreams, cliParams)
+	ctx := writer.WithWriter(context.Background(), w)
+
+	err := opts.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --source")
+}
+
+func TestViewOptions_Run_EmbedderBinaryName(t *testing.T) {
+	// Cannot use t.Parallel with t.Setenv.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o600))
+
+	t.Setenv("MYCLI_LOGGING_LEVEL", "info")
+	t.Setenv("SCAFCTL_LOGGING_LEVEL", "debug")
+
+	var stdout, stderr bytes.Buffer
+	ioStreams := terminal.NewIOStreams(nil, &stdout, &stderr, false)
+	cliParams := settings.NewCliParams()
+	cliParams.BinaryName = "mycli"
+
+	opts := &ViewOptions{
+		IOStreams:  ioStreams,
+		CliParams:  cliParams,
+		ConfigPath: configPath,
+		BinaryName: "mycli",
+		ShowOrigin: true,
+	}
+	opts.Output = "json"
+
+	// Wire the embedder's env prefix into the manager options via context, so
+	// the domain layer uses MYCLI_ instead of SCAFCTL_.
+	ctx := appconfig.WithManagerOptions(
+		context.Background(),
+		[]appconfig.ManagerOption{appconfig.WithEnvPrefix("MYCLI")},
+	)
+	ctx = writer.WithWriter(ctx, writer.New(ioStreams, cliParams))
+
+	require.NoError(t, opts.Run(ctx))
+
+	out := stdout.String()
+	assert.Contains(t, out, `"MYCLI_LOGGING_LEVEL"`, "embedder prefix should be detected")
+	assert.NotContains(t, out, `"SCAFCTL_LOGGING_LEVEL"`, "default prefix should be ignored under embedder")
 }
 
 func TestGetOptions_Run(t *testing.T) {

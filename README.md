@@ -307,7 +307,10 @@ scafctl stores its configuration in XDG-compliant paths. Use the `config` comman
 scafctl config init
 
 # View current config
-scafctl config show
+scafctl config view
+
+# Show where each value comes from (file / env / default)
+scafctl config view --show-origin
 
 # Set / get / unset values
 scafctl config set defaultOutput json
@@ -513,7 +516,7 @@ scafctl diff snapshot --from baseline --to current
 scafctl run resolver -f solution.yaml --graph
 
 # Configuration and secrets
-scafctl config show
+scafctl config view
 scafctl secrets list
 scafctl secrets list --all  # include auth tokens
 
