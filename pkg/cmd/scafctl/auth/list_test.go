@@ -407,6 +407,7 @@ func (m *minimalHandler) Login(_ context.Context, _ auth.LoginOptions) (*auth.Re
 }
 func (m *minimalHandler) Logout(_ context.Context) error                 { return nil }
 func (m *minimalHandler) Status(_ context.Context) (*auth.Status, error) { return &auth.Status{}, nil }
+
 func (m *minimalHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
 	return nil, nil
 }

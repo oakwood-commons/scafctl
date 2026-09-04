@@ -627,7 +627,8 @@ func (f *Fetcher) disposeLock(dep pluginArtifact, locked *bundler.LockPlugin) (*
 		return nil, fmt.Errorf(
 			"plugin %s: lock constraint %q does not match current constraint %q; "+
 				"run '%s build solution' to refresh the lock: %w",
-			dep.ArtifactName(), locked.Constraint, constraint, f.binaryName, ErrLockStale)
+			dep.ArtifactName(), locked.Constraint, constraint, f.binaryName, ErrLockStale,
+		)
 	}
 }
 

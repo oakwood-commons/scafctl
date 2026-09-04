@@ -342,78 +342,84 @@ func browserTUISchema(displayName string, useDeviceCodeTUI bool, dci deviceCodeD
 	switch {
 	case useDeviceCodeTUI && dci.userCode != "":
 		// Real device code flow (e.g., GitHub without client_secret).
-		return map[string]any{
-				"title": fmt.Sprintf("Sign in to %s", displayName),
-				"url":   dci.verificationURI,
-				"code":  dci.userCode,
-			}, &tui.DisplaySchema{
-				Version: "v1",
-				Status: &tui.StatusDisplayConfig{
-					TitleField:     "title",
-					WaitMessage:    "Waiting for authentication...",
-					SuccessMessage: "Authenticated successfully!",
-					DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-					DoneDelay:      "2s",
-					DisplayFields: []tui.StatusFieldDisplay{
-						{Label: "URL", Field: "url"},
-						{Label: "Code", Field: "code"},
+		fields := map[string]any{
+			"title": fmt.Sprintf("Sign in to %s", displayName),
+			"url":   dci.verificationURI,
+			"code":  dci.userCode,
+		}
+		schema := &tui.DisplaySchema{
+			Version: "v1",
+			Status: &tui.StatusDisplayConfig{
+				TitleField:     "title",
+				WaitMessage:    "Waiting for authentication...",
+				SuccessMessage: "Authenticated successfully!",
+				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+				DoneDelay:      "2s",
+				DisplayFields: []tui.StatusFieldDisplay{
+					{Label: "URL", Field: "url"},
+					{Label: "Code", Field: "code"},
+				},
+				Actions: []tui.StatusActionConfig{
+					{
+						Label: "Copy code",
+						Type:  "copy-value",
+						Field: "code",
+						Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
 					},
-					Actions: []tui.StatusActionConfig{
-						{
-							Label: "Copy code",
-							Type:  "copy-value",
-							Field: "code",
-							Keys:  tui.StatusKeyBindings{Vim: "c", Emacs: "alt+c", Function: "f2"},
-						},
-						{
-							Label: "Open URL",
-							Type:  "open-url",
-							Field: "url",
-							Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
-						},
+					{
+						Label: "Open URL",
+						Type:  "open-url",
+						Field: "url",
+						Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
 					},
 				},
-			}
+			},
+		}
+		return fields, schema
 	case useDeviceCodeTUI && dci.userCode == "" && dci.verificationURI != "":
 		// Browser auth code flow — handler reported the auth URL via callback.
-		return map[string]any{
-				"title": fmt.Sprintf("Sign in to %s", displayName),
-				"url":   dci.verificationURI,
-			}, &tui.DisplaySchema{
-				Version: "v1",
-				Status: &tui.StatusDisplayConfig{
-					TitleField:     "title",
-					WaitMessage:    "Waiting for browser authentication...",
-					SuccessMessage: "Authenticated successfully!",
-					DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-					DoneDelay:      "2s",
-					DisplayFields: []tui.StatusFieldDisplay{
-						{Label: "URL", Field: "url"},
-					},
-					Actions: []tui.StatusActionConfig{
-						{
-							Label: "Re-open in browser",
-							Type:  "open-url",
-							Field: "url",
-							Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
-						},
+		fields := map[string]any{
+			"title": fmt.Sprintf("Sign in to %s", displayName),
+			"url":   dci.verificationURI,
+		}
+		schema := &tui.DisplaySchema{
+			Version: "v1",
+			Status: &tui.StatusDisplayConfig{
+				TitleField:     "title",
+				WaitMessage:    "Waiting for browser authentication...",
+				SuccessMessage: "Authenticated successfully!",
+				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+				DoneDelay:      "2s",
+				DisplayFields: []tui.StatusFieldDisplay{
+					{Label: "URL", Field: "url"},
+				},
+				Actions: []tui.StatusActionConfig{
+					{
+						Label: "Re-open in browser",
+						Type:  "open-url",
+						Field: "url",
+						Keys:  tui.StatusKeyBindings{Vim: "o", Emacs: "alt+o", Function: "f3"},
 					},
 				},
-			}
+			},
+		}
+		return fields, schema
 	default:
 		// No callback fired — show minimal browser waiting TUI.
-		return map[string]any{
-				"title": fmt.Sprintf("Sign in to %s", displayName),
-			}, &tui.DisplaySchema{
-				Version: "v1",
-				Status: &tui.StatusDisplayConfig{
-					TitleField:     "title",
-					WaitMessage:    "Waiting for browser authentication...",
-					SuccessMessage: "Authenticated successfully!",
-					DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
-					DoneDelay:      "2s",
-				},
-			}
+		fields := map[string]any{
+			"title": fmt.Sprintf("Sign in to %s", displayName),
+		}
+		schema := &tui.DisplaySchema{
+			Version: "v1",
+			Status: &tui.StatusDisplayConfig{
+				TitleField:     "title",
+				WaitMessage:    "Waiting for browser authentication...",
+				SuccessMessage: "Authenticated successfully!",
+				DoneBehavior:   tui.DoneBehaviorExitAfterDelay,
+				DoneDelay:      "2s",
+			},
+		}
+		return fields, schema
 	}
 }
 

@@ -655,7 +655,8 @@ func (e *ghcrEnumerator) fetchPage(ctx context.Context, apiURL string) ([]string
 			return nil, "", fmt.Errorf(
 				"GHCR Packages API returned %d — your GitHub token may lack the read:packages scope; "+
 					"run: %s auth login github: %w",
-				resp.StatusCode, bin, ErrEnumerationNotSupported)
+				resp.StatusCode, bin, ErrEnumerationNotSupported,
+			)
 		}
 		return nil, "", fmt.Errorf("API returned status %d: %w",
 			resp.StatusCode, ErrEnumerationNotSupported)

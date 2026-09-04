@@ -956,7 +956,8 @@ func withState(s entryState) entryOption    { return func(e *poolEntry) { e.stat
 func withLastUsed(ts time.Time) entryOption { return func(e *poolEntry) { e.lastUsed = ts } }
 func withClient(c pluginClient) entryOption { return func(e *poolEntry) { e.client = c } }
 func withRefs(n int32) entryOption          { return func(e *poolEntry) { atomic.StoreInt32(&e.refCount, n) } }
-func withProviders(p []string) entryOption  { return func(e *poolEntry) { e.registeredProviders = p } }
+
+func withProviders(p []string) entryOption { return func(e *poolEntry) { e.registeredProviders = p } }
 
 // seedEntry builds a ready poolEntry (its ready channel already closed) for id
 // at version, applies opts, and indexes it in both the index and the store,

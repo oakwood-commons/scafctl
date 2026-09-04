@@ -363,8 +363,8 @@ func TestRender_WithForEachExpansion(t *testing.T) {
 					Name:     "deploy",
 					Provider: "shell",
 					ForEach: &spec.ForEachClause{
-						Concurrency: 2,
-						OnError:     spec.OnErrorContinue,
+						Concurrency:     2,
+						ContinueOnError: boolCond("true"),
 					},
 				},
 				ExpandedName:       "deploy[0]",
@@ -381,8 +381,8 @@ func TestRender_WithForEachExpansion(t *testing.T) {
 					Name:     "deploy",
 					Provider: "shell",
 					ForEach: &spec.ForEachClause{
-						Concurrency: 2,
-						OnError:     spec.OnErrorContinue,
+						Concurrency:     2,
+						ContinueOnError: boolCond("true"),
 					},
 				},
 				ExpandedName:       "deploy[1]",
@@ -399,8 +399,8 @@ func TestRender_WithForEachExpansion(t *testing.T) {
 					Name:     "deploy",
 					Provider: "shell",
 					ForEach: &spec.ForEachClause{
-						Concurrency: 2,
-						OnError:     spec.OnErrorContinue,
+						Concurrency:     2,
+						ContinueOnError: boolCond("true"),
 					},
 				},
 				ExpandedName:       "deploy[2]",

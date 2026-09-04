@@ -616,7 +616,8 @@ func HostDepsFromAuthRegistry(authReg *auth.Registry) *HostServiceDeps {
 				return nil, fmt.Errorf(
 					"no identity claims available for auth handler %q without a scope; "+
 						"supply a scope (e.g. inputs.scope: api://<app-id>/.default) so a "+
-						"scoped token can be minted to derive identity claims", handler)
+						"scoped token can be minted to derive identity claims", handler,
+				)
 			}
 			return claimsToProto(st.Claims), nil
 		},

@@ -41,7 +41,7 @@ func TestEffectiveOnErrorPolicy(t *testing.T) {
 
 	t.Run("forEach deprecated onError wins over action-level", func(t *testing.T) {
 		action := &ExpandedAction{
-			Action:          &Action{ContinueOnError: cond, ForEach: &spec.ForEachClause{OnError: spec.OnErrorContinue}},
+			Action:          &Action{ContinueOnError: cond, ForEach: &spec.ForEachClause{OnError: spec.OnErrorContinue}}, //nolint:staticcheck // intentionally exercises the deprecated field's precedence behavior
 			ForEachMetadata: &ForEachExpansionMetadata{ExpandedFrom: "deploy", Index: 1},
 		}
 		gotCond, gotFallback := effectiveOnErrorPolicy(action)

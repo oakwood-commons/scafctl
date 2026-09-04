@@ -351,7 +351,8 @@ func TestPoolBinderNilAcquire(t *testing.T) {
 	t.Run("errors when deps need pinning", func(t *testing.T) {
 		t.Parallel()
 		reg, release, err := PoolBinder(shared, nil)(
-			context.Background(), []solution.PluginDependency{{Name: "exec"}})
+			context.Background(), []solution.PluginDependency{{Name: "exec"}},
+		)
 		require.ErrorIs(t, err, errNilAcquire)
 		require.Nil(t, reg)
 		require.Nil(t, release)

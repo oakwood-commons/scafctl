@@ -116,7 +116,8 @@ func TestCompareSnapshot_NormalizesBeforeCompare(t *testing.T) {
 	require.NoError(t, os.WriteFile(snapshotPath, []byte(normalized), 0o644))
 
 	match, diff, _, err := soltesting.CompareSnapshot(
-		"started at 2025-02-13T12:00:00Z\n", snapshotPath, "", nil)
+		"started at 2025-02-13T12:00:00Z\n", snapshotPath, "", nil,
+	)
 	require.NoError(t, err)
 	assert.True(t, match, "should match after normalization, diff: %s", diff)
 }
@@ -155,7 +156,8 @@ func TestCompareSnapshot_WithSandboxPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(snapshotPath, []byte(normalized), 0o644))
 
 	match, _, _, err := soltesting.CompareSnapshot(
-		"file at /tmp/scafctl-test-xyz/out.txt\n", snapshotPath, sandboxPath, nil)
+		"file at /tmp/scafctl-test-xyz/out.txt\n", snapshotPath, sandboxPath, nil,
+	)
 	require.NoError(t, err)
 	assert.True(t, match)
 }

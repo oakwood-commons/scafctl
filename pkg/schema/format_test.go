@@ -292,16 +292,16 @@ func TestAppendLengthValidation(t *testing.T) {
 	minVal := 1
 	maxVal := 10
 
-	parts := appendLengthValidation(nil, &minVal, &maxVal)
+	parts := appendLengthValidation(&minVal, &maxVal)
 	assert.Equal(t, []string{"length: 1-10"}, parts)
 
-	parts = appendLengthValidation(nil, &minVal, nil)
+	parts = appendLengthValidation(&minVal, nil)
 	assert.Equal(t, []string{"minLength: 1"}, parts)
 
-	parts = appendLengthValidation(nil, nil, &maxVal)
+	parts = appendLengthValidation(nil, &maxVal)
 	assert.Equal(t, []string{"maxLength: 10"}, parts)
 
-	parts = appendLengthValidation(nil, nil, nil)
+	parts = appendLengthValidation(nil, nil)
 	assert.Empty(t, parts)
 }
 

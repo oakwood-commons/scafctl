@@ -123,7 +123,8 @@ func (s *Server) registerProviderTools() {
 				"transform values (cel, static), validate inputs, and perform actions (exec, github, file). "+
 				"Use list_providers and get_provider_schema to discover available providers and their input schemas. "+
 				"NOTE: Some providers have side effects (e.g., exec runs commands, github creates issues). "+
-				"Use dry_run=true to preview what would happen without executing.", s.name)),
+				"Use dry_run=true to preview what would happen without executing.", s.name,
+		)),
 		mcp.WithTitleAnnotation("Run Provider"),
 		mcp.WithToolIcons(toolIcons["provider"]),
 		mcp.WithReadOnlyHintAnnotation(false),

@@ -708,7 +708,7 @@ func TestValidateWorkflow_ForEachValidation(t *testing.T) {
 				"deploy": {
 					Provider: "shell",
 					ForEach: &spec.ForEachClause{
-						OnError: spec.OnErrorBehavior("invalid"),
+						OnError: spec.OnErrorBehavior("invalid"), //nolint:staticcheck // intentionally exercises deprecated onError field validation
 					},
 				},
 			},
@@ -724,7 +724,7 @@ func TestValidateWorkflow_ForEachValidation(t *testing.T) {
 				"deploy": {
 					Provider: "shell",
 					ForEach: &spec.ForEachClause{
-						OnError: spec.OnErrorContinue,
+						OnError: spec.OnErrorContinue, //nolint:staticcheck // intentionally exercises deprecated onError field validation
 					},
 				},
 			},
@@ -1091,9 +1091,9 @@ func TestValidateWorkflow_ComplexScenario(t *testing.T) {
 					"version":  {Expr: celExpr("__actions.test.results.version")},
 				},
 				ForEach: &spec.ForEachClause{
-					Item:        "region",
-					Concurrency: 3,
-					OnError:     spec.OnErrorContinue,
+					Item:            "region",
+					Concurrency:     3,
+					ContinueOnError: boolCond("true"),
 				},
 			},
 		},

@@ -12,9 +12,9 @@ import (
 
 // Compile-time checks: ensure the observer interfaces are subsets of ProgressCallback.
 var (
-	_ Observer      = (ProgressCallback)(nil)
-	_ PhaseObserver = (ProgressCallback)(nil)
-	_ RetryObserver = (ProgressCallback)(nil)
+	_ Observer      = ProgressCallback(nil)
+	_ PhaseObserver = ProgressCallback(nil)
+	_ RetryObserver = ProgressCallback(nil)
 )
 
 // Compile-time checks: ensure NoOpProgressCallback satisfies all observer interfaces.
@@ -39,11 +39,15 @@ func (o *testActionObserver) OnActionStart(name, _ string) { o.started = append(
 func (o *testActionObserver) OnActionComplete(name string, _ any) {
 	o.completed = append(o.completed, name)
 }
+
 func (o *testActionObserver) OnActionFailed(name string, _ error) { o.failed = append(o.failed, name) }
-func (o *testActionObserver) OnActionSkipped(name, _ string)      { o.skipped = append(o.skipped, name) }
+
+func (o *testActionObserver) OnActionSkipped(name, _ string) { o.skipped = append(o.skipped, name) }
+
 func (o *testActionObserver) OnActionTimeout(name string, _ time.Duration) {
 	o.timedOut = append(o.timedOut, name)
 }
+
 func (o *testActionObserver) OnActionCancelled(name string) { o.cancelled = append(o.cancelled, name) }
 
 // testPhaseObserver only implements PhaseObserver.
@@ -55,6 +59,7 @@ type testPhaseObserver struct {
 }
 
 func (o *testPhaseObserver) OnPhaseStart(phase int, _ []string) { o.phases = append(o.phases, phase) }
+
 func (o *testPhaseObserver) OnPhaseComplete(phase int) {
 	o.phasesComplete = append(o.phasesComplete, phase)
 }

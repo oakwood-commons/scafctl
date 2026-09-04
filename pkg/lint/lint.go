@@ -485,7 +485,8 @@ func lintResolvers(sol *solution.Solution, result *Result, registry providerLook
 			if severity == SeverityInfo {
 				suggestion = fmt.Sprintf(
 					"This solution has no workflow, so a terminal resolver is expected to be run directly via the 'run resolver' command (resolver %q). Add a workflow or reference it elsewhere if it should be consumed.",
-					name)
+					name,
+				)
 			}
 			result.addFinding(severity, "usage", location,
 				fmt.Sprintf("resolver '%s' is defined but never referenced", name),

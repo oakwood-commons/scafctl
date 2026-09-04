@@ -346,7 +346,8 @@ func TestEnclosingCallNameIndentation(t *testing.T) {
 			"          - provider: parameter\n" + // 8
 			"            inputs:\n" + // 9
 			"              value:\n" + // 10
-			"                expr: something\n") // 11
+			"                expr: something\n",
+	) // 11
 
 	// Genuinely inside myCall's args.
 	name, ok := enclosingCallName(raw, 7)
@@ -369,7 +370,8 @@ func TestEnclosingCallNameIndentation(t *testing.T) {
 			"          - call: myCall\n" + // 5
 			"            args:\n" + // 6
 			"              foo:\n" + // 7
-			"                bar: 1\n") // 8
+			"                bar: 1\n",
+	) // 8
 	name, ok = enclosingCallName(nested, 8) // the "bar: 1" line, nested under foo
 	require.True(t, ok)
 	assert.Equal(t, "myCall", name)

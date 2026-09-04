@@ -182,7 +182,8 @@ func NewGoTemplateProvider() *GoTemplateProvider {
 				"pathTemplate": schemahelper.StringProp(
 					"Go template that computes each entry's output path during fan-out (required when 'forEach' is set; ignored otherwise). Rendered per (item, entry) with the forEach aliases, __item/__index, resolver context, shared data, and the per-entry path parts __filePath, __fileName, __fileStem, __fileExtension, __fileDir (same variables as the file provider's write-tree outputPath). Must produce a distinct, non-empty path for every item so outputs never collide.",
 					schemahelper.WithExample("envs/{{ .env.name }}/{{ if .__fileDir }}{{ .__fileDir }}/{{ end }}{{ .__fileStem }}"),
-					schemahelper.WithMaxLength(*ptrs.IntPtr(1024))),
+					schemahelper.WithMaxLength(*ptrs.IntPtr(1024)),
+				),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityTransform: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
