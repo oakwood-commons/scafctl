@@ -104,7 +104,8 @@ func fetchAndRegisterIntoComposite(
 	}
 
 	vClients, regErr := plugin.RegisterFetchedVersionedPlugins(
-		ctx, composite, fetchResults, cfg.pluginCfg, nil, nil, cfg.clientOpts...)
+		ctx, composite, fetchResults, cfg.pluginCfg, nil, nil, cfg.clientOpts...,
+	)
 	if regErr != nil {
 		return nil, nil, fmt.Errorf("registering fetched plugins: %w", regErr)
 	}

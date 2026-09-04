@@ -264,6 +264,7 @@ func (s *stubAuthHandler) Login(_ context.Context, _ auth.LoginOptions) (*auth.R
 }
 func (s *stubAuthHandler) Logout(_ context.Context) error                 { return nil }
 func (s *stubAuthHandler) Status(_ context.Context) (*auth.Status, error) { return &auth.Status{}, nil }
+
 func (s *stubAuthHandler) GetToken(_ context.Context, _ auth.TokenOptions) (*auth.Token, error) {
 	return nil, nil
 }
@@ -402,7 +403,8 @@ func TestRoot_ConfigPathHonored(t *testing.T) {
 			"    aliases:\n"+
 			"      lab:\n"+
 			"        server: https://api.lab.example.com:6443\n"+
-			"        defaultHandler: oidc\n"), 0o600))
+			"        defaultHandler: oidc\n",
+	), 0o600))
 
 	var captured kube.ClusterResolver
 	cmd, cleanup := Root(&RootOptions{

@@ -151,28 +151,33 @@ func NewFileProvider() *FileProvider {
 					"Conflict resolution strategy when the target file already exists. "+
 						"Defaults to skip-unchanged when not overridden by the --on-conflict CLI flag.",
 					schemahelper.WithExample("skip-unchanged"),
-					schemahelper.WithEnum("error", "overwrite", "skip", "skip-unchanged", "append")),
+					schemahelper.WithEnum("error", "overwrite", "skip", "skip-unchanged", "append"),
+				),
 				"backup": schemahelper.BoolProp(
 					"Create a .bak backup of existing files before mutating them. " +
-						"Applies to overwrite, skip-unchanged (when content differs), and append (when content is appended)."),
+						"Applies to overwrite, skip-unchanged (when content differs), and append (when content is appended).",
+				),
 				"dedupe": schemahelper.BoolProp(
 					"When onConflict is append, perform line-level deduplication. "+
 						"Only lines not already present in the existing file are appended. "+
 						"Useful for files like .gitignore. "+
 						"Returns a validation error if set to true with any strategy other than append.",
 					schemahelper.WithExample(true),
-					schemahelper.WithDefault(false)),
+					schemahelper.WithDefault(false),
+				),
 				"failFast": schemahelper.BoolProp(
 					"When onConflict is error and operation is write-tree, stop at the first "+
 						"conflicting file instead of collecting all conflicts into a single error. "+
 						"Has no effect on other strategies or the write operation.",
 					schemahelper.WithExample(false),
-					schemahelper.WithDefault(false)),
+					schemahelper.WithDefault(false),
+				),
 				"stripSuffix": schemahelper.StringProp(
 					"Strip the given suffix from each entry path before writing (write-tree only). "+
 						"For example, with stripSuffix '.tmpl', 'main.go.tmpl' becomes 'main.go'. "+
 						"Applied before outputPath template if both are set.",
-					schemahelper.WithExample(".tmpl")),
+					schemahelper.WithExample(".tmpl"),
+				),
 				"relativeTo": schemahelper.StringProp(
 					"Base directory anchor for relative path resolution. "+
 						"solution: resolve relative to the solution file's directory, bypassing the "+
@@ -185,7 +190,8 @@ func NewFileProvider() *FileProvider {
 						"returning an error if the resolved path would escape that directory.",
 					schemahelper.WithEnum("auto", "solution", "cwd"),
 					schemahelper.WithExample("solution"),
-					schemahelper.WithDefault("auto")),
+					schemahelper.WithDefault("auto"),
+				),
 			}),
 			OutputSchemas: map[provider.Capability]*jsonschema.Schema{
 				provider.CapabilityFrom: schemahelper.ObjectSchema(nil, map[string]*jsonschema.Schema{

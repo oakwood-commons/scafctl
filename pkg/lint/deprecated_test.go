@@ -109,7 +109,7 @@ func TestLintDeprecatedFields_ActionAndForEach(t *testing.T) {
 						Provider: "exec",
 						OnError:  spec.OnErrorContinue,
 						ForEach: &spec.ForEachClause{
-							OnError: spec.OnErrorFail,
+							OnError: spec.OnErrorFail, //nolint:staticcheck // intentionally exercises the deprecated-field lint rule
 						},
 					},
 				},

@@ -326,7 +326,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_CacheHitAllLayers(
 	// All requested layers are present in cache — served without any network I/O.
 	content, layers, err := resolver.FetchRemoteSolutionWithLayers(
 		t.Context(), "localhost:9999/myorg/starter-kit@1.0.0",
-		MediaTypeSolutionBundle, MediaTypeSolutionLock)
+		MediaTypeSolutionBundle, MediaTypeSolutionLock,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("cached-content"), content)
 	assert.Equal(t, []byte("cached-bundle"), layers[MediaTypeSolutionBundle])
@@ -358,7 +359,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_CacheHitFiltersToR
 	// Request only the bundle — the returned map must exclude the lock even
 	// though it is present in the cache entry.
 	content, layers, err := resolver.FetchRemoteSolutionWithLayers(
-		t.Context(), "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle)
+		t.Context(), "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("cached-content"), content)
 	assert.Equal(t, []byte("cached-bundle"), layers[MediaTypeSolutionBundle])
@@ -387,7 +389,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_CacheHitMissingReq
 
 	_, _, err := resolver.FetchRemoteSolutionWithLayers(
 		ctx, "localhost:9999/myorg/starter-kit@1.0.0",
-		MediaTypeSolutionBundle, MediaTypeSolutionLock)
+		MediaTypeSolutionBundle, MediaTypeSolutionLock,
+	)
 	require.Error(t, err, "should fall through to fetch and fail on canceled ctx")
 	assert.NotContains(t, err.Error(), "invalid remote reference")
 	assert.False(t, mc.putCalled, "Put should not be called when fetch fails")
@@ -408,7 +411,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_CacheMiss(t *testi
 	cancel()
 
 	_, _, err := resolver.FetchRemoteSolutionWithLayers(
-		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle)
+		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle,
+	)
 	require.Error(t, err, "should fail due to canceled context, not cache")
 	assert.NotContains(t, err.Error(), "invalid remote reference")
 
@@ -437,7 +441,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_NoCacheBypass(t *t
 	cancel()
 
 	_, _, err := resolver.FetchRemoteSolutionWithLayers(
-		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle)
+		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle,
+	)
 	require.Error(t, err, "noCache should bypass cache and attempt fetch")
 	assert.Empty(t, mc.getKind, "cache Get must not be consulted when noCache is set")
 }
@@ -454,7 +459,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_NilCache(t *testin
 	cancel()
 
 	_, _, err := resolver.FetchRemoteSolutionWithLayers(
-		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle)
+		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle,
+	)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "invalid remote reference")
 }
@@ -476,7 +482,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_CacheGetErrorIgnor
 	cancel()
 
 	_, _, err := resolver.FetchRemoteSolutionWithLayers(
-		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle)
+		ctx, "localhost:9999/myorg/starter-kit@1.0.0", MediaTypeSolutionBundle,
+	)
 	require.Error(t, err, "should fail on fetch, not on cache error")
 	assert.NotContains(t, err.Error(), "disk full")
 }
@@ -495,7 +502,8 @@ func TestRemoteSolutionResolver_FetchRemoteSolutionWithLayers_EmptyTagNormalized
 	cancel()
 
 	_, _, err := resolver.FetchRemoteSolutionWithLayers(
-		ctx, "localhost:9999/myorg/starter-kit", MediaTypeSolutionBundle)
+		ctx, "localhost:9999/myorg/starter-kit", MediaTypeSolutionBundle,
+	)
 	require.Error(t, err, "should fail due to canceled context")
 	assert.Equal(t, "latest", mc.getVersion, "empty tag should be normalized to 'latest'")
 }

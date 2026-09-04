@@ -46,7 +46,8 @@ func (s *Server) registerPluginTools() {
 				"each plugin's name, kind (provider or auth-handler), version, catalog, and digest. "+
 				"Use this to discover what plugins exist, list all versions of a specific plugin "+
 				"(set 'name'), or check whether a newer version is available (combine 'name' with a "+
-				"'version' constraint). Results are deduplicated across catalogs."),
+				"'version' constraint). Results are deduplicated across catalogs.",
+		),
 		mcp.WithTitleAnnotation("Catalog List Plugins"),
 		mcp.WithToolIcons(toolIcons["plugin"]),
 		mcp.WithReadOnlyHintAnnotation(true),

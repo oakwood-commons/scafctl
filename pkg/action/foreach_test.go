@@ -49,8 +49,8 @@ func TestFromForEachClause(t *testing.T) {
 
 	t.Run("with clause", func(t *testing.T) {
 		clause := &spec.ForEachClause{
-			Concurrency: 3,
-			OnError:     spec.OnErrorContinue,
+			Concurrency:     3,
+			ContinueOnError: boolCond("true"),
 		}
 		exec := FromForEachClause(clause, nil)
 		assert.NotNil(t, exec)

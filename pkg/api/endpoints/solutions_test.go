@@ -397,7 +397,8 @@ func TestEnsureProviderDependencies_NilArgs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			scoped, release, err := ensureProviderDependencies(
-				context.Background(), tt.sol, tt.reg, nil, tt.fetcher, tt.ensure, nil, prepare.LockModeStrict)
+				context.Background(), tt.sol, tt.reg, nil, tt.fetcher, tt.ensure, nil, prepare.LockModeStrict,
+			)
 			assert.ErrorIs(t, err, tt.wantErr)
 			assert.Nil(t, scoped)
 			assert.Nil(t, release)
@@ -417,7 +418,8 @@ func TestEnsureProviderDependencies_NilAliasAllowed(t *testing.T) {
 	fetcher := &plugin.Fetcher{}
 
 	scoped, release, err := ensureProviderDependencies(
-		context.Background(), sol, reg, (*catalogindex.Index)(nil), fetcher, fakeEnsureAndAcquire{}, nil, prepare.LockModeStrict)
+		context.Background(), sol, reg, (*catalogindex.Index)(nil), fetcher, fakeEnsureAndAcquire{}, nil, prepare.LockModeStrict,
+	)
 	assert.NoError(t, err)
 	assert.NotNil(t, scoped)
 	assert.NotNil(t, release)

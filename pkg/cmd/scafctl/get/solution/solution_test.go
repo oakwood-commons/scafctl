@@ -536,7 +536,8 @@ func TestListSolutions_WithLocalArtifacts(t *testing.T) {
 	// Pre-populate a local catalog with a solution.
 	lgr := logr.Discard()
 	localCat, err := catalog.NewLocalCatalogAt(
-		filepath.Join(tmpDir, "scafctl", "catalog"), lgr)
+		filepath.Join(tmpDir, "scafctl", "catalog"), lgr,
+	)
 	require.NoError(t, err)
 
 	solYAML := []byte("apiVersion: scafctl.io/v1\nkind: Solution\nmetadata:\n  name: list-test\n  version: 1.0.0\nspec: {}\n")
@@ -584,7 +585,8 @@ func TestListSolutions_WithMultipleArtifacts(t *testing.T) {
 
 	lgr := logr.Discard()
 	localCat, err := catalog.NewLocalCatalogAt(
-		filepath.Join(tmpDir, "scafctl", "catalog"), lgr)
+		filepath.Join(tmpDir, "scafctl", "catalog"), lgr,
+	)
 	require.NoError(t, err)
 
 	for _, item := range []struct{ name, ver string }{

@@ -28,7 +28,8 @@ func (s *Server) registerRunTools() {
 				"Solutions are loaded from file paths, catalog names, or URLs. "+
 				"Use 'catalog_search' or 'catalog_list_solutions' to discover solutions, "+
 				"then 'inspect_solution' to see required parameters before running. "+
-				"Use 'dry_run_solution' first to preview what will happen without making changes.", s.name)),
+				"Use 'dry_run_solution' first to preview what will happen without making changes.", s.name,
+		)),
 		mcp.WithTitleAnnotation("Run Solution"),
 		mcp.WithToolIcons(toolIcons["action"]),
 		mcp.WithReadOnlyHintAnnotation(false),

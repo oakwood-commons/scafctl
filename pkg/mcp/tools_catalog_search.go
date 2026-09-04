@@ -23,7 +23,8 @@ func (s *Server) registerCatalogSearchTools() {
 				"Use 'catalog' to target a specific registered catalog, or 'all' to search every registered catalog. "+
 				"Returns relevance-scored results. Use 'inspect_solution' to get full details on a result. "+
 				"Use 'catalog_list_registered' to see available catalogs. "+
-				"Invoke with '%s run <name>' to execute a solution.", s.name)),
+				"Invoke with '%s run <name>' to execute a solution.", s.name,
+		)),
 		mcp.WithTitleAnnotation("Catalog Search"),
 		mcp.WithToolIcons(toolIcons["catalog"]),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -54,7 +55,8 @@ func (s *Server) registerCatalogSearchTools() {
 				"including description, category, tags, parameters, providers, and maintainers. "+
 				"Searches remote catalog indexes for fast discovery. "+
 				"Use 'catalog_search' to filter results or 'inspect_solution' for full details. "+
-				"Invoke with '%s run <name>' to execute a solution.", s.name)),
+				"Invoke with '%s run <name>' to execute a solution.", s.name,
+		)),
 		mcp.WithTitleAnnotation("Catalog List Solutions"),
 		mcp.WithToolIcons(toolIcons["catalog"]),
 		mcp.WithReadOnlyHintAnnotation(true),

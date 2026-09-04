@@ -60,7 +60,8 @@ func resolveRegistryToCatalog(registry string, resolver RegistryAliasResolver) (
 	}
 	return "", fmt.Errorf(
 		"provider registry %q is not a configured catalog; add it to the catalogs "+
-			"configuration or reference a configured registry", registry)
+			"configuration or reference a configured registry", registry,
+	)
 }
 
 // UndeclaredProviderError lists provider references that are neither builtins
@@ -75,7 +76,8 @@ var _ error = (*UndeclaredProviderError)(nil)
 func (e *UndeclaredProviderError) Error() string {
 	return fmt.Sprintf(
 		"providers %v are not builtins and are not declared in bundle.plugins; add them to bundle.plugins",
-		e.Providers)
+		e.Providers,
+	)
 }
 
 func (e *UndeclaredProviderError) Is(target error) bool {
@@ -99,7 +101,8 @@ func (e *UnconfiguredCatalogError) Error() string {
 	return fmt.Sprintf(
 		"provider registries %v are not configured catalogs; add them to the catalogs "+
 			"configuration or reference a configured registry",
-		e.Registries)
+		e.Registries,
+	)
 }
 
 func (e *UnconfiguredCatalogError) Is(target error) bool {
@@ -265,14 +268,16 @@ func findLockEntry(dep solution.PluginDependency, lock *bundler.LockFile, mode L
 	if lock == nil {
 		return nil, fmt.Errorf(
 			"provider %q: %s mode requires a lock file but none was provided: %w",
-			dep.ArtifactName(), mode, ErrMissingLockFile)
+			dep.ArtifactName(), mode, ErrMissingLockFile,
+		)
 	}
 	lp := lock.FindPluginByVersionConstraint(dep)
 	if lp == nil {
 		return nil, fmt.Errorf(
 			"provider %q: no lock entry matches constraint %q; "+
 				"the solution lock is out of sync with bundle.plugins",
-			dep.ArtifactName(), dep.Version)
+			dep.ArtifactName(), dep.Version,
+		)
 	}
 	return lp, nil
 }
@@ -285,13 +290,15 @@ func resolveStrict(dep solution.PluginDependency, lock *bundler.LockFile, resolv
 	if lp.Version == "" {
 		return solution.PluginDependency{}, fmt.Errorf(
 			"provider %q: lock entry has no resolved version; "+
-				"cannot pin in strict mode", dep.ArtifactName())
+				"cannot pin in strict mode", dep.ArtifactName(),
+		)
 	}
 	catalog, ok := resolver.AliasForRegistry(lp.ResolvedCanonical)
 	if !ok {
 		return solution.PluginDependency{}, fmt.Errorf(
 			"provider %q: lock entry resolved to registry %q, which is not a configured catalog",
-			dep.ArtifactName(), lp.ResolvedCanonical)
+			dep.ArtifactName(), lp.ResolvedCanonical,
+		)
 	}
 	dep.Catalog = catalog
 	dep.Version = lp.Version
@@ -310,13 +317,15 @@ func resolveConstrained(dep solution.PluginDependency, lock *bundler.LockFile, r
 	if version == "" {
 		return solution.PluginDependency{}, fmt.Errorf(
 			"provider %q: no version constraint in bundle.plugins or lock entry; "+
-				"cannot resolve in constrained mode", dep.ArtifactName())
+				"cannot resolve in constrained mode", dep.ArtifactName(),
+		)
 	}
 	catalog, ok := resolver.AliasForRegistry(lp.ResolvedCanonical)
 	if !ok {
 		return solution.PluginDependency{}, fmt.Errorf(
 			"provider %q: lock entry resolved to registry %q, which is not a configured catalog",
-			dep.ArtifactName(), lp.ResolvedCanonical)
+			dep.ArtifactName(), lp.ResolvedCanonical,
+		)
 	}
 	dep.Version = version
 	dep.Catalog = catalog
@@ -431,7 +440,8 @@ func registryCatalogBinder(resolve ResolvePluginsFunc) catalogBinder {
 		if len(artifacts) != len(depsToResolve) {
 			return nil, fmt.Errorf(
 				"resolver returned %d artifacts for %d dependencies",
-				len(artifacts), len(depsToResolve))
+				len(artifacts), len(depsToResolve),
+			)
 		}
 
 		for i, artifact := range artifacts {
@@ -439,7 +449,8 @@ func registryCatalogBinder(resolve ResolvePluginsFunc) catalogBinder {
 			if artifact.Catalog == "" {
 				return nil, fmt.Errorf(
 					"resolver returned no catalog for provider %q",
-					deps[originalIndex].ArtifactName())
+					deps[originalIndex].ArtifactName(),
+				)
 			}
 			deps[originalIndex].Catalog = artifact.Catalog
 			if ref := artifact.Reference; ref.Version != nil {

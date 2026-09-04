@@ -102,7 +102,8 @@ func TestExecutionRegistry_Get(t *testing.T) {
 		shared := provider.NewCompositeRegistry()
 		// Same name registered in BOTH tiers with distinguishable tags.
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"}))
+			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"},
+		))
 		require.NoError(t, shared.RegisterExternal(
 			&fakeProvider{name: "echo", version: "1.2.0", tag: "external"},
 			provider.WithCatalogName("ghcr.io/org"),
@@ -149,7 +150,8 @@ func TestExecutionRegistry_Get(t *testing.T) {
 		// A builtin named "echo" exists, but the resolved ref points at an
 		// external entry that was never registered.
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"}))
+			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry(shared, map[string]PluginArtifact{
 			"echo": providerDep("echo", "ghcr.io/org", "1.2.0"),
@@ -163,7 +165,8 @@ func TestExecutionRegistry_Get(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry(shared, map[string]PluginArtifact{
 			"echo": providerDep("echo", "ghcr.io/org", "1.2.0"),
@@ -188,7 +191,8 @@ func TestExecutionRegistry_Get(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry[PluginArtifact](shared, nil)
 
@@ -205,7 +209,8 @@ func TestExecutionRegistry_Has(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 		require.NoError(t, shared.RegisterExternal(
 			&fakeProvider{name: "echo", version: "1.2.0", tag: "external"},
 			provider.WithCatalogName("ghcr.io/org"),
@@ -226,7 +231,8 @@ func TestExecutionRegistry_Has(t *testing.T) {
 		shared := provider.NewCompositeRegistry()
 		// Builtin of the same name exists but must not satisfy a resolved ref.
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"}))
+			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry(shared, map[string]PluginArtifact{
 			"echo": providerDep("echo", "ghcr.io/org", "1.2.0"),
@@ -304,7 +310,8 @@ func TestExecutionRegistry_DescriptorLookup(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"}))
+			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"},
+		))
 		require.NoError(t, shared.RegisterExternal(
 			&fakeProvider{name: "echo", version: "1.2.0", tag: "external"},
 			provider.WithCatalogName("ghcr.io/org"),
@@ -325,7 +332,8 @@ func TestExecutionRegistry_DescriptorLookup(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry[PluginArtifact](shared, map[string]PluginArtifact{
 			"echo": providerDep("echo", "ghcr.io/org", "1.2.0"),
@@ -343,7 +351,8 @@ func TestExecutionRegistry_DescriptorLookup(t *testing.T) {
 		// A builtin named "echo" exists; the resolved external entry does not.
 		// Unlike Get, DescriptorLookup falls through to the builtin tier.
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"}))
+			&fakeProvider{name: "echo", version: "9.9.9", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry[PluginArtifact](shared, map[string]PluginArtifact{
 			"echo": providerDep("echo", "ghcr.io/org", "1.2.0"),
@@ -372,9 +381,11 @@ func TestExecutionRegistry_List(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "env", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "env", version: "1.0.0", tag: "builtin"},
+		))
 		require.NoError(t, shared.RegisterExternal(
 			&fakeProvider{name: "echo", version: "1.2.0", tag: "external"},
 			provider.WithCatalogName("ghcr.io/org"),
@@ -392,7 +403,8 @@ func TestExecutionRegistry_List(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 		// "tf" is pinned to a version that was never registered externally.
 		require.NoError(t, shared.RegisterExternal(
 			&fakeProvider{name: "tf", version: "1.0.0", tag: "v1"},
@@ -414,7 +426,8 @@ func TestExecutionRegistry_List(t *testing.T) {
 		t.Parallel()
 		shared := provider.NewCompositeRegistry()
 		require.NoError(t, shared.RegisterBase(
-			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"}))
+			&fakeProvider{name: "cel", version: "1.0.0", tag: "builtin"},
+		))
 
 		sr := NewExecutionRegistry[PluginArtifact](shared, nil)
 

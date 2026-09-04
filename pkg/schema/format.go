@@ -248,9 +248,7 @@ func (f *Formatter) formatValidation(info *FieldInfo, indent string) {
 
 // formatValidationCompact renders validation in a single line.
 func (f *Formatter) formatValidationCompact(info *FieldInfo, indent string) {
-	var parts []string
-
-	parts = appendLengthValidation(parts, info.MinLength, info.MaxLength)
+	parts := appendLengthValidation(info.MinLength, info.MaxLength)
 	parts = appendRangeValidation(parts, info.Minimum, info.Maximum)
 	parts = appendItemsValidation(parts, info.MinItems, info.MaxItems)
 
@@ -275,16 +273,16 @@ func (f *Formatter) formatValidationCompact(info *FieldInfo, indent string) {
 	}
 }
 
-func appendLengthValidation(parts []string, minLen, maxLen *int) []string {
+func appendLengthValidation(minLen, maxLen *int) []string {
 	switch {
 	case minLen != nil && maxLen != nil:
-		return append(parts, fmt.Sprintf("length: %d-%d", *minLen, *maxLen))
+		return []string{fmt.Sprintf("length: %d-%d", *minLen, *maxLen)}
 	case minLen != nil:
-		return append(parts, fmt.Sprintf("minLength: %d", *minLen))
+		return []string{fmt.Sprintf("minLength: %d", *minLen)}
 	case maxLen != nil:
-		return append(parts, fmt.Sprintf("maxLength: %d", *maxLen))
+		return []string{fmt.Sprintf("maxLength: %d", *maxLen)}
 	default:
-		return parts
+		return nil
 	}
 }
 
