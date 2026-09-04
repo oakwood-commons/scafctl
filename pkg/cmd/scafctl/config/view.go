@@ -28,6 +28,12 @@ type ViewOptions struct {
 	CliParams  *settings.Run
 	ConfigPath string
 
+	// ShowOrigin adds per-key source metadata and env-override info to the output.
+	ShowOrigin bool
+	// SourceFilter, when set, restricts the output to values whose source
+	// matches. Valid values: "default", "dropin", "file", "env".
+	SourceFilter string
+
 	flags.KvxOutputFlags
 }
 
@@ -45,15 +51,31 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 
 			Shows all settings from the config file merged with environment overrides.
 
+			Use --show-origin to annotate each key with the source it came from
+			(default, dropin, file, or env). Use --source=<origin> to restrict
+			the output to values from a single source.
+
 			Examples:
-			  # View config as YAML
+			  # View config
 			  scafctl config view
+
+			  # View config as YAML
+			  scafctl config view -o yaml
 
 			  # View config as JSON
 			  scafctl config view -o json
 
 			  # View specific section using CEL
 			  scafctl config view -e '_.catalogs'
+
+			  # Annotate every key with its source and list env overrides
+			  scafctl config view --show-origin
+
+			  # Show only values coming from the config file
+			  scafctl config view --source=file
+
+			  # Show only env-var overrides
+			  scafctl config view --source=env
 		`), settings.CliBinaryName, cliParams.BinaryName),
 		RunE: func(cCmd *cobra.Command, _ []string) error {
 			cliParams.EntryPointSettings.Path = filepath.Join(path, cCmd.Use)
@@ -85,8 +107,11 @@ func CommandView(cliParams *settings.Run, ioStreams *terminal.IOStreams, path st
 	}
 
 	flags.AddKvxOutputFlagsToStruct(cCmd, &opts.KvxOutputFlags)
-	// Default to yaml for config view
-	_ = cCmd.Flags().Set("output", "yaml")
+
+	cCmd.Flags().BoolVar(&opts.ShowOrigin, "show-origin", false,
+		"Annotate each key with its source (default, dropin, file, env) and list env-var overrides")
+	cCmd.Flags().StringVar(&opts.SourceFilter, "source", "",
+		"Only show values from this source: default, dropin, file, or env")
 
 	return cCmd
 }
@@ -102,6 +127,12 @@ func (o *ViewOptions) Run(ctx context.Context) error {
 		return fmt.Errorf("writer not initialized in context")
 	}
 
+	if o.SourceFilter != "" && !appconfig.ValidSource(appconfig.Source(o.SourceFilter)) {
+		err := fmt.Errorf("invalid --source %q: expected one of default, dropin, file, env", o.SourceFilter)
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
+	}
+
 	mgr := appconfig.NewManager(o.ConfigPath, appconfig.ManagerOptionsFromContext(ctx)...)
 	cfg, err := mgr.Load()
 	if err != nil {
@@ -109,25 +140,46 @@ func (o *ViewOptions) Run(ctx context.Context) error {
 		return exitcode.WithCode(err, exitcode.ConfigError)
 	}
 
-	// Include config file path in output.
-	// Convert structs to maps via JSON round-trip so CEL expressions can access fields.
-	settingsMap, err := kvx.StructToMap(cfg.Settings)
+	// Emit the full effective config (all top-level sections) via JSON
+	// round-trip so CEL expressions can access every field.
+	cfgAny, err := kvx.StructToMap(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to normalize settings: %w", err)
+		return fmt.Errorf("failed to normalize config: %w", err)
+	}
+	output, _ := cfgAny.(map[string]any)
+	if output == nil {
+		output = map[string]any{}
+	}
+	// Redact known sensitive leaves before rendering; view is a human-facing
+	// dump so anything shown here can end up in terminal scrollback or logs.
+	appconfig.RedactConfigMap(output)
+
+	sources := mgr.Sources()
+
+	if filter := appconfig.Source(o.SourceFilter); filter != "" {
+		output = appconfig.FilterMapBySource(output, sources, filter, "")
 	}
 
-	catalogsList, err := kvx.StructToMap(cfg.Catalogs)
-	if err != nil {
-		return fmt.Errorf("failed to normalize catalogs: %w", err)
-	}
+	output["configFile"] = mgr.ConfigPath()
 
-	output := map[string]any{
-		"configFile": mgr.ConfigPath(),
-		"catalogs":   catalogsList,
-		"settings":   settingsMap,
+	if o.ShowOrigin || appconfig.Source(o.SourceFilter) == appconfig.SourceEnv {
+		output["envOverrides"] = mgr.EnvOverrides()
+	}
+	if o.ShowOrigin {
+		output["sources"] = sourcesToStringMap(sources)
 	}
 
 	return o.writeOutput(ctx, output)
+}
+
+// sourcesToStringMap converts a Source map to a plain string map for
+// stable YAML/JSON serialization and CEL access.
+func sourcesToStringMap(in map[string]appconfig.Source) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = string(v)
+	}
+	return out
 }
 
 func (o *ViewOptions) writeOutput(ctx context.Context, data any) error {
