@@ -30,8 +30,8 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
-	github.com/mark3labs/mcp-go v0.58.0
-	github.com/oakwood-commons/celexp v0.1.0
+	github.com/mark3labs/mcp-go v1.0.0
+	github.com/oakwood-commons/celexp v0.2.0
 	github.com/oakwood-commons/httpc v0.2.0
 	github.com/oakwood-commons/kvx v0.16.1
 	github.com/oakwood-commons/oauth-helpers v0.2.0
@@ -48,7 +48,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
 	github.com/tliron/glsp v0.2.2
-	github.com/vbauerster/mpb/v8 v8.16.0
+	github.com/vbauerster/mpb/v8 v8.16.1
 	github.com/zalando/go-keyring v0.2.8
 	go.opentelemetry.io/contrib/bridges/otellogr v0.20.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0
@@ -63,13 +63,13 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.22.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
 	golang.org/x/tools v0.49.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.37.0
