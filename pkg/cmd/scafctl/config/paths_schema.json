@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scafctl Paths",
+  "description": "XDG-compliant paths used by scafctl with display extensions",
+  "type": "array",
+
+  "x-kvx-icon": "📁",
+  "x-kvx-collectionTitle": "Paths",
+
+  "x-kvx-list": {
+    "titleField": "name",
+    "subtitleField": "path",
+    "subtitleMaxLines": 1,
+    "badgeFields": ["platform"]
+  },
+
+  "x-kvx-detail": {
+    "titleField": "name",
+    "hiddenFields": [],
+    "sections": [
+      {
+        "title": "Platform",
+        "fields": ["platform"],
+        "layout": "inline"
+      },
+      {
+        "title": "Description",
+        "fields": ["description"],
+        "layout": "paragraph"
+      },
+      {
+        "title": "Location",
+        "fields": ["path", "xdgVariable"],
+        "layout": "table"
+      },
+      {
+        "title": "Illustrative",
+        "fields": ["illustrative"],
+        "layout": "inline"
+      }
+    ]
+  },
+
+  "items": {
+    "type": "object",
+    "required": ["name", "path"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "title": "Name",
+        "description": "Path identifier (e.g., Config, Secrets, Data)"
+      },
+      "path": {
+        "type": "string",
+        "title": "Path",
+        "description": "Resolved filesystem path"
+      },
+      "description": {
+        "type": "string",
+        "title": "Description",
+        "description": "What this path is used for"
+      },
+      "xdgVariable": {
+        "type": "string",
+        "title": "XDG Variable",
+        "description": "XDG environment variable that overrides this path"
+      },
+      "platform": {
+        "type": "string",
+        "title": "Platform",
+        "description": "Operating system the path applies to (linux, darwin, windows)"
+      },
+      "illustrative": {
+        "type": "boolean",
+        "title": "Illustrative",
+        "description": "True when the path is an illustrative default for a non-current platform"
+      }
+    }
+  }
+}
