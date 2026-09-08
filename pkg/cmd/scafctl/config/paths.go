@@ -5,6 +5,7 @@ package config
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc/v2"
+	"github.com/oakwood-commons/kvx/pkg/tui"
 	"github.com/oakwood-commons/scafctl/pkg/cmd/flags"
 	appconfig "github.com/oakwood-commons/scafctl/pkg/config"
 	"github.com/oakwood-commons/scafctl/pkg/exitcode"
@@ -25,6 +27,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+//go:embed paths_schema.json
+var pathsSchemaJSON []byte
+
 // Supported platforms for --platform flag.
 var supportedPlatforms = paths.SupportedPlatforms
 
@@ -35,6 +40,16 @@ type PathsOptions struct {
 	CliParams      *settings.Run
 	KvxOutputFlags flags.KvxOutputFlags
 	Platform       string
+}
+
+// pathRow is the kvx-friendly row shape emitted by `config paths`.
+type pathRow struct {
+	Name         string `json:"name" yaml:"name"`
+	Path         string `json:"path" yaml:"path"`
+	Description  string `json:"description" yaml:"description"`
+	XDGVariable  string `json:"xdgVariable,omitempty" yaml:"xdgVariable,omitempty"`
+	Platform     string `json:"platform" yaml:"platform"`
+	Illustrative bool   `json:"illustrative" yaml:"illustrative"`
 }
 
 // CommandPaths creates the 'config paths' command.
@@ -64,21 +79,27 @@ func CommandPaths(cliParams *settings.Run, ioStreams *terminal.IOStreams, path s
 			  - XDG_STATE_HOME: State files (logs, history)
 			  - SCAFCTL_SECRETS_DIR: Override secrets location specifically
 
+			Standard kvx output flags (-o, -i, -e/--expression, -w/--where) are
+			supported. On a real terminal, human formats also print the config-file
+			merge order to stderr; machine-readable formats keep stdout and stderr
+			clean.
+
 			Examples:
 			  # Show all paths for current system
 			  scafctl config paths
 
-			  # Show paths for Linux
+			  # Show paths for a specific platform
 			  scafctl config paths --platform linux
 
-			  # Show paths for Windows
-			  scafctl config paths --platform windows
-
-			  # Output as JSON
+			  # Emit machine-readable output
 			  scafctl config paths -o json
-
-			  # Output as YAML
 			  scafctl config paths -o yaml
+
+			  # Browse interactively
+			  scafctl config paths -i
+
+			  # Filter rows with CEL
+			  scafctl config paths --where 'name == "Config"'
 		`)),
 		Args: cobra.NoArgs,
 		RunE: func(cCmd *cobra.Command, _ []string) error {
@@ -122,111 +143,140 @@ func (o *PathsOptions) Run(ctx context.Context) error {
 		return fmt.Errorf("writer not initialized in context")
 	}
 
-	// Determine if we're showing paths for a different platform
-	targetPlatform := o.Platform
-	isIllustrative := false
-
-	if targetPlatform != "" {
-		// Normalize platform name
-		targetPlatform = strings.ToLower(targetPlatform)
-		if targetPlatform == "macos" {
-			targetPlatform = "darwin"
-		}
-
-		// Validate platform
-		if !slices.Contains(supportedPlatforms, targetPlatform) {
-			err := fmt.Errorf("unsupported platform %q; supported platforms: linux, darwin (or macos), windows", o.Platform)
-			w.Errorf("%v", err)
-			return exitcode.WithCode(err, exitcode.InvalidInput)
-		}
-
-		// Check if it's different from current platform
-		if targetPlatform != runtime.GOOS {
-			isIllustrative = true
-		}
-	} else {
-		targetPlatform = runtime.GOOS
+	targetPlatform, isIllustrative, err := o.resolvePlatform()
+	if err != nil {
+		w.Errorf("%v", err)
+		return exitcode.WithCode(err, exitcode.InvalidInput)
 	}
 
 	var pathInfos []paths.PathInfo
-
 	if isIllustrative {
-		// Generate illustrative paths for the target platform
 		pathInfos = paths.IllustrativePaths(targetPlatform)
 	} else {
-		// Get real paths for current platform
-		pathInfos = o.getRealPaths()
+		pathInfos = paths.AllPaths()
 	}
 
-	// Config file sources (real platform only): the config.d fragments and the
-	// user config file that actually feed the merged configuration.
-	var sourceInfos []configSource
-	if !isIllustrative {
-		sourceInfos = o.configSourceInfos()
+	rows := buildPathRows(pathInfos, targetPlatform, isIllustrative)
+
+	kvxOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags,
+		kvx.WithOutputContext(ctx),
+		kvx.WithOutputNoColor(o.CliParams != nil && o.CliParams.NoColor),
+		kvx.WithOutputAppName(o.BinaryName+" config paths"),
+		kvx.WithOutputDisplaySchemaJSON(pathsSchemaJSON),
+		kvx.WithIOStreams(o.IOStreams),
+		kvx.WithOutputColumnOrder([]string{"name", "path", "platform"}),
+		kvx.WithOutputColumnHints(map[string]tui.ColumnHint{
+			"name":         {MaxWidth: 12, Priority: 10},
+			"path":         {MaxWidth: 60, Priority: 9, Flex: true},
+			"platform":     {MaxWidth: 10, Priority: 7},
+			"description":  {Hidden: true},
+			"xdgVariable":  {Hidden: true},
+			"illustrative": {Hidden: true},
+		}),
+	)
+
+	if err := kvxOpts.Write(rowsToGeneric(rows)); err != nil {
+		return err
 	}
 
-	// Handle structured output formats
-	outputOpts := flags.ToKvxOutputOptions(&o.KvxOutputFlags, kvx.WithIOStreams(o.IOStreams))
-	if kvx.IsStructuredFormat(outputOpts.Format) {
-		out := pathInfos
-		for _, s := range sourceInfos {
-			out = append(out, s.Info)
+	if !isIllustrative && isHumanFormat(kvxOpts.Format) {
+		if sources := o.configSourceInfos(); len(sources) > 0 {
+			renderConfigSourcesNote(w, o.BinaryName, sources)
 		}
-		return outputOpts.Write(out)
-	}
-
-	// Table output
-	w.Infof("%s Paths", o.BinaryName)
-	w.Plain("")
-
-	if isIllustrative {
-		w.Plainf("Platform: %s (illustrative)\n", targetPlatform)
-		w.Warningf("These are illustrative paths for reference only. They may not reflect actual paths on a real %s system.\n", targetPlatform)
-	} else {
-		w.Plainf("Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	}
-	w.Plain("")
-
-	// Find max name length for alignment
-	maxNameLen := 0
-	for _, p := range pathInfos {
-		if len(p.Name) > maxNameLen {
-			maxNameLen = len(p.Name)
-		}
-	}
-
-	for _, p := range pathInfos {
-		w.Plainf("%-*s  %s\n", maxNameLen, p.Name+":", p.Path)
-	}
-
-	w.Plain("")
-	if !isIllustrative {
-		w.Plainf("Override paths with XDG environment variables or %s_SECRETS_DIR.\n", settings.SafeEnvPrefix(o.BinaryName))
-	}
-
-	// Show the config sources in merge order so the config.d overlay (where most
-	// real values live) is discoverable, not just the base config file path.
-	if !isIllustrative && len(sourceInfos) > 0 {
-		w.Plain("")
-		w.Infof("Config sources (merge order)")
-		w.Plain("")
-		idx := 1
-		w.Plainf("  %d. %s\n", idx, "built-in defaults")
-		idx++
-		for _, s := range sourceInfos {
-			line := s.Info.Path
-			if !s.Exists {
-				line += "  (not present)"
-			}
-			w.Plainf("  %d. %s\n", idx, line)
-			idx++
-		}
-		w.Plainf("  %d. %s_* environment variables\n", idx, settings.SafeEnvPrefix(o.BinaryName))
-		w.Plain("")
-		w.Plain("Later sources override earlier ones.")
 	}
 
 	return nil
+}
+
+// resolvePlatform normalizes --platform and reports whether the result diverges
+// from the runtime OS.
+func (o *PathsOptions) resolvePlatform() (string, bool, error) {
+	if o.Platform == "" {
+		return runtime.GOOS, false, nil
+	}
+
+	target := strings.ToLower(o.Platform)
+	if target == "macos" {
+		target = "darwin"
+	}
+	if !slices.Contains(supportedPlatforms, target) {
+		return "", false, fmt.Errorf("unsupported platform %q; supported platforms: linux, darwin (or macos), windows", o.Platform)
+	}
+	return target, target != runtime.GOOS, nil
+}
+
+// buildPathRows converts PathInfo entries into kvx-friendly rows, tagging every
+// row with the platform they describe.
+func buildPathRows(infos []paths.PathInfo, platform string, illustrative bool) []pathRow {
+	rows := make([]pathRow, 0, len(infos))
+	for _, p := range infos {
+		rows = append(rows, pathRow{
+			Name:         p.Name,
+			Path:         p.Path,
+			Description:  p.Description,
+			XDGVariable:  p.XDGVariable,
+			Platform:     platform,
+			Illustrative: illustrative,
+		})
+	}
+	return rows
+}
+
+// rowsToGeneric converts a typed row slice to kvx's generic list form
+// ([]any of map[string]any). Structured formats (json/yaml/csv/toml) apply the
+// per-item Where filter before serialization, and kvx's CEL evaluator only
+// treats generic map-based lists as filterable list data.
+func rowsToGeneric(rows []pathRow) []any {
+	out := make([]any, len(rows))
+	for i, r := range rows {
+		m := map[string]any{
+			"name":         r.Name,
+			"path":         r.Path,
+			"description":  r.Description,
+			"platform":     r.Platform,
+			"illustrative": r.Illustrative,
+		}
+		if r.XDGVariable != "" {
+			m["xdgVariable"] = r.XDGVariable
+		}
+		out[i] = m
+	}
+	return out
+}
+
+// isHumanFormat reports whether the format renders human/interactive output on
+// stdout. Structured formats and quiet suppress the merge-order note so piped
+// runs stay clean.
+func isHumanFormat(format kvx.OutputFormat) bool {
+	if kvx.IsStructuredFormat(format) {
+		return false
+	}
+	if format == kvx.OutputFormatQuiet {
+		return false
+	}
+	return true
+}
+
+// renderConfigSourcesNote prints the config-file merge order to stderr. Callers
+// gate on format so machine-readable output never sees this text.
+func renderConfigSourcesNote(w *writer.Writer, binaryName string, sources []configSource) {
+	w.PlainStderr("")
+	w.PlainStderr("Config sources (merge order)")
+	w.PlainStderr("")
+	idx := 1
+	w.PlainStderrf("  %d. built-in defaults", idx)
+	idx++
+	for _, s := range sources {
+		line := s.Info.Path
+		if !s.Exists {
+			line += "  (not present)"
+		}
+		w.PlainStderrf("  %d. %s", idx, line)
+		idx++
+	}
+	w.PlainStderrf("  %d. %s_* environment variables", idx, settings.SafeEnvPrefix(binaryName))
+	w.PlainStderr("")
+	w.PlainStderr("Later sources override earlier ones.")
 }
 
 // configSource is a single on-disk config file layer feeding the merged
@@ -240,7 +290,7 @@ type configSource struct {
 // configuration, in merge order: each config.d fragment (lexical), followed by
 // the user config file. Non-file layers (built-in defaults, any embedder base
 // config, and SCAFCTL_* environment overrides) are surfaced separately by the
-// table output. Returns nil when the config path cannot be resolved.
+// stderr note. Returns nil when the config path cannot be resolved.
 func (o *PathsOptions) configSourceInfos() []configSource {
 	configPath, err := paths.ConfigFile()
 	if err != nil {
@@ -281,9 +331,4 @@ func (o *PathsOptions) configSourceInfos() []configSource {
 	})
 
 	return sources
-}
-
-// getRealPaths returns the actual paths for the current platform.
-func (o *PathsOptions) getRealPaths() []paths.PathInfo {
-	return paths.AllPaths()
 }

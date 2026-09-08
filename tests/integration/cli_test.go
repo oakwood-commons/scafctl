@@ -3652,6 +3652,88 @@ func TestIntegration_ConfigReset_HappyPath(t *testing.T) {
 	assert.NotContains(t, string(data), "custom: true")
 }
 
+func TestIntegration_ConfigPaths_JSON(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "config", "paths", "-o", "json")
+
+	assert.Equal(t, 0, exitCode)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &rows), "stdout should be a JSON array")
+	require.NotEmpty(t, rows)
+
+	assert.Equal(t, "Config", rows[0]["name"])
+	assert.NotEmpty(t, rows[0]["path"])
+	assert.NotEmpty(t, rows[0]["platform"])
+	assert.Equal(t, false, rows[0]["illustrative"])
+
+	assert.NotContains(t, stderr, "Config sources (merge order)",
+		"structured output must not leak the merge-order note to stderr")
+}
+
+func TestIntegration_ConfigPaths_YAMLQuietSuppressStderrNote(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{"yaml", "quiet"} {
+		format := format
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			_, stderr, exitCode := runScafctl(t, "config", "paths", "-o", format)
+			assert.Equal(t, 0, exitCode)
+			assert.NotContains(t, stderr, "Config sources (merge order)")
+		})
+	}
+}
+
+func TestIntegration_ConfigPaths_TableRendersAndNotesToStderr(t *testing.T) {
+	t.Parallel()
+	stdout, stderr, exitCode := runScafctl(t, "config", "paths", "-o", "table")
+
+	assert.Equal(t, 0, exitCode)
+	assert.NotContains(t, stdout, "scafctl Paths", "old hand-rolled header must be gone")
+	assert.NotContains(t, stdout, "Config sources (merge order)",
+		"merge-order note must land on stderr, not stdout")
+	assert.Contains(t, strings.ToLower(stdout), "config")
+	assert.Contains(t, stderr, "Config sources (merge order)")
+}
+
+func TestIntegration_ConfigPaths_WhereFilter(t *testing.T) {
+	t.Parallel()
+	stdout, _, exitCode := runScafctl(t,
+		"config", "paths",
+		"-o", "json",
+		"--where", `_.name == "Config"`,
+	)
+
+	assert.Equal(t, 0, exitCode)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Config", rows[0]["name"])
+}
+
+func TestIntegration_ConfigPaths_IllustrativePlatform(t *testing.T) {
+	t.Parallel()
+	target := "linux"
+	if runtime.GOOS == "linux" {
+		target = "darwin"
+	}
+	stdout, stderr, exitCode := runScafctl(t,
+		"config", "paths",
+		"--platform", target,
+		"-o", "json",
+	)
+
+	assert.Equal(t, 0, exitCode)
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(stdout), &rows))
+	require.NotEmpty(t, rows)
+	for _, r := range rows {
+		assert.Equal(t, target, r["platform"])
+		assert.Equal(t, true, r["illustrative"])
+	}
+	assert.NotContains(t, stderr, "Config sources (merge order)",
+		"illustrative mode must suppress the merge-order note")
+}
+
 // ============================================================================
 // Secrets Command Tests (basic, non-destructive)
 // ============================================================================
