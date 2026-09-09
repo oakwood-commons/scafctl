@@ -3608,6 +3608,81 @@ func TestIntegration_ConfigView(t *testing.T) {
 	t.Logf("exit code: %d, stdout: %s", exitCode, stdout)
 }
 
+func TestIntegration_ConfigView_ShowOrigin(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(
+		"settings:\n  defaultCatalog: from-file\n",
+	), 0o600))
+
+	stdout, stderr, exitCode := runScafctlIsolatedEnv(t,
+		scafctlEnvKeys(),
+		map[string]string{"SCAFCTL_LOGGING_LEVEL": "debug"},
+		"--config", configPath, "config", "view", "--show-origin", "-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	assert.Contains(t, stdout, `"sources"`)
+	assert.Contains(t, stdout, `"envOverrides"`)
+	assert.Contains(t, stdout, `"SCAFCTL_LOGGING_LEVEL"`)
+	assert.Contains(t, stdout, `"from-file"`)
+}
+
+func TestIntegration_ConfigView_SourceFilterEnv(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(
+		"settings:\n  defaultCatalog: from-file\n",
+	), 0o600))
+
+	stdout, stderr, exitCode := runScafctlIsolatedEnv(t,
+		scafctlEnvKeys(),
+		map[string]string{"SCAFCTL_LOGGING_LEVEL": "debug"},
+		"--config", configPath, "config", "view", "--source", "env", "-o", "json",
+	)
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr)
+
+	assert.NotContains(t, stdout, "from-file", "file-sourced value should be filtered out")
+	assert.Contains(t, stdout, `"SCAFCTL_LOGGING_LEVEL"`, "envOverrides always accompanies --source=env")
+	assert.Contains(t, stdout, `"debug"`)
+}
+
+func TestIntegration_ConfigView_SourceFilterInvalid(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, exitCode := runScafctl(t, "config", "view", "--source", "bogus")
+
+	assert.NotEqual(t, 0, exitCode, "invalid --source should fail")
+	assert.Contains(t, stderr, "invalid --source")
+}
+
+func TestIntegration_ConfigShowRemoved(t *testing.T) {
+	t.Parallel()
+	// Regression: the deprecated `config show` command was removed in favor of
+	// `config view --show-origin`; cobra should reject the subcommand.
+	_, stderr, exitCode := runScafctl(t, "config", "show")
+
+	assert.NotEqual(t, 0, exitCode)
+	assert.Contains(t, strings.ToLower(stderr), "unknown command")
+}
+
+// scafctlEnvKeys returns every SCAFCTL_-prefixed env var currently in the
+// process environment. Used to fully scrub the subprocess env in tests that
+// assert on the presence/absence of env-sourced values.
+func scafctlEnvKeys() []string {
+	var out []string
+	for _, env := range os.Environ() {
+		if k, _, ok := strings.Cut(env, "="); ok && strings.HasPrefix(k, "SCAFCTL_") {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 func TestIntegration_ConfigSchema(t *testing.T) {
 	t.Parallel()
 	stdout, _, exitCode := runScafctl(t, "config", "schema")
