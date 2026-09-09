@@ -261,11 +261,25 @@ func ParseRemoteReference(input string) (*RemoteReference, error) {
 	return ref, nil
 }
 
+// canonicalOrigin returns the canonical source identity for this remote
+// reference: "registry" or "registry/repository". It is empty when no registry
+// is present, in which case the produced Reference has an unresolved origin.
+func (r *RemoteReference) canonicalOrigin() string {
+	if r.Registry == "" {
+		return ""
+	}
+	if r.Repository == "" {
+		return r.Registry
+	}
+	return r.Registry + "/" + r.Repository
+}
+
 // ToReference converts a RemoteReference to a Reference.
 func (r *RemoteReference) ToReference() (Reference, error) {
 	ref := Reference{
-		Kind: r.Kind,
-		Name: r.Name,
+		Kind:   r.Kind,
+		Name:   r.Name,
+		Origin: r.canonicalOrigin(),
 	}
 
 	if r.Tag == "" || strings.EqualFold(r.Tag, "latest") {

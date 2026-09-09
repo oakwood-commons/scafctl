@@ -72,6 +72,7 @@ func TestLocalCatalog_Store(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, ref.Name, info.Reference.Name)
 		assert.Equal(t, ref.Version.String(), info.Reference.Version.String())
+		assert.Equal(t, LocalOrigin, info.Reference.Origin, "genuine local build should claim the reserved local origin")
 		assert.NotEmpty(t, info.Digest)
 		assert.NotZero(t, info.CreatedAt)
 		assert.Equal(t, LocalCatalogName, info.Catalog)

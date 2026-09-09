@@ -60,6 +60,11 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			  - Local name:    my-solution@1.0.0  (requires --catalog or default catalog)
 			  - Full remote:   ghcr.io/myorg/solutions/my-solution@1.0.0
 
+			A full remote reference can also be used as an origin-qualified local
+			source selector together with --catalog. In that form, scafctl reads the
+			artifact from the local catalog using its exact origin-qualified identity
+			and pushes it to the target catalog specified by --catalog.
+
 			If no version is specified, the latest version is pushed.
 
 			When using a local name, the target registry is resolved in this order:
@@ -72,6 +77,9 @@ func CommandPush(cliParams *settings.Run, ioStreams *terminal.IOStreams, _ strin
 			Examples:
 			  # Push using a full remote reference
 			  scafctl catalog push ghcr.io/myorg/solutions/my-solution@1.0.0
+
+			  # Push an origin-qualified local copy to a different target catalog
+			  scafctl catalog push ghcr.io/source/solutions/my-solution@1.0.0 --catalog ghcr.io/target
 
 			  # Push using the configured default catalog
 			  scafctl catalog push my-solution@1.0.0
@@ -159,7 +167,17 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 				version = ref.Version.String()
 			}
 
-			ref.Kind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, ref.Name, version)
+			// With --catalog the full reference is an origin-qualified source
+			// selector, so scope kind inference to ref.Origin -- otherwise the
+			// kind could be inferred from a same-name copy in another origin and
+			// the exact source lookup would then fail or target the wrong kind.
+			// Without --catalog the reference is the push destination and the
+			// source is an ordinary local build, so infer origin-agnostically.
+			inferOrigin := ""
+			if opts.Catalog != "" {
+				inferOrigin = ref.Origin
+			}
+			ref.Kind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, ref.Name, version, inferOrigin)
 			if err != nil {
 				w.Errorf("failed to infer artifact kind: %v", err)
 				w.Infof("Hint: use --kind to specify the artifact kind explicitly")
@@ -173,10 +191,23 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 
 		verboseRefInfo(w, remoteRef.Name, string(remoteRef.Kind), remoteRef.Tag)
 
-		// --catalog flag conflicts with a full remote reference
+		// When --catalog is set, treat the full remote reference as the exact
+		// origin-qualified local source identity and push it to the explicit
+		// target catalog instead of back to its source origin.
 		if opts.Catalog != "" {
-			w.Errorf("cannot use --catalog with a full remote reference")
-			return exitcode.Errorf("conflicting options")
+			registry, repository, err = resolvePushTargetCatalog(ctx, opts.Catalog)
+			if err != nil {
+				w.Errorf("%v", err)
+				return exitcode.WithCode(err, exitcode.InvalidInput)
+			}
+		} else {
+			// No --catalog: the remote reference names the push destination, not
+			// an origin-qualified source selector. ToReference set ref.Origin to
+			// that destination's canonical identity, but the local artifact being
+			// pushed is an ordinary locally-built kind/name:version. Clear the
+			// origin so the local Resolve below finds the local build rather than
+			// looking only for an origin-qualified cached copy.
+			ref.Origin = ""
 		}
 	} else {
 		// Local name: hello-world@0.1.0
@@ -194,7 +225,7 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 			}
 			artifactKind = kind
 		} else {
-			artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
+			artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version, "")
 			if err != nil {
 				w.Errorf("failed to infer artifact kind: %v", err)
 				w.Infof("Hint: use --kind to specify the artifact kind explicitly")
@@ -217,18 +248,10 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 		}
 
 		// Resolve catalog URL from flag, config name, or default
-		catalogURL, resolveErr := catalog.ResolveCatalogURL(ctx, opts.Catalog)
-		if resolveErr != nil {
-			w.Errorf("%v", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
-		}
-
-		// Parse target catalog URL
-		registry, repository = catalog.ParseCatalogURL(catalogURL)
-		if registry == "" {
-			resolveErr = fmt.Errorf("invalid catalog URL: %s", catalogURL)
-			w.Errorf("%v", resolveErr)
-			return exitcode.WithCode(resolveErr, exitcode.InvalidInput)
+		registry, repository, err = resolvePushTargetCatalog(ctx, opts.Catalog)
+		if err != nil {
+			w.Errorf("%v", err)
+			return exitcode.WithCode(err, exitcode.InvalidInput)
 		}
 	}
 
@@ -355,6 +378,20 @@ func runPush(ctx context.Context, opts *PushOptions) error {
 	}
 
 	return nil
+}
+
+func resolvePushTargetCatalog(ctx context.Context, catalogArg string) (string, string, error) {
+	catalogURL, err := catalog.ResolveCatalogURL(ctx, catalogArg)
+	if err != nil {
+		return "", "", err
+	}
+
+	registry, repository := catalog.ParseCatalogURL(catalogURL)
+	if registry == "" {
+		return "", "", fmt.Errorf("invalid catalog URL: %s", catalogURL)
+	}
+
+	return registry, repository, nil
 }
 
 // shouldAttachSBOM reports whether an SBOM should be generated and attached

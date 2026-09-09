@@ -6,6 +6,8 @@ package catalog
 import (
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
+	catalogpkg "github.com/oakwood-commons/scafctl/pkg/catalog"
 	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/oakwood-commons/scafctl/pkg/terminal"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +44,7 @@ func TestCommandDelete_Flags(t *testing.T) {
 		{"insecure"},
 		{"force"},
 		{"dry-run"},
+		{"local"},
 	}
 
 	for _, tt := range flagTests {
@@ -161,6 +164,41 @@ func TestLooksLikeRemoteReference(t *testing.T) {
 			t.Parallel()
 			result := looksLikeRemoteReference(tt.ref)
 			assert.Equal(t, tt.expected, result, "looksLikeRemoteReference(%q)", tt.ref)
+		})
+	}
+}
+
+func TestLocalDeleteDisplay(t *testing.T) {
+	t.Parallel()
+
+	v := semver.MustParse("1.0.0")
+
+	tests := []struct {
+		name string
+		ref  catalogpkg.Reference
+		want string
+	}{
+		{
+			name: "unqualified origin uses plain name@version",
+			ref:  catalogpkg.Reference{Kind: catalogpkg.ArtifactKindSolution, Name: "my-solution", Version: v},
+			want: "my-solution@1.0.0",
+		},
+		{
+			name: "local origin uses plain name@version",
+			ref:  catalogpkg.Reference{Kind: catalogpkg.ArtifactKindSolution, Name: "my-solution", Version: v, Origin: catalogpkg.LocalOrigin},
+			want: "my-solution@1.0.0",
+		},
+		{
+			name: "remote origin uses origin-qualified local tag",
+			ref:  catalogpkg.Reference{Kind: catalogpkg.ArtifactKindSolution, Name: "my-solution", Version: v, Origin: "ghcr.io/myorg/scafctl"},
+			want: "ghcr.io/myorg/scafctl/solutions/my-solution:1.0.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, localDeleteDisplay(tt.ref))
 		})
 	}
 }

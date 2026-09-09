@@ -97,6 +97,19 @@ func NewRemoteCatalog(cfg RemoteCatalogConfig) (*RemoteCatalog, error) {
 		cfg.Name = cfg.Registry
 	}
 
+	// Reserve the LocalOrigin namespace: a remote catalog whose canonical
+	// identity is exactly "local" would collide with locally-authored
+	// artifacts in the shared local store. Real registries always carry a dot,
+	// a port, or the "localhost:PORT" form, so this only rejects the reserved
+	// sentinel, never a legitimate registry.
+	canonical := cfg.Registry
+	if cfg.Repository != "" {
+		canonical += "/" + cfg.Repository
+	}
+	if canonical == LocalOrigin {
+		return nil, fmt.Errorf("registry %q with repository %q resolves to the reserved origin %q; choose a different registry or repository", cfg.Registry, cfg.Repository, LocalOrigin)
+	}
+
 	rc := &RemoteCatalog{
 		name:              cfg.Name,
 		registry:          cfg.Registry,
@@ -1728,22 +1741,20 @@ func (c *RemoteCatalog) Tag(ctx context.Context, ref Reference, alias string) (s
 	return oldVersion, nil
 }
 
-// tagForRef returns the OCI tag string for a reference.
-// The reference must have a version or digest — scafctl does not use
-// arbitrary tags like "latest". Callers must resolve the version before
-// calling this method (e.g. via resolveWithKind or listVersions).
+// tagForRef returns the OCI tag string for a reference within a remote
+// repository (just the version or digest; see Reference.RemoteTag). The
+// reference must have a version or digest — scafctl does not use arbitrary
+// tags like "latest". Callers must resolve the version before calling this
+// method (e.g. via resolveWithKind or listVersions).
 func (c *RemoteCatalog) tagForRef(ref Reference) string {
-	if ref.HasDigest() {
-		return ref.Digest
+	tag := ref.RemoteTag()
+	if tag == unresolvedTag {
+		// This should never happen — callers must resolve the version first.
+		// The sentinel fails OCI resolution rather than silently creating a
+		// "latest" tag; log it so the bug is visible.
+		c.logger.Error(nil, "BUG: tagForRef called without version or digest", "name", ref.Name, "kind", ref.Kind)
 	}
-	if ref.HasVersion() {
-		return ref.Version.String()
-	}
-	// This should never happen — callers must resolve the version first.
-	// Panic in debug builds; return a sentinel that will fail OCI resolution
-	// rather than silently creating a "latest" tag.
-	c.logger.Error(nil, "BUG: tagForRef called without version or digest", "name", ref.Name, "kind", ref.Kind)
-	return "__unresolved__"
+	return tag
 }
 
 // CopyOptions configures a copy operation between catalogs.
@@ -1780,7 +1791,19 @@ func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, targe
 		return ArtifactInfo{}, err
 	}
 
-	tag := c.tagForRef(ref)
+	sourceTag := c.tagForRef(ref)
+
+	// Keep the logical artifact identity separate from the fully qualified OCI
+	// reference used as the destination in the shared local store. The
+	// destination is origin-qualified (Origin set to this catalog's canonical
+	// identity) so that the same logical reference pulled from two registries
+	// never collides locally.
+	targetRef := ref
+	if opts.TargetName != "" {
+		targetRef.Name = opts.TargetName
+	}
+	targetRef.Origin = c.canonicalID()
+	destinationRef := targetRef.LocalTag()
 
 	// Configure copy options
 	copyOpts := oras.DefaultCopyOptions
@@ -1795,23 +1818,16 @@ func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, targe
 		}
 	}
 
-	// Copy from remote to local store
-	desc, err := oras.Copy(ctx, repo, tag, target.store, tag, copyOpts)
+	// Copy directly to the final, globally unique local reference. Using the
+	// remote's bare version tag as an intermediate destination could collide
+	// with concurrent pulls of unrelated artifacts at the same version.
+	desc, err := oras.Copy(ctx, repo, sourceTag, target.store, destinationRef, copyOpts)
 	if err != nil {
 		return ArtifactInfo{}, fmt.Errorf("failed to copy artifact: %w", err)
 	}
 
-	// Determine target reference
-	targetRef := ref
-	if opts.TargetName != "" {
-		targetRef.Name = opts.TargetName
-	}
-
-	// Tag in local store with the canonical local tag format (kind/name:version).
-	// Attach an origin annotation to the descriptor so the local catalog knows
-	// where the artifact was pulled from. This lives only in the OCI index
-	// (index.json) and does not modify the manifest blob or its digest.
-	targetTag := target.tagForRef(targetRef)
+	// Attach origin annotations to the final destination descriptor. These live
+	// only in index.json and do not modify the manifest blob or its digest.
 	if desc.Annotations == nil {
 		desc.Annotations = make(map[string]string)
 	}
@@ -1821,15 +1837,16 @@ func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, targe
 	}
 	desc.Annotations[AnnotationOrigin] = origin
 	desc.Annotations[AnnotationSourceCanonical] = c.canonicalID()
-	if err := target.store.Tag(ctx, desc, targetTag); err != nil {
-		return ArtifactInfo{}, fmt.Errorf("failed to tag artifact: %w", err)
+	// When pulled under a local alias (--as), the copied manifest still
+	// advertises the source name, so record the local name as descriptor-level
+	// metadata. Local listing/resolution prefer this override (see
+	// infoFromAnnotations' descriptor-over-manifest merge), which lets the
+	// documented alias be resolved without rewriting the digest-stable manifest.
+	if targetRef.Name != ref.Name {
+		desc.Annotations[AnnotationArtifactName] = targetRef.Name
 	}
-
-	// Remove the raw remote tag that oras.Copy created (e.g. "1.0.0") so the
-	// artifact is only reachable via the canonical local tag. Without this the
-	// local catalog would require two deletes for the same artifact.
-	if tag != targetTag {
-		_ = target.store.Untag(ctx, tag)
+	if err := target.store.Tag(ctx, desc, destinationRef); err != nil {
+		return ArtifactInfo{}, fmt.Errorf("failed to annotate copied artifact: %w", err)
 	}
 
 	c.logger.V(1).Info("copied artifact from remote to local",
@@ -1847,17 +1864,32 @@ func (c *RemoteCatalog) copyToInternal(ctx context.Context, ref Reference, targe
 
 // CopyFrom copies an artifact from a local catalog to this remote catalog.
 func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref Reference, opts CopyOptions) (ArtifactInfo, error) {
-	repo, err := c.getRepository(ref)
-	if err != nil {
-		return ArtifactInfo{}, err
-	}
-
 	// Resolve the artifact in the source catalog. This handles mismatched
 	// tags (e.g., bare "1.0.0" vs canonical "solution/email-notifier:1.0.0")
 	// by falling back to annotation-based lookup.
 	info, err := source.Resolve(ctx, ref)
 	if err != nil {
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+	// Prefer the resolved reference name over the manifest annotation: for an
+	// artifact pulled under a local alias (--as), the immutable manifest still
+	// carries the remote source name, whereas the resolved reference reflects
+	// the local identity. The origin qualifier is tracked separately on the
+	// reference, so Name here is the bare local name. An explicit --as on push
+	// still overrides it.
+	name := info.Reference.Name
+	if opts.TargetName != "" {
+		name = opts.TargetName
+	}
+	if name == "" {
+		return ArtifactInfo{}, fmt.Errorf("cannot determine remote artifact name for %q: source artifact has no resolvable name and no target name was provided",
+			ref.VersionOrDigest())
+	}
+	targetRef := ref
+	targetRef.Name = name
+	repo, err := c.getRepository(targetRef)
+	if err != nil {
+		return ArtifactInfo{}, err
 	}
 
 	// Use the resolved digest to locate the artifact in the OCI store,
@@ -1870,9 +1902,9 @@ func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref 
 
 	// Check if target already exists (unless force)
 	if !opts.Force {
-		exists, _ := c.Exists(ctx, ref)
+		exists, _ := c.Exists(ctx, targetRef)
 		if exists {
-			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: c.name}
+			return ArtifactInfo{}, &ArtifactExistsError{Reference: targetRef, Catalog: c.name}
 		}
 	}
 
@@ -1889,11 +1921,6 @@ func (c *RemoteCatalog) CopyFrom(ctx context.Context, source *LocalCatalog, ref 
 		}
 	}
 
-	// Determine target tag
-	targetRef := ref
-	if opts.TargetName != "" {
-		targetRef.Name = opts.TargetName
-	}
 	targetTag := c.tagForRef(targetRef)
 
 	// Copy from local to remote

@@ -137,7 +137,7 @@ func runTag(ctx context.Context, opts *TagOptions) error {
 	}
 
 	if artifactKind == "" {
-		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version)
+		artifactKind, err = catalog.InferKindFromLocalCatalog(ctx, localCatalog, name, version, "")
 		if err != nil {
 			w.Errorf("failed to infer artifact kind: %v", err)
 			w.Infof("Hint: use --kind to specify the artifact kind explicitly")

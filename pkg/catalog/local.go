@@ -88,9 +88,24 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Check if artifact already exists (unless force is set)
+	// A caller that pre-set AnnotationSourceCanonical (remote cache writes via
+	// storeLocally/cacheArtifact) but left ref.Origin empty is storing a pulled
+	// copy. Normalize the origin from the canonical source before the duplicate
+	// guard and tagging so the copy lives under its origin-qualified tag rather
+	// than clobbering the bare local tag (which would overwrite a local build or
+	// another origin's cached copy).
+	if ref.Origin == "" {
+		if canonical := annotations[AnnotationSourceCanonical]; canonical != "" {
+			ref.Origin = canonical
+		}
+	}
+
+	// Check if artifact already exists (unless force is set). The guard is
+	// origin-exact: a locally-built artifact only collides with another local
+	// build, not with a pulled copy of the same name+version from a remote
+	// origin (which lives under a distinct origin-qualified tag).
 	if !force {
-		if c.existsLocked(ctx, ref) {
+		if c.existsExactLocked(ctx, ref) {
 			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 		}
 	}
@@ -110,9 +125,15 @@ func (c *LocalCatalog) Store(ctx context.Context, ref Reference, content, bundle
 	annotations[AnnotationCreated] = now.Format(time.RFC3339)
 
 	// Default origin to "built" unless the caller set one (e.g., cacheArtifact
-	// passes "auto-cached from <catalog>").
+	// passes "auto-cached from <catalog>"). A genuine local build also claims
+	// the reserved LocalOrigin identity so its stored Reference has a
+	// well-defined source; callers that pre-set AnnotationOrigin (remote
+	// caches) keep whatever origin they provided.
 	if annotations[AnnotationOrigin] == "" {
 		annotations[AnnotationOrigin] = "built"
+		if ref.Origin == "" {
+			ref.Origin = LocalOrigin
+		}
 	}
 
 	// Create content layer
@@ -427,13 +448,13 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 		if err != nil {
 			return ArtifactInfo{}, err
 		}
-		for _, a := range artifacts {
-			if ref.HasVersion() && a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
-				return a, nil
-			}
-			if ref.HasDigest() && a.Digest == ref.Digest {
-				return a, nil
-			}
+		matches := matchesForRef(ref, artifacts)
+		idx, err := selectByOrigin(ref, matches)
+		if err != nil {
+			return ArtifactInfo{}, err
+		}
+		if idx >= 0 {
+			return matches[idx], nil
 		}
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 	}
@@ -446,6 +467,25 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 
 	if len(artifacts) == 0 {
 		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
+	// For an origin-qualified request, restrict to that origin *before* the
+	// prerelease and latest-version selection below. Otherwise "latest" is
+	// computed across every origin -- if another origin holds a higher version,
+	// it would win the selection and then fail origin matching, incorrectly
+	// reporting not-found for a version that this origin does hold. Unqualified
+	// requests keep all origins so cross-origin ambiguity is still surfaced.
+	if o := ref.Origin; o != "" && o != LocalOrigin {
+		filtered := make([]ArtifactInfo, 0, len(artifacts))
+		for _, a := range artifacts {
+			if a.Reference.Origin == o {
+				filtered = append(filtered, a)
+			}
+		}
+		if len(filtered) == 0 {
+			return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+		}
+		artifacts = filtered
 	}
 
 	// Filter out pre-release versions unless explicitly included
@@ -481,11 +521,31 @@ func (c *LocalCatalog) resolveLocked(ctx context.Context, ref Reference) (Artifa
 		return vi.GreaterThan(vj)
 	})
 
+	// Among the artifacts sharing the highest version, apply origin precedence
+	// so an origin-qualified request selects its own origin's copy and an
+	// unqualified request surfaces cross-origin ambiguity rather than silently
+	// returning whichever copy sorted first (which reflects OCI index order,
+	// not intent).
+	top := artifacts[0].Reference.Version
+	latest := make([]ArtifactInfo, 0, len(artifacts))
+	for _, a := range artifacts {
+		if versionsEqual(a.Reference.Version, top) {
+			latest = append(latest, a)
+		}
+	}
+	idx, err := selectByOrigin(ref, latest)
+	if err != nil {
+		return ArtifactInfo{}, err
+	}
+	if idx < 0 {
+		return ArtifactInfo{}, &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
+	}
+
 	c.logger.V(1).Info("resolved latest version",
 		"name", ref.Name,
-		"version", artifacts[0].Reference.VersionOrDigest())
+		"version", latest[idx].Reference.VersionOrDigest())
 
-	return artifacts[0], nil
+	return latest[idx], nil
 }
 
 // List returns all artifacts matching the criteria.
@@ -507,7 +567,7 @@ func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name s
 				continue
 			}
 
-			annotations, err := c.getManifestAnnotations(ctx, desc)
+			annotations, err := c.effectiveAnnotations(ctx, desc)
 			if err != nil {
 				c.logger.V(2).Info("failed to get annotations", "tag", tag, "error", err)
 				continue
@@ -552,6 +612,103 @@ func (c *LocalCatalog) listLocked(ctx context.Context, kind ArtifactKind, name s
 	return results, nil
 }
 
+// versionsEqual reports whether two artifact versions are equal, treating two
+// nil (unversioned) values as equal and a nil/non-nil pair as unequal.
+func versionsEqual(a, b *semver.Version) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(b)
+}
+
+// matchesForRef filters listed artifacts to those satisfying ref's version or
+// digest constraint. A bare name (no version, no digest) matches everything.
+// When a version is present it takes precedence over a digest, mirroring
+// resolveLocked's original match order.
+func matchesForRef(ref Reference, artifacts []ArtifactInfo) []ArtifactInfo {
+	switch {
+	case ref.HasVersion():
+		var matches []ArtifactInfo
+		for _, a := range artifacts {
+			if a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
+				matches = append(matches, a)
+			}
+		}
+		return matches
+	case ref.HasDigest():
+		var matches []ArtifactInfo
+		for _, a := range artifacts {
+			if a.Digest == ref.Digest {
+				matches = append(matches, a)
+			}
+		}
+		return matches
+	default:
+		return artifacts
+	}
+}
+
+// selectByOrigin applies origin-aware precedence to matches (already filtered
+// by matchesForRef) and returns the index of the chosen artifact, or -1 when
+// matches is empty. The precedence ladder resolves short-name ambiguity
+// deterministically:
+//
+//  1. A reference with a non-empty origin -- a remote canonical or the
+//     reserved LocalOrigin -- only matches that exact origin.
+//  2. For an unqualified (empty-origin) reference, a locally-built copy
+//     (Origin == LocalOrigin) wins over remote copies, mirroring how a locally
+//     built image shadows a registry copy.
+//  3. Remaining remote copies that share a single origin are unambiguous.
+//  4. Remote copies from more than one distinct origin are ambiguous: rather
+//     than picking one by index-order (which reflects OCI index write order,
+//     not intent), it returns an AmbiguousReferenceError so the caller can
+//     re-run with an origin-qualified reference.
+func selectByOrigin(ref Reference, matches []ArtifactInfo) (int, error) {
+	if len(matches) == 0 {
+		return -1, nil
+	}
+
+	// An origin-qualified reference resolves only against its exact origin --
+	// even when a single candidate exists, that candidate must belong to the
+	// requested origin. Applying this before the single-match shortcut prevents
+	// resolving (or origin-qualified deleting) the wrong artifact when the
+	// requested origin is absent but one other-origin copy is present. Every
+	// non-empty origin is exact, including the reserved LocalOrigin: an explicit
+	// local-origin reference must match only a locally-built copy and must never
+	// fall through to a remote copy via the single-match shortcut below. The
+	// empty origin is the sole unqualified form, handled by the local-wins and
+	// single-origin rules that follow.
+	if o := ref.Origin; o != "" {
+		for i, m := range matches {
+			if m.Reference.Origin == o {
+				return i, nil
+			}
+		}
+		return -1, nil
+	}
+
+	if len(matches) == 1 {
+		return 0, nil
+	}
+
+	// A locally-built copy wins over any number of remote copies.
+	for i, m := range matches {
+		if m.Reference.Origin == LocalOrigin {
+			return i, nil
+		}
+	}
+
+	// All remaining copies are remote. If they share a single origin the short
+	// name is unambiguous; otherwise it cannot pick between distinct origins.
+	firstOrigin := matches[0].Reference.Origin
+	for _, m := range matches[1:] {
+		if m.Reference.Origin != firstOrigin {
+			return -1, &AmbiguousReferenceError{Reference: ref, Candidates: matches}
+		}
+	}
+	return 0, nil
+}
+
 // Exists checks if an artifact exists in the catalog.
 func (c *LocalCatalog) Exists(ctx context.Context, ref Reference) (bool, error) {
 	c.mu.RLock()
@@ -567,19 +724,56 @@ func (c *LocalCatalog) existsLocked(ctx context.Context, ref Reference) bool {
 	}
 
 	// Tag lookup failed -- fall back to annotation-based listing to handle
-	// artifacts whose OCI tag doesn't match the canonical format.
+	// artifacts whose OCI tag doesn't match the canonical format. Existence is
+	// a presence check, not a resolution: an origin-qualified reference exists
+	// only if a copy from that same origin is present, while a short
+	// (empty-origin) reference exists if any origin's copy matches (it may still
+	// be ambiguous to Resolve, but it is undeniably present). Every non-empty
+	// origin -- including the reserved LocalOrigin -- is exact, so an explicit
+	// local-origin reference exists only when a locally-built copy is present.
 	artifacts, listErr := c.listLocked(ctx, ref.Kind, ref.Name)
 	if listErr != nil {
 		return false
 	}
-	for _, a := range artifacts {
-		if ref.HasVersion() && a.Reference.Version != nil && a.Reference.Version.Equal(ref.Version) {
-			return true
+	matches := matchesForRef(ref, artifacts)
+	if o := ref.Origin; o != "" {
+		for _, m := range matches {
+			if m.Reference.Origin == o {
+				return true
+			}
 		}
-		if ref.HasDigest() && a.Digest == ref.Digest {
-			return true
+		return false
+	}
+	return len(matches) > 0
+}
+
+// existsExactLocked reports whether a copy with this reference's exact origin
+// identity is already stored. Unlike existsLocked, a short or LocalOrigin
+// reference matches only a locally-built copy (the canonical kind/name:version
+// tag it would occupy), never a remote copy. This is the correct guard for
+// Store: a locally-built artifact and a pulled copy of the same name+version
+// live under different tags and must be allowed to coexist rather than one
+// being rejected as a duplicate of the other.
+func (c *LocalCatalog) existsExactLocked(ctx context.Context, ref Reference) bool {
+	tag := c.tagForRef(ref)
+	if _, err := c.store.Resolve(ctx, tag); err == nil {
+		return true
+	}
+
+	artifacts, listErr := c.listLocked(ctx, ref.Kind, ref.Name)
+	if listErr != nil {
+		return false
+	}
+	want := ref.Origin
+	if want == "" {
+		want = LocalOrigin
+	}
+	for _, m := range matchesForRef(ref, artifacts) {
+		have := m.Reference.Origin
+		if have == "" {
+			have = LocalOrigin
 		}
-		if !ref.HasVersion() && !ref.HasDigest() {
+		if have == want {
 			return true
 		}
 	}
@@ -595,9 +789,15 @@ func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
 	tag := c.tagForRef(ref)
 	desc, err := c.store.Resolve(ctx, tag)
 	if err != nil {
-		// Fall back to resolving via annotations for mismatched tags.
+		// Fall back to resolving via annotations for mismatched tags. A short
+		// reference that matches copies from multiple origins is ambiguous:
+		// deleting one non-deterministically would silently drop the wrong
+		// origin's copy, so surface the ambiguity instead.
 		tag, desc, err = c.findTagByAnnotations(ctx, ref)
 		if err != nil {
+			if errors.Is(err, ErrAmbiguousReference) {
+				return err
+			}
 			return &ArtifactNotFoundError{Reference: ref, Catalog: LocalCatalogName}
 		}
 	}
@@ -609,7 +809,7 @@ func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
 
 	c.logger.V(1).Info("deleted artifact",
 		"name", ref.Name,
-		"version", ref.Version.String(),
+		"version", ref.VersionOrDigest(),
 		"digest", desc.Digest.String())
 
 	return nil
@@ -618,14 +818,10 @@ func (c *LocalCatalog) Delete(ctx context.Context, ref Reference) error {
 // Helper methods
 
 func (c *LocalCatalog) tagForRef(ref Reference) string {
-	// Format: kind/name:version or kind/name@digest
-	if ref.HasDigest() {
-		return fmt.Sprintf("%s/%s@%s", ref.Kind, ref.Name, ref.Digest)
-	}
-	if ref.HasVersion() {
-		return fmt.Sprintf("%s/%s:%s", ref.Kind, ref.Name, ref.Version.String())
-	}
-	return fmt.Sprintf("%s/%s", ref.Kind, ref.Name)
+	// Canonical local tag for locally-authored artifacts: kind/name:version
+	// (or kind/name@digest). Origin-qualified tags for pulled artifacts are
+	// produced by Reference.LocalTag when Origin is a remote canonical identity.
+	return ref.LocalTag()
 }
 
 // manifestAnnotations returns a copy of annotations with descriptor-only
@@ -772,9 +968,17 @@ func (c *LocalCatalog) fetchBlob(ctx context.Context, desc ocispec.Descriptor) (
 // given reference by annotation metadata. Returns the actual stored tag and
 // its descriptor. This handles mismatched tags (e.g., "/name:1.0.0" instead
 // of "solution/name:1.0.0").
+//
+// When several tags match the same name and version from different origins it
+// applies the same origin precedence as resolveLocked, returning an
+// AmbiguousReferenceError rather than picking one non-deterministically.
 func (c *LocalCatalog) findTagByAnnotations(ctx context.Context, ref Reference) (string, ocispec.Descriptor, error) {
-	var foundTag string
-	var foundDesc ocispec.Descriptor
+	type candidate struct {
+		tag  string
+		desc ocispec.Descriptor
+		info ArtifactInfo
+	}
+	var candidates []candidate
 
 	err := c.store.Tags(ctx, "", func(tags []string) error {
 		for _, tag := range tags {
@@ -782,7 +986,7 @@ func (c *LocalCatalog) findTagByAnnotations(ctx context.Context, ref Reference) 
 			if err != nil {
 				continue
 			}
-			annotations, err := c.getManifestAnnotations(ctx, desc)
+			annotations, err := c.effectiveAnnotations(ctx, desc)
 			if err != nil {
 				continue
 			}
@@ -806,24 +1010,35 @@ func (c *LocalCatalog) findTagByAnnotations(ctx context.Context, ref Reference) 
 				}
 			}
 
-			foundTag = tag
-			foundDesc = desc
-			return errStopIteration
+			parsedRef, err := c.refFromAnnotations(annotations)
+			if err != nil {
+				continue
+			}
+			info := c.infoFromAnnotations(parsedRef, desc, annotations)
+			candidates = append(candidates, candidate{tag: tag, desc: desc, info: info})
 		}
 		return nil
 	})
-
-	if err != nil && !errors.Is(err, errStopIteration) {
+	if err != nil {
 		return "", ocispec.Descriptor{}, err
 	}
-	if foundTag == "" {
+	if len(candidates) == 0 {
 		return "", ocispec.Descriptor{}, fmt.Errorf("not found")
 	}
-	return foundTag, foundDesc, nil
-}
 
-// errStopIteration is a sentinel used to break out of tag iteration early.
-var errStopIteration = fmt.Errorf("stop iteration")
+	matches := make([]ArtifactInfo, len(candidates))
+	for i, cand := range candidates {
+		matches[i] = cand.info
+	}
+	idx, err := selectByOrigin(ref, matches)
+	if err != nil {
+		return "", ocispec.Descriptor{}, err
+	}
+	if idx < 0 {
+		return "", ocispec.Descriptor{}, fmt.Errorf("not found")
+	}
+	return candidates[idx].tag, candidates[idx].desc, nil
+}
 
 // fetchManifestByDigest fetches and unmarshals an OCI manifest using its
 // content digest. This avoids the need to reconstruct a tag which may not
@@ -865,6 +1080,32 @@ func (c *LocalCatalog) getManifestAnnotations(ctx context.Context, desc ocispec.
 	}
 
 	return manifest.Annotations, nil
+}
+
+// effectiveAnnotations returns the manifest annotations merged with the
+// descriptor-level (index.json) annotations, with descriptor annotations taking
+// precedence. Descriptor annotations carry local-only metadata written at Tag()
+// time -- provenance (AnnotationOrigin/AnnotationSourceCanonical) and, for a
+// `--as` pull, the local alias (AnnotationArtifactName) -- without rewriting the
+// digest-stable manifest blob. Callers that filter or build references from
+// annotations must use this so a locally-renamed pull resolves under its alias
+// rather than the source manifest name.
+func (c *LocalCatalog) effectiveAnnotations(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
+	manifestAnn, err := c.getManifestAnnotations(ctx, desc)
+	if err != nil {
+		return nil, err
+	}
+	if len(desc.Annotations) == 0 {
+		return manifestAnn, nil
+	}
+	merged := make(map[string]string, len(manifestAnn)+len(desc.Annotations))
+	for k, v := range manifestAnn {
+		merged[k] = v
+	}
+	for k, v := range desc.Annotations {
+		merged[k] = v
+	}
+	return merged, nil
 }
 
 func (c *LocalCatalog) refFromAnnotations(annotations map[string]string) (Reference, error) {
@@ -910,6 +1151,19 @@ func (c *LocalCatalog) infoFromAnnotations(ref Reference, desc ocispec.Descripto
 	}
 	for k, v := range desc.Annotations {
 		merged[k] = v
+	}
+
+	// Populate the reference Origin from provenance so a reloaded artifact
+	// reports the same identity as it did when stored: a remote canonical
+	// source if present, otherwise the reserved LocalOrigin for locally-built
+	// artifacts. LocalTag maps LocalOrigin to the canonical built tag, so this
+	// does not change the on-disk tag.
+	if ref.Origin == "" {
+		if canonical := merged[AnnotationSourceCanonical]; canonical != "" {
+			ref.Origin = canonical
+		} else {
+			ref.Origin = LocalOrigin
+		}
 	}
 
 	return ArtifactInfo{
@@ -1309,8 +1563,13 @@ func (c *LocalCatalog) Load(ctx context.Context, inputPath string, force bool) (
 		return LoadResult{}, fmt.Errorf("failed to parse artifact reference: %w", err)
 	}
 
-	// Check if artifact already exists
-	if c.existsLocked(ctx, ref) && !force {
+	// Check if artifact already exists. The guard is origin-exact: Load always
+	// writes the canonical local tag (refFromAnnotations never sets Origin), so
+	// it can only genuinely clobber an existing locally-identified copy, not a
+	// pulled copy of the same name+version that lives under an origin-qualified
+	// tag. Using existsExactLocked lets the two coexist rather than rejecting
+	// the load as a spurious duplicate.
+	if c.existsExactLocked(ctx, ref) && !force {
 		return LoadResult{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 	}
 
@@ -1427,8 +1686,12 @@ func (c *LocalCatalog) StoreDedup(ctx context.Context, ref Reference, solutionYA
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Origin-exact guard (see Store): a locally-built dedup artifact only
+	// collides with another local build of the same name+version, not with a
+	// pulled copy from a remote origin (which occupies a distinct
+	// origin-qualified tag). This keeps StoreDedup consistent with Store.
 	if !force {
-		if c.existsLocked(ctx, ref) {
+		if c.existsExactLocked(ctx, ref) {
 			return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 		}
 	}

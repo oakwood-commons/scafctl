@@ -31,8 +31,11 @@ func (c *LocalCatalog) StoreMultiPlatform(ctx context.Context, ref Reference, pl
 		return ArtifactInfo{}, fmt.Errorf("at least one platform binary is required")
 	}
 
-	// Check existence (unless force)
-	if !force && c.existsLocked(ctx, ref) {
+	// Check existence (unless force). The guard is origin-exact so a locally
+	// built multi-platform provider is not rejected merely because a pulled
+	// copy of the same coordinates from a remote origin exists -- the two live
+	// under distinct tags and must coexist (matching Store/StoreDedup).
+	if !force && c.existsExactLocked(ctx, ref) {
 		return ArtifactInfo{}, &ArtifactExistsError{Reference: ref, Catalog: LocalCatalogName}
 	}
 

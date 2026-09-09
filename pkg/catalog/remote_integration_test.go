@@ -1346,6 +1346,133 @@ func TestRemoteCatalog_CopyTo_SetsOriginAnnotation(t *testing.T) {
 	_ = info // ensure CopyTo returned successfully
 }
 
+// TestRemoteCatalog_CopyTo_As_ResolvesAndPushesUnderAlias verifies the local
+// alias (--as) round-trip: pulling under an alias must persist the alias as
+// descriptor-level metadata so the artifact resolves and lists under the alias
+// (not the source manifest name), and a later push must default to the alias
+// without requiring --as to be repeated.
+func TestRemoteCatalog_CopyTo_As_ResolvesAndPushesUnderAlias(t *testing.T) {
+	t.Parallel()
+
+	remoteCat, ts := newTestRemoteCatalog(t)
+	t.Cleanup(ts.Close)
+
+	ctx := t.Context()
+
+	// The remote artifact is published under its source name.
+	srcRef := Reference{Kind: ArtifactKindSolution, Name: "source-name", Version: semver.MustParse("1.0.0")}
+	_, err := remoteCat.Store(ctx, srcRef, []byte("name: source-name"), nil, map[string]string{
+		AnnotationArtifactName: "source-name",
+		AnnotationArtifactType: "solution",
+		AnnotationVersion:      "1.0.0",
+	}, false)
+	require.NoError(t, err)
+
+	// Pull it locally under a different alias via --as.
+	localCat := newTestLocalCatalog(t)
+	_, err = remoteCat.CopyTo(ctx, srcRef, localCat, CopyOptions{TargetName: "local-alias"})
+	require.NoError(t, err)
+
+	aliasVersioned := Reference{Kind: ArtifactKindSolution, Name: "local-alias", Version: semver.MustParse("1.0.0")}
+	aliasShort := Reference{Kind: ArtifactKindSolution, Name: "local-alias"}
+
+	t.Run("resolves under the local alias by version", func(t *testing.T) {
+		t.Parallel()
+		info, err := localCat.Resolve(ctx, aliasVersioned)
+		require.NoError(t, err)
+		assert.Equal(t, "local-alias", info.Reference.Name)
+	})
+
+	t.Run("resolves under the local alias without a version", func(t *testing.T) {
+		t.Parallel()
+		info, err := localCat.Resolve(ctx, aliasShort)
+		require.NoError(t, err)
+		assert.Equal(t, "local-alias", info.Reference.Name)
+		require.NotNil(t, info.Reference.Version)
+		assert.Equal(t, "1.0.0", info.Reference.Version.String())
+	})
+
+	t.Run("local listing finds it under the alias, not the source name", func(t *testing.T) {
+		t.Parallel()
+		byAlias, err := localCat.List(ctx, ArtifactKindSolution, "local-alias")
+		require.NoError(t, err)
+		require.Len(t, byAlias, 1)
+		assert.Equal(t, "local-alias", byAlias[0].Reference.Name)
+
+		bySource, err := localCat.List(ctx, ArtifactKindSolution, "source-name")
+		require.NoError(t, err)
+		assert.Empty(t, bySource, "the alias must not be listed under the source manifest name")
+	})
+
+	t.Run("push back publishes under the local alias without repeating --as", func(t *testing.T) {
+		t.Parallel()
+		dstCat, dstTS := newTestRemoteCatalog(t)
+		t.Cleanup(dstTS.Close)
+
+		pushed, err := dstCat.CopyFrom(ctx, localCat, aliasVersioned, CopyOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "local-alias", pushed.Reference.Name, "push must default to the local alias, not the source name")
+
+		exists, err := dstCat.Exists(ctx, aliasVersioned)
+		require.NoError(t, err)
+		assert.True(t, exists, "the pushed artifact should exist under the alias")
+	})
+}
+
+// TestRemoteCatalog_CopyFrom_PushesBareShortName guards the non-renamed
+// registry-to-registry hop: an artifact pulled from one registry occupies an
+// origin-qualified LOCAL tag (e.g. "ghcr.io/oakwood-commons/providers/exec"),
+// but pushing it to a different registry must publish under the bare short name
+// ("exec") with no source-registry info leaking into the destination path.
+// Reference.Name holds only the short name -- the origin qualifier lives in the
+// separate Reference.Origin field and never leaks through RemoteTag/repo path.
+func TestRemoteCatalog_CopyFrom_PushesBareShortName(t *testing.T) {
+	t.Parallel()
+
+	srcCat, srcTS := newTestRemoteCatalog(t)
+	t.Cleanup(srcTS.Close)
+
+	ctx := t.Context()
+
+	// The source registry publishes a provider under its bare name.
+	srcRef := Reference{Kind: ArtifactKindProvider, Name: "exec", Version: semver.MustParse("0.6.0")}
+	_, err := srcCat.Store(ctx, srcRef, []byte("name: exec"), nil, map[string]string{
+		AnnotationArtifactName: "exec",
+		AnnotationArtifactType: "provider",
+		AnnotationVersion:      "0.6.0",
+	}, false)
+	require.NoError(t, err)
+
+	// Pull it locally WITHOUT --as: it lands under an origin-qualified local tag.
+	localCat := newTestLocalCatalog(t)
+	pulled, err := srcCat.CopyTo(ctx, srcRef, localCat, CopyOptions{})
+	require.NoError(t, err)
+	// The local identity keeps the bare name; the source registry is recorded
+	// only in Origin, not folded into Name.
+	assert.Equal(t, "exec", pulled.Reference.Name)
+	assert.Equal(t, srcCat.canonicalID(), pulled.Reference.Origin)
+
+	// Push to a *different* registry without --as.
+	dstCat, dstTS := newTestRemoteCatalog(t)
+	t.Cleanup(dstTS.Close)
+
+	shortRef := Reference{Kind: ArtifactKindProvider, Name: "exec", Version: semver.MustParse("0.6.0")}
+	pushed, err := dstCat.CopyFrom(ctx, localCat, shortRef, CopyOptions{})
+	require.NoError(t, err)
+
+	// The destination stores only the bare short name -- no source-registry path.
+	assert.Equal(t, "exec", pushed.Reference.Name)
+	assert.NotContains(t, pushed.Reference.Name, "/", "the pushed name must not carry registry/path info")
+	destPath := dstCat.RepositoryPath(pushed.Reference)
+	assert.True(t, strings.HasSuffix(destPath, "/providers/exec"),
+		"destination repo path should end in the bare short name, got %q", destPath)
+	assert.NotContains(t, destPath, srcCat.canonicalID(), "source registry must not leak into the destination path")
+
+	exists, err := dstCat.Exists(ctx, shortRef)
+	require.NoError(t, err)
+	assert.True(t, exists, "the pushed artifact should exist under the bare short name")
+}
+
 // detectManifestMediaType inspects stored manifest JSON to return the correct
 // Content-Type. Defaults to image manifest if detection fails.
 func detectManifestMediaType(data []byte) string {

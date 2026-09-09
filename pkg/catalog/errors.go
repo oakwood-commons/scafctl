@@ -6,6 +6,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrArtifactNotFound is returned when an artifact cannot be found.
@@ -16,6 +17,11 @@ var ErrArtifactExists = errors.New("artifact already exists")
 
 // ErrInvalidReference is returned when a reference is malformed.
 var ErrInvalidReference = errors.New("invalid reference")
+
+// ErrAmbiguousReference is returned when a short (origin-unqualified) reference
+// matches copies of the same name and version pulled from more than one origin,
+// with no locally-built copy present to break the tie.
+var ErrAmbiguousReference = errors.New("ambiguous reference")
 
 // ArtifactNotFoundError provides details about a missing artifact.
 type ArtifactNotFoundError struct {
@@ -66,6 +72,42 @@ func (e *InvalidReferenceError) Error() string {
 // Unwrap returns the base error for errors.Is support.
 func (e *InvalidReferenceError) Unwrap() error {
 	return ErrInvalidReference
+}
+
+// AmbiguousReferenceError reports that a short, origin-unqualified reference
+// matched copies of the same name and version from more than one origin. The
+// local store keeps such copies distinct by origin, so resolving the short name
+// would require guessing which origin the caller meant. Rather than picking one
+// non-deterministically, resolution fails and the caller must re-run with an
+// origin-qualified reference. Candidates lists every matching copy so the error
+// can present the exact alternatives.
+type AmbiguousReferenceError struct {
+	Reference  Reference
+	Candidates []ArtifactInfo
+}
+
+// Error implements the error interface, listing each candidate's
+// origin-qualified local tag so the user can copy one to disambiguate.
+func (e *AmbiguousReferenceError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "reference %q is ambiguous: %d copies from different origins:",
+		e.Reference.String(), len(e.Candidates))
+	for _, c := range e.Candidates {
+		fmt.Fprintf(&b, "\n  - %s", c.Reference.LocalTag())
+	}
+	b.WriteString("\nre-run with an origin-qualified reference to select one")
+	return b.String()
+}
+
+// Unwrap returns the base error for errors.Is support.
+func (e *AmbiguousReferenceError) Unwrap() error {
+	return ErrAmbiguousReference
+}
+
+// IsAmbiguousReference returns true if the error indicates an origin-ambiguous
+// reference.
+func IsAmbiguousReference(err error) bool {
+	return errors.Is(err, ErrAmbiguousReference)
 }
 
 // IsNotFound returns true if the error indicates an artifact was not found.
