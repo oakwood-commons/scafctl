@@ -206,6 +206,25 @@ type sharedResolverOptions struct {
 	// provider fall back to their defaults. Intended for CI/offline runs.
 	NoState bool
 
+	// StateFile points the run at an explicit state file, using the builtin
+	// file backend. It is an alternate input source for state: the solution's
+	// own state block remains the primary way to configure state, and this
+	// flag overrides it entirely (provider, format, and Emit targets included)
+	// when both are present, reporting the override on stderr.
+	//
+	// The synthesized config inherits the FORMAT the solution's own primary
+	// backend declared (or "full" when the solution declares no state block),
+	// so a solution's chosen save shape survives being pointed at an explicit
+	// file. It carries no Emit targets: pointing a run at an explicit file is a
+	// complete substitution for state, not an additional output.
+	//
+	// When the solution declares no state block, this enables state for the
+	// run rather than overriding anything, so a solution need not be authored
+	// for it. State is read from and written back to this path, so successive
+	// runs accumulate into it exactly as a solution-configured file backend
+	// would. Mutually exclusive with NoState. Set via the --state-file flag.
+	StateFile string
+
 	// OnUnknownResolver controls how -r/--resolver parameters whose key is not
 	// consumed by any declared parameter resolver are handled: "error"
 	// (default) rejects them, "warn" proceeds with a warning, "ignore" accepts
@@ -984,6 +1003,7 @@ func addSharedResolverFlags(cCmd *cobra.Command, o *sharedResolverOptions) {
 	cCmd.Flags().BoolVar(&o.PreRelease, "pre-release", false, "Include pre-release versions when resolving latest from catalog")
 	cCmd.Flags().BoolVar(&o.Strict, "strict", false, "Disable auto-resolution of official providers; require explicit bundle.plugins declarations")
 	cCmd.Flags().BoolVar(&o.NoState, "no-state", false, "Skip the entire state lifecycle: do not load, verify immutables, or save state (for CI/offline runs)")
+	cCmd.Flags().StringVar(&o.StateFile, "state-file", "", "Read and write state at this file path using the file backend. Overrides the solution's state block when present (inheriting its declared format); enables state when it is absent. Mutually exclusive with --no-state")
 	cCmd.Flags().StringVar(&o.OnUnknownResolver, "on-unknown-resolver", string(settings.DefaultUnknownResolverPolicy), "Policy for -r keys not consumed by any declared parameter: error (reject), warn (proceed with warning), or ignore (accept silently)")
 	cCmd.Flags().StringVar(&o.LockMode, "lock-mode", "", "Lock file resolution mode: strict (pin exact version), constrained (use constraint range), or bestEffort (use lock when available, fall back when absent). Default is source-dependent: strict for catalog/remote solutions carrying an embedded lock layer, bestEffort for local files, stdin, and lock-less artifacts")
 }
@@ -1077,6 +1097,159 @@ func warnStateSkipped(ctx context.Context, sol *solution.Solution) {
 	}
 	if w := writer.FromContext(ctx); w != nil {
 		w.WarnStderrf("--no-state: skipping state load, immutable checks, and save for solution %q", sol.Metadata.Name)
+	}
+}
+
+// resolveStateConfig returns the state configuration a run should use, applying
+// the --state-file override when set.
+//
+// Precedence:
+//   - --state-file set: an explicit file backend at that path is used, saved in
+//     the FORMAT the solution's own primary backend declared (or "full" when
+//     the solution declares no state block). When the solution also declares a
+//     state block, that block is overridden entirely (provider, format, and
+//     Emit targets included) and the override is reported on stderr so the
+//     user is never silently switched off a configured backend. Emit targets
+//     are dropped: pointing a run at an explicit file is a complete
+//     substitution for state, not an additional output.
+//   - --state-file unset: the solution's own state block is used unchanged.
+//
+// The returned config is nil when neither source configures state, which
+// callers treat as "state is not enabled for this run".
+func (o *sharedResolverOptions) resolveStateConfig(ctx context.Context, sol *solution.Solution) (*state.Config, error) {
+	var declared *state.Config
+	if sol != nil {
+		declared = sol.State
+	}
+
+	if o.StateFile == "" {
+		return declared, nil
+	}
+
+	inheritedFormat := ""
+	if declared != nil {
+		inheritedFormat = declared.Backend.Format
+	}
+
+	cfg, err := state.ConfigForFile(o.StateFile, inheritedFormat)
+	if err != nil {
+		return nil, err
+	}
+
+	if info := state.DescribeOverride(declared); info.Overridden {
+		if w := writer.FromContext(ctx); w != nil {
+			msg := fmt.Sprintf("--state-file: overriding the solution's %q state backend; reading and writing state at %s",
+				info.PreviousProvider, o.StateFile)
+			if info.DroppedEmits > 0 {
+				msg += fmt.Sprintf(" (%d emit target(s) dropped)", info.DroppedEmits)
+			}
+			w.WarnStderr(msg)
+		}
+	}
+
+	return cfg, nil
+}
+
+// validateStateFlags rejects mutually exclusive state flag combinations. It is
+// called before any state work so the user gets a clear error instead of a
+// silently ignored flag.
+func (o *sharedResolverOptions) validateStateFlags() error {
+	if o.NoState && o.StateFile != "" {
+		return fmt.Errorf("--no-state and --state-file are mutually exclusive: --no-state disables state entirely, while --state-file points the run at a state file")
+	}
+	return nil
+}
+
+// warnSolutionMismatch emits a one-line stderr notice when a loaded state
+// document was written for a different solution or version than the one being
+// run. It is advisory only: a mismatch never fails the run, because a state
+// document is a legitimate hand-authorable input (an "intent" document) that
+// may omit metadata entirely, and because running a newer solution version
+// against older state is a normal upgrade path.
+//
+// Empty recorded values are not a mismatch -- they mean the document simply did
+// not record that field.
+func warnSolutionMismatch(ctx context.Context, sd *state.Data, sol *solution.Solution) {
+	if sd == nil || sol == nil {
+		return
+	}
+
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+
+	if name := sd.Metadata.Solution; name != "" && name != sol.Metadata.Name {
+		w.WarnStderrf("state was written for solution %q but this run is %q; verify the state file matches the solution", name, sol.Metadata.Name)
+	}
+
+	// Version is a *semver.Version (optional); guard the nil pointer before
+	// String() (a value receiver that panics on a nil pointer). It is normally
+	// defaulted during load, but an embedder may construct a solution directly.
+	var version string
+	if sol.Metadata.Version != nil {
+		version = sol.Metadata.Version.String()
+	}
+	if recorded := sd.Metadata.Version; recorded != "" && version != "" && recorded != version {
+		w.WarnStderrf("state was written by solution version %s but this run is %s", recorded, version)
+	}
+}
+
+// locationOrProvider returns location when set, otherwise a fallback naming
+// provider -- used when a backend (e.g. one with no "path" or "url" input,
+// such as a custom plugin backend) has no reportable location.
+func locationOrProvider(location, provider string) string {
+	if location != "" {
+		return location
+	}
+	return fmt.Sprintf("%s backend", provider)
+}
+
+// reportStateLoaded prints a one-line stderr notice describing what state was
+// (or was not) found before this run, so state's effect on parameters and
+// immutable locks is never silent. It is a no-op when load was skipped (state
+// disabled) and respects --quiet via the writer.
+//
+// This is informational only (PlainStderr, not a warning): a fresh first-run
+// document is the expected, unremarkable steady state for a brand-new backend.
+func reportStateLoaded(ctx context.Context, lr *state.LoadResult) {
+	if lr == nil || lr.Skipped {
+		return
+	}
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+	loc := locationOrProvider(lr.Location, lr.Provider)
+	if lr.FirstRun {
+		w.PlainStderrf("state: no prior state at %s (first run)", loc)
+		return
+	}
+	w.PlainStderrf("state: reusing %d parameter(s) and %d locked value(s) from %s",
+		lr.LoadedParams, lr.LoadedResolvers, loc)
+}
+
+// reportStateSaved prints a one-line stderr success notice per backend this
+// run actually wrote state to (the primary, plus any enabled Emit targets),
+// so a save is never silent. Emit targets skipped by their Enabled condition
+// are not reported -- an explicitly disabled target is not news. It is a
+// no-op when sr is nil (state disabled, or an interim SaveImmutables commit
+// whose result the caller intentionally discarded) and respects --quiet via
+// the writer.
+func reportStateSaved(ctx context.Context, sr *state.SaveResult) {
+	if sr == nil {
+		return
+	}
+	w := writer.FromContext(ctx)
+	if w == nil {
+		return
+	}
+	w.SuccessStderrf("state: updated %s (%s)", locationOrProvider(sr.Primary.Location, sr.Primary.Provider), sr.Primary.Format)
+	for _, emit := range sr.Emits {
+		if emit.Skipped {
+			continue
+		}
+		w.SuccessStderrf("state: emitted %s (%s)", locationOrProvider(emit.Location, emit.Provider), emit.Format)
 	}
 }
 

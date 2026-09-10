@@ -294,9 +294,22 @@ func introspectFieldsWithSeen(t reflect.Type, depth int, seen map[reflect.Type]b
 		// json/yaml both flatten such embeds into the parent object, so the
 		// schema must too -- otherwise the embed surfaces as a phantom field
 		// named after its Go type and its real keys are hidden a level down.
+		//
+		// Deliberately do NOT consult or mutate the shared "seen" set here: it
+		// exists to keep the schema readable by not re-expanding the full
+		// internals of a commonly-reused struct type every time it appears deep
+		// in a tree (e.g. ValueRef, which shows up dozens of times) -- but an
+		// inline embed's fields ARE the parent's own top-level keys, not a
+		// nested substructure, so they must always be listed even if that same
+		// struct type happens to appear (embedded or not) elsewhere in the same
+		// tree. Recursing with a fresh map gives the embed its own readability
+		// budget rather than being silently dropped by an unrelated sibling's
+		// earlier expansion. Go disallows embedding cycles at compile time, so
+		// the depth cap alone is sufficient protection against runaway
+		// recursion here -- no self-referential guard is needed.
 		if embeddedType, ok := inlineEmbeddedStruct(f); ok {
-			if depth < 10 && !seen[embeddedType] {
-				fields = append(fields, introspectFieldsWithSeen(embeddedType, depth+1, seen)...)
+			if depth < 10 {
+				fields = append(fields, introspectFieldsWithSeen(embeddedType, depth+1, map[reflect.Type]bool{})...)
 			}
 			continue
 		}

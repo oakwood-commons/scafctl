@@ -340,6 +340,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 		return o.exitWithCode(ctx, o.positionalPathErr, exitcode.InvalidInput)
 	}
 
+	// Reject mutually exclusive state flags before any work begins.
+	if err := o.validateStateFlags(); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	// Include pre-release versions in catalog resolution when --pre-release is set.
 	// Must happen before resolveVersionConstraintForFile so --version constraints
 	// also respect the flag.
@@ -537,10 +542,14 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	var stateSeed map[string]*resolver.ExecutionResult
+	stateCfg, stateCfgErr := o.resolveStateConfig(ctx, sol)
+	if stateCfgErr != nil {
+		return o.exitWithCode(ctx, stateCfgErr, exitcode.InvalidInput)
+	}
 	if o.NoState {
 		warnStateSkipped(ctx, sol)
-	} else if sol.State != nil {
-		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
+	} else if stateCfg != nil {
+		stateMgr = state.NewManager(stateCfg, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run solution", params)
 		loadResult, loadErr := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, o.buildStateTwoPhaseInput(sol, params, reg))
 		if loadErr != nil {
@@ -552,7 +561,9 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 			actionCtx = state.WithState(actionCtx, loadResult.Data)
 			stateData = loadResult.Data
 			params = loadResult.MergedParams
+			warnSolutionMismatch(ctx, stateData, sol)
 		}
+		reportStateLoaded(ctx, loadResult.LoadResult)
 	}
 
 	// Dry run — execute resolvers with ctx (CWD by default, or base-dir when
@@ -683,9 +694,11 @@ func (o *SolutionOptions) Run(ctx context.Context) error {
 	// Immutable locks were already committed before actions (D1).
 	if stateMgr != nil && stateData != nil {
 		solMeta := buildStateSolutionMeta(sol)
-		if saveErr := stateMgr.SaveParams(ctx, stateData, params, resolverData, solMeta); saveErr != nil {
+		saveResult, saveErr := stateMgr.SaveParams(ctx, stateData, params, resolverData, solMeta)
+		if saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
+		reportStateSaved(ctx, saveResult)
 	}
 
 	// Build and write output — only include __execution in output when --show-execution is set

@@ -430,6 +430,11 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 		o.BinaryName = settings.CliBinaryName
 	}
 
+	// Reject mutually exclusive state flags before any work begins.
+	if err := o.validateStateFlags(); err != nil {
+		return o.exitWithCode(ctx, err, exitcode.InvalidInput)
+	}
+
 	// Include pre-release versions in catalog resolution when --pre-release is set.
 	// Must happen before resolveVersionConstraintForFile so --version constraints
 	// also respect the flag.
@@ -642,10 +647,14 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	var stateMgr *state.Manager
 	var stateData *state.Data
 	var stateSeed map[string]*resolver.ExecutionResult
+	stateCfg, stateCfgErr := o.resolveStateConfig(ctx, sol)
+	if stateCfgErr != nil {
+		return o.exitWithCode(ctx, stateCfgErr, exitcode.InvalidInput)
+	}
 	if o.NoState {
 		warnStateSkipped(ctx, sol)
-	} else if sol.State != nil {
-		stateMgr = state.NewManager(sol.State, reg, state.RuntimeProvenanceFromContext(ctx))
+	} else if stateCfg != nil {
+		stateMgr = state.NewManager(stateCfg, reg, state.RuntimeProvenanceFromContext(ctx))
 		cmdInfo := buildCommandInfo("run resolver", params)
 		loadResult, loadErr := stateMgr.LoadTwoPhase(ctx, params, cmdInfo, o.buildStateTwoPhaseInput(sol, params, reg))
 		if loadErr != nil {
@@ -656,7 +665,9 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 			ctx = loadResult.Ctx
 			stateData = loadResult.Data
 			params = loadResult.MergedParams
+			warnSolutionMismatch(ctx, stateData, sol)
 		}
+		reportStateLoaded(ctx, loadResult.LoadResult)
 	}
 
 	// Wire skip-transform flag into shared options for executeResolvers
@@ -692,9 +703,11 @@ func (o *ResolverOptions) Run(ctx context.Context) error {
 	// so invalid values are never persisted.
 	if stateMgr != nil && stateData != nil && execErr == nil {
 		solMeta := buildStateSolutionMeta(sol)
-		if saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta); saveErr != nil {
+		saveResult, saveErr := stateMgr.Save(ctx, stateData, resolverCtx, resolvers, params, resolverData, solMeta)
+		if saveErr != nil {
 			return o.exitWithCode(ctx, fmt.Errorf("state save: %w", saveErr), exitcode.GeneralError)
 		}
+		reportStateSaved(ctx, saveResult)
 	}
 
 	// Build output and write

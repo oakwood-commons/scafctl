@@ -24,7 +24,8 @@ This tutorial walks you through using state persistence in scafctl. The state sy
 7. [CLI Commands](#cli-commands)
 8. [Command Behavior](#command-behavior)
 9. [Save-Time Overrides](#save-time-overrides)
-10. [Common Patterns](#common-patterns)
+10. [Emit Targets](#emit-targets)
+11. [Common Patterns](#common-patterns)
 
 ---
 
@@ -612,6 +613,32 @@ Use `render solution` to preview what an action graph would look like with curre
 | `run action` | Yes | Yes | After actions succeed |
 | `render solution` | Yes | No (read-only) | -- |
 
+### Run-Time Feedback
+
+Every load and save prints a one-line stderr notice, so state's effect on a
+run is never silent:
+
+~~~bash
+$ scafctl run resolver -f ./solution.yaml -r username=alice -r region=us-west1
+state: no prior state at .scafctl/state.json (first run)
+state: updated .scafctl/state.json (full)
+...
+
+$ scafctl run resolver -f ./solution.yaml
+state: reusing 2 parameter(s) and 0 locked value(s) from .scafctl/state.json
+state: updated .scafctl/state.json (full)
+...
+~~~
+
+A save line is printed once per backend actually written -- the primary,
+plus each enabled [Emit Target](#emit-targets) (`state: emitted <path>
+(intent)`) -- so a solution publishing both a full local file and a lean
+intent document reports both. A disabled emit target (its `enabled`
+evaluated false) prints nothing.
+
+These notices are on stderr, respect `--quiet` (fully suppressed), and never
+appear in structured stdout (`-o json`/`-o yaml`).
+
 ### Skipping State (`--no-state`)
 
 Pass `--no-state` to `run solution`, `run resolver`, `run action`, or `render solution` to skip the **entire** state lifecycle for that invocation:
@@ -631,6 +658,57 @@ Two consequences to keep in mind:
 # Run without touching the state backend
 scafctl run solution -f ./solution.yaml --no-state
 ~~~
+
+### Pointing at a State File (`--state-file`)
+
+Pass `--state-file <path>` to `run solution`, `run resolver`, or `run action` to
+read and write state at a specific file, using the `file` backend. It is an
+**alternate input source** for state; a solution's own `state` block remains
+the primary way to configure state.
+
+- When the solution declares **no** `state` block, the flag enables state for
+  the run -- so a solution can be driven by an external state file without
+  being authored for it.
+- When the solution declares a `state` block, the flag **overrides it
+  entirely** (provider, format, and `emit` targets included) and a one-line
+  notice reports what was replaced (so you are never silently switched off a
+  configured backend, e.g. `github`), including how many `emit` targets were
+  dropped if the replaced block had any. The synthesized config **inherits the
+  `format`** the solution's own primary backend declared.
+- State is read from and written back to the path, so successive runs
+  accumulate into it.
+- It is **mutually exclusive with `--no-state`**.
+
+~~~bash
+# Drive a run from a specific state file
+scafctl run solution -f ./solution.yaml --state-file ./intent/sandbox.json
+~~~
+
+#### Intent documents: a state file is a superset of its own inputs
+
+A state file loads tolerantly -- missing sections default to empty. So a
+**subset** document carrying only what is needed to replay (exactly the shape
+the `intent` [format](#emit-targets) produces) is a valid state input:
+
+~~~json
+{
+  "schemaVersion": 3,
+  "metadata": { "solution": "deploy-app", "version": "1.5.4" },
+  "parameters": { "appName": "my-app", "environmentName": "sandbox" }
+}
+~~~
+
+This document is the human-readable, replay-complete subset of a state file. A
+run pointed at it via `--state-file` replays the parameters and, at save time,
+**regenerates the full state document in place** (runtime metadata,
+timestamps, resolver locks) -- unless the inherited format is itself `intent`,
+in which case it stays lean. If the file records a `metadata.solution` /
+`metadata.version` that differs from the solution being run, an advisory
+stderr warning is emitted; it never fails the run.
+
+An optional opaque `attestation` field may ride along in the state document;
+scafctl never interprets it and preserves it verbatim across the
+load -> save round-trip, so a downstream verifier can read it back unchanged.
 
 ---
 
@@ -733,6 +811,136 @@ Run `scafctl lint` to check your configuration.
 
 > [!TIP]
 > See [examples/solutions/state/github-state.yaml](https://github.com/oakwood-commons/scafctl/blob/main/examples/solutions/state/github-state.yaml) for a complete working example.
+
+---
+
+## Emit Targets
+
+A solution's state is not limited to a single saved copy. `emit` lets you save
+**additional, save-only projections** of the same state document, each through
+its own backend -- the primary `backend` is still the only one used for
+**load**; `emit` targets are extra outputs produced only when saving.
+
+### The Problem
+
+You want a full-fidelity state file locally (so immutable locks and action
+fingerprints persist across runs), but you also want to publish a lean,
+human-readable, **signable** document -- for example an "intent" file a
+managed pipeline commits and later replays to regenerate trusted output. A
+single backend can only be one shape at a time; `emit` lets it be both.
+
+### How It Works
+
+Each entry in `emit` is a full `Backend` (`provider`, `format`, `inputs`,
+`saveOverrides`) plus an optional per-target `enabled` condition. `format`
+controls what shape of the document that backend receives:
+
+- `"full"` (the default) -- the complete state document.
+- `"intent"` -- only `schemaVersion`, `metadata.solution`/`metadata.version`,
+  `parameters`, and `attestation` (when present). No timestamps, no resolver
+  locks, no fingerprints -- deterministic and stable for signing.
+
+### Example: Full State Locally, Intent Published
+
+~~~yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: deploy-app
+  version: 1.0.0
+
+state:
+  enabled: true
+  backend:                                 # full-fidelity primary
+    provider: file
+    inputs:
+      path: ".scafctl/state.json"
+  emit:
+    - provider: file
+      format: intent
+      inputs:
+        path: "intent/sandbox.json"
+
+spec:
+  resolvers:
+    app_name:
+      type: string
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "app_name"
+
+    cluster_id:
+      type: string
+      immutable: true
+      resolve:
+        with:
+          - provider: parameter
+            inputs:
+              key: "cluster_id"
+~~~
+
+Run it:
+
+~~~bash
+scafctl run resolver -f ./deploy-app.yaml -r app_name=my-app
+~~~
+
+Two files are written: `.scafctl/state.json` (everything, including the
+`cluster_id` immutable lock) and `intent/sandbox.json` (just the solution
+identity and `app_name`). Commit only the second file -- it is what you'd sign
+and hand to a pipeline via `--state-file` (see
+[Pointing at a State File](#pointing-at-a-state-file---state-file)).
+
+### Per-Target `enabled`
+
+Unlike the top-level `state.enabled` (which is evaluated at **load** time,
+before any resolver has run, and can therefore only reference
+state-independent resolvers), an `emit` target's `enabled` is evaluated at
+**save** time -- after every resolver has run. It may reference **any**
+resolver, with no acyclic restriction:
+
+~~~yaml
+emit:
+  - provider: file
+    format: intent
+    inputs: { path: "intent/sandbox.json" }
+    enabled: { expr: "_.environment == 'sandbox'" }
+~~~
+
+Absent `enabled` defaults to `true` (always emit).
+
+### Failure Semantics
+
+- A failure saving the **primary** backend aborts before any `emit` target
+  runs.
+- A failure saving one `emit` target aborts the **remaining** targets (in
+  order) but does not undo the primary save or any earlier `emit` target that
+  already succeeded.
+
+### The Lossy Shortcut
+
+You can set `format: intent` directly on the **primary** backend with no
+`emit` at all -- useful when the intent document genuinely is the only state
+that matters (e.g. a pipeline whose entire job is replaying a committed
+intent). But it is **lossy**: immutable resolver locks live in the `resolvers`
+section, which the intent format omits, so `scafctl lint` warns
+(`state-format-lossy-with-immutable`) whenever a solution combines
+`format: intent` on the primary backend with any `immutable: true` resolver.
+Prefer the full-primary-plus-emit pattern above unless you specifically want
+this trade-off.
+
+### Lint Rules
+
+| Rule | Severity | What It Catches |
+|------|----------|----------------|
+| `missing-state-emit-backend` | Error | An `emit` entry with no `provider` |
+| `invalid-state-emit-backend` | Error | An `emit` entry's `provider` is unregistered or lacks `CapabilityState` |
+| `invalid-state-format` | Error | `format` is set to something other than `full` or `intent` |
+| `state-format-lossy-with-immutable` | Warning | The primary backend's `format` is `intent` while the solution has an `immutable` resolver |
+
+Run `scafctl lint` to check your configuration.
 
 ---
 

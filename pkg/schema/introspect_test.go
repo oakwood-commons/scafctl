@@ -382,3 +382,48 @@ func TestFieldsAtPath_NamedEmbedNotFlattened(t *testing.T) {
 	assert.NotContains(t, names, "args")
 	assert.Contains(t, names, "provider")
 }
+
+// ReusedInlineEmbedSibling and ReusedInlineEmbedRoot exercise a struct type that
+// appears TWICE in the same tree: once as a normal named field
+// (ReusedInlineEmbedRoot.Named), and once as an inline embed elsewhere
+// (ReusedInlineEmbedSibling embeds InlineEmbedInner). This is a regression test
+// for a bug where the shared type-dedup ("seen") tracking -- meant only to
+// avoid re-expanding a commonly-reused type's full internals for readability --
+// incorrectly suppressed the SECOND occurrence's promoted fields entirely when
+// that occurrence was an inline embed: the embed produced no field, not even an
+// un-expanded placeholder, silently dropping real serializable keys from the
+// schema (discovered via state.EmitTarget embedding state.Backend, which is
+// also used as a plain named field on state.Config; also affected
+// spec.CallRef, embedded identically in ResolvePhase/TransformPhase/
+// ValidatePhase, so only the first phase's call/args ever appeared).
+type ReusedInlineEmbedSibling struct {
+	InlineEmbedInner `yaml:",inline"`
+	Enabled          bool `json:"enabled,omitempty" doc:"enabled flag"`
+}
+
+type ReusedInlineEmbedRoot struct {
+	Named   InlineEmbedInner         `json:"named" doc:"a plain named field of the reused type"`
+	Sibling ReusedInlineEmbedSibling `json:"sibling" doc:"a sibling field whose type inline-embeds the same reused type"`
+}
+
+func TestFieldsAtPath_InlineEmbedPromotedEvenWhenTypeAlreadySeenElsewhere(t *testing.T) {
+	fields, ok := FieldsAtPath((*ReusedInlineEmbedRoot)(nil), "")
+	require.True(t, ok)
+	names := fieldNames(fields)
+	require.Contains(t, names, "sibling")
+
+	var siblingField *FieldInfo
+	for i := range fields {
+		if fields[i].Name == "sibling" {
+			siblingField = &fields[i]
+			break
+		}
+	}
+	require.NotNil(t, siblingField)
+
+	nestedNames := fieldNames(siblingField.NestedFields)
+	assert.Contains(t, nestedNames, "call",
+		"the embed's promoted fields must be listed even though InlineEmbedInner was already expanded via the sibling 'named' field")
+	assert.Contains(t, nestedNames, "args")
+	assert.Contains(t, nestedNames, "enabled")
+}
