@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  namespace: {{ .namespace }}
+spec:
+  replicas: {{ .replicas }}
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+        environment: {{ .environment }}
+    spec:
+      containers:
+        - name: {{ .name }}
+          image: {{ .image }}
+          ports:
+            - containerPort: {{ .port }}
+          resources:
+            limits:
+              cpu: {{ .resources.cpu }}
+              memory: {{ .resources.memory }}
+          env:
+            - name: ENVIRONMENT
+              value: {{ .environment }}
+            - name: LOG_LEVEL
+              value: {{ .logLevel }}

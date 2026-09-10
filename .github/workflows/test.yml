@@ -107,6 +107,9 @@ jobs:
       - name: Run functional integration tests
         run: task integration
 
+      - name: Run e2e module tests
+        run: task test:e2e:go
+
       - name: Lint solution examples and integration tests
         run: task lint:solutions
 

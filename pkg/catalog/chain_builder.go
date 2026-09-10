@@ -272,6 +272,7 @@ func BuildRemoteCatalogFromConfig(catCfg config.CatalogConfig, credStore *Creden
 		Repository:        repository,
 		CredentialStore:   credStore,
 		DiscoveryStrategy: catCfg.DiscoveryStrategy,
+		Insecure:          catCfg.Insecure,
 		Logger:            logger,
 	}
 

@@ -1,0 +1,12 @@
+# This file is included in the bundle via the bundle.include glob (configs/**/*.yaml)
+# Test configuration - included alongside the other configs/*.yaml fixtures
+name: test-app
+namespace: test
+environment: test
+replicas: 1
+image: my-app:test
+port: 8080
+logLevel: debug
+resources:
+  cpu: "50m"
+  memory: "64Mi"

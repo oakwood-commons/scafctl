@@ -28,6 +28,7 @@ type SanitizedCatalog struct {
 	Type     string            `json:"type" yaml:"type" doc:"Catalog type" maxLength:"64" example:"git"`
 	Path     string            `json:"path,omitempty" yaml:"path,omitempty" doc:"Local filesystem path" maxLength:"1024" example:"/path/to/catalog"`
 	URL      string            `json:"url,omitempty" yaml:"url,omitempty" doc:"Remote URL" maxLength:"2048" example:"https://github.com/org/catalog"`
+	Insecure bool              `json:"insecure,omitempty" yaml:"insecure,omitempty" doc:"Allow insecure TLS/HTTP for local development and test registries"`
 	Auth     *SanitizedCatAuth `json:"auth,omitempty" yaml:"auth,omitempty" doc:"Authentication settings (redacted)"`
 	Metadata map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty" doc:"Additional metadata"`
 }
@@ -124,6 +125,7 @@ func SanitizeConfig(cfg *Config) SanitizedConfig {
 			Type:     cat.Type,
 			Path:     cat.Path,
 			URL:      cat.URL,
+			Insecure: cat.Insecure,
 			Metadata: cat.Metadata,
 		}
 		if cat.Auth != nil {

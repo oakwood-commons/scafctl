@@ -57,9 +57,10 @@ func TestSanitizeConfig(t *testing.T) {
 		cfg := &Config{
 			Catalogs: []CatalogConfig{
 				{
-					Name: "remote",
-					Type: "oci",
-					URL:  "https://registry.example.com",
+					Name:     "remote",
+					Type:     "oci",
+					URL:      "https://registry.example.com",
+					Insecure: true,
 					Auth: &AuthConfig{
 						Type:        "token",
 						TokenEnvVar: "MY_TOKEN",
@@ -71,6 +72,7 @@ func TestSanitizeConfig(t *testing.T) {
 		sanitized := SanitizeConfig(cfg)
 		require.Len(t, sanitized.Catalogs, 1)
 		assert.Equal(t, "remote", sanitized.Catalogs[0].Name)
+		assert.True(t, sanitized.Catalogs[0].Insecure)
 		require.NotNil(t, sanitized.Catalogs[0].Auth)
 		assert.Equal(t, "token", sanitized.Catalogs[0].Auth.Type)
 		assert.Equal(t, "MY_TOKEN", sanitized.Catalogs[0].Auth.TokenEnvVar)
