@@ -132,6 +132,7 @@ func isEmptyData(sd *Data) bool {
 		len(sd.Parameters) == 0 &&
 		len(sd.Resolvers) == 0 &&
 		len(sd.Fingerprints) == 0 &&
+		len(sd.Attestation) == 0 &&
 		sd.Metadata == (Metadata{}) &&
 		sd.Command.Subcommand == "" &&
 		len(sd.Command.Parameters) == 0

@@ -2476,6 +2476,333 @@ func TestLintState_NonGitHubNoSaveBranchHint(t *testing.T) {
 	assert.Empty(t, findings) // hint only fires for github provider
 }
 
+func TestLintState_InvalidFormat_Primary(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Format:   "bogus",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "invalid-state-format")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityError, findings[0].Severity)
+}
+
+func TestLintState_ValidFormats_Primary(t *testing.T) {
+	for _, format := range []string{"", state.FormatFull, state.FormatIntent} {
+		t.Run(format, func(t *testing.T) {
+			sol := &solution.Solution{
+				APIVersion: "scafctl.io/v1",
+				Kind:       "Solution",
+				Metadata:   solution.Metadata{Name: "test"},
+				Spec: solution.Spec{
+					Resolvers: map[string]*resolver.Resolver{
+						"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+					},
+				},
+				State: &state.Config{
+					Enabled: &spec.ValueRef{Literal: true},
+					Backend: state.Backend{
+						Provider: "file",
+						Format:   format,
+						Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+					},
+				},
+			}
+			reg := provider.NewRegistry()
+			_ = reg.Register(newFakeProvider("static", nil))
+			_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+			result := Solution(sol, "test.yaml", reg)
+			assert.Empty(t, filterFindingsByRule(result, "invalid-state-format"))
+		})
+	}
+}
+
+func TestLintState_Emit_MissingBackendProvider(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Emit: []state.EmitTarget{
+				{Backend: state.Backend{Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "missing-state-emit-backend")
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Location, "state.emit[0]")
+}
+
+func TestLintState_Emit_InvalidBackendProvider(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Emit: []state.EmitTarget{
+				{Backend: state.Backend{Provider: "static", Inputs: map[string]*spec.ValueRef{"path": {Literal: "intent.json"}}}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "invalid-state-emit-backend")
+	require.Len(t, findings, 1)
+}
+
+func TestLintState_Emit_ValidConfig(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: ".scafctl/state.json"}},
+			},
+			Emit: []state.EmitTarget{
+				{
+					Backend: state.Backend{
+						Provider: "file",
+						Format:   state.FormatIntent,
+						Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
+					},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	stateFindings := []*Finding{}
+	for _, f := range result.Findings {
+		if f.Category == "state" {
+			stateFindings = append(stateFindings, f)
+		}
+	}
+	assert.Empty(t, stateFindings)
+}
+
+func TestLintState_Emit_InvalidTargetDoesNotBlockOthers(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+			Emit: []state.EmitTarget{
+				{Backend: state.Backend{Inputs: map[string]*spec.ValueRef{"path": {Literal: "a.json"}}}}, // missing provider
+				{Backend: state.Backend{Provider: "file", Format: "bogus", Inputs: map[string]*spec.ValueRef{"path": {Literal: "b.json"}}}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	assert.Len(t, filterFindingsByRule(result, "missing-state-emit-backend"), 1, "emit[0] must still be reported")
+	assert.Len(t, filterFindingsByRule(result, "invalid-state-format"), 1, "emit[1]'s independent problem must still be reported")
+}
+
+func TestLintState_FormatLossyWithImmutable(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: true,
+					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Format:   state.FormatIntent,
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	findings := filterFindingsByRule(result, "state-format-lossy-with-immutable")
+	require.Len(t, findings, 1)
+	assert.Equal(t, SeverityWarning, findings[0].Severity)
+}
+
+func TestLintState_FormatLossyWithImmutable_NoWarningWithoutImmutable(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"env": {Type: "string", Resolve: &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}}},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Format:   state.FormatIntent,
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
+}
+
+func TestLintState_FormatLossyWithImmutable_NoWarningWhenFormatFull(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: true,
+					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: "state.json"}},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
+}
+
+// TestLintState_FormatLossyWithImmutable_EmitDoesNotTrigger verifies that a
+// lossy format on an EMIT target (as opposed to the primary backend) does not
+// trigger the warning: only the primary backend's format matters, because the
+// primary is what a solution's own replay depends on, and an emit target
+// alongside a full-fidelity primary is the recommended, non-lossy pattern.
+func TestLintState_FormatLossyWithImmutable_EmitDoesNotTrigger(t *testing.T) {
+	sol := &solution.Solution{
+		APIVersion: "scafctl.io/v1",
+		Kind:       "Solution",
+		Metadata:   solution.Metadata{Name: "test"},
+		Spec: solution.Spec{
+			Resolvers: map[string]*resolver.Resolver{
+				"cluster_id": {
+					Type:      "string",
+					Immutable: true,
+					Resolve:   &resolver.ResolvePhase{With: []resolver.ProviderSource{{Provider: "static"}}},
+				},
+			},
+		},
+		State: &state.Config{
+			Enabled: &spec.ValueRef{Literal: true},
+			Backend: state.Backend{
+				Provider: "file",
+				Inputs:   map[string]*spec.ValueRef{"path": {Literal: ".scafctl/state.json"}},
+			},
+			Emit: []state.EmitTarget{
+				{
+					Backend: state.Backend{
+						Provider: "file",
+						Format:   state.FormatIntent,
+						Inputs:   map[string]*spec.ValueRef{"path": {Literal: "intent/sandbox.json"}},
+					},
+				},
+			},
+		},
+	}
+	reg := provider.NewRegistry()
+	_ = reg.Register(newFakeProvider("static", nil))
+	_ = reg.Register(newStateProvider("file", provider.CapabilityState))
+
+	result := Solution(sol, "test.yaml", reg)
+	assert.Empty(t, filterFindingsByRule(result, "state-format-lossy-with-immutable"))
+}
+
 func TestLintResolveForEach(t *testing.T) {
 	prov := newFakeProvider("http", map[string]*jsonschema.Schema{
 		"url": {Type: "string"},

@@ -4,6 +4,7 @@
 package state
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/oakwood-commons/scafctl/pkg/spec"
@@ -34,6 +35,29 @@ const (
 // the single source of truth for the name; the provider implementation and all
 // partition logic reference it to avoid drift.
 const ReadProviderName = "state"
+
+// Backend format identifiers. Format controls what a backend's state_save
+// receives: the complete state document, or a lean, human-readable "intent"
+// projection of it. See Backend.Format and projectState.
+const (
+	// FormatFull is the default: the complete state document (schemaVersion,
+	// metadata, command, parameters, resolvers, fingerprints, attestation).
+	FormatFull = "full"
+
+	// FormatIntent projects only the replay-relevant subset: schemaVersion,
+	// metadata.solution/metadata.version, parameters, and attestation (when
+	// present). It deliberately omits command, resolvers, fingerprints, and the
+	// volatile metadata fields (createdAt/lastUpdatedAt/runtime), producing a
+	// deterministic, reviewable document suitable for committing and signing.
+	//
+	// Using FormatIntent as the PRIMARY backend's format is lossy: immutable
+	// resolver locks live in the omitted "resolvers" section, so they will not
+	// persist across runs against that backend alone. Pair it with a full-
+	// fidelity primary backend and an "emit" entry (see Config.Emit) to keep
+	// both a complete local state and a published intent; see
+	// lintStateFormatLossy for the guardrail.
+	FormatIntent = "intent"
+)
 
 const (
 	// OutputKeyData is the state_load output field that carries the decoded or
@@ -73,6 +97,21 @@ const (
 //	    inputs:
 //	      path:
 //	        expr: "'gcp/' + __params.project + '/state.json'"
+//
+// A solution can additionally publish one or more projected copies of the same
+// state document via Emit -- for example, keeping a full-fidelity primary state
+// file locally while also emitting a lean "intent" file intended to be committed
+// and signed:
+//
+//	state:
+//	  enabled: true
+//	  backend:                                # full-fidelity primary
+//	    provider: file
+//	    inputs: { path: ".scafctl/state.json" }
+//	  emit:
+//	    - provider: file
+//	      format: intent
+//	      inputs: { path: "intent/sandbox.json" }
 type Config struct {
 	// Enabled controls whether state persistence is active. Supports a literal bool,
 	// CEL expression, Go template, or resolver reference.
@@ -81,14 +120,29 @@ type Config struct {
 	// Use __params to reference CLI parameters (e.g. expr: "__params.enable_state == true").
 	Enabled *spec.ValueRef `json:"enabled" yaml:"enabled" doc:"Dynamic activation of state persistence"`
 
-	// Backend configures which provider handles state persistence.
+	// Backend configures which provider handles state persistence. This is the
+	// PRIMARY backend: the only one used for load, and always saved to.
 	Backend Backend `json:"backend" yaml:"backend" doc:"Backend provider configuration"`
+
+	// Emit configures additional save-only projections of the same state
+	// document, each written through its own backend. Emit targets are never
+	// used for load -- only Backend is. Each target may set its own Format
+	// (e.g. "intent") independent of the primary backend's format, and its own
+	// Enabled condition to skip that emission on some runs. See FormatIntent.
+	Emit []EmitTarget `json:"emit,omitempty" yaml:"emit,omitempty" doc:"Additional save-only projected state emissions" maxItems:"20"`
 }
 
-// Backend configures the state persistence backend.
+// Backend configures a state persistence backend -- used both for the primary
+// Config.Backend (load + save) and for each Config.Emit target (save only).
 type Backend struct {
 	// Provider is the name of a registered provider with CapabilityState (e.g., "file").
 	Provider string `json:"provider" yaml:"provider" doc:"Provider name with CapabilityState" maxLength:"253" example:"file"`
+
+	// Format controls what shape of the state document this backend receives at
+	// save time. "full" (the default) saves the complete state document; "intent"
+	// saves the lean, replay-relevant projection (see FormatIntent). Load is
+	// unaffected by Format -- decoding already tolerates a lean document.
+	Format string `json:"format,omitempty" yaml:"format,omitempty" doc:"Save-time projection: full (default) or intent" enum:"full,intent" example:"intent"`
 
 	// Inputs are provider-specific inputs. Each value is a ValueRef for dynamic resolution.
 	//
@@ -100,6 +154,9 @@ type Backend struct {
 	//
 	// Go templates spread resolver data at top level (e.g. {{ .name }}) and expose CLI
 	// parameters under __params (e.g. {{ .__params.project }}).
+	//
+	// For an Emit target, Inputs are resolved at save time only (resolver data _
+	// is always available), so this constraint applies only to the primary backend.
 	Inputs map[string]*spec.ValueRef `json:"inputs" yaml:"inputs" doc:"Provider-specific inputs (ValueRef for dynamic resolution)"`
 
 	// SaveOverrides are provider-specific inputs resolved only at save time when
@@ -108,8 +165,26 @@ type Backend struct {
 	// (via Inputs) and saving to a resolver-derived branch (via SaveOverrides).
 	//
 	// At load time, SaveOverrides are completely ignored -- no errors are raised
-	// for resolver-dependent expressions.
+	// for resolver-dependent expressions. Not applicable to Emit targets, which
+	// are save-only already -- an Emit target's Inputs may reference resolvers
+	// directly.
 	SaveOverrides map[string]*spec.ValueRef `json:"saveOverrides,omitempty" yaml:"saveOverrides,omitempty" doc:"Save-time-only inputs that override Inputs keys"`
+}
+
+// EmitTarget is one additional, save-only projected state emission. It embeds
+// Backend (provider, format, inputs, saveOverrides) and adds a per-target
+// enable condition.
+type EmitTarget struct {
+	Backend `json:",inline" yaml:",inline"`
+
+	// Enabled gates this emission independent of the primary Config.Enabled.
+	// Resolved at save time, so it may reference ANY resolver (unlike the
+	// primary Config.Enabled, which is load-time and restricted to
+	// state-independent resolvers): all resolvers have run by save time. CEL
+	// expressions have __params (CLI parameters) and _ (resolver outputs)
+	// available; Go templates spread resolver data at top level and expose
+	// __params. Coerced to bool; absent defaults to true (always emit).
+	Enabled *spec.ValueRef `json:"enabled,omitempty" yaml:"enabled,omitempty" doc:"Per-emit condition, resolved at save time (default: always emit)"`
 }
 
 // Data is the complete persisted state structure.
@@ -138,6 +213,21 @@ type Data struct {
 	// Fingerprints stores file and input hashes for action up-to-date checks.
 	// Keys use the format "__fingerprint:<actionName>:<type>".
 	Fingerprints map[string]*FingerprintEntry `json:"fingerprints" doc:"Action fingerprint hashes"`
+
+	// Attestation carries an optional producer attestation supplied alongside an
+	// intent document -- for example the authenticated principal, its issuing
+	// identity provider, and a digest of the bytes that were signed.
+	//
+	// scafctl never interprets, validates, or verifies this value. It is stored
+	// verbatim and round-tripped across load, projection (see FormatIntent), and
+	// save so that a downstream verifier (a pipeline, a policy gate) can read it
+	// back unchanged. Keeping it opaque means the attestation schema is owned by
+	// whoever produces it and can evolve without a scafctl change.
+	//
+	// Any cryptographic signature over the state document is expected to be
+	// detached (stored beside the file, not embedded here): a signature cannot
+	// cover bytes that contain the signature itself.
+	Attestation json.RawMessage `json:"attestation,omitempty" doc:"Opaque producer attestation, stored verbatim and never interpreted by scafctl"`
 }
 
 // Metadata identifies the solution and tracks state lifecycle timestamps.
