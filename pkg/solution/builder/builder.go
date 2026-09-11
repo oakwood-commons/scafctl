@@ -551,7 +551,7 @@ func (a *RegistryFetcherAdapter) ListSolutions(ctx context.Context, name string)
 // the binary) or explicitly declared in bundle.plugins. Returns an actionable
 // error listing missing providers and suggesting the YAML to add.
 func validateProviderCoverage(sol *solution.Solution, builtins []string, officialReg *official.Registry) error {
-	referenced := sol.Spec.ReferencedProviderNames()
+	referenced := sol.ReferencedProviderNames()
 	if len(referenced) == 0 {
 		return nil
 	}

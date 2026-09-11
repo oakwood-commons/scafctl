@@ -982,10 +982,11 @@ func (p *SolutionProvider) autoResolveChildProviders(ctx context.Context, sol *s
 		return nil
 	}
 
-	// Use Spec.ReferencedProviderNames() to collect all provider references,
-	// then filter to those that are missing and official.
+	// Use Solution.ReferencedProviderNames() to collect all provider references
+	// (including the state backend provider), then filter to those that are
+	// missing and official.
 	var missing []official.Provider
-	for _, name := range sol.Spec.ReferencedProviderNames() {
+	for _, name := range sol.ReferencedProviderNames() {
 		if reg.Has(name) {
 			continue
 		}

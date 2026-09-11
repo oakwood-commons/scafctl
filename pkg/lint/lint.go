@@ -2917,7 +2917,7 @@ func lintValidateExternalProviders(sol *solution.Solution, result *Result, regis
 		return registry.Has(s)
 	}
 	err := prepare.ValidateExternalProviders(sol, builtin, func(sol *solution.Solution) []string {
-		return sol.Spec.ReferencedProviderNames()
+		return sol.ReferencedProviderNames()
 	})
 	if err != nil {
 		result.addFinding(SeverityError, "provider", "spec",

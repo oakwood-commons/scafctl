@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -582,4 +583,35 @@ func (s *Solution) Validate() error {
 	}
 
 	return nil
+}
+
+// ReferencedProviderNames returns the unique, sorted set of provider names
+// referenced anywhere in the solution that must be registered before
+// execution. It is the whole-solution superset of Spec.ReferencedProviderNames:
+// every provider used by resolver phases, reusable calls, and workflow actions,
+// plus the state persistence backend provider (state.backend.provider) when
+// state is configured.
+//
+// The state backend is included because the state manager executes it
+// (state_load / state_save) around a run, so it must be resolvable, fetchable,
+// and declared just like any spec-referenced provider. Prefer this over
+// Spec.ReferencedProviderNames() when validating, fetching, or registering the
+// providers a solution needs.
+func (s *Solution) ReferencedProviderNames() []string {
+	if s == nil {
+		return nil
+	}
+	names := s.Spec.ReferencedProviderNames()
+	if s.State == nil || s.State.Backend.Provider == "" {
+		return names
+	}
+	for _, n := range names {
+		if n == s.State.Backend.Provider {
+			return names
+		}
+	}
+	merged := slices.Clone(names)
+	merged = append(merged, s.State.Backend.Provider)
+	slices.Sort(merged)
+	return merged
 }

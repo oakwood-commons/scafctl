@@ -981,7 +981,7 @@ func providerPoolDeps(sol *solution.Solution, cfg *prepareConfig) []solution.Plu
 		}
 	}
 	if cfg.officialProviders != nil {
-		for _, name := range sol.Spec.ReferencedProviderNames() {
+		for _, name := range sol.ReferencedProviderNames() {
 			if seen[name] {
 				continue
 			}
@@ -1040,7 +1040,7 @@ func missingOfficialProviders(
 	officialReg *official.Registry,
 ) []official.Provider {
 	var missing []official.Provider
-	for _, name := range sol.Spec.ReferencedProviderNames() {
+	for _, name := range sol.ReferencedProviderNames() {
 		if reg.Has(name) {
 			continue
 		}

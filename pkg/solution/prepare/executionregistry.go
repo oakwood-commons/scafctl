@@ -143,7 +143,7 @@ func autoResolveOfficialVersioned(
 	// in either the builtin or external tier, and not already in the
 	// resolution map (which means fetchAndRegisterVersioned already handled them).
 	var missing []official.Provider
-	for _, name := range sol.Spec.ReferencedProviderNames() {
+	for _, name := range sol.ReferencedProviderNames() {
 		if composite.HasBase(name) {
 			continue
 		}
