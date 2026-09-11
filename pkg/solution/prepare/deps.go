@@ -112,7 +112,7 @@ func (e *UnconfiguredCatalogError) Is(target error) bool {
 func ValidateExternalProviders(sol *solution.Solution, isBuiltin func(string) bool, extractProviderReferences func(*solution.Solution) []string) error {
 	if extractProviderReferences == nil {
 		extractProviderReferences = func(sol *solution.Solution) []string {
-			return sol.Spec.ReferencedProviderNames()
+			return sol.ReferencedProviderNames()
 		}
 	}
 	return validateExternalProviderInternal(extractProviderReferences(sol), sol.Bundle.Plugins, isBuiltin)
@@ -123,7 +123,7 @@ func ValidateExternalProviders(sol *solution.Solution, isBuiltin func(string) bo
 func validateExternalProviders(sol *solution.Solution, isBuiltin func(string) bool, extractProviderReferences func(*solution.Solution) []string) error {
 	if extractProviderReferences == nil {
 		extractProviderReferences = func(sol *solution.Solution) []string {
-			return sol.Spec.ReferencedProviderNames()
+			return sol.ReferencedProviderNames()
 		}
 	}
 	return validateExternalProviderInternal(extractProviderReferences(sol), sol.Bundle.Plugins, isBuiltin)
@@ -170,7 +170,7 @@ type providerDependency struct {
 func externalProviders(sol *solution.Solution, extractDependencyFunc func([]solution.PluginDependency) []solution.PluginDependency, isBuiltin func(string) bool, extractReferences func(*solution.Solution) []string) ([]providerDependency, error) {
 	if extractReferences == nil {
 		extractReferences = func(sol *solution.Solution) []string {
-			return sol.Spec.ReferencedProviderNames()
+			return sol.ReferencedProviderNames()
 		}
 	}
 	return externalProviderInternal(extractReferences(sol), sol.Bundle.Plugins, extractDependencyFunc, isBuiltin)
