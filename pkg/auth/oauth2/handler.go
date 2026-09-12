@@ -220,8 +220,14 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 
 	h.logger.V(1).Info("performing dynamic client registration")
 
-	// Perform dynamic client registration.
-	reqBody, err := json.Marshal(dcr.ClientMetadata)
+	// Perform dynamic client registration. RFC 7591 requires the request
+	// body to be a JSON object; marshal a nil metadata map as "{}" rather
+	// than JSON null.
+	clientMetadata := dcr.ClientMetadata
+	if clientMetadata == nil {
+		clientMetadata = map[string]any{}
+	}
+	reqBody, err := json.Marshal(clientMetadata)
 	if err != nil {
 		return auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
 	}
