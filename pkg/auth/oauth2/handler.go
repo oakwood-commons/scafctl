@@ -42,8 +42,15 @@ const (
 )
 
 type dynamicClient struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
+	ClientID              string `json:"client_id"`
+	ClientSecret          string `json:"client_secret"` //nolint:gosec // struct field, not a credential literal
+	ClientSecretExpiresAt int64  `json:"client_secret_expires_at,omitempty"`
+}
+
+// expired reports whether the cached dynamic client's secret has expired.
+// A zero ClientSecretExpiresAt means the secret does not expire (RFC 7591).
+func (c *dynamicClient) expired() bool {
+	return c.ClientSecretExpiresAt > 0 && time.Now().Unix() >= c.ClientSecretExpiresAt
 }
 
 // Handler implements auth.Handler for generic configurable OAuth2 services.
@@ -163,9 +170,9 @@ func (h *Handler) Capabilities() []auth.Capability {
 	}
 }
 
-func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string) error {
-	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret}
-	data, err := json.Marshal(client)
+func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string, expiresAt int64) error {
+	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret, ClientSecretExpiresAt: expiresAt}
+	data, err := json.Marshal(client) //nolint:gosec // marshaling to store in the secret store, not logging
 	if err != nil {
 		return fmt.Errorf("marshal dynamic client: %w", err)
 	}
@@ -184,26 +191,31 @@ func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error)
 	return &client, nil
 }
 
-// dynamicClientRegistration performs RFC 7591 Dynamic Client Registration if configured.
-// It returns a new handler with the dynamic client ID and secret, or an error.
-func (h *Handler) dynamicClientRegistration(ctx context.Context) (*Handler, error) {
+// dynamicClientRegistration performs RFC 7591 Dynamic Client Registration if
+// configured. On success it mutates h.cfg in place with the (cached or newly
+// registered) client credentials, so both this call's caller and any later
+// calls on the same *Handler (e.g. GetToken, refresh) observe the same
+// client ID/secret and cache fingerprint. It must be called after
+// ensureSecrets, since it dereferences h.secretStore.
+func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	dcr := h.cfg.DynamicClientRegistration
 	if dcr == nil || dcr.RegistrationEndpoint == "" {
-		return h, nil
+		return nil
 	}
 
 	// Check if we already have a dynamic client registered and cached.
 	cachedClient, err := h.loadDynamicClient(ctx)
-	if err == nil && cachedClient != nil {
+	if err == nil && cachedClient != nil && !cachedClient.expired() {
 		h.logger.V(1).Info("using cached dynamic client")
-		// Return a new handler with the cached client credentials.
-		newCfg := h.cfg
-		newCfg.ClientID = cachedClient.ClientID
-		newCfg.ClientSecret = cachedClient.ClientSecret
-		return New(newCfg, WithLogger(h.logger), WithHTTPClient(h.httpClient), WithSecretStore(h.secretStore))
+		h.cfg.ClientID = cachedClient.ClientID
+		h.cfg.ClientSecret = cachedClient.ClientSecret
+		return nil
 	}
 	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
-		return nil, auth.NewError(h.cfg.Name, "load_dynamic_client", err)
+		return auth.NewError(h.cfg.Name, "load_dynamic_client", err)
+	}
+	if cachedClient != nil && cachedClient.expired() {
+		h.logger.V(1).Info("cached dynamic client secret expired, re-registering")
 	}
 
 	h.logger.V(1).Info("performing dynamic client registration")
@@ -211,12 +223,12 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) (*Handler, erro
 	// Perform dynamic client registration.
 	reqBody, err := json.Marshal(dcr.ClientMetadata)
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
+		return auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dcr.RegistrationEndpoint, bytes.NewBuffer(reqBody))
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "dcr_request", fmt.Errorf("create registration request: %w", err))
+		return auth.NewError(h.cfg.Name, "dcr_request", fmt.Errorf("create registration request: %w", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -226,52 +238,57 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) (*Handler, erro
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
+		return auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 	if err != nil {
-		return nil, auth.NewError(h.cfg.Name, "dcr_read_body", fmt.Errorf("read registration response: %w", err))
+		return auth.NewError(h.cfg.Name, "dcr_read_body", fmt.Errorf("read registration response: %w", err))
 	}
 
 	if resp.StatusCode != http.StatusCreated {
-		return nil, auth.NewError(h.cfg.Name, "dcr_http_status", fmt.Errorf("registration failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
+		return auth.NewError(h.cfg.Name, "dcr_http_status", fmt.Errorf("registration failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
 	}
 
 	var regResp struct {
-		ClientID     string `json:"client_id"`
-		ClientSecret string `json:"client_secret"`
+		ClientID              string `json:"client_id"`
+		ClientSecret          string `json:"client_secret"` //nolint:gosec // JSON field
+		ClientSecretExpiresAt int64  `json:"client_secret_expires_at"`
 	}
 	if err := json.Unmarshal(respBody, &regResp); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "dcr_unmarshal", fmt.Errorf("parse registration response: %w", err))
+		return auth.NewError(h.cfg.Name, "dcr_unmarshal", fmt.Errorf("parse registration response: %w", err))
 	}
 
 	if regResp.ClientID == "" {
-		return nil, auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
+		return auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
 	}
 
 	// Store the new client credentials.
-	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret); err != nil {
-		return nil, auth.NewError(h.cfg.Name, "dcr_store", err)
+	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret, regResp.ClientSecretExpiresAt); err != nil {
+		return auth.NewError(h.cfg.Name, "dcr_store", err)
 	}
 
-	// Return a new handler with the new client credentials.
-	newCfg := h.cfg
-	newCfg.ClientID = regResp.ClientID
-	newCfg.ClientSecret = regResp.ClientSecret
-	return New(newCfg, WithLogger(h.logger), WithHTTPClient(h.httpClient), WithSecretStore(h.secretStore))
+	// Apply the new client credentials to this handler.
+	h.cfg.ClientID = regResp.ClientID
+	h.cfg.ClientSecret = regResp.ClientSecret
+	return nil
 }
 
 // Login performs authentication using the configured OAuth2 flow.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
-	newHandler, err := h.dynamicClientRegistration(ctx)
-	if err != nil {
+	if err := h.ensureSecrets(); err != nil {
 		return nil, err
 	}
-	h = newHandler
 
-	if err := h.ensureSecrets(); err != nil {
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if err := h.dynamicClientRegistration(ctx); err != nil {
 		return nil, err
 	}
 
@@ -284,13 +301,6 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	if len(scopes) == 0 {
 		scopes = h.cfg.Scopes
 	}
-
-	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
 	var tokenResp *tokenResponse
 	var loginErr error
@@ -331,9 +341,10 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	// Verify token identity (optional)
 	var claims *auth.Claims
 	if h.cfg.VerifyURL != "" {
-		claims, err = h.verifyToken(ctx, tokenResp.AccessToken)
-		if err != nil {
-			h.logger.V(1).Info("token verification failed, continuing without identity", "error", err)
+		var verifyErr error
+		claims, verifyErr = h.verifyToken(ctx, tokenResp.AccessToken)
+		if verifyErr != nil {
+			h.logger.V(1).Info("token verification failed, continuing without identity", "error", verifyErr)
 		}
 	}
 	if claims == nil {

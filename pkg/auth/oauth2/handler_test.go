@@ -1196,3 +1196,48 @@ func TestHandler_Login_DynamicClientRegistration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, registrationRequests, "registration should not be called a second time")
 }
+
+func TestHandler_Login_DynamicClientRegistration_ExpiredSecretReregisters(t *testing.T) {
+	var registrationRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			registrationRequests++
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":                fmt.Sprintf("dynamic-client-%d", registrationRequests),
+				"client_secret":            "dynamic-secret",
+				"client_secret_expires_at": time.Now().Add(time.Hour).Unix(),
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			writeJSON(w, tokenResponse{AccessToken: "dcr-access-token", TokenType: "Bearer", ExpiresIn: 3600})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.DynamicClientRegistration = &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			ClientMetadata:       map[string]any{"client_name": "scafctl"},
+		}
+	})
+
+	_, err := h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests)
+
+	// Manually expire the cached dynamic client's secret.
+	key := h.profileSecretKey(context.Background(), dynamicClientSecretKey)
+	expired := dynamicClient{ClientID: "dynamic-client-1", ClientSecret: "dynamic-secret", ClientSecretExpiresAt: time.Now().Add(-time.Hour).Unix()}
+	data, err := json.Marshal(expired)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(context.Background(), key, data))
+
+	// Login again should detect the expired secret and re-register.
+	_, err = h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 2, registrationRequests, "expired dynamic client should trigger re-registration")
+}
