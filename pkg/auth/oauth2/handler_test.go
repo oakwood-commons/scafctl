@@ -439,6 +439,9 @@ func TestValidateConfig(t *testing.T) {
 		{name: "invalid callbackHost", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", CallbackHost: "evil.com"}, wantErr: "not allowed"},
 		{name: "invalid callbackPath", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", CallbackPath: "no-slash"}, wantErr: "must start with /"},
 		{name: "valid callbackHost and path", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", CallbackHost: "127.0.0.1", CallbackPath: "/auth/callback"}},
+		{name: "dcr missing registrationEndpoint", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", ClientID: "c", AuthorizeURL: "https://x.com/a", DynamicClientRegistration: &config.DynamicClientRegistrationConfig{}}, wantErr: "dynamicClientRegistration.registrationEndpoint is required"},
+		{name: "dcr-only satisfies clientID", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", DynamicClientRegistration: &config.DynamicClientRegistrationConfig{RegistrationEndpoint: "https://x.com/register"}}},
+		{name: "dcr-only satisfies client_credentials secret", cfg: config.CustomOAuth2Config{Name: "t", TokenURL: "https://x.com/token", DefaultFlow: "client_credentials", DynamicClientRegistration: &config.DynamicClientRegistrationConfig{RegistrationEndpoint: "https://x.com/register"}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1144,4 +1147,173 @@ func TestHandler_GetToken_ProfileResolvedSkipsReResolution(t *testing.T) {
 	token, err := h.GetToken(ctx, auth.TokenOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "refreshed-access-token", token.AccessToken)
+}
+
+func TestHandler_Login_DynamicClientRegistration(t *testing.T) {
+	var registrationRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			registrationRequests++
+			var reqBody map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&reqBody))
+			assert.Equal(t, "scafctl", reqBody["client_name"])
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]string{"client_id": "dynamic-client-id", "client_secret": "dynamic-client-secret"})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			assert.Equal(t, "dynamic-client-id", r.FormValue("client_id"))
+			writeJSON(w, tokenResponse{AccessToken: "dcr-access-token", TokenType: "Bearer", ExpiresIn: 3600})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "static-secret" // This will be overridden by DCR
+		cfg.DynamicClientRegistration = &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			ClientMetadata:       map[string]any{"client_name": "scafctl"},
+		}
+	})
+
+	// First login should perform registration.
+	_, err := h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests)
+
+	// Check that the dynamic client is stored.
+	clientBytes, err := store.Get(context.Background(), h.profileSecretKey(context.Background(), dynamicClientSecretKey))
+	require.NoError(t, err)
+	var client dynamicClient
+	require.NoError(t, json.Unmarshal(clientBytes, &client))
+	assert.Equal(t, "dynamic-client-id", client.ClientID)
+	assert.Equal(t, "dynamic-client-secret", client.ClientSecret)
+
+	// Second login should use the cached client.
+	newHandler, err := New(h.cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	_, err = newHandler.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests, "registration should not be called a second time")
+}
+
+func TestHandler_Login_DynamicClientRegistration_ExpiredSecretReregisters(t *testing.T) {
+	var registrationRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			registrationRequests++
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":                fmt.Sprintf("dynamic-client-%d", registrationRequests),
+				"client_secret":            "dynamic-secret",
+				"client_secret_expires_at": time.Now().Add(time.Hour).Unix(),
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			writeJSON(w, tokenResponse{AccessToken: "dcr-access-token", TokenType: "Bearer", ExpiresIn: 3600})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.DynamicClientRegistration = &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			ClientMetadata:       map[string]any{"client_name": "scafctl"},
+		}
+	})
+
+	_, err := h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests)
+
+	// Manually expire the cached dynamic client's secret.
+	key := h.profileSecretKey(context.Background(), dynamicClientSecretKey)
+	expired := dynamicClient{ClientID: "dynamic-client-1", ClientSecret: "dynamic-secret", ClientSecretExpiresAt: time.Now().Add(-time.Hour).Unix()}
+	data, err := json.Marshal(expired)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(context.Background(), key, data))
+
+	// Login again should detect the expired secret and re-register.
+	_, err = h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 2, registrationRequests, "expired dynamic client should trigger re-registration")
+}
+
+func TestHandler_Login_DynamicClientRegistration_FingerprintMismatchReregisters(t *testing.T) {
+	var registrationRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			registrationRequests++
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]any{
+				"client_id":     fmt.Sprintf("dynamic-client-%d", registrationRequests),
+				"client_secret": "dynamic-secret",
+			})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			writeJSON(w, tokenResponse{AccessToken: "dcr-access-token", TokenType: "Bearer", ExpiresIn: 3600})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.DynamicClientRegistration = &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			ClientMetadata:       map[string]any{"client_name": "scafctl"},
+		}
+	})
+
+	_, err := h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests)
+
+	// Simulate a stale cache entry fingerprinted against a different
+	// registration target (e.g. the handler's tokenURL/metadata changed
+	// since the credentials were cached).
+	key := h.profileSecretKey(context.Background(), dynamicClientSecretKey)
+	stale := dynamicClient{ClientID: "dynamic-client-1", ClientSecret: "dynamic-secret", Fingerprint: "stale-fingerprint"}
+	data, err := json.Marshal(stale)
+	require.NoError(t, err)
+	require.NoError(t, store.Set(context.Background(), key, data))
+
+	// Login again should detect the fingerprint mismatch and re-register
+	// rather than silently reusing credentials issued for a different target.
+	_, err = h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 2, registrationRequests, "fingerprint mismatch should trigger re-registration")
+}
+
+func TestDcrFingerprint(t *testing.T) {
+	base := &config.DynamicClientRegistrationConfig{
+		RegistrationEndpoint: "https://as.example.com/register",
+		ClientMetadata:       map[string]any{"client_name": "scafctl", "grant_types": []any{"client_credentials"}},
+	}
+
+	// Same inputs (even with metadata keys in a different map iteration
+	// order) must produce the same fingerprint.
+	reordered := &config.DynamicClientRegistrationConfig{
+		RegistrationEndpoint: base.RegistrationEndpoint,
+		ClientMetadata:       map[string]any{"grant_types": []any{"client_credentials"}, "client_name": "scafctl"},
+	}
+	assert.Equal(t, dcrFingerprint(base, "https://as.example.com/token"), dcrFingerprint(reordered, "https://as.example.com/token"))
+
+	// A different token URL must change the fingerprint.
+	assert.NotEqual(t, dcrFingerprint(base, "https://as.example.com/token"), dcrFingerprint(base, "https://other.example.com/token"))
+
+	// A different registration endpoint must change the fingerprint.
+	other := &config.DynamicClientRegistrationConfig{RegistrationEndpoint: "https://other.example.com/register", ClientMetadata: base.ClientMetadata}
+	assert.NotEqual(t, dcrFingerprint(base, "https://as.example.com/token"), dcrFingerprint(other, "https://as.example.com/token"))
+
+	// Different client metadata must change the fingerprint.
+	diffMeta := &config.DynamicClientRegistrationConfig{RegistrationEndpoint: base.RegistrationEndpoint, ClientMetadata: map[string]any{"client_name": "other"}}
+	assert.NotEqual(t, dcrFingerprint(base, "https://as.example.com/token"), dcrFingerprint(diffMeta, "https://as.example.com/token"))
 }

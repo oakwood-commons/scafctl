@@ -85,25 +85,26 @@ type SanitizedGCPAuth struct {
 // SanitizedCustomOAuth2 mirrors CustomOAuth2Config with the client secret and
 // token-exchange request body dropped.
 type SanitizedCustomOAuth2 struct {
-	Name                   string                  `json:"name" yaml:"name" doc:"Handler name" maxLength:"64" example:"quay"`
-	DisplayName            string                  `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name" maxLength:"128"`
-	AuthorizeURL           string                  `json:"authorizeURL,omitempty" yaml:"authorizeURL,omitempty" doc:"OAuth2 authorization endpoint" maxLength:"2048"`
-	TokenURL               string                  `json:"tokenURL" yaml:"tokenURL" doc:"OAuth2 token endpoint" maxLength:"2048"`
-	DeviceAuthURL          string                  `json:"deviceAuthURL,omitempty" yaml:"deviceAuthURL,omitempty" doc:"OAuth2 device authorization endpoint" maxLength:"2048"`
-	ClientID               string                  `json:"clientID" yaml:"clientID" doc:"OAuth2 client ID" maxLength:"256"`
-	Scopes                 []string                `json:"scopes,omitempty" yaml:"scopes,omitempty" doc:"Default OAuth scopes" maxItems:"20"`
-	DefaultFlow            string                  `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default OAuth2 flow" maxLength:"32"`
-	CallbackPort           int                     `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" doc:"Local callback port"`
-	CallbackPath           string                  `json:"callbackPath,omitempty" yaml:"callbackPath,omitempty" doc:"Callback path" maxLength:"256"`
-	CallbackHost           string                  `json:"callbackHost,omitempty" yaml:"callbackHost,omitempty" doc:"Callback host" maxLength:"253"`
-	DeviceCodePollInterval int                     `json:"deviceCodePollInterval,omitempty" yaml:"deviceCodePollInterval,omitempty" doc:"Device code poll interval"`
-	DisablePKCE            bool                    `json:"disablePKCE,omitempty" yaml:"disablePKCE,omitempty" doc:"Disable PKCE"`
-	ResponseType           string                  `json:"responseType,omitempty" yaml:"responseType,omitempty" doc:"OAuth2 response type" maxLength:"16"`
-	VerifyURL              string                  `json:"verifyURL,omitempty" yaml:"verifyURL,omitempty" doc:"Token verification endpoint" maxLength:"2048"`
-	IdentityFields         *IdentityFieldMapping   `json:"identityFields,omitempty" yaml:"identityFields,omitempty" doc:"Field mapping from verify response to identity claims"`
-	Registry               string                  `json:"registry,omitempty" yaml:"registry,omitempty" doc:"OCI registry host" maxLength:"253"`
-	RegistryUsername       string                  `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty" doc:"Registry username" maxLength:"256"`
-	TokenExchange          *SanitizedTokenExchange `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" doc:"Token exchange configuration (request body redacted)"`
+	Name                      string                              `json:"name" yaml:"name" doc:"Handler name" maxLength:"64" example:"quay"`
+	DisplayName               string                              `json:"displayName,omitempty" yaml:"displayName,omitempty" doc:"Human-readable display name" maxLength:"128"`
+	AuthorizeURL              string                              `json:"authorizeURL,omitempty" yaml:"authorizeURL,omitempty" doc:"OAuth2 authorization endpoint" maxLength:"2048"`
+	TokenURL                  string                              `json:"tokenURL" yaml:"tokenURL" doc:"OAuth2 token endpoint" maxLength:"2048"`
+	DeviceAuthURL             string                              `json:"deviceAuthURL,omitempty" yaml:"deviceAuthURL,omitempty" doc:"OAuth2 device authorization endpoint" maxLength:"2048"`
+	ClientID                  string                              `json:"clientID" yaml:"clientID" doc:"OAuth2 client ID" maxLength:"256"`
+	Scopes                    []string                            `json:"scopes,omitempty" yaml:"scopes,omitempty" doc:"Default OAuth scopes" maxItems:"20"`
+	DefaultFlow               string                              `json:"defaultFlow,omitempty" yaml:"defaultFlow,omitempty" doc:"Default OAuth2 flow" maxLength:"32"`
+	CallbackPort              int                                 `json:"callbackPort,omitempty" yaml:"callbackPort,omitempty" doc:"Local callback port"`
+	CallbackPath              string                              `json:"callbackPath,omitempty" yaml:"callbackPath,omitempty" doc:"Callback path" maxLength:"256"`
+	CallbackHost              string                              `json:"callbackHost,omitempty" yaml:"callbackHost,omitempty" doc:"Callback host" maxLength:"253"`
+	DeviceCodePollInterval    int                                 `json:"deviceCodePollInterval,omitempty" yaml:"deviceCodePollInterval,omitempty" doc:"Device code poll interval"`
+	DisablePKCE               bool                                `json:"disablePKCE,omitempty" yaml:"disablePKCE,omitempty" doc:"Disable PKCE"`
+	ResponseType              string                              `json:"responseType,omitempty" yaml:"responseType,omitempty" doc:"OAuth2 response type" maxLength:"16"`
+	VerifyURL                 string                              `json:"verifyURL,omitempty" yaml:"verifyURL,omitempty" doc:"Token verification endpoint" maxLength:"2048"`
+	IdentityFields            *IdentityFieldMapping               `json:"identityFields,omitempty" yaml:"identityFields,omitempty" doc:"Field mapping from verify response to identity claims"`
+	Registry                  string                              `json:"registry,omitempty" yaml:"registry,omitempty" doc:"OCI registry host" maxLength:"253"`
+	RegistryUsername          string                              `json:"registryUsername,omitempty" yaml:"registryUsername,omitempty" doc:"Registry username" maxLength:"256"`
+	TokenExchange             *SanitizedTokenExchange             `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" doc:"Token exchange configuration (request body redacted)"`
+	DynamicClientRegistration *SanitizedDynamicClientRegistration `json:"dynamicClientRegistration,omitempty" yaml:"dynamicClientRegistration,omitempty" doc:"RFC 7591 Dynamic Client Registration configuration (initial access token redacted)"`
 }
 
 // SanitizedTokenExchange mirrors TokenExchangeConfig with the request body
@@ -114,6 +115,14 @@ type SanitizedTokenExchange struct {
 	Method           string `json:"method,omitempty" yaml:"method,omitempty" doc:"HTTP method" maxLength:"10"`
 	TokenJSONPath    string `json:"tokenJSONPath" yaml:"tokenJSONPath" doc:"JSON path to the derived token" maxLength:"256"`
 	UsernameJSONPath string `json:"usernameJSONPath,omitempty" yaml:"usernameJSONPath,omitempty" doc:"JSON path to username" maxLength:"256"`
+}
+
+// SanitizedDynamicClientRegistration mirrors DynamicClientRegistrationConfig
+// with the initial access token dropped -- it is a bearer credential used to
+// authorize the registration request.
+type SanitizedDynamicClientRegistration struct {
+	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048"`
+	ClientMetadata       map[string]any `json:"clientMetadata,omitempty" yaml:"clientMetadata,omitempty" doc:"Client metadata for dynamic registration"`
 }
 
 // SanitizedAuthHandler mirrors HandlerConfig but drops the opaque plugin
@@ -353,6 +362,12 @@ func sanitizeCustomOAuth2(oc CustomOAuth2Config) SanitizedCustomOAuth2 {
 			Method:           oc.TokenExchange.Method,
 			TokenJSONPath:    oc.TokenExchange.TokenJSONPath,
 			UsernameJSONPath: oc.TokenExchange.UsernameJSONPath,
+		}
+	}
+	if oc.DynamicClientRegistration != nil {
+		out.DynamicClientRegistration = &SanitizedDynamicClientRegistration{
+			RegistrationEndpoint: oc.DynamicClientRegistration.RegistrationEndpoint,
+			ClientMetadata:       oc.DynamicClientRegistration.ClientMetadata,
 		}
 	}
 	return out

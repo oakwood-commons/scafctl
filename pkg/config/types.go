@@ -999,6 +999,13 @@ type APITracingConfig struct {
 	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty" mapstructure:"enabled" doc:"Enable OpenTelemetry tracing"`
 }
 
+// DynamicClientRegistrationConfig holds configuration for RFC 7591 Dynamic Client Registration.
+type DynamicClientRegistrationConfig struct {
+	RegistrationEndpoint string         `json:"registrationEndpoint,omitempty" yaml:"registrationEndpoint,omitempty" mapstructure:"registrationEndpoint" doc:"RFC 7591 Dynamic Client Registration endpoint" maxLength:"2048"`
+	ClientMetadata       map[string]any `json:"clientMetadata,omitempty" yaml:"clientMetadata,omitempty" mapstructure:"clientMetadata" doc:"Client metadata for dynamic registration"`
+	InitialAccessToken   string         `json:"initialAccessToken,omitempty" yaml:"initialAccessToken,omitempty" mapstructure:"initialAccessToken" doc:"Initial access token for dynamic registration"`
+}
+
 // CustomOAuth2Config defines a user-configurable OAuth2 auth handler.
 // Each entry registers as its own named auth.Handler, usable for any OAuth2 service
 // (OCI registries, APIs, providers, etc.).
@@ -1038,6 +1045,10 @@ type CustomOAuth2Config struct {
 
 	// Token exchange (optional secondary credential derivation)
 	TokenExchange *TokenExchangeConfig `json:"tokenExchange,omitempty" yaml:"tokenExchange,omitempty" mapstructure:"tokenExchange" doc:"Optional secondary API call to derive a service-specific credential from the OAuth2 token"`
+
+	// DynamicClientRegistration holds configuration for RFC 7591 Dynamic Client Registration.
+	// When set, the handler performs dynamic registration before the authorization flow.
+	DynamicClientRegistration *DynamicClientRegistrationConfig `json:"dynamicClientRegistration,omitempty" yaml:"dynamicClientRegistration,omitempty" mapstructure:"dynamicClientRegistration" doc:"RFC 7591 Dynamic Client Registration configuration"`
 }
 
 // TokenExchangeConfig defines a secondary API call that the OAuth2 handler executes after
