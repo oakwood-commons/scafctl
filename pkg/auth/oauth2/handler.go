@@ -38,7 +38,13 @@ const (
 	defaultPollInterval     = 5
 	maxResponseBody         = 1 << 20
 	defaultTokenType        = "Bearer"
+	dynamicClientSecretKey  = "dynamic_client"
 )
+
+type dynamicClient struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
 
 // Handler implements auth.Handler for generic configurable OAuth2 services.
 type Handler struct {
@@ -157,8 +163,114 @@ func (h *Handler) Capabilities() []auth.Capability {
 	}
 }
 
+func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string) error {
+	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret}
+	data, err := json.Marshal(client)
+	if err != nil {
+		return fmt.Errorf("marshal dynamic client: %w", err)
+	}
+	return h.secretStore.Set(ctx, h.profileSecretKey(ctx, dynamicClientSecretKey), data)
+}
+
+func (h *Handler) loadDynamicClient(ctx context.Context) (*dynamicClient, error) {
+	data, err := h.secretStore.Get(ctx, h.profileSecretKey(ctx, dynamicClientSecretKey))
+	if err != nil {
+		return nil, err
+	}
+	var client dynamicClient
+	if err := json.Unmarshal(data, &client); err != nil {
+		return nil, fmt.Errorf("unmarshal dynamic client: %w", err)
+	}
+	return &client, nil
+}
+
+// dynamicClientRegistration performs RFC 7591 Dynamic Client Registration if configured.
+// It returns a new handler with the dynamic client ID and secret, or an error.
+func (h *Handler) dynamicClientRegistration(ctx context.Context) (*Handler, error) {
+	dcr := h.cfg.DynamicClientRegistration
+	if dcr == nil || dcr.RegistrationEndpoint == "" {
+		return h, nil
+	}
+
+	// Check if we already have a dynamic client registered and cached.
+	cachedClient, err := h.loadDynamicClient(ctx)
+	if err == nil && cachedClient != nil {
+		h.logger.V(1).Info("using cached dynamic client")
+		// Return a new handler with the cached client credentials.
+		newCfg := h.cfg
+		newCfg.ClientID = cachedClient.ClientID
+		newCfg.ClientSecret = cachedClient.ClientSecret
+		return New(newCfg, WithLogger(h.logger), WithHTTPClient(h.httpClient), WithSecretStore(h.secretStore))
+	}
+	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+		return nil, auth.NewError(h.cfg.Name, "load_dynamic_client", err)
+	}
+
+	h.logger.V(1).Info("performing dynamic client registration")
+
+	// Perform dynamic client registration.
+	reqBody, err := json.Marshal(dcr.ClientMetadata)
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "dcr_marshal", fmt.Errorf("marshal client metadata: %w", err))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dcr.RegistrationEndpoint, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "dcr_request", fmt.Errorf("create registration request: %w", err))
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	if dcr.InitialAccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+dcr.InitialAccessToken)
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "dcr_http", fmt.Errorf("registration request failed: %w", err))
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return nil, auth.NewError(h.cfg.Name, "dcr_read_body", fmt.Errorf("read registration response: %w", err))
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, auth.NewError(h.cfg.Name, "dcr_http_status", fmt.Errorf("registration failed (HTTP %d): %s", resp.StatusCode, string(respBody)))
+	}
+
+	var regResp struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}
+	if err := json.Unmarshal(respBody, &regResp); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "dcr_unmarshal", fmt.Errorf("parse registration response: %w", err))
+	}
+
+	if regResp.ClientID == "" {
+		return nil, auth.NewError(h.cfg.Name, "dcr_missing_field", fmt.Errorf("registration response missing client_id"))
+	}
+
+	// Store the new client credentials.
+	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret); err != nil {
+		return nil, auth.NewError(h.cfg.Name, "dcr_store", err)
+	}
+
+	// Return a new handler with the new client credentials.
+	newCfg := h.cfg
+	newCfg.ClientID = regResp.ClientID
+	newCfg.ClientSecret = regResp.ClientSecret
+	return New(newCfg, WithLogger(h.logger), WithHTTPClient(h.httpClient), WithSecretStore(h.secretStore))
+}
+
 // Login performs authentication using the configured OAuth2 flow.
 func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Result, error) {
+	newHandler, err := h.dynamicClientRegistration(ctx)
+	if err != nil {
+		return nil, err
+	}
+	h = newHandler
+
 	if err := h.ensureSecrets(); err != nil {
 		return nil, err
 	}
@@ -180,10 +292,8 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var (
-		tokenResp *tokenResponse
-		err       error
-	)
+	var tokenResp *tokenResponse
+	var loginErr error
 
 	switch flow { //nolint:exhaustive // only generic OAuth2 flows are supported
 	case auth.FlowInteractive:
@@ -191,17 +301,17 @@ func (h *Handler) Login(ctx context.Context, opts auth.LoginOptions) (*auth.Resu
 		if callbackPort == 0 {
 			callbackPort = h.cfg.CallbackPort
 		}
-		tokenResp, err = h.authCodeLogin(ctx, scopes, callbackPort)
+		tokenResp, loginErr = h.authCodeLogin(ctx, scopes, callbackPort)
 	case auth.FlowDeviceCode:
-		tokenResp, err = h.deviceCodeLogin(ctx, opts, scopes)
+		tokenResp, loginErr = h.deviceCodeLogin(ctx, opts, scopes)
 	case auth.FlowClientCredentials:
-		tokenResp, err = h.clientCredentialsLogin(ctx, scopes)
+		tokenResp, loginErr = h.clientCredentialsLogin(ctx, scopes)
 	default:
 		return nil, auth.NewError(h.cfg.Name, "login",
 			fmt.Errorf("%w: %s (supported: %v)", auth.ErrFlowNotSupported, flow, h.SupportedFlows()))
 	}
-	if err != nil {
-		return nil, err
+	if loginErr != nil {
+		return nil, loginErr
 	}
 
 	// Token exchange (optional post-flow pipeline)
@@ -1182,6 +1292,12 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 			default:
 				return fmt.Errorf("custom OAuth2 handler %q: tokenExchange.method must be GET, POST, PUT, or PATCH", cfg.Name)
 			}
+		}
+	}
+
+	if cfg.DynamicClientRegistration != nil {
+		if cfg.DynamicClientRegistration.RegistrationEndpoint == "" {
+			return fmt.Errorf("custom OAuth2 handler %q: dynamicClientRegistration.registrationEndpoint is required", cfg.Name)
 		}
 	}
 

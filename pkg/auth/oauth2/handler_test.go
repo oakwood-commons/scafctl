@@ -1145,3 +1145,54 @@ func TestHandler_GetToken_ProfileResolvedSkipsReResolution(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "refreshed-access-token", token.AccessToken)
 }
+
+func TestHandler_Login_DynamicClientRegistration(t *testing.T) {
+	var registrationRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/register":
+			registrationRequests++
+			var reqBody map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&reqBody))
+			assert.Equal(t, "scafctl", reqBody["client_name"])
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, map[string]string{"client_id": "dynamic-client-id", "client_secret": "dynamic-client-secret"})
+		case "/token":
+			require.NoError(t, r.ParseForm())
+			assert.Equal(t, "dynamic-client-id", r.FormValue("client_id"))
+			writeJSON(w, tokenResponse{AccessToken: "dcr-access-token", TokenType: "Bearer", ExpiresIn: 3600})
+		default:
+			t.Fatalf("unexpected request to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	h, store := newTestHandler(t, srv, func(cfg *config.CustomOAuth2Config) {
+		cfg.ClientSecret = "static-secret" // This will be overridden by DCR
+		cfg.DynamicClientRegistration = &config.DynamicClientRegistrationConfig{
+			RegistrationEndpoint: srv.URL + "/register",
+			ClientMetadata:       map[string]any{"client_name": "scafctl"},
+		}
+	})
+
+	// First login should perform registration.
+	_, err := h.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests)
+
+	// Check that the dynamic client is stored.
+	clientBytes, err := store.Get(context.Background(), h.profileSecretKey(context.Background(), dynamicClientSecretKey))
+	require.NoError(t, err)
+	var client dynamicClient
+	require.NoError(t, json.Unmarshal(clientBytes, &client))
+	assert.Equal(t, "dynamic-client-id", client.ClientID)
+	assert.Equal(t, "dynamic-client-secret", client.ClientSecret)
+
+	// Second login should use the cached client.
+	newHandler, err := New(h.cfg, WithSecretStore(store), WithHTTPClient(srv.Client()), WithLogger(logr.Discard()))
+	require.NoError(t, err)
+
+	_, err = newHandler.Login(context.Background(), auth.LoginOptions{Flow: auth.FlowClientCredentials})
+	require.NoError(t, err)
+	assert.Equal(t, 1, registrationRequests, "registration should not be called a second time")
+}
