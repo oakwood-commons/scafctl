@@ -10,12 +10,15 @@ package oauth2
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,12 +48,40 @@ type dynamicClient struct {
 	ClientID              string `json:"client_id"`
 	ClientSecret          string `json:"client_secret"` //nolint:gosec // struct field, not a credential literal
 	ClientSecretExpiresAt int64  `json:"client_secret_expires_at,omitempty"`
+	// Fingerprint binds the cached credentials to the registration config
+	// that produced them (registration endpoint, token URL, and client
+	// metadata). If the config changes -- e.g. the handler is repointed at
+	// a different authorization server -- the fingerprint no longer
+	// matches and the cache is treated as a miss, forcing re-registration
+	// instead of silently reusing credentials that were never issued for
+	// the new target.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // expired reports whether the cached dynamic client's secret has expired.
 // A zero ClientSecretExpiresAt means the secret does not expire (RFC 7591).
 func (c *dynamicClient) expired() bool {
 	return c.ClientSecretExpiresAt > 0 && time.Now().Unix() >= c.ClientSecretExpiresAt
+}
+
+// dcrFingerprint computes a stable fingerprint for a Dynamic Client
+// Registration config, binding cached credentials to the registration
+// endpoint, token endpoint, and client metadata that produced them.
+func dcrFingerprint(dcr *config.DynamicClientRegistrationConfig, tokenURL string) string {
+	keys := make([]string, 0, len(dcr.ClientMetadata))
+	for k := range dcr.ClientMetadata {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	sb.WriteString(dcr.RegistrationEndpoint)
+	sb.WriteString("|")
+	sb.WriteString(tokenURL)
+	for _, k := range keys {
+		fmt.Fprintf(&sb, "|%s=%v", k, dcr.ClientMetadata[k])
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // Handler implements auth.Handler for generic configurable OAuth2 services.
@@ -155,10 +186,17 @@ func (h *Handler) SupportedFlows() []auth.Flow {
 	if h.cfg.DeviceAuthURL != "" {
 		flows = append(flows, auth.FlowDeviceCode)
 	}
-	if h.cfg.ClientSecret != "" {
+	if h.cfg.ClientSecret != "" || h.dcrEnabled() {
 		flows = append(flows, auth.FlowClientCredentials)
 	}
 	return flows
+}
+
+// dcrEnabled reports whether this handler has RFC 7591 Dynamic Client
+// Registration configured with a registration endpoint. When true, static
+// clientID/clientSecret are supplied by registration rather than config.
+func (h *Handler) dcrEnabled() bool {
+	return h.cfg.DynamicClientRegistration != nil && h.cfg.DynamicClientRegistration.RegistrationEndpoint != ""
 }
 
 // Capabilities returns the handler's capabilities.
@@ -170,8 +208,8 @@ func (h *Handler) Capabilities() []auth.Capability {
 	}
 }
 
-func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string, expiresAt int64) error {
-	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret, ClientSecretExpiresAt: expiresAt}
+func (h *Handler) storeDynamicClient(ctx context.Context, clientID, clientSecret string, expiresAt int64, fingerprint string) error {
+	client := &dynamicClient{ClientID: clientID, ClientSecret: clientSecret, ClientSecretExpiresAt: expiresAt, Fingerprint: fingerprint}
 	data, err := json.Marshal(client) //nolint:gosec // marshaling to store in the secret store, not logging
 	if err != nil {
 		return fmt.Errorf("marshal dynamic client: %w", err)
@@ -202,10 +240,12 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	if dcr == nil || dcr.RegistrationEndpoint == "" {
 		return nil
 	}
+	fingerprint := dcrFingerprint(dcr, h.cfg.TokenURL)
 
-	// Check if we already have a dynamic client registered and cached.
+	// Check if we already have a dynamic client registered and cached for
+	// this exact registration target (endpoint + token URL + metadata).
 	cachedClient, err := h.loadDynamicClient(ctx)
-	if err == nil && cachedClient != nil && !cachedClient.expired() {
+	if err == nil && cachedClient != nil && !cachedClient.expired() && cachedClient.Fingerprint == fingerprint {
 		h.logger.V(1).Info("using cached dynamic client")
 		h.cfg.ClientID = cachedClient.ClientID
 		h.cfg.ClientSecret = cachedClient.ClientSecret
@@ -214,8 +254,13 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 		return auth.NewError(h.cfg.Name, "load_dynamic_client", err)
 	}
-	if cachedClient != nil && cachedClient.expired() {
-		h.logger.V(1).Info("cached dynamic client secret expired, re-registering")
+	if cachedClient != nil {
+		switch {
+		case cachedClient.expired():
+			h.logger.V(1).Info("cached dynamic client secret expired, re-registering")
+		case cachedClient.Fingerprint != fingerprint:
+			h.logger.V(1).Info("dynamic client registration config changed, re-registering")
+		}
 	}
 
 	h.logger.V(1).Info("performing dynamic client registration")
@@ -271,7 +316,7 @@ func (h *Handler) dynamicClientRegistration(ctx context.Context) error {
 	}
 
 	// Store the new client credentials.
-	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret, regResp.ClientSecretExpiresAt); err != nil {
+	if err := h.storeDynamicClient(ctx, regResp.ClientID, regResp.ClientSecret, regResp.ClientSecretExpiresAt, fingerprint); err != nil {
 		return auth.NewError(h.cfg.Name, "dcr_store", err)
 	}
 
@@ -1265,13 +1310,24 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 	if cfg.TokenURL == "" && cfg.ResponseType != "token" {
 		return fmt.Errorf("custom OAuth2 handler %q: tokenURL is required", cfg.Name)
 	}
-	if cfg.ClientID == "" {
+
+	// Dynamic Client Registration (RFC 7591) supplies clientID/clientSecret
+	// at login time, so when it is configured the static credential checks
+	// below are satisfied by registration instead of requiring dummy values.
+	if cfg.DynamicClientRegistration != nil {
+		if cfg.DynamicClientRegistration.RegistrationEndpoint == "" {
+			return fmt.Errorf("custom OAuth2 handler %q: dynamicClientRegistration.registrationEndpoint is required", cfg.Name)
+		}
+	}
+	dcrEnabled := cfg.DynamicClientRegistration != nil && cfg.DynamicClientRegistration.RegistrationEndpoint != ""
+
+	if cfg.ClientID == "" && !dcrEnabled {
 		return fmt.Errorf("custom OAuth2 handler %q: clientID is required", cfg.Name)
 	}
 
 	switch cfg.DefaultFlow {
 	case "", "interactive":
-		if cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == "" {
+		if cfg.AuthorizeURL == "" && cfg.DeviceAuthURL == "" && cfg.ClientSecret == "" && !dcrEnabled {
 			return fmt.Errorf("custom OAuth2 handler %q: at least one of authorizeURL, deviceAuthURL, or clientSecret must be set", cfg.Name)
 		}
 	case "device_code":
@@ -1279,7 +1335,7 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 			return fmt.Errorf("custom OAuth2 handler %q: deviceAuthURL is required when defaultFlow is device_code", cfg.Name)
 		}
 	case "client_credentials":
-		if cfg.ClientSecret == "" {
+		if cfg.ClientSecret == "" && !dcrEnabled {
 			return fmt.Errorf("custom OAuth2 handler %q: clientSecret is required when defaultFlow is client_credentials", cfg.Name)
 		}
 	default:
@@ -1309,12 +1365,6 @@ func ValidateConfig(cfg config.CustomOAuth2Config) error {
 			default:
 				return fmt.Errorf("custom OAuth2 handler %q: tokenExchange.method must be GET, POST, PUT, or PATCH", cfg.Name)
 			}
-		}
-	}
-
-	if cfg.DynamicClientRegistration != nil {
-		if cfg.DynamicClientRegistration.RegistrationEndpoint == "" {
-			return fmt.Errorf("custom OAuth2 handler %q: dynamicClientRegistration.registrationEndpoint is required", cfg.Name)
 		}
 	}
 
