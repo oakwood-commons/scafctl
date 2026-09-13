@@ -38,11 +38,25 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/solution"
 )
 
+// loopbackHTTPClientConfig opts the test server in to fetching solutions from
+// private/loopback addresses.
+//
+// Integration fixtures serve solution YAML from an httptest server, which always
+// binds loopback, and the SSRF guard in the solution fetch path denies that by
+// default. Production keeps the guard on; these tests deliberately opt out
+// because the fixture server IS the system under test's input, not an untrusted
+// third-party URL.
+func loopbackHTTPClientConfig() config.HTTPClientConfig {
+	allow := true
+	return config.HTTPClientConfig{AllowPrivateIPs: &allow}
+}
+
 // setupTestServer creates a test HTTP server with all endpoints registered.
 func setupTestServer(t testing.TB) *httptest.Server {
 	t.Helper()
 
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -1120,6 +1134,7 @@ func setupTestServerWithCORS(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 			CORS: config.APICORSConfig{
@@ -1238,6 +1253,7 @@ func setupTestServerWithShutdown(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -1697,6 +1713,7 @@ func (m *mockPluginPool) Shutdown() {
 // underlying provider via the args namespace (_.args.x).
 func TestAPI_SolutionRender_Calls(t *testing.T) {
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -1807,6 +1824,7 @@ spec:
 // deferred-validation-not-fail-fast advisory.
 func TestAPI_DeferredValidation(t *testing.T) {
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -1918,6 +1936,7 @@ spec:
 // resolver that forces 'type: string' must not.
 func TestAPI_LintParameterNumericMatches(t *testing.T) {
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -2222,6 +2241,7 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.
 	t.Helper()
 
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -2348,6 +2368,7 @@ func TestAPI_SolutionRun_PluginNotAllowed(t *testing.T) {
 // returns 503 when the plugin pool is at capacity.
 func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -2451,6 +2472,7 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	})
 
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -2652,6 +2674,7 @@ func setupStaticProviderServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	cfg := &config.Config{
+		HTTPClient: loopbackHTTPClientConfig(),
 		APIServer: config.APIServerConfig{
 			APIVersion: settings.DefaultAPIVersion,
 		},
@@ -2759,4 +2782,155 @@ bundle:
 			ep.assertGreetingOK(obj)
 		})
 	}
+}
+
+// setupTestServerWithAPIConfig builds a test server from a caller-supplied
+// apiServer config, so security middleware can be exercised end-to-end through
+// the real middleware stack rather than in isolation.
+func setupTestServerWithAPIConfig(t testing.TB, apiCfg config.APIServerConfig) *httptest.Server {
+	t.Helper()
+
+	if apiCfg.APIVersion == "" {
+		apiCfg.APIVersion = settings.DefaultAPIVersion
+	}
+	cfg := &config.Config{HTTPClient: loopbackHTTPClientConfig(), APIServer: apiCfg}
+
+	reg := provider.NewRegistry()
+	require.NoError(t, reg.Register(messageprovider.NewMessageProvider()))
+	require.NoError(t, reg.Register(fileprovider.NewFileProvider()))
+
+	srv, err := api.NewServer(
+		api.WithServerConfig(cfg),
+		api.WithServerVersion("test-dev"),
+		api.WithServerRegistry(reg),
+		api.WithServerCompositeRegistry(provider.NewCompositeRegistryFromBase(reg)),
+	)
+	require.NoError(t, err)
+
+	apiRouter, err := api.SetupMiddleware(t.Context(), srv.Router(), &cfg.APIServer, logr.Discard())
+	require.NoError(t, err)
+	srv.SetAPIRouter(apiRouter)
+	srv.InitAPI()
+
+	endpoints.RegisterAll(srv.API(), srv.Router(), srv.HandlerCtx())
+
+	ts := httptest.NewServer(srv.Router())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// doRequest issues a GET with an optional Host override and optional headers,
+// returning the status code. Host must be set on Request.Host (not the header
+// map) for net/http to send it on the wire.
+func doRequest(t testing.TB, url, hostOverride string, headers map[string]string) int {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
+	if hostOverride != "" {
+		req.Host = hostOverride
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+// TestAPI_AdminAuthorization exercises the admin gate through the full
+// middleware stack. httptest binds loopback, so the caller is a genuine
+// loopback peer -- which is exactly the configuration a same-host reverse proxy
+// produces, and therefore the case the proxy-header denial must catch.
+func TestAPI_AdminAuthorization(t *testing.T) {
+	ts := setupTestServerWithAPIConfig(t, config.APIServerConfig{})
+
+	t.Run("loopback caller reaches admin when auth is disabled", func(t *testing.T) {
+		assert.Equal(t, http.StatusOK, doRequest(t, ts.URL+"/v1/admin/info", "", nil))
+	})
+
+	t.Run("proxy headers on a loopback request are denied", func(t *testing.T) {
+		// A same-host reverse proxy makes every internet caller appear to be
+		// 127.0.0.1. The presence of a hop header proves a proxy was involved,
+		// so the request must be rejected rather than trusted.
+		for _, header := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
+			t.Run(header, func(t *testing.T) {
+				status := doRequest(t, ts.URL+"/v1/admin/info", "", map[string]string{
+					header: "203.0.113.7",
+				})
+				assert.Equal(t, http.StatusForbidden, status,
+					"%s on a loopback request must not reach admin", header)
+			})
+		}
+	})
+
+	t.Run("non-admin endpoints are unaffected by proxy headers", func(t *testing.T) {
+		status := doRequest(t, ts.URL+"/v1/providers", "", map[string]string{
+			"X-Forwarded-For": "203.0.113.7",
+		})
+		assert.Equal(t, http.StatusOK, status,
+			"the admin gate must not leak onto non-admin routes")
+	})
+
+	t.Run("health probe is unaffected", func(t *testing.T) {
+		status := doRequest(t, ts.URL+"/health", "", map[string]string{
+			"X-Forwarded-For": "203.0.113.7",
+		})
+		assert.Equal(t, http.StatusOK, status)
+	})
+}
+
+// TestAPI_HostAllowlist exercises the DNS-rebinding guard end-to-end.
+func TestAPI_HostAllowlist(t *testing.T) {
+	t.Run("empty allowlist accepts any Host", func(t *testing.T) {
+		ts := setupTestServerWithAPIConfig(t, config.APIServerConfig{})
+
+		assert.Equal(t, http.StatusOK,
+			doRequest(t, ts.URL+"/v1/providers", "evil.example.com", nil),
+			"the default must not break existing deployments")
+	})
+
+	t.Run("configured allowlist enforces the Host header", func(t *testing.T) {
+		ts := setupTestServerWithAPIConfig(t, config.APIServerConfig{
+			AllowedHosts: []string{"api.example.com", "*.internal.example.com"},
+		})
+
+		tests := []struct {
+			name     string
+			host     string
+			expected int
+		}{
+			{"exact match allowed", "api.example.com", http.StatusOK},
+			{"exact match with port allowed", "api.example.com:8080", http.StatusOK},
+			{"wildcard subdomain allowed", "svc.internal.example.com", http.StatusOK},
+			{"rebinding host denied", "evil.example.com", http.StatusForbidden},
+			{"bare apex of wildcard denied", "internal.example.com", http.StatusForbidden},
+			{"unrelated host denied", "127.0.0.1", http.StatusForbidden},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				assert.Equal(t, tt.expected,
+					doRequest(t, ts.URL+"/v1/providers", tt.host, nil))
+			})
+		}
+	})
+
+	t.Run("probe endpoints stay exempt so k8s probes keep working", func(t *testing.T) {
+		ts := setupTestServerWithAPIConfig(t, config.APIServerConfig{
+			AllowedHosts: []string{"api.example.com"},
+		})
+
+		// Kubernetes sends the pod IP as Host; blocking that takes the
+		// deployment down.
+		for _, path := range []string{"/health", "/metrics"} {
+			t.Run(path, func(t *testing.T) {
+				assert.Equal(t, http.StatusOK,
+					doRequest(t, ts.URL+path, "10.1.2.3:8080", nil))
+			})
+		}
+	})
 }

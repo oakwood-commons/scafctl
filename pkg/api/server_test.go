@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/oakwood-commons/scafctl/pkg/plugin"
 	"github.com/oakwood-commons/scafctl/pkg/provider"
 	"github.com/oakwood-commons/scafctl/pkg/provider/official"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,6 +144,160 @@ func TestParseTimeoutOrDefault(t *testing.T) {
 		})
 	}
 }
+
+// TestIsLoopbackHost pins the predicate that decides whether the server warns
+// about being exposed without authentication. A false positive here silences a
+// real exposure warning, so unresolvable and wildcard hosts must NOT be treated
+// as loopback.
+func TestIsLoopbackHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		expected bool
+	}{
+		{"empty means the loopback default", "", true},
+		{"localhost name", "localhost", true},
+		{"localhost uppercase", "LocalHost", true},
+		{"ipv4 loopback", "127.0.0.1", true},
+		{"ipv4 loopback range", "127.0.0.53", true},
+		{"ipv6 loopback", "::1", true},
+		{"ipv6 loopback bracketed", "[::1]", true},
+		{"ipv4 wildcard binds all interfaces", "0.0.0.0", false},
+		{"ipv6 wildcard binds all interfaces", "::", false},
+		{"private lan address", "192.168.1.10", false},
+		{"public address", "203.0.113.7", false},
+		{"unresolvable hostname errs toward warning", "api.example.com", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isLoopbackHost(tt.host))
+		})
+	}
+}
+
+// TestServer_AppliesResourceLimits verifies the http.Server is constructed with
+// the idle and header bounds, including that an explicit config value wins over
+// the default.
+func TestServer_AppliesResourceLimits(t *testing.T) {
+	t.Run("defaults are applied when unset", func(t *testing.T) {
+		srv, err := NewServer(WithServerConfig(&config.Config{}))
+		require.NoError(t, err)
+
+		addr := srv.buildHTTPServer()
+
+		require.NotNil(t, srv.httpSrv)
+		expectedIdle, _ := time.ParseDuration(settings.DefaultAPIIdleTimeout)
+		assert.Equal(t, expectedIdle, srv.httpSrv.IdleTimeout)
+		assert.Equal(t, settings.DefaultAPIMaxHeaderBytes, srv.httpSrv.MaxHeaderBytes)
+		assert.Equal(t, "127.0.0.1:8080", addr, "default bind must stay loopback")
+	})
+
+	t.Run("explicit config overrides defaults", func(t *testing.T) {
+		srv, err := NewServer(WithServerConfig(&config.Config{
+			APIServer: config.APIServerConfig{
+				IdleTimeout:    "45s",
+				MaxHeaderBytes: 4096,
+			},
+		}))
+		require.NoError(t, err)
+
+		srv.buildHTTPServer()
+
+		require.NotNil(t, srv.httpSrv)
+		assert.Equal(t, 45*time.Second, srv.httpSrv.IdleTimeout)
+		assert.Equal(t, 4096, srv.httpSrv.MaxHeaderBytes)
+	})
+
+	t.Run("invalid idle timeout falls back to the default", func(t *testing.T) {
+		srv, err := NewServer(WithServerConfig(&config.Config{
+			APIServer: config.APIServerConfig{IdleTimeout: "not-a-duration"},
+		}))
+		require.NoError(t, err)
+
+		srv.buildHTTPServer()
+
+		expectedIdle, _ := time.ParseDuration(settings.DefaultAPIIdleTimeout)
+		assert.Equal(t, expectedIdle, srv.httpSrv.IdleTimeout)
+	})
+
+	t.Run("default idle timeout does not exceed the read timeout", func(t *testing.T) {
+		// Regression test. net/http falls back to ReadTimeout when IdleTimeout is
+		// zero (Server.idleTimeout), so a default LARGER than ReadTimeout would
+		// widen the idle window rather than bound it -- the opposite of the
+		// intent. Keep the default at or below the request timeout.
+		srv, err := NewServer(WithServerConfig(&config.Config{}))
+		require.NoError(t, err)
+
+		srv.buildHTTPServer()
+
+		assert.LessOrEqual(t, srv.httpSrv.IdleTimeout, srv.httpSrv.ReadTimeout,
+			"default IdleTimeout must not exceed ReadTimeout, or it loosens the idle bound")
+	})
+}
+
+// TestServer_ExposureWarning asserts the server warns when it is bound beyond
+// loopback with authentication disabled, and stays quiet otherwise. The warning
+// is the only signal an operator gets that they have exposed solution execution.
+func TestServer_ExposureWarning(t *testing.T) {
+	tests := []struct {
+		name        string
+		host        string
+		authEnabled bool
+		wantWarning bool
+	}{
+		{"non-loopback without auth warns", "0.0.0.0", false, true},
+		{"public address without auth warns", "203.0.113.7", false, true},
+		{"non-loopback with auth is silent", "0.0.0.0", true, false},
+		{"loopback without auth is silent", "127.0.0.1", false, false},
+		{"default host without auth is silent", "", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sink warningSink
+			srv, err := NewServer(
+				WithServerConfig(&config.Config{
+					APIServer: config.APIServerConfig{
+						Host: tt.host,
+						Auth: config.APIAuthConfig{
+							AzureOIDC: config.APIAzureOIDCConfig{
+								Enabled:  tt.authEnabled,
+								TenantID: "tenant",
+								ClientID: "client",
+							},
+						},
+					},
+				}),
+				WithServerLogger(logr.New(&sink)),
+			)
+			require.NoError(t, err)
+
+			srv.buildHTTPServer()
+
+			assert.Equal(t, tt.wantWarning, sink.sawWarning,
+				"exposure warning presence mismatch for host %q (auth=%v)", tt.host, tt.authEnabled)
+		})
+	}
+}
+
+// warningSink is a minimal logr.LogSink that records whether an exposure
+// warning was emitted.
+type warningSink struct {
+	sawWarning bool
+}
+
+func (s *warningSink) Init(logr.RuntimeInfo)       {}
+func (s *warningSink) Enabled(int) bool            { return true }
+func (s *warningSink) Error(error, string, ...any) {}
+
+func (s *warningSink) Info(_ int, msg string, _ ...any) {
+	if strings.Contains(msg, "authentication DISABLED") {
+		s.sawWarning = true
+	}
+}
+
+func (s *warningSink) WithValues(...any) logr.LogSink { return s }
+func (s *warningSink) WithName(string) logr.LogSink   { return s }
 
 func TestServer_Start_InvalidTLS(t *testing.T) {
 	cfg := &config.Config{

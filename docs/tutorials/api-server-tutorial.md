@@ -34,8 +34,19 @@ apiServer:
   apiVersion: "v1"
   shutdownTimeout: "30s"
   requestTimeout: "60s"
+  idleTimeout: "60s"          # keep-alive idle timeout
+  maxHeaderBytes: 1048576     # 1MB request header cap
   maxRequestSize: 10485760  # 10MB
   maxConcurrent: 1000
+
+
+  # DNS-rebinding protection: permitted Host header values.
+  # An EMPTY list accepts any Host. Set this when exposing the server.
+  # Supports wildcards, e.g. "*.example.com" (subdomains only, not the
+  # bare apex -- list that separately). Applies to /v1/* only --
+  # /health and /metrics stay exempt so k8s probes keep working.
+  allowedHosts:
+    - "api.example.com"
 
   tls:
     enabled: false

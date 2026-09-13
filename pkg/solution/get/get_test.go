@@ -143,6 +143,20 @@ func TestNewGetter_WithLogger(t *testing.T) {
 	assert.NotNil(t, getter.httpClient)
 }
 
+// ctxAllowPrivateIPs returns a context whose config permits HTTP fetches to
+// private, loopback, and link-local addresses.
+//
+// Tests that serve fixtures from httptest.NewServer need this: httptest always
+// binds loopback, and FromURL's SSRF guard blocks loopback by default. Opting
+// in here keeps the guard strict in production while letting these tests reach
+// their local fixture server.
+func ctxAllowPrivateIPs() context.Context {
+	allow := true
+	return config.WithConfig(context.Background(), &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allow},
+	})
+}
+
 func TestFromUrl(t *testing.T) {
 	validSolutionJSON := `{
 		"apiVersion": "scafctl.io/v1",
@@ -161,7 +175,7 @@ func TestFromUrl(t *testing.T) {
 		defer server.Close()
 
 		getter := NewGetter()
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.NoError(t, err)
@@ -190,7 +204,7 @@ func TestFromUrl(t *testing.T) {
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
@@ -211,7 +225,7 @@ func TestFromUrl(t *testing.T) {
 		customClient := httpc.NewClient(config)
 
 		getter := NewGetter(WithHTTPClient(customClient))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
@@ -228,7 +242,7 @@ func TestFromUrl(t *testing.T) {
 		defer server.Close()
 
 		getter := NewGetter()
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
@@ -248,7 +262,7 @@ func TestFromUrl(t *testing.T) {
 		customClient := httpc.NewClient(config)
 
 		getter := NewGetter(WithHTTPClient(customClient))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.NoError(t, err)
@@ -263,7 +277,7 @@ func TestFromUrl(t *testing.T) {
 		defer server.Close()
 
 		getter := NewGetter()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(ctxAllowPrivateIPs())
 		cancel() // Cancel immediately
 
 		sol, err := getter.FromURL(ctx, server.URL)
@@ -287,7 +301,7 @@ func TestFromUrl(t *testing.T) {
 			WithLogger(customLogger),
 			WithHTTPClient(httpc.NewClient(cfg)),
 		)
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.NoError(t, err)
@@ -307,12 +321,151 @@ func TestFromUrl(t *testing.T) {
 		cfg := httpc.DefaultConfig()
 		cfg.EnableCache = false
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.FromURL(ctx, server.URL)
 		require.Error(t, err)
 		assert.Nil(t, sol)
 		assert.Contains(t, err.Error(), "validation")
+	})
+}
+
+// TestFromURL_SSRFGuard is a regression test for the SSRF hole in the solution
+// fetch path: FromURL did not apply the private-IP check that the http provider
+// already applied, so a caller-supplied URL could reach loopback, private, and
+// link-local addresses (including cloud metadata endpoints).
+//
+// The guard must deny by default and only yield when the application config
+// explicitly opts in via HTTPClient.AllowPrivateIPs.
+func TestFromURL_SSRFGuard(t *testing.T) {
+	t.Run("blocks private and link-local addresses by default", func(t *testing.T) {
+		blocked := []struct {
+			name string
+			url  string
+		}{
+			{"loopback v4", "http://127.0.0.1/solution.yaml"},
+			{"loopback name", "http://localhost/solution.yaml"},
+			{"link-local metadata", "http://169.254.169.254/latest/meta-data/"},
+			{"private 10/8", "http://10.0.0.5/solution.yaml"},
+			{"private 192.168/16", "http://192.168.1.10/solution.yaml"},
+			{"private 172.16/12", "http://172.16.0.3/solution.yaml"},
+		}
+
+		for _, tc := range blocked {
+			t.Run(tc.name, func(t *testing.T) {
+				getter := NewGetter()
+
+				// context.Background() carries no config, so the guard must deny.
+				sol, err := getter.FromURL(context.Background(), tc.url)
+
+				require.Error(t, err, "expected %s to be blocked", tc.url)
+				assert.Nil(t, sol)
+				assert.Contains(t, err.Error(), "Refusing to fetch",
+					"error should identify the SSRF guard as the cause")
+			})
+		}
+	})
+
+	t.Run("blocks before issuing any request", func(t *testing.T) {
+		// A guard that rejects only after the fetch would still leak the request
+		// to the internal target, so assert the server is never contacted.
+		var hits int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits++
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		getter := NewGetter()
+		sol, err := getter.FromURL(context.Background(), server.URL)
+
+		require.Error(t, err)
+		assert.Nil(t, sol)
+		assert.Zero(t, hits, "guard must reject before the request is sent")
+	})
+
+	t.Run("allows private addresses when explicitly opted in", func(t *testing.T) {
+		validSolutionJSON := `{"apiVersion":"scafctl.io/v1","kind":"Solution",` +
+			`"metadata":{"name":"test-solution","version":"1.0.0"}}`
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validSolutionJSON))
+		}))
+		defer server.Close()
+
+		cfg := httpc.DefaultConfig()
+		cfg.EnableCache = false
+		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
+
+		sol, err := getter.FromURL(ctxAllowPrivateIPs(), server.URL)
+
+		require.NoError(t, err, "opt-in config should permit the loopback fetch")
+		require.NotNil(t, sol)
+	})
+	t.Run("public addresses are unaffected by the guard", func(t *testing.T) {
+		// Assert against the validator directly rather than calling FromURL: a
+		// real fetch of a public URL would make a live outbound request, which
+		// does not belong in a unit test and would assert nothing when the
+		// network is unavailable.
+		assert.NoError(t, httpc.ValidateURLNotPrivate("http://example.com/solution.yaml"),
+			"a public address must not be rejected by the SSRF guard")
+		assert.NoError(t, httpc.ValidateURLNotPrivate("https://203.0.113.7/solution.yaml"),
+			"a public IP literal must not be rejected by the SSRF guard")
+	})
+
+	t.Run("known residual: DNS names are not resolved", func(t *testing.T) {
+		// Documents a deliberate limitation so it is not silently re-forgotten.
+		// httpc.ValidateURLNotPrivate does not resolve hostnames, so a name that
+		// points at a private address passes the pre-flight check. Closing this
+		// requires a resolve-and-pin dialer. If this assertion ever starts
+		// failing, the upstream validator gained DNS resolution and this guard's
+		// comment in get.go should be updated to match.
+		assert.NoError(t, httpc.ValidateURLNotPrivate("http://internal.example.com/solution.yaml"),
+			"hostnames are intentionally not resolved by the pre-flight check")
+	})
+	t.Run("every public entry point enforces the guard", func(t *testing.T) {
+		// FromURL is currently the single choke point for URL fetches, but the
+		// callers that dispatch to it are the real API surface. Pin each one so
+		// a future fetch path added to a dispatcher cannot bypass the guard
+		// without failing here.
+		var hits int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hits++
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		entryPoints := map[string]func(*Getter) error{
+			"Get": func(g *Getter) error {
+				_, err := g.Get(context.Background(), server.URL)
+				return err
+			},
+			"GetWithBundle": func(g *Getter) error {
+				_, _, err := g.GetWithBundle(context.Background(), server.URL)
+				return err
+			},
+			"GetWithLayers": func(g *Getter) error {
+				_, _, err := g.GetWithLayers(context.Background(), server.URL, mediaTypeSolutionLock)
+				return err
+			},
+			"FromURL": func(g *Getter) error {
+				_, err := g.FromURL(context.Background(), server.URL)
+				return err
+			},
+		}
+
+		for name, call := range entryPoints {
+			t.Run(name, func(t *testing.T) {
+				hits = 0
+				err := call(NewGetter())
+
+				require.Error(t, err, "%s must reject a loopback URL under default config", name)
+				assert.Contains(t, err.Error(), "Refusing to fetch",
+					"%s must fail via the SSRF guard, not some incidental error", name)
+				assert.Zero(t, hits, "%s must not contact the server", name)
+			})
+		}
 	})
 }
 
@@ -515,7 +668,7 @@ func TestGet(t *testing.T) {
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		ctx := context.Background()
+		ctx := ctxAllowPrivateIPs()
 
 		sol, err := getter.Get(ctx, server.URL)
 		require.NoError(t, err)
@@ -1256,7 +1409,7 @@ spec:
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		sol, layers, err := getter.GetWithLayers(context.Background(), server.URL, mediaTypeSolutionLock)
+		sol, layers, err := getter.GetWithLayers(ctxAllowPrivateIPs(), server.URL, mediaTypeSolutionLock)
 
 		require.NoError(t, err)
 		assert.NotNil(t, sol)
@@ -1926,7 +2079,7 @@ spec:
 		cfg.EnableCache = false
 		cfg.RetryMax = 0
 		getter := NewGetter(WithHTTPClient(httpc.NewClient(cfg)))
-		sol, bundleData, err := getter.GetWithBundle(context.Background(), server.URL)
+		sol, bundleData, err := getter.GetWithBundle(ctxAllowPrivateIPs(), server.URL)
 
 		require.NoError(t, err)
 		assert.NotNil(t, sol)

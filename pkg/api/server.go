@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -220,7 +221,26 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 
 		catalogIndex: sc.catalogIndex,
 	}
+
+	// Attach the application config to every request context, matching what the
+	// CLI (cmd/scafctl/root.go) and MCP server (pkg/mcp/context.go) already do.
+	//
+	// Without this, config.FromContext returns nil inside API handlers, so
+	// config-driven behaviour -- including the httpClient.allowPrivateIPs SSRF
+	// setting consulted when fetching a solution by URL -- silently fell back to
+	// defaults and could not be configured by an operator at all.
+	s.router.Use(withAppConfig(cfg))
+
 	return s, nil
+}
+
+// withAppConfig returns middleware that places cfg in each request's context.
+func withAppConfig(cfg *config.Config) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(config.WithConfig(r.Context(), cfg)))
+		})
+	}
 }
 
 // Router returns the root chi router for global middleware setup.
@@ -306,27 +326,7 @@ func (s *Server) Start() error {
 
 	apiCfg := s.cfg.APIServer
 
-	host := apiCfg.Host
-	if host == "" {
-		host = settings.DefaultAPIHost
-	}
-	port := apiCfg.Port
-	if port <= 0 {
-		port = settings.DefaultAPIPort
-	}
-
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-
-	s.httpSrv = &http.Server{
-		Addr:              addr,
-		Handler:           s.router,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
-		WriteTimeout:      parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
-		BaseContext: func(_ net.Listener) context.Context {
-			return runmode.WithMode(s.ctx, runmode.API)
-		},
-	}
+	addr := s.buildHTTPServer()
 
 	// TLS configuration
 	if apiCfg.TLS.Enabled {
@@ -402,6 +402,59 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// buildHTTPServer constructs s.httpSrv from configuration and returns the
+// resolved listen address. It performs no I/O and binds no port, so the
+// server's resource limits and exposure warning can be exercised in tests
+// without starting a listener.
+func (s *Server) buildHTTPServer() string {
+	apiCfg := s.cfg.APIServer
+
+	host := apiCfg.Host
+	if host == "" {
+		host = settings.DefaultAPIHost
+	}
+	port := apiCfg.Port
+	if port <= 0 {
+		port = settings.DefaultAPIPort
+	}
+
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+
+	// Warn when the server is reachable beyond this machine without
+	// authentication. The API executes caller-submitted solutions by design, so
+	// binding a non-loopback address with auth disabled exposes that capability
+	// to anyone who can reach the port. The default (127.0.0.1) is safe; this
+	// fires only when an operator has explicitly widened the bind address.
+	if !isLoopbackHost(host) && !apiCfg.Auth.AzureOIDC.Enabled {
+		s.logger.Info("WARNING: API server is binding a non-loopback address with authentication DISABLED. "+
+			"This exposes solution execution to any caller that can reach this port. "+
+			"Enable apiServer.auth.azureOIDC, or bind 127.0.0.1 and front the server with an authenticating proxy. "+
+			"If you use a same-host proxy, also block /v1/admin/ at the proxy: with auth disabled the admin gate "+
+			"falls back to a loopback peer-address check, which a same-host proxy makes indistinguishable from a local caller.",
+			"host", host, "addr", addr)
+	}
+
+	maxHeaderBytes := apiCfg.MaxHeaderBytes
+	if maxHeaderBytes <= 0 {
+		maxHeaderBytes = settings.DefaultAPIMaxHeaderBytes
+	}
+
+	s.httpSrv = &http.Server{
+		Addr:              addr,
+		Handler:           s.router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
+		WriteTimeout:      parseTimeoutOrDefault(apiCfg.RequestTimeout, settings.DefaultAPIRequestTimeout),
+		IdleTimeout:       parseTimeoutOrDefault(apiCfg.IdleTimeout, settings.DefaultAPIIdleTimeout),
+		MaxHeaderBytes:    maxHeaderBytes,
+		BaseContext: func(_ net.Listener) context.Context {
+			return runmode.WithMode(s.ctx, runmode.API)
+		},
+	}
+
+	return addr
+}
+
 // parseTimeoutOrDefault parses a duration string, returning a default on failure.
 func parseTimeoutOrDefault(value, defaultValue string) time.Duration {
 	if value == "" {
@@ -412,4 +465,27 @@ func parseTimeoutOrDefault(value, defaultValue string) time.Duration {
 		d, _ = time.ParseDuration(defaultValue)
 	}
 	return d
+}
+
+// isLoopbackHost reports whether host refers only to the local machine.
+//
+// It recognises loopback IP literals and the "localhost" name. An empty host
+// is treated as loopback because the caller substitutes the loopback default
+// before this is called. The wildcard addresses ("0.0.0.0", "::") are NOT
+// loopback: they bind every interface and are the case worth warning about.
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	// Tolerate a bracketed IPv6 literal (e.g. "[::1]").
+	trimmed := strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if ip := net.ParseIP(trimmed); ip != nil {
+		return ip.IsLoopback()
+	}
+	// An unresolvable hostname is not provably local; treat it as exposed so
+	// the warning errs toward being shown rather than silently skipped.
+	return false
 }
