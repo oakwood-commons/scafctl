@@ -344,6 +344,13 @@ func (m *Manager) setDefaults() {
 	m.v.SetDefault("build.enableCache", true)
 	m.v.SetDefault("build.cacheDir", settings.DefaultBuildCacheDir())
 	m.v.SetDefault("build.autoCacheRemoteArtifacts", true)
+
+	// API Server defaults
+	m.v.SetDefault("apiServer.rateLimit.global", &APIRateLimitEntry{
+		MaxRequests: settings.DefaultAPIRateLimitMaxRequests,
+		Window:      settings.DefaultAPIRateLimitWindow,
+		TrustProxy:  false,
+	})
 	m.v.SetDefault("build.pluginCacheDir", settings.DefaultPluginCacheDir())
 }
 
