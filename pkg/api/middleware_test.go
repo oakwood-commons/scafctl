@@ -65,6 +65,26 @@ func TestSetupMiddleware_AuthMissingConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "entra OIDC is enabled but tenantId or clientId is empty")
 }
 
+// TestSetupMiddleware_ValidatesConfig proves SetupMiddleware validates the
+// config it is given, not just the one NewServer happened to see.
+//
+// SetupMiddleware is exported and takes its own *config.APIServerConfig,
+// independent of whatever NewServer validated -- and it is the only consumer
+// of AllowedHosts. Without its own cfg.Validate() call, an embedder invoking
+// SetupMiddleware directly (bypassing NewServer entirely) could exceed every
+// advertised bound this PR introduces.
+func TestSetupMiddleware_ValidatesConfig(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.APIServerConfig{MaxHeaderBytes: -1}
+	lgr := logr.Discard()
+
+	apiRouter, err := SetupMiddleware(t.Context(), router, cfg, lgr)
+	assert.Nil(t, apiRouter, "an invalid config must not produce a usable router")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid apiServer configuration")
+	assert.ErrorContains(t, err, "maxHeaderBytes: must not be negative")
+}
+
 func TestSetupMiddleware_WithRateLimit(t *testing.T) {
 	router := chi.NewRouter()
 	cfg := &config.APIServerConfig{

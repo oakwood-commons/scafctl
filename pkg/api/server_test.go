@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -51,8 +52,42 @@ func TestNewServer_WithOptions(t *testing.T) {
 	assert.Equal(t, cfg, srv.Config())
 }
 
+// TestNewServer_AttachesAppConfigToRequestContext proves withAppConfig actually
+// reaches a real request, not just that it is registered.
+//
+// The CLI and MCP server have always attached the app config to their
+// contexts; the API server never did. Without this, config.FromContext
+// returned nil inside every API handler, so config-driven behavior --
+// including the httpClient.allowPrivateIPs SSRF setting this PR's guard
+// depends on -- silently fell back to defaults and was unconfigurable in API
+// mode. Registering the middleware is not enough to prove that; this drives
+// an actual request through the router and reads the context inside a real
+// handler.
+func TestNewServer_AttachesAppConfigToRequestContext(t *testing.T) {
+	allowPrivateIPs := true
+	cfg := &config.Config{
+		HTTPClient: config.HTTPClientConfig{AllowPrivateIPs: &allowPrivateIPs},
+	}
+	srv, err := NewServer(WithServerConfig(cfg))
+	require.NoError(t, err)
+
+	var gotFromContext *config.Config
+	srv.Router().Get("/probe", func(_ http.ResponseWriter, r *http.Request) {
+		gotFromContext = config.FromContext(r.Context())
+	})
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/probe", nil)
+	srv.Router().ServeHTTP(httptest.NewRecorder(), req)
+
+	require.NotNil(t, gotFromContext, "config.FromContext must not be nil inside a handler")
+	require.NotNil(t, gotFromContext.HTTPClient.AllowPrivateIPs)
+	assert.True(t, *gotFromContext.HTTPClient.AllowPrivateIPs,
+		"the exact config instance passed to NewServer must be reachable from request context")
+}
+
 func TestServer_SetAPIRouter(t *testing.T) {
 	srv, err := NewServer()
+
 	require.NoError(t, err)
 	assert.Equal(t, srv.Router(), srv.APIRouter())
 	srv.SetAPIRouter(srv.Router())
