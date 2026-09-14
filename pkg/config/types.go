@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/oakwood-commons/scafctl/pkg/gotmpl"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 )
 
 // CurrentConfigVersion is the current config file version.
@@ -880,6 +881,9 @@ type APIServerConfig struct {
 	APIVersion       string                  `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" mapstructure:"apiVersion" doc:"API version prefix (e.g. v1, v2)" example:"v1" maxLength:"10" pattern:"^v[0-9]+$" patternDescription:"must be 'v' followed by one or more digits (e.g. v1, v2)"`
 	ShutdownTimeout  string                  `json:"shutdownTimeout,omitempty" yaml:"shutdownTimeout,omitempty" mapstructure:"shutdownTimeout" doc:"Graceful shutdown timeout" example:"30s" maxLength:"20"`
 	RequestTimeout   string                  `json:"requestTimeout,omitempty" yaml:"requestTimeout,omitempty" mapstructure:"requestTimeout" doc:"Default request timeout" example:"60s" maxLength:"20"`
+	IdleTimeout      string                  `json:"idleTimeout,omitempty" yaml:"idleTimeout,omitempty" mapstructure:"idleTimeout" doc:"Keep-alive idle connection timeout (default: 60s)" example:"60s" maxLength:"20"`
+	MaxHeaderBytes   int                     `json:"maxHeaderBytes,omitempty" yaml:"maxHeaderBytes,omitempty" mapstructure:"maxHeaderBytes" doc:"Maximum size of request headers in bytes (default: 1048576). Capped at 4MB; raising it increases DoS exposure." maximum:"4194304" example:"1048576"`
+	AllowedHosts     []string                `json:"allowedHosts,omitempty" yaml:"allowedHosts,omitempty" mapstructure:"allowedHosts" doc:"Host header values this server will answer to, guarding against DNS rebinding. Empty (default) accepts any Host. Supports '*.example.com' wildcards; '*' accepts all." maxItems:"50"`
 	BodyReadTimeout  string                  `json:"bodyReadTimeout,omitempty" yaml:"bodyReadTimeout,omitempty" mapstructure:"bodyReadTimeout" doc:"Default body read timeout for Huma operations" example:"15s" maxLength:"20"`
 	MaxRequestSize   int64                   `json:"maxRequestSize,omitempty" yaml:"maxRequestSize,omitempty" mapstructure:"maxRequestSize" doc:"Maximum request body size in bytes" maximum:"1073741824" example:"10485760"`
 	TLS              APITLSConfig            `json:"tls,omitempty" yaml:"tls,omitempty" mapstructure:"tls" doc:"TLS configuration"`
@@ -937,8 +941,34 @@ type APICORSConfig struct {
 
 // APIRateLimitConfig holds rate limiting configuration.
 type APIRateLimitConfig struct {
-	Global    *APIRateLimitEntry            `json:"global,omitempty" yaml:"global,omitempty" mapstructure:"global" doc:"Global rate limit"`
+	Global    *APIRateLimitEntry            `json:"global,omitempty" yaml:"global,omitempty" mapstructure:"global" doc:"Global rate limit. Unset means the built-in default applies, not that rate limiting is off; to run effectively unlimited set a very high maxRequests, since 0 denies every request"`
 	Endpoints map[string]*APIRateLimitEntry `json:"endpoints,omitempty" yaml:"endpoints,omitempty" mapstructure:"endpoints" doc:"Per-endpoint rate limits (reserved for future use — not yet applied by the middleware stack)"`
+}
+
+// EffectiveGlobal returns the global rate limit to enforce, substituting the
+// built-in default when none is configured. It never returns nil.
+//
+// A nil Global means "unset", not "disabled". Manager.Load installs this same
+// default through Viper, so a server started by `scafctl serve` is always rate
+// limited; without this method an embedder passing a zero-valued config to
+// NewServer or SetupMiddleware would silently get no limiter at all, and the
+// "on by default" guarantee would hold only for the CLI.
+//
+// There is deliberately no off switch. A configured MaxRequests of 0 (or any
+// negative value) denies every request rather than disabling the limiter, so
+// running effectively unlimited means setting a very high MaxRequests.
+//
+// The returned entry aliases the configured value rather than copying it, so
+// callers must treat it as read-only; normalizing a field in place would mutate
+// the caller's own configuration.
+func (c APIRateLimitConfig) EffectiveGlobal() *APIRateLimitEntry {
+	if c.Global != nil {
+		return c.Global
+	}
+	return &APIRateLimitEntry{
+		MaxRequests: settings.DefaultAPIRateLimitMaxRequests,
+		Window:      settings.DefaultAPIRateLimitWindow,
+	}
 }
 
 // APIRateLimitEntry defines a rate limit rule.

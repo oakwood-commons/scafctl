@@ -182,6 +182,9 @@ type SanitizedAPIServer struct {
 	APIVersion       string                  `json:"apiVersion,omitempty" yaml:"apiVersion,omitempty" doc:"API version prefix" maxLength:"10"`
 	ShutdownTimeout  string                  `json:"shutdownTimeout,omitempty" yaml:"shutdownTimeout,omitempty" doc:"Graceful shutdown timeout" maxLength:"20"`
 	RequestTimeout   string                  `json:"requestTimeout,omitempty" yaml:"requestTimeout,omitempty" doc:"Default request timeout" maxLength:"20"`
+	IdleTimeout      string                  `json:"idleTimeout,omitempty" yaml:"idleTimeout,omitempty" doc:"Keep-alive idle connection timeout" maxLength:"20"`
+	MaxHeaderBytes   int                     `json:"maxHeaderBytes,omitempty" yaml:"maxHeaderBytes,omitempty" doc:"Maximum size of request headers in bytes"`
+	AllowedHosts     []string                `json:"allowedHosts,omitempty" yaml:"allowedHosts,omitempty" doc:"Host header values this server will answer to" maxItems:"50"`
 	BodyReadTimeout  string                  `json:"bodyReadTimeout,omitempty" yaml:"bodyReadTimeout,omitempty" doc:"Body read timeout" maxLength:"20"`
 	MaxRequestSize   int64                   `json:"maxRequestSize,omitempty" yaml:"maxRequestSize,omitempty" doc:"Max request body size"`
 	TLS              SanitizedAPITLSConfig   `json:"tls,omitempty" yaml:"tls,omitempty" doc:"TLS configuration (key path redacted)"`
@@ -448,6 +451,9 @@ func sanitizeAPIServer(api APIServerConfig) SanitizedAPIServer {
 		APIVersion:      api.APIVersion,
 		ShutdownTimeout: api.ShutdownTimeout,
 		RequestTimeout:  api.RequestTimeout,
+		IdleTimeout:     api.IdleTimeout,
+		MaxHeaderBytes:  api.MaxHeaderBytes,
+		AllowedHosts:    api.AllowedHosts,
 		BodyReadTimeout: api.BodyReadTimeout,
 		MaxRequestSize:  api.MaxRequestSize,
 		TLS: SanitizedAPITLSConfig{

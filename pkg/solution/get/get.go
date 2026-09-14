@@ -318,7 +318,8 @@ func (o *Getter) Get(ctx context.Context, path string) (*solution.Solution, erro
 		path = o.FindSolution()
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.Get",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.Get",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -380,7 +381,8 @@ func (o *Getter) GetWithBundle(ctx context.Context, path string) (*solution.Solu
 		path = o.FindSolution()
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.GetWithBundle",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.GetWithBundle",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -445,7 +447,8 @@ func (o *Getter) GetWithLayers(ctx context.Context, path string, mediaTypes ...s
 		path = o.FindSolution()
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.GetWithLayers",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.GetWithLayers",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -860,7 +863,8 @@ func (o *Getter) FromLocalFileSystem(ctx context.Context, path string) (*solutio
 		path = resolved
 	}
 
-	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromLocalFileSystem",
+	_, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.FromLocalFileSystem",
 		trace.WithAttributes(attribute.String("solution.path", path)),
 	)
 	defer span.End()
@@ -925,10 +929,34 @@ func (o *Getter) FromURL(ctx context.Context, url string) (*solution.Solution, e
 		return nil, fmt.Errorf("the provided path to the solution is not a valid URL: %s", url)
 	}
 
-	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(ctx, "solution.FromURL",
+	ctx, span := telemetry.Tracer(telemetry.TracerSolution).Start(
+		ctx, "solution.FromURL",
 		trace.WithAttributes(attribute.String("solution.url", url)),
 	)
 	defer span.End()
+
+	// SSRF guard: refuse to fetch a solution from a private, loopback, or
+	// link-local address unless the application config explicitly permits it.
+	// This mirrors the check the http provider applies to solution-authored
+	// requests. It is required here because httpc.NewClient sets
+	// AllowPrivateIPs=true on the transport and delegates SSRF validation to
+	// call sites; without this guard the solution-fetch path is the one place a
+	// caller-supplied URL reaches internal infrastructure unchecked.
+	//
+	// KNOWN RESIDUAL: this covers IP literals and a small set of well-known
+	// hostnames only. httpc.ValidateURLNotPrivate deliberately does not resolve
+	// DNS (pre-resolution checks are TOCTOU-prone), so a hostname whose A record
+	// points at a private or metadata address is still fetched. Closing that
+	// needs a resolve-and-pin dialer rather than a pre-flight URL check, and the
+	// same residual applies to every caller of this shared validator.
+	if !httpc.PrivateIPsAllowed(ctx) {
+		if privErr := httpc.ValidateURLNotPrivate(url); privErr != nil {
+			o.logger.Error(privErr, "Blocked solution fetch to private address", "url", url)
+			span.RecordError(privErr)
+			span.SetStatus(codes.Error, privErr.Error())
+			return nil, fmt.Errorf("unable to get the solution. Refusing to fetch from URL '%s': %w", url, privErr)
+		}
+	}
 
 	o.logger.V(1).Info("Fetching solution from URL", "url", url)
 	resp, err := o.httpClient.Get(ctx, url)

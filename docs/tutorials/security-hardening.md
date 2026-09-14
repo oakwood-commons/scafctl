@@ -26,6 +26,7 @@ The limit applies to both direct requests **and** each page in paginated request
 Requests to private, loopback, link-local, and CGNAT IP addresses are **blocked by default**. This prevents Server-Side Request Forgery (SSRF) attacks where a malicious solution file could probe internal network endpoints or cloud metadata services (e.g., `169.254.169.254`).
 
 Blocked ranges:
+
 - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (RFC 1918)
 - `127.0.0.0/8` (loopback), `::1/128` (IPv6 loopback)
 - `169.254.0.0/16` (link-local / cloud metadata)
@@ -55,7 +56,7 @@ All HTTP connections verify TLS certificates by default. The `--insecure` flag o
 scafctl encrypts all cached secrets (auth tokens, master keys) using AES-256-GCM. The master encryption key is stored in your operating system's keyring:
 
 | Platform | Keyring |
-|----------|---------|
+| ---------- | --------- |
 | macOS | Keychain |
 | Linux | Secret Service (GNOME Keyring / KWallet) |
 | Windows | Credential Manager |
@@ -86,6 +87,7 @@ insecure keyring backend "file" would be used — refusing to proceed.
 ### Secret Export Encryption
 
 Exported secrets (`scafctl secrets export --encrypt`) use:
+
 - **PBKDF2-HMAC-SHA256** with 600,000 iterations for key derivation
 - **AES-256-GCM** for authenticated encryption
 - A unique random salt and nonce per export
@@ -98,16 +100,20 @@ If the OS keychain is cleared or reset (e.g., OS reinstall), existing encrypted 
 
 {{< tabs "security-hardening-cmd-1" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Before clearing the keychain, export your secrets
 scafctl secrets export --encrypt --output secrets-backup.enc
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Before clearing the keychain, export your secrets
 scafctl secrets export --encrypt --output secrets-backup.enc
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -126,6 +132,7 @@ Always use lock files in production:
 
 {{< tabs "security-hardening-cmd-2" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Generate a lock file with pinned versions and digests
 scafctl package solution -f solution.yaml
@@ -133,8 +140,10 @@ scafctl package solution -f solution.yaml
 # The lock file pins exact versions and digests
 cat .scafctl.lock.yaml
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Generate a lock file with pinned versions and digests
 scafctl package solution -f solution.yaml
@@ -142,6 +151,7 @@ scafctl package solution -f solution.yaml
 # The lock file pins exact versions and digests
 cat .scafctl.lock.yaml
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -164,16 +174,20 @@ which would otherwise be auto-resolved at runtime:
 
 {{< tabs "security-hardening-cmd-strict" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # CI pipeline: also require official auth handlers to be declared
 scafctl run solution -f ./solution.yaml --strict
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # CI pipeline: also require official auth handlers to be declared
 scafctl run solution -f ./solution.yaml --strict
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -189,7 +203,7 @@ non-determinism in CI. Combine `--strict` with a lock file and
 The private key can be provided from three sources (checked in priority order):
 
 | Source | Security Level | Recommendation |
-|--------|:---:|---|
+| -------- | :---: | --- |
 | `privateKeySecretName` | ✅ Best | Key encrypted by OS keychain. Use in production. |
 | `privateKeyPath` | ✅ Good | Key in a file. Use `chmod 600` to restrict permissions. |
 | `privateKey` (inline) | ⚠️ Low | Key visible in config or env var. Use only in ephemeral CI. |
@@ -207,16 +221,20 @@ auth:
 
 {{< tabs "security-hardening-cmd-3" >}}
 {{% tab "Bash" %}}
+
 ```bash
 # Store the key in the secret store first
 scafctl secrets set github-app-private-key < private-key.pem
 ```
+
 {{% /tab %}}
 {{% tab "PowerShell" %}}
+
 ```powershell
 # Store the key in the secret store first
 scafctl secrets set github-app-private-key < private-key.pem
 ```
+
 {{% /tab %}}
 {{< /tabs >}}
 
@@ -259,6 +277,44 @@ httpClient:
 
 cel:
   costLimit: 1000000
+
+apiServer:
+  # Bind loopback unless the server is deliberately exposed. Binding a
+  # non-loopback address with auth disabled logs a startup warning.
+  host: "127.0.0.1"
+  port: 8080
+
+  # Authentication is OFF by default. The API executes caller-submitted
+  # solutions by design, so enable auth before exposing the server.
+  auth:
+    azureOIDC:
+      enabled: true
+      tenantId: "<tenant-id>"
+      clientId: "<client-id>"
+
+  # DNS-rebinding protection. An empty list accepts ANY Host header.
+  allowedHosts:
+    - "api.example.com"
+
+  tls:
+    enabled: true
+    cert: "/etc/scafctl/tls/server.crt"
+    key: "/etc/scafctl/tls/server.key"
+
+  # Resource limits.
+  requestTimeout: "60s"
+  idleTimeout: "60s"
+  maxHeaderBytes: 1048576   # 1 MB
+  maxRequestSize: 10485760  # 10 MB
+  maxConcurrent: 1000
+
+  rateLimit:
+    global:
+      maxRequests: 100
+      window: "1m"
+
+  audit:
+    enabled: true
 ```
 
 - [ ] Use lock files for all solutions (`scafctl package solution`)
@@ -267,3 +323,21 @@ cel:
 - [ ] Keep `allowPrivateIPs: false` (default) unless on-premises access is needed
 - [ ] Export secrets backup before OS keychain changes
 - [ ] Review lock file digest changes during code review
+
+### API server (`scafctl serve`)
+
+`scafctl serve` executes caller-submitted solutions by design. Treat it like a
+build runner, not a read-only API: anyone who can reach the port and pass
+authentication can make the server run a solution.
+
+- [ ] Enable `apiServer.auth.azureOIDC` before binding a non-loopback address
+- [ ] Keep `apiServer.host` at `127.0.0.1` unless the server is deliberately exposed
+- [ ] Set `apiServer.allowedHosts` -- empty accepts any `Host` (no DNS-rebinding protection)
+- [ ] Enable `apiServer.tls`, or terminate TLS at an authenticating proxy
+- [ ] Tune `apiServer.rateLimit.global` -- a 100-request/minute per-IP limit applies by default
+- [ ] Block the admin routes at the proxy when fronting the server with one -- the
+      prefix follows `apiServer.apiVersion` (`/v1/admin/` by default). The startup
+      warning prints the resolved path, but only when the server binds a
+      non-loopback address with authentication disabled
+- [ ] Enable `apiServer.audit` to retain a record of executed solutions
+- [ ] Do not expose `/metrics` publicly -- it bypasses API middleware by design

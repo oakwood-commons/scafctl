@@ -5,9 +5,12 @@ package config
 
 import (
 	"fmt"
+	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
+	"github.com/oakwood-commons/scafctl/pkg/settings"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -537,6 +540,132 @@ func TestLoggingConfig_Validate(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+// TestAPIServerConfig_Validate_MaxHeaderBytes asserts the advertised 4MB
+// ceiling is actually enforced. The `maximum` struct tag documents it for
+// schema consumers but the config loader never applies struct tags, so without
+// this check an operator could configure an unbounded per-connection header
+// buffer despite the documented guarantee.
+func TestAPIServerConfig_Validate_MaxHeaderBytes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{"unset uses the default", 0, false},
+		{"below the cap", 1 << 20, false},
+		{"exactly at the cap", settings.MaxAPIMaxHeaderBytes, false},
+		{"one byte over the cap", settings.MaxAPIMaxHeaderBytes + 1, true},
+		{"far over the cap", 1 << 30, true},
+		{"negative", -1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{APIServer: APIServerConfig{MaxHeaderBytes: tt.value}}
+
+			err := cfg.Validate()
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "apiServer")
+			assert.Contains(t, err.Error(), "maxHeaderBytes")
+		})
+	}
+}
+
+// TestAPIServerConfig_Validate_AllowedHosts asserts an allowlist that would be
+// configured-but-inert is rejected at startup rather than silently accepting
+// every Host, while both documented opt-outs stay valid. The advertised
+// entry cap is enforced here too: `maxItems` is schema-only, and the allowlist
+// is scanned on every request.
+func TestAPIServerConfig_Validate_AllowedHosts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		hosts   []string
+		wantErr bool
+	}{
+		{"unset", nil, false},
+		{"explicit wildcard opt-out", []string{"*"}, false},
+		{"usable entries", []string{"api.example.com", "*.internal.example.com"}, false},
+		{"only blanks", []string{"", "   "}, true},
+		{"only the malformed wildcard", []string{"*."}, true},
+		{"exactly at the entry cap", hostList(settings.MaxAPIAllowedHosts), false},
+		{"one entry over the cap", hostList(settings.MaxAPIAllowedHosts + 1), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := &Config{APIServer: APIServerConfig{AllowedHosts: tt.hosts}}
+
+			err := cfg.Validate()
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "apiServer")
+			assert.Contains(t, err.Error(), "allowedHosts")
+		})
+	}
+}
+
+// hostList builds n distinct, individually valid allowlist entries so a
+// length-boundary case is not conflated with a normalization failure.
+func hostList(n int) []string {
+	hosts := make([]string, 0, n)
+	for i := range n {
+		hosts = append(hosts, fmt.Sprintf("host%d.example.com", i))
+	}
+	return hosts
+}
+
+// TestAPIServerConfig_TagsMatchRuntimeLimits pins the struct tags that document
+// the apiServer bounds to the constants that actually enforce them. The tags
+// are what schema consumers read; the constants are what Validate checks.
+// Nothing but this test ties the two together, and a schema that advertises a
+// bound the runtime does not apply is exactly the drift these limits exist to
+// close.
+func TestAPIServerConfig_TagsMatchRuntimeLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field string
+		tag   string
+		want  int
+	}{
+		{"MaxHeaderBytes", "maximum", settings.MaxAPIMaxHeaderBytes},
+		{"AllowedHosts", "maxItems", settings.MaxAPIAllowedHosts},
+	}
+
+	typ := reflect.TypeOf(APIServerConfig{})
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			t.Parallel()
+
+			field, ok := typ.FieldByName(tt.field)
+			require.True(t, ok, "APIServerConfig has no field %s", tt.field)
+
+			raw, ok := field.Tag.Lookup(tt.tag)
+			require.True(t, ok, "%s is missing its `%s` tag, so the schema no longer advertises the bound", tt.field, tt.tag)
+
+			got, err := strconv.Atoi(raw)
+			require.NoError(t, err, "%s `%s` tag is not an integer", tt.field, tt.tag)
+			assert.Equal(t, tt.want, got,
+				"%s `%s:%q` disagrees with the constant Validate enforces", tt.field, tt.tag, raw)
 		})
 	}
 }

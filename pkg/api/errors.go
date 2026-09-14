@@ -14,7 +14,7 @@ import (
 )
 
 // HandleError logs the error and returns a Huma error with the given status code.
-// For 5xx status codes the raw error is never included in the response body to
+// For 4xx and 5xx status codes the raw error is never included in the response body to
 // prevent leaking internal implementation details, stack traces, or file paths.
 func HandleError(ctx context.Context, err error, operation string, statusCode int, userMessage string) error {
 	lgr := logger.FromContext(ctx)
@@ -23,10 +23,12 @@ func HandleError(ctx context.Context, err error, operation string, statusCode in
 	} else {
 		lgr.Info("API error with nil error", "operation", operation, "statusCode", statusCode)
 	}
-	// Server-side errors: log only, never expose raw error to caller.
-	if statusCode >= http.StatusInternalServerError {
+	// Server-side and client-side contract-violation errors: log only,
+	// never expose raw error to caller.
+	if statusCode >= http.StatusBadRequest && statusCode < 600 {
 		return huma.NewError(statusCode, userMessage)
 	}
+	// For all other errors, include the raw error for client-side debugging.
 	return huma.NewError(statusCode, userMessage, err)
 }
 

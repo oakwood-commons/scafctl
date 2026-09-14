@@ -306,6 +306,38 @@ const (
 	// DefaultAPIRequestTimeout is the default request timeout.
 	DefaultAPIRequestTimeout = "60s"
 
+	// DefaultAPIIdleTimeout is the default keep-alive idle timeout.
+	//
+	// It matches DefaultAPIRequestTimeout deliberately. When http.Server.IdleTimeout
+	// is zero, net/http falls back to ReadTimeout (see Server.idleTimeout), which the
+	// API server derives from RequestTimeout. Setting a LARGER value here would widen
+	// the window an idle connection can be held open rather than bound it. The value
+	// of making it explicit is that operators can now tune it; keep it <= the
+	// request timeout unless deliberately loosening.
+	DefaultAPIIdleTimeout = "60s"
+
+	// DefaultAPIMaxHeaderBytes is the default maximum size of request headers
+	// (1MB). Without an explicit bound, net/http applies its own default; this
+	// makes the limit explicit and configurable.
+	DefaultAPIMaxHeaderBytes = 1 << 20
+
+	// MaxAPIMaxHeaderBytes is the ceiling accepted for the configurable
+	// apiServer.maxHeaderBytes (4MB). Header bytes are buffered per connection
+	// before any request handling, so an unbounded allowance is a cheap
+	// memory-exhaustion vector; configuration validation rejects anything above
+	// this. It must stay in sync with the `maximum` struct tag on
+	// APIServerConfig.MaxHeaderBytes.
+	MaxAPIMaxHeaderBytes = 4 << 20
+
+	// MaxAPIAllowedHosts is the ceiling accepted for the number of
+	// apiServer.allowedHosts entries. The bound is about honouring the
+	// advertised schema and catching operator error, not performance -- 50
+	// versus 500 suffix comparisons per request is not measurable. It exists
+	// because a declared limit that nothing enforces is not a limit. It must
+	// stay in sync with the `maxItems` struct tag on
+	// APIServerConfig.AllowedHosts.
+	MaxAPIAllowedHosts = 50
+
 	// DefaultAPIMaxRequestSize is the default maximum request body size in bytes (10MB).
 	DefaultAPIMaxRequestSize int64 = 10 * 1024 * 1024
 
