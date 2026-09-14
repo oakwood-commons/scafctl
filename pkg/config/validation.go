@@ -251,6 +251,13 @@ func (c *APIServerConfig) Validate() error {
 		return fmt.Errorf("maxHeaderBytes: must not be negative, got %d", c.MaxHeaderBytes)
 	}
 
+	// Same reason as maxHeaderBytes above: the `maxItems` struct tag documents
+	// the bound for schema consumers, but the config loader never applies
+	// struct tags, so an advertised cap that is not checked here is not a cap.
+	if len(c.AllowedHosts) > settings.MaxAPIAllowedHosts {
+		return fmt.Errorf("allowedHosts: %d entries exceed the maximum of %d", len(c.AllowedHosts), settings.MaxAPIAllowedHosts)
+	}
+
 	// An allowlist made entirely of blank or malformed entries would leave this
 	// security control configured but inert; refuse to start instead.
 	if err := middleware.ValidateAllowedHosts(c.AllowedHosts); err != nil {

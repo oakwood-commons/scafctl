@@ -2253,7 +2253,8 @@ func setupTestServerWithPool(t testing.TB, poolOpts ...plugin.Option) *httptest.
 
 	compositeReg := provider.NewCompositeRegistryFromBase(reg)
 
-	mockCat := catalog.NewMockCatalog("test-catalog",
+	mockCat := catalog.NewMockCatalog(
+		"test-catalog",
 		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 			ref.Version = semver.MustParse("1.0.0")
 			return catalog.ArtifactInfo{
@@ -2345,7 +2346,8 @@ func TestAPI_SolutionDryRun_PluginExternalDisabled(t *testing.T) {
 // TestAPI_SolutionRun_PluginNotAllowed verifies that the run endpoint
 // returns 403 when a plugin is not on the allowlist.
 func TestAPI_SolutionRun_PluginNotAllowed(t *testing.T) {
-	ts := setupTestServerWithPool(t,
+	ts := setupTestServerWithPool(
+		t,
 		plugin.WithVersionPoolIdleTimeout(0),
 		plugin.WithVersionPoolAllowedPlugins(map[string]catalog.PluginPolicy{
 			"test-catalog": {Plugins: []string{"only-this-one"}},
@@ -2378,7 +2380,8 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 
 	compositeReg := provider.NewCompositeRegistryFromBase(reg)
 
-	mockCat := catalog.NewMockCatalog("test-catalog",
+	mockCat := catalog.NewMockCatalog(
+		"test-catalog",
 		catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 			ref.Version = semver.MustParse("1.0.0")
 			return catalog.ArtifactInfo{
@@ -2394,7 +2397,8 @@ func TestAPI_SolutionRender_PluginPoolFull(t *testing.T) {
 		Logger:   logr.Discard(),
 	})
 
-	pool := plugin.NewVersionPool(context.Background(), fetcher, compositeReg,
+	pool := plugin.NewVersionPool(
+		context.Background(), fetcher, compositeReg,
 		plugin.WithVersionPoolIdleTimeout(0),
 		plugin.WithVersionPoolMaxPlugins(1),
 	)
@@ -2456,7 +2460,8 @@ func TestAPI_SolutionRun_AllowedCatalogs_Rejected(t *testing.T) {
 	require.NoError(t, os.WriteFile(pluginBinDir+"/"+pluginName, []byte("#!/bin/sh\n"), 0o755))
 
 	fetcher := plugin.NewFetcher(plugin.FetcherConfig{
-		Catalog: catalog.NewMockCatalog("untrusted-registry",
+		Catalog: catalog.NewMockCatalog(
+			"untrusted-registry",
 			catalog.WithResolveFunc(func(_ context.Context, ref catalog.Reference) (catalog.ArtifactInfo, error) {
 				ref.Version = semver.MustParse("1.0.0")
 				return catalog.ArtifactInfo{
@@ -2856,14 +2861,20 @@ func TestAPI_AdminAuthorization(t *testing.T) {
 		// A same-host reverse proxy makes every internet caller appear to be
 		// 127.0.0.1. The presence of a hop header proves a proxy was involved,
 		// so the request must be rejected rather than trusted.
+		//
+		// The empty-value cases matter as much as the populated ones: the
+		// policy is presence-based, and an empty-valued header survives the
+		// wire as []string{""}. A value-based check would let it through.
 		for _, header := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
-			t.Run(header, func(t *testing.T) {
-				status := doRequest(t, ts.URL+"/v1/admin/info", "", map[string]string{
-					header: "203.0.113.7",
+			for _, value := range []string{"203.0.113.7", ""} {
+				t.Run(header+"="+value, func(t *testing.T) {
+					status := doRequest(t, ts.URL+"/v1/admin/info", "", map[string]string{
+						header: value,
+					})
+					assert.Equal(t, http.StatusForbidden, status,
+						"%s=%q on a loopback request must not reach admin", header, value)
 				})
-				assert.Equal(t, http.StatusForbidden, status,
-					"%s on a loopback request must not reach admin", header)
-			})
+			}
 		}
 	})
 

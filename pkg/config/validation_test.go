@@ -5,6 +5,8 @@ package config
 
 import (
 	"fmt"
+	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/oakwood-commons/scafctl/pkg/api/middleware"
@@ -583,7 +585,9 @@ func TestAPIServerConfig_Validate_MaxHeaderBytes(t *testing.T) {
 
 // TestAPIServerConfig_Validate_AllowedHosts asserts an allowlist that would be
 // configured-but-inert is rejected at startup rather than silently accepting
-// every Host, while both documented opt-outs stay valid.
+// every Host, while both documented opt-outs stay valid. The advertised
+// entry cap is enforced here too: `maxItems` is schema-only, and the allowlist
+// is scanned on every request.
 func TestAPIServerConfig_Validate_AllowedHosts(t *testing.T) {
 	t.Parallel()
 
@@ -597,6 +601,8 @@ func TestAPIServerConfig_Validate_AllowedHosts(t *testing.T) {
 		{"usable entries", []string{"api.example.com", "*.internal.example.com"}, false},
 		{"only blanks", []string{"", "   "}, true},
 		{"only the malformed wildcard", []string{"*."}, true},
+		{"exactly at the entry cap", hostList(settings.MaxAPIAllowedHosts), false},
+		{"one entry over the cap", hostList(settings.MaxAPIAllowedHosts + 1), true},
 	}
 
 	for _, tt := range tests {
@@ -613,6 +619,53 @@ func TestAPIServerConfig_Validate_AllowedHosts(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "apiServer")
 			assert.Contains(t, err.Error(), "allowedHosts")
+		})
+	}
+}
+
+// hostList builds n distinct, individually valid allowlist entries so a
+// length-boundary case is not conflated with a normalization failure.
+func hostList(n int) []string {
+	hosts := make([]string, 0, n)
+	for i := range n {
+		hosts = append(hosts, fmt.Sprintf("host%d.example.com", i))
+	}
+	return hosts
+}
+
+// TestAPIServerConfig_TagsMatchRuntimeLimits pins the struct tags that document
+// the apiServer bounds to the constants that actually enforce them. The tags
+// are what schema consumers read; the constants are what Validate checks.
+// Nothing but this test ties the two together, and a schema that advertises a
+// bound the runtime does not apply is exactly the drift these limits exist to
+// close.
+func TestAPIServerConfig_TagsMatchRuntimeLimits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		field string
+		tag   string
+		want  int
+	}{
+		{"MaxHeaderBytes", "maximum", settings.MaxAPIMaxHeaderBytes},
+		{"AllowedHosts", "maxItems", settings.MaxAPIAllowedHosts},
+	}
+
+	typ := reflect.TypeOf(APIServerConfig{})
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			t.Parallel()
+
+			field, ok := typ.FieldByName(tt.field)
+			require.True(t, ok, "APIServerConfig has no field %s", tt.field)
+
+			raw, ok := field.Tag.Lookup(tt.tag)
+			require.True(t, ok, "%s is missing its `%s` tag, so the schema no longer advertises the bound", tt.field, tt.tag)
+
+			got, err := strconv.Atoi(raw)
+			require.NoError(t, err, "%s `%s` tag is not an integer", tt.field, tt.tag)
+			assert.Equal(t, tt.want, got,
+				"%s `%s:%q` disagrees with the constant Validate enforces", tt.field, tt.tag, raw)
 		})
 	}
 }

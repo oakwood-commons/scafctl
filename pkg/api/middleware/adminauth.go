@@ -94,9 +94,17 @@ var proxyHeaders = []string{ //nolint:gochecknoglobals // fixed lookup table
 
 // proxyHopHeader returns the name of the first proxy header present on r, or ""
 // if the request carries none.
+//
+// Presence is tested with Header.Values, not Header.Get: Get returns "" both for
+// an absent header and for one sent with an empty value, so it cannot express
+// the presence question this policy asks. An empty-valued header is trivially
+// sendable -- `curl -H "X-Forwarded-For;"`, or any client writing the bare
+// `X-Forwarded-For:` line -- and reaches the handler as []string{""}. A Get-based
+// check would read that as "no proxy hop" and fall through to the loopback
+// grant, which is the whole hole this gate exists to close.
 func proxyHopHeader(r *http.Request) string {
 	for _, h := range proxyHeaders {
-		if r.Header.Get(h) != "" {
+		if len(r.Header.Values(h)) > 0 {
 			return h
 		}
 	}

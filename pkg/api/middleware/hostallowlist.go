@@ -41,8 +41,10 @@ const reasonWildcardAll = `wildcard entry "*" accepts all hosts`
 //   - A leading "*." entry matches any single-or-multi label subdomain at any
 //     depth, e.g. "*.example.com" matches "api.example.com" and
 //     "a.b.example.com". It does NOT match the bare apex "example.com" -- the
-//     same semantics nginx's wildcard server_name and Go's x509 hostname
-//     matching use. List the apex explicitly if the server answers to it too.
+//     same semantics nginx's wildcard server_name uses. (Note this is
+//     deliberately broader than TLS certificate wildcards, where "*.example.com"
+//     covers exactly one label and would reject "a.b.example.com".) List the
+//     apex explicitly if the server answers to it too.
 //   - An entry of "*" accepts any host, equivalent to disabling the check.
 func HostAllowlist(allowedHosts []string, lgr logr.Logger) func(http.Handler) http.Handler {
 	normalized, disabledReason := normalizeAllowedHosts(allowedHosts)
@@ -161,7 +163,8 @@ func hostAllowed(host string, allowed []string) bool {
 			// "*.example.com" matches subdomains at any depth
 			// ("api.example.com", "a.b.example.com") but NOT the bare apex
 			// "example.com" -- the same semantics nginx's wildcard server_name
-			// and Go's x509 hostname matching use. An operator who also serves
+			// uses, and deliberately broader than a TLS certificate wildcard,
+			// which covers exactly one label. An operator who also serves
 			// the apex lists it explicitly, so the allowlist never grants a
 			// host the operator did not name.
 			if strings.HasSuffix(host, "."+suffix) {

@@ -192,6 +192,17 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cfg = &config.Config{}
 	}
 
+	// Validate the API section here, not just in the config loader.
+	// config.Manager.Load is the only other caller of Validate, so an embedder
+	// passing a hand-built config through WithServerConfig would otherwise skip
+	// every advertised apiServer bound -- including maxHeaderBytes, which sizes
+	// a per-connection buffer before any request handling. Failing at
+	// construction keeps the documented limits true for every path that can
+	// start a server.
+	if err := cfg.APIServer.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid apiServer configuration: %w", err)
+	}
+
 	baseCtx := sc.ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()

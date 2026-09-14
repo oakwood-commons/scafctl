@@ -33,6 +33,16 @@ import (
 // huma.Register runs through the full middleware chain assembled here.
 // Returns the root router for API-router compatibility with callers.
 func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServerConfig, lgr logr.Logger) (chi.Router, error) {
+	// Validate here as well as in NewServer. This function is exported and
+	// takes its own *APIServerConfig, so a caller can reach it with a config
+	// object NewServer never saw -- and it is the only consumer of
+	// AllowedHosts. Routing both entry points through the same Validate keeps
+	// the advertised bounds true no matter which one an embedder uses, and
+	// keeps this from drifting into a second, partial validation.
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid apiServer configuration: %w", err)
+	}
+
 	// Validate auth configuration: refuse to start unauthenticated when auth is expected.
 	if cfg.Auth.AzureOIDC.Enabled {
 		if cfg.Auth.AzureOIDC.TenantID == "" || cfg.Auth.AzureOIDC.ClientID == "" {
@@ -85,11 +95,6 @@ func SetupMiddleware(ctx context.Context, router *chi.Mux, cfg *config.APIServer
 	router.Use(middleware.FlightID)
 	router.Use(chimiddleware.StripSlashes)
 	router.Use(middleware.RequestLogging(lgr))
-	if cfg.TokenPassThrough != nil {
-		if err := cfg.TokenPassThrough.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid token pass-through configuration: %w", err)
-		}
-	}
 	router.Use(middleware.TokenPassthrough(cfg.TokenPassThroughAllowedHeaders()))
 
 	// ── API middleware (versioned paths only) ──

@@ -235,6 +235,49 @@ func TestServer_AppliesResourceLimits(t *testing.T) {
 	})
 }
 
+// TestNewServer_ValidatesAPIConfig asserts the advertised apiServer bounds hold
+// on the embedder path too. config.Manager.Load is the only other caller of
+// APIServerConfig.Validate, so without a check in NewServer an embedder passing
+// a hand-built config through WithServerConfig could start a server with an
+// arbitrarily large per-connection header buffer, or with a host allowlist that
+// was requested but is unusable.
+func TestNewServer_ValidatesAPIConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiCfg  config.APIServerConfig
+		wantErr string
+	}{
+		{"zero value is valid", config.APIServerConfig{}, ""},
+		{"in-bounds config is valid", config.APIServerConfig{
+			MaxHeaderBytes: settings.MaxAPIMaxHeaderBytes,
+			AllowedHosts:   []string{"api.example.com"},
+		}, ""},
+		{"header cap is enforced", config.APIServerConfig{
+			MaxHeaderBytes: settings.MaxAPIMaxHeaderBytes + 1,
+		}, "maxHeaderBytes"},
+		{"negative header bytes rejected", config.APIServerConfig{
+			MaxHeaderBytes: -1,
+		}, "maxHeaderBytes"},
+		{"unusable allowlist rejected", config.APIServerConfig{
+			AllowedHosts: []string{" "},
+		}, "allowedHosts"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, err := NewServer(WithServerConfig(&config.Config{APIServer: tt.apiCfg}))
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.NotNil(t, srv)
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, srv, "no server may be returned alongside a validation error")
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 // TestServer_ExposureWarning asserts the server warns when it is bound beyond
 // loopback with authentication disabled, and stays quiet otherwise. The warning
 // is the only signal an operator gets that they have exposed solution execution.

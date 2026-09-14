@@ -329,6 +329,15 @@ const (
 	// APIServerConfig.MaxHeaderBytes.
 	MaxAPIMaxHeaderBytes = 4 << 20
 
+	// MaxAPIAllowedHosts is the ceiling accepted for the number of
+	// apiServer.allowedHosts entries. The bound is about honouring the
+	// advertised schema and catching operator error, not performance -- 50
+	// versus 500 suffix comparisons per request is not measurable. It exists
+	// because a declared limit that nothing enforces is not a limit. It must
+	// stay in sync with the `maxItems` struct tag on
+	// APIServerConfig.AllowedHosts.
+	MaxAPIAllowedHosts = 50
+
 	// DefaultAPIMaxRequestSize is the default maximum request body size in bytes (10MB).
 	DefaultAPIMaxRequestSize int64 = 10 * 1024 * 1024
 

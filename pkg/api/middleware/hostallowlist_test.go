@@ -135,8 +135,9 @@ func TestHostAllowlist(t *testing.T) {
 			{"api.example.com", true},
 			{"deep.nested.example.com", true},
 			// The bare apex is NOT covered by "*.example.com" -- matching
-			// nginx and x509 wildcard semantics. An operator serving the apex
-			// lists it explicitly.
+			// nginx wildcard server_name semantics. An operator serving the
+			// apex lists it explicitly. Multi-label subdomains ARE covered,
+			// unlike TLS certificate wildcards.
 			{"example.com", false},
 			{"example.com.evil.com", false},
 			{"notexample.com", false},

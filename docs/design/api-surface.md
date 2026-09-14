@@ -300,7 +300,7 @@ The API server is configured via the `apiServer` section in the scafctl config f
 | `shutdownTimeout` | string | `30s` | Graceful shutdown window |
 | `maxConcurrent` | int | `1000` | Max concurrent in-flight requests |
 | `maxRequestSize` | int64 | `10485760` | Max request body size (bytes) |
-| `allowedHosts` | []string | -- | Permitted `Host` header values (DNS-rebinding protection). **Empty means every Host is accepted.** Supports `*.example.com` wildcards (subdomains at any depth, but **not** the bare apex -- list it separately). A bare `*` is the explicit accept-everything opt-out; a non-empty list whose entries are *all* blank or malformed is **rejected at startup** rather than silently disabling the check. Applies to `/v1/*` only; `/health` and `/metrics` are exempt so k8s probes keep working. |
+| `allowedHosts` | []string | -- | Permitted `Host` header values (DNS-rebinding protection). **Empty means every Host is accepted.** Supports `*.example.com` wildcards (subdomains at any depth, but **not** the bare apex -- list it separately). A bare `*` is the explicit accept-everything opt-out; a non-empty list whose entries are *all* blank or malformed is **rejected at startup** rather than silently disabling the check. Capped at 50 entries, enforced at startup. Applies to `/v1/*` only; `/health` and `/metrics` are exempt so k8s probes keep working. |
 | `compression.level` | int | `6` | Gzip compression level |
 | `cors.enabled` | bool | `false` | Enable CORS |
 | `cors.allowedOrigins` | []string | — | Allowed origins |
@@ -317,3 +317,24 @@ The API server is configured via the `apiServer` section in the scafctl config f
 | `rateLimit.global.window` | string | — | Rate limit window duration |
 | `audit.enabled` | bool | `false` | Enable audit logging |
 | `tracing.enabled` | bool | `false` | Enable OpenTelemetry tracing |
+
+### Where these bounds are enforced
+
+The `maximum` / `maxItems` struct tags on `APIServerConfig` describe the bounds
+to schema consumers, but the config loader does not apply struct tags. The
+values above are therefore checked by `APIServerConfig.Validate`, which runs on
+every path that can start a server:
+
+- `config.Manager.Load` -- the file/env/flag configuration path used by
+  `scafctl serve`.
+- `api.NewServer` -- the embedder path. `NewServer(WithServerConfig(cfg))`
+  accepts a hand-built config that never went through the loader, so it
+  validates before constructing anything and returns an error on a violation.
+- `api.SetupMiddleware` -- exported separately, takes its own
+  `*config.APIServerConfig`, and is the only consumer of `allowedHosts`.
+
+Embedder note: `NewServer` and `SetupMiddleware` return an error for an
+`apiServer` config that exceeds a documented bound. A limit that only the
+file-loading path honours is not a limit, so this is deliberate -- but an
+embedder that was previously passing an out-of-bounds value will now fail at
+construction instead of silently running unbounded.

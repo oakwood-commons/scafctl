@@ -217,6 +217,34 @@ func TestAdminAuthorization(t *testing.T) {
 		}
 	})
 
+	t.Run("auth disabled: an empty-valued proxy header still proves a hop", func(t *testing.T) {
+		// The policy is presence-based, but http.Header.Get returns "" for both
+		// an absent header and one sent with an empty value, so it cannot
+		// express presence. An empty-valued header is trivially sendable
+		// (`curl -H "X-Forwarded-For;"`, or any client writing the bare header
+		// line) and arrives as []string{""}, so a Get-based check would hand
+		// such a caller the loopback fallback.
+		empty := []string{"X-Forwarded-For", "Forwarded", "X-Real-IP"}
+
+		for _, key := range empty {
+			t.Run(key, func(t *testing.T) {
+				var reached bool
+				mw := middleware.AdminAuthorization(false, logr.Discard())
+
+				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/admin/info", nil)
+				req.RemoteAddr = "127.0.0.1:54321"
+				req.Header.Set(key, "")
+				rec := httptest.NewRecorder()
+
+				mw(okHandler(&reached)).ServeHTTP(rec, req)
+
+				assert.Equal(t, http.StatusForbidden, rec.Code,
+					"%s present with an empty value must count as a proxy hop", key)
+				assert.False(t, reached)
+			})
+		}
+	})
+
 	t.Run("auth enabled: proxy headers do not affect the role check", func(t *testing.T) {
 		// The proxy-hop denial applies only to the loopback fallback. With auth
 		// enabled, identity comes from the validated token, so a legitimate
